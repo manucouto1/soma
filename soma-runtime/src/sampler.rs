@@ -237,7 +237,7 @@ fn linspace(low: f64, high: f64, n: usize, scale: Scale) -> Vec<f64> {
 }
 
 /// Sample a float from [low, high] given t in [0, 1), respecting scale.
-fn sample_float(low: f64, high: f64, scale: Scale, t: f64) -> f64 {
+pub fn sample_float(low: f64, high: f64, scale: Scale, t: f64) -> f64 {
     match scale {
         Scale::Linear => low + (high - low) * t,
         Scale::Log => {
@@ -252,19 +252,19 @@ fn sample_float(low: f64, high: f64, scale: Scale, t: f64) -> f64 {
     }
 }
 
-/// Simple deterministic pseudo-random: hash-based, returns [0.0, 1.0).
-fn pseudo_random(state: u64) -> f64 {
+/// Simple deterministic pseudo-random (public for use by BayesianSampler): hash-based, returns [0.0, 1.0).
+pub fn pseudo_random(state: u64) -> f64 {
     let h = splitmix64(state);
     (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// Simple hash combiner for generating unique RNG states.
-fn hash_u64(seed: u64, a: u64, b: u64) -> u64 {
+pub fn hash_u64(seed: u64, a: u64, b: u64) -> u64 {
     splitmix64(seed.wrapping_add(a.wrapping_mul(6364136223846793005)).wrapping_add(b))
 }
 
 /// SplitMix64 hash function.
-fn splitmix64(mut x: u64) -> u64 {
+pub fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9e3779b97f4a7c15);
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);

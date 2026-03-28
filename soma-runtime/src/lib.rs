@@ -4,7 +4,9 @@ pub mod cache_tiered;
 pub mod event_bus;
 pub mod executor;
 pub mod pipeline;
+pub mod pruner;
 pub mod sampler;
+pub mod sampler_bayesian;
 pub mod study_runner;
 
 pub use cache::MemoryCache;
@@ -13,5 +15,7 @@ pub use cache_tiered::TieredCache;
 pub use event_bus::EventBus;
 pub use executor::{execute, Context, FilterStore};
 pub use pipeline::Pipeline;
+pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use sampler::{GridSampler, RandomSampler, Sampler};
+pub use sampler_bayesian::BayesianSampler;
 pub use study_runner::{FnTrialExecutor, StudyRunner, TrialExecutor, TrialOutcome};
