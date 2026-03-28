@@ -4,6 +4,7 @@ members = [
     "soma-core",
     "soma-compiler",
     "soma-runtime",
+    "soma-macros",
 ]
 
 [workspace.package]
@@ -35,3 +36,8 @@ proptest = "1"
 
 # Logging
 tracing = "0.1"
+
+# Proc macros
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

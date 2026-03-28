@@ -18,3 +18,6 @@ pub use study::{
     Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState,
 };
 pub use value::Value;
+
+// Re-export derive macro
+pub use soma_macros::SomaFilter;
