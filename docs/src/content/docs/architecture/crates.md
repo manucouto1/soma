@@ -9,12 +9,14 @@ description: The Rust workspace organization and crate responsibilities.
 soma/
 ├── Cargo.toml              # workspace definition
 ├── soma-core/              # types, traits, serialization
+├── soma-macros/            # #[derive(SomaFilter)] proc macro
 ├── soma-compiler/          # graph → execution plan
 ├── soma-runtime/           # plan executor, events, cache, optimization
 ├── soma-worker/            # remote execution daemon
-├── soma-memory/            # ChronosVector integration
+├── soma-memory/            # KnowledgeBase + ChronosVector integration
 ├── soma-agent/             # autonomous agent loop
-├── soma-python/            # PyO3 bindings
+├── soma-mcp/               # MCP server for agent integration
+├── soma-python/            # PyO3 bindings (pip install soma)
 └── docs/                   # Starlight documentation (this site)
 ```
 
