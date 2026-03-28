@@ -7,6 +7,7 @@ pub mod schema;
 pub mod search;
 pub mod study;
 pub mod value;
+pub mod virtual_value;
 
 // Re-export core types for convenience.
 pub use cache::{CacheKey, CacheStore, CacheTier, EntryMeta, Origin};
@@ -20,6 +21,7 @@ pub use study::{
     Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState,
 };
 pub use value::Value;
+pub use virtual_value::{ValueStatus, VirtualValue};
 
 // Re-export derive macro
 pub use soma_macros::SomaFilter;
