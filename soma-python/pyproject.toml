@@ -7,7 +7,7 @@ name = "soma"
 dynamic = ["version"]
 description = "A computational graph runtime for research pipelines, agent orchestration, and data virtualization"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = { text = "Elastic-2.0" }
 readme = "../README.md"
 keywords = ["pipeline", "ml", "optimization", "caching", "agents"]
 classifiers = [

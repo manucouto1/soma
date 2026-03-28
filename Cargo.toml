@@ -15,7 +15,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "Elastic-2.0"
 repository = "https://github.com/manucouto1/soma"
 description = "A computational graph runtime for research pipelines, agent orchestration, and data virtualization"
 
