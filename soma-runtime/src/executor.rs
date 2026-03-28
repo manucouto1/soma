@@ -105,11 +105,22 @@ impl Context {
         self.execution_order.push(id.clone());
         self.store.insert(id, value);
     }
+
+    fn snapshot(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            event_bus: self.event_bus.clone(),
+            run_id: self.run_id.clone(),
+            execution_order: self.execution_order.clone(),
+            graph_info: self.graph_info.clone(),
+        }
+    }
 }
 
 /// Registry of filter implementations, keyed by node ID.
+/// Wrapped in Arc for sharing across async tasks.
 pub struct FilterStore {
-    filters: HashMap<String, Box<dyn Filter>>,
+    filters: HashMap<String, Arc<dyn Filter>>,
     states: HashMap<String, Value>,
 }
 
@@ -122,11 +133,11 @@ impl FilterStore {
     }
 
     pub fn register(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
-        self.filters.insert(node_id.into(), filter);
+        self.filters.insert(node_id.into(), Arc::from(filter));
     }
 
-    pub fn get(&self, node_id: &str) -> Option<&dyn Filter> {
-        self.filters.get(node_id).map(|f| f.as_ref())
+    pub fn get(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
+        self.filters.get(node_id).cloned()
     }
 
     pub fn set_state(&mut self, node_id: impl Into<String>, state: Value) {
@@ -144,7 +155,8 @@ impl Default for FilterStore {
     }
 }
 
-/// Execute a compiled plan.
+/// Execute a compiled plan synchronously.
+/// For parallel branches, uses the async executor under the hood.
 pub fn execute(
     plan: &ExecutionPlan,
     ctx: &mut Context,
@@ -154,67 +166,14 @@ pub fn execute(
     match plan {
         ExecutionPlan::Empty => Ok(()),
 
-        ExecutionPlan::Execute { node_id } => {
-            let start = Instant::now();
-
-            ctx.event_bus.emit(Event::NodeStarted {
-                run_id: ctx.run_id.clone(),
-                node_id: node_id.clone(),
-                kind: filters
-                    .get(node_id)
-                    .map(|f| f.meta().kind)
-                    .unwrap_or(soma_core::filter::FilterKind::Opaque),
-            });
-
-            let filter = filters.get(node_id).ok_or_else(|| SomaError::NodeNotFound(node_id.clone()))?;
-
-            // Resolve input from predecessors
-            let input = resolve_input(node_id, ctx);
-
-            // Get or compute state
-            let state = match filters.get_state(node_id) {
-                Some(s) => s.clone(),
-                None => Value::Empty,
-            };
-
-            // Execute forward
-            let result = filter.forward(&input, &state);
-
-            match result {
-                Ok(output) => {
-                    let duration = start.elapsed();
-                    let summary = format!("{output}");
-
-                    ctx.set(node_id.clone(), output);
-
-                    ctx.event_bus.emit(Event::NodeCompleted {
-                        run_id: ctx.run_id.clone(),
-                        node_id: node_id.clone(),
-                        duration,
-                        output_summary: summary,
-                    });
-                    Ok(())
-                }
-                Err(e) => {
-                    ctx.event_bus.emit(Event::NodeFailed {
-                        run_id: ctx.run_id.clone(),
-                        node_id: node_id.clone(),
-                        error: e.to_string(),
-                    });
-                    Err(e)
-                }
-            }
-        }
+        ExecutionPlan::Execute { node_id } => execute_node(node_id, ctx, filters, cache),
 
         ExecutionPlan::Cached { node_id, key } => {
             let start = Instant::now();
-
             let value = cache.get(key)?.ok_or_else(|| {
                 SomaError::Cache(format!("expected cached value for node `{node_id}` not found"))
             })?;
-
             ctx.set(node_id.clone(), value);
-
             ctx.event_bus.emit(Event::NodeCacheHit {
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.clone(),
@@ -233,30 +192,7 @@ pub fn execute(
         }
 
         ExecutionPlan::Parallel(branches) => {
-            // Synchronous parallel for now (true async parallelism in future)
-            let mut branch_outputs: Vec<(String, Value)> = Vec::new();
-
-            for branch in branches {
-                let mut branch_ctx = Context {
-                    store: ctx.store.clone(),
-                    event_bus: ctx.event_bus.clone(),
-                    run_id: ctx.run_id.clone(),
-                    execution_order: ctx.execution_order.clone(),
-                    graph_info: ctx.graph_info.clone(),
-                };
-                execute(branch, &mut branch_ctx, filters, cache)?;
-
-                for (key, value) in &branch_ctx.store {
-                    if !ctx.store.contains_key(key) {
-                        branch_outputs.push((key.clone(), value.clone()));
-                    }
-                }
-            }
-
-            for (key, value) in branch_outputs {
-                ctx.set(key, value);
-            }
-            Ok(())
+            execute_parallel(branches, ctx, filters, cache)
         }
 
         ExecutionPlan::Loop { node_id: _, body, max_iterations } => {
@@ -282,18 +218,103 @@ pub fn execute(
     }
 }
 
-/// Resolve the input for a node from the context store using graph topology.
+/// Execute a single filter node.
+fn execute_node(
+    node_id: &str,
+    ctx: &mut Context,
+    filters: &FilterStore,
+    _cache: &dyn CacheStore,
+) -> Result<()> {
+    let start = Instant::now();
+
+    let filter = filters.get(node_id).ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
+
+    ctx.event_bus.emit(Event::NodeStarted {
+        run_id: ctx.run_id.clone(),
+        node_id: node_id.to_string(),
+        kind: filter.meta().kind,
+    });
+
+    let input = resolve_input(node_id, ctx);
+    let state = filters.get_state(node_id).cloned().unwrap_or(Value::Empty);
+    let result = filter.forward(&input, &state);
+
+    match result {
+        Ok(output) => {
+            let duration = start.elapsed();
+            let summary = format!("{output}");
+            ctx.set(node_id, output);
+            ctx.event_bus.emit(Event::NodeCompleted {
+                run_id: ctx.run_id.clone(),
+                node_id: node_id.to_string(),
+                duration,
+                output_summary: summary,
+            });
+            Ok(())
+        }
+        Err(e) => {
+            ctx.event_bus.emit(Event::NodeFailed {
+                run_id: ctx.run_id.clone(),
+                node_id: node_id.to_string(),
+                error: e.to_string(),
+            });
+            Err(e)
+        }
+    }
+}
+
+/// Execute parallel branches concurrently using std::thread::scope.
 ///
-/// - If the node has one predecessor, use that predecessor's output.
-/// - If the node has multiple predecessors, merge them into a JSON object.
-/// - If the node has no predecessors, use Value::Empty (root node).
-/// - Fallback: if no graph info, use the most recently produced output.
+/// Each branch gets a snapshot of the context. After all branches complete,
+/// their new outputs are merged back into the main context.
+fn execute_parallel(
+    branches: &[ExecutionPlan],
+    ctx: &mut Context,
+    filters: &FilterStore,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    let snapshot_keys: Arc<std::collections::HashSet<String>> =
+        Arc::new(ctx.store.keys().cloned().collect());
+
+    // Use scoped threads for true parallelism without Send requirements
+    let results: Vec<Result<Vec<(String, Value)>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = branches
+            .iter()
+            .map(|branch| {
+                let mut branch_ctx = ctx.snapshot();
+                let keys = snapshot_keys.clone();
+                s.spawn(move || {
+                    execute(branch, &mut branch_ctx, filters, cache)?;
+                    let new_entries: Vec<(String, Value)> = branch_ctx
+                        .store
+                        .into_iter()
+                        .filter(|(k, _)| !keys.contains(k))
+                        .collect();
+                    Ok(new_entries)
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    // Merge results and propagate first error
+    for result in results {
+        let entries = result?;
+        for (key, value) in entries {
+            ctx.set(key, value);
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve the input for a node from the context store using graph topology.
 fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     let preds = ctx.graph_info.predecessors(node_id);
 
     match preds.len() {
         0 => {
-            // Root node or no graph info: fall back to last output
             ctx.execution_order
                 .last()
                 .and_then(|last_id| ctx.store.get(last_id))
@@ -301,14 +322,12 @@ fn resolve_input(node_id: &str, ctx: &Context) -> Value {
                 .unwrap_or(Value::Empty)
         }
         1 => {
-            // Single predecessor: use its output directly
             ctx.store
                 .get(&preds[0])
                 .cloned()
                 .unwrap_or(Value::Empty)
         }
         _ => {
-            // Multiple predecessors: merge into JSON object keyed by node ID
             let mut merged = serde_json::Map::new();
             for pred_id in preds {
                 if let Some(val) = ctx.store.get(pred_id) {
@@ -328,19 +347,15 @@ mod tests {
     use soma_core::cache::CacheKey;
     use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
 
-    // ── Test filters ──
-
     struct DoublerFilter;
 
     impl Filter for DoublerFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Doubler"])
         }
-
         fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
             Ok(Value::Empty)
         }
-
         fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
             match x {
                 Value::Tensor { values, shape } => {
@@ -350,7 +365,6 @@ mod tests {
                 _ => Ok(x.clone()),
             }
         }
-
         fn meta(&self) -> FilterMeta {
             FilterMeta {
                 name: "Doubler".into(),
@@ -373,11 +387,9 @@ mod tests {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Adder", &self.amount.to_le_bytes()])
         }
-
         fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
             Ok(Value::Empty)
         }
-
         fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
             match x {
                 Value::Tensor { values, shape } => {
@@ -387,12 +399,42 @@ mod tests {
                 _ => Ok(x.clone()),
             }
         }
-
         fn meta(&self) -> FilterMeta {
             FilterMeta {
                 name: "Adder".into(),
                 kind: FilterKind::Stateless,
                 cacheable: true,
+                differentiable: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: soma_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+    }
+
+    /// Slow filter that sleeps to verify parallelism.
+    struct SlowFilter {
+        id: String,
+        delay_ms: u64,
+    }
+
+    impl Filter for SlowFilter {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Slow", self.id.as_bytes()])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: format!("Slow_{}", self.id),
+                kind: FilterKind::Stateless,
+                cacheable: false,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: soma_core::filter::Distribution::Local,
@@ -411,8 +453,6 @@ mod tests {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
-
-        // Tell executor that "doubler" reads from "input"
         ctx.graph_info
             .set_predecessors("doubler", vec!["input".into()]);
 
@@ -436,7 +476,6 @@ mod tests {
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
 
-        // Linear: input → add → double
         let graph_info = GraphInfo::for_linear(&["input", "add", "double"]);
         ctx.graph_info = graph_info;
 
@@ -445,19 +484,15 @@ mod tests {
         filters.register("double", Box::new(DoublerFilter));
 
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Execute {
-                node_id: "add".into(),
-            },
-            ExecutionPlan::Execute {
-                node_id: "double".into(),
-            },
+            ExecutionPlan::Execute { node_id: "add".into() },
+            ExecutionPlan::Execute { node_id: "double".into() },
         ]);
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
 
         let result = ctx.get("double").unwrap();
         let (data, _) = result.as_tensor().unwrap();
-        assert_eq!(data, &[22.0, 24.0]); // (1+10)*2=22, (2+10)*2=24
+        assert_eq!(data, &[22.0, 24.0]);
     }
 
     #[test]
@@ -476,9 +511,7 @@ mod tests {
         };
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
-
-        let result = ctx.get("cached_node").unwrap();
-        assert_eq!(*result, cached_value);
+        assert_eq!(*ctx.get("cached_node").unwrap(), cached_value);
     }
 
     #[test]
@@ -489,17 +522,15 @@ mod tests {
 
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0], vec![1]));
-        ctx.graph_info
-            .set_predecessors("double", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("double", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
         filters.register("double", Box::new(DoublerFilter));
 
-        let plan = ExecutionPlan::Execute {
-            node_id: "double".into(),
-        };
-
-        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+        execute(
+            &ExecutionPlan::Execute { node_id: "double".into() },
+            &mut ctx, &filters, &cache,
+        ).unwrap();
 
         let e1 = rx.try_recv().unwrap();
         assert!(matches!(e1, Event::NodeStarted { .. }));
@@ -513,11 +544,10 @@ mod tests {
         let mut ctx = Context::new(bus, "run_1");
         let filters = FilterStore::new();
 
-        let plan = ExecutionPlan::Execute {
-            node_id: "nonexistent".into(),
-        };
-
-        let result = execute(&plan, &mut ctx, &filters, &cache);
+        let result = execute(
+            &ExecutionPlan::Execute { node_id: "nonexistent".into() },
+            &mut ctx, &filters, &cache,
+        );
         assert!(matches!(result, Err(SomaError::NodeNotFound(_))));
     }
 
@@ -526,7 +556,6 @@ mod tests {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         let filters = FilterStore::new();
-
         execute(&ExecutionPlan::Empty, &mut ctx, &filters, &cache).unwrap();
     }
 
@@ -535,34 +564,57 @@ mod tests {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![5.0], vec![1]));
-
-        // Both branches read from "input"
-        ctx.graph_info
-            .set_predecessors("double", vec!["input".into()]);
-        ctx.graph_info
-            .set_predecessors("add", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("double", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("add", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
         filters.register("double", Box::new(DoublerFilter));
         filters.register("add", Box::new(AdderFilter { amount: 100.0 }));
 
         let plan = ExecutionPlan::Parallel(vec![
-            ExecutionPlan::Execute {
-                node_id: "double".into(),
-            },
-            ExecutionPlan::Execute {
-                node_id: "add".into(),
-            },
+            ExecutionPlan::Execute { node_id: "double".into() },
+            ExecutionPlan::Execute { node_id: "add".into() },
         ]);
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
 
-        // Both branches produced their own outputs
         let double_out = ctx.get("double").unwrap().as_tensor().unwrap().0;
-        assert_eq!(double_out, &[10.0]); // 5*2
-
+        assert_eq!(double_out, &[10.0]);
         let add_out = ctx.get("add").unwrap().as_tensor().unwrap().0;
-        assert_eq!(add_out, &[105.0]); // 5+100
+        assert_eq!(add_out, &[105.0]);
+    }
+
+    #[test]
+    fn parallel_branches_run_concurrently() {
+        let (bus, cache) = setup();
+        let mut ctx = Context::new(bus, "run_1");
+        ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+        ctx.graph_info.set_predecessors("slow_a", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("slow_b", vec!["input".into()]);
+
+        let mut filters = FilterStore::new();
+        filters.register("slow_a", Box::new(SlowFilter { id: "a".into(), delay_ms: 50 }));
+        filters.register("slow_b", Box::new(SlowFilter { id: "b".into(), delay_ms: 50 }));
+
+        let plan = ExecutionPlan::Parallel(vec![
+            ExecutionPlan::Execute { node_id: "slow_a".into() },
+            ExecutionPlan::Execute { node_id: "slow_b".into() },
+        ]);
+
+        let start = Instant::now();
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+        let elapsed = start.elapsed();
+
+        // If truly parallel: ~50ms. If sequential: ~100ms.
+        // Use 90ms as threshold to account for overhead.
+        assert!(
+            elapsed.as_millis() < 90,
+            "parallel branches took {}ms, expected <90ms (sequential would be ~100ms)",
+            elapsed.as_millis()
+        );
+
+        assert!(ctx.get("slow_a").is_some());
+        assert!(ctx.get("slow_b").is_some());
     }
 
     #[test]
@@ -583,11 +635,9 @@ mod tests {
         let mut ctx = Context::new(bus, "r");
         ctx.set("A", Value::tensor(vec![1.0], vec![1]));
         ctx.set("B", Value::tensor(vec![2.0], vec![1]));
-        ctx.graph_info
-            .set_predecessors("C", vec!["A".into(), "B".into()]);
+        ctx.graph_info.set_predecessors("C", vec!["A".into(), "B".into()]);
 
         let input = resolve_input("C", &ctx);
-        // Should be a JSON object with both predecessor outputs
         let json = input.as_json().unwrap();
         assert!(json.get("A").is_some());
         assert!(json.get("B").is_some());
@@ -598,7 +648,7 @@ mod tests {
         let bus = Arc::new(EventBus::new(8));
         let mut ctx = Context::new(bus, "r");
         ctx.set("prev", Value::tensor(vec![7.0], vec![1]));
-        // No graph info for "root" → falls back to last output
+
         let input = resolve_input("root", &ctx);
         let (data, _) = input.as_tensor().unwrap();
         assert_eq!(data, &[7.0]);
