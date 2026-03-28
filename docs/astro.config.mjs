@@ -54,6 +54,7 @@ export default defineConfig({
 						{ label: 'Gitflow & Workflow', slug: 'development/gitflow' },
 						{ label: 'TDD Strategy', slug: 'development/tdd' },
 						{ label: 'Implementation Roadmap', slug: 'development/roadmap' },
+						{ label: 'Architecture Review', slug: 'development/architecture-review' },
 					],
 				},
 			],

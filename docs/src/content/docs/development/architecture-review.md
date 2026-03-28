@@ -1,0 +1,308 @@
+---
+title: Architecture Review
+description: Analysis of current architecture, identified issues, and improvement roadmap.
+---
+
+This document captures the findings from a comprehensive architecture review performed after the initial implementation of all crates. It serves as a living reference for what to improve and why.
+
+## Current State
+
+```
+200 tests (186 Rust + 14 Python), all passing, clippy clean.
+
+soma-core       (67+9+19 tests)  Foundation types
+soma-macros                      #[derive(SomaFilter)] proc macro
+soma-compiler   (26+6 tests)     Graph → ExecutionPlan compiler
+soma-runtime    (55 tests)       Executor, Pipeline, Samplers, StudyRunner
+soma-worker     (13 tests)       Worker protocol and daemon
+soma-python     (14 tests)       PyO3 bindings
+```
+
+## Identified Issues
+
+### Priority 1: Critical Design Issues
+
+#### 1.1 Filter Trait Mixes Concerns
+
+**Current**: The `Filter` trait owns both computation (`fit`/`forward`) and caching (`config_hash`).
+
+```rust
+pub trait Filter: Send + Sync {
+    fn config_hash(&self) -> CacheKey;  // caching concern
+    fn fit(&self, x: &Value, ...) -> Result<Value>;  // computation
+    fn forward(&self, x: &Value, state: &Value) -> Result<Value>;  // computation
+    fn meta(&self) -> FilterMeta;  // metadata
+}
+```
+
+**Problem**: Cache key computation is not a computation concern. It forces all filter implementations to know about `CacheKey`, even if they don't use caching.
+
+**Proposed Fix**: Split into composable traits:
+
+```rust
+trait Compute: Send + Sync {
+    fn fit(&self, x: &Value, y: Option<&Value>) -> Result<Value>;
+    fn forward(&self, x: &Value, state: &Value) -> Result<Value>;
+}
+
+trait Describable {
+    fn meta(&self) -> FilterMeta;
+}
+
+trait Cacheable {
+    fn config_hash(&self) -> CacheKey;
+}
+
+// Filter = Compute + Describable + Cacheable (default blanket impl)
+trait Filter: Compute + Describable + Cacheable {}
+impl<T: Compute + Describable + Cacheable> Filter for T {}
+```
+
+**Impact**: Medium. Requires changing trait bounds everywhere but improves extensibility.
+
+**Status**: Deferred to next iteration. Current monolithic trait works for MVP.
+
+---
+
+#### 1.2 SomaError Is Too Broad
+
+**Current**: One error enum for all crates with a catch-all `Other(String)`.
+
+```rust
+pub enum SomaError {
+    RequiresLabels,
+    Cache(String),         // vague
+    Compilation(String),   // vague
+    Execution { .. },
+    Pruned { .. },         // control flow as error!
+    Other(String),         // catch-all
+    ...
+}
+```
+
+**Problems**:
+- `Other(String)` used in 12+ places as a dumping ground
+- `Pruned` is control flow disguised as an error
+- No error context chain
+
+**Proposed Fix**:
+
+```rust
+// Control flow separated from errors
+enum TrialOutcome {
+    Completed(Vec<MetricRecord>),
+    Pruned { step: usize, reason: String },
+}
+
+// Per-concern errors
+enum CacheError { NotFound(CacheKey), Corrupt(String), Io(io::Error) }
+enum CompileError { CycleDetected, SchemaMismatch { .. }, NodeNotFound(String) }
+enum RuntimeError { FilterFailed { node_id: String, source: Box<dyn Error> }, ... }
+```
+
+**Impact**: High. Touches every error site. Should be done before 1.0.
+
+**Status**: Deferred. Current approach works but `Pruned` as error is a known smell.
+
+---
+
+#### 1.3 Stringly-Typed Node IDs
+
+**Current**: `pub type NodeId = String;` used everywhere.
+
+**Problem**: No compile-time guarantee that a node ID exists in the graph. Typos cause runtime errors.
+
+**Proposed Fix**:
+
+```rust
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct NodeId(String);
+
+impl NodeId {
+    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+```
+
+**Impact**: Low-medium. Mostly mechanical replacement. Improves safety.
+
+**Status**: Deferred. String-based IDs work for current scale.
+
+---
+
+### Priority 2: Scalability Issues
+
+#### 2.1 Graph Uses Linear Scans
+
+**Current**: `predecessors()` and `successors()` iterate all edges: O(edges) per call.
+
+**Problem**: For graphs with 10k+ nodes, this is quadratic in the compiler.
+
+**Proposed Fix**: Maintain adjacency lists.
+
+```rust
+pub struct Graph {
+    nodes: Vec<Node>,
+    edges: Vec<Edge>,
+    // Precomputed indices
+    preds: HashMap<String, Vec<String>>,
+    succs: HashMap<String, Vec<String>>,
+}
+```
+
+**Status**: Deferred. Current graphs are small (<100 nodes).
+
+---
+
+#### 2.2 MemoryCache Has No Eviction
+
+**Current**: `max_bytes` field exists but is never enforced (`#[expect(dead_code)]`).
+
+**Problem**: Cache grows unbounded. Long-running studies will OOM.
+
+**Proposed Fix**: Implement LRU eviction.
+
+**Status**: Must fix before production use. Not blocking for development.
+
+---
+
+#### 2.3 GridSampler Builds Full Cartesian Product
+
+**Current**: On first call, builds all combinations in memory.
+
+**Problem**: 10 dimensions with 10 points each = 10 billion combinations.
+
+**Proposed Fix**: Lazy index-based generation.
+
+```rust
+fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
+    // Convert trial_index to multi-dimensional index
+    // without building the full grid
+}
+```
+
+**Status**: Must fix before exposing grid search on large spaces.
+
+---
+
+#### 2.4 Serial Trial Execution
+
+**Current**: StudyRunner runs trials one at a time in a `while` loop.
+
+**Problem**: Can't leverage multiple workers or CPU cores.
+
+**Proposed Fix**: Async trial execution with worker pool.
+
+**Status**: Deferred to Phase 3 (agents and workers).
+
+---
+
+### Priority 3: Design Smells
+
+#### 3.1 soma-core Does Too Much
+
+**Current**: soma-core owns 7 unrelated domains (graph, filter, cache, value, study, search, event).
+
+**Problem**: Can't import Filter without pulling in Study, Event, SearchSpace.
+
+**Proposed Fix**: Eventually split into:
+- `soma-types` (Value, Schema, Error)
+- `soma-graph` (Graph, Node, Edge)
+- `soma-filter` (Filter trait, FilterMeta)
+- `soma-study` (Study, Trial, SearchSpace)
+- `soma-event` (Event, EventBus)
+
+**Status**: Deferred. Single crate is simpler for now. Split when compile times become an issue.
+
+---
+
+#### 3.2 Pipeline Has Too Many Responsibilities
+
+**Current**: Pipeline manages filter composition, state storage, caching, events, and fit status.
+
+**Problem**: Adding features (streaming, distribution) will bloat the struct.
+
+**Proposed Fix**: Separate concerns:
+- `FilterChain` — composition only
+- `FittedPipeline` — holds trained states
+- Pipeline wraps both with caching and events
+
+**Status**: Deferred. Current design is functional.
+
+---
+
+#### 3.3 ExecutionPlan Variants Are Public
+
+**Current**: All plan variants (Sequence, Parallel, Execute, Cached, Remote, Loop, Branch, Empty) are public.
+
+**Problem**: Runtime consumers must exhaustively match, making extension breaking.
+
+**Proposed Fix**: Keep enum public but add `#[non_exhaustive]` attribute.
+
+**Status**: Should apply before 1.0 release.
+
+---
+
+### Priority 4: Missing Abstractions
+
+| Abstraction | Purpose | Status |
+|---|---|---|
+| `DataFlow` trait | Abstract input resolution from graph topology | GraphInfo added (partial) |
+| `CachePolicy` | LRU, TTL, size-based eviction | Not implemented |
+| `StreamingFilter` | Chunk processing with state checkpoints | StreamMode enum exists, no execution |
+| `Scheduler` | Distribute trials/plans across workers | Not implemented |
+| `MetricsCollector` | Pluggable observability backends | EventBus only |
+| `DataSchema` | Type-safe input/output validation | Not implemented |
+
+---
+
+## Test Coverage Gaps
+
+### Currently Tested vs Missing
+
+| Category | Tested | Missing |
+|---|---|---|
+| **Pipeline** | Linear sequential | Nested, branching, conditional, empty, dependent state |
+| **Caching** | Basic put/get/exists | Invalidation on data change, cross-run, concurrent, tiered promotion |
+| **Optimization** | Grid, Random, basic objectives | Hyperband, Bayesian, pruning, resumption, multi-objective |
+| **Error handling** | Predict-before-fit, missing filter | Filter panic, type mismatch, corrupt cache, invalid config |
+| **Concurrency** | None | Shared cache, parallel events, interleaving |
+| **ML edge cases** | None | Empty/single sample, NaN/Inf, high-dimensional |
+| **Integration** | Individual components | End-to-end workflows, study+pipeline, cache warm-up |
+
+### Highest Priority Missing Tests
+
+1. **Full end-to-end workflow**: define filters → build pipeline → fit → predict → cache hit on re-run
+2. **Cache invalidation**: same pipeline, different data → different results
+3. **Study + Pipeline integration**: study samples params → pipeline executes with those params
+4. **Multi-objective optimization**: two objectives with different directions
+5. **Error resilience**: filter that fails mid-execution, study continues with remaining trials
+6. **Empty/single sample**: boundary conditions in real ML workflows
+
+---
+
+## Improvement Roadmap
+
+### Before 1.0
+
+1. Apply `#[non_exhaustive]` to public enums (ExecutionPlan, Event, Value, SomaError)
+2. Implement LRU eviction in MemoryCache
+3. Fix GridSampler for large spaces (lazy generation)
+4. Separate `Pruned` from `SomaError` into `TrialOutcome` enum
+5. Add integration tests for full workflows
+6. Add `#[must_use]` annotations where appropriate
+
+### Next Iteration
+
+7. Split Filter trait into Compute + Describable + Cacheable
+8. Per-crate error types
+9. Typed NodeId (newtype over String)
+10. Graph adjacency list precomputation
+11. Async trial execution in StudyRunner
+
+### Future
+
+12. Split soma-core into focused crates
+13. Pluggable hash algorithm for CacheKey
+14. Streaming execution with checkpoint support
+15. Worker scheduler and task queue
