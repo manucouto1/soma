@@ -50,6 +50,8 @@ impl Filter for Normalizer {
             differentiable: true,
             stream_mode: StreamMode::FixedState,
             distribution: soma_core::filter::Distribution::Local,
+            input_schema: None,
+            output_schema: None,
         }
     }
 }
@@ -97,6 +99,8 @@ impl Filter for LinearModel {
             differentiable: true,
             stream_mode: StreamMode::FixedState,
             distribution: soma_core::filter::Distribution::Local,
+            input_schema: None,
+            output_schema: None,
         }
     }
 }
@@ -120,6 +124,8 @@ impl Filter for FailingFilter {
             differentiable: false,
             stream_mode: StreamMode::FixedState,
             distribution: soma_core::filter::Distribution::Local,
+            input_schema: None,
+            output_schema: None,
         }
     }
 }

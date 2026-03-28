@@ -1,5 +1,6 @@
 use crate::cache::CacheKey;
 use crate::error::Result;
+use crate::schema::Schema;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +75,12 @@ pub struct FilterMeta {
 
     /// Where this filter should execute.
     pub distribution: Distribution,
+
+    /// Expected input schema (None = accepts anything).
+    pub input_schema: Option<Schema>,
+
+    /// Output schema (None = dynamic/unknown).
+    pub output_schema: Option<Schema>,
 }
 
 /// The fundamental computation unit in Soma.
@@ -151,6 +158,8 @@ mod tests {
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
+                input_schema: None,
+                output_schema: None,
             }
         }
     }
@@ -228,6 +237,8 @@ mod tests {
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
+                input_schema: None,
+                output_schema: None,
             }
         }
     }

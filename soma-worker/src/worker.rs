@@ -127,6 +127,8 @@ mod tests {
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: soma_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
             }
         }
     }
