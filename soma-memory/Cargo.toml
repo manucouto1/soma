@@ -12,6 +12,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+chronos-vector = { version = "0.1", optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+chronos-vector = "0.1"
+
+[features]
+default = []
+chronos = ["dep:chronos-vector"]
