@@ -7,6 +7,7 @@ pub mod pipeline;
 pub mod pruner;
 pub mod sampler;
 pub mod sampler_bayesian;
+pub mod stream;
 pub mod study_runner;
 
 pub use cache::MemoryCache;
@@ -17,5 +18,6 @@ pub use executor::{execute, Context, FilterStore};
 pub use pipeline::Pipeline;
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use sampler::{GridSampler, RandomSampler, Sampler};
+pub use stream::{FittedFilter, StreamExecutor};
 pub use sampler_bayesian::BayesianSampler;
 pub use study_runner::{FnTrialExecutor, StudyRunner, TrialExecutor, TrialOutcome};
