@@ -14,4 +14,4 @@ pub use event_bus::EventBus;
 pub use executor::{execute, Context, FilterStore};
 pub use pipeline::Pipeline;
 pub use sampler::{GridSampler, RandomSampler, Sampler};
-pub use study_runner::{FnTrialExecutor, StudyRunner, TrialExecutor};
+pub use study_runner::{FnTrialExecutor, StudyRunner, TrialExecutor, TrialOutcome};

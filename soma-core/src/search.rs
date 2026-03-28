@@ -13,6 +13,7 @@ pub enum Scale {
 /// A single searchable parameter dimension.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "dim_type")]
+#[non_exhaustive]
 pub enum SearchDimension {
     /// Continuous range (f64)
     Float {

@@ -10,6 +10,7 @@ use std::fmt;
 /// The compiler resolves caching, parallelism, and distribution before
 /// the runtime sees the plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ExecutionPlan {
     /// Execute steps sequentially, one after another.
     Sequence(Vec<ExecutionPlan>),

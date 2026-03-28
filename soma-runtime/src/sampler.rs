@@ -20,21 +20,33 @@ pub trait Sampler: Send + Sync {
 // ──────────────────────────────────────────────
 
 /// Exhaustive grid search over all combinations.
+///
+/// Uses lazy index-based generation: instead of building the full cartesian
+/// product in memory, it computes the parameter set for a given trial index
+/// on the fly. Safe for large search spaces.
 pub struct GridSampler {
     points_per_dim: usize,
-    grid: Option<Vec<HashMap<String, serde_json::Value>>>,
+    /// Cached per-dimension discrete values (computed once, not the full grid).
+    dim_values: Option<Vec<(String, Vec<serde_json::Value>)>>,
+    /// Total number of combinations.
+    total: Option<usize>,
 }
 
 impl GridSampler {
     pub fn new(points_per_dim: usize) -> Self {
         Self {
             points_per_dim,
-            grid: None,
+            dim_values: None,
+            total: None,
         }
     }
 
-    fn build_grid(&self, space: &SearchSpace) -> Vec<HashMap<String, serde_json::Value>> {
-        let dim_values: Vec<(String, Vec<serde_json::Value>)> = space
+    /// Compute discrete values for each dimension (once).
+    fn ensure_dims(&mut self, space: &SearchSpace) {
+        if self.dim_values.is_some() {
+            return;
+        }
+        let dims: Vec<(String, Vec<serde_json::Value>)> = space
             .active_dimensions()
             .iter()
             .map(|dim| {
@@ -44,25 +56,43 @@ impl GridSampler {
             })
             .collect();
 
-        if dim_values.is_empty() {
-            return vec![HashMap::new()];
+        let total = if dims.is_empty() {
+            1 // one combo with empty params
+        } else {
+            dims.iter().map(|(_, v)| v.len()).product()
+        };
+
+        self.dim_values = Some(dims);
+        self.total = Some(total);
+    }
+
+    /// Convert a flat trial index into a multi-dimensional index
+    /// and look up the parameter values. O(n_dims) per call.
+    fn sample_at(&self, trial_index: usize) -> Option<HashMap<String, serde_json::Value>> {
+        let dims = self.dim_values.as_ref()?;
+        let total = self.total?;
+
+        if trial_index >= total {
+            return None;
         }
 
-        // Cartesian product
-        let mut combos: Vec<HashMap<String, serde_json::Value>> = vec![HashMap::new()];
-        for (name, values) in &dim_values {
-            let mut new_combos = Vec::new();
-            for combo in &combos {
-                for val in values {
-                    let mut c = combo.clone();
-                    c.insert(name.clone(), val.clone());
-                    new_combos.push(c);
-                }
-            }
-            combos = new_combos;
+        if dims.is_empty() {
+            return Some(HashMap::new());
         }
 
-        combos
+        let mut params = HashMap::new();
+        let mut remaining = trial_index;
+
+        // Decompose flat index into per-dimension indices
+        // like converting a number to mixed-radix representation
+        for (name, values) in dims.iter().rev() {
+            let dim_size = values.len();
+            let dim_idx = remaining % dim_size;
+            remaining /= dim_size;
+            params.insert(name.clone(), values[dim_idx].clone());
+        }
+
+        Some(params)
     }
 
     fn discretize(&self, dim: &SearchDimension) -> Vec<serde_json::Value> {
@@ -84,6 +114,7 @@ impl GridSampler {
             }
             SearchDimension::Categorical { choices, .. } => choices.clone(),
             SearchDimension::Conditional { dimension, .. } => self.discretize(dimension),
+            _ => vec![serde_json::Value::Null],
         }
     }
 }
@@ -94,14 +125,12 @@ impl Sampler for GridSampler {
         space: &SearchSpace,
         trial_index: usize,
     ) -> Result<Option<HashMap<String, serde_json::Value>>> {
-        if self.grid.is_none() {
-            self.grid = Some(self.build_grid(space));
-        }
-        Ok(self.grid.as_ref().unwrap().get(trial_index).cloned())
+        self.ensure_dims(space);
+        Ok(self.sample_at(trial_index))
     }
 
     fn n_trials(&self) -> Option<usize> {
-        self.grid.as_ref().map(|g| g.len())
+        self.total
     }
 }
 
@@ -146,6 +175,7 @@ impl RandomSampler {
             SearchDimension::Conditional { dimension, .. } => {
                 self.sample_dim(dimension, rng_state)
             }
+            _ => serde_json::Value::Null,
         }
     }
 }

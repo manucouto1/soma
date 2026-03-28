@@ -4,6 +4,7 @@ use std::fmt;
 /// Typed values flowing between filters in a pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data")]
+#[non_exhaustive]
 pub enum Value {
     /// Numeric tensor data (shape + flat data)
     Tensor {

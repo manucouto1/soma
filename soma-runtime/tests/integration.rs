@@ -265,12 +265,12 @@ fn study_with_pipeline_integration() {
             .map(|(p, y)| (p - y).powi(2))
             .sum::<f64>() / pred_data.len() as f64;
 
-        Ok(vec![MetricRecord {
+        Ok(TrialOutcome::Completed(vec![MetricRecord {
             name: "mse".into(),
             value: mse,
             step: 0,
             timestamp: chrono::Utc::now(),
-        }])
+        }]))
     });
 
     let mut sampler = RandomSampler::new(10, Some(42));
@@ -325,12 +325,12 @@ fn study_continues_after_failed_trials() {
         if x < 0.0 {
             return Err(SomaError::Other("negative x".into()));
         }
-        Ok(vec![MetricRecord {
+        Ok(TrialOutcome::Completed(vec![MetricRecord {
             name: "score".into(),
             value: x,
             step: 0,
             timestamp: chrono::Utc::now(),
-        }])
+        }]))
     });
 
     let mut sampler = RandomSampler::new(10, Some(42));

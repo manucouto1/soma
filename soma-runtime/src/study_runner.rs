@@ -1,18 +1,29 @@
 use crate::event_bus::EventBus;
 use crate::sampler::Sampler;
-use soma_core::error::{Result, SomaError};
+use soma_core::error::Result;
 use soma_core::event::{Event, MetricRecord};
 use soma_core::study::{Study, Trial, TrialState};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Result of executing a trial. Separates control flow (pruning) from errors.
+#[derive(Debug, Clone)]
+pub enum TrialOutcome {
+    /// Trial completed successfully with final metrics.
+    Completed(Vec<MetricRecord>),
+    /// Trial was pruned (stopped early) at the given step.
+    Pruned { step: usize, reason: String },
+}
+
 /// Callback that executes a trial given sampled parameters.
-/// Returns the final metrics for the trial.
+///
+/// Returns `Ok(TrialOutcome)` for normal completion or pruning,
+/// `Err(SomaError)` only for unexpected failures.
 pub trait TrialExecutor: Send + Sync {
     fn execute_trial(
         &self,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<MetricRecord>>;
+    ) -> Result<TrialOutcome>;
 }
 
 /// Function-based trial executor for convenience.
@@ -20,14 +31,14 @@ pub struct FnTrialExecutor<F>(pub F);
 
 impl<F> TrialExecutor for FnTrialExecutor<F>
 where
-    F: Fn(&std::collections::HashMap<String, serde_json::Value>) -> Result<Vec<MetricRecord>>
+    F: Fn(&std::collections::HashMap<String, serde_json::Value>) -> Result<TrialOutcome>
         + Send
         + Sync,
 {
     fn execute_trial(
         &self,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<MetricRecord>> {
+    ) -> Result<TrialOutcome> {
         (self.0)(params)
     }
 }
@@ -74,12 +85,11 @@ impl StudyRunner {
             let start = Instant::now();
 
             match executor.execute_trial(&params) {
-                Ok(metrics) => {
+                Ok(TrialOutcome::Completed(metrics)) => {
                     trial.duration_ms = Some(start.elapsed().as_millis() as u64);
                     trial.metrics = metrics.clone();
                     trial.state = TrialState::Completed;
 
-                    // Emit metric events
                     for metric in &metrics {
                         self.event_bus.emit(Event::TrialMetric {
                             study_id: study.id.clone(),
@@ -94,7 +104,7 @@ impl StudyRunner {
                         final_metrics: metrics,
                     });
                 }
-                Err(SomaError::Pruned { step, reason }) => {
+                Ok(TrialOutcome::Pruned { step, reason }) => {
                     trial.duration_ms = Some(start.elapsed().as_millis() as u64);
                     trial.state = TrialState::Pruned {
                         step,
@@ -186,6 +196,7 @@ mod tests {
     use super::*;
     use crate::sampler::{GridSampler, RandomSampler};
     use chrono::Utc;
+    use soma_core::error::SomaError;
     use soma_core::search::{Scale, SearchDimension, SearchSpace};
     use soma_core::study::{Direction, Objective, SearchStrategy};
 
@@ -212,17 +223,17 @@ mod tests {
     fn make_executor() -> FnTrialExecutor<
         impl Fn(
             &std::collections::HashMap<String, serde_json::Value>,
-        ) -> Result<Vec<MetricRecord>>,
+        ) -> Result<TrialOutcome>,
     > {
         FnTrialExecutor(|params: &std::collections::HashMap<String, serde_json::Value>| {
             let lr = params["lr"].as_f64().unwrap();
             let f1 = (1.0 - (lr - 0.01).abs() * 10.0).max(0.0);
-            Ok(vec![MetricRecord {
+            Ok(TrialOutcome::Completed(vec![MetricRecord {
                 name: "f1".into(),
                 value: f1,
                 step: 0,
                 timestamp: Utc::now(),
-            }])
+            }]))
         })
     }
 
@@ -334,12 +345,12 @@ mod tests {
                 if x > 0.5 {
                     Err(SomaError::Other("too high".into()))
                 } else {
-                    Ok(vec![MetricRecord {
+                    Ok(TrialOutcome::Completed(vec![MetricRecord {
                         name: "f1".into(),
                         value: x,
                         step: 0,
                         timestamp: Utc::now(),
-                    }])
+                    }]))
                 }
             },
         );
@@ -387,7 +398,7 @@ mod tests {
         // Executor that prunes every trial
         let executor = FnTrialExecutor(
             |_params: &std::collections::HashMap<String, serde_json::Value>| {
-                Err(SomaError::Pruned {
+                Ok(TrialOutcome::Pruned {
                     step: 5,
                     reason: "below median".into(),
                 })
@@ -433,12 +444,12 @@ mod tests {
 
         let executor = FnTrialExecutor(
             |_params: &std::collections::HashMap<String, serde_json::Value>| {
-                Ok(vec![MetricRecord {
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
                     name: "f1".into(),
                     value: 0.5,
                     step: 0,
                     timestamp: Utc::now(),
-                }])
+                }]))
             },
         );
 

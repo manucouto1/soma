@@ -34,6 +34,7 @@ pub struct PlanSummary {
 /// Structured events emitted during execution at three levels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type")]
+#[non_exhaustive]
 pub enum Event {
     // ── Level 1: Pipeline execution (per run) ──
 

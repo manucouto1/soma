@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Classification of filter behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FilterKind {
     /// No state needed. `fit()` is a no-op.
     /// Example: activation function, fixed projection.
@@ -21,6 +22,7 @@ pub enum FilterKind {
 
 /// How a filter behaves in streaming mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum StreamMode {
     /// State is fixed (pre-trained). Each chunk processed independently.
     FixedState,

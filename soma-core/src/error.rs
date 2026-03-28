@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum SomaError {
     #[error("filter requires labels (y) but none were provided")]
     RequiresLabels,

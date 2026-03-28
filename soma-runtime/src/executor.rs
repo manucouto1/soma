@@ -277,6 +277,8 @@ pub fn execute(
         ExecutionPlan::Remote { plan, .. } => {
             execute(plan, ctx, filters, cache)
         }
+
+        _ => Ok(()),
     }
 }
 

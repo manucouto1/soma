@@ -12,7 +12,7 @@ use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use soma_core::study::{Direction, Objective, SearchStrategy, Study};
 use soma_core::value::Value;
 use soma_runtime::sampler::{GridSampler, RandomSampler, Sampler};
-use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner};
+use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use soma_runtime::{EventBus, Pipeline};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
@@ -81,6 +81,7 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
         }
         Value::Bytes(b) => Ok(b.into_pyobject(py)?.into_any().unbind()),
         Value::Empty => Ok(py.None()),
+        _ => Ok(py.None()),
     }
 }
 
@@ -324,7 +325,7 @@ impl PyStudy {
         let executor_obj = executor.clone().unbind();
 
         let trial_executor = FnTrialExecutor(
-            move |params: &HashMap<String, serde_json::Value>| -> SomaResult<Vec<MetricRecord>> {
+            move |params: &HashMap<String, serde_json::Value>| -> SomaResult<TrialOutcome> {
                 Python::with_gil(|py| {
                     let py_params = PyDict::new(py);
                     for (k, v) in params {
@@ -366,7 +367,7 @@ impl PyStudy {
                             timestamp: chrono::Utc::now(),
                         });
                     }
-                    Ok(metrics)
+                    Ok(TrialOutcome::Completed(metrics))
                 })
             },
         );
