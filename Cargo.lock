@@ -1559,6 +1559,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "soma-memory"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+ "serde",
+ "serde_json",
+ "soma-core",
+ "thiserror",
+]
+
+[[package]]
 name = "soma-python"
 version = "0.1.0"
 dependencies = [

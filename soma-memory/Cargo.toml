@@ -1,0 +1,17 @@
+[package]
+name = "soma-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Knowledge base and temporal experiment tracking for the Soma runtime"
+
+[dependencies]
+soma-core = { path = "../soma-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
