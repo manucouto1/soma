@@ -125,6 +125,9 @@ impl<'a> Compiler<'a> {
         // Check gradient flow
         self.check_gradient_flow(&sorted);
 
+        // Validate schema compatibility
+        self.validate_schemas(&sorted);
+
         // Build the structural plan (detect parallelism)
         let plan = self.build_plan(&sorted);
 
@@ -336,6 +339,48 @@ impl<'a> Compiler<'a> {
                 branches.into_iter().map(|b| self.resolve_distribution(b)).collect(),
             ),
             other => other,
+        }
+    }
+
+    /// Validate schema compatibility between connected filters.
+    ///
+    /// For each edge (A → B), checks that A's output_schema is compatible
+    /// with B's input_schema. Emits warnings (not errors) for mismatches,
+    /// since schemas are optional and None means "accepts anything".
+    fn validate_schemas(&mut self, sorted: &[&str]) {
+        for &node_id in sorted {
+            let input_schema = self
+                .registry
+                .meta(node_id)
+                .and_then(|m| m.input_schema.clone());
+
+            // Skip if this node accepts anything
+            let Some(expected_input) = input_schema else {
+                continue;
+            };
+
+            // Check each predecessor's output schema
+            for pred_id in self.graph.predecessors(node_id) {
+                let pred_output = self
+                    .registry
+                    .meta(pred_id)
+                    .and_then(|m| m.output_schema.clone());
+
+                let Some(actual_output) = pred_output else {
+                    continue; // predecessor output unknown, skip
+                };
+
+                if !actual_output.is_compatible_with(&expected_input) {
+                    self.diagnostics.push(Diagnostic {
+                        node_id: node_id.to_string(),
+                        level: DiagnosticLevel::Warning,
+                        message: format!(
+                            "schema mismatch: `{pred_id}` outputs {actual_output} \
+                             but `{node_id}` expects {expected_input}",
+                        ),
+                    });
+                }
+            }
         }
     }
 

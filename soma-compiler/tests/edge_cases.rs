@@ -4,6 +4,7 @@ use soma_compiler::{
 use soma_core::cache::{CacheKey, CacheStore, EntryMeta};
 use soma_core::error::{Result, SomaError};
 use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
+use soma_core::schema::{DataType, Schema};
 use soma_core::graph::{linear_pipeline, Edge, Graph, Node};
 use soma_core::value::Value;
 use std::collections::HashSet;
@@ -217,4 +218,188 @@ fn all_compile_modes() {
     // NoCache: no caching
     let r3 = compile(&graph, &reg, CompileMode::NoCache, Some(&cache)).unwrap();
     assert_eq!(r3.plan.cached_count(), 0);
+}
+
+// ── Schema validation ──
+
+fn meta_with_schemas(
+    output: Option<Schema>,
+    input: Option<Schema>,
+) -> FilterMeta {
+    FilterMeta {
+        name: "typed".into(),
+        kind: FilterKind::Trainable,
+        cacheable: true,
+        differentiable: true,
+        stream_mode: StreamMode::FixedState,
+        distribution: soma_core::filter::Distribution::Local,
+        input_schema: input,
+        output_schema: output,
+    }
+}
+
+#[test]
+fn schema_compatible_no_warnings() {
+    let graph = linear_pipeline(vec![
+        Node::new("a", "A", "F"),
+        Node::new("b", "B", "F"),
+    ]);
+
+    let mut reg = SimpleFilterRegistry::new();
+    // A outputs f64[128], B expects f64[128] → compatible
+    reg.register_meta(
+        "a",
+        meta_with_schemas(
+            Some(Schema::vector(DataType::Float64, 128)),
+            None,
+        ),
+        CacheKey::hash_data(b"a"),
+    );
+    reg.register_meta(
+        "b",
+        meta_with_schemas(
+            None,
+            Some(Schema::vector(DataType::Float64, 128)),
+        ),
+        CacheKey::hash_data(b"b"),
+    );
+
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    let schema_warnings: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("schema mismatch"))
+        .collect();
+    assert!(schema_warnings.is_empty(), "should have no schema warnings");
+}
+
+#[test]
+fn schema_incompatible_dtype_warns() {
+    let graph = linear_pipeline(vec![
+        Node::new("a", "A", "F"),
+        Node::new("b", "B", "F"),
+    ]);
+
+    let mut reg = SimpleFilterRegistry::new();
+    // A outputs f64, B expects i64 → incompatible
+    reg.register_meta(
+        "a",
+        meta_with_schemas(
+            Some(Schema::vector(DataType::Float64, 128)),
+            None,
+        ),
+        CacheKey::hash_data(b"a"),
+    );
+    reg.register_meta(
+        "b",
+        meta_with_schemas(
+            None,
+            Some(Schema::vector(DataType::Int64, 128)),
+        ),
+        CacheKey::hash_data(b"b"),
+    );
+
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    let schema_warnings: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("schema mismatch"))
+        .collect();
+    assert_eq!(schema_warnings.len(), 1);
+    assert!(schema_warnings[0].message.contains("f64"));
+    assert!(schema_warnings[0].message.contains("i64"));
+}
+
+#[test]
+fn schema_incompatible_shape_warns() {
+    let graph = linear_pipeline(vec![
+        Node::new("a", "A", "F"),
+        Node::new("b", "B", "F"),
+    ]);
+
+    let mut reg = SimpleFilterRegistry::new();
+    // A outputs f64[128], B expects f64[256] → shape mismatch
+    reg.register_meta(
+        "a",
+        meta_with_schemas(
+            Some(Schema::vector(DataType::Float64, 128)),
+            None,
+        ),
+        CacheKey::hash_data(b"a"),
+    );
+    reg.register_meta(
+        "b",
+        meta_with_schemas(
+            None,
+            Some(Schema::vector(DataType::Float64, 256)),
+        ),
+        CacheKey::hash_data(b"b"),
+    );
+
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    let schema_warnings: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("schema mismatch"))
+        .collect();
+    assert_eq!(schema_warnings.len(), 1);
+}
+
+#[test]
+fn schema_dynamic_compatible_with_fixed() {
+    let graph = linear_pipeline(vec![
+        Node::new("a", "A", "F"),
+        Node::new("b", "B", "F"),
+    ]);
+
+    let mut reg = SimpleFilterRegistry::new();
+    // A outputs f64[batch, 128], B expects f64[32, 128] → compatible (dynamic batch)
+    reg.register_meta(
+        "a",
+        meta_with_schemas(
+            Some(Schema::batched(DataType::Float64, &[128])),
+            None,
+        ),
+        CacheKey::hash_data(b"a"),
+    );
+    reg.register_meta(
+        "b",
+        meta_with_schemas(
+            None,
+            Some(Schema::matrix(DataType::Float64, 32, 128)),
+        ),
+        CacheKey::hash_data(b"b"),
+    );
+
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    let schema_warnings: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("schema mismatch"))
+        .collect();
+    assert!(schema_warnings.is_empty());
+}
+
+#[test]
+fn schema_none_skips_validation() {
+    let graph = linear_pipeline(vec![
+        Node::new("a", "A", "F"),
+        Node::new("b", "B", "F"),
+    ]);
+
+    let mut reg = SimpleFilterRegistry::new();
+    // Both have None schemas → no validation, no warnings
+    reg.register_meta(
+        "a",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"a"),
+    );
+    reg.register_meta(
+        "b",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"b"),
+    );
+
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    assert!(result.diagnostics.is_empty());
 }
