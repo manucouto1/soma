@@ -78,14 +78,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install maturin and deps
-        run: pip install maturin pytest numpy
+      - name: Create virtualenv and install deps
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin pytest numpy
 
       - name: Build and install soma
-        run: cd soma-python && maturin develop
+        run: |
+          source .venv/bin/activate
+          cd soma-python && maturin develop
 
       - name: Run Python tests
-        run: cd soma-python && pytest tests/ -v
+        run: |
+          source .venv/bin/activate
+          cd soma-python && pytest tests/ -v
 
   doc:
     name: Documentation
