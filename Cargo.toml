@@ -5,6 +5,7 @@ members = [
     "soma-compiler",
     "soma-runtime",
     "soma-macros",
+    "soma-python",
 ]
 
 [workspace.package]
@@ -41,3 +42,7 @@ tracing = "0.1"
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = "1"
+
+# Python bindings
+pyo3 = { version = "0.24", features = ["extension-module"] }
+numpy = { version = "0.24" }

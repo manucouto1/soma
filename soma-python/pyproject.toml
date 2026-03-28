@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "soma"
+version = "0.1.0"
+description = "A computational graph runtime for research pipelines, agent orchestration, and data virtualization"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "numpy>=1.20"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "soma._soma"

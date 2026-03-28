@@ -1,0 +1,21 @@
+[package]
+name = "soma-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python bindings for the Soma computational graph runtime"
+
+[lib]
+name = "_soma"
+crate-type = ["cdylib"]
+
+[dependencies]
+soma-core = { path = "../soma-core" }
+soma-compiler = { path = "../soma-compiler" }
+soma-runtime = { path = "../soma-runtime" }
+pyo3 = { workspace = true }
+numpy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
