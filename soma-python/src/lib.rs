@@ -154,6 +154,7 @@ impl Filter for PyFilterBridge {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
+            distribution: soma_core::filter::Distribution::Local,
         }
     }
 }

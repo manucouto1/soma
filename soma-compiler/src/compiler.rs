@@ -389,6 +389,7 @@ mod tests {
             cacheable: true,
             differentiable,
             stream_mode: StreamMode::FixedState,
+            distribution: soma_core::filter::Distribution::Local,
         }
     }
 

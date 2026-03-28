@@ -118,6 +118,7 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
                     cacheable: #cacheable,
                     differentiable: #differentiable,
                     stream_mode: #stream_mode,
+                    distribution: soma_core::filter::Distribution::Local,
                 }
             }
         }

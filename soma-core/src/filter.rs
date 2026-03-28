@@ -32,6 +32,26 @@ pub enum StreamMode {
     Barrier,
 }
 
+/// Where a filter should execute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Distribution {
+    /// Execute in the local process (default).
+    Local,
+    /// Execute on a specific remote target.
+    Remote(RemoteTarget),
+    /// Execute anywhere (scheduler decides).
+    Any,
+}
+
+/// Target for remote execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteTarget {
+    /// A specific worker by ID.
+    WorkerId(String),
+    /// Any worker matching a tag (e.g. "gpu", "high-memory").
+    Tag(String),
+}
+
 /// Metadata about a filter, used by the compiler for optimization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterMeta {
@@ -49,6 +69,9 @@ pub struct FilterMeta {
 
     /// Behavior in streaming mode.
     pub stream_mode: StreamMode,
+
+    /// Where this filter should execute.
+    pub distribution: Distribution,
 }
 
 /// The fundamental computation unit in Soma.
@@ -125,6 +148,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
+                distribution: Distribution::Local,
             }
         }
     }
@@ -201,6 +225,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
+                distribution: Distribution::Local,
             }
         }
     }
