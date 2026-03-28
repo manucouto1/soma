@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "soma-core",
+    "soma-compiler",
+    "soma-runtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/manucouto1/soma"
+description = "A computational graph runtime for research pipelines, agent orchestration, and data virtualization"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Hashing
+sha2 = "0.10"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "2"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Testing
+proptest = "1"
+
+# Logging
+tracing = "0.1"
