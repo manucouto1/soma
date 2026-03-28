@@ -6,6 +6,7 @@ members = [
     "soma-runtime",
     "soma-macros",
     "soma-python",
+    "soma-worker",
 ]
 
 [workspace.package]
