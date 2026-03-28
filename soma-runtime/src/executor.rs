@@ -9,6 +9,63 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Graph topology information for input resolution.
+///
+/// Maps each node to its predecessor node IDs so the executor knows
+/// where to read inputs from in the context store.
+#[derive(Debug, Clone, Default)]
+pub struct GraphInfo {
+    /// node_id → list of predecessor node IDs
+    predecessors: HashMap<String, Vec<String>>,
+}
+
+impl GraphInfo {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register predecessors for a node.
+    pub fn set_predecessors(&mut self, node_id: impl Into<String>, preds: Vec<String>) {
+        self.predecessors.insert(node_id.into(), preds);
+    }
+
+    /// Build GraphInfo from a soma_core::graph::Graph.
+    pub fn from_graph(graph: &soma_core::graph::Graph) -> Self {
+        let mut info = Self::new();
+        for node in &graph.nodes {
+            let preds: Vec<String> = graph
+                .predecessors(&node.id)
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            info.set_predecessors(node.id.clone(), preds);
+        }
+        info
+    }
+
+    /// Build GraphInfo for a linear pipeline (each node depends on the previous).
+    pub fn for_linear(node_ids: &[&str]) -> Self {
+        let mut info = Self::new();
+        for (i, &id) in node_ids.iter().enumerate() {
+            let preds = if i > 0 {
+                vec![node_ids[i - 1].to_string()]
+            } else {
+                vec![]
+            };
+            info.set_predecessors(id, preds);
+        }
+        info
+    }
+
+    /// Get predecessors for a node.
+    pub fn predecessors(&self, node_id: &str) -> &[String] {
+        self.predecessors
+            .get(node_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+}
+
 /// Execution context passed to filters during runtime.
 pub struct Context {
     /// Outputs of completed nodes, keyed by node ID.
@@ -17,8 +74,10 @@ pub struct Context {
     pub event_bus: Arc<EventBus>,
     /// Current run ID.
     pub run_id: String,
-    /// Track execution order so we know the most recent output.
+    /// Track execution order.
     pub execution_order: Vec<String>,
+    /// Graph topology for input resolution.
+    pub graph_info: GraphInfo,
 }
 
 impl Context {
@@ -28,7 +87,13 @@ impl Context {
             event_bus,
             run_id: run_id.into(),
             execution_order: Vec::new(),
+            graph_info: GraphInfo::new(),
         }
+    }
+
+    pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
+        self.graph_info = info;
+        self
     }
 
     pub fn get(&self, node_id: &str) -> Option<&Value> {
@@ -103,7 +168,7 @@ pub fn execute(
 
             let filter = filters.get(node_id).ok_or_else(|| SomaError::NodeNotFound(node_id.clone()))?;
 
-            // Resolve input: use predecessor output or Empty
+            // Resolve input from predecessors
             let input = resolve_input(node_id, ctx);
 
             // Get or compute state
@@ -169,20 +234,18 @@ pub fn execute(
 
         ExecutionPlan::Parallel(branches) => {
             // Synchronous parallel for now (true async parallelism in future)
-            // Each branch gets its own context snapshot, results merged back
             let mut branch_outputs: Vec<(String, Value)> = Vec::new();
 
             for branch in branches {
-                // Execute in a cloned context to isolate branches
                 let mut branch_ctx = Context {
                     store: ctx.store.clone(),
                     event_bus: ctx.event_bus.clone(),
                     run_id: ctx.run_id.clone(),
                     execution_order: ctx.execution_order.clone(),
+                    graph_info: ctx.graph_info.clone(),
                 };
                 execute(branch, &mut branch_ctx, filters, cache)?;
 
-                // Collect new entries produced by this branch
                 for (key, value) in &branch_ctx.store {
                     if !ctx.store.contains_key(key) {
                         branch_outputs.push((key.clone(), value.clone()));
@@ -190,7 +253,6 @@ pub fn execute(
                 }
             }
 
-            // Merge branch outputs back into main context
             for (key, value) in branch_outputs {
                 ctx.set(key, value);
             }
@@ -206,7 +268,6 @@ pub fn execute(
         }
 
         ExecutionPlan::Branch { node_id: _, arms } => {
-            // For now, execute first arm. Full condition evaluation in future.
             if let Some((_, plan)) = arms.first() {
                 execute(plan, ctx, filters, cache)?;
             }
@@ -214,23 +275,48 @@ pub fn execute(
         }
 
         ExecutionPlan::Remote { plan, .. } => {
-            // For now, execute locally. Remote dispatch implemented in soma-worker.
             execute(plan, ctx, filters, cache)
         }
     }
 }
 
-/// Resolve the input for a node from the context store.
-/// Uses the most recently produced output as input.
-fn resolve_input(_node_id: &str, ctx: &Context) -> Value {
-    // Take the output of the most recently executed node.
-    // In a full implementation, this would use the graph edges
-    // to find the specific predecessor outputs.
-    ctx.execution_order
-        .last()
-        .and_then(|last_id| ctx.store.get(last_id))
-        .cloned()
-        .unwrap_or(Value::Empty)
+/// Resolve the input for a node from the context store using graph topology.
+///
+/// - If the node has one predecessor, use that predecessor's output.
+/// - If the node has multiple predecessors, merge them into a JSON object.
+/// - If the node has no predecessors, use Value::Empty (root node).
+/// - Fallback: if no graph info, use the most recently produced output.
+fn resolve_input(node_id: &str, ctx: &Context) -> Value {
+    let preds = ctx.graph_info.predecessors(node_id);
+
+    match preds.len() {
+        0 => {
+            // Root node or no graph info: fall back to last output
+            ctx.execution_order
+                .last()
+                .and_then(|last_id| ctx.store.get(last_id))
+                .cloned()
+                .unwrap_or(Value::Empty)
+        }
+        1 => {
+            // Single predecessor: use its output directly
+            ctx.store
+                .get(&preds[0])
+                .cloned()
+                .unwrap_or(Value::Empty)
+        }
+        _ => {
+            // Multiple predecessors: merge into JSON object keyed by node ID
+            let mut merged = serde_json::Map::new();
+            for pred_id in preds {
+                if let Some(val) = ctx.store.get(pred_id) {
+                    let json_val = serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
+                    merged.insert(pred_id.clone(), json_val);
+                }
+            }
+            Value::Json(serde_json::Value::Object(merged))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -320,6 +406,10 @@ mod tests {
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
 
+        // Tell executor that "doubler" reads from "input"
+        ctx.graph_info
+            .set_predecessors("doubler", vec!["input".into()]);
+
         let mut filters = FilterStore::new();
         filters.register("doubler", Box::new(DoublerFilter));
 
@@ -335,10 +425,14 @@ mod tests {
     }
 
     #[test]
-    fn execute_sequence() {
+    fn execute_sequence_with_graph_info() {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
+
+        // Linear: input → add → double
+        let graph_info = GraphInfo::for_linear(&["input", "add", "double"]);
+        ctx.graph_info = graph_info;
 
         let mut filters = FilterStore::new();
         filters.register("add", Box::new(AdderFilter { amount: 10.0 }));
@@ -389,6 +483,8 @@ mod tests {
 
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+        ctx.graph_info
+            .set_predecessors("double", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
         filters.register("double", Box::new(DoublerFilter));
@@ -399,7 +495,6 @@ mod tests {
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
 
-        // Should have emitted NodeStarted + NodeCompleted
         let e1 = rx.try_recv().unwrap();
         assert!(matches!(e1, Event::NodeStarted { .. }));
         let e2 = rx.try_recv().unwrap();
@@ -430,10 +525,16 @@ mod tests {
     }
 
     #[test]
-    fn execute_parallel_branches() {
+    fn execute_parallel_branches_merge_outputs() {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![5.0], vec![1]));
+
+        // Both branches read from "input"
+        ctx.graph_info
+            .set_predecessors("double", vec!["input".into()]);
+        ctx.graph_info
+            .set_predecessors("add", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
         filters.register("double", Box::new(DoublerFilter));
@@ -450,8 +551,58 @@ mod tests {
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
 
-        // Both branches should have produced outputs
-        assert!(ctx.get("double").is_some());
-        assert!(ctx.get("add").is_some());
+        // Both branches produced their own outputs
+        let double_out = ctx.get("double").unwrap().as_tensor().unwrap().0;
+        assert_eq!(double_out, &[10.0]); // 5*2
+
+        let add_out = ctx.get("add").unwrap().as_tensor().unwrap().0;
+        assert_eq!(add_out, &[105.0]); // 5+100
+    }
+
+    #[test]
+    fn resolve_input_single_predecessor() {
+        let bus = Arc::new(EventBus::new(8));
+        let mut ctx = Context::new(bus, "r");
+        ctx.set("A", Value::tensor(vec![42.0], vec![1]));
+        ctx.graph_info.set_predecessors("B", vec!["A".into()]);
+
+        let input = resolve_input("B", &ctx);
+        let (data, _) = input.as_tensor().unwrap();
+        assert_eq!(data, &[42.0]);
+    }
+
+    #[test]
+    fn resolve_input_multiple_predecessors() {
+        let bus = Arc::new(EventBus::new(8));
+        let mut ctx = Context::new(bus, "r");
+        ctx.set("A", Value::tensor(vec![1.0], vec![1]));
+        ctx.set("B", Value::tensor(vec![2.0], vec![1]));
+        ctx.graph_info
+            .set_predecessors("C", vec!["A".into(), "B".into()]);
+
+        let input = resolve_input("C", &ctx);
+        // Should be a JSON object with both predecessor outputs
+        let json = input.as_json().unwrap();
+        assert!(json.get("A").is_some());
+        assert!(json.get("B").is_some());
+    }
+
+    #[test]
+    fn resolve_input_no_predecessors_fallback() {
+        let bus = Arc::new(EventBus::new(8));
+        let mut ctx = Context::new(bus, "r");
+        ctx.set("prev", Value::tensor(vec![7.0], vec![1]));
+        // No graph info for "root" → falls back to last output
+        let input = resolve_input("root", &ctx);
+        let (data, _) = input.as_tensor().unwrap();
+        assert_eq!(data, &[7.0]);
+    }
+
+    #[test]
+    fn graph_info_from_linear() {
+        let info = GraphInfo::for_linear(&["a", "b", "c"]);
+        assert!(info.predecessors("a").is_empty());
+        assert_eq!(info.predecessors("b"), &["a"]);
+        assert_eq!(info.predecessors("c"), &["b"]);
     }
 }

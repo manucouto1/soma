@@ -31,7 +31,7 @@ impl MemoryCache {
 
     /// Number of entries currently in the cache.
     pub fn len(&self) -> usize {
-        self.store.lock().unwrap().len()
+        self.store.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Whether the cache is empty.
@@ -41,7 +41,7 @@ impl MemoryCache {
 
     /// Clear all entries.
     pub fn clear(&self) {
-        self.store.lock().unwrap().clear();
+        self.store.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 
@@ -53,7 +53,7 @@ impl Default for MemoryCache {
 
 impl CacheStore for MemoryCache {
     fn get(&self, key: &CacheKey) -> Result<Option<Value>> {
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = store.get_mut(key) {
             entry.meta.last_accessed = Utc::now();
             Ok(Some(entry.value.clone()))
@@ -66,7 +66,7 @@ impl CacheStore for MemoryCache {
         let size = estimate_size(value);
         let now = Utc::now();
 
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         store.insert(
             key.clone(),
             CacheEntry {
@@ -88,11 +88,11 @@ impl CacheStore for MemoryCache {
     }
 
     fn exists(&self, key: &CacheKey) -> Result<bool> {
-        Ok(self.store.lock().unwrap().contains_key(key))
+        Ok(self.store.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
     }
 
     fn remove(&self, key: &CacheKey) -> Result<()> {
-        self.store.lock().unwrap().remove(key);
+        self.store.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
         Ok(())
     }
 

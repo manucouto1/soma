@@ -247,6 +247,14 @@ impl<'a> Compiler<'a> {
             for pred in &pred_ids {
                 if let Some(pred_key) = node_keys.get(*pred) {
                     key_parts.push(pred_key.0.to_vec());
+                } else {
+                    // Predecessor should always be processed first in topological order.
+                    // If missing, the cache key will be incomplete but won't panic.
+                    debug_assert!(
+                        false,
+                        "predecessor `{pred}` of `{node_id}` not in node_keys - \
+                         topological order may be broken"
+                    );
                 }
             }
             let parts_refs: Vec<&[u8]> = key_parts.iter().map(|p| p.as_slice()).collect();
@@ -331,7 +339,11 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Check gradient flow and emit warnings for interruptions.
+    /// Check gradient flow and emit warnings for each interruption.
+    ///
+    /// Gradient flow can restart after an opaque node (differentiable nodes
+    /// after an opaque one can still propagate gradients among themselves),
+    /// but gradients from before the interruption are lost.
     fn check_gradient_flow(&mut self, sorted: &[&str]) {
         let mut gradient_flows = true;
 
@@ -343,12 +355,15 @@ impl<'a> Compiler<'a> {
                         level: DiagnosticLevel::Warning,
                         message: format!(
                             "gradient flow interrupted at `{}` ({:?}). \
-                             Downstream filters will not receive upstream gradients.",
+                             Gradients from upstream will not reach downstream filters \
+                             through this node.",
                             node_id, meta.kind,
                         ),
                     });
                     gradient_flows = false;
                 } else if !gradient_flows && meta.differentiable {
+                    // Gradient flow restarts: differentiable nodes after the
+                    // interruption can propagate gradients among themselves
                     gradient_flows = true;
                 }
             }
