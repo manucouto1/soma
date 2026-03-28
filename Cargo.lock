@@ -1525,6 +1525,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "soma-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+ "serde",
+ "serde_json",
+ "soma-core",
+ "soma-memory",
+ "soma-runtime",
+ "tracing",
+]
+
+[[package]]
 name = "soma-compiler"
 version = "0.1.0"
 dependencies = [

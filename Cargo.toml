@@ -8,6 +8,7 @@ members = [
     "soma-python",
     "soma-worker",
     "soma-memory",
+    "soma-agent",
 ]
 
 [workspace.package]
