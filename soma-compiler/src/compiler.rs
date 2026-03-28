@@ -135,6 +135,9 @@ impl<'a> Compiler<'a> {
             plan
         };
 
+        // Resolve distribution (wrap Remote nodes)
+        let plan = self.resolve_distribution(plan);
+
         let plan = plan.simplify();
 
         Ok(CompileResult {
@@ -294,6 +297,35 @@ impl<'a> Compiler<'a> {
                     .into_iter()
                     .map(|b| self.apply_cache_to_plan(b, cached, keys))
                     .collect(),
+            ),
+            other => other,
+        }
+    }
+
+    /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
+    fn resolve_distribution(&self, plan: ExecutionPlan) -> ExecutionPlan {
+        match plan {
+            ExecutionPlan::Execute { ref node_id } => {
+                if let Some(meta) = self.registry.meta(node_id) {
+                    match &meta.distribution {
+                        soma_core::filter::Distribution::Remote(target) => {
+                            ExecutionPlan::Remote {
+                                node_id: node_id.clone(),
+                                target: target.clone(),
+                                plan: Box::new(plan),
+                            }
+                        }
+                        _ => plan,
+                    }
+                } else {
+                    plan
+                }
+            }
+            ExecutionPlan::Sequence(steps) => ExecutionPlan::Sequence(
+                steps.into_iter().map(|s| self.resolve_distribution(s)).collect(),
+            ),
+            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
+                branches.into_iter().map(|b| self.resolve_distribution(b)).collect(),
             ),
             other => other,
         }
@@ -721,5 +753,77 @@ mod tests {
         let summary = result.plan.summary();
         assert_eq!(summary.total_nodes, 4);
         assert_eq!(summary.parallel_branches, 2);
+    }
+
+    #[test]
+    fn distribution_wraps_remote_nodes() {
+        let graph = linear_pipeline(vec![
+            Node::new("preprocess", "Preprocess", "F"),
+            Node::new("gpu_train", "GpuTrain", "F"),
+            Node::new("evaluate", "Evaluate", "F"),
+        ]);
+
+        let mut registry = SimpleFilterRegistry::new();
+        // preprocess: local
+        registry.register_meta(
+            "preprocess",
+            make_meta(FilterKind::Trainable, true),
+            CacheKey::hash_data(b"pre"),
+        );
+        // gpu_train: remote on GPU tag
+        let mut gpu_meta = make_meta(FilterKind::Trainable, true);
+        gpu_meta.distribution = soma_core::filter::Distribution::Remote(
+            soma_core::filter::RemoteTarget::Tag("gpu".into()),
+        );
+        registry.register_meta("gpu_train", gpu_meta, CacheKey::hash_data(b"gpu"));
+        // evaluate: local
+        registry.register_meta(
+            "evaluate",
+            make_meta(FilterKind::Trainable, true),
+            CacheKey::hash_data(b"eval"),
+        );
+
+        let result = compile(&graph, &registry, CompileMode::Inference, None).unwrap();
+
+        // Should be: Sequence(Execute(preprocess), Remote(gpu_train, ...), Execute(evaluate))
+        if let ExecutionPlan::Sequence(steps) = &result.plan {
+            assert_eq!(steps.len(), 3);
+            assert!(matches!(&steps[0], ExecutionPlan::Execute { node_id } if node_id == "preprocess"));
+            assert!(
+                matches!(&steps[1], ExecutionPlan::Remote { node_id, target, .. }
+                    if node_id == "gpu_train"
+                    && *target == soma_core::filter::RemoteTarget::Tag("gpu".into())
+                ),
+                "expected Remote, got: {:?}", steps[1]
+            );
+            assert!(matches!(&steps[2], ExecutionPlan::Execute { node_id } if node_id == "evaluate"));
+        } else {
+            panic!("expected Sequence, got: {:?}", result.plan);
+        }
+    }
+
+    #[test]
+    fn local_distribution_not_wrapped() {
+        let graph = linear_pipeline(vec![
+            Node::new("a", "A", "F"),
+            Node::new("b", "B", "F"),
+        ]);
+
+        let mut registry = SimpleFilterRegistry::new();
+        register_nodes(
+            &mut registry,
+            &["a", "b"],
+            make_meta(FilterKind::Trainable, true),
+        );
+
+        let result = compile(&graph, &registry, CompileMode::Inference, None).unwrap();
+
+        // No Remote nodes
+        let ids = result.plan.node_ids();
+        assert_eq!(ids.len(), 2);
+        // Should all be Execute, no Remote wrapper
+        if let ExecutionPlan::Sequence(steps) = &result.plan {
+            assert!(steps.iter().all(|s| matches!(s, ExecutionPlan::Execute { .. })));
+        }
     }
 }

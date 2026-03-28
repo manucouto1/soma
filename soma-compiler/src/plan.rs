@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use soma_core::cache::CacheKey;
+use soma_core::filter::RemoteTarget;
 use soma_core::graph::NodeId;
 use std::fmt;
 
@@ -35,6 +36,13 @@ pub enum ExecutionPlan {
         arms: Vec<(String, ExecutionPlan)>,
     },
 
+    /// Execute a sub-plan on a remote worker.
+    Remote {
+        node_id: NodeId,
+        target: RemoteTarget,
+        plan: Box<ExecutionPlan>,
+    },
+
     /// No-op: nothing to execute (e.g. empty graph).
     Empty,
 }
@@ -51,6 +59,7 @@ impl ExecutionPlan {
             Self::Branch { arms, .. } => {
                 1 + arms.iter().map(|(_, p)| p.node_count()).sum::<usize>()
             }
+            Self::Remote { plan, .. } => plan.node_count(),
             Self::Empty => 0,
         }
     }
@@ -65,6 +74,7 @@ impl ExecutionPlan {
             }
             Self::Loop { body, .. } => body.cached_count(),
             Self::Branch { arms, .. } => arms.iter().map(|(_, p)| p.cached_count()).sum(),
+            Self::Remote { plan, .. } => plan.cached_count(),
             Self::Empty => 0,
         }
     }
@@ -95,6 +105,11 @@ impl ExecutionPlan {
                 for (_, p) in arms {
                     ids.extend(p.node_ids());
                 }
+                ids
+            }
+            Self::Remote { node_id, plan, .. } => {
+                let mut ids = vec![node_id.as_str()];
+                ids.extend(plan.node_ids());
                 ids
             }
             Self::Empty => vec![],
@@ -177,6 +192,14 @@ impl ExecutionPlan {
                     plan.fmt_indent(f, indent + 2)?;
                 }
                 Ok(())
+            }
+            Self::Remote {
+                node_id,
+                target,
+                plan,
+            } => {
+                writeln!(f, "{pad}Remote({node_id}, target={target:?}):")?;
+                plan.fmt_indent(f, indent + 1)
             }
             Self::Empty => writeln!(f, "{pad}Empty"),
         }

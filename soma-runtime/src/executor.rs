@@ -212,6 +212,11 @@ pub fn execute(
             }
             Ok(())
         }
+
+        ExecutionPlan::Remote { plan, .. } => {
+            // For now, execute locally. Remote dispatch implemented in soma-worker.
+            execute(plan, ctx, filters, cache)
+        }
     }
 }
 
