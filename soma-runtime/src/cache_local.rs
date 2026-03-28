@@ -160,10 +160,7 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = env::temp_dir().join(format!(
-            "soma_test_cache_{}_{id}",
-            std::process::id()
-        ));
+        let dir = env::temp_dir().join(format!("soma_test_cache_{}_{id}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }
@@ -218,7 +215,9 @@ mod tests {
         let dir = temp_dir();
         let cache = LocalCache::new(&dir).unwrap();
         let key = CacheKey::hash_data(b"test");
-        cache.put(&key, &Value::tensor(vec![1.0; 50], vec![50])).unwrap();
+        cache
+            .put(&key, &Value::tensor(vec![1.0; 50], vec![50]))
+            .unwrap();
 
         let meta = cache.metadata(&key).unwrap().unwrap();
         assert!(meta.size_bytes > 0);

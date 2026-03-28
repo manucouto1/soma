@@ -88,11 +88,15 @@ impl StreamExecutor {
 
             if mode == StreamMode::Barrier && !self.barrier_buffers[i].is_empty() {
                 let materialized = self.materialize_buffer(i)?;
-                let result = self.filters[i].filter.forward(&materialized, &self.filters[i].state)?;
+                let result = self.filters[i]
+                    .filter
+                    .forward(&materialized, &self.filters[i].state)?;
                 self.barrier_buffers[i].clear();
                 current = Some(result);
             } else if let Some(val) = current.take() {
-                let result = self.filters[i].filter.forward(&val, &self.filters[i].state)?;
+                let result = self.filters[i]
+                    .filter
+                    .forward(&val, &self.filters[i].state)?;
                 current = Some(result);
             }
         }
@@ -128,14 +132,10 @@ impl StreamExecutor {
 
         // Try cache
         if let Some(cache) = &self.cache {
-            let chunk_hash = CacheKey::hash_data(
-                &serde_json::to_vec(input).unwrap_or_default(),
-            );
+            let chunk_hash = CacheKey::hash_data(&serde_json::to_vec(input).unwrap_or_default());
             let cache_key = CacheKey::for_output(
                 &fitted.filter.config_hash(),
-                &CacheKey::hash_data(
-                    &serde_json::to_vec(&fitted.state).unwrap_or_default(),
-                ),
+                &CacheKey::hash_data(&serde_json::to_vec(&fitted.state).unwrap_or_default()),
                 &chunk_hash,
             );
             if let Some(cached) = cache.get(&cache_key)? {
@@ -233,13 +233,18 @@ mod tests {
 
     struct DoubleChunk;
     impl Filter for DoubleChunk {
-        fn config_hash(&self) -> CacheKey { CacheKey::from_parts(&[b"DoubleChunk"]) }
-        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> { Ok(Value::Empty) }
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"DoubleChunk"])
+        }
+        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
         fn forward(&self, x: &Value, _: &Value) -> Result<Value> {
             match x {
-                Value::Tensor { values, shape } => {
-                    Ok(Value::tensor(values.iter().map(|v| v * 2.0).collect(), shape.clone()))
-                }
+                Value::Tensor { values, shape } => Ok(Value::tensor(
+                    values.iter().map(|v| v * 2.0).collect(),
+                    shape.clone(),
+                )),
                 _ => Ok(x.clone()),
             }
         }
@@ -259,8 +264,12 @@ mod tests {
 
     struct Accumulator;
     impl Filter for Accumulator {
-        fn config_hash(&self) -> CacheKey { CacheKey::from_parts(&[b"Accumulator"]) }
-        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> { Ok(Value::Empty) }
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Accumulator"])
+        }
+        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
         fn forward(&self, x: &Value, _: &Value) -> Result<Value> {
             // For barrier: receives concatenated tensor, computes mean
             match x {
@@ -287,7 +296,9 @@ mod tests {
 
     struct RunningSum;
     impl Filter for RunningSum {
-        fn config_hash(&self) -> CacheKey { CacheKey::from_parts(&[b"RunningSum"]) }
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"RunningSum"])
+        }
         fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> {
             Ok(Value::tensor(vec![0.0], vec![1]))
         }
@@ -302,7 +313,9 @@ mod tests {
                 kind: FilterKind::Trainable,
                 cacheable: false,
                 differentiable: false,
-                stream_mode: StreamMode::Evolving { checkpoint_every: 3 },
+                stream_mode: StreamMode::Evolving {
+                    checkpoint_every: 3,
+                },
                 distribution: soma_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
@@ -346,18 +359,24 @@ mod tests {
         }]);
 
         // Process chunks: barrier should return None for each
-        assert!(executor
-            .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
-            .unwrap()
-            .is_none());
-        assert!(executor
-            .process_chunk(Value::tensor(vec![3.0, 4.0], vec![2]))
-            .unwrap()
-            .is_none());
-        assert!(executor
-            .process_chunk(Value::tensor(vec![5.0, 6.0], vec![2]))
-            .unwrap()
-            .is_none());
+        assert!(
+            executor
+                .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            executor
+                .process_chunk(Value::tensor(vec![3.0, 4.0], vec![2]))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            executor
+                .process_chunk(Value::tensor(vec![5.0, 6.0], vec![2]))
+                .unwrap()
+                .is_none()
+        );
 
         // Flush: should materialize and compute mean of [1,2,3,4,5,6]
         let result = executor.flush().unwrap().unwrap();
@@ -452,9 +471,13 @@ mod tests {
         }]);
 
         assert_eq!(executor.chunks_processed(), 0);
-        executor.process_chunk(Value::tensor(vec![1.0], vec![1])).unwrap();
+        executor
+            .process_chunk(Value::tensor(vec![1.0], vec![1]))
+            .unwrap();
         assert_eq!(executor.chunks_processed(), 1);
-        executor.process_chunk(Value::tensor(vec![2.0], vec![1])).unwrap();
+        executor
+            .process_chunk(Value::tensor(vec![2.0], vec![1]))
+            .unwrap();
         assert_eq!(executor.chunks_processed(), 2);
     }
 

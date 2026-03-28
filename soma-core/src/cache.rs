@@ -30,7 +30,11 @@ impl CacheKey {
 
     /// Create a cache key for a filter's output.
     /// key = hash(filter_config_hash + state_hash + input_data_hash)
-    pub fn for_output(config_hash: &CacheKey, state_hash: &CacheKey, input_hash: &CacheKey) -> Self {
+    pub fn for_output(
+        config_hash: &CacheKey,
+        state_hash: &CacheKey,
+        input_hash: &CacheKey,
+    ) -> Self {
         Self::from_parts(&[&config_hash.0, &state_hash.0, &input_hash.0])
     }
 
@@ -68,9 +72,17 @@ pub enum CacheTier {
 /// Where a cached value originated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Origin {
-    Computed { node_id: String, run_id: String },
-    Ingested { source: String },
-    Streamed { window_start: DateTime<Utc>, window_end: DateTime<Utc> },
+    Computed {
+        node_id: String,
+        run_id: String,
+    },
+    Ingested {
+        source: String,
+    },
+    Streamed {
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+    },
 }
 
 /// Metadata about a cached entry, queryable without loading the value.

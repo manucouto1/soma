@@ -1,8 +1,8 @@
 //! Integration test: full autonomous research loop.
 
+use serde_json::json;
 use soma_agent::{Action, Agent, SimpleResearchPlan};
 use soma_memory::{ExperimentRecord, MemoryKnowledgeBase};
-use serde_json::json;
 use std::collections::HashMap;
 
 /// Simulate executing an experiment: returns a metric based on params.
@@ -15,8 +15,7 @@ fn simulate_experiment(config: &HashMap<String, serde_json::Value>) -> f64 {
 #[test]
 fn agent_runs_research_loop() {
     let kb = Box::new(MemoryKnowledgeBase::new());
-    let mut agent = Agent::new("test_agent", "find best C for SVM", kb)
-        .with_max_iterations(5);
+    let mut agent = Agent::new("test_agent", "find best C for SVM", kb).with_max_iterations(5);
 
     let plan = SimpleResearchPlan::new(
         HashMap::from([("model".into(), json!("svm"))]),
@@ -74,11 +73,7 @@ fn agent_stops_at_max_iterations() {
     let kb = Box::new(MemoryKnowledgeBase::new());
     let mut agent = Agent::new("test", "objective", kb).with_max_iterations(3);
 
-    let plan = SimpleResearchPlan::new(
-        HashMap::new(),
-        "x",
-        vec![json!(1)],
-    );
+    let plan = SimpleResearchPlan::new(HashMap::new(), "x", vec![json!(1)]);
 
     let mut actions = Vec::new();
     for _ in 0..10 {
@@ -100,11 +95,7 @@ fn agent_tracks_decisions() {
     let kb = Box::new(MemoryKnowledgeBase::new());
     let mut agent = Agent::new("test", "objective", kb).with_max_iterations(3);
 
-    let plan = SimpleResearchPlan::new(
-        HashMap::new(),
-        "x",
-        vec![json!(1)],
-    );
+    let plan = SimpleResearchPlan::new(HashMap::new(), "x", vec![json!(1)]);
 
     agent.step(&plan).unwrap();
     agent.step(&plan).unwrap();

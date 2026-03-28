@@ -85,7 +85,11 @@ impl KnowledgeBase for MemoryKnowledgeBase {
             .iter()
             .filter(|e| {
                 e.name.to_lowercase().contains(&q)
-                    || e.hypothesis.as_deref().unwrap_or("").to_lowercase().contains(&q)
+                    || e.hypothesis
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&q)
                     || e.notes.as_deref().unwrap_or("").to_lowercase().contains(&q)
                     || e.tags.iter().any(|t| t.to_lowercase().contains(&q))
                     || e.pipeline_summary.to_lowercase().contains(&q)
@@ -152,8 +156,7 @@ impl KnowledgeBase for MemoryKnowledgeBase {
         let promising: Vec<ResearchLine> = all_lines
             .into_iter()
             .filter(|l| {
-                l.trend == Trend::Improving
-                    || l.best_metric_name.as_deref() == Some(metric)
+                l.trend == Trend::Improving || l.best_metric_name.as_deref() == Some(metric)
             })
             .collect();
         Ok(promising)
@@ -163,9 +166,7 @@ impl KnowledgeBase for MemoryKnowledgeBase {
         let exps = self.experiments_in_line(line)?;
         let traj: Vec<(String, f64)> = exps
             .iter()
-            .filter_map(|e| {
-                e.metrics.get(metric).map(|&v| (e.id.clone(), v))
-            })
+            .filter_map(|e| e.metrics.get(metric).map(|&v| (e.id.clone(), v)))
             .collect();
         Ok(traj)
     }
@@ -283,11 +284,10 @@ mod tests {
     #[test]
     fn search_by_name() {
         let mut kb = MemoryKnowledgeBase::new();
-        kb.record(make_experiment("exp_001", "line_a", 0.8)).unwrap();
-        kb.record(
-            ExperimentRecord::new("exp_002", "SVM experiment")
-                .with_research_line("line_b")
-        ).unwrap();
+        kb.record(make_experiment("exp_001", "line_a", 0.8))
+            .unwrap();
+        kb.record(ExperimentRecord::new("exp_002", "SVM experiment").with_research_line("line_b"))
+            .unwrap();
 
         let results = kb.search("SVM", 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -299,8 +299,9 @@ mod tests {
         let mut kb = MemoryKnowledgeBase::new();
         kb.record(
             make_experiment("exp_001", "line_a", 0.8)
-                .with_tags(vec!["normalization".into(), "time-series".into()])
-        ).unwrap();
+                .with_tags(vec!["normalization".into(), "time-series".into()]),
+        )
+        .unwrap();
 
         let results = kb.search("time-series", 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -309,9 +310,12 @@ mod tests {
     #[test]
     fn experiments_in_line_ordered() {
         let mut kb = MemoryKnowledgeBase::new();
-        kb.record(make_experiment("exp_003", "line_a", 0.9)).unwrap();
-        kb.record(make_experiment("exp_001", "line_a", 0.7)).unwrap();
-        kb.record(make_experiment("exp_002", "line_b", 0.8)).unwrap();
+        kb.record(make_experiment("exp_003", "line_a", 0.9))
+            .unwrap();
+        kb.record(make_experiment("exp_001", "line_a", 0.7))
+            .unwrap();
+        kb.record(make_experiment("exp_002", "line_b", 0.8))
+            .unwrap();
 
         let line_a = kb.experiments_in_line("line_a").unwrap();
         assert_eq!(line_a.len(), 2);
@@ -320,10 +324,14 @@ mod tests {
     #[test]
     fn research_lines_detected() {
         let mut kb = MemoryKnowledgeBase::new();
-        kb.record(make_experiment("e1", "rocket_znorm", 0.7)).unwrap();
-        kb.record(make_experiment("e2", "rocket_znorm", 0.8)).unwrap();
-        kb.record(make_experiment("e3", "rocket_znorm", 0.85)).unwrap();
-        kb.record(make_experiment("e4", "inception_minmax", 0.6)).unwrap();
+        kb.record(make_experiment("e1", "rocket_znorm", 0.7))
+            .unwrap();
+        kb.record(make_experiment("e2", "rocket_znorm", 0.8))
+            .unwrap();
+        kb.record(make_experiment("e3", "rocket_znorm", 0.85))
+            .unwrap();
+        kb.record(make_experiment("e4", "inception_minmax", 0.6))
+            .unwrap();
 
         let lines = kb.research_lines().unwrap();
         assert_eq!(lines.len(), 2);
@@ -365,13 +373,12 @@ mod tests {
     fn children_found() {
         let mut kb = MemoryKnowledgeBase::new();
         kb.record(make_experiment("parent", "line_a", 0.7)).unwrap();
-        kb.record(
-            make_experiment("child_1", "line_a", 0.8).with_parent("parent")
-        ).unwrap();
-        kb.record(
-            make_experiment("child_2", "line_a", 0.75).with_parent("parent")
-        ).unwrap();
-        kb.record(make_experiment("unrelated", "line_b", 0.6)).unwrap();
+        kb.record(make_experiment("child_1", "line_a", 0.8).with_parent("parent"))
+            .unwrap();
+        kb.record(make_experiment("child_2", "line_a", 0.75).with_parent("parent"))
+            .unwrap();
+        kb.record(make_experiment("unrelated", "line_b", 0.6))
+            .unwrap();
 
         let kids = kb.children("parent").unwrap();
         assert_eq!(kids.len(), 2);

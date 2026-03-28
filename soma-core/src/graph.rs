@@ -20,7 +20,11 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(id: impl Into<String>, label: impl Into<String>, filter_name: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        filter_name: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
@@ -49,7 +53,11 @@ pub struct Edge {
 }
 
 impl Edge {
-    pub fn data(id: impl Into<String>, source: impl Into<String>, target: impl Into<String>) -> Self {
+    pub fn data(
+        id: impl Into<String>,
+        source: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             source: source.into(),
@@ -59,7 +67,11 @@ impl Edge {
         }
     }
 
-    pub fn control(id: impl Into<String>, source: impl Into<String>, target: impl Into<String>) -> Self {
+    pub fn control(
+        id: impl Into<String>,
+        source: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             source: source.into(),
@@ -232,11 +244,7 @@ pub fn linear_pipeline(nodes: Vec<Node>) -> Graph {
     for (i, node) in nodes.iter().enumerate() {
         graph.add_node(node.clone());
         if i > 0 {
-            graph.add_edge(Edge::data(
-                format!("e_{}", i),
-                &nodes[i - 1].id,
-                &node.id,
-            ));
+            graph.add_edge(Edge::data(format!("e_{}", i), &nodes[i - 1].id, &node.id));
         }
     }
     graph

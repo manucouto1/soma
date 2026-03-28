@@ -1,10 +1,10 @@
 use soma_core::cache::CacheKey;
 use soma_core::error::SomaError;
-use soma_core::graph::{linear_pipeline, Edge, Graph, Node};
+use soma_core::event::MetricRecord;
+use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
 use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use soma_core::study::{Direction, Objective, SearchStrategy, Study, Trial, TrialState};
 use soma_core::value::Value;
-use soma_core::event::MetricRecord;
 
 // ── Value edge cases ──
 
@@ -149,8 +149,14 @@ fn study_best_trial_single_trial() {
     let mut study = Study::new(
         "test",
         SearchSpace::new(),
-        SearchStrategy::Random { n_trials: 1, seed: None },
-        vec![Objective { metric: "f1".into(), direction: Direction::Maximize }],
+        SearchStrategy::Random {
+            n_trials: 1,
+            seed: None,
+        },
+        vec![Objective {
+            metric: "f1".into(),
+            direction: Direction::Maximize,
+        }],
     );
     let mut t = Trial::new("t1", std::collections::HashMap::new());
     t.state = TrialState::Completed;
@@ -170,8 +176,14 @@ fn study_best_trial_all_same_value() {
     let mut study = Study::new(
         "test",
         SearchSpace::new(),
-        SearchStrategy::Random { n_trials: 3, seed: None },
-        vec![Objective { metric: "f1".into(), direction: Direction::Maximize }],
+        SearchStrategy::Random {
+            n_trials: 3,
+            seed: None,
+        },
+        vec![Objective {
+            metric: "f1".into(),
+            direction: Direction::Maximize,
+        }],
     );
     for i in 0..3 {
         let mut t = Trial::new(format!("t{i}"), std::collections::HashMap::new());

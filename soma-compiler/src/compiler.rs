@@ -58,7 +58,8 @@ impl SimpleFilterRegistry {
 
     pub fn register(&mut self, node_id: impl Into<String>, filter: &dyn Filter) {
         let id = node_id.into();
-        self.entries.insert(id, (filter.meta(), filter.config_hash()));
+        self.entries
+            .insert(id, (filter.meta(), filter.config_hash()));
     }
 
     pub fn register_meta(
@@ -96,11 +97,7 @@ pub struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(
-        graph: &'a Graph,
-        registry: &'a dyn FilterRegistry,
-        mode: CompileMode,
-    ) -> Self {
+    pub fn new(graph: &'a Graph, registry: &'a dyn FilterRegistry, mode: CompileMode) -> Self {
         Self {
             graph,
             registry,
@@ -319,13 +316,11 @@ impl<'a> Compiler<'a> {
             ExecutionPlan::Execute { ref node_id } => {
                 if let Some(meta) = self.registry.meta(node_id) {
                     match &meta.distribution {
-                        soma_core::filter::Distribution::Remote(target) => {
-                            ExecutionPlan::Remote {
-                                node_id: node_id.clone(),
-                                target: target.clone(),
-                                plan: Box::new(plan),
-                            }
-                        }
+                        soma_core::filter::Distribution::Remote(target) => ExecutionPlan::Remote {
+                            node_id: node_id.clone(),
+                            target: target.clone(),
+                            plan: Box::new(plan),
+                        },
                         _ => plan,
                     }
                 } else {
@@ -333,10 +328,16 @@ impl<'a> Compiler<'a> {
                 }
             }
             ExecutionPlan::Sequence(steps) => ExecutionPlan::Sequence(
-                steps.into_iter().map(|s| self.resolve_distribution(s)).collect(),
+                steps
+                    .into_iter()
+                    .map(|s| self.resolve_distribution(s))
+                    .collect(),
             ),
             ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches.into_iter().map(|b| self.resolve_distribution(b)).collect(),
+                branches
+                    .into_iter()
+                    .map(|b| self.resolve_distribution(b))
+                    .collect(),
             ),
             other => other,
         }
@@ -432,7 +433,7 @@ mod tests {
     use soma_core::cache::EntryMeta;
     use soma_core::error::SomaError;
     use soma_core::filter::{FilterKind, StreamMode};
-    use soma_core::graph::{linear_pipeline, Edge, Graph, Node};
+    use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
     use soma_core::value::Value;
     use std::sync::Mutex;
 
@@ -537,7 +538,11 @@ mod tests {
 
         if let ExecutionPlan::Sequence(steps) = &result.plan {
             assert_eq!(steps.len(), 3);
-            assert!(steps.iter().all(|s| matches!(s, ExecutionPlan::Execute { .. })));
+            assert!(
+                steps
+                    .iter()
+                    .all(|s| matches!(s, ExecutionPlan::Execute { .. }))
+            );
         } else {
             panic!("expected Sequence, got: {:?}", result.plan);
         }
@@ -678,10 +683,7 @@ mod tests {
 
     #[test]
     fn no_cache_mode_skips_all_caching() {
-        let graph = linear_pipeline(vec![
-            Node::new("a", "A", "F"),
-            Node::new("b", "B", "F"),
-        ]);
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
         let mut registry = SimpleFilterRegistry::new();
         register_nodes(
@@ -704,10 +706,7 @@ mod tests {
 
     #[test]
     fn differentiable_mode_skips_output_caching() {
-        let graph = linear_pipeline(vec![
-            Node::new("a", "A", "F"),
-            Node::new("b", "B", "F"),
-        ]);
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
         let mut registry = SimpleFilterRegistry::new();
         register_nodes(
@@ -721,8 +720,7 @@ mod tests {
         let cache = MockCacheStore::new();
         cache.insert(a_key);
 
-        let result =
-            compile(&graph, &registry, CompileMode::Differentiable, Some(&cache)).unwrap();
+        let result = compile(&graph, &registry, CompileMode::Differentiable, Some(&cache)).unwrap();
 
         // Differentiable mode should not cache forward outputs
         assert_eq!(result.plan.cached_count(), 0);
@@ -758,15 +756,16 @@ mod tests {
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(result.diagnostics[0].node_id, "tree");
         assert_eq!(result.diagnostics[0].level, DiagnosticLevel::Warning);
-        assert!(result.diagnostics[0].message.contains("gradient flow interrupted"));
+        assert!(
+            result.diagnostics[0]
+                .message
+                .contains("gradient flow interrupted")
+        );
     }
 
     #[test]
     fn no_diagnostic_when_all_differentiable() {
-        let graph = linear_pipeline(vec![
-            Node::new("a", "A", "F"),
-            Node::new("b", "B", "F"),
-        ]);
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
         let mut registry = SimpleFilterRegistry::new();
         register_nodes(
@@ -850,15 +849,20 @@ mod tests {
         // Should be: Sequence(Execute(preprocess), Remote(gpu_train, ...), Execute(evaluate))
         if let ExecutionPlan::Sequence(steps) = &result.plan {
             assert_eq!(steps.len(), 3);
-            assert!(matches!(&steps[0], ExecutionPlan::Execute { node_id } if node_id == "preprocess"));
+            assert!(
+                matches!(&steps[0], ExecutionPlan::Execute { node_id } if node_id == "preprocess")
+            );
             assert!(
                 matches!(&steps[1], ExecutionPlan::Remote { node_id, target, .. }
                     if node_id == "gpu_train"
                     && *target == soma_core::filter::RemoteTarget::Tag("gpu".into())
                 ),
-                "expected Remote, got: {:?}", steps[1]
+                "expected Remote, got: {:?}",
+                steps[1]
             );
-            assert!(matches!(&steps[2], ExecutionPlan::Execute { node_id } if node_id == "evaluate"));
+            assert!(
+                matches!(&steps[2], ExecutionPlan::Execute { node_id } if node_id == "evaluate")
+            );
         } else {
             panic!("expected Sequence, got: {:?}", result.plan);
         }
@@ -866,10 +870,7 @@ mod tests {
 
     #[test]
     fn local_distribution_not_wrapped() {
-        let graph = linear_pipeline(vec![
-            Node::new("a", "A", "F"),
-            Node::new("b", "B", "F"),
-        ]);
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
         let mut registry = SimpleFilterRegistry::new();
         register_nodes(
@@ -885,7 +886,11 @@ mod tests {
         assert_eq!(ids.len(), 2);
         // Should all be Execute, no Remote wrapper
         if let ExecutionPlan::Sequence(steps) = &result.plan {
-            assert!(steps.iter().all(|s| matches!(s, ExecutionPlan::Execute { .. })));
+            assert!(
+                steps
+                    .iter()
+                    .all(|s| matches!(s, ExecutionPlan::Execute { .. }))
+            );
         }
     }
 }

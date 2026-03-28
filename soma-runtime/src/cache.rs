@@ -88,7 +88,11 @@ impl MemoryCache {
 
     /// Number of entries currently in the cache.
     pub fn len(&self) -> usize {
-        self.store.lock().unwrap_or_else(|e| e.into_inner()).entries.len()
+        self.store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .len()
     }
 
     /// Whether the cache is empty.
@@ -98,7 +102,10 @@ impl MemoryCache {
 
     /// Current memory usage in bytes.
     pub fn current_bytes(&self) -> usize {
-        self.store.lock().unwrap_or_else(|e| e.into_inner()).current_bytes
+        self.store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current_bytes
     }
 
     /// Clear all entries.
@@ -156,11 +163,19 @@ impl CacheStore for MemoryCache {
     }
 
     fn exists(&self, key: &CacheKey) -> Result<bool> {
-        Ok(self.store.lock().unwrap_or_else(|e| e.into_inner()).entries.contains_key(key))
+        Ok(self
+            .store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .contains_key(key))
     }
 
     fn remove(&self, key: &CacheKey) -> Result<()> {
-        self.store.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        self.store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
         Ok(())
     }
 
@@ -247,8 +262,12 @@ mod tests {
     #[test]
     fn clear_empties_cache() {
         let cache = MemoryCache::default();
-        cache.put(&CacheKey::hash_data(b"a"), &Value::Empty).unwrap();
-        cache.put(&CacheKey::hash_data(b"b"), &Value::Empty).unwrap();
+        cache
+            .put(&CacheKey::hash_data(b"a"), &Value::Empty)
+            .unwrap();
+        cache
+            .put(&CacheKey::hash_data(b"b"), &Value::Empty)
+            .unwrap();
         assert_eq!(cache.len(), 2);
 
         cache.clear();
@@ -297,12 +316,18 @@ mod tests {
         let k2 = CacheKey::hash_data(b"second");
         let k3 = CacheKey::hash_data(b"third");
 
-        cache.put(&k1, &Value::tensor(vec![0.0; 5], vec![5])).unwrap();
-        cache.put(&k2, &Value::tensor(vec![0.0; 5], vec![5])).unwrap();
+        cache
+            .put(&k1, &Value::tensor(vec![0.0; 5], vec![5]))
+            .unwrap();
+        cache
+            .put(&k2, &Value::tensor(vec![0.0; 5], vec![5]))
+            .unwrap();
         assert_eq!(cache.len(), 2);
 
         // Adding third should evict first (48+48+48=144 > 100)
-        cache.put(&k3, &Value::tensor(vec![0.0; 5], vec![5])).unwrap();
+        cache
+            .put(&k3, &Value::tensor(vec![0.0; 5], vec![5]))
+            .unwrap();
 
         assert!(!cache.exists(&k1).unwrap(), "k1 should be evicted");
         assert!(cache.exists(&k2).unwrap(), "k2 should remain");
@@ -317,14 +342,20 @@ mod tests {
         let k2 = CacheKey::hash_data(b"second");
         let k3 = CacheKey::hash_data(b"third");
 
-        cache.put(&k1, &Value::tensor(vec![0.0; 5], vec![5])).unwrap();
-        cache.put(&k2, &Value::tensor(vec![0.0; 5], vec![5])).unwrap();
+        cache
+            .put(&k1, &Value::tensor(vec![0.0; 5], vec![5]))
+            .unwrap();
+        cache
+            .put(&k2, &Value::tensor(vec![0.0; 5], vec![5]))
+            .unwrap();
 
         // Access k1, making k2 the least recently used
         cache.get(&k1).unwrap();
 
         // Adding k3 should evict k2 (LRU), not k1
-        cache.put(&k3, &Value::tensor(vec![0.0; 5], vec![5])).unwrap();
+        cache
+            .put(&k3, &Value::tensor(vec![0.0; 5], vec![5]))
+            .unwrap();
 
         assert!(cache.exists(&k1).unwrap(), "k1 was accessed, should remain");
         assert!(!cache.exists(&k2).unwrap(), "k2 was LRU, should be evicted");
@@ -338,10 +369,12 @@ mod tests {
         assert_eq!(cache.current_bytes(), 0);
 
         // 10 f64s = 80 bytes data + 8 bytes shape = 88
-        cache.put(
-            &CacheKey::hash_data(b"a"),
-            &Value::tensor(vec![0.0; 10], vec![10]),
-        ).unwrap();
+        cache
+            .put(
+                &CacheKey::hash_data(b"a"),
+                &Value::tensor(vec![0.0; 10], vec![10]),
+            )
+            .unwrap();
         assert_eq!(cache.current_bytes(), 88);
 
         cache.remove(&CacheKey::hash_data(b"a")).unwrap();
@@ -353,11 +386,15 @@ mod tests {
         let cache = MemoryCache::new(1024);
 
         let key = CacheKey::hash_data(b"key");
-        cache.put(&key, &Value::tensor(vec![0.0; 10], vec![10])).unwrap();
+        cache
+            .put(&key, &Value::tensor(vec![0.0; 10], vec![10]))
+            .unwrap();
         let size1 = cache.current_bytes();
 
         // Replace with larger value
-        cache.put(&key, &Value::tensor(vec![0.0; 20], vec![20])).unwrap();
+        cache
+            .put(&key, &Value::tensor(vec![0.0; 20], vec![20]))
+            .unwrap();
         let size2 = cache.current_bytes();
 
         assert!(size2 > size1, "larger value should use more bytes");

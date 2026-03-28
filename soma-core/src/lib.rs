@@ -14,12 +14,10 @@ pub use cache::{CacheKey, CacheStore, CacheTier, EntryMeta, Origin};
 pub use error::{Result, SomaError};
 pub use event::{Event, MetricRecord, PlanSummary, RunId, StudyId, TrialId};
 pub use filter::{Distribution, Filter, FilterKind, FilterMeta, RemoteTarget, StreamMode};
-pub use schema::{DataType, Dimension, Schema};
 pub use graph::{Edge, EdgeKind, Graph, Node, NodeId};
+pub use schema::{DataType, Dimension, Schema};
 pub use search::{Scale, SearchDimension, SearchSpace, Searchable};
-pub use study::{
-    Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState,
-};
+pub use study::{Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState};
 pub use value::Value;
 pub use virtual_value::{ValueStatus, VirtualValue};
 

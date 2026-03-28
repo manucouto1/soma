@@ -2,7 +2,7 @@ use crate::protocol::*;
 use soma_core::cache::CacheStore;
 use soma_core::event::Event;
 use soma_core::filter::Filter;
-use soma_runtime::{execute, Context, EventBus, FilterStore, MemoryCache};
+use soma_runtime::{Context, EventBus, FilterStore, MemoryCache, execute};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -54,7 +54,10 @@ impl Worker {
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
 
-        let mut ctx = Context::new(self.event_bus.clone(), format!("worker_run_{}", plan.plan_id));
+        let mut ctx = Context::new(
+            self.event_bus.clone(),
+            format!("worker_run_{}", plan.plan_id),
+        );
 
         // If input data is provided, set it in context
         if let Some(input) = &plan.input_data {
@@ -178,7 +181,11 @@ mod tests {
 
         let result = worker.execute_plan(&plan);
 
-        if let PlanResult::Success { output, duration_ms } = result {
+        if let PlanResult::Success {
+            output,
+            duration_ms,
+        } = result
+        {
             let (data, _) = output.as_tensor().unwrap();
             assert_eq!(data, &[2.0, 4.0, 6.0]);
             assert!(duration_ms < 1000);
@@ -208,12 +215,12 @@ mod tests {
     #[test]
     fn worker_matches_target_by_id() {
         let worker = make_worker();
-        assert!(worker.matches_target(&soma_core::filter::RemoteTarget::WorkerId(
-            "test_worker".into()
-        )));
-        assert!(!worker.matches_target(&soma_core::filter::RemoteTarget::WorkerId(
-            "other".into()
-        )));
+        assert!(
+            worker.matches_target(&soma_core::filter::RemoteTarget::WorkerId(
+                "test_worker".into()
+            ))
+        );
+        assert!(!worker.matches_target(&soma_core::filter::RemoteTarget::WorkerId("other".into())));
     }
 
     #[test]
@@ -274,7 +281,15 @@ mod tests {
         while let Ok(e) = rx.try_recv() {
             events.push(e);
         }
-        assert!(events.iter().any(|e| matches!(e, Event::NodeStarted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::NodeCompleted { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::NodeStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::NodeCompleted { .. }))
+        );
     }
 }

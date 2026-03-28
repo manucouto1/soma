@@ -4,14 +4,27 @@ build-backend = "maturin"
 
 [project]
 name = "soma"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A computational graph runtime for research pipelines, agent orchestration, and data virtualization"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+readme = "../README.md"
+keywords = ["pipeline", "ml", "optimization", "caching", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+]
 dependencies = ["numpy>=1.20"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "numpy>=1.20"]
+
+[project.urls]
+Repository = "https://github.com/manucouto1/soma"
+Documentation = "https://manucouto1.github.io/soma/"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

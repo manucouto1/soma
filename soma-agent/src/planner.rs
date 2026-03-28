@@ -131,11 +131,7 @@ mod tests {
 
     #[test]
     fn simple_plan_cycles_values() {
-        let plan = SimpleResearchPlan::new(
-            HashMap::new(),
-            "x",
-            vec![json!(1), json!(2), json!(3)],
-        );
+        let plan = SimpleResearchPlan::new(HashMap::new(), "x", vec![json!(1), json!(2), json!(3)]);
 
         let a1 = plan.initial_action("test").unwrap();
         let a2 = plan.initial_action("test").unwrap();
@@ -144,9 +140,16 @@ mod tests {
 
         // All should be RunExperiment with different values
         if let (
-            Action::RunExperiment { pipeline_config: c1, .. },
-            Action::RunExperiment { pipeline_config: c4, .. },
-        ) = (a1, a4) {
+            Action::RunExperiment {
+                pipeline_config: c1,
+                ..
+            },
+            Action::RunExperiment {
+                pipeline_config: c4,
+                ..
+            },
+        ) = (a1, a4)
+        {
             // a4 wraps to same value as a1
             assert_eq!(c1["x"], c4["x"]);
         }

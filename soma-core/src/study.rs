@@ -398,15 +398,21 @@ mod tests {
     #[test]
     fn search_strategy_n_trials() {
         assert_eq!(
-            SearchStrategy::Random { n_trials: 50, seed: None }.n_trials(),
+            SearchStrategy::Random {
+                n_trials: 50,
+                seed: None
+            }
+            .n_trials(),
             Some(50)
         );
+        assert_eq!(SearchStrategy::Grid { points_per_dim: 5 }.n_trials(), None);
         assert_eq!(
-            SearchStrategy::Grid { points_per_dim: 5 }.n_trials(),
-            None
-        );
-        assert_eq!(
-            SearchStrategy::Bayesian { n_trials: 100, n_startup: 10, seed: None }.n_trials(),
+            SearchStrategy::Bayesian {
+                n_trials: 100,
+                n_startup: 10,
+                seed: None
+            }
+            .n_trials(),
             Some(100)
         );
     }
@@ -416,8 +422,14 @@ mod tests {
         let study = Study::new(
             "empty",
             SearchSpace::new(),
-            SearchStrategy::Random { n_trials: 10, seed: None },
-            vec![Objective { metric: "f1".into(), direction: Direction::Maximize }],
+            SearchStrategy::Random {
+                n_trials: 10,
+                seed: None,
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
         );
         assert!(study.best_trial().is_none());
     }

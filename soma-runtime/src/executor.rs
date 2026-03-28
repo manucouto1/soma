@@ -171,7 +171,9 @@ pub fn execute(
         ExecutionPlan::Cached { node_id, key } => {
             let start = Instant::now();
             let value = cache.get(key)?.ok_or_else(|| {
-                SomaError::Cache(format!("expected cached value for node `{node_id}` not found"))
+                SomaError::Cache(format!(
+                    "expected cached value for node `{node_id}` not found"
+                ))
             })?;
             ctx.set(node_id.clone(), value);
             ctx.event_bus.emit(Event::NodeCacheHit {
@@ -191,11 +193,13 @@ pub fn execute(
             Ok(())
         }
 
-        ExecutionPlan::Parallel(branches) => {
-            execute_parallel(branches, ctx, filters, cache)
-        }
+        ExecutionPlan::Parallel(branches) => execute_parallel(branches, ctx, filters, cache),
 
-        ExecutionPlan::Loop { node_id: _, body, max_iterations } => {
+        ExecutionPlan::Loop {
+            node_id: _,
+            body,
+            max_iterations,
+        } => {
             let max = max_iterations.unwrap_or(usize::MAX);
             for _i in 0..max {
                 execute(body, ctx, filters, cache)?;
@@ -210,9 +214,7 @@ pub fn execute(
             Ok(())
         }
 
-        ExecutionPlan::Remote { plan, .. } => {
-            execute(plan, ctx, filters, cache)
-        }
+        ExecutionPlan::Remote { plan, .. } => execute(plan, ctx, filters, cache),
 
         _ => Ok(()),
     }
@@ -227,7 +229,9 @@ fn execute_node(
 ) -> Result<()> {
     let start = Instant::now();
 
-    let filter = filters.get(node_id).ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
+    let filter = filters
+        .get(node_id)
+        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
 
     ctx.event_bus.emit(Event::NodeStarted {
         run_id: ctx.run_id.clone(),
@@ -314,19 +318,13 @@ fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     let preds = ctx.graph_info.predecessors(node_id);
 
     match preds.len() {
-        0 => {
-            ctx.execution_order
-                .last()
-                .and_then(|last_id| ctx.store.get(last_id))
-                .cloned()
-                .unwrap_or(Value::Empty)
-        }
-        1 => {
-            ctx.store
-                .get(&preds[0])
-                .cloned()
-                .unwrap_or(Value::Empty)
-        }
+        0 => ctx
+            .execution_order
+            .last()
+            .and_then(|last_id| ctx.store.get(last_id))
+            .cloned()
+            .unwrap_or(Value::Empty),
+        1 => ctx.store.get(&preds[0]).cloned().unwrap_or(Value::Empty),
         _ => {
             let mut merged = serde_json::Map::new();
             for pred_id in preds {
@@ -484,8 +482,12 @@ mod tests {
         filters.register("double", Box::new(DoublerFilter));
 
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Execute { node_id: "add".into() },
-            ExecutionPlan::Execute { node_id: "double".into() },
+            ExecutionPlan::Execute {
+                node_id: "add".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "double".into(),
+            },
         ]);
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
@@ -522,15 +524,21 @@ mod tests {
 
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0], vec![1]));
-        ctx.graph_info.set_predecessors("double", vec!["input".into()]);
+        ctx.graph_info
+            .set_predecessors("double", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
         filters.register("double", Box::new(DoublerFilter));
 
         execute(
-            &ExecutionPlan::Execute { node_id: "double".into() },
-            &mut ctx, &filters, &cache,
-        ).unwrap();
+            &ExecutionPlan::Execute {
+                node_id: "double".into(),
+            },
+            &mut ctx,
+            &filters,
+            &cache,
+        )
+        .unwrap();
 
         let e1 = rx.try_recv().unwrap();
         assert!(matches!(e1, Event::NodeStarted { .. }));
@@ -545,8 +553,12 @@ mod tests {
         let filters = FilterStore::new();
 
         let result = execute(
-            &ExecutionPlan::Execute { node_id: "nonexistent".into() },
-            &mut ctx, &filters, &cache,
+            &ExecutionPlan::Execute {
+                node_id: "nonexistent".into(),
+            },
+            &mut ctx,
+            &filters,
+            &cache,
         );
         assert!(matches!(result, Err(SomaError::NodeNotFound(_))));
     }
@@ -564,7 +576,8 @@ mod tests {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![5.0], vec![1]));
-        ctx.graph_info.set_predecessors("double", vec!["input".into()]);
+        ctx.graph_info
+            .set_predecessors("double", vec!["input".into()]);
         ctx.graph_info.set_predecessors("add", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
@@ -572,8 +585,12 @@ mod tests {
         filters.register("add", Box::new(AdderFilter { amount: 100.0 }));
 
         let plan = ExecutionPlan::Parallel(vec![
-            ExecutionPlan::Execute { node_id: "double".into() },
-            ExecutionPlan::Execute { node_id: "add".into() },
+            ExecutionPlan::Execute {
+                node_id: "double".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "add".into(),
+            },
         ]);
 
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
@@ -589,16 +606,34 @@ mod tests {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
         ctx.set("input", Value::tensor(vec![1.0], vec![1]));
-        ctx.graph_info.set_predecessors("slow_a", vec!["input".into()]);
-        ctx.graph_info.set_predecessors("slow_b", vec!["input".into()]);
+        ctx.graph_info
+            .set_predecessors("slow_a", vec!["input".into()]);
+        ctx.graph_info
+            .set_predecessors("slow_b", vec!["input".into()]);
 
         let mut filters = FilterStore::new();
-        filters.register("slow_a", Box::new(SlowFilter { id: "a".into(), delay_ms: 50 }));
-        filters.register("slow_b", Box::new(SlowFilter { id: "b".into(), delay_ms: 50 }));
+        filters.register(
+            "slow_a",
+            Box::new(SlowFilter {
+                id: "a".into(),
+                delay_ms: 50,
+            }),
+        );
+        filters.register(
+            "slow_b",
+            Box::new(SlowFilter {
+                id: "b".into(),
+                delay_ms: 50,
+            }),
+        );
 
         let plan = ExecutionPlan::Parallel(vec![
-            ExecutionPlan::Execute { node_id: "slow_a".into() },
-            ExecutionPlan::Execute { node_id: "slow_b".into() },
+            ExecutionPlan::Execute {
+                node_id: "slow_a".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "slow_b".into(),
+            },
         ]);
 
         let start = Instant::now();
@@ -635,7 +670,8 @@ mod tests {
         let mut ctx = Context::new(bus, "r");
         ctx.set("A", Value::tensor(vec![1.0], vec![1]));
         ctx.set("B", Value::tensor(vec![2.0], vec![1]));
-        ctx.graph_info.set_predecessors("C", vec!["A".into(), "B".into()]);
+        ctx.graph_info
+            .set_predecessors("C", vec!["A".into(), "B".into()]);
 
         let input = resolve_input("C", &ctx);
         let json = input.as_json().unwrap();

@@ -172,9 +172,7 @@ impl RandomSampler {
                 let idx = idx.min(choices.len() - 1);
                 choices[idx].clone()
             }
-            SearchDimension::Conditional { dimension, .. } => {
-                self.sample_dim(dimension, rng_state)
-            }
+            SearchDimension::Conditional { dimension, .. } => self.sample_dim(dimension, rng_state),
             _ => serde_json::Value::Null,
         }
     }
@@ -260,7 +258,10 @@ pub fn pseudo_random(state: u64) -> f64 {
 
 /// Simple hash combiner for generating unique RNG states.
 pub fn hash_u64(seed: u64, a: u64, b: u64) -> u64 {
-    splitmix64(seed.wrapping_add(a.wrapping_mul(6364136223846793005)).wrapping_add(b))
+    splitmix64(
+        seed.wrapping_add(a.wrapping_mul(6364136223846793005))
+            .wrapping_add(b),
+    )
 }
 
 /// SplitMix64 hash function.

@@ -27,8 +27,10 @@ pub struct Pipeline {
 impl Pipeline {
     /// Create a new pipeline from a list of named filters.
     pub fn new(filters: Vec<(String, Box<dyn Filter>)>) -> Self {
-        let state_slots: Vec<(String, Option<Value>)> =
-            filters.iter().map(|(name, _)| (name.clone(), None)).collect();
+        let state_slots: Vec<(String, Option<Value>)> = filters
+            .iter()
+            .map(|(name, _)| (name.clone(), None))
+            .collect();
         Self {
             filters,
             states: state_slots,
@@ -84,9 +86,8 @@ impl Pipeline {
             });
 
             // Check state cache
-            let data_hash = CacheKey::hash_data(
-                &serde_json::to_vec(&current_x).unwrap_or_default(),
-            );
+            let data_hash =
+                CacheKey::hash_data(&serde_json::to_vec(&current_x).unwrap_or_default());
             let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
 
             let state = if let Some(cached_state) = self.cache.get(&state_key)? {
@@ -224,14 +225,21 @@ mod tests {
         }
 
         fn fit(&self, x: &Value, _y: Option<&Value>) -> Result<Value> {
-            let (data, _) = x.as_tensor().ok_or(SomaError::Other("need tensor".into()))?;
+            let (data, _) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("need tensor".into()))?;
             let mean = data.iter().sum::<f64>() / data.len() as f64;
             Ok(Value::json(serde_json::json!({ "mean": mean })))
         }
 
         fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
-            let (data, shape) = x.as_tensor().ok_or(SomaError::Other("need tensor".into()))?;
-            let mean = state.as_json().and_then(|j| j["mean"].as_f64()).unwrap_or(0.0);
+            let (data, shape) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("need tensor".into()))?;
+            let mean = state
+                .as_json()
+                .and_then(|j| j["mean"].as_f64())
+                .unwrap_or(0.0);
             let result: Vec<f64> = data.iter().map(|v| (v - mean) * self.scale).collect();
             Ok(Value::tensor(result, shape.to_vec()))
         }
@@ -262,7 +270,9 @@ mod tests {
         }
 
         fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
-            let (data, shape) = x.as_tensor().ok_or(SomaError::Other("need tensor".into()))?;
+            let (data, shape) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("need tensor".into()))?;
             let result: Vec<f64> = data.iter().map(|v| v * v).collect();
             Ok(Value::tensor(result, shape.to_vec()))
         }
@@ -304,9 +314,10 @@ mod tests {
 
     #[test]
     fn predict_before_fit_errors() {
-        let pipeline = Pipeline::new(vec![
-            ("scaler".into(), Box::new(ScaleFilter { scale: 1.0 })),
-        ]);
+        let pipeline = Pipeline::new(vec![(
+            "scaler".into(),
+            Box::new(ScaleFilter { scale: 1.0 }),
+        )]);
 
         let result = pipeline.predict(&Value::tensor(vec![1.0], vec![1]));
         assert!(result.is_err());
@@ -317,9 +328,10 @@ mod tests {
         let bus = Arc::new(EventBus::new(64));
         let mut rx = bus.subscribe();
 
-        let mut pipeline = Pipeline::new(vec![
-            ("scaler".into(), Box::new(ScaleFilter { scale: 1.0 })),
-        ])
+        let mut pipeline = Pipeline::new(vec![(
+            "scaler".into(),
+            Box::new(ScaleFilter { scale: 1.0 }),
+        )])
         .with_event_bus(bus);
 
         let data = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
@@ -332,18 +344,31 @@ mod tests {
         }
 
         assert!(events.iter().any(|e| matches!(e, Event::RunStarted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::NodeStarted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::NodeCompleted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::RunCompleted { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::NodeStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::NodeCompleted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::RunCompleted { .. }))
+        );
     }
 
     #[test]
     fn pipeline_caches_state() {
         let cache = Arc::new(MemoryCache::new(1024 * 1024));
 
-        let mut pipeline = Pipeline::new(vec![
-            ("scaler".into(), Box::new(ScaleFilter { scale: 1.0 })),
-        ])
+        let mut pipeline = Pipeline::new(vec![(
+            "scaler".into(),
+            Box::new(ScaleFilter { scale: 1.0 }),
+        )])
         .with_cache(cache.clone());
 
         let data = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);

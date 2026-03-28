@@ -10,8 +10,8 @@
 use crate::knowledge_base::KnowledgeBase;
 use crate::record::{ChangePoint, ExperimentRecord, ResearchLine, Trend};
 use chronos_vector::core::TemporalFilter;
-use chronos_vector::index::hnsw::temporal::TemporalHnsw;
 use chronos_vector::index::hnsw::HnswConfig;
+use chronos_vector::index::hnsw::temporal::TemporalHnsw;
 use chronos_vector::index::metrics::L2Distance;
 use soma_core::error::Result;
 use std::collections::HashMap;
@@ -238,7 +238,9 @@ impl KnowledgeBase for ChronosKnowledgeBase {
         let all = self.research_lines()?;
         Ok(all
             .into_iter()
-            .filter(|l| l.trend == Trend::Improving || l.best_metric_name.as_deref() == Some(metric))
+            .filter(|l| {
+                l.trend == Trend::Improving || l.best_metric_name.as_deref() == Some(metric)
+            })
             .collect())
     }
 
@@ -265,9 +267,7 @@ impl KnowledgeBase for ChronosKnowledgeBase {
                     metric_name: metric.to_string(),
                     value_before: *val_before,
                     value_after: val_after,
-                    description: format!(
-                        "{metric} changed from {val_before:.4} to {val_after:.4}"
-                    ),
+                    description: format!("{metric} changed from {val_before:.4} to {val_after:.4}"),
                 });
             }
         }
@@ -360,17 +360,20 @@ mod tests {
             make_exp("e1", "line_a", 0.8)
                 .with_hypothesis("SVM classification with z-normalization")
                 .with_tags(vec!["svm".into(), "normalization".into()]),
-        ).unwrap();
+        )
+        .unwrap();
         kb.record(
             make_exp("e2", "line_b", 0.7)
                 .with_hypothesis("Random forest on raw features")
                 .with_tags(vec!["rf".into()]),
-        ).unwrap();
+        )
+        .unwrap();
         kb.record(
             make_exp("e3", "line_a", 0.9)
                 .with_hypothesis("SVM with robust scaling")
                 .with_tags(vec!["svm".into(), "scaling".into()]),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Search for SVM-related experiments
         let results = kb.search("SVM normalization", 10).unwrap();
@@ -427,7 +430,8 @@ mod tests {
     fn chronos_children() {
         let mut kb = ChronosKnowledgeBase::new(16);
         kb.record(make_exp("parent", "line_a", 0.7)).unwrap();
-        kb.record(make_exp("child", "line_a", 0.8).with_parent("parent")).unwrap();
+        kb.record(make_exp("child", "line_a", 0.8).with_parent("parent"))
+            .unwrap();
 
         let kids = kb.children("parent").unwrap();
         assert_eq!(kids.len(), 1);

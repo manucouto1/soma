@@ -71,7 +71,6 @@ impl StudyRunner {
         let mut trial_index = 0;
 
         while let Some(params) = sampler.sample(&study.search_space, trial_index)? {
-
             let trial_id = format!("trial_{trial_index:04}");
             let mut trial = Trial::new(trial_id.clone(), params.clone());
             trial.state = TrialState::Running;
@@ -167,10 +166,7 @@ impl StudyRunner {
             trial_index += 1;
         }
 
-        let best_trial_id = study
-            .best_trial()
-            .map(|t| t.id.clone())
-            .unwrap_or_default();
+        let best_trial_id = study.best_trial().map(|t| t.id.clone()).unwrap_or_default();
         let best_value = study
             .best_trial()
             .and_then(|t| {
@@ -211,30 +207,27 @@ mod tests {
         });
         space.add(SearchDimension::Categorical {
             name: "activation".into(),
-            choices: vec![
-                serde_json::json!("relu"),
-                serde_json::json!("tanh"),
-            ],
+            choices: vec![serde_json::json!("relu"), serde_json::json!("tanh")],
         });
         space
     }
 
     /// Simple executor: f1 = 1.0 - |lr - 0.01| * 10
     fn make_executor() -> FnTrialExecutor<
-        impl Fn(
-            &std::collections::HashMap<String, serde_json::Value>,
-        ) -> Result<TrialOutcome>,
+        impl Fn(&std::collections::HashMap<String, serde_json::Value>) -> Result<TrialOutcome>,
     > {
-        FnTrialExecutor(|params: &std::collections::HashMap<String, serde_json::Value>| {
-            let lr = params["lr"].as_f64().unwrap();
-            let f1 = (1.0 - (lr - 0.01).abs() * 10.0).max(0.0);
-            Ok(TrialOutcome::Completed(vec![MetricRecord {
-                name: "f1".into(),
-                value: f1,
-                step: 0,
-                timestamp: Utc::now(),
-            }]))
-        })
+        FnTrialExecutor(
+            |params: &std::collections::HashMap<String, serde_json::Value>| {
+                let lr = params["lr"].as_f64().unwrap();
+                let f1 = (1.0 - (lr - 0.01).abs() * 10.0).max(0.0);
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "f1".into(),
+                    value: f1,
+                    step: 0,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        )
     }
 
     #[test]
@@ -276,11 +269,31 @@ mod tests {
         while let Ok(e) = rx.try_recv() {
             events.push(e);
         }
-        assert!(events.iter().any(|e| matches!(e, Event::StudyStarted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::TrialStarted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::TrialCompleted { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::BestUpdated { .. })));
-        assert!(events.iter().any(|e| matches!(e, Event::StudyCompleted { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::StudyStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::TrialStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::TrialCompleted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::BestUpdated { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::StudyCompleted { .. }))
+        );
     }
 
     #[test]
@@ -408,10 +421,12 @@ mod tests {
         let mut sampler = RandomSampler::new(3, Some(42));
         runner.run(&mut study, &mut sampler, &executor).unwrap();
 
-        assert!(study.trials.iter().all(|t| matches!(
-            t.state,
-            TrialState::Pruned { .. }
-        )));
+        assert!(
+            study
+                .trials
+                .iter()
+                .all(|t| matches!(t.state, TrialState::Pruned { .. }))
+        );
     }
 
     #[test]
@@ -459,7 +474,10 @@ mod tests {
         // Collect progress events
         let mut progress_events = Vec::new();
         while let Ok(e) = rx.try_recv() {
-            if let Event::StudyProgress { completed, total, .. } = e {
+            if let Event::StudyProgress {
+                completed, total, ..
+            } = e
+            {
                 progress_events.push((completed, total));
             }
         }

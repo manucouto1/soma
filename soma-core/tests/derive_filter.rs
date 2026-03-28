@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use soma_core::search::Searchable;
 use soma_core::SomaFilter;
+use soma_core::search::Searchable;
 use std::collections::HashMap;
 
 #[derive(SomaFilter, Serialize, Deserialize, Default)]

@@ -124,24 +124,21 @@ mod tests {
 
     impl Filter for TestScaler {
         fn config_hash(&self) -> CacheKey {
-            CacheKey::from_parts(&[
-                b"TestScaler",
-                &self.scale.to_le_bytes(),
-            ])
+            CacheKey::from_parts(&[b"TestScaler", &self.scale.to_le_bytes()])
         }
 
         fn fit(&self, x: &Value, _y: Option<&Value>) -> Result<Value> {
-            let (data, _shape) = x.as_tensor().ok_or(SomaError::Other(
-                "expected tensor".into(),
-            ))?;
+            let (data, _shape) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("expected tensor".into()))?;
             let mean = data.iter().sum::<f64>() / data.len() as f64;
             Ok(Value::json(serde_json::json!({ "mean": mean })))
         }
 
         fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
-            let (data, shape) = x.as_tensor().ok_or(SomaError::Other(
-                "expected tensor".into(),
-            ))?;
+            let (data, shape) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("expected tensor".into()))?;
             let mean = state
                 .as_json()
                 .and_then(|j| j["mean"].as_f64())

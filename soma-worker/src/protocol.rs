@@ -104,14 +104,8 @@ pub enum CoordinatorToWorker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum PlanResult {
-    Success {
-        output: Value,
-        duration_ms: u64,
-    },
-    Failed {
-        error: String,
-        duration_ms: u64,
-    },
+    Success { output: Value, duration_ms: u64 },
+    Failed { error: String, duration_ms: u64 },
 }
 
 #[cfg(test)]
@@ -174,7 +168,10 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: CoordinatorToWorker = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, CoordinatorToWorker::AssignPlan { .. }));
+        assert!(matches!(
+            deserialized,
+            CoordinatorToWorker::AssignPlan { .. }
+        ));
     }
 
     #[test]

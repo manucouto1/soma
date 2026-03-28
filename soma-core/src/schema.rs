@@ -123,10 +123,7 @@ impl Schema {
 
     /// Create a schema with fully dynamic (unknown) shape.
     pub fn dynamic(dtype: DataType) -> Self {
-        Self {
-            dtype,
-            shape: None,
-        }
+        Self { dtype, shape: None }
     }
 
     /// Check if this schema is compatible with another (can be connected in a pipeline).
@@ -182,8 +179,14 @@ mod tests {
 
     #[test]
     fn schema_display() {
-        assert_eq!(Schema::scalar(DataType::Float64).to_string(), "f64 (scalar)");
-        assert_eq!(Schema::vector(DataType::Float64, 128).to_string(), "f64[128]");
+        assert_eq!(
+            Schema::scalar(DataType::Float64).to_string(),
+            "f64 (scalar)"
+        );
+        assert_eq!(
+            Schema::vector(DataType::Float64, 128).to_string(),
+            "f64[128]"
+        );
         assert_eq!(
             Schema::matrix(DataType::Float64, 100, 50).to_string(),
             "f64[100, 50]"

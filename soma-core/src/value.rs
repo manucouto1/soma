@@ -7,10 +7,7 @@ use std::fmt;
 #[non_exhaustive]
 pub enum Value {
     /// Numeric tensor data (shape + flat data)
-    Tensor {
-        values: Vec<f64>,
-        shape: Vec<usize>,
-    },
+    Tensor { values: Vec<f64>, shape: Vec<usize> },
 
     /// Structured JSON data
     Json(serde_json::Value),

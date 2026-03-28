@@ -18,15 +18,9 @@ impl TieredCache {
     }
 
     /// Create a two-level cache: Memory + Local.
-    pub fn memory_and_local(
-        memory: Box<dyn CacheStore>,
-        local: Box<dyn CacheStore>,
-    ) -> Self {
+    pub fn memory_and_local(memory: Box<dyn CacheStore>, local: Box<dyn CacheStore>) -> Self {
         Self {
-            tiers: vec![
-                (CacheTier::Memory, memory),
-                (CacheTier::Local, local),
-            ],
+            tiers: vec![(CacheTier::Memory, memory), (CacheTier::Local, local)],
         }
     }
 }
@@ -93,10 +87,7 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = env::temp_dir().join(format!(
-            "soma_tiered_test_{}_{id}",
-            std::process::id()
-        ));
+        let dir = env::temp_dir().join(format!("soma_tiered_test_{}_{id}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }

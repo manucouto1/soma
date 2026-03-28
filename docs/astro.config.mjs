@@ -49,6 +49,17 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'API Reference',
+					items: [
+						{
+							label: 'Rust API (cargo doc)',
+							link: '/api/soma_core/',
+							attrs: { target: '_blank' },
+						},
+						{ label: 'Python API', slug: 'api/python' },
+					],
+				},
+				{
 					label: 'Development',
 					items: [
 						{ label: 'Gitflow & Workflow', slug: 'development/gitflow' },

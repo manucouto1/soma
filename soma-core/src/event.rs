@@ -37,7 +37,6 @@ pub struct PlanSummary {
 #[non_exhaustive]
 pub enum Event {
     // ── Level 1: Pipeline execution (per run) ──
-
     /// A pipeline run has started.
     RunStarted {
         run_id: RunId,
@@ -92,13 +91,9 @@ pub enum Event {
     },
 
     /// The pipeline run failed.
-    RunFailed {
-        run_id: RunId,
-        error: String,
-    },
+    RunFailed { run_id: RunId, error: String },
 
     // ── Level 2: Trial execution (per hyperparameter set) ──
-
     /// A new trial has started.
     TrialStarted {
         study_id: StudyId,
@@ -136,7 +131,6 @@ pub enum Event {
     },
 
     // ── Level 3: Study execution (optimization session) ──
-
     /// An optimization study has started.
     StudyStarted {
         study_id: StudyId,
@@ -212,7 +206,11 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("RunStarted"));
         let deserialized: Event = serde_json::from_str(&json).unwrap();
-        if let Event::RunStarted { run_id, plan_summary } = deserialized {
+        if let Event::RunStarted {
+            run_id,
+            plan_summary,
+        } = deserialized
+        {
             assert_eq!(run_id, "run_001");
             assert_eq!(plan_summary.total_nodes, 5);
         } else {
@@ -289,9 +287,16 @@ mod tests {
             // Level 1
             Event::RunStarted {
                 run_id: "r".into(),
-                plan_summary: PlanSummary { total_nodes: 1, cached_nodes: 0, parallel_branches: 0 },
+                plan_summary: PlanSummary {
+                    total_nodes: 1,
+                    cached_nodes: 0,
+                    parallel_branches: 0,
+                },
             },
-            Event::RunCompleted { run_id: "r".into(), duration: Duration::from_secs(1) },
+            Event::RunCompleted {
+                run_id: "r".into(),
+                duration: Duration::from_secs(1),
+            },
             // Level 2
             Event::TrialStarted {
                 study_id: "s".into(),
@@ -305,7 +310,11 @@ mod tests {
                 reason: "below median".into(),
             },
             // Level 3
-            Event::StudyStarted { study_id: "s".into(), name: "test".into(), total_trials: 100 },
+            Event::StudyStarted {
+                study_id: "s".into(),
+                name: "test".into(),
+                total_trials: 100,
+            },
             Event::BestUpdated {
                 study_id: "s".into(),
                 trial_id: "t".into(),

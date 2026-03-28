@@ -60,15 +60,23 @@ impl SearchDimension {
     /// Validate the dimension configuration.
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Float { low, high, name, .. } => {
+            Self::Float {
+                low, high, name, ..
+            } => {
                 if low >= high {
-                    return Err(format!("{name}: `low` ({low}) must be less than `high` ({high})"));
+                    return Err(format!(
+                        "{name}: `low` ({low}) must be less than `high` ({high})"
+                    ));
                 }
                 Ok(())
             }
-            Self::Int { low, high, name, .. } => {
+            Self::Int {
+                low, high, name, ..
+            } => {
                 if low >= high {
-                    return Err(format!("{name}: `low` ({low}) must be less than `high` ({high})"));
+                    return Err(format!(
+                        "{name}: `low` ({low}) must be less than `high` ({high})"
+                    ));
                 }
                 Ok(())
             }
@@ -101,7 +109,10 @@ impl fmt::Display for SearchDimension {
                 write!(f, "{name}: Categorical[{}]", labels.join(", "))
             }
             Self::Conditional {
-                name, parent, dimension, ..
+                name,
+                parent,
+                dimension,
+                ..
             } => write!(f, "{name}: Conditional(if {parent}) -> {dimension}"),
         }
     }
@@ -258,10 +269,7 @@ mod tests {
             name: "kernel".into(),
             choices: vec![json!("linear"), json!("rbf")],
         };
-        assert_eq!(
-            dim.to_string(),
-            "kernel: Categorical[\"linear\", \"rbf\"]"
-        );
+        assert_eq!(dim.to_string(), "kernel: Categorical[\"linear\", \"rbf\"]");
     }
 
     #[test]

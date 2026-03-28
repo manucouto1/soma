@@ -1,10 +1,10 @@
 use crate::protocol::*;
 use crate::worker::Worker;
+use axum::Router;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
 use std::sync::{Arc, Mutex};
 
 /// Shared state for the worker HTTP/WebSocket server.
@@ -55,8 +55,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
             Some(Ok(Message::Text(text))) => {
                 let response = match serde_json::from_str::<CoordinatorToWorker>(&text) {
                     Ok(CoordinatorToWorker::AssignPlan { plan }) => {
-                        let mut worker = state.worker.lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
                         let plan_id = plan.plan_id.clone();
                         let worker_id = worker.id.clone();
                         let result = worker.execute_plan(&plan);
@@ -68,10 +67,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         serde_json::to_string(&msg).unwrap_or_default()
                     }
                     Ok(CoordinatorToWorker::StatusRequest) => {
-                        let worker = state.worker.lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        serde_json::to_string(&worker.registration_message())
-                            .unwrap_or_default()
+                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+                        serde_json::to_string(&worker.registration_message()).unwrap_or_default()
                     }
                     Ok(CoordinatorToWorker::CancelPlan { .. }) => {
                         r#"{"status": "cancel_not_implemented"}"#.to_string()

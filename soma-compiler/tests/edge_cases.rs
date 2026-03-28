@@ -1,11 +1,9 @@
-use soma_compiler::{
-    compile, CompileMode, ExecutionPlan, SimpleFilterRegistry,
-};
+use soma_compiler::{CompileMode, ExecutionPlan, SimpleFilterRegistry, compile};
 use soma_core::cache::{CacheKey, CacheStore, EntryMeta};
 use soma_core::error::{Result, SomaError};
 use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
+use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
 use soma_core::schema::{DataType, Schema};
-use soma_core::graph::{linear_pipeline, Edge, Graph, Node};
 use soma_core::value::Value;
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -39,13 +37,21 @@ impl MockCache {
 }
 
 impl CacheStore for MockCache {
-    fn get(&self, _: &CacheKey) -> Result<Option<Value>> { Ok(None) }
-    fn put(&self, _: &CacheKey, _: &Value) -> Result<()> { Ok(()) }
+    fn get(&self, _: &CacheKey) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    fn put(&self, _: &CacheKey, _: &Value) -> Result<()> {
+        Ok(())
+    }
     fn exists(&self, key: &CacheKey) -> Result<bool> {
         Ok(self.entries.lock().unwrap().contains(key))
     }
-    fn remove(&self, _: &CacheKey) -> Result<()> { Ok(()) }
-    fn metadata(&self, _: &CacheKey) -> Result<Option<EntryMeta>> { Ok(None) }
+    fn remove(&self, _: &CacheKey) -> Result<()> {
+        Ok(())
+    }
+    fn metadata(&self, _: &CacheKey) -> Result<Option<EntryMeta>> {
+        Ok(None)
+    }
 }
 
 // ── Gradient flow edge cases ──
@@ -62,11 +68,31 @@ fn gradient_multiple_interruptions() {
     ]);
 
     let mut reg = SimpleFilterRegistry::new();
-    reg.register_meta("d1", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"d1"));
-    reg.register_meta("o1", make_meta(FilterKind::Opaque, false), CacheKey::hash_data(b"o1"));
-    reg.register_meta("d2", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"d2"));
-    reg.register_meta("o2", make_meta(FilterKind::Opaque, false), CacheKey::hash_data(b"o2"));
-    reg.register_meta("d3", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"d3"));
+    reg.register_meta(
+        "d1",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"d1"),
+    );
+    reg.register_meta(
+        "o1",
+        make_meta(FilterKind::Opaque, false),
+        CacheKey::hash_data(b"o1"),
+    );
+    reg.register_meta(
+        "d2",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"d2"),
+    );
+    reg.register_meta(
+        "o2",
+        make_meta(FilterKind::Opaque, false),
+        CacheKey::hash_data(b"o2"),
+    );
+    reg.register_meta(
+        "d3",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"d3"),
+    );
 
     let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
 
@@ -90,9 +116,21 @@ fn gradient_all_opaque_single_warning() {
     ]);
 
     let mut reg = SimpleFilterRegistry::new();
-    reg.register_meta("o1", make_meta(FilterKind::Opaque, false), CacheKey::hash_data(b"o1"));
-    reg.register_meta("o2", make_meta(FilterKind::Opaque, false), CacheKey::hash_data(b"o2"));
-    reg.register_meta("o3", make_meta(FilterKind::Opaque, false), CacheKey::hash_data(b"o3"));
+    reg.register_meta(
+        "o1",
+        make_meta(FilterKind::Opaque, false),
+        CacheKey::hash_data(b"o1"),
+    );
+    reg.register_meta(
+        "o2",
+        make_meta(FilterKind::Opaque, false),
+        CacheKey::hash_data(b"o2"),
+    );
+    reg.register_meta(
+        "o3",
+        make_meta(FilterKind::Opaque, false),
+        CacheKey::hash_data(b"o3"),
+    );
 
     let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
 
@@ -118,10 +156,26 @@ fn cache_diamond_cascade() {
     graph.add_edge(Edge::data("e4", "b2", "merge"));
 
     let mut reg = SimpleFilterRegistry::new();
-    reg.register_meta("root", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"root"));
-    reg.register_meta("b1", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"b1"));
-    reg.register_meta("b2", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"b2"));
-    reg.register_meta("merge", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"merge"));
+    reg.register_meta(
+        "root",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"root"),
+    );
+    reg.register_meta(
+        "b1",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"b1"),
+    );
+    reg.register_meta(
+        "b2",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"b2"),
+    );
+    reg.register_meta(
+        "merge",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"merge"),
+    );
 
     // Cache root's output
     let cache = MockCache::new();
@@ -137,31 +191,32 @@ fn cache_diamond_cascade() {
     cache.insert(b2_key.clone());
 
     // Cache merge (depends on b1 AND b2)
-    let merge_key = CacheKey::from_parts(&[
-        &CacheKey::hash_data(b"merge").0,
-        &b1_key.0,
-        &b2_key.0,
-    ]);
+    let merge_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"merge").0, &b1_key.0, &b2_key.0]);
     cache.insert(merge_key);
 
     let result = compile(&graph, &reg, CompileMode::Inference, Some(&cache)).unwrap();
 
     // Everything should be cached
-    assert_eq!(result.plan.cached_count(), 4, "all 4 nodes should be cached");
+    assert_eq!(
+        result.plan.cached_count(),
+        4,
+        "all 4 nodes should be cached"
+    );
 }
 
 // ── Unregistered node handling ──
 
 #[test]
 fn compile_with_unregistered_node() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     // Only register "a", not "b"
     let mut reg = SimpleFilterRegistry::new();
-    reg.register_meta("a", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"a"));
+    reg.register_meta(
+        "a",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"a"),
+    );
 
     // Should still compile (unregistered nodes get Execute, no caching)
     let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
@@ -194,14 +249,19 @@ fn compile_deep_chain() {
 
 #[test]
 fn all_compile_modes() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     let mut reg = SimpleFilterRegistry::new();
-    reg.register_meta("a", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"a"));
-    reg.register_meta("b", make_meta(FilterKind::Trainable, true), CacheKey::hash_data(b"b"));
+    reg.register_meta(
+        "a",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"a"),
+    );
+    reg.register_meta(
+        "b",
+        make_meta(FilterKind::Trainable, true),
+        CacheKey::hash_data(b"b"),
+    );
 
     let cache = MockCache::new();
     let a_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"a").0]);
@@ -222,10 +282,7 @@ fn all_compile_modes() {
 
 // ── Schema validation ──
 
-fn meta_with_schemas(
-    output: Option<Schema>,
-    input: Option<Schema>,
-) -> FilterMeta {
+fn meta_with_schemas(output: Option<Schema>, input: Option<Schema>) -> FilterMeta {
     FilterMeta {
         name: "typed".into(),
         kind: FilterKind::Trainable,
@@ -240,27 +297,18 @@ fn meta_with_schemas(
 
 #[test]
 fn schema_compatible_no_warnings() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     let mut reg = SimpleFilterRegistry::new();
     // A outputs f64[128], B expects f64[128] → compatible
     reg.register_meta(
         "a",
-        meta_with_schemas(
-            Some(Schema::vector(DataType::Float64, 128)),
-            None,
-        ),
+        meta_with_schemas(Some(Schema::vector(DataType::Float64, 128)), None),
         CacheKey::hash_data(b"a"),
     );
     reg.register_meta(
         "b",
-        meta_with_schemas(
-            None,
-            Some(Schema::vector(DataType::Float64, 128)),
-        ),
+        meta_with_schemas(None, Some(Schema::vector(DataType::Float64, 128))),
         CacheKey::hash_data(b"b"),
     );
 
@@ -275,27 +323,18 @@ fn schema_compatible_no_warnings() {
 
 #[test]
 fn schema_incompatible_dtype_warns() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     let mut reg = SimpleFilterRegistry::new();
     // A outputs f64, B expects i64 → incompatible
     reg.register_meta(
         "a",
-        meta_with_schemas(
-            Some(Schema::vector(DataType::Float64, 128)),
-            None,
-        ),
+        meta_with_schemas(Some(Schema::vector(DataType::Float64, 128)), None),
         CacheKey::hash_data(b"a"),
     );
     reg.register_meta(
         "b",
-        meta_with_schemas(
-            None,
-            Some(Schema::vector(DataType::Int64, 128)),
-        ),
+        meta_with_schemas(None, Some(Schema::vector(DataType::Int64, 128))),
         CacheKey::hash_data(b"b"),
     );
 
@@ -312,27 +351,18 @@ fn schema_incompatible_dtype_warns() {
 
 #[test]
 fn schema_incompatible_shape_warns() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     let mut reg = SimpleFilterRegistry::new();
     // A outputs f64[128], B expects f64[256] → shape mismatch
     reg.register_meta(
         "a",
-        meta_with_schemas(
-            Some(Schema::vector(DataType::Float64, 128)),
-            None,
-        ),
+        meta_with_schemas(Some(Schema::vector(DataType::Float64, 128)), None),
         CacheKey::hash_data(b"a"),
     );
     reg.register_meta(
         "b",
-        meta_with_schemas(
-            None,
-            Some(Schema::vector(DataType::Float64, 256)),
-        ),
+        meta_with_schemas(None, Some(Schema::vector(DataType::Float64, 256))),
         CacheKey::hash_data(b"b"),
     );
 
@@ -347,27 +377,18 @@ fn schema_incompatible_shape_warns() {
 
 #[test]
 fn schema_dynamic_compatible_with_fixed() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     let mut reg = SimpleFilterRegistry::new();
     // A outputs f64[batch, 128], B expects f64[32, 128] → compatible (dynamic batch)
     reg.register_meta(
         "a",
-        meta_with_schemas(
-            Some(Schema::batched(DataType::Float64, &[128])),
-            None,
-        ),
+        meta_with_schemas(Some(Schema::batched(DataType::Float64, &[128])), None),
         CacheKey::hash_data(b"a"),
     );
     reg.register_meta(
         "b",
-        meta_with_schemas(
-            None,
-            Some(Schema::matrix(DataType::Float64, 32, 128)),
-        ),
+        meta_with_schemas(None, Some(Schema::matrix(DataType::Float64, 32, 128))),
         CacheKey::hash_data(b"b"),
     );
 
@@ -382,10 +403,7 @@ fn schema_dynamic_compatible_with_fixed() {
 
 #[test]
 fn schema_none_skips_validation() {
-    let graph = linear_pipeline(vec![
-        Node::new("a", "A", "F"),
-        Node::new("b", "B", "F"),
-    ]);
+    let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     let mut reg = SimpleFilterRegistry::new();
     // Both have None schemas → no validation, no warnings

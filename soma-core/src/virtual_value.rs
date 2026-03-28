@@ -19,16 +19,10 @@ use std::fmt;
 #[non_exhaustive]
 pub enum VirtualValue {
     /// Already computed and in memory. Ready to use.
-    Materialized {
-        value: Value,
-        schema: Schema,
-    },
+    Materialized { value: Value, schema: Schema },
 
     /// Stored in cache (K/V store). Can be loaded on demand.
-    Cached {
-        key: CacheKey,
-        schema: Schema,
-    },
+    Cached { key: CacheKey, schema: Schema },
 
     /// Not computed yet. Carries the "recipe" to produce it:
     /// which node produces it, and what its cache key would be.
@@ -39,10 +33,7 @@ pub enum VirtualValue {
     },
 
     /// A stream that materializes chunk by chunk.
-    Stream {
-        source_id: String,
-        schema: Schema,
-    },
+    Stream { source_id: String, schema: Schema },
 }
 
 /// Status of a VirtualValue without inspecting the actual data.
@@ -76,7 +67,11 @@ impl VirtualValue {
     }
 
     /// Create a deferred (not yet computed) reference.
-    pub fn deferred(producer_node_id: impl Into<String>, cache_key: CacheKey, schema: Schema) -> Self {
+    pub fn deferred(
+        producer_node_id: impl Into<String>,
+        cache_key: CacheKey,
+        schema: Schema,
+    ) -> Self {
         Self::Deferred {
             producer_node_id: producer_node_id.into(),
             cache_key,
@@ -121,7 +116,10 @@ impl VirtualValue {
     }
 
     /// Materialize from a cache store. Returns the value if found, None if not cached.
-    pub fn try_load(&self, cache: &dyn crate::cache::CacheStore) -> crate::error::Result<Option<Value>> {
+    pub fn try_load(
+        &self,
+        cache: &dyn crate::cache::CacheStore,
+    ) -> crate::error::Result<Option<Value>> {
         match self {
             Self::Materialized { value, .. } => Ok(Some(value.clone())),
             Self::Cached { key, .. } => cache.get(key),
@@ -166,7 +164,12 @@ impl VirtualValue {
         match value {
             Value::Tensor { values: _, shape } => Schema {
                 dtype: crate::schema::DataType::Float64,
-                shape: Some(shape.iter().map(|&d| crate::schema::Dimension::Fixed(d)).collect()),
+                shape: Some(
+                    shape
+                        .iter()
+                        .map(|&d| crate::schema::Dimension::Fixed(d))
+                        .collect(),
+                ),
             },
             Value::Json(_) => Schema::json(),
             Value::Bytes(_) => Schema::bytes(),
@@ -288,11 +291,24 @@ mod tests {
         // Simple mock cache
         struct EmptyCache;
         impl CacheStore for EmptyCache {
-            fn get(&self, _: &CacheKey) -> crate::error::Result<Option<Value>> { Ok(None) }
-            fn put(&self, _: &CacheKey, _: &Value) -> crate::error::Result<()> { Ok(()) }
-            fn exists(&self, _: &CacheKey) -> crate::error::Result<bool> { Ok(false) }
-            fn remove(&self, _: &CacheKey) -> crate::error::Result<()> { Ok(()) }
-            fn metadata(&self, _: &CacheKey) -> crate::error::Result<Option<crate::cache::EntryMeta>> { Ok(None) }
+            fn get(&self, _: &CacheKey) -> crate::error::Result<Option<Value>> {
+                Ok(None)
+            }
+            fn put(&self, _: &CacheKey, _: &Value) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn exists(&self, _: &CacheKey) -> crate::error::Result<bool> {
+                Ok(false)
+            }
+            fn remove(&self, _: &CacheKey) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn metadata(
+                &self,
+                _: &CacheKey,
+            ) -> crate::error::Result<Option<crate::cache::EntryMeta>> {
+                Ok(None)
+            }
         }
 
         let val = Value::tensor(vec![1.0], vec![1]);
@@ -314,19 +330,27 @@ mod tests {
             fn with(key: CacheKey, value: Value) -> Self {
                 let mut store = HashMap::new();
                 store.insert(key, value);
-                Self { store: Mutex::new(store) }
+                Self {
+                    store: Mutex::new(store),
+                }
             }
         }
         impl CacheStore for TestCache {
             fn get(&self, key: &CacheKey) -> crate::error::Result<Option<Value>> {
                 Ok(self.store.lock().unwrap().get(key).cloned())
             }
-            fn put(&self, _: &CacheKey, _: &Value) -> crate::error::Result<()> { Ok(()) }
+            fn put(&self, _: &CacheKey, _: &Value) -> crate::error::Result<()> {
+                Ok(())
+            }
             fn exists(&self, key: &CacheKey) -> crate::error::Result<bool> {
                 Ok(self.store.lock().unwrap().contains_key(key))
             }
-            fn remove(&self, _: &CacheKey) -> crate::error::Result<()> { Ok(()) }
-            fn metadata(&self, _: &CacheKey) -> crate::error::Result<Option<EntryMeta>> { Ok(None) }
+            fn remove(&self, _: &CacheKey) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn metadata(&self, _: &CacheKey) -> crate::error::Result<Option<EntryMeta>> {
+                Ok(None)
+            }
         }
 
         let key = CacheKey::hash_data(b"cached_value");
@@ -347,7 +371,11 @@ mod tests {
         let values = vec![
             VirtualValue::materialized(Value::tensor(vec![1.0], vec![1])),
             VirtualValue::cached(CacheKey::hash_data(b"k"), Schema::json()),
-            VirtualValue::deferred("n", CacheKey::hash_data(b"d"), Schema::vector(DataType::Float64, 10)),
+            VirtualValue::deferred(
+                "n",
+                CacheKey::hash_data(b"d"),
+                Schema::vector(DataType::Float64, 10),
+            ),
         ];
         for vv in values {
             let json = serde_json::to_string(&vv).unwrap();

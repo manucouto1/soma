@@ -1,4 +1,4 @@
-use crate::sampler::{pseudo_random, hash_u64, sample_float, Sampler};
+use crate::sampler::{Sampler, hash_u64, pseudo_random, sample_float};
 use soma_core::error::Result;
 use soma_core::search::{SearchDimension, SearchSpace};
 use std::collections::HashMap;
@@ -63,14 +63,19 @@ impl BayesianSampler {
 
             // With 80% probability, sample near good trials' values for this dim.
             // With 20% probability, sample uniformly (exploration).
-            let explore_prob = pseudo_random(hash_u64(self.seed, trial_index as u64, dim_idx as u64 + 1000));
+            let explore_prob = pseudo_random(hash_u64(
+                self.seed,
+                trial_index as u64,
+                dim_idx as u64 + 1000,
+            ));
 
             let value = if explore_prob < 0.2 || good_indices.is_empty() {
                 // Explore: sample uniformly
                 self.sample_uniform(dim, t)
             } else {
                 // Exploit: sample near a good trial's value
-                let good_idx = good_indices[((t * good_indices.len() as f64) as usize).min(good_indices.len() - 1)];
+                let good_idx = good_indices
+                    [((t * good_indices.len() as f64) as usize).min(good_indices.len() - 1)];
                 let good_params = &self.history[good_idx].0;
 
                 if let Some(good_val) = good_params.get(dim.name()) {
@@ -88,7 +93,9 @@ impl BayesianSampler {
 
     fn sample_uniform(&self, dim: &SearchDimension, t: f64) -> serde_json::Value {
         match dim {
-            SearchDimension::Float { low, high, scale, .. } => {
+            SearchDimension::Float {
+                low, high, scale, ..
+            } => {
                 serde_json::json!(sample_float(*low, *high, *scale, t))
             }
             SearchDimension::Int { low, high, .. } => {
@@ -192,10 +199,7 @@ mod tests {
         });
         space.add(SearchDimension::Categorical {
             name: "kernel".into(),
-            choices: vec![
-                serde_json::json!("rbf"),
-                serde_json::json!("linear"),
-            ],
+            choices: vec![serde_json::json!("rbf"), serde_json::json!("linear")],
         });
         space
     }

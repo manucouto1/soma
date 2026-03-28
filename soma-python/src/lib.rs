@@ -42,8 +42,8 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if obj.is_instance_of::<PyDict>() {
         let json_mod = py.import("json")?;
         let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
-        let val: serde_json::Value = serde_json::from_str(&json_str)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let val: serde_json::Value =
+            serde_json::from_str(&json_str).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         return Ok(Value::Json(val));
     }
 
@@ -190,14 +190,21 @@ fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<Sea
                 _ => Scale::Linear,
             };
             Ok(SearchDimension::Float {
-                name, low, high, scale, default: None,
+                name,
+                low,
+                high,
+                scale,
+                default: None,
             })
         }
         "int" => {
             let low: i64 = dict.get_item("low")?.unwrap().extract()?;
             let high: i64 = dict.get_item("high")?.unwrap().extract()?;
             Ok(SearchDimension::Int {
-                name, low, high, scale: Scale::Linear,
+                name,
+                low,
+                high,
+                scale: Scale::Linear,
             })
         }
         "categorical" => {
@@ -206,16 +213,24 @@ fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<Sea
             let choices: Vec<serde_json::Value> = choices_list
                 .iter()
                 .map(|c| {
-                    if let Ok(s) = c.extract::<String>() { serde_json::json!(s) }
-                    else if let Ok(b) = c.extract::<bool>() { serde_json::json!(b) }
-                    else if let Ok(i) = c.extract::<i64>() { serde_json::json!(i) }
-                    else if let Ok(f) = c.extract::<f64>() { serde_json::json!(f) }
-                    else { serde_json::json!(c.to_string()) }
+                    if let Ok(s) = c.extract::<String>() {
+                        serde_json::json!(s)
+                    } else if let Ok(b) = c.extract::<bool>() {
+                        serde_json::json!(b)
+                    } else if let Ok(i) = c.extract::<i64>() {
+                        serde_json::json!(i)
+                    } else if let Ok(f) = c.extract::<f64>() {
+                        serde_json::json!(f)
+                    } else {
+                        serde_json::json!(c.to_string())
+                    }
                 })
                 .collect();
             Ok(SearchDimension::Categorical { name, choices })
         }
-        _ => Err(PyRuntimeError::new_err(format!("unknown search dim type: {dtype}"))),
+        _ => Err(PyRuntimeError::new_err(format!(
+            "unknown search dim type: {dtype}"
+        ))),
     }
 }
 
@@ -246,13 +261,20 @@ impl PyPipeline {
     }
 
     #[pyo3(signature = (x, y=None))]
-    fn fit(&mut self, py: Python<'_>, x: &Bound<'_, PyAny>, y: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    fn fit(
+        &mut self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         let x_val = py_to_value(py, x)?;
         let y_val = match y {
             Some(v) => Some(py_to_value(py, v)?),
             None => None,
         };
-        self.pipeline.fit(&x_val, y_val.as_ref()).map_err(soma_err_to_py)
+        self.pipeline
+            .fit(&x_val, y_val.as_ref())
+            .map_err(soma_err_to_py)
     }
 
     fn predict(&self, py: Python<'_>, x: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -266,7 +288,11 @@ impl PyPipeline {
     }
 
     fn filter_names(&self) -> Vec<String> {
-        self.pipeline.filter_names().iter().map(|s| s.to_string()).collect()
+        self.pipeline
+            .filter_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// Get the aggregated search space from all filters as a list of dicts.
@@ -308,23 +334,31 @@ impl PyStudy {
         }
 
         let strat = match strategy.as_str() {
-            "grid" => SearchStrategy::Grid { points_per_dim: n_trials },
+            "grid" => SearchStrategy::Grid {
+                points_per_dim: n_trials,
+            },
             "random" => SearchStrategy::Random { n_trials, seed },
             "bayesian" => SearchStrategy::Bayesian {
                 n_trials,
                 n_startup: (n_trials / 5).max(5),
                 seed,
             },
-            _ => return Err(PyRuntimeError::new_err(format!(
-                "Unknown strategy: {strategy}. Use 'grid', 'random', or 'bayesian'."
-            ))),
+            _ => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "Unknown strategy: {strategy}. Use 'grid', 'random', or 'bayesian'."
+                )));
+            }
         };
 
         let objs: Vec<Objective> = objectives
             .into_iter()
             .map(|(metric, dir)| Objective {
                 metric,
-                direction: if dir == "minimize" { Direction::Minimize } else { Direction::Maximize },
+                direction: if dir == "minimize" {
+                    Direction::Minimize
+                } else {
+                    Direction::Maximize
+                },
             })
             .collect();
 
@@ -354,9 +388,12 @@ impl PyStudy {
                             serde_json::Value::String(s) => {
                                 s.into_pyobject(py).unwrap().into_any().unbind()
                             }
-                            serde_json::Value::Bool(b) => {
-                                (*b).into_pyobject(py).unwrap().to_owned().into_any().unbind()
-                            }
+                            serde_json::Value::Bool(b) => (*b)
+                                .into_pyobject(py)
+                                .unwrap()
+                                .to_owned()
+                                .into_any()
+                                .unbind(),
                             _ => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
                         };
                         py_params.set_item(k, py_val).map_err(py_err_to_soma)?;
@@ -388,10 +425,15 @@ impl PyStudy {
 
         let mut sampler: Box<dyn Sampler> = match &self.study.strategy {
             SearchStrategy::Grid { points_per_dim } => Box::new(GridSampler::new(*points_per_dim)),
-            SearchStrategy::Random { n_trials, seed } => Box::new(RandomSampler::new(*n_trials, *seed)),
-            SearchStrategy::Bayesian { n_trials, n_startup, seed, .. } => {
-                Box::new(BayesianSampler::new(*n_trials, *n_startup, *seed))
+            SearchStrategy::Random { n_trials, seed } => {
+                Box::new(RandomSampler::new(*n_trials, *seed))
             }
+            SearchStrategy::Bayesian {
+                n_trials,
+                n_startup,
+                seed,
+                ..
+            } => Box::new(BayesianSampler::new(*n_trials, *n_startup, *seed)),
             _ => return Err(PyRuntimeError::new_err("Unsupported strategy")),
         };
 
@@ -410,11 +452,21 @@ impl PyStudy {
                 for (k, v) in &trial.params {
                     let py_val: PyObject = match v {
                         serde_json::Value::Number(n) => {
-                            if let Some(f) = n.as_f64() { f.into_pyobject(py).unwrap().into_any().unbind() }
-                            else { py.None() }
+                            if let Some(f) = n.as_f64() {
+                                f.into_pyobject(py).unwrap().into_any().unbind()
+                            } else {
+                                py.None()
+                            }
                         }
-                        serde_json::Value::String(s) => s.into_pyobject(py).unwrap().into_any().unbind(),
-                        serde_json::Value::Bool(b) => (*b).into_pyobject(py).unwrap().to_owned().into_any().unbind(),
+                        serde_json::Value::String(s) => {
+                            s.into_pyobject(py).unwrap().into_any().unbind()
+                        }
+                        serde_json::Value::Bool(b) => (*b)
+                            .into_pyobject(py)
+                            .unwrap()
+                            .to_owned()
+                            .into_any()
+                            .unbind(),
                         _ => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
                     };
                     params_dict.set_item(k, py_val)?;

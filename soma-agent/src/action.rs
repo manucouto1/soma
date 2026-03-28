@@ -20,7 +20,5 @@ pub enum Action {
     },
 
     /// Conclude the research (no more iterations).
-    Conclude {
-        reason: String,
-    },
+    Conclude { reason: String },
 }

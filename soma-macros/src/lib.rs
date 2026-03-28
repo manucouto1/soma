@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Lit, Expr};
+use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};
 
 /// Derive macro for generating `config_hash()` and `Searchable` implementations.
 ///
@@ -93,7 +93,9 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
 
     let stream_mode = match struct_attrs.stream.as_deref() {
         Some("Barrier") => quote! { soma_core::filter::StreamMode::Barrier },
-        Some("Evolving") => quote! { soma_core::filter::StreamMode::Evolving { checkpoint_every: 100 } },
+        Some("Evolving") => {
+            quote! { soma_core::filter::StreamMode::Evolving { checkpoint_every: 100 } }
+        }
         _ => quote! { soma_core::filter::StreamMode::FixedState },
     };
 
