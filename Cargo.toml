@@ -39,6 +39,10 @@ proptest = "1"
 # Logging
 tracing = "0.1"
 
+# HTTP
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+
 # Proc macros
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
