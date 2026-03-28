@@ -1,0 +1,34 @@
+---
+title: Soma
+description: A computational graph runtime for research pipelines, agent orchestration, and data virtualization.
+template: splash
+hero:
+  tagline: If an agent decides what to do, Soma defines how it's done.
+  actions:
+    - text: Get Started
+      link: /getting-started/introduction/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/manucouto1/soma
+      variant: minimal
+      icon: github
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Core Capabilities
+
+<CardGrid>
+  <Card title="Computational Graphs" icon="rocket">
+    Define research pipelines as executable, differentiable graphs with automatic caching and lazy evaluation.
+  </Card>
+  <Card title="Data Virtualization" icon="document">
+    Every intermediate result is a virtual reference materialized on demand. Like Denodo, but for computation.
+  </Card>
+  <Card title="Hyperparameter Optimization" icon="setting">
+    Search spaces co-located with filters. Bayesian, Hyperband, and multi-objective optimization built in.
+  </Card>
+  <Card title="Agent Integration" icon="star">
+    Agents construct, execute, and analyze pipelines autonomously. Temporal knowledge base tracks all experiments.
+  </Card>
+</CardGrid>
