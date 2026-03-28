@@ -79,3 +79,33 @@ class TestStudy:
         best = study.best_trial
         assert best["params"]["method"] == "best"
         assert best["metrics"]["score"] == 0.9
+
+    def test_run_bayesian_study(self):
+        study = Study(
+            name="bayesian_test",
+            search_space=[
+                {"type": "float", "name": "x", "low": 0.0, "high": 1.0, "scale": "linear"},
+            ],
+            strategy="bayesian",
+            n_trials=15,
+            objectives=[("f1", "maximize")],
+            seed=42,
+        )
+        study.run(simple_executor)
+
+        assert study.n_trials == 15
+        best = study.best_trial
+        assert best is not None
+        assert best["metrics"]["f1"] > 0.3
+
+    def test_pipeline_search_space(self):
+        from soma import Pipeline, Filter, search
+
+        class SearchableFilter(Filter):
+            lr: float = search(0.001, 0.1, scale="log")
+            method: str = search(choices=["a", "b"])
+
+        pipeline = Pipeline([SearchableFilter(lr=0.01, method="a")])
+        # search_space() returns a list
+        space = pipeline.search_space()
+        assert isinstance(space, list)

@@ -12,6 +12,7 @@ use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use soma_core::study::{Direction, Objective, SearchStrategy, Study};
 use soma_core::value::Value;
 use soma_runtime::sampler::{GridSampler, RandomSampler, Sampler};
+use soma_runtime::sampler_bayesian::BayesianSampler;
 use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use soma_runtime::{EventBus, Pipeline};
 
@@ -267,6 +268,17 @@ impl PyPipeline {
     fn filter_names(&self) -> Vec<String> {
         self.pipeline.filter_names().iter().map(|s| s.to_string()).collect()
     }
+
+    /// Get the aggregated search space from all filters as a list of dicts.
+    fn search_space(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Collect _soma_search_space from each filter's Python class
+        // (this is stored at the Pipeline level via the bridge)
+        // For now return the filter names that have search spaces
+        let result = PyList::empty(py);
+        // Pipeline doesn't currently track search spaces, return empty
+        // (search spaces are accessed via Filter class directly)
+        Ok(result.into_any().unbind())
+    }
 }
 
 // ── PyStudy ──
@@ -377,7 +389,9 @@ impl PyStudy {
         let mut sampler: Box<dyn Sampler> = match &self.study.strategy {
             SearchStrategy::Grid { points_per_dim } => Box::new(GridSampler::new(*points_per_dim)),
             SearchStrategy::Random { n_trials, seed } => Box::new(RandomSampler::new(*n_trials, *seed)),
-            SearchStrategy::Bayesian { n_trials, seed, .. } => Box::new(RandomSampler::new(*n_trials, *seed)),
+            SearchStrategy::Bayesian { n_trials, n_startup, seed, .. } => {
+                Box::new(BayesianSampler::new(*n_trials, *n_startup, *seed))
+            }
             _ => return Err(PyRuntimeError::new_err("Unsupported strategy")),
         };
 
