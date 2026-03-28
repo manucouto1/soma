@@ -2031,6 +2031,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "soma-mcp"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+ "serde",
+ "serde_json",
+ "soma-agent",
+ "soma-compiler",
+ "soma-core",
+ "soma-memory",
+ "soma-runtime",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "soma-memory"
 version = "0.1.0"
 dependencies = [
