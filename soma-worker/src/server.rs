@@ -1,3 +1,4 @@
+use crate::env_manager::{EnvManager, EnvType};
 use crate::protocol::*;
 use crate::worker::Worker;
 use axum::Router;
@@ -5,17 +6,34 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Shared state for the worker HTTP/WebSocket server.
 struct ServerState {
     worker: Mutex<Worker>,
+    env_manager: EnvManager,
+    work_dir: PathBuf,
 }
 
 /// Build a worker server router.
 pub fn worker_router(worker: Worker) -> Router {
+    worker_router_with_dirs(worker, "/tmp/soma-envs", "/tmp/soma-work")
+}
+
+/// Build a worker server router with custom directories.
+pub fn worker_router_with_dirs(
+    worker: Worker,
+    env_dir: impl Into<PathBuf>,
+    work_dir: impl Into<PathBuf>,
+) -> Router {
+    let work = work_dir.into();
+    std::fs::create_dir_all(&work).ok();
     let state = Arc::new(ServerState {
         worker: Mutex::new(worker),
+        env_manager: EnvManager::new(env_dir, EnvType::Venv),
+        work_dir: work,
     });
     Router::new()
         .route("/health", get(health))
@@ -74,17 +92,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         r#"{"status": "cancel_not_implemented"}"#.to_string()
                     }
                     Ok(CoordinatorToWorker::AssignPythonJob { job }) => {
-                        // Python pipeline execution — TODO: wire EnvManager
-                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        let msg = WorkerToCoordinator::JobResult {
-                            worker_id: worker.id.clone(),
-                            job_id: job.job_id.clone(),
-                            success: false,
-                            metrics: serde_json::json!({}),
-                            output: "Python job execution not yet wired in server".into(),
-                            duration_ms: 0,
-                        };
-                        serde_json::to_string(&msg).unwrap_or_default()
+                        execute_python_job(&state, &job)
                     }
                     Ok(CoordinatorToWorker::Ping) => {
                         r#"{"type":"Pong"}"#.to_string()
@@ -101,6 +109,115 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
             }
             Some(Ok(Message::Close(_))) | None => break,
             _ => {}
+        }
+    }
+}
+
+/// Execute a Python pipeline job with isolated environment.
+fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
+    let start = Instant::now();
+    let worker_id = {
+        let w = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+        w.id.clone()
+    };
+
+    // 1. Ensure environment exists (create or reuse with incremental update)
+    let python = match state.env_manager.ensure_env(&job.pipeline_id, &job.requirements) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to create env for pipeline {}: {e}", job.pipeline_id);
+            let msg = WorkerToCoordinator::JobResult {
+                worker_id,
+                job_id: job.job_id.clone(),
+                success: false,
+                metrics: serde_json::json!({}),
+                output: format!("Environment setup failed: {e}"),
+                duration_ms: start.elapsed().as_millis() as u64,
+            };
+            return serde_json::to_string(&msg).unwrap_or_default();
+        }
+    };
+
+    // 2. Write pipeline files to work directory
+    let job_dir = state.work_dir.join(format!("job-{}", job.job_id));
+    if let Err(e) = std::fs::create_dir_all(&job_dir) {
+        let msg = WorkerToCoordinator::JobResult {
+            worker_id,
+            job_id: job.job_id.clone(),
+            success: false,
+            metrics: serde_json::json!({}),
+            output: format!("Failed to create work dir: {e}"),
+            duration_ms: start.elapsed().as_millis() as u64,
+        };
+        return serde_json::to_string(&msg).unwrap_or_default();
+    }
+
+    for file in &job.files {
+        let file_path = job_dir.join(&file.path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        if let Err(e) = std::fs::write(&file_path, &file.content) {
+            tracing::error!("Failed to write {}: {e}", file.path);
+        }
+    }
+
+    // 3. Execute the entry point
+    tracing::info!(
+        "Executing job {} with python: {}",
+        job.job_id,
+        python.display()
+    );
+
+    let output = std::process::Command::new(&python)
+        .arg(&job.entry_point)
+        .current_dir(&job_dir)
+        .env("PYTHONPATH", &job_dir)
+        .output();
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // 4. Clean up work directory
+    let _ = std::fs::remove_dir_all(&job_dir);
+
+    // 5. Build result
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let success = out.status.success();
+
+            // Try to parse metrics from stdout (last line as JSON)
+            let metrics = stdout
+                .lines()
+                .rev()
+                .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .unwrap_or(serde_json::json!({}));
+
+            if !success {
+                tracing::warn!("Job {} failed: {}", job.job_id, stderr.chars().take(200).collect::<String>());
+            }
+
+            let msg = WorkerToCoordinator::JobResult {
+                worker_id,
+                job_id: job.job_id.clone(),
+                success,
+                metrics,
+                output: if success { stdout } else { format!("STDERR:\n{stderr}\nSTDOUT:\n{stdout}") },
+                duration_ms,
+            };
+            serde_json::to_string(&msg).unwrap_or_default()
+        }
+        Err(e) => {
+            let msg = WorkerToCoordinator::JobResult {
+                worker_id,
+                job_id: job.job_id.clone(),
+                success: false,
+                metrics: serde_json::json!({}),
+                output: format!("Failed to execute: {e}"),
+                duration_ms,
+            };
+            serde_json::to_string(&msg).unwrap_or_default()
         }
     }
 }
@@ -133,8 +250,6 @@ mod tests {
         assert_eq!(resp, "ok");
     }
 
-    // info endpoint tested via full_server_starts_and_stops
-
     #[tokio::test]
     async fn full_server_starts_and_stops() {
         let worker = make_worker();
@@ -145,10 +260,8 @@ mod tests {
             axum::serve(listener, worker_router(worker)).await.unwrap();
         });
 
-        // Give server a moment to start
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        // Make a health check request
         let client = reqwest::Client::new();
         let resp = client
             .get(format!("http://{addr}/health"))
@@ -157,7 +270,6 @@ mod tests {
             .unwrap();
         assert_eq!(resp.text().await.unwrap(), "ok");
 
-        // Make an info request
         let resp = client
             .get(format!("http://{addr}/info"))
             .send()
