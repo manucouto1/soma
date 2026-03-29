@@ -196,27 +196,90 @@ pub fn execute(
         ExecutionPlan::Parallel(branches) => execute_parallel(branches, ctx, filters, cache),
 
         ExecutionPlan::Loop {
-            node_id: _,
+            node_id,
             body,
             max_iterations,
         } => {
-            let max = max_iterations.unwrap_or(usize::MAX);
-            for _i in 0..max {
+            let max = max_iterations.unwrap_or(100);
+            for i in 0..max {
                 execute(body, ctx, filters, cache)?;
+
+                // Check termination: if the last executed node produced a Value
+                // that indicates "done" (true, "done", "stop", or empty), break.
+                let should_stop = ctx
+                    .execution_order
+                    .last()
+                    .and_then(|last_id| ctx.store.get(last_id))
+                    .map(|v| match v {
+                        Value::Json(j) => {
+                            j.as_bool() == Some(true)
+                                || j.as_str().map(|s| s == "done" || s == "stop") == Some(true)
+                                || j.get("done").and_then(|d| d.as_bool()) == Some(true)
+                        }
+                        Value::Empty => true,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+
+                if should_stop {
+                    ctx.event_bus.emit(Event::NodeCompleted {
+                        run_id: ctx.run_id.clone(),
+                        node_id: node_id.clone(),
+                        duration: std::time::Duration::ZERO,
+                        output_summary: format!("Loop terminated at iteration {}", i + 1),
+                    });
+                    break;
+                }
             }
             Ok(())
         }
 
-        ExecutionPlan::Branch { node_id: _, arms } => {
-            if let Some((_, plan)) = arms.first() {
+        ExecutionPlan::Branch { node_id, arms } => {
+            // Execute the branch node first (it produces the condition value)
+            execute_node(node_id, ctx, filters, cache)?;
+
+            // Get the condition result
+            let condition = ctx.store.get(node_id).cloned().unwrap_or(Value::Empty);
+
+            // Match against arm labels
+            let selected_arm = match &condition {
+                Value::Json(j) => {
+                    // Try matching by string value, bool, or "branch" field
+                    let selector = j.as_str()
+                        .map(String::from)
+                        .or_else(|| j.as_bool().map(|b| b.to_string()))
+                        .or_else(|| j.get("branch").and_then(|b| b.as_str()).map(String::from))
+                        .unwrap_or_else(|| "true".to_string());
+
+                    arms.iter()
+                        .find(|(label, _)| label == &selector)
+                        .or_else(|| arms.iter().find(|(label, _)| label == "default" || label == "else"))
+                        .or_else(|| arms.first())
+                }
+                _ => arms.first(),
+            };
+
+            if let Some((label, plan)) = selected_arm {
+                ctx.event_bus.emit(Event::NodeCompleted {
+                    run_id: ctx.run_id.clone(),
+                    node_id: node_id.clone(),
+                    duration: std::time::Duration::ZERO,
+                    output_summary: format!("Branch selected: {label}"),
+                });
                 execute(plan, ctx, filters, cache)?;
             }
             Ok(())
         }
 
-        ExecutionPlan::Remote { plan, .. } => execute(plan, ctx, filters, cache),
+        ExecutionPlan::Remote { plan, .. } => {
+            // Execute locally for now — real distribution handled by scheduler + workers
+            execute(plan, ctx, filters, cache)
+        }
 
-        _ => Ok(()),
+        _ => {
+            tracing::warn!("Unhandled ExecutionPlan variant");
+            Ok(())
+        }
     }
 }
 
