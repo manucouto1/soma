@@ -115,9 +115,9 @@ impl DataStore for LocalDataStore {
     fn put(&self, key: &CacheKey, data: &Value) -> Result<DataRef> {
         let path = self.base_path.join(key.to_hex());
         let bytes = serde_json::to_vec(data)
-            .map_err(|e| crate::error::SomaError::Cache(e.to_string()))?;
+            .map_err(|e| crate::error::SomaError::DataStore(e.to_string()))?;
         std::fs::write(&path, &bytes)
-            .map_err(|e| crate::error::SomaError::Cache(e.to_string()))?;
+            .map_err(|e| crate::error::SomaError::DataStore(e.to_string()))?;
         Ok(DataRef::Local {
             path: path.to_string_lossy().to_string(),
         })
@@ -127,19 +127,19 @@ impl DataStore for LocalDataStore {
         match data_ref {
             DataRef::Local { path } => {
                 let bytes = std::fs::read(path)
-                    .map_err(|e| crate::error::SomaError::Cache(e.to_string()))?;
+                    .map_err(|e| crate::error::SomaError::DataStore(e.to_string()))?;
                 serde_json::from_slice(&bytes)
-                    .map_err(|e| crate::error::SomaError::Cache(e.to_string()))
+                    .map_err(|e| crate::error::SomaError::DataStore(e.to_string()))
             }
             DataRef::Cached { cache_key } => {
                 let path = self.base_path.join(cache_key.to_hex());
                 let bytes = std::fs::read(&path)
-                    .map_err(|e| crate::error::SomaError::Cache(e.to_string()))?;
+                    .map_err(|e| crate::error::SomaError::DataStore(e.to_string()))?;
                 serde_json::from_slice(&bytes)
-                    .map_err(|e| crate::error::SomaError::Cache(e.to_string()))
+                    .map_err(|e| crate::error::SomaError::DataStore(e.to_string()))
             }
             DataRef::Inline { value } => Ok(value.clone()),
-            _ => Err(crate::error::SomaError::Cache(
+            _ => Err(crate::error::SomaError::DataStore(
                 "Cannot get non-local DataRef from LocalDataStore".into(),
             )),
         }

@@ -34,12 +34,17 @@ cargo doc --workspace --open  # Rust API docs
 ```
 soma-macros     → proc macro (#[derive(SomaFilter)])
 soma-core       → types, traits: Filter, Value, Graph, Event, Schema, VirtualValue, Search, Study
+                  DataStore (Local/S3/Stream), StreamCache (inference chunk cache)
 soma-compiler   → Graph → ExecutionPlan (cache resolution, schema validation, distribution)
+                  Scheduler (distribute plan across workers: sequential grouping,
+                  parallel distribution, differentiable node affinity)
 soma-runtime    → Pipeline, parallel executor (threads), stream executor,
                   LRU cache, tiered cache, Grid/Random/Bayesian samplers,
                   Median/Percentile pruners, StudyRunner with TrialOutcome
 soma-memory     → KnowledgeBase trait + MemoryKB + ChronosKB (feature-gated)
-soma-worker     → Protocol, Worker, Axum HTTP/WebSocket server
+soma-worker     → Protocol (Rust plans + Python pipeline jobs), Worker, EnvManager
+                  (isolated venv/conda per pipeline with incremental dep updates),
+                  Axum HTTP/WebSocket server, Dockerfile (CPU + GPU variants)
 soma-agent      → Agent loop, Action, ResearchPlan trait
 soma-mcp        → MCP server (13 tools: code, execution, knowledge, project)
 soma-python     → PyO3 bindings: Pipeline, Filter, Study, Lab
@@ -49,8 +54,8 @@ docs/           → 24 Starlight pages
 ## Tests
 
 ```bash
-# 293 total: 274 Rust + 19 Python
-cargo test --workspace                              # 274 Rust tests
+# 300+ total: 284+ Rust + 19 Python
+cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # 19 Python tests
 cargo test -p soma-memory --features chronos        # +8 ChronosVector tests
 ```
@@ -76,6 +81,12 @@ cargo test -p soma-memory --features chronos        # +8 ChronosVector tests
 - **Distribution**: Local | Remote(WorkerId | Tag) — compiler wraps in ExecutionPlan::Remote.
 - **GraphInfo**: Topology-aware input resolution (predecessors, not "last executed").
 - **LRU Cache**: Enforces max_bytes with eviction. No unbounded growth.
+- **DataStore**: Abstraction for data movement between workers (Local, S3, Cached, Stream, Inline).
+- **StreamCache**: Inference optimization — caches filter states and chunk results by content hash.
+- **Scheduler**: Analyzes ExecutionPlan topology, assigns to workers (sequential→same worker,
+  parallel→distribute, differentiable→group together). Produces DistributionPlan.
+- **EnvManager**: Isolated Python environments per pipeline with incremental dependency updates.
+  Hashes requirements to detect changes, only installs/upgrades/removes what changed.
 
 ## MCP Server
 

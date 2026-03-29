@@ -81,6 +81,26 @@ pub enum WorkerToCoordinator {
         plan_id: PlanId,
         result: PlanResult,
     },
+
+    /// Python job progress update.
+    JobProgress {
+        worker_id: WorkerId,
+        job_id: String,
+        phase: String,
+        step: u32,
+        total: u32,
+        metrics: serde_json::Value,
+    },
+
+    /// Python job result.
+    JobResult {
+        worker_id: WorkerId,
+        job_id: String,
+        success: bool,
+        metrics: serde_json::Value,
+        output: String,
+        duration_ms: u64,
+    },
 }
 
 /// A Python pipeline job: source files + requirements for isolated execution.
@@ -131,48 +151,6 @@ pub enum CoordinatorToWorker {
     Ping,
 }
 
-/// Messages from Worker → Coordinator (extended).
-impl WorkerToCoordinator {
-    /// Create a job progress message.
-    pub fn job_progress(
-        worker_id: impl Into<String>,
-        job_id: impl Into<String>,
-        phase: impl Into<String>,
-        step: u32,
-        total: u32,
-        metrics: serde_json::Value,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "type": "JobProgress",
-            "worker_id": worker_id.into(),
-            "job_id": job_id.into(),
-            "phase": phase.into(),
-            "step": step,
-            "total": total,
-            "metrics": metrics,
-        })
-    }
-
-    /// Create a job result message.
-    pub fn job_result(
-        worker_id: impl Into<String>,
-        job_id: impl Into<String>,
-        success: bool,
-        metrics: serde_json::Value,
-        output: impl Into<String>,
-        duration_ms: u64,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "type": "JobResult",
-            "worker_id": worker_id.into(),
-            "job_id": job_id.into(),
-            "success": success,
-            "metrics": metrics,
-            "output": output.into(),
-            "duration_ms": duration_ms,
-        })
-    }
-}
 
 /// Result of a plan execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]

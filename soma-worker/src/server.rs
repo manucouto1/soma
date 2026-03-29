@@ -74,17 +74,17 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         r#"{"status": "cancel_not_implemented"}"#.to_string()
                     }
                     Ok(CoordinatorToWorker::AssignPythonJob { job }) => {
-                        // Python pipeline execution handled by env_manager
+                        // Python pipeline execution — TODO: wire EnvManager
                         let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        let result_msg = WorkerToCoordinator::job_result(
-                            &worker.id,
-                            &job.job_id,
-                            false,
-                            serde_json::json!({}),
-                            "Python job execution not yet wired in server",
-                            0,
-                        );
-                        serde_json::to_string(&result_msg).unwrap_or_default()
+                        let msg = WorkerToCoordinator::JobResult {
+                            worker_id: worker.id.clone(),
+                            job_id: job.job_id.clone(),
+                            success: false,
+                            metrics: serde_json::json!({}),
+                            output: "Python job execution not yet wired in server".into(),
+                            duration_ms: 0,
+                        };
+                        serde_json::to_string(&msg).unwrap_or_default()
                     }
                     Ok(CoordinatorToWorker::Ping) => {
                         r#"{"type":"Pong"}"#.to_string()

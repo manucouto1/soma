@@ -221,10 +221,7 @@ impl EnvManager {
     }
 
     fn python_path(&self, env_dir: &Path) -> Result<PathBuf, String> {
-        let path = match self.env_type {
-            EnvType::Venv => env_dir.join("bin").join("python"),
-            EnvType::Conda => env_dir.join("bin").join("python"),
-        };
+        let path = env_dir.join("bin").join("python");
         if path.exists() {
             Ok(path)
         } else {
