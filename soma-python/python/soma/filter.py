@@ -22,52 +22,94 @@ class FilterMeta(type):
 class Filter(metaclass=FilterMeta):
     """Base class for pipeline filters.
 
-    Subclass this and implement fit() and forward().
-    Use search() descriptors to define hyperparameter search spaces.
+    A filter has three types of data:
 
-    Optional class attributes for metadata (read by the Soma runtime):
+    1. **Parameters** (constructor args / search spaces):
+       - Passed via constructor: ``KNN(n_neighbors=5)``
+       - Or defined as search spaces: ``n_neighbors = search.int(1, 15)``
+       - Live on ``self`` — used in both ``fit()`` and ``forward()``
+       - Cached by config_hash (change params → new cache key)
+
+    2. **State** (returned by ``fit()``):
+       - Learned from training data, returned as a dict
+       - Passed to ``forward(x, state)`` as argument, NOT stored on self
+       - Cached independently — same params + same data → same state
+
+    3. **Internal attributes** (private, not parameters):
+       - Prefix with ``_`` to mark as internal
+       - Not included in config_hash or search space
+
+    Example::
+
+        from soma import Filter, search
+
+        class KNN(Filter):
+            # Search space parameters (optimizable)
+            n_neighbors = search.int(1, 15)
+            weights = search.categorical(["uniform", "distance"])
+
+            # Fixed parameter (not in search space)
+            metric: str = "euclidean"
+
+            def __init__(self, metric="euclidean", **kwargs):
+                super().__init__(**kwargs)
+                self.metric = metric
+
+            def fit(self, x, y=None):
+                # State: learned from data, returned as dict
+                return {"train_x": x.tolist(), "train_y": y.tolist()}
+
+            def forward(self, x, state):
+                # self.n_neighbors → parameter (from constructor or search)
+                # state["train_x"] → state (from fit)
+                ...
+
+    Metadata class attributes (optional)::
 
         _cacheable = True        # whether outputs can be cached (default True)
         _differentiable = False  # whether gradients can flow through (default False)
         _kind = "trainable"      # "trainable" (default) or "stateless"
         _stream_mode = "fixed"   # "fixed" (default), "evolving", or "barrier"
-
-    Example::
-
-        class MyScaler(Filter):
-            _differentiable = True
-            scale: float = search(0.1, 10.0, scale="log")
-
-            def fit(self, x, y=None):
-                return {"mean": x.mean(0), "std": x.std(0)}
-
-            def forward(self, x, state):
-                return (x - state["mean"]) / state["std"] * self.scale
-
-        class DecisionTree(Filter):
-            _differentiable = False
-            _cacheable = True
-
-            def fit(self, x, y=None):
-                # train tree...
-                return {"tree": tree}
     """
 
     def __init__(self, **kwargs):
-        # Set all kwargs as attributes
+        # Set all kwargs as attributes (parameters)
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-        # Set defaults from search descriptors
+        # Set defaults from search descriptors (if not already set via kwargs)
         for dim in self.__class__._soma_search_space:
             name = dim["name"]
-            if not hasattr(self, name) and "default" in dim:
-                setattr(self, name, dim["default"])
+            if not hasattr(self, name) or isinstance(getattr(self.__class__, name, None), SearchDescriptor):
+                if name not in kwargs and "default" in dim:
+                    setattr(self, name, dim["default"])
 
     def fit(self, x, y=None):
-        """Learn state from training data. Override in subclass."""
+        """Learn state from training data.
+
+        Override this to implement training logic. Return a dict
+        with the learned state. This state will be passed to forward().
+
+        Args:
+            x: Input data (numpy array, list, etc.)
+            y: Labels (optional, for supervised learning)
+
+        Returns:
+            dict: Learned state (e.g., {"mean": ..., "std": ...})
+        """
         return {}
 
     def forward(self, x, state):
-        """Transform data using learned state. Override in subclass."""
+        """Transform data using learned state.
+
+        Override this to implement the transformation. Use parameters
+        from self (e.g., self.n_neighbors) and state from fit().
+
+        Args:
+            x: Input data to transform
+            state: Dict returned by fit()
+
+        Returns:
+            Transformed data
+        """
         return x

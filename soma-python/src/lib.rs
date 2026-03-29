@@ -97,11 +97,24 @@ struct PyFilterBridge {
 impl PyFilterBridge {
     fn new(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let name: String = obj.get_type().name()?.to_string();
+
+        // Build config hash from public attributes only.
+        // Private attrs (_name) are internal state, not parameters.
+        // This ensures: same params → same cache key, regardless of internal state.
         let dict = obj.getattr("__dict__")?;
+        let dict_ref = dict.downcast::<pyo3::types::PyDict>()?;
+        let params = pyo3::types::PyDict::new(py);
+        for (key, value) in dict_ref.iter() {
+            let k: String = key.extract()?;
+            if !k.starts_with('_') {
+                params.set_item(key, value)?;
+            }
+        }
+
         let json_mod = py.import("json")?;
         let dict_sorted = json_mod.call_method(
             "dumps",
-            (dict.clone(),),
+            (params,),
             Some(&[("sort_keys", true)].into_py_dict(py)?),
         )?;
         let dict_str: String = dict_sorted.extract()?;
