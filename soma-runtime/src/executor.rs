@@ -66,6 +66,21 @@ impl GraphInfo {
     }
 }
 
+/// Trait for executing plan nodes on remote workers.
+///
+/// When set on Context, `ExecutionPlan::Remote` nodes delegate to this
+/// instead of executing locally. The implementation sends the sub-plan
+/// to a worker and returns the result.
+pub trait RemoteExecutor: Send + Sync {
+    /// Execute a sub-plan remotely and return the output value.
+    fn execute_remote(
+        &self,
+        node_id: &str,
+        target: &soma_core::filter::RemoteTarget,
+        input: Option<&Value>,
+    ) -> Result<Value>;
+}
+
 /// Execution context passed to filters during runtime.
 pub struct Context {
     /// Outputs of completed nodes, keyed by node ID.
@@ -78,6 +93,8 @@ pub struct Context {
     pub execution_order: Vec<String>,
     /// Graph topology for input resolution.
     pub graph_info: GraphInfo,
+    /// Optional remote executor for distributed plans.
+    pub remote_executor: Option<Arc<dyn RemoteExecutor>>,
 }
 
 impl Context {
@@ -88,11 +105,17 @@ impl Context {
             run_id: run_id.into(),
             execution_order: Vec::new(),
             graph_info: GraphInfo::new(),
+            remote_executor: None,
         }
     }
 
     pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
         self.graph_info = info;
+        self
+    }
+
+    pub fn with_remote_executor(mut self, executor: Arc<dyn RemoteExecutor>) -> Self {
+        self.remote_executor = Some(executor);
         self
     }
 
@@ -113,6 +136,7 @@ impl Context {
             run_id: self.run_id.clone(),
             execution_order: self.execution_order.clone(),
             graph_info: self.graph_info.clone(),
+            remote_executor: self.remote_executor.clone(),
         }
     }
 }
@@ -271,9 +295,27 @@ pub fn execute(
             Ok(())
         }
 
-        ExecutionPlan::Remote { plan, .. } => {
-            // Execute locally for now — real distribution handled by scheduler + workers
-            execute(plan, ctx, filters, cache)
+        ExecutionPlan::Remote {
+            node_id,
+            target,
+            plan,
+        } => {
+            if let Some(remote) = &ctx.remote_executor {
+                // Gather input from predecessors
+                let input = ctx
+                    .graph_info
+                    .predecessors(node_id)
+                    .first()
+                    .and_then(|pred| ctx.store.get(pred));
+
+                let result = remote.execute_remote(node_id, target, input)?;
+                ctx.set(node_id.clone(), result);
+                ctx.execution_order.push(node_id.clone());
+                Ok(())
+            } else {
+                // No remote executor — fall back to local execution
+                execute(plan, ctx, filters, cache)
+            }
         }
 
         _ => {

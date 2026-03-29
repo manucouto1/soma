@@ -14,7 +14,7 @@ pub use cache::MemoryCache;
 pub use cache_local::LocalCache;
 pub use cache_tiered::TieredCache;
 pub use event_bus::EventBus;
-pub use executor::{Context, FilterStore, execute};
+pub use executor::{Context, FilterStore, GraphInfo, RemoteExecutor, execute};
 pub use pipeline::Pipeline;
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use sampler::{GridSampler, RandomSampler, Sampler};

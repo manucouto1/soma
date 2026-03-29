@@ -150,12 +150,50 @@ impl Filter for PyFilterBridge {
     }
 
     fn meta(&self) -> FilterMeta {
+        // Read optional meta attributes from the Python class.
+        // Users can set: _cacheable = False, _differentiable = False,
+        //                _kind = "stateless", _stream_mode = "evolving"
+        let (kind, cacheable, differentiable, stream_mode) = Python::with_gil(|py| {
+            let obj = self.py_obj.bind(py);
+
+            let cacheable = obj
+                .getattr("_cacheable")
+                .and_then(|v| v.extract::<bool>())
+                .unwrap_or(true);
+
+            let differentiable = obj
+                .getattr("_differentiable")
+                .and_then(|v| v.extract::<bool>())
+                .unwrap_or(false);
+
+            let kind = obj
+                .getattr("_kind")
+                .and_then(|v| v.extract::<String>())
+                .map(|s| match s.as_str() {
+                    "stateless" => FilterKind::Stateless,
+                    _ => FilterKind::Trainable,
+                })
+                .unwrap_or(FilterKind::Trainable);
+
+            let stream_mode = obj
+                .getattr("_stream_mode")
+                .and_then(|v| v.extract::<String>())
+                .map(|s| match s.as_str() {
+                    "evolving" => StreamMode::Evolving { checkpoint_every: 100 },
+                    "barrier" => StreamMode::Barrier,
+                    _ => StreamMode::FixedState,
+                })
+                .unwrap_or(StreamMode::FixedState);
+
+            (kind, cacheable, differentiable, stream_mode)
+        });
+
         FilterMeta {
             name: self.name.clone(),
-            kind: FilterKind::Trainable,
-            cacheable: true,
-            differentiable: true,
-            stream_mode: StreamMode::FixedState,
+            kind,
+            cacheable,
+            differentiable,
+            stream_mode,
             distribution: soma_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,

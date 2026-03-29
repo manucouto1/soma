@@ -25,17 +25,32 @@ class Filter(metaclass=FilterMeta):
     Subclass this and implement fit() and forward().
     Use search() descriptors to define hyperparameter search spaces.
 
+    Optional class attributes for metadata (read by the Soma runtime):
+
+        _cacheable = True        # whether outputs can be cached (default True)
+        _differentiable = False  # whether gradients can flow through (default False)
+        _kind = "trainable"      # "trainable" (default) or "stateless"
+        _stream_mode = "fixed"   # "fixed" (default), "evolving", or "barrier"
+
     Example::
 
         class MyScaler(Filter):
+            _differentiable = True
             scale: float = search(0.1, 10.0, scale="log")
-            method: str = search(choices=["standard", "robust"])
 
             def fit(self, x, y=None):
                 return {"mean": x.mean(0), "std": x.std(0)}
 
             def forward(self, x, state):
                 return (x - state["mean"]) / state["std"] * self.scale
+
+        class DecisionTree(Filter):
+            _differentiable = False
+            _cacheable = True
+
+            def fit(self, x, y=None):
+                # train tree...
+                return {"tree": tree}
     """
 
     def __init__(self, **kwargs):
