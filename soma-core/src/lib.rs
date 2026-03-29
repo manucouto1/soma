@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod data_store;
 pub mod error;
 pub mod event;
 pub mod filter;
@@ -11,6 +12,7 @@ pub mod virtual_value;
 
 // Re-export core types for convenience.
 pub use cache::{CacheKey, CacheStore, CacheTier, EntryMeta, Origin};
+pub use data_store::{DataRef, DataStore, LocalDataStore, StorageConfig, StreamCache, StreamFormat};
 pub use error::{Result, SomaError};
 pub use event::{Event, MetricRecord, PlanSummary, RunId, StudyId, TrialId};
 pub use filter::{Distribution, Filter, FilterKind, FilterMeta, RemoteTarget, StreamMode};
