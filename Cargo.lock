@@ -2061,6 +2061,7 @@ dependencies = [
  "soma-core",
  "soma-memory",
  "soma-runtime",
+ "tempfile",
  "tokio",
  "tracing",
 ]
