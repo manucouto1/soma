@@ -14,5 +14,13 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 soma-macros = { path = "../soma-macros" }
 
+[features]
+s3 = ["dep:reqwest"]
+
+[dependencies.reqwest]
+version = "0.12"
+features = ["blocking", "json"]
+optional = true
+
 [dev-dependencies]
 proptest = { workspace = true }
