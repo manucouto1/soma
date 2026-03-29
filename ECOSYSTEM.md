@@ -298,3 +298,43 @@ A researcher opens Nous. They:
 10. **Iterate** guided by the agent's analysis
 
 Three projects. One platform. Complete research automation.
+
+## Research Automation Loop
+
+The system automates the scientific method with human-in-the-loop control:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Observe State → Analyze Results → Search Literature    │
+│       ↑              ↓                    ↓             │
+│  Check Criteria ← Document ← Execute ← Human Review    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+| Component | Project | What it does |
+|-----------|---------|-------------|
+| Research Workspace | Nous | LaTeX editor + PDF, pipeline view, copilot chat |
+| Research Plan | Nous | Objective, metric, threshold, HITL mode |
+| Research Agent Graph | Nous | Default loop or custom agent graph |
+| ResearchHand | Nous | Paper search, BibTeX, grammar check |
+| SomaHand | Nous | Pipeline execution via MCP |
+| Worker | Soma | Isolated venv, executes Python pipelines |
+| Scheduler | Soma | Distributes work across workers |
+| DataStore | Soma | S3/Local data movement between workers |
+| StreamCache | Soma | Inference optimization (cached states + chunks) |
+
+### Data Flow
+
+```
+Training:  Data → S3 → Worker → fit() → state → Cache → forward() → output → S3
+Inference: Stream → chunks → cached state → forward(chunk) → StreamCache → output
+Cross-worker: Worker A → DataStore.put(S3) → Worker B → DataStore.get(S3)
+```
+
+### Test Coverage
+
+- Soma: 297 Rust + 19 Python tests
+- Nous: 227 Rust + 19 frontend tests
+- Total: 562 tests across the ecosystem
