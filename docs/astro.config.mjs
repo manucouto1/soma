@@ -37,6 +37,8 @@ export default defineConfig({
 						{ label: 'Compiler & Execution Plans', slug: 'design/compiler' },
 						{ label: 'Event System', slug: 'design/events' },
 						{ label: 'Hyperparameter Optimization', slug: 'design/optimization' },
+						{ label: 'DataStore & S3', slug: 'design/data-store' },
+						{ label: 'Scheduler', slug: 'design/scheduler' },
 					],
 				},
 				{
@@ -45,6 +47,7 @@ export default defineConfig({
 						{ label: 'Agents & Memory', slug: 'platform/agents' },
 						{ label: 'Knowledge Base', slug: 'platform/knowledge-base' },
 						{ label: 'Workers & Remote Execution', slug: 'platform/workers' },
+						{ label: 'Environment Manager', slug: 'platform/env-manager' },
 						{ label: 'Graph Integration', slug: 'platform/graph-integration' },
 					],
 				},
