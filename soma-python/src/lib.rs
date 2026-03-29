@@ -285,12 +285,33 @@ impl PyPipeline {
     fn new(py: Python<'_>, filters: &Bound<'_, PyList>) -> PyResult<Self> {
         let mut named_filters: Vec<(String, Box<dyn Filter>)> = Vec::new();
         for (i, item) in filters.iter().enumerate() {
-            let name = item
-                .getattr("__class__")
-                .and_then(|c| c.getattr("__name__"))
-                .and_then(|n| n.extract::<String>())
-                .unwrap_or_else(|_| format!("filter_{i}"));
-            let bridge = PyFilterBridge::new(py, &item)?;
+            // Support both Pipeline([Filter()]) and Pipeline([("name", Filter())])
+            let (name, filter_obj) = if let Ok(tuple) = item.downcast::<pyo3::types::PyTuple>() {
+                if tuple.len() == 2 {
+                    let n = tuple.get_item(0)?.extract::<String>()?;
+                    let f = tuple.get_item(1)?;
+                    (n, f.to_owned())
+                } else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "Tuple filters must be (name, filter)"
+                    ));
+                }
+            } else {
+                // Auto-derive name from class name (snake_case)
+                let class_name = item
+                    .getattr("__class__")
+                    .and_then(|c| c.getattr("__name__"))
+                    .and_then(|n| n.extract::<String>())
+                    .unwrap_or_else(|_| format!("filter_{i}"));
+                // Convert CamelCase to snake_case
+                let snake = class_name.chars().enumerate().fold(String::new(), |mut s, (i, c)| {
+                    if c.is_uppercase() && i > 0 { s.push('_'); }
+                    s.push(c.to_ascii_lowercase());
+                    s
+                });
+                (snake, item.to_owned())
+            };
+            let bridge = PyFilterBridge::new(py, &filter_obj)?;
             named_filters.push((name, Box::new(bridge)));
         }
         Ok(Self {
