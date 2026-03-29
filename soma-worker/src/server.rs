@@ -92,7 +92,16 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         r#"{"status": "cancel_not_implemented"}"#.to_string()
                     }
                     Ok(CoordinatorToWorker::AssignPythonJob { job }) => {
-                        execute_python_job(&state, &job)
+                        // Send progress messages during execution
+                        let messages = execute_python_job_with_progress(&state, &job);
+                        // Send all but the last as intermediate messages
+                        for msg in &messages[..messages.len().saturating_sub(1)] {
+                            if socket.send(Message::Text(msg.clone().into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        // Return the last message (result) through the normal path
+                        messages.into_iter().last().unwrap_or_default()
                     }
                     Ok(CoordinatorToWorker::Ping) => {
                         r#"{"type":"Pong"}"#.to_string()
@@ -113,15 +122,28 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
     }
 }
 
-/// Execute a Python pipeline job with isolated environment.
-fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
+/// Execute a Python pipeline job with progress reporting.
+fn execute_python_job_with_progress(state: &ServerState, job: &PythonPipelineJob) -> Vec<String> {
     let start = Instant::now();
+    let mut messages = Vec::new();
     let worker_id = {
         let w = state.worker.lock().unwrap_or_else(|e| e.into_inner());
         w.id.clone()
     };
 
-    // 1. Ensure environment exists (create or reuse with incremental update)
+    let progress = |wid: &str, jid: &str, phase: &str, step: u32, total: u32| -> String {
+        serde_json::to_string(&WorkerToCoordinator::JobProgress {
+            worker_id: wid.into(),
+            job_id: jid.into(),
+            phase: phase.into(),
+            step, total,
+            metrics: serde_json::json!({}),
+        }).unwrap_or_default()
+    };
+
+    // Phase 1/4: Environment setup
+    messages.push(progress(&worker_id, &job.job_id, "environment", 1, 4));
+
     let python = match state.env_manager.ensure_env(&job.pipeline_id, &job.requirements) {
         Ok(p) => p,
         Err(e) => {
@@ -134,11 +156,14 @@ fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
                 output: format!("Environment setup failed: {e}"),
                 duration_ms: start.elapsed().as_millis() as u64,
             };
-            return serde_json::to_string(&msg).unwrap_or_default();
+            messages.push(serde_json::to_string(&msg).unwrap_or_default());
+            return messages;
         }
     };
 
-    // 2. Write pipeline files to work directory
+    // Phase 2/4: Write files
+    messages.push(progress(&worker_id, &job.job_id, "write_files", 2, 4));
+
     let job_dir = state.work_dir.join(format!("job-{}", job.job_id));
     if let Err(e) = std::fs::create_dir_all(&job_dir) {
         let msg = WorkerToCoordinator::JobResult {
@@ -149,7 +174,8 @@ fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
             output: format!("Failed to create work dir: {e}"),
             duration_ms: start.elapsed().as_millis() as u64,
         };
-        return serde_json::to_string(&msg).unwrap_or_default();
+        messages.push(serde_json::to_string(&msg).unwrap_or_default());
+        return messages;
     }
 
     for file in &job.files {
@@ -162,7 +188,9 @@ fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
         }
     }
 
-    // 3. Execute the entry point
+    // Phase 3/4: Execute
+    messages.push(progress(&worker_id, &job.job_id, "execute", 3, 4));
+
     tracing::info!(
         "Executing job {} with python: {}",
         job.job_id,
@@ -177,17 +205,16 @@ fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    // 4. Clean up work directory
+    // Phase 4/4: Collect results
     let _ = std::fs::remove_dir_all(&job_dir);
+    messages.push(progress(&worker_id, &job.job_id, "collect_results", 4, 4));
 
-    // 5. Build result
-    match output {
+    let result_msg = match output {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let success = out.status.success();
 
-            // Try to parse metrics from stdout (last line as JSON)
             let metrics = stdout
                 .lines()
                 .rev()
@@ -198,28 +225,26 @@ fn execute_python_job(state: &ServerState, job: &PythonPipelineJob) -> String {
                 tracing::warn!("Job {} failed: {}", job.job_id, stderr.chars().take(200).collect::<String>());
             }
 
-            let msg = WorkerToCoordinator::JobResult {
+            WorkerToCoordinator::JobResult {
                 worker_id,
                 job_id: job.job_id.clone(),
                 success,
                 metrics,
                 output: if success { stdout } else { format!("STDERR:\n{stderr}\nSTDOUT:\n{stdout}") },
                 duration_ms,
-            };
-            serde_json::to_string(&msg).unwrap_or_default()
+            }
         }
-        Err(e) => {
-            let msg = WorkerToCoordinator::JobResult {
-                worker_id,
-                job_id: job.job_id.clone(),
-                success: false,
-                metrics: serde_json::json!({}),
-                output: format!("Failed to execute: {e}"),
-                duration_ms,
-            };
-            serde_json::to_string(&msg).unwrap_or_default()
-        }
-    }
+        Err(e) => WorkerToCoordinator::JobResult {
+            worker_id,
+            job_id: job.job_id.clone(),
+            success: false,
+            metrics: serde_json::json!({}),
+            output: format!("Failed to execute: {e}"),
+            duration_ms,
+        },
+    };
+    messages.push(serde_json::to_string(&result_msg).unwrap_or_default());
+    messages
 }
 
 #[cfg(test)]
