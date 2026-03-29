@@ -83,6 +83,31 @@ pub enum WorkerToCoordinator {
     },
 }
 
+/// A Python pipeline job: source files + requirements for isolated execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonPipelineJob {
+    pub job_id: String,
+    pub pipeline_id: String,
+    pub investigation_id: String,
+    /// Source files: path → content
+    pub files: Vec<PipelineFile>,
+    /// pip requirements (content of requirements.txt)
+    pub requirements: String,
+    /// Entry point: which file/function to execute
+    pub entry_point: String,
+    /// Input data (JSON-serialized)
+    pub input_data: Option<serde_json::Value>,
+    /// Extra parameters
+    pub params: serde_json::Value,
+}
+
+/// A source file in a pipeline job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineFile {
+    pub path: String,
+    pub content: String,
+}
+
 /// Messages from Coordinator → Worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -90,14 +115,63 @@ pub enum CoordinatorToWorker {
     /// Accept worker registration.
     Registered { worker_id: WorkerId },
 
-    /// Assign a plan for execution.
+    /// Assign a native Soma plan for execution.
     AssignPlan { plan: SerializedPlan },
 
-    /// Cancel a running plan.
+    /// Assign a Python pipeline job (with environment isolation).
+    AssignPythonJob { job: PythonPipelineJob },
+
+    /// Cancel a running plan/job.
     CancelPlan { plan_id: PlanId },
 
     /// Request current status.
     StatusRequest,
+
+    /// Ping for keepalive.
+    Ping,
+}
+
+/// Messages from Worker → Coordinator (extended).
+impl WorkerToCoordinator {
+    /// Create a job progress message.
+    pub fn job_progress(
+        worker_id: impl Into<String>,
+        job_id: impl Into<String>,
+        phase: impl Into<String>,
+        step: u32,
+        total: u32,
+        metrics: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": "JobProgress",
+            "worker_id": worker_id.into(),
+            "job_id": job_id.into(),
+            "phase": phase.into(),
+            "step": step,
+            "total": total,
+            "metrics": metrics,
+        })
+    }
+
+    /// Create a job result message.
+    pub fn job_result(
+        worker_id: impl Into<String>,
+        job_id: impl Into<String>,
+        success: bool,
+        metrics: serde_json::Value,
+        output: impl Into<String>,
+        duration_ms: u64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": "JobResult",
+            "worker_id": worker_id.into(),
+            "job_id": job_id.into(),
+            "success": success,
+            "metrics": metrics,
+            "output": output.into(),
+            "duration_ms": duration_ms,
+        })
+    }
 }
 
 /// Result of a plan execution.
