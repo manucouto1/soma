@@ -192,3 +192,85 @@ fn local_cache_prevents_refetch() {
 
     store.remove(&data_ref).unwrap();
 }
+
+#[test]
+fn append_variable_batches() {
+    let Some(store) = store() else { return };
+
+    // Start with 3 rows × 2 cols, chunk_rows=4
+    let key = CacheKey::hash_data(b"zarr_test_append");
+    let initial = Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]);
+    let data_ref = store.put(&key, &initial).unwrap();
+
+    // Append 1 row (fills partial chunk 0: was 3 rows, now 4 = full)
+    store
+        .append(&data_ref, &Value::tensor(vec![7.0, 8.0], vec![1, 2]))
+        .unwrap();
+    let meta = store.meta(&data_ref).unwrap();
+    assert_eq!(meta.total_rows, 4);
+
+    // Append 3 rows (creates new partial chunk 1)
+    store
+        .append(
+            &data_ref,
+            &Value::tensor(vec![9.0, 10.0, 11.0, 12.0, 13.0, 14.0], vec![3, 2]),
+        )
+        .unwrap();
+    let meta = store.meta(&data_ref).unwrap();
+    assert_eq!(meta.total_rows, 7);
+
+    // Clear local cache to force S3 reads
+    let cache_dir = std::env::temp_dir().join("soma-zarr-integration");
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    std::fs::create_dir_all(&cache_dir).ok();
+
+    // Read all 7 rows
+    let full = store.get(&data_ref).unwrap();
+    let (vals, shape) = full.as_tensor().unwrap();
+    assert_eq!(shape, &[7, 2]);
+    assert_eq!(
+        vals,
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]
+    );
+
+    // Partial read across the append boundary
+    let mid = store.get_rows(&data_ref, 2, 4).unwrap();
+    let (vals, shape) = mid.as_tensor().unwrap();
+    assert_eq!(shape, &[4, 2]);
+    assert_eq!(vals, &[5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+
+    println!("Append variable batches ok: 3 + 1 + 3 = 7 rows");
+    store.remove(&data_ref).unwrap();
+}
+
+#[test]
+fn append_creates_multiple_new_chunks() {
+    let Some(store) = store() else { return };
+
+    // 2 rows initial, chunk_rows=4
+    let key = CacheKey::hash_data(b"zarr_test_append_big");
+    let initial = Value::tensor(vec![1.0, 2.0], vec![2]);
+    let data_ref = store.put(&key, &initial).unwrap();
+
+    // Append 10 rows (fills chunk 0 partial + creates chunk 1 full + chunk 2 partial)
+    let big: Vec<f64> = (3..13).map(|i| i as f64).collect();
+    store
+        .append(&data_ref, &Value::tensor(big, vec![10]))
+        .unwrap();
+
+    let meta = store.meta(&data_ref).unwrap();
+    assert_eq!(meta.total_rows, 12);
+
+    // Clear cache
+    let cache_dir = std::env::temp_dir().join("soma-zarr-integration");
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    std::fs::create_dir_all(&cache_dir).ok();
+
+    let full = store.get(&data_ref).unwrap();
+    let (vals, _) = full.as_tensor().unwrap();
+    let expected: Vec<f64> = (1..13).map(|i| i as f64).collect();
+    assert_eq!(vals, &expected);
+
+    println!("Append big batch ok: 2 + 10 = 12 rows across 3 chunks");
+    store.remove(&data_ref).unwrap();
+}

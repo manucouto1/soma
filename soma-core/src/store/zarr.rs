@@ -512,6 +512,105 @@ impl ZarrStore {
         CacheKey::hash_data(hex.as_bytes())
     }
 
+    // ── Append ──
+
+    /// Append rows to an existing Zarr array.
+    ///
+    /// Only rewrites the last (partial) chunk and adds new full chunks.
+    /// Updates zarr.json with the new total shape.
+    ///
+    /// ```ignore
+    /// let data_ref = store.put(&key, &initial_data)?;
+    /// store.append(&data_ref, &Value::tensor(vec![1.0, 2.0], vec![1, 2]))?;
+    /// ```
+    pub fn append(&self, data_ref: &DataRef, new_rows: &Value) -> Result<()> {
+        let DataRef::Zarr { array_path, .. } = data_ref else {
+            return Err(SomaError::DataStore("append only works on Zarr DataRefs".into()));
+        };
+        let Value::Tensor { values: new_values, shape: new_shape } = new_rows else {
+            return Err(SomaError::DataStore("append only works on Tensor values".into()));
+        };
+
+        let key = self.key_from_path(array_path);
+        let mut meta = self.read_meta(&key, array_path)?;
+        let chunk_rows = meta.chunk_rows();
+        let cols = meta.cols();
+
+        // Validate shape compatibility
+        let new_cols: usize = new_shape.get(1..).unwrap_or_default().iter().product::<usize>().max(1);
+        if cols != new_cols {
+            return Err(SomaError::DataStore(format!(
+                "shape mismatch: array has {} cols, new data has {new_cols}",
+                cols
+            )));
+        }
+
+        let old_total = meta.shape[0];
+        let append_rows = new_shape[0];
+        let new_total = old_total + append_rows;
+
+        // How many rows are in the last existing chunk?
+        let last_chunk_rows = if old_total % chunk_rows == 0 && old_total > 0 {
+            chunk_rows // last chunk is full
+        } else {
+            old_total % chunk_rows
+        };
+
+        let mut cursor = 0; // position in new_values
+
+        // If last chunk is partial, read it, extend, rewrite
+        if last_chunk_rows < chunk_rows && old_total > 0 {
+            let last_chunk_idx = (old_total - 1) / chunk_rows;
+            let mut chunk_data = self.read_chunk(&key, array_path, last_chunk_idx)?;
+
+            let can_fill = chunk_rows - last_chunk_rows; // space left
+            let take = can_fill.min(append_rows);
+            let elem_take = take * cols;
+
+            chunk_data.extend_from_slice(&new_values[..elem_take]);
+            cursor = elem_take;
+
+            // Rewrite this chunk
+            let raw: Vec<u8> = chunk_data.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let compressed = compress_chunk(&raw)?;
+            self.s3_put(&format!("{array_path}/c/{last_chunk_idx}"), &compressed)?;
+            self.cache_write(self.local_chunk_path(&key, last_chunk_idx), &compressed);
+        }
+
+        // Write new full chunks from remaining data
+        let remaining_elems = new_values.len() - cursor;
+        let remaining_rows = remaining_elems / cols;
+        let first_new_chunk = (old_total + (chunk_rows - last_chunk_rows).min(append_rows) + chunk_rows - 1) / chunk_rows;
+
+        let mut chunk_idx = first_new_chunk;
+        let mut rows_written = 0;
+        while rows_written < remaining_rows {
+            let take = chunk_rows.min(remaining_rows - rows_written);
+            let elem_start = cursor + rows_written * cols;
+            let elem_end = elem_start + take * cols;
+
+            let raw: Vec<u8> = new_values[elem_start..elem_end]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            let compressed = compress_chunk(&raw)?;
+            self.s3_put(&format!("{array_path}/c/{chunk_idx}"), &compressed)?;
+            self.cache_write(self.local_chunk_path(&key, chunk_idx), &compressed);
+
+            rows_written += take;
+            chunk_idx += 1;
+        }
+
+        // Update zarr.json with new shape
+        meta.shape[0] = new_total;
+        let meta_json = serde_json::to_vec_pretty(&meta)
+            .map_err(|e| SomaError::DataStore(format!("meta serialize: {e}")))?;
+        self.s3_put(&format!("{array_path}/zarr.json"), &meta_json)?;
+        self.cache_write(self.local_meta_path(&key), &meta_json);
+
+        Ok(())
+    }
+
     // ── Plain object operations (JSON/Bytes fallback) ──
 
     fn put_object(&self, key: &CacheKey, value: &Value) -> Result<DataRef> {
