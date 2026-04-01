@@ -1,3 +1,7 @@
+pub mod bayesian;
+
+pub use bayesian::BayesianSampler;
+
 use soma_core::error::Result;
 use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use std::collections::HashMap;

@@ -76,8 +76,8 @@ impl CacheStore for TieredCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::MemoryCache;
-    use crate::cache_local::LocalCache;
+    use crate::cache::memory::MemoryCache;
+    use crate::cache::local::LocalCache;
     use std::env;
     use std::fs;
     use std::path::PathBuf;

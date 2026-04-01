@@ -8,3 +8,4 @@ __pycache__/
 *.dylib
 *.dSYM/
 .pytest_cache/
+.env

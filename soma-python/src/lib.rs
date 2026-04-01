@@ -11,8 +11,7 @@ use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use soma_core::study::{Direction, Objective, SearchStrategy, Study};
 use soma_core::value::Value;
-use soma_runtime::sampler::{GridSampler, RandomSampler, Sampler};
-use soma_runtime::sampler_bayesian::BayesianSampler;
+use soma_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
 use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use soma_runtime::{EventBus, Pipeline};
 

@@ -3,10 +3,74 @@
 //! Separates WHERE data lives from HOW it's processed.
 //! Workers use DataRef to reference data without materializing it.
 
+#[cfg(feature = "s3")]
+pub mod s3;
+
+#[cfg(feature = "s3")]
+pub use s3::S3DataStore;
+
+#[cfg(feature = "zarr")]
+pub mod zarr;
+
+#[cfg(feature = "zarr")]
+pub use zarr::ZarrStore;
+
 use crate::cache::CacheKey;
-use crate::error::Result;
+use crate::error::{Result, SomaError};
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
+
+/// Metadata about a stored value, queryable without loading data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreMeta {
+    /// Total number of rows (shape[0] for tensors, 1 for scalar types).
+    pub total_rows: usize,
+    /// Remaining shape dimensions after the row axis (shape[1..] for tensors).
+    pub shape_tail: Vec<usize>,
+    /// Type tag: "tensor", "json", "bytes", or "empty".
+    pub dtype: String,
+}
+
+impl StoreMeta {
+    /// Build metadata from an in-memory Value.
+    pub fn from_value(value: &Value) -> Self {
+        match value {
+            Value::Tensor { shape, .. } => Self {
+                total_rows: shape.first().copied().unwrap_or(0),
+                shape_tail: shape.get(1..).unwrap_or_default().to_vec(),
+                dtype: "tensor".into(),
+            },
+            Value::Json(_) => Self { total_rows: 1, shape_tail: vec![], dtype: "json".into() },
+            Value::Bytes(b) => Self { total_rows: b.len(), shape_tail: vec![], dtype: "bytes".into() },
+            Value::Empty => Self { total_rows: 0, shape_tail: vec![], dtype: "empty".into() },
+        }
+    }
+}
+
+/// Slice rows `[start..start+len)` from a tensor value.
+pub fn slice_tensor_rows(value: &Value, start: usize, len: usize) -> Result<Value> {
+    match value {
+        Value::Tensor { values, shape } => {
+            if shape.is_empty() {
+                return Err(SomaError::DataStore("cannot slice scalar tensor".into()));
+            }
+            let cols: usize = shape[1..].iter().product::<usize>().max(1);
+            let row_start = start * cols;
+            let row_end = (start + len) * cols;
+            if row_end > values.len() {
+                return Err(SomaError::DataStore(format!(
+                    "row range {start}..{} out of bounds (total rows: {})",
+                    start + len,
+                    shape[0]
+                )));
+            }
+            let mut new_shape = shape.clone();
+            new_shape[0] = len;
+            Ok(Value::tensor(values[row_start..row_end].to_vec(), new_shape))
+        }
+        _ => Err(SomaError::DataStore("get_rows only works on Tensor values".into())),
+    }
+}
 
 /// A reference to data that may live in different places.
 /// Workers exchange DataRefs instead of raw data.
@@ -31,6 +95,13 @@ pub enum DataRef {
     },
     /// Data materialized inline (small values only)
     Inline { value: Value },
+    /// Data stored as a Zarr v3 array in object storage (chunked tensors).
+    Zarr {
+        bucket: String,
+        /// Root path of the Zarr array (contains zarr.json + chunk objects).
+        array_path: String,
+        region: Option<String>,
+    },
 }
 
 /// Stream data format.
@@ -59,7 +130,17 @@ pub enum StorageConfig {
         bucket: String,
         prefix: String,
         region: Option<String>,
-        endpoint: Option<String>, // for MinIO etc.
+        endpoint: Option<String>,
+    },
+    /// Zarr v3 chunked storage on S3-compatible backend.
+    #[serde(rename = "zarr")]
+    Zarr {
+        bucket: String,
+        prefix: String,
+        region: Option<String>,
+        endpoint: Option<String>,
+        /// Rows per chunk (first dimension).
+        chunk_rows: usize,
     },
 }
 
@@ -90,6 +171,21 @@ pub trait DataStore: Send + Sync {
 
     /// Get the storage config.
     fn config(&self) -> &StorageConfig;
+
+    /// Read a range of rows `[start..start+len)` from a tensor.
+    /// Returns a `Value::Tensor` with `shape[0] == len`.
+    /// Default impl downloads the full value and slices in memory.
+    fn get_rows(&self, data_ref: &DataRef, start: usize, len: usize) -> Result<Value> {
+        let value = self.get(data_ref)?;
+        slice_tensor_rows(&value, start, len)
+    }
+
+    /// Get metadata about a stored value without reading the data.
+    /// Default impl downloads the full value to extract metadata.
+    fn meta(&self, data_ref: &DataRef) -> Result<StoreMeta> {
+        let value = self.get(data_ref)?;
+        Ok(StoreMeta::from_value(&value))
+    }
 }
 
 /// Local filesystem data store.
@@ -349,10 +445,107 @@ mod tests {
             DataRef::S3 { bucket: "b".into(), key: "k".into(), region: None },
             DataRef::Cached { cache_key: CacheKey::hash_data(b"x") },
             DataRef::Inline { value: Value::Empty },
+            DataRef::Zarr { bucket: "b".into(), array_path: "data/abc".into(), region: None },
         ];
         for r in &refs {
             let json = serde_json::to_string(r).unwrap();
             let _: DataRef = serde_json::from_str(&json).unwrap();
         }
+    }
+
+    #[test]
+    fn slice_tensor_rows_basic() {
+        // 4 rows × 3 cols
+        let v = Value::tensor(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            vec![4, 3],
+        );
+        // Rows 1..3 → [[4,5,6], [7,8,9]]
+        let sliced = slice_tensor_rows(&v, 1, 2).unwrap();
+        let (data, shape) = sliced.as_tensor().unwrap();
+        assert_eq!(shape, &[2, 3]);
+        assert_eq!(data, &[4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn slice_tensor_rows_single() {
+        let v = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
+        let sliced = slice_tensor_rows(&v, 1, 1).unwrap();
+        let (data, shape) = sliced.as_tensor().unwrap();
+        assert_eq!(shape, &[1]);
+        assert_eq!(data, &[20.0]);
+    }
+
+    #[test]
+    fn slice_tensor_rows_out_of_bounds() {
+        let v = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
+        assert!(slice_tensor_rows(&v, 2, 5).is_err());
+    }
+
+    #[test]
+    fn store_meta_from_tensor() {
+        let v = Value::tensor(vec![0.0; 12], vec![4, 3]);
+        let meta = StoreMeta::from_value(&v);
+        assert_eq!(meta.total_rows, 4);
+        assert_eq!(meta.shape_tail, vec![3]);
+        assert_eq!(meta.dtype, "tensor");
+    }
+
+    #[test]
+    fn store_meta_from_json() {
+        let v = Value::json(serde_json::json!({"a": 1}));
+        let meta = StoreMeta::from_value(&v);
+        assert_eq!(meta.dtype, "json");
+        assert_eq!(meta.total_rows, 1);
+    }
+
+    #[test]
+    fn default_get_rows_on_local_store() {
+        let dir = std::env::temp_dir().join("soma-ds-test-getrows");
+        let store = LocalDataStore::new(&dir);
+
+        let key = CacheKey::hash_data(b"rows_test");
+        let value = Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]);
+        let data_ref = store.put(&key, &value).unwrap();
+
+        // Read rows 1..2 via default impl (full get + slice)
+        let sliced = store.get_rows(&data_ref, 1, 2).unwrap();
+        let (data, shape) = sliced.as_tensor().unwrap();
+        assert_eq!(shape, &[2, 2]);
+        assert_eq!(data, &[3.0, 4.0, 5.0, 6.0]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_meta_on_local_store() {
+        let dir = std::env::temp_dir().join("soma-ds-test-meta");
+        let store = LocalDataStore::new(&dir);
+
+        let key = CacheKey::hash_data(b"meta_test");
+        let value = Value::tensor(vec![0.0; 20], vec![5, 4]);
+        let data_ref = store.put(&key, &value).unwrap();
+
+        let meta = store.meta(&data_ref).unwrap();
+        assert_eq!(meta.total_rows, 5);
+        assert_eq!(meta.shape_tail, vec![4]);
+        assert_eq!(meta.dtype, "tensor");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zarr_storage_config_serde() {
+        let zarr = StorageConfig::Zarr {
+            bucket: "soma-research".into(),
+            prefix: "data/".into(),
+            region: None,
+            endpoint: Some("s3.eu-central-003.backblazeb2.com".into()),
+            chunk_rows: 1024,
+        };
+        let json = serde_json::to_string(&zarr).unwrap();
+        assert!(json.contains("soma-research"));
+        assert!(json.contains("1024"));
+        let _: StorageConfig = serde_json::from_str(&json).unwrap();
     }
 }
