@@ -54,3 +54,9 @@ proc-macro2 = "1"
 # Python bindings
 pyo3 = { version = "0.24", features = ["extension-module"] }
 numpy = { version = "0.24" }
+
+# Object storage
+object_store = { version = "0.12", features = ["aws"] }
+
+# Compression
+zstd = "0.13"
