@@ -1,3 +1,8 @@
+//! Plan executor — walks [`ExecutionPlan`] trees and runs filter nodes.
+//!
+//! Handles sequential, parallel (scoped threads), cached, remote, loop,
+//! and branch execution. Uses [`GraphInfo`] for topology-aware input resolution.
+
 use crate::event_bus::EventBus;
 use soma_compiler::ExecutionPlan;
 use soma_core::cache::CacheStore;

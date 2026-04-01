@@ -1,3 +1,9 @@
+//! Study — defines an optimization experiment with objectives and strategy.
+//!
+//! A [`Study`] holds the search space, strategy (Grid/Random/Bayesian),
+//! objectives, and tracks trials. The [`StudyRunner`] in soma-runtime
+//! orchestrates execution.
+
 use crate::event::MetricRecord;
 use crate::search::SearchSpace;
 use serde::{Deserialize, Serialize};

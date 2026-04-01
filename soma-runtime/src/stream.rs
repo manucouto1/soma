@@ -1,3 +1,9 @@
+//! Streaming executor — processes data in chunks through fitted filters.
+//!
+//! Respects each filter's [`StreamMode`]: FixedState processes chunks
+//! independently, Evolving updates state per chunk with checkpoints,
+//! Barrier accumulates all chunks before processing.
+
 use soma_core::cache::{CacheKey, CacheStore};
 use soma_core::error::{Result, SomaError};
 use soma_core::filter::{Filter, StreamMode};

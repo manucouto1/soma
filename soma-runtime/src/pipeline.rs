@@ -1,3 +1,8 @@
+//! Sequential filter pipeline with fit/predict lifecycle.
+//!
+//! The main user-facing API. Supports caching, event emission,
+//! batched prediction from a [`DataStore`], and state persistence.
+
 use crate::cache::MemoryCache;
 use crate::event_bus::EventBus;
 use soma_core::cache::{CacheKey, CacheStore};

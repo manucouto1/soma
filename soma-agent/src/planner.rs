@@ -1,3 +1,5 @@
+//! Research planner — generates actions based on experiment history.
+
 use crate::action::Action;
 use soma_core::error::Result;
 use soma_memory::ResearchLine;

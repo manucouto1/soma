@@ -1,3 +1,9 @@
+//! Early stopping strategies for optimization studies.
+//!
+//! A [`Pruner`] decides whether a trial should be stopped based on
+//! intermediate metric values. Implementations: [`MedianPruner`],
+//! [`PercentilePruner`].
+
 use soma_core::event::MetricRecord;
 
 /// A pruner decides whether to stop a trial early based on intermediate metrics.

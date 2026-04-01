@@ -1,3 +1,14 @@
+//! Execution engine for Soma pipelines.
+//!
+//! Provides the runtime components that execute compiled plans:
+//! - [`Pipeline`] — sequential filter chain with fit/predict
+//! - [`executor`] — walks [`ExecutionPlan`] trees (sequence, parallel, cached, remote)
+//! - [`cache`] — LRU memory cache, local disk cache, tiered cache
+//! - [`sampler`] — hyperparameter samplers (Grid, Random, Bayesian/TPE)
+//! - [`pruner`] — early stopping strategies (Median, Percentile)
+//! - [`stream`] — chunk-based streaming executor
+//! - [`StudyRunner`] — orchestrates optimization studies
+
 pub mod cache;
 pub mod event_bus;
 pub mod executor;

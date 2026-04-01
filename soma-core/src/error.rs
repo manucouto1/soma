@@ -1,3 +1,5 @@
+//! Error types for the Soma runtime.
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

@@ -1,3 +1,5 @@
+//! Worker — receives and executes plans from a coordinator.
+
 use crate::protocol::*;
 use soma_core::cache::CacheStore;
 use soma_core::event::Event;

@@ -1,3 +1,5 @@
+//! Agent loop — iterates explore/experiment/evaluate cycles autonomously.
+
 use crate::action::Action;
 use crate::planner::ResearchPlan;
 use soma_core::error::Result;

@@ -1,3 +1,9 @@
+//! Hyperparameter samplers for optimization studies.
+//!
+//! - [`GridSampler`] — exhaustive cartesian product, lazy index-based
+//! - [`RandomSampler`] — uniform sampling with deterministic seeds
+//! - [`BayesianSampler`] — TPE (Tree-Parzen Estimator) with explore/exploit
+
 pub mod bayesian;
 
 pub use bayesian::BayesianSampler;

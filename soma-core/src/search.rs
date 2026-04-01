@@ -1,3 +1,9 @@
+//! Search spaces for hyperparameter optimization.
+//!
+//! Defines [`SearchSpace`] (a collection of [`SearchDimension`]s) that
+//! samplers use to generate trial configurations. Dimensions can be
+//! float, int, categorical, or conditional.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;

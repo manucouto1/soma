@@ -1,3 +1,9 @@
+//! The Filter trait — the fundamental computation unit in Soma.
+//!
+//! A filter has two phases: `fit(x, y)` learns state from training data,
+//! `forward(x, state)` transforms data using that state. Each phase is
+//! independently cacheable via content-addressable keys.
+
 use crate::cache::CacheKey;
 use crate::error::Result;
 use crate::schema::Schema;

@@ -1,3 +1,9 @@
+//! Virtual values — lazy references to data that can be materialized on demand.
+//!
+//! Instead of eagerly loading all intermediate results, [`VirtualValue`]
+//! keeps references (Materialized, Cached, Deferred, Stream) and only
+//! materializes when a filter actually needs the data.
+
 use crate::cache::CacheKey;
 use crate::schema::Schema;
 use crate::value::Value;

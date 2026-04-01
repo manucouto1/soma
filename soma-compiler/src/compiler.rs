@@ -1,3 +1,8 @@
+//! Graph → ExecutionPlan compiler.
+//!
+//! Compilation phases: topological sort → parallelism detection →
+//! cache resolution → schema validation → distribution wrapping → simplification.
+
 use crate::plan::ExecutionPlan;
 use soma_core::cache::{CacheKey, CacheStore};
 use soma_core::error::Result;

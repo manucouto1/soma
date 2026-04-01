@@ -1,3 +1,8 @@
+//! KnowledgeBase trait and in-memory implementation.
+//!
+//! Stores experiments, detects research lines, computes trajectories
+//! and change points, and identifies promising directions.
+
 use crate::record::{ChangePoint, ExperimentRecord, ResearchLine, Trend};
 use soma_core::error::Result;
 use std::collections::HashMap;

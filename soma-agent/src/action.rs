@@ -1,3 +1,5 @@
+//! Agent actions — the decisions an agent can take during a research loop.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

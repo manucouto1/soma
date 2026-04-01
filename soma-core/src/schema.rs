@@ -1,3 +1,8 @@
+//! Schema — dtype and shape for compile-time type checking between filters.
+//!
+//! The compiler validates that connected filters have compatible schemas
+//! before execution begins, catching shape/type mismatches early.
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

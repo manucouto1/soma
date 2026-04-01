@@ -1,3 +1,8 @@
+//! Computational graph — DAG of filter nodes connected by edges.
+//!
+//! The graph is the user-facing representation of a pipeline topology.
+//! It gets compiled into an [`ExecutionPlan`] by the compiler.
+
 use crate::error::{Result, SomaError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

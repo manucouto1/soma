@@ -1,3 +1,8 @@
+//! Execution plan — the compiled representation of a pipeline.
+//!
+//! Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote, Empty.
+//! Plans are data-free (no filter implementations) and serializable.
+
 use serde::{Deserialize, Serialize};
 use soma_core::cache::CacheKey;
 use soma_core::filter::RemoteTarget;

@@ -1,3 +1,9 @@
+//! Study runner — orchestrates hyperparameter optimization.
+//!
+//! Iterates over trials: samples parameters, calls the executor,
+//! records metrics, and tracks the best result. Supports Grid,
+//! Random, and Bayesian sampling strategies.
+
 use crate::event_bus::EventBus;
 use crate::sampler::Sampler;
 use soma_core::error::Result;

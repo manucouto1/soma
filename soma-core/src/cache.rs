@@ -1,3 +1,11 @@
+//! Content-addressable caching — keys, traits, and metadata.
+//!
+//! [`CacheKey`] is a SHA-256 hash of computation inputs. Two cache keys:
+//! - **State key**: `hash(config + training_data)` — for fit() results
+//! - **Output key**: `hash(config + state + input)` — for forward() results
+//!
+//! [`CacheStore`] is the K/V interface; implementations live in soma-runtime.
+
 use crate::error::Result;
 use crate::value::Value;
 use chrono::{DateTime, Utc};

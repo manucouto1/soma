@@ -1,3 +1,8 @@
+//! Wire protocol for coordinator ↔ worker communication.
+//!
+//! Defines message types for plan assignment, results, heartbeats,
+//! Python job management, and worker capabilities.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use soma_compiler::ExecutionPlan;

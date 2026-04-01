@@ -1,3 +1,9 @@
+//! PyO3 bindings for Soma — exposes Pipeline, Study, and Filter to Python.
+//!
+//! Bridges Python Filter classes to the Rust Filter trait, converts
+//! between Python lists/dicts and Soma Values, and wraps the StudyRunner
+//! for hyperparameter optimization from Python.
+
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyList};

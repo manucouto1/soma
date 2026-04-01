@@ -1,3 +1,14 @@
+//! Core types and traits for the Soma computational graph runtime.
+//!
+//! This crate defines the contracts that all other crates depend on:
+//! - [`Filter`] — the computation unit (fit/forward)
+//! - [`Value`] — typed data flowing between filters (Tensor, JSON, Bytes)
+//! - [`Graph`] — DAG of filter nodes and edges
+//! - [`CacheKey`] / [`CacheStore`] — content-addressable caching
+//! - [`DataStore`] — abstraction for moving data between workers
+//! - [`Schema`] — dtype + shape for compile-time validation
+//! - [`Event`] — runtime lifecycle events
+
 pub mod cache;
 pub mod error;
 pub mod event;

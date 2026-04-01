@@ -1,3 +1,5 @@
+//! Axum HTTP/WebSocket server for the worker process.
+
 use crate::env_manager::{EnvManager, EnvType};
 use crate::protocol::*;
 use crate::worker::Worker;

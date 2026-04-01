@@ -1,3 +1,8 @@
+//! Broadcast event bus for runtime observability.
+//!
+//! Emits [`Event`]s (node started/completed/failed, cache hits, run lifecycle)
+//! to all subscribers via a tokio broadcast channel.
+
 use soma_core::event::Event;
 use tokio::sync::broadcast;
 
