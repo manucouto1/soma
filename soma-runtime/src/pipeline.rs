@@ -4,6 +4,7 @@ use soma_core::cache::{CacheKey, CacheStore};
 use soma_core::error::{Result, SomaError};
 use soma_core::event::Event;
 use soma_core::filter::Filter;
+use soma_core::store::{DataRef, DataStore};
 use soma_core::value::Value;
 use std::sync::Arc;
 use std::time::Instant;
@@ -20,6 +21,8 @@ pub struct Pipeline {
     cache: Arc<dyn CacheStore>,
     /// Event bus.
     event_bus: Arc<EventBus>,
+    /// Optional data store for persisting/loading data from remote storage.
+    data_store: Option<Arc<dyn DataStore>>,
     /// Whether the pipeline has been fitted.
     fitted: bool,
 }
@@ -36,6 +39,7 @@ impl Pipeline {
             states: state_slots,
             cache: Arc::new(MemoryCache::default()),
             event_bus: Arc::new(EventBus::default()),
+            data_store: None,
             fitted: false,
         }
     }
@@ -49,6 +53,12 @@ impl Pipeline {
     /// Set a custom event bus.
     pub fn with_event_bus(mut self, bus: Arc<EventBus>) -> Self {
         self.event_bus = bus;
+        self
+    }
+
+    /// Set a data store for batched operations and persistence.
+    pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
+        self.data_store = Some(store);
         self
     }
 
@@ -196,6 +206,154 @@ impl Pipeline {
     /// Get the search space aggregated from all filters.
     pub fn filter_names(&self) -> Vec<&str> {
         self.filters.iter().map(|(n, _)| n.as_str()).collect()
+    }
+
+    /// Predict in batches from a DataStore reference.
+    ///
+    /// Reads `batch_size` rows at a time from the data store,
+    /// runs each batch through the pipeline, and concatenates results.
+    /// Requires a data store to be set via `with_data_store()`.
+    pub fn predict_batched(
+        &self,
+        data_ref: &DataRef,
+        batch_size: usize,
+    ) -> Result<Value> {
+        if !self.fitted {
+            return Err(SomaError::Execution {
+                node_id: "pipeline".into(),
+                message: "pipeline must be fitted before predict_batched".into(),
+            });
+        }
+
+        let store = self.data_store.as_ref().ok_or_else(|| SomaError::Execution {
+            node_id: "pipeline".into(),
+            message: "predict_batched requires a data store (use with_data_store)".into(),
+        })?;
+
+        let meta = store.meta(data_ref)?;
+        let total_rows = meta.total_rows;
+
+        if total_rows == 0 {
+            return Ok(Value::Empty);
+        }
+
+        let run_id = format!("predict_batched_{}", timestamp_id());
+        let start = Instant::now();
+
+        self.event_bus.emit(Event::RunStarted {
+            run_id: run_id.clone(),
+            plan_summary: soma_core::event::PlanSummary {
+                total_nodes: self.filters.len(),
+                cached_nodes: 0,
+                parallel_branches: 0,
+            },
+        });
+
+        let mut all_values: Vec<f64> = Vec::new();
+        let mut result_shape: Option<Vec<usize>> = None;
+        let mut rows_processed = 0;
+
+        while rows_processed < total_rows {
+            let batch_len = batch_size.min(total_rows - rows_processed);
+            let batch = store.get_rows(data_ref, rows_processed, batch_len)?;
+
+            let output = self.predict(&batch)?;
+
+            if let Value::Tensor { values, shape } = &output {
+                if result_shape.is_none() {
+                    result_shape = Some(shape.clone());
+                }
+                all_values.extend_from_slice(values);
+            } else {
+                // Non-tensor output: can't concatenate batches
+                // Return last batch result (for JSON outputs, batching is unusual)
+                self.event_bus.emit(Event::RunCompleted {
+                    run_id,
+                    duration: start.elapsed(),
+                });
+                return Ok(output);
+            }
+
+            rows_processed += batch_len;
+        }
+
+        self.event_bus.emit(Event::RunCompleted {
+            run_id,
+            duration: start.elapsed(),
+        });
+
+        match result_shape {
+            Some(mut shape) => {
+                shape[0] = total_rows;
+                Ok(Value::tensor(all_values, shape))
+            }
+            None => Ok(Value::Empty),
+        }
+    }
+
+    /// Persist pipeline states to the data store.
+    ///
+    /// Returns a DataRef that can be used to restore the states later
+    /// via `load_states()`.
+    pub fn persist_states(&self) -> Result<DataRef> {
+        let store = self.data_store.as_ref().ok_or_else(|| SomaError::Execution {
+            node_id: "pipeline".into(),
+            message: "persist_states requires a data store (use with_data_store)".into(),
+        })?;
+
+        // Serialize all states as a JSON value
+        let mut states_map = serde_json::Map::new();
+        for (name, state) in &self.states {
+            if let Some(s) = state {
+                let json = serde_json::to_value(s)
+                    .map_err(|e| SomaError::Other(format!("state serialize: {e}")))?;
+                states_map.insert(name.clone(), json);
+            }
+        }
+
+        let states_value = Value::Json(serde_json::Value::Object(states_map));
+        let key = CacheKey::from_parts(&[
+            b"pipeline_states",
+            &self
+                .filters
+                .iter()
+                .map(|(n, f)| format!("{}:{}", n, f.config_hash()))
+                .collect::<Vec<_>>()
+                .join(",")
+                .into_bytes(),
+        ]);
+
+        store.put(&key, &states_value)
+    }
+
+    /// Load pipeline states from a data store reference.
+    ///
+    /// Restores states previously saved via `persist_states()`.
+    pub fn load_states(&mut self, data_ref: &DataRef) -> Result<()> {
+        let store = self.data_store.as_ref().ok_or_else(|| SomaError::Execution {
+            node_id: "pipeline".into(),
+            message: "load_states requires a data store (use with_data_store)".into(),
+        })?;
+
+        let states_value = store.get(data_ref)?;
+        let states_json = states_value.as_json().ok_or_else(|| SomaError::Other(
+            "persisted states must be JSON".into(),
+        ))?;
+
+        let obj = states_json.as_object().ok_or_else(|| SomaError::Other(
+            "persisted states must be a JSON object".into(),
+        ))?;
+
+        for (name, state_opt) in &mut self.states {
+            if let Some(json_val) = obj.get(name) {
+                let value: Value = serde_json::from_value(json_val.clone())
+                    .map_err(|e| SomaError::Other(format!("state deserialize: {e}")))?;
+                *state_opt = Some(value);
+            }
+        }
+
+        self.fitted = true;
+        Ok(())
     }
 }
 

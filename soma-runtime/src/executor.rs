@@ -4,6 +4,7 @@ use soma_core::cache::CacheStore;
 use soma_core::error::{Result, SomaError};
 use soma_core::event::Event;
 use soma_core::filter::Filter;
+use soma_core::store::DataStore;
 use soma_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -95,6 +96,8 @@ pub struct Context {
     pub graph_info: GraphInfo,
     /// Optional remote executor for distributed plans.
     pub remote_executor: Option<Arc<dyn RemoteExecutor>>,
+    /// Optional data store for persisting intermediate results.
+    pub data_store: Option<Arc<dyn DataStore>>,
 }
 
 impl Context {
@@ -106,6 +109,7 @@ impl Context {
             execution_order: Vec::new(),
             graph_info: GraphInfo::new(),
             remote_executor: None,
+            data_store: None,
         }
     }
 
@@ -116,6 +120,11 @@ impl Context {
 
     pub fn with_remote_executor(mut self, executor: Arc<dyn RemoteExecutor>) -> Self {
         self.remote_executor = Some(executor);
+        self
+    }
+
+    pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
+        self.data_store = Some(store);
         self
     }
 
@@ -137,6 +146,7 @@ impl Context {
             execution_order: self.execution_order.clone(),
             graph_info: self.graph_info.clone(),
             remote_executor: self.remote_executor.clone(),
+            data_store: self.data_store.clone(),
         }
     }
 }
