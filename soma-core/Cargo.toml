@@ -15,11 +15,26 @@ chrono = { workspace = true }
 soma-macros = { path = "../soma-macros" }
 
 [features]
-s3 = ["dep:reqwest"]
+s3 = ["dep:rust-s3", "dep:tokio"]
+zarr = ["dep:object_store", "dep:tokio", "dep:zstd"]
 
-[dependencies.reqwest]
-version = "0.12"
-features = ["blocking", "json"]
+[dependencies.rust-s3]
+version = "0.35"
+optional = true
+default-features = false
+features = ["tokio-rustls-tls"]
+
+[dependencies.tokio]
+version = "1"
+optional = true
+features = ["rt"]
+
+[dependencies.object_store]
+workspace = true
+optional = true
+
+[dependencies.zstd]
+workspace = true
 optional = true
 
 [dev-dependencies]
