@@ -26,8 +26,9 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectStore as ObjStore;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const ELEMENT_SIZE: usize = 8; // f64 = 8 bytes
 const ZSTD_LEVEL: i32 = 3;    // default zstd compression level
@@ -133,6 +134,64 @@ impl ZarrMeta {
     }
 }
 
+/// Default max local cache size: 512 MB.
+const DEFAULT_MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// LRU tracker for local chunk cache files.
+/// Evicts least-recently-used entries when total size exceeds the limit.
+struct ChunkLru {
+    /// (path, size_bytes) in access order — most recent at back.
+    entries: VecDeque<(PathBuf, u64)>,
+    current_bytes: u64,
+    max_bytes: u64,
+}
+
+impl ChunkLru {
+    fn new(max_bytes: u64) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            current_bytes: 0,
+            max_bytes,
+        }
+    }
+
+    /// Record a cache write. Evicts old entries if over budget.
+    fn record(&mut self, path: PathBuf, size: u64) {
+        // Remove if already tracked (will re-add at back)
+        if let Some(pos) = self.entries.iter().position(|(p, _)| p == &path) {
+            let (_, old_size) = self.entries.remove(pos).unwrap();
+            self.current_bytes = self.current_bytes.saturating_sub(old_size);
+        }
+
+        self.entries.push_back((path, size));
+        self.current_bytes += size;
+
+        // Evict from front until under budget
+        while self.current_bytes > self.max_bytes && !self.entries.is_empty() {
+            if let Some((evict_path, evict_size)) = self.entries.pop_front() {
+                self.current_bytes = self.current_bytes.saturating_sub(evict_size);
+                let _ = std::fs::remove_file(&evict_path);
+            }
+        }
+    }
+
+    /// Mark a path as recently accessed (move to back).
+    fn touch(&mut self, path: &PathBuf) {
+        if let Some(pos) = self.entries.iter().position(|(p, _)| p == path) {
+            let entry = self.entries.remove(pos).unwrap();
+            self.entries.push_back(entry);
+        }
+    }
+
+    fn current_bytes(&self) -> u64 {
+        self.current_bytes
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// S3-compatible Zarr v3 data store.
 pub struct ZarrStore {
     config: StorageConfig,
@@ -140,6 +199,7 @@ pub struct ZarrStore {
     prefix: String,
     chunk_rows: usize,
     local_cache: PathBuf,
+    lru: Mutex<ChunkLru>,
     rt: tokio::runtime::Runtime,
 }
 
@@ -187,6 +247,7 @@ impl ZarrStore {
             prefix,
             chunk_rows,
             local_cache: cache_dir,
+            lru: Mutex::new(ChunkLru::new(DEFAULT_MAX_CACHE_BYTES)),
             rt,
         })
     }
@@ -209,6 +270,42 @@ impl ZarrStore {
             local_cache,
             chunk_rows,
         )
+    }
+
+    /// Set the maximum local cache size in bytes.
+    pub fn set_max_cache_bytes(&self, max_bytes: u64) {
+        let mut lru = self.lru.lock().unwrap_or_else(|e| e.into_inner());
+        lru.max_bytes = max_bytes;
+    }
+
+    /// Current local cache usage in bytes.
+    pub fn cache_bytes(&self) -> u64 {
+        self.lru.lock().unwrap_or_else(|e| e.into_inner()).current_bytes()
+    }
+
+    /// Number of cached chunk files.
+    pub fn cache_entries(&self) -> usize {
+        self.lru.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    /// Record a local cache write and evict if needed.
+    fn cache_write(&self, path: PathBuf, data: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&path, data).ok();
+        self.lru
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(path, data.len() as u64);
+    }
+
+    /// Mark a local cache file as recently accessed.
+    fn cache_touch(&self, path: &PathBuf) {
+        self.lru
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .touch(path);
     }
 
     /// Root path for a Zarr array.
@@ -304,18 +401,12 @@ impl ZarrStore {
 
             // Cache locally (compressed form — decompressed on read)
             let local = self.local_chunk_path(key, chunk_idx);
-            if let Some(parent) = local.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            std::fs::write(&local, &compressed).ok();
+            self.cache_write(local, &compressed);
         }
 
         // Cache metadata locally
         let local_meta = self.local_meta_path(key);
-        if let Some(parent) = local_meta.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        std::fs::write(&local_meta, &meta_json).ok();
+        self.cache_write(local_meta, &meta_json);
 
         Ok(DataRef::Zarr {
             bucket: match &self.config {
@@ -328,16 +419,13 @@ impl ZarrStore {
     }
 
     fn read_meta(&self, key: &CacheKey, array_path: &str) -> Result<ZarrMeta> {
-        // Try local cache
         let local = self.local_meta_path(key);
         let bytes = if local.exists() {
+            self.cache_touch(&local);
             std::fs::read(&local).map_err(|e| SomaError::DataStore(e.to_string()))?
         } else {
             let bytes = self.s3_get(&format!("{array_path}/zarr.json"))?;
-            if let Some(parent) = local.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            std::fs::write(&local, &bytes).ok();
+            self.cache_write(local, &bytes);
             bytes
         };
         serde_json::from_slice(&bytes)
@@ -345,17 +433,14 @@ impl ZarrStore {
     }
 
     fn read_chunk(&self, key: &CacheKey, array_path: &str, chunk_idx: usize) -> Result<Vec<f64>> {
-        // Try local cache (stored compressed)
         let local = self.local_chunk_path(key, chunk_idx);
         let compressed = if local.exists() {
+            self.cache_touch(&local);
             std::fs::read(&local).map_err(|e| SomaError::DataStore(e.to_string()))?
         } else {
             let chunk_path = format!("{array_path}/c/{chunk_idx}");
             let bytes = self.s3_get(&chunk_path)?;
-            if let Some(parent) = local.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            std::fs::write(&local, &bytes).ok();
+            self.cache_write(local, &bytes);
             bytes
         };
 
@@ -681,5 +766,90 @@ mod tests {
 
         let decompressed = decompress_chunk(&compressed).unwrap();
         assert_eq!(decompressed, raw);
+    }
+
+    // ── LRU tests ──
+
+    #[test]
+    fn lru_tracks_entries() {
+        let mut lru = ChunkLru::new(1000);
+        lru.record(PathBuf::from("/tmp/a"), 100);
+        lru.record(PathBuf::from("/tmp/b"), 200);
+
+        assert_eq!(lru.len(), 2);
+        assert_eq!(lru.current_bytes(), 300);
+    }
+
+    #[test]
+    fn lru_evicts_when_over_budget() {
+        let dir = std::env::temp_dir().join("soma-lru-test-evict");
+        std::fs::create_dir_all(&dir).ok();
+
+        let path_a = dir.join("a");
+        let path_b = dir.join("b");
+        let path_c = dir.join("c");
+
+        // Create real files so eviction can delete them
+        std::fs::write(&path_a, &[0u8; 100]).unwrap();
+        std::fs::write(&path_b, &[0u8; 100]).unwrap();
+        std::fs::write(&path_c, &[0u8; 100]).unwrap();
+
+        let mut lru = ChunkLru::new(250); // budget for ~2 entries
+        lru.record(path_a.clone(), 100);
+        lru.record(path_b.clone(), 100);
+        assert_eq!(lru.len(), 2);
+        assert!(path_a.exists());
+
+        // Adding c pushes over budget → evicts a (oldest)
+        lru.record(path_c.clone(), 100);
+        assert_eq!(lru.current_bytes(), 200); // b + c
+        assert!(!path_a.exists(), "a should be evicted");
+        assert!(path_b.exists());
+        assert!(path_c.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lru_touch_prevents_eviction() {
+        let dir = std::env::temp_dir().join("soma-lru-test-touch");
+        std::fs::create_dir_all(&dir).ok();
+
+        let path_a = dir.join("a");
+        let path_b = dir.join("b");
+        let path_c = dir.join("c");
+
+        std::fs::write(&path_a, &[0u8; 100]).unwrap();
+        std::fs::write(&path_b, &[0u8; 100]).unwrap();
+        std::fs::write(&path_c, &[0u8; 100]).unwrap();
+
+        let mut lru = ChunkLru::new(250);
+        lru.record(path_a.clone(), 100);
+        lru.record(path_b.clone(), 100);
+
+        // Touch a → now b is the oldest
+        lru.touch(&path_a);
+
+        // Adding c should evict b (oldest after touch), not a
+        lru.record(path_c.clone(), 100);
+        assert!(path_a.exists(), "a was touched, should survive");
+        assert!(!path_b.exists(), "b was oldest, should be evicted");
+        assert!(path_c.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lru_duplicate_record_updates_size() {
+        let mut lru = ChunkLru::new(1000);
+        let path = PathBuf::from("/tmp/x");
+
+        lru.record(path.clone(), 100);
+        assert_eq!(lru.current_bytes(), 100);
+
+        // Re-record with different size
+        lru.record(path.clone(), 200);
+        assert_eq!(lru.len(), 1);
+        assert_eq!(lru.current_bytes(), 200);
     }
 }
