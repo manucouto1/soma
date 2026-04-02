@@ -14,7 +14,10 @@ crate-type = ["cdylib"]
 soma-core = { version = "0.2.5", path = "../soma-core" }
 soma-compiler = { version = "0.2.5", path = "../soma-compiler" }
 soma-runtime = { version = "0.2.5", path = "../soma-runtime" }
+soma-worker = { version = "0.2.5", path = "../soma-worker" }
 pyo3 = { workspace = true }
+tokio = { workspace = true }
+hostname = "0.4"
 numpy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

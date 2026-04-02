@@ -1,6 +1,6 @@
 """Soma: A computational graph runtime for research pipelines."""
 
-from soma._soma import Graph, Study, __version__
+from soma._soma import Graph, Study, Worker, __version__
 from soma.filter import Filter
 from soma.search import search
 from soma.lab import Lab
@@ -16,6 +16,7 @@ Graph.somatize = classmethod(lambda cls, topology: _somatize(topology))
 __all__ = [
     "Graph",
     "Study",
+    "Worker",
     "Filter",
     "Lab",
     "Chain",
