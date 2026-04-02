@@ -73,7 +73,8 @@ jobs:
         working-directory: soma-python
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-        run: maturin build --release --out dist
+          PYO3_PYTHON: python${{ matrix.python-version }}
+        run: maturin build --release --out dist --interpreter python${{ matrix.python-version }}
 
       - name: List built wheels
         run: ls -la soma-python/dist/

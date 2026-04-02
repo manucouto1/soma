@@ -8,9 +8,9 @@ repository.workspace = true
 description = "Autonomous research agent for the Soma runtime"
 
 [dependencies]
-soma-core = { version = "0.2.3", path = "../soma-core" }
-soma-runtime = { version = "0.2.3", path = "../soma-runtime" }
-soma-memory = { version = "0.2.3", path = "../soma-memory" }
+soma-core = { version = "0.2.4", path = "../soma-core" }
+soma-runtime = { version = "0.2.4", path = "../soma-runtime" }
+soma-memory = { version = "0.2.4", path = "../soma-memory" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
