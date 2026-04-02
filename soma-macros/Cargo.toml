@@ -2,6 +2,7 @@
 name = "soma-macros"
 version.workspace = true
 edition.workspace = true
+readme = "../README.md"
 license.workspace = true
 repository.workspace = true
 description = "Derive macros for the Soma computational graph runtime"

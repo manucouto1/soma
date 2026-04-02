@@ -2,6 +2,7 @@
 name = "soma-agent"
 version.workspace = true
 edition.workspace = true
+readme = "../README.md"
 license.workspace = true
 repository.workspace = true
 description = "Autonomous research agent for the Soma runtime"

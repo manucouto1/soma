@@ -2,6 +2,7 @@
 name = "soma-worker"
 version.workspace = true
 edition.workspace = true
+readme = "../README.md"
 license.workspace = true
 repository.workspace = true
 description = "Worker daemon for distributed execution in the Soma runtime"

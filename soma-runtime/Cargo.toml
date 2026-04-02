@@ -2,6 +2,7 @@
 name = "soma-runtime"
 version.workspace = true
 edition.workspace = true
+readme = "../README.md"
 license.workspace = true
 repository.workspace = true
 description = "Execution engine for the Soma computational graph runtime"

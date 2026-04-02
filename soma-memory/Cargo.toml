@@ -2,6 +2,7 @@
 name = "soma-memory"
 version.workspace = true
 edition.workspace = true
+readme = "../README.md"
 license.workspace = true
 repository.workspace = true
 description = "Knowledge base and temporal experiment tracking for the Soma runtime"

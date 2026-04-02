@@ -2,6 +2,7 @@
 name = "soma-compiler"
 version.workspace = true
 edition.workspace = true
+readme = "../README.md"
 license.workspace = true
 repository.workspace = true
 description = "Graph-to-execution-plan compiler for the Soma runtime"
