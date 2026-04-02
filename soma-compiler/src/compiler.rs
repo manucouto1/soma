@@ -160,16 +160,11 @@ impl<'a> Compiler<'a> {
 
         for level in &levels {
             if level.len() == 1 {
-                plan_steps.push(ExecutionPlan::Execute {
-                    node_id: level[0].to_string(),
-                });
+                plan_steps.push(self.plan_for_node(level[0]));
             } else {
-                // Multiple nodes at same level → parallel
                 let branches: Vec<ExecutionPlan> = level
                     .iter()
-                    .map(|id| ExecutionPlan::Execute {
-                        node_id: id.to_string(),
-                    })
+                    .map(|id| self.plan_for_node(id))
                     .collect();
                 plan_steps.push(ExecutionPlan::Parallel(branches));
             }
@@ -179,6 +174,72 @@ impl<'a> Compiler<'a> {
             plan_steps.into_iter().next().unwrap()
         } else {
             ExecutionPlan::Sequence(plan_steps)
+        }
+    }
+
+    /// Generate the execution plan for a single node based on its kind.
+    fn plan_for_node(&self, node_id: &str) -> ExecutionPlan {
+        use soma_core::graph::NodeKind;
+
+        let node = match self.graph.node(node_id) {
+            Some(n) => n,
+            None => return ExecutionPlan::Execute { node_id: node_id.to_string() },
+        };
+
+        match &node.kind {
+            NodeKind::Filter { .. } => ExecutionPlan::Execute {
+                node_id: node_id.to_string(),
+            },
+
+            NodeKind::SubGraph { graph } => {
+                // Recursively compile the inner graph
+                let inner_compiler = Compiler::new(graph, self.registry, self.mode);
+                match inner_compiler.compile(None) {
+                    Ok(result) => result.plan,
+                    Err(_) => ExecutionPlan::Execute { node_id: node_id.to_string() },
+                }
+            }
+
+            NodeKind::Loop { max_iterations } => {
+                // The body consists of the successors of this loop node.
+                // Build a sub-plan from the successor chain.
+                let successors = self.graph.successors(node_id);
+                let body = if successors.len() == 1 {
+                    self.plan_for_node(successors[0])
+                } else if successors.len() > 1 {
+                    let branches: Vec<ExecutionPlan> = successors
+                        .iter()
+                        .map(|id| self.plan_for_node(id))
+                        .collect();
+                    ExecutionPlan::Parallel(branches)
+                } else {
+                    ExecutionPlan::Empty
+                };
+                ExecutionPlan::Loop {
+                    node_id: node_id.to_string(),
+                    body: Box::new(body),
+                    max_iterations: *max_iterations,
+                }
+            }
+
+            NodeKind::Branch => {
+                // Arms come from control edges leaving this node.
+                let arms: Vec<(String, ExecutionPlan)> = self.graph.edges
+                    .iter()
+                    .filter(|e| e.source == node_id)
+                    .map(|e| {
+                        let label = e.label.clone().unwrap_or_else(|| e.target.clone());
+                        let plan = self.plan_for_node(&e.target);
+                        (label, plan)
+                    })
+                    .collect();
+                ExecutionPlan::Branch {
+                    node_id: node_id.to_string(),
+                    arms,
+                }
+            }
+
+            _ => ExecutionPlan::Execute { node_id: node_id.to_string() },
         }
     }
 

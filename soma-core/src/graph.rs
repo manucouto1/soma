@@ -16,15 +16,31 @@ pub type NodeId = String;
 /// Unique identifier for an edge in a graph.
 pub type EdgeId = String;
 
+/// What kind of computation a node represents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[non_exhaustive]
+pub enum NodeKind {
+    /// A single filter (the common case).
+    Filter { filter_name: String },
+    /// A nested sub-graph (compiled recursively).
+    SubGraph { graph: Box<Graph> },
+    /// A loop node — body is the sub-graph of successors.
+    Loop { max_iterations: Option<usize> },
+    /// A branch/conditional node — arms determined by control edges.
+    Branch,
+}
+
 /// A node in the computational graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
     pub label: String,
-    pub filter_name: String,
+    pub kind: NodeKind,
 }
 
 impl Node {
+    /// Create a filter node (backward-compatible with old 3-arg constructor).
     pub fn new(
         id: impl Into<String>,
         label: impl Into<String>,
@@ -33,7 +49,65 @@ impl Node {
         Self {
             id: id.into(),
             label: label.into(),
-            filter_name: filter_name.into(),
+            kind: NodeKind::Filter { filter_name: filter_name.into() },
+        }
+    }
+
+    /// Create a filter node with explicit id and filter_name.
+    pub fn filter_with_id(id: impl Into<String>, filter_name: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            label: id.clone(),
+            id,
+            kind: NodeKind::Filter { filter_name: filter_name.into() },
+        }
+    }
+
+    /// Create a filter node where id defaults to filter_name.
+    pub fn filter(filter_name: impl Into<String>) -> Self {
+        let name = filter_name.into();
+        Self {
+            id: name.clone(),
+            label: name.clone(),
+            kind: NodeKind::Filter { filter_name: name },
+        }
+    }
+
+    /// Create a sub-graph node.
+    pub fn subgraph(id: impl Into<String>, graph: Graph) -> Self {
+        let id = id.into();
+        Self {
+            id: id.clone(),
+            label: id,
+            kind: NodeKind::SubGraph { graph: Box::new(graph) },
+        }
+    }
+
+    /// Create a loop node.
+    pub fn loop_node(id: impl Into<String>, max_iterations: Option<usize>) -> Self {
+        let id = id.into();
+        Self {
+            id: id.clone(),
+            label: id,
+            kind: NodeKind::Loop { max_iterations },
+        }
+    }
+
+    /// Create a branch/conditional node.
+    pub fn branch(id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            id: id.clone(),
+            label: id,
+            kind: NodeKind::Branch,
+        }
+    }
+
+    /// Get the filter name if this is a Filter node.
+    pub fn filter_name(&self) -> Option<&str> {
+        match &self.kind {
+            NodeKind::Filter { filter_name } => Some(filter_name),
+            _ => None,
         }
     }
 }
@@ -106,8 +180,34 @@ impl Graph {
         self.nodes.push(node);
     }
 
+    /// Add a filter node using the filter name as the node id.
+    /// If a node with that name already exists, appends a suffix.
+    pub fn add_filter(&mut self, filter_name: impl Into<String>) -> &str {
+        let name = filter_name.into();
+        let id = if self.nodes.iter().any(|n| n.id == name) {
+            let mut i = 2;
+            loop {
+                let candidate = format!("{name}_{i}");
+                if !self.nodes.iter().any(|n| n.id == candidate) {
+                    break candidate;
+                }
+                i += 1;
+            }
+        } else {
+            name.clone()
+        };
+        self.nodes.push(Node::filter_with_id(&id, &name));
+        &self.nodes.last().unwrap().id
+    }
+
     pub fn add_edge(&mut self, edge: Edge) {
         self.edges.push(edge);
+    }
+
+    /// Connect two nodes with a data edge (auto-generates edge id).
+    pub fn connect(&mut self, source: impl Into<String>, target: impl Into<String>) {
+        let id = format!("e_{}", self.edges.len());
+        self.edges.push(Edge::data(id, source, target));
     }
 
     /// Get a node by its ID.
@@ -206,7 +306,7 @@ impl Graph {
         Ok(sorted)
     }
 
-    /// Validate the graph structure.
+    /// Validate the graph structure (recursively validates sub-graphs).
     pub fn validate(&self) -> Result<()> {
         // Check for duplicate node IDs
         let mut seen = HashSet::new();
@@ -232,6 +332,13 @@ impl Graph {
 
         // Check for cycles
         self.topological_sort()?;
+
+        // Recursively validate sub-graphs
+        for node in &self.nodes {
+            if let NodeKind::SubGraph { graph } = &node.kind {
+                graph.validate()?;
+            }
+        }
 
         Ok(())
     }
@@ -377,5 +484,95 @@ mod tests {
         assert_eq!(g.roots(), vec!["solo"]);
         assert_eq!(g.leaves(), vec!["solo"]);
         assert_eq!(g.topological_sort().unwrap(), vec!["solo"]);
+    }
+
+    // ── NodeKind tests ──
+
+    #[test]
+    fn node_filter_shorthand() {
+        let n = Node::filter("StandardScaler");
+        assert_eq!(n.id, "StandardScaler");
+        assert_eq!(n.filter_name(), Some("StandardScaler"));
+    }
+
+    #[test]
+    fn node_filter_with_id() {
+        let n = Node::filter_with_id("my_scaler", "StandardScaler");
+        assert_eq!(n.id, "my_scaler");
+        assert_eq!(n.filter_name(), Some("StandardScaler"));
+    }
+
+    #[test]
+    fn graph_add_filter_auto_names() {
+        let mut g = Graph::new();
+        g.add_filter("Scaler");
+        g.add_filter("PCA");
+        g.connect("Scaler", "PCA");
+
+        assert!(g.validate().is_ok());
+        assert_eq!(g.nodes.len(), 2);
+        assert_eq!(g.nodes[0].id, "Scaler");
+        assert_eq!(g.nodes[1].id, "PCA");
+    }
+
+    #[test]
+    fn graph_add_filter_deduplicates() {
+        let mut g = Graph::new();
+        g.add_filter("Scaler");
+        g.add_filter("Scaler"); // duplicate name → gets suffix
+
+        assert_eq!(g.nodes.len(), 2);
+        assert_eq!(g.nodes[0].id, "Scaler");
+        assert_eq!(g.nodes[1].id, "Scaler_2");
+    }
+
+    #[test]
+    fn subgraph_node() {
+        let inner = linear_pipeline(vec![
+            Node::new("a", "A", "F"),
+            Node::new("b", "B", "F"),
+        ]);
+
+        let mut outer = Graph::new();
+        outer.add_node(Node::new("input", "Input", "Input"));
+        outer.add_node(Node::subgraph("pipeline", inner));
+        outer.add_node(Node::new("output", "Output", "Output"));
+        outer.add_edge(Edge::data("e1", "input", "pipeline"));
+        outer.add_edge(Edge::data("e2", "pipeline", "output"));
+
+        assert!(outer.validate().is_ok());
+        assert_eq!(outer.nodes.len(), 3);
+
+        // SubGraph node has no filter_name
+        assert!(outer.node("pipeline").unwrap().filter_name().is_none());
+    }
+
+    #[test]
+    fn loop_and_branch_nodes() {
+        let mut g = Graph::new();
+        g.add_node(Node::loop_node("train_loop", Some(100)));
+        g.add_node(Node::branch("check_convergence"));
+        g.add_edge(Edge::data("e1", "train_loop", "check_convergence"));
+
+        assert!(g.validate().is_ok());
+        assert!(matches!(g.node("train_loop").unwrap().kind, NodeKind::Loop { max_iterations: Some(100) }));
+        assert!(matches!(g.node("check_convergence").unwrap().kind, NodeKind::Branch));
+    }
+
+    #[test]
+    fn node_kind_serde_roundtrip() {
+        let inner = linear_pipeline(vec![Node::new("x", "X", "F")]);
+        let nodes = vec![
+            Node::filter("Scaler"),
+            Node::subgraph("sub", inner),
+            Node::loop_node("loop", Some(50)),
+            Node::branch("cond"),
+        ];
+
+        for node in &nodes {
+            let json = serde_json::to_string(node).unwrap();
+            let parsed: Node = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.id, node.id);
+        }
     }
 }
