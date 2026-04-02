@@ -7,22 +7,19 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
 jobs:
   # Publish Rust crates to crates.io
   publish-crates:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Publish crates (in dependency order)
         env:
@@ -44,63 +41,62 @@ jobs:
           sleep 30
           cargo publish -p somatize --allow-dirty || true
 
-  # Build Python wheels
-  build-wheels:
-    name: Build wheels (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+  # Build macOS ARM wheel natively
+  build-macos:
+    name: Build macOS ARM wheel
+    runs-on: self-hosted
     strategy:
-      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
-        python-version: ["3.11", "3.12", "3.13"]
-    env:
-      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install maturin
-        run: pip install maturin
-
       - name: Build wheel
         working-directory: soma-python
-        env:
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-          PYO3_PYTHON: python${{ matrix.python-version }}
-        run: maturin build --release --out dist --interpreter python${{ matrix.python-version }}
+        run: |
+          pip install maturin
+          maturin build --release --out dist --interpreter python${{ matrix.python-version }}
 
-      - name: List built wheels
-        run: ls -la soma-python/dist/
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos-py${{ matrix.python-version }}
+          path: soma-python/dist/*.whl
+
+  # Build Linux wheels via Docker
+  build-linux:
+    name: Build Linux wheels
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build manylinux wheels via Docker
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/io" \
+            -w /io/soma-python \
+            -e PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+            ghcr.io/pyo3/maturin:latest \
+            build --release --out /io/dist --interpreter python3.12 python3.13
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: soma-python/dist/*.whl
+          name: wheels-linux
+          path: dist/*.whl
 
   # Build sdist
   build-sdist:
     name: Build sdist
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-          working-directory: soma-python
+        working-directory: soma-python
+        run: |
+          pip install maturin
+          maturin sdist --out dist
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
@@ -111,29 +107,32 @@ jobs:
   # Upload to PyPI
   upload-pypi:
     name: Upload to PyPI
-    needs: [build-wheels, build-sdist]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
+    needs: [build-macos, build-linux, build-sdist]
+    runs-on: self-hosted
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: "{wheels-*,sdist}"
           merge-multiple: true
           path: dist
 
       - name: List dist contents
         run: ls -la dist/
 
+      - name: Install twine
+        run: pip install twine
+
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
 
   # Create GitHub Release
   github-release:
     name: GitHub Release
     needs: [publish-crates, upload-pypi]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
