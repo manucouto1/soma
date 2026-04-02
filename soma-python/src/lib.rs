@@ -493,6 +493,10 @@ struct PyGraph {
     cache: Arc<dyn soma_core::cache::CacheStore>,
     event_bus: Arc<EventBus>,
     fitted: bool,
+    /// Registered remote workers: (address, token, tags).
+    workers: Vec<(String, Option<String>, Vec<String>)>,
+    /// Coordinator URL + token.
+    coordinator: Option<(String, Option<String>)>,
 }
 
 #[pymethods]
@@ -505,6 +509,8 @@ impl PyGraph {
             cache: Arc::new(MemoryCache::default()),
             event_bus: Arc::new(EventBus::new(256)),
             fitted: false,
+            workers: Vec::new(),
+            coordinator: None,
         }
     }
 
@@ -847,6 +853,68 @@ impl PyGraph {
             }
         });
         Ok(())
+    }
+
+    // ── Workers ──
+
+    /// Register a remote worker for direct connection (mode B).
+    ///
+    /// Usage:
+    ///   g.add_worker("ws://gpu-0:8080", token="sk-xxx", tags=["gpu"])
+    #[pyo3(signature = (address, token=None, tags=None))]
+    fn add_worker(&mut self, address: String, token: Option<String>, tags: Option<Vec<String>>) {
+        self.workers
+            .push((address, token, tags.unwrap_or_default()));
+    }
+
+    /// Set a coordinator for auto-discovery (mode C).
+    ///
+    /// Usage:
+    ///   g.set_coordinator("http://coord:9090", token="sk-xxx")
+    #[pyo3(signature = (url, token=None))]
+    fn set_coordinator(&mut self, url: String, token: Option<String>) {
+        self.coordinator = Some((url, token));
+    }
+
+    /// List known workers (from add_worker or coordinator).
+    ///
+    /// Returns a list of dicts with worker info.
+    fn workers(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty(py);
+
+        // Direct workers
+        for (addr, _token, tags) in &self.workers {
+            let dict = PyDict::new(py);
+            dict.set_item("address", addr)?;
+            dict.set_item("tags", tags)?;
+            dict.set_item("source", "direct")?;
+            list.append(dict)?;
+        }
+
+        // If coordinator is set, query it for registered workers
+        if let Some((url, token)) = &self.coordinator {
+            let workers_url = format!("{url}/workers");
+            // Synchronous HTTP request (blocking in Python context is fine)
+            let client = reqwest::blocking::Client::new();
+            let mut request = client.get(&workers_url);
+            if let Some(t) = token {
+                request = request.query(&[("token", t.as_str())]);
+            }
+            if let Ok(resp) = request.send()
+                && let Ok(text) = resp.text()
+            {
+                let json_mod = py.import("json")?;
+                if let Ok(parsed) = json_mod.call_method1("loads", (text,))
+                    && let Ok(items) = parsed.downcast::<PyList>()
+                {
+                    for item in items.iter() {
+                        list.append(item)?;
+                    }
+                }
+            }
+        }
+
+        Ok(list.into_any().unbind())
     }
 
     /// Number of nodes in the graph.
