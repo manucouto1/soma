@@ -55,6 +55,9 @@ proc-macro2 = "1"
 pyo3 = { version = "0.24", features = ["extension-module"] }
 numpy = { version = "0.24" }
 
+# System info
+sysinfo = "0.33"
+
 # Object storage
 object_store = { version = "0.12", features = ["aws"] }
 

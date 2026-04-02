@@ -20,6 +20,8 @@ axum = { workspace = true }
 tower = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
+sysinfo = { workspace = true }
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 proptest = { workspace = true }

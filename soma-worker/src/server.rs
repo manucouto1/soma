@@ -1,11 +1,15 @@
 //! Axum HTTP/WebSocket server for the worker process.
+//!
+//! Supports optional bearer token authentication on WebSocket connections.
+//! Set a token via [`worker_router_authenticated`] or the `--token` CLI flag.
 
 use crate::env_manager::{EnvManager, EnvType};
 use crate::protocol::*;
 use crate::worker::Worker;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::{Query, State, WebSocketUpgrade};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use std::path::PathBuf;
@@ -17,11 +21,13 @@ struct ServerState {
     worker: Mutex<Worker>,
     env_manager: EnvManager,
     work_dir: PathBuf,
+    /// Optional bearer token for authentication.
+    token: Option<String>,
 }
 
-/// Build a worker server router.
+/// Build a worker server router (no authentication).
 pub fn worker_router(worker: Worker) -> Router {
-    worker_router_with_dirs(worker, "/tmp/soma-envs", "/tmp/soma-work")
+    worker_router_full(worker, "/tmp/soma-envs", "/tmp/soma-work", None)
 }
 
 /// Build a worker server router with custom directories.
@@ -30,12 +36,32 @@ pub fn worker_router_with_dirs(
     env_dir: impl Into<PathBuf>,
     work_dir: impl Into<PathBuf>,
 ) -> Router {
+    worker_router_full(worker, env_dir, work_dir, None)
+}
+
+/// Build a worker server router with authentication.
+pub fn worker_router_authenticated(
+    worker: Worker,
+    env_dir: impl Into<PathBuf>,
+    work_dir: impl Into<PathBuf>,
+    token: impl Into<String>,
+) -> Router {
+    worker_router_full(worker, env_dir, work_dir, Some(token.into()))
+}
+
+fn worker_router_full(
+    worker: Worker,
+    env_dir: impl Into<PathBuf>,
+    work_dir: impl Into<PathBuf>,
+    token: Option<String>,
+) -> Router {
     let work = work_dir.into();
     std::fs::create_dir_all(&work).ok();
     let state = Arc::new(ServerState {
         worker: Mutex::new(worker),
         env_manager: EnvManager::new(env_dir, EnvType::Venv),
         work_dir: work,
+        token,
     });
     Router::new()
         .route("/health", get(health))
@@ -52,6 +78,19 @@ pub async fn serve_worker(worker: Worker, addr: &str) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+/// Start a worker server with authentication.
+pub async fn serve_worker_authenticated(
+    worker: Worker,
+    addr: &str,
+    token: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("Worker server listening on {addr} (authenticated)");
+    let router = worker_router_authenticated(worker, "/tmp/soma-envs", "/tmp/soma-work", token);
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
 async fn health() -> &'static str {
     "ok"
 }
@@ -62,11 +101,25 @@ async fn info(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     axum::Json(serde_json::to_value(msg).unwrap_or_default())
 }
 
+/// Query params for WebSocket authentication.
+#[derive(serde::Deserialize, Default)]
+struct WsParams {
+    token: Option<String>,
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
+    Query(params): Query<WsParams>,
     State(state): State<Arc<ServerState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
+) -> Result<impl IntoResponse, StatusCode> {
+    // Validate token if server requires one
+    if let Some(expected) = &state.token {
+        match &params.token {
+            Some(provided) if provided == expected => {}
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
+    Ok(ws.on_upgrade(move |socket| handle_ws(socket, state)))
 }
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
