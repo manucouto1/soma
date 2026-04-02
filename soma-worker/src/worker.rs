@@ -4,7 +4,7 @@ use crate::protocol::*;
 use soma_core::cache::CacheStore;
 use soma_core::event::Event;
 use soma_core::filter::Filter;
-use soma_runtime::{Context, EventBus, FilterStore, MemoryCache, execute};
+use soma_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,7 +14,7 @@ pub struct Worker {
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
-    filters: FilterStore,
+    filters: FilterLibrary,
 }
 
 impl Worker {
@@ -24,7 +24,7 @@ impl Worker {
             capabilities,
             event_bus: Arc::new(EventBus::new(256)),
             cache: Arc::new(MemoryCache::default()),
-            filters: FilterStore::new(),
+            filters: FilterLibrary::new(),
         }
     }
 
@@ -69,7 +69,9 @@ impl Worker {
                 InputSource::Reference { data_ref } => {
                     // Try to load from context's data store
                     if let Some(store) = &ctx.data_store {
-                        store.get(data_ref).unwrap_or(soma_core::value::Value::Empty)
+                        store
+                            .get(data_ref)
+                            .unwrap_or(soma_core::value::Value::Empty)
                     } else {
                         tracing::warn!("DataRef input but no DataStore configured on worker");
                         soma_core::value::Value::Empty
@@ -190,7 +192,9 @@ mod tests {
             plan: ExecutionPlan::Execute {
                 node_id: "doubler".into(),
             },
-            input: Some(crate::protocol::InputSource::Inline { value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]) }),
+            input: Some(crate::protocol::InputSource::Inline {
+                value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
+            }),
             metadata: serde_json::json!({}),
         };
 
@@ -262,7 +266,9 @@ mod tests {
                     node_id: "d2".into(),
                 },
             ]),
-            input: Some(crate::protocol::InputSource::Inline { value: Value::tensor(vec![5.0], vec![1]) }),
+            input: Some(crate::protocol::InputSource::Inline {
+                value: Value::tensor(vec![5.0], vec![1]),
+            }),
             metadata: serde_json::json!({}),
         };
 
@@ -286,7 +292,9 @@ mod tests {
             plan: ExecutionPlan::Execute {
                 node_id: "doubler".into(),
             },
-            input: Some(crate::protocol::InputSource::Inline { value: Value::tensor(vec![1.0], vec![1]) }),
+            input: Some(crate::protocol::InputSource::Inline {
+                value: Value::tensor(vec![1.0], vec![1]),
+            }),
             metadata: serde_json::json!({}),
         };
 

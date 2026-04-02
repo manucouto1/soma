@@ -58,14 +58,14 @@ class TestGraphBasic:
 
 
 class TestGraphExecution:
-    def test_linear_fit_predict(self):
+    def test_linear_fit_forward(self):
         g = Graph()
         g.node(Doubler())
         g.node(Adder(amount=5.0))
         g.connect("doubler", "adder")
 
         g.fit([1.0, 2.0, 3.0])
-        result = g.predict([10.0, 20.0])
+        result = g.forward([10.0, 20.0])
         # doubler: [10, 20] → [20, 40]
         # adder: fit on [2,4,6] → mean=4, forward: [20+5-4, 40+5-4]
         # But graph_fit propagates through: doubler([1,2,3])=[2,4,6]

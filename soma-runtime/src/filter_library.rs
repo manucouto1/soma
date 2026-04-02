@@ -1,17 +1,17 @@
-//! Unified filter registry — holds both implementations and metadata.
+//! Unified filter registry — holds implementations, metadata, and trained states.
 //!
-//! [`FilterLibrary`] bridges the compiler (which needs [`FilterRegistry`])
-//! and the executor (which needs [`FilterStore`]). Register filters once,
-//! use everywhere.
+//! [`FilterLibrary`] is the single registry for the entire pipeline:
+//! the compiler reads metadata via [`FilterRegistry`], and the executor
+//! reads filters and states directly. No intermediate conversion needed.
 
-use crate::executor::FilterStore;
 use soma_compiler::FilterRegistry;
 use soma_core::cache::CacheKey;
 use soma_core::filter::{Filter, FilterMeta};
+use soma_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// A unified registry of filter implementations and their metadata.
+/// Unified registry of filter implementations, metadata, and trained states.
 ///
 /// ```ignore
 /// let mut lib = FilterLibrary::new();
@@ -21,32 +21,25 @@ use std::sync::Arc;
 /// // Use as compiler registry
 /// let result = soma_compiler::compile(&graph, &lib, mode, cache)?;
 ///
-/// // Use as executor filter store
-/// let store = lib.to_filter_store();
+/// // Use directly with executor — no conversion needed
+/// executor::execute(&plan, &mut ctx, &lib, &cache)?;
 /// ```
 pub struct FilterLibrary {
     filters: HashMap<String, Arc<dyn Filter>>,
+    states: HashMap<String, Value>,
 }
 
 impl FilterLibrary {
     pub fn new() -> Self {
         Self {
             filters: HashMap::new(),
+            states: HashMap::new(),
         }
     }
 
     /// Register a filter for a given node ID.
     pub fn register(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
         self.filters.insert(node_id.into(), Arc::from(filter));
-    }
-
-    /// Build a [`FilterStore`] for the executor, transferring all filters and states.
-    pub fn to_filter_store(&self) -> FilterStore {
-        let mut store = FilterStore::new();
-        for (id, filter) in &self.filters {
-            store.register(id.clone(), Box::new(ArcFilter(filter.clone())));
-        }
-        store
     }
 
     /// Number of registered filters.
@@ -62,6 +55,16 @@ impl FilterLibrary {
     /// Get a filter by node ID.
     pub fn get(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
         self.filters.get(node_id).cloned()
+    }
+
+    /// Store a trained state for a node.
+    pub fn set_state(&mut self, node_id: impl Into<String>, state: Value) {
+        self.states.insert(node_id.into(), state);
+    }
+
+    /// Retrieve the trained state for a node.
+    pub fn get_state(&self, node_id: &str) -> Option<&Value> {
+        self.states.get(node_id)
     }
 }
 
@@ -83,31 +86,11 @@ impl FilterRegistry for FilterLibrary {
     }
 }
 
-/// Thin wrapper to re-box an `Arc<dyn Filter>` into `Box<dyn Filter>`.
-/// Needed because FilterStore takes `Box<dyn Filter>` but we store `Arc`.
-struct ArcFilter(Arc<dyn Filter>);
-
-impl Filter for ArcFilter {
-    fn config_hash(&self) -> CacheKey {
-        self.0.config_hash()
-    }
-    fn fit(&self, x: &soma_core::value::Value, y: Option<&soma_core::value::Value>) -> soma_core::error::Result<soma_core::value::Value> {
-        self.0.fit(x, y)
-    }
-    fn forward(&self, x: &soma_core::value::Value, state: &soma_core::value::Value) -> soma_core::error::Result<soma_core::value::Value> {
-        self.0.forward(x, state)
-    }
-    fn meta(&self) -> FilterMeta {
-        self.0.meta()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use soma_core::error::Result;
     use soma_core::filter::{FilterKind, StreamMode};
-    use soma_core::value::Value;
 
     struct DummyFilter {
         name: String,
@@ -151,9 +134,13 @@ mod tests {
     #[test]
     fn implements_filter_registry() {
         let mut lib = FilterLibrary::new();
-        lib.register("node_1", Box::new(DummyFilter { name: "Scaler".into() }));
+        lib.register(
+            "node_1",
+            Box::new(DummyFilter {
+                name: "Scaler".into(),
+            }),
+        );
 
-        // FilterRegistry methods
         let meta = lib.meta("node_1").unwrap();
         assert_eq!(meta.name, "Scaler");
         assert!(meta.cacheable);
@@ -165,25 +152,14 @@ mod tests {
     }
 
     #[test]
-    fn to_filter_store_transfers_filters() {
-        let mut lib = FilterLibrary::new();
-        lib.register("a", Box::new(DummyFilter { name: "A".into() }));
-        lib.register("b", Box::new(DummyFilter { name: "B".into() }));
-
-        let store = lib.to_filter_store();
-        assert!(store.get("a").is_some());
-        assert!(store.get("b").is_some());
-        assert!(store.get("c").is_none());
-    }
-
-    #[test]
-    fn filter_store_filters_work() {
+    fn state_management() {
         let mut lib = FilterLibrary::new();
         lib.register("a", Box::new(DummyFilter { name: "A".into() }));
 
-        let store = lib.to_filter_store();
-        let filter = store.get("a").unwrap();
-        let result = filter.forward(&Value::tensor(vec![1.0], vec![1]), &Value::Empty).unwrap();
-        assert_eq!(result, Value::tensor(vec![1.0], vec![1]));
+        assert!(lib.get_state("a").is_none());
+
+        lib.set_state("a", Value::json(serde_json::json!({"mean": 5.0})));
+        let state = lib.get_state("a").unwrap();
+        assert_eq!(state.as_json().unwrap()["mean"], 5.0);
     }
 }

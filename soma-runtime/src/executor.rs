@@ -4,11 +4,11 @@
 //! and branch execution. Uses [`GraphInfo`] for topology-aware input resolution.
 
 use crate::event_bus::EventBus;
+use crate::filter_library::FilterLibrary;
 use soma_compiler::ExecutionPlan;
 use soma_core::cache::CacheStore;
 use soma_core::error::{Result, SomaError};
 use soma_core::event::Event;
-use soma_core::filter::Filter;
 use soma_core::store::DataStore;
 use soma_core::value::Value;
 use soma_core::virtual_value::VirtualValue;
@@ -153,23 +153,20 @@ impl Context {
     /// If a DataStore and spill threshold are configured, check if the value
     /// should be offloaded. Returns VirtualValue (materialized or cached ref).
     fn maybe_spill(&self, node_id: &str, value: Value) -> VirtualValue {
-        if self.spill_threshold > 0 {
-            if let Some(store) = &self.data_store {
-                let size = value.size() * 8; // approximate bytes (f64 = 8 bytes)
-                if size >= self.spill_threshold {
-                    let key = soma_core::cache::CacheKey::from_parts(&[
-                        self.run_id.as_bytes(),
-                        node_id.as_bytes(),
-                    ]);
-                    // Infer schema before spilling (we still have the value)
-                    let vv_for_schema = VirtualValue::materialized(value.clone());
-                    let schema = vv_for_schema.schema().clone();
-                    if let Ok(_data_ref) = store.put(&key, &value) {
-                        tracing::debug!(
-                            "spilled node `{node_id}` ({size} bytes) to DataStore"
-                        );
-                        return VirtualValue::cached(key, schema);
-                    }
+        if self.spill_threshold > 0
+            && let Some(store) = &self.data_store
+        {
+            let size = value.size() * 8; // approximate bytes (f64 = 8 bytes)
+            if size >= self.spill_threshold {
+                let key = soma_core::cache::CacheKey::from_parts(&[
+                    self.run_id.as_bytes(),
+                    node_id.as_bytes(),
+                ]);
+                let vv_for_schema = VirtualValue::materialized(value.clone());
+                let schema = vv_for_schema.schema().clone();
+                if let Ok(_data_ref) = store.put(&key, &value) {
+                    tracing::debug!("spilled node `{node_id}` ({size} bytes) to DataStore");
+                    return VirtualValue::cached(key, schema);
                 }
             }
         }
@@ -214,50 +211,12 @@ impl Context {
     }
 }
 
-/// Registry of filter implementations, keyed by node ID.
-/// Wrapped in Arc for sharing across async tasks.
-pub struct FilterStore {
-    filters: HashMap<String, Arc<dyn Filter>>,
-    states: HashMap<String, Value>,
-}
-
-impl FilterStore {
-    pub fn new() -> Self {
-        Self {
-            filters: HashMap::new(),
-            states: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
-        self.filters.insert(node_id.into(), Arc::from(filter));
-    }
-
-    pub fn get(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
-        self.filters.get(node_id).cloned()
-    }
-
-    pub fn set_state(&mut self, node_id: impl Into<String>, state: Value) {
-        self.states.insert(node_id.into(), state);
-    }
-
-    pub fn get_state(&self, node_id: &str) -> Option<&Value> {
-        self.states.get(node_id)
-    }
-}
-
-impl Default for FilterStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Execute a compiled plan synchronously.
 /// For parallel branches, uses the async executor under the hood.
 pub fn execute(
     plan: &ExecutionPlan,
     ctx: &mut Context,
-    filters: &FilterStore,
+    filters: &FilterLibrary,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     match plan {
@@ -342,7 +301,8 @@ pub fn execute(
             let selected_arm = match &condition {
                 Value::Json(j) => {
                     // Try matching by string value, bool, or "branch" field
-                    let selector = j.as_str()
+                    let selector = j
+                        .as_str()
                         .map(String::from)
                         .or_else(|| j.as_bool().map(|b| b.to_string()))
                         .or_else(|| j.get("branch").and_then(|b| b.as_str()).map(String::from))
@@ -350,7 +310,10 @@ pub fn execute(
 
                     arms.iter()
                         .find(|(label, _)| label == &selector)
-                        .or_else(|| arms.iter().find(|(label, _)| label == "default" || label == "else"))
+                        .or_else(|| {
+                            arms.iter()
+                                .find(|(label, _)| label == "default" || label == "else")
+                        })
                         .or_else(|| arms.first())
                 }
                 _ => arms.first(),
@@ -402,7 +365,7 @@ pub fn execute(
 fn execute_node(
     node_id: &str,
     ctx: &mut Context,
-    filters: &FilterStore,
+    filters: &FilterLibrary,
     _cache: &dyn CacheStore,
 ) -> Result<()> {
     let start = Instant::now();
@@ -453,7 +416,7 @@ fn execute_node(
 fn execute_parallel(
     branches: &[ExecutionPlan],
     ctx: &mut Context,
-    filters: &FilterStore,
+    filters: &FilterLibrary,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     let snapshot_keys: Arc<std::collections::HashSet<String>> =
@@ -499,7 +462,9 @@ fn resolve_value(vv: &VirtualValue, data_store: &Option<Arc<dyn DataStore>>) -> 
         VirtualValue::Cached { key, .. } => {
             // Try to load from DataStore
             if let Some(store) = data_store {
-                let data_ref = soma_core::store::DataRef::Cached { cache_key: key.clone() };
+                let data_ref = soma_core::store::DataRef::Cached {
+                    cache_key: key.clone(),
+                };
                 store.get(&data_ref).ok()
             } else {
                 None
@@ -511,11 +476,13 @@ fn resolve_value(vv: &VirtualValue, data_store: &Option<Arc<dyn DataStore>>) -> 
 
 /// Resolve the input for a node from the context store using graph topology.
 /// If a predecessor was spilled to DataStore, loads it back.
-fn resolve_input(node_id: &str, ctx: &Context) -> Value {
+pub fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     let preds = ctx.graph_info.predecessors(node_id);
 
     let resolve_node = |id: &str| -> Option<Value> {
-        ctx.store.get(id).and_then(|vv| resolve_value(vv, &ctx.data_store))
+        ctx.store
+            .get(id)
+            .and_then(|vv| resolve_value(vv, &ctx.data_store))
     };
 
     match preds.len() {
@@ -543,7 +510,7 @@ mod tests {
     use super::*;
     use crate::cache::MemoryCache;
     use soma_core::cache::CacheKey;
-    use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
+    use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 
     struct DoublerFilter;
 
@@ -654,7 +621,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("doubler", vec!["input".into()]);
 
-        let mut filters = FilterStore::new();
+        let mut filters = FilterLibrary::new();
         filters.register("doubler", Box::new(DoublerFilter));
 
         let plan = ExecutionPlan::Execute {
@@ -677,7 +644,7 @@ mod tests {
         let graph_info = GraphInfo::for_linear(&["input", "add", "double"]);
         ctx.graph_info = graph_info;
 
-        let mut filters = FilterStore::new();
+        let mut filters = FilterLibrary::new();
         filters.register("add", Box::new(AdderFilter { amount: 10.0 }));
         filters.register("double", Box::new(DoublerFilter));
 
@@ -705,7 +672,7 @@ mod tests {
         cache.put(&key, &cached_value).unwrap();
 
         let mut ctx = Context::new(bus, "run_1");
-        let filters = FilterStore::new();
+        let filters = FilterLibrary::new();
 
         let plan = ExecutionPlan::Cached {
             node_id: "cached_node".into(),
@@ -727,7 +694,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("double", vec!["input".into()]);
 
-        let mut filters = FilterStore::new();
+        let mut filters = FilterLibrary::new();
         filters.register("double", Box::new(DoublerFilter));
 
         execute(
@@ -750,7 +717,7 @@ mod tests {
     fn execute_missing_filter_errors() {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
-        let filters = FilterStore::new();
+        let filters = FilterLibrary::new();
 
         let result = execute(
             &ExecutionPlan::Execute {
@@ -767,7 +734,7 @@ mod tests {
     fn execute_empty_plan() {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
-        let filters = FilterStore::new();
+        let filters = FilterLibrary::new();
         execute(&ExecutionPlan::Empty, &mut ctx, &filters, &cache).unwrap();
     }
 
@@ -780,7 +747,7 @@ mod tests {
             .set_predecessors("double", vec!["input".into()]);
         ctx.graph_info.set_predecessors("add", vec!["input".into()]);
 
-        let mut filters = FilterStore::new();
+        let mut filters = FilterLibrary::new();
         filters.register("double", Box::new(DoublerFilter));
         filters.register("add", Box::new(AdderFilter { amount: 100.0 }));
 
@@ -811,7 +778,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("slow_b", vec!["input".into()]);
 
-        let mut filters = FilterStore::new();
+        let mut filters = FilterLibrary::new();
         filters.register(
             "slow_a",
             Box::new(SlowFilter {

@@ -98,14 +98,14 @@ class TestStudy:
         assert best is not None
         assert best["metrics"]["f1"] > 0.3
 
-    def test_pipeline_search_space(self):
-        from soma import Pipeline, Filter, search
+    def test_search_descriptors(self):
+        from soma import Filter, search
 
         class SearchableFilter(Filter):
             lr: float = search(0.001, 0.1, scale="log")
             method: str = search(choices=["a", "b"])
 
-        pipeline = Pipeline([SearchableFilter(lr=0.01, method="a")])
-        # search_space() returns a list
-        space = pipeline.search_space()
+        f = SearchableFilter(lr=0.01, method="a")
+        space = f._soma_search_space
         assert isinstance(space, list)
+        assert len(space) == 2

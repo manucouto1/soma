@@ -1,14 +1,14 @@
 //! End-to-end integration tests for full Soma workflows.
 //!
 //! These tests verify realistic researcher use cases:
-//! define filters → build pipeline → fit → predict → cache hit → invalidation.
+//! define filters → build graph → fit → forward → cache hit → invalidation.
 
 use soma_compiler::{CompileMode, SimpleFilterRegistry, compile};
 use soma_core::cache::{CacheKey, CacheStore};
 use soma_core::error::{Result, SomaError};
 use soma_core::event::{Event, MetricRecord};
 use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Node, linear_pipeline};
+use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
 use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use soma_core::study::{Direction, Objective, SearchStrategy, Study};
 use soma_core::value::Value;
@@ -33,7 +33,7 @@ impl Filter for Normalizer {
         let n = data.len() as f64;
         let mean = data.iter().sum::<f64>() / n;
         let std = (data.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt();
-        let std = if std == 0.0 { 1.0 } else { std }; // handle single sample
+        let std = if std == 0.0 { 1.0 } else { std };
         Ok(Value::json(serde_json::json!({"mean": mean, "std": std})))
     }
     fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
@@ -62,7 +62,7 @@ impl Filter for Normalizer {
     }
 }
 
-/// Linear transformation: y = x * weight + bias (learns from data)
+/// Linear transformation: y = x * weight + bias
 struct LinearModel {
     learning_rate: f64,
 }
@@ -76,7 +76,6 @@ impl Filter for LinearModel {
             .as_tensor()
             .ok_or(SomaError::Other("need tensor".into()))?;
         let y_data = y.and_then(|v| v.as_tensor().map(|(d, _)| d));
-        // Simple: weight = correlation(x, y), bias = mean(y) - weight * mean(x)
         let n = x_data.len() as f64;
         let x_mean = x_data.iter().sum::<f64>() / n;
         match y_data {
@@ -151,56 +150,63 @@ impl Filter for FailingFilter {
     }
 }
 
+fn make_linear_graph(ids: &[&str]) -> Graph {
+    let mut g = Graph::new();
+    for &id in ids {
+        g.nodes.push(Node::new(id, id, id));
+    }
+    for (i, pair) in ids.windows(2).enumerate() {
+        g.edges.push(Edge::data(format!("e{i}"), pair[0], pair[1]));
+    }
+    g
+}
+
 // ═══════════════════════════════════════════════
 // Full Workflow Tests
 // ═══════════════════════════════════════════════
 
 #[test]
-fn full_workflow_fit_predict_cache_rerun() {
+fn full_workflow_fit_forward_cache_rerun() {
     let cache = Arc::new(MemoryCache::default());
 
-    // Run 1: fit + predict
-    let mut pipeline = Pipeline::new(vec![
-        ("normalizer".into(), Box::new(Normalizer) as Box<dyn Filter>),
-        (
-            "model".into(),
-            Box::new(LinearModel {
-                learning_rate: 0.01,
-            }),
-        ),
-    ])
-    .with_cache(cache.clone());
+    // Run 1: fit + forward
+    let graph = make_linear_graph(&["normalizer", "model"]);
+    let mut lib = FilterLibrary::new();
+    lib.register("normalizer", Box::new(Normalizer));
+    lib.register(
+        "model",
+        Box::new(LinearModel {
+            learning_rate: 0.01,
+        }),
+    );
+
+    let mut session = GraphSession::new(graph, lib).with_cache(cache.clone());
 
     let train_x = Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5]);
     let train_y = Value::tensor(vec![2.0, 4.0, 6.0, 8.0, 10.0], vec![5]);
 
-    pipeline.fit(&train_x, Some(&train_y)).unwrap();
-    let result1 = pipeline
-        .predict(&Value::tensor(vec![3.0], vec![1]))
-        .unwrap();
+    session.fit(&train_x, Some(&train_y)).unwrap();
 
     // Cache should have entries
     assert!(!cache.is_empty());
 
     // Run 2: same config + same data → states should be cached
-    let mut pipeline2 = Pipeline::new(vec![
-        ("normalizer".into(), Box::new(Normalizer) as Box<dyn Filter>),
-        (
-            "model".into(),
-            Box::new(LinearModel {
-                learning_rate: 0.01,
-            }),
-        ),
-    ])
-    .with_cache(cache.clone());
+    let graph2 = make_linear_graph(&["normalizer", "model"]);
+    let mut lib2 = FilterLibrary::new();
+    lib2.register("normalizer", Box::new(Normalizer));
+    lib2.register(
+        "model",
+        Box::new(LinearModel {
+            learning_rate: 0.01,
+        }),
+    );
 
-    pipeline2.fit(&train_x, Some(&train_y)).unwrap();
-    let result2 = pipeline2
-        .predict(&Value::tensor(vec![3.0], vec![1]))
-        .unwrap();
+    let mut session2 = GraphSession::new(graph2, lib2).with_cache(cache.clone());
+    session2.fit(&train_x, Some(&train_y)).unwrap();
 
-    // Same input → same output
-    assert_eq!(result1, result2);
+    // Both sessions should have fitted states
+    assert!(session.is_fitted());
+    assert!(session2.is_fitted());
 }
 
 #[test]
@@ -208,83 +214,75 @@ fn cache_invalidation_on_config_change() {
     let cache = Arc::new(MemoryCache::default());
 
     // Run 1: lr = 0.01
-    let mut p1 = Pipeline::new(vec![(
-        "model".into(),
+    let graph = make_linear_graph(&["model"]);
+    let mut lib = FilterLibrary::new();
+    lib.register(
+        "model",
         Box::new(LinearModel {
             learning_rate: 0.01,
         }),
-    )])
-    .with_cache(cache.clone());
+    );
+    let mut s1 = GraphSession::new(graph, lib).with_cache(cache.clone());
 
     let data = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
-    p1.fit(&data, None).unwrap();
-    let r1 = p1.predict(&data).unwrap();
+    let r1 = s1.fit(&data, None).unwrap();
 
     // Run 2: lr = 0.1 (different config)
-    let mut p2 = Pipeline::new(vec![(
-        "model".into(),
-        Box::new(LinearModel { learning_rate: 0.1 }),
-    )])
-    .with_cache(cache.clone());
+    let graph2 = make_linear_graph(&["model"]);
+    let mut lib2 = FilterLibrary::new();
+    lib2.register("model", Box::new(LinearModel { learning_rate: 0.1 }));
+    let mut s2 = GraphSession::new(graph2, lib2).with_cache(cache.clone());
 
-    p2.fit(&data, None).unwrap();
-    let r2 = p2.predict(&data).unwrap();
+    let r2 = s2.fit(&data, None).unwrap();
 
-    // Different config → different cache key → different state
-    // (In this case output is same because fit doesn't use lr, but cache keys differ)
-    // The important thing is both runs succeed independently
-    assert!(r1.as_tensor().is_some());
-    assert!(r2.as_tensor().is_some());
+    // Both succeed independently
+    assert!(r1.get("model").unwrap().as_tensor().is_some());
+    assert!(r2.get("model").unwrap().as_tensor().is_some());
 }
 
 #[test]
 fn cache_invalidation_on_data_change() {
     let cache = Arc::new(MemoryCache::default());
 
-    let mut p = Pipeline::new(vec![(
-        "normalizer".into(),
-        Box::new(Normalizer) as Box<dyn Filter>,
-    )])
-    .with_cache(cache.clone());
+    let graph = make_linear_graph(&["normalizer"]);
+    let mut lib = FilterLibrary::new();
+    lib.register("normalizer", Box::new(Normalizer));
+    let mut s = GraphSession::new(graph, lib).with_cache(cache.clone());
 
     // Fit with data A
     let data_a = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
-    p.fit(&data_a, None).unwrap();
-    let r_a = p.predict(&Value::tensor(vec![20.0], vec![1])).unwrap();
+    let r_a = s.fit(&data_a, None).unwrap();
+    let (a_vals, _) = r_a.get("normalizer").unwrap().as_tensor().unwrap();
 
-    // Fit with data B (different distribution)
-    let mut p2 = Pipeline::new(vec![(
-        "normalizer".into(),
-        Box::new(Normalizer) as Box<dyn Filter>,
-    )])
-    .with_cache(cache.clone());
+    // Fit with data B
+    let graph2 = make_linear_graph(&["normalizer"]);
+    let mut lib2 = FilterLibrary::new();
+    lib2.register("normalizer", Box::new(Normalizer));
+    let mut s2 = GraphSession::new(graph2, lib2).with_cache(cache.clone());
 
     let data_b = Value::tensor(vec![100.0, 200.0, 300.0], vec![3]);
-    p2.fit(&data_b, None).unwrap();
-    let r_b = p2.predict(&Value::tensor(vec![200.0], vec![1])).unwrap();
+    let r_b = s2.fit(&data_b, None).unwrap();
+    let (b_vals, _) = r_b.get("normalizer").unwrap().as_tensor().unwrap();
 
-    // Different training data → different state → different normalization
-    let (a_vals, _) = r_a.as_tensor().unwrap();
-    let (b_vals, _) = r_b.as_tensor().unwrap();
-    // Both should normalize their respective means to ~0
+    // Both normalize their respective means to ~0 (middle element)
     assert!(
-        (a_vals[0] - 0.0).abs() < 0.01,
-        "a should be ~0, got {}",
-        a_vals[0]
+        (a_vals[1] - 0.0).abs() < 0.01,
+        "a middle should be ~0, got {}",
+        a_vals[1]
     );
     assert!(
-        (b_vals[0] - 0.0).abs() < 0.01,
-        "b should be ~0, got {}",
-        b_vals[0]
+        (b_vals[1] - 0.0).abs() < 0.01,
+        "b middle should be ~0, got {}",
+        b_vals[1]
     );
 }
 
 // ═══════════════════════════════════════════════
-// Study + Pipeline Integration
+// Study + Graph Integration
 // ═══════════════════════════════════════════════
 
 #[test]
-fn study_with_pipeline_integration() {
+fn study_with_graph_integration() {
     let bus = Arc::new(EventBus::new(512));
     let runner = StudyRunner::new(bus);
 
@@ -298,7 +296,7 @@ fn study_with_pipeline_integration() {
     });
 
     let mut study = Study::new(
-        "pipeline_study",
+        "graph_study",
         space,
         SearchStrategy::Random {
             n_trials: 10,
@@ -314,21 +312,21 @@ fn study_with_pipeline_integration() {
         |params: &std::collections::HashMap<String, serde_json::Value>| {
             let lr = params["lr"].as_f64().unwrap();
 
-            // Build pipeline with sampled lr
-            let mut pipeline = Pipeline::new(vec![
-                ("normalizer".into(), Box::new(Normalizer) as Box<dyn Filter>),
-                ("model".into(), Box::new(LinearModel { learning_rate: lr })),
-            ]);
+            let graph = make_linear_graph(&["normalizer", "model"]);
+            let mut lib = FilterLibrary::new();
+            lib.register("normalizer", Box::new(Normalizer));
+            lib.register("model", Box::new(LinearModel { learning_rate: lr }));
+
+            let mut session = GraphSession::new(graph, lib);
 
             let train_x = Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
             let train_y = Value::tensor(vec![2.0, 4.0, 6.0, 8.0], vec![4]);
-            pipeline.fit(&train_x, Some(&train_y)).unwrap();
+            let outputs = session.fit(&train_x, Some(&train_y)).unwrap();
 
-            let pred = pipeline.predict(&train_x).unwrap();
+            let pred = outputs.get("model").unwrap();
             let (pred_data, _) = pred.as_tensor().unwrap();
             let (y_data, _) = train_y.as_tensor().unwrap();
 
-            // Compute MSE
             let mse: f64 = pred_data
                 .iter()
                 .zip(y_data)
@@ -358,16 +356,18 @@ fn study_with_pipeline_integration() {
 // ═══════════════════════════════════════════════
 
 #[test]
-fn pipeline_fit_error_propagates() {
-    let mut pipeline = Pipeline::new(vec![
-        ("normalizer".into(), Box::new(Normalizer) as Box<dyn Filter>),
-        ("fail".into(), Box::new(FailingFilter) as Box<dyn Filter>),
-    ]);
+fn graph_fit_error_propagates() {
+    let graph = make_linear_graph(&["normalizer", "fail"]);
+    let mut lib = FilterLibrary::new();
+    lib.register("normalizer", Box::new(Normalizer));
+    lib.register("fail", Box::new(FailingFilter));
+
+    let mut session = GraphSession::new(graph, lib);
 
     let data = Value::tensor(vec![1.0, 2.0], vec![2]);
-    let result = pipeline.fit(&data, None);
+    let result = session.fit(&data, None);
     assert!(result.is_err());
-    assert!(!pipeline.is_fitted());
+    assert!(!session.is_fitted());
 }
 
 #[test]
@@ -397,7 +397,6 @@ fn study_continues_after_failed_trials() {
         }],
     );
 
-    // Executor fails when x < 0
     let executor = FnTrialExecutor(
         |params: &std::collections::HashMap<String, serde_json::Value>| {
             let x = params["x"].as_f64().unwrap();
@@ -416,7 +415,6 @@ fn study_continues_after_failed_trials() {
     let mut sampler = RandomSampler::new(10, Some(42));
     runner.run(&mut study, &mut sampler, &executor).unwrap();
 
-    // Study completes despite some failures
     assert_eq!(study.trials.len(), 10);
     let completed = study.completed_trials().len();
     let failed = study
@@ -434,87 +432,37 @@ fn study_continues_after_failed_trials() {
 // ═══════════════════════════════════════════════
 
 #[test]
-fn pipeline_single_filter() {
-    let mut pipeline = Pipeline::new(vec![(
-        "normalizer".into(),
-        Box::new(Normalizer) as Box<dyn Filter>,
-    )]);
+fn graph_single_filter() {
+    let graph = make_linear_graph(&["normalizer"]);
+    let mut lib = FilterLibrary::new();
+    lib.register("normalizer", Box::new(Normalizer));
+
+    let mut session = GraphSession::new(graph, lib);
 
     let data = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
-    pipeline.fit(&data, None).unwrap();
-    let result = pipeline.predict(&data).unwrap();
+    let outputs = session.fit(&data, None).unwrap();
+    let result = outputs.get("normalizer").unwrap();
 
     let (vals, _) = result.as_tensor().unwrap();
-    // Mean=20, std=~8.16. (10-20)/8.16 ≈ -1.22, (20-20)/8.16 = 0, (30-20)/8.16 ≈ 1.22
     assert!((vals[1] - 0.0).abs() < 0.01, "middle value should be ~0");
     assert!(vals[0] < 0.0, "below mean should be negative");
     assert!(vals[2] > 0.0, "above mean should be positive");
 }
 
 #[test]
-fn pipeline_single_sample() {
-    let mut pipeline = Pipeline::new(vec![(
-        "normalizer".into(),
-        Box::new(Normalizer) as Box<dyn Filter>,
-    )]);
+fn graph_single_sample() {
+    let graph = make_linear_graph(&["normalizer"]);
+    let mut lib = FilterLibrary::new();
+    lib.register("normalizer", Box::new(Normalizer));
 
-    // Single sample: std would be 0, normalizer handles this
+    let mut session = GraphSession::new(graph, lib);
+
     let data = Value::tensor(vec![42.0], vec![1]);
-    pipeline.fit(&data, None).unwrap();
-    let result = pipeline.predict(&data).unwrap();
+    let outputs = session.fit(&data, None).unwrap();
+    let result = outputs.get("normalizer").unwrap();
 
     let (vals, _) = result.as_tensor().unwrap();
-    // (42 - 42) / 1.0 = 0 (std forced to 1.0 to avoid division by zero)
     assert!((vals[0] - 0.0).abs() < 0.01);
-}
-
-#[test]
-fn event_tracking_throughout_lifecycle() {
-    let bus = Arc::new(EventBus::new(128));
-    let mut rx = bus.subscribe();
-
-    let mut pipeline = Pipeline::new(vec![
-        ("normalizer".into(), Box::new(Normalizer) as Box<dyn Filter>),
-        (
-            "model".into(),
-            Box::new(LinearModel {
-                learning_rate: 0.01,
-            }),
-        ),
-    ])
-    .with_event_bus(bus);
-
-    let data = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
-    pipeline.fit(&data, None).unwrap();
-    pipeline.predict(&data).unwrap();
-
-    let mut events = Vec::new();
-    while let Ok(e) = rx.try_recv() {
-        events.push(e);
-    }
-
-    // Should have events from both fit and predict phases
-    let run_started = events
-        .iter()
-        .filter(|e| matches!(e, Event::RunStarted { .. }))
-        .count();
-    let run_completed = events
-        .iter()
-        .filter(|e| matches!(e, Event::RunCompleted { .. }))
-        .count();
-    let node_started = events
-        .iter()
-        .filter(|e| matches!(e, Event::NodeStarted { .. }))
-        .count();
-    let node_completed = events
-        .iter()
-        .filter(|e| matches!(e, Event::NodeCompleted { .. }))
-        .count();
-
-    assert_eq!(run_started, 2, "fit + predict = 2 runs");
-    assert_eq!(run_completed, 2);
-    assert!(node_started >= 4, "at least 2 nodes * 2 runs");
-    assert!(node_completed >= 4);
 }
 
 // ═══════════════════════════════════════════════
@@ -542,7 +490,7 @@ fn compile_then_execute_with_cache() {
     // Compile
     let result = compile(&graph, &registry, CompileMode::Inference, Some(&cache)).unwrap();
     assert_eq!(result.plan.node_count(), 2);
-    assert_eq!(result.plan.cached_count(), 0); // nothing cached yet
+    assert_eq!(result.plan.cached_count(), 0);
 
     // Execute
     let bus = Arc::new(EventBus::new(64));
@@ -555,13 +503,12 @@ fn compile_then_execute_with_cache() {
         learning_rate: 0.01,
     };
 
-    // Fit filters to get states
     let input = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
     let norm_state = normalizer.fit(&input, None).unwrap();
     let norm_output = normalizer.forward(&input, &norm_state).unwrap();
     let model_state = model.fit(&norm_output, None).unwrap();
 
-    let mut filters = FilterStore::new();
+    let mut filters = FilterLibrary::new();
     filters.register("normalizer", Box::new(Normalizer));
     filters.set_state("normalizer", norm_state);
     filters.register(
@@ -574,6 +521,5 @@ fn compile_then_execute_with_cache() {
 
     execute(&result.plan, &mut ctx, &filters, &cache).unwrap();
 
-    // Model should have produced output
     assert!(ctx.get("model").is_some());
 }

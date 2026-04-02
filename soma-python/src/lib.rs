@@ -1,4 +1,4 @@
-//! PyO3 bindings for Soma — exposes Pipeline, Study, and Filter to Python.
+//! PyO3 bindings for Soma — exposes Graph, Study, and Filter to Python.
 //!
 //! Bridges Python Filter classes to the Rust Filter trait, converts
 //! between Python lists/dicts and Soma Values, and wraps the StudyRunner
@@ -10,21 +10,21 @@ use pyo3::types::{IntoPyDict, PyDict, PyList};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use soma_compiler::CompileMode;
 use soma_core::cache::CacheKey;
 use soma_core::error::{Result as SomaResult, SomaError};
 use soma_core::event::MetricRecord;
 use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use soma_core::graph::{Edge, Graph, Node};
 use soma_core::search::{Scale, SearchDimension, SearchSpace};
 use soma_core::study::{Direction, Objective, SearchStrategy, Study};
 use soma_core::value::Value;
-use soma_compiler::CompileMode;
-use soma_core::graph::{Edge, Graph, Node};
+use soma_runtime::EventBus;
 use soma_runtime::cache::MemoryCache;
 use soma_runtime::filter_library::FilterLibrary;
 use soma_runtime::graph_session;
 use soma_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
 use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
-use soma_runtime::{EventBus, Pipeline};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -202,7 +202,9 @@ impl Filter for PyFilterBridge {
                 .getattr("_stream_mode")
                 .and_then(|v| v.extract::<String>())
                 .map(|s| match s.as_str() {
-                    "evolving" => StreamMode::Evolving { checkpoint_every: 100 },
+                    "evolving" => StreamMode::Evolving {
+                        checkpoint_every: 100,
+                    },
                     "barrier" => StreamMode::Barrier,
                     _ => StreamMode::FixedState,
                 })
@@ -292,100 +294,6 @@ fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<Sea
         _ => Err(PyRuntimeError::new_err(format!(
             "unknown search dim type: {dtype}"
         ))),
-    }
-}
-
-// ── PyPipeline ──
-
-#[pyclass(name = "Pipeline")]
-struct PyPipeline {
-    pipeline: Pipeline,
-}
-
-#[pymethods]
-impl PyPipeline {
-    #[new]
-    fn new(py: Python<'_>, filters: &Bound<'_, PyList>) -> PyResult<Self> {
-        let mut named_filters: Vec<(String, Box<dyn Filter>)> = Vec::new();
-        for (i, item) in filters.iter().enumerate() {
-            // Support both Pipeline([Filter()]) and Pipeline([("name", Filter())])
-            let (name, filter_obj) = if let Ok(tuple) = item.downcast::<pyo3::types::PyTuple>() {
-                if tuple.len() == 2 {
-                    let n = tuple.get_item(0)?.extract::<String>()?;
-                    let f = tuple.get_item(1)?;
-                    (n, f.to_owned())
-                } else {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        "Tuple filters must be (name, filter)"
-                    ));
-                }
-            } else {
-                // Auto-derive name from class name (snake_case)
-                let class_name = item
-                    .getattr("__class__")
-                    .and_then(|c| c.getattr("__name__"))
-                    .and_then(|n| n.extract::<String>())
-                    .unwrap_or_else(|_| format!("filter_{i}"));
-                // Convert CamelCase to snake_case
-                let snake = class_name.chars().enumerate().fold(String::new(), |mut s, (i, c)| {
-                    if c.is_uppercase() && i > 0 { s.push('_'); }
-                    s.push(c.to_ascii_lowercase());
-                    s
-                });
-                (snake, item.to_owned())
-            };
-            let bridge = PyFilterBridge::new(py, &filter_obj)?;
-            named_filters.push((name, Box::new(bridge)));
-        }
-        Ok(Self {
-            pipeline: Pipeline::new(named_filters),
-        })
-    }
-
-    #[pyo3(signature = (x, y=None))]
-    fn fit(
-        &mut self,
-        py: Python<'_>,
-        x: &Bound<'_, PyAny>,
-        y: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let x_val = py_to_value(py, x)?;
-        let y_val = match y {
-            Some(v) => Some(py_to_value(py, v)?),
-            None => None,
-        };
-        self.pipeline
-            .fit(&x_val, y_val.as_ref())
-            .map_err(soma_err_to_py)
-    }
-
-    fn predict(&self, py: Python<'_>, x: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        let x_val = py_to_value(py, x)?;
-        let result = self.pipeline.predict(&x_val).map_err(soma_err_to_py)?;
-        value_to_py(py, &result)
-    }
-
-    fn is_fitted(&self) -> bool {
-        self.pipeline.is_fitted()
-    }
-
-    fn filter_names(&self) -> Vec<String> {
-        self.pipeline
-            .filter_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    }
-
-    /// Get the aggregated search space from all filters as a list of dicts.
-    fn search_space(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Collect _soma_search_space from each filter's Python class
-        // (this is stored at the Pipeline level via the bridge)
-        // For now return the filter names that have search spaces
-        let result = PyList::empty(py);
-        // Pipeline doesn't currently track search spaces, return empty
-        // (search spaces are accessed via Filter class directly)
-        Ok(result.into_any().unbind())
     }
 }
 
@@ -644,7 +552,8 @@ impl PyGraph {
             node_id.clone()
         };
 
-        self.graph.add_node(Node::filter_with_id(&actual_id, &bridge.name));
+        self.graph
+            .add_node(Node::filter_with_id(&actual_id, &bridge.name));
         self.library.register(actual_id.clone(), Box::new(bridge));
 
         Ok(actual_id)
@@ -687,18 +596,16 @@ impl PyGraph {
     }
 
     /// Forward data through the compiled graph (inference mode).
-    fn predict(&self, py: Python<'_>, x: &Bound<'_, pyo3::types::PyAny>) -> PyResult<PyObject> {
+    fn forward(&self, py: Python<'_>, x: &Bound<'_, pyo3::types::PyAny>) -> PyResult<PyObject> {
         if !self.fitted {
-            return Err(PyRuntimeError::new_err("graph must be fitted before predict"));
+            return Err(PyRuntimeError::new_err(
+                "graph must be fitted before forward",
+            ));
         }
         let x_val = py_to_value(py, x)?;
-        let result = graph_session::graph_predict(
-            &self.graph,
-            &self.library,
-            &x_val,
-            self.cache.as_ref(),
-        )
-        .map_err(soma_err_to_py)?;
+        let result =
+            graph_session::graph_predict(&self.graph, &self.library, &x_val, self.cache.as_ref())
+                .map_err(soma_err_to_py)?;
         value_to_py(py, &result)
     }
 
@@ -764,25 +671,29 @@ impl PyGraph {
     fn __repr__(&self) -> String {
         let n = self.graph.nodes.len();
         let e = self.graph.edges.len();
-        format!("Graph({n} nodes, {e} edges, fitted={fitted})", fitted = self.fitted)
+        format!(
+            "Graph({n} nodes, {e} edges, fitted={fitted})",
+            fitted = self.fitted
+        )
     }
 }
 
 fn to_snake_case(name: &str) -> String {
-    name.chars().enumerate().fold(String::new(), |mut s, (i, c)| {
-        if c.is_uppercase() && i > 0 {
-            s.push('_');
-        }
-        s.push(c.to_ascii_lowercase());
-        s
-    })
+    name.chars()
+        .enumerate()
+        .fold(String::new(), |mut s, (i, c)| {
+            if c.is_uppercase() && i > 0 {
+                s.push('_');
+            }
+            s.push(c.to_ascii_lowercase());
+            s
+        })
 }
 
 // ── Module ──
 
 #[pymodule]
 fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyPipeline>()?;
     m.add_class::<PyGraph>()?;
     m.add_class::<PyStudy>()?;
     m.add("__version__", "0.1.0")?;
