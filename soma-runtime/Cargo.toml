@@ -8,8 +8,8 @@ repository.workspace = true
 description = "Execution engine for the Soma computational graph runtime"
 
 [dependencies]
-soma-core = { version = "0.2.2", path = "../soma-core" }
-soma-compiler = { version = "0.2.2", path = "../soma-compiler" }
+soma-core = { version = "0.2.3", path = "../soma-core" }
+soma-compiler = { version = "0.2.3", path = "../soma-compiler" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
