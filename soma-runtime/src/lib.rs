@@ -12,6 +12,8 @@
 pub mod cache;
 pub mod event_bus;
 pub mod executor;
+pub mod filter_library;
+pub mod graph_session;
 pub mod pipeline;
 pub mod pruner;
 pub mod sampler;
@@ -21,6 +23,8 @@ pub mod study_runner;
 pub use cache::{LocalCache, MemoryCache, TieredCache};
 pub use event_bus::EventBus;
 pub use executor::{Context, FilterStore, GraphInfo, RemoteExecutor, execute};
+pub use filter_library::FilterLibrary;
+pub use graph_session::{graph_fit, graph_predict, graph_run};
 pub use pipeline::Pipeline;
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
