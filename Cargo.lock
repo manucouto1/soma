@@ -2774,7 +2774,7 @@ dependencies = [
 
 [[package]]
 name = "soma"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "soma-agent",
  "soma-compiler",
@@ -2787,7 +2787,7 @@ dependencies = [
 
 [[package]]
 name = "soma-agent"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "proptest",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "soma-compiler"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "proptest",
  "serde",
@@ -2813,7 +2813,7 @@ dependencies = [
 
 [[package]]
 name = "soma-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "object_store",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "soma-macros"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "soma-mcp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "proptest",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "soma-memory"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "chronos-vector",
@@ -2870,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "soma-python"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "numpy",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "soma-runtime"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "proptest",
@@ -2901,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "soma-worker"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "axum",
  "chrono",

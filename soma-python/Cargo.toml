@@ -11,9 +11,9 @@ name = "_soma"
 crate-type = ["cdylib"]
 
 [dependencies]
-soma-core = { version = "0.2.4", path = "../soma-core" }
-soma-compiler = { version = "0.2.4", path = "../soma-compiler" }
-soma-runtime = { version = "0.2.4", path = "../soma-runtime" }
+soma-core = { version = "0.2.5", path = "../soma-core" }
+soma-compiler = { version = "0.2.5", path = "../soma-compiler" }
+soma-runtime = { version = "0.2.5", path = "../soma-runtime" }
 pyo3 = { workspace = true }
 numpy = { workspace = true }
 serde = { workspace = true }
