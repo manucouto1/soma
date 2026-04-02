@@ -63,13 +63,13 @@ async fn cli_starts_and_responds_to_health() {
     let mut started = false;
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        if let Ok(resp) = client.get(&url).send().await {
-            if resp.status().is_success() {
-                let text = resp.text().await.unwrap_or_default();
-                assert_eq!(text, "ok");
-                started = true;
-                break;
-            }
+        if let Ok(resp) = client.get(&url).send().await
+            && resp.status().is_success()
+        {
+            let text = resp.text().await.unwrap_or_default();
+            assert_eq!(text, "ok");
+            started = true;
+            break;
         }
     }
 

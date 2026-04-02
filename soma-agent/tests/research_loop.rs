@@ -64,7 +64,7 @@ fn agent_runs_research_loop() {
 
     // Knowledge base should have records
     let kb = agent.knowledge_base();
-    assert!(kb.len() > 0);
+    assert!(!kb.is_empty());
     assert!(!kb.research_lines().unwrap().is_empty());
 }
 

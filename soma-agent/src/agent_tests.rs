@@ -3,6 +3,7 @@ mod tests {
     use crate::action::Action;
     use crate::agent::Agent;
     use crate::planner::SimpleResearchPlan;
+    #[allow(unused_imports)]
     use soma_memory::{ExperimentRecord, KnowledgeBase, MemoryKnowledgeBase};
     use std::collections::HashMap;
 

@@ -279,7 +279,7 @@ mod tests {
         fn forward(&self, x: &Value, _: &Value) -> Result<Value> {
             // For barrier: receives concatenated tensor, computes mean
             match x {
-                Value::Tensor { values, shape } => {
+                Value::Tensor { values, shape: _ } => {
                     let mean = values.iter().sum::<f64>() / values.len() as f64;
                     Ok(Value::tensor(vec![mean], vec![1]))
                 }

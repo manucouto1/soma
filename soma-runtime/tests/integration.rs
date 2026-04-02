@@ -4,9 +4,9 @@
 //! define filters → build graph → fit → forward → cache hit → invalidation.
 
 use soma_compiler::{CompileMode, SimpleFilterRegistry, compile};
-use soma_core::cache::{CacheKey, CacheStore};
+use soma_core::cache::CacheKey;
 use soma_core::error::{Result, SomaError};
-use soma_core::event::{Event, MetricRecord};
+use soma_core::event::MetricRecord;
 use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
 use soma_core::search::{Scale, SearchDimension, SearchSpace};

@@ -291,8 +291,6 @@ mod tests {
     #[test]
     fn resolve_materialized_stays_materialized() {
         use crate::cache::CacheStore;
-        use std::collections::HashMap;
-        use std::sync::Mutex;
 
         // Simple mock cache
         struct EmptyCache;

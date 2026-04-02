@@ -136,8 +136,8 @@ mod tests {
         let plan = SimpleResearchPlan::new(HashMap::new(), "x", vec![json!(1), json!(2), json!(3)]);
 
         let a1 = plan.initial_action("test").unwrap();
-        let a2 = plan.initial_action("test").unwrap();
-        let a3 = plan.initial_action("test").unwrap();
+        let _a2 = plan.initial_action("test").unwrap();
+        let _a3 = plan.initial_action("test").unwrap();
         let a4 = plan.initial_action("test").unwrap(); // wraps around
 
         // All should be RunExperiment with different values

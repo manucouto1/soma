@@ -1,6 +1,6 @@
-use soma_compiler::{CompileMode, ExecutionPlan, SimpleFilterRegistry, compile};
+use soma_compiler::{CompileMode, SimpleFilterRegistry, compile};
 use soma_core::cache::{CacheKey, CacheStore, EntryMeta};
-use soma_core::error::{Result, SomaError};
+use soma_core::error::Result;
 use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
 use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
 use soma_core::schema::{DataType, Schema};
