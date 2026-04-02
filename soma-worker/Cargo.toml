@@ -8,9 +8,9 @@ repository.workspace = true
 description = "Worker daemon for distributed execution in the Soma runtime"
 
 [dependencies]
-soma-core = { version = "0.2.1", path = "../soma-core" }
-soma-compiler = { version = "0.2.1", path = "../soma-compiler" }
-soma-runtime = { version = "0.2.1", path = "../soma-runtime" }
+soma-core = { version = "0.2.2", path = "../soma-core" }
+soma-compiler = { version = "0.2.2", path = "../soma-compiler" }
+soma-runtime = { version = "0.2.2", path = "../soma-runtime" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
