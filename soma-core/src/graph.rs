@@ -4,6 +4,7 @@
 //! It gets compiled into an [`ExecutionPlan`] by the compiler.
 
 use crate::error::{Result, SomaError};
+use crate::strategy::TrainingStrategy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -172,6 +173,10 @@ impl Edge {
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Training strategy for distributed execution.
+    /// Inherited by subgraphs unless overridden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_strategy: Option<TrainingStrategy>,
 }
 
 impl Graph {
@@ -179,7 +184,25 @@ impl Graph {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
+            training_strategy: None,
         }
+    }
+
+    /// Set the training strategy for this graph.
+    pub fn with_strategy(mut self, strategy: TrainingStrategy) -> Self {
+        self.training_strategy = Some(strategy);
+        self
+    }
+
+    /// Set the training strategy (mutable).
+    pub fn set_strategy(&mut self, strategy: TrainingStrategy) {
+        self.training_strategy = Some(strategy);
+    }
+
+    /// Get the effective training strategy (defaults to Local).
+    pub fn effective_strategy(&self) -> &TrainingStrategy {
+        static LOCAL: TrainingStrategy = TrainingStrategy::Local;
+        self.training_strategy.as_ref().unwrap_or(&LOCAL)
     }
 
     pub fn add_node(&mut self, node: Node) {

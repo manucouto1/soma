@@ -17,6 +17,7 @@ pub mod graph;
 pub mod schema;
 pub mod search;
 pub mod store;
+pub mod strategy;
 pub mod study;
 pub mod util;
 pub mod value;
@@ -37,6 +38,10 @@ pub use store::ZarrStore;
 pub use store::{
     DataRef, DataStore, LocalDataStore, StorageConfig, StoreMeta, StreamCache, StreamFormat,
     slice_tensor_rows,
+};
+pub use strategy::{
+    ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy, FederatedAggregation,
+    GradientAggregation, Partition, TrainingStrategy,
 };
 pub use study::{Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState};
 pub use value::Value;
