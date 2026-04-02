@@ -6,7 +6,7 @@ description: Python API reference for the Soma package.
 ## Installation
 
 ```bash
-pip install soma
+pip install somatize
 ```
 
 ## Core Classes

@@ -3,13 +3,13 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "soma"
+name = "somatize"
 dynamic = ["version"]
 description = "A computational graph runtime for research pipelines, agent orchestration, and data virtualization"
 requires-python = ">=3.9"
 license = { text = "Elastic-2.0" }
 readme = "../README.md"
-keywords = ["pipeline", "ml", "optimization", "caching", "agents"]
+keywords = ["graph", "ml", "optimization", "caching", "agents", "distributed"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
