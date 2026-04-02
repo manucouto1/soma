@@ -13,7 +13,7 @@ pip install soma
 
 ### Filter
 
-Base class for pipeline nodes. Subclass to define custom transformations.
+Base class for computational nodes. Subclass to define custom transformations.
 
 ```python
 from soma import Filter, search
@@ -37,6 +37,9 @@ class MyScaler(Filter):
 |--------|-----------|-------------|
 | `fit` | `(x, y=None) -> dict` | Learn internal state from training data |
 | `forward` | `(x, state) -> list` | Transform data using learned state |
+| `to` | `(other) -> Chain` | Chain this filter to another (fluent builder) |
+| `>>` | `filter >> other` | Chain operator (same as `.to()`) |
+| `\|` | `filter \| other` | Fork operator (parallel branches) |
 
 #### Search Descriptors
 
@@ -46,31 +49,119 @@ Use `search()` to define hyperparameter search spaces:
 scale: float = search(0.1, 10.0, scale="log")      # Float range
 epochs: int = search(10, 100)                        # Integer range
 method: str = search(choices=["a", "b", "c"])        # Categorical
-enabled: bool = search()                             # Auto: [True, False]
 ```
 
-### Pipeline
+### Graph
 
-Compose filters into a sequential pipeline with automatic caching.
+The primary API for Soma. A computational DAG of filter nodes.
+
+#### Construction
 
 ```python
-from soma import Pipeline
+from soma import Graph, Filter
 
-pipeline = Pipeline([MyScaler(scale=2.0), MyClassifier(C=1.0)])
-pipeline.fit(x_train, y_train)
-result = pipeline.predict(x_test)
+class Scaler(Filter):
+    def forward(self, x, state):
+        return [v * 2 for v in x]
+
+class Model(Filter):
+    def fit(self, x, y=None):
+        return {"w": 1.0}
+    def forward(self, x, state):
+        return [v * state["w"] for v in x]
+
+# Method 1: Fluent builder with Graph.somatize()
+g = Graph.somatize(Scaler() >> Model())
+
+# Method 2: Manual construction
+g = Graph()
+g.node(Scaler())
+g.node(Model())
+g.connect("scaler", "model")
+```
+
+#### Fluent Operators
+
+```python
+# >> chains filters linearly
+g = Graph.somatize(Scaler() >> PCA() >> Model())
+
+# | creates parallel branches
+g = Graph.somatize(
+    Scaler() >> (HeadA() | HeadB()) >> Ensemble()
+)
+
+# Nested branches with long chains
+g = Graph.somatize(
+    (LoadA() >> NormA() | LoadB() >> NormB())
+    >> Aggregate()
+    >> Backbone()
+    >> (ClassA() | ClassB())
+)
+
+# .to() / .collect() method syntax
+g = Graph.somatize(
+    Scaler().to([
+        PCA() >> ClassA(),
+        UMAP() >> ClassB(),
+    ]).collect(Ensemble())
+)
 ```
 
 #### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `__init__` | `(filters: list[Filter])` | Create pipeline from filter instances |
-| `fit` | `(x, y=None)` | Train all filters sequentially |
-| `predict` | `(x) -> list` | Forward data through fitted pipeline |
-| `is_fitted` | `() -> bool` | Whether pipeline has been fitted |
-| `filter_names` | `() -> list[str]` | Names of filters in order |
-| `search_space` | `() -> list` | Aggregated search space |
+| `somatize` | `(topology) -> Graph` | Class method. Materialize a Chain/Fork into a graph |
+| `node` | `(filter) -> str` | Add a filter node, returns node ID |
+| `edge` / `connect` | `(source, target)` | Connect two nodes with a data edge |
+| `fit` | `(x, y=None)` | Fit all trainable filters in topological order |
+| `forward` | `(x) -> list` | Forward data through fitted graph |
+| `run` | `() -> dict` | Compile and execute, return all outputs |
+| `compile` | `(mode="inference") -> dict` | Compile and return diagnostics |
+| `to_mermaid` | `() -> str` | Render graph as Mermaid diagram |
+| `to_graphviz` | `() -> str` | Render graph as Graphviz DOT |
+| `to_text` | `() -> str` | Render graph as ASCII tree |
+| `on_event` | `(callback)` | Register event callback (background thread) |
+| `set_strategy` | `(strategy)` | Set training strategy (from soma-core) |
+| `add_worker` | `(address, token?, tags?)` | Add a remote worker |
+| `set_coordinator` | `(url, token?)` | Set coordinator for auto-discovery |
+| `workers` | `() -> list[dict]` | List known workers |
+
+#### Compile Modes
+
+```python
+info = g.compile("inference")       # Full caching
+info = g.compile("differentiable")  # Cache states, re-execute forwards
+info = g.compile("no_cache")        # Force re-execution
+# Returns: {total_nodes, cached_nodes, parallel_branches, diagnostics, plan_text, plan_mermaid}
+```
+
+#### Events
+
+```python
+def on_event(event):
+    print(event["event_type"], event.get("node_id", ""))
+
+g.on_event(on_event)
+g.fit(data)
+# Events: NodeStarted, NodeCompleted, NodeCacheHit, NodeFailed, ...
+```
+
+#### Workers
+
+```python
+# Mode B: Direct workers
+g.add_worker("ws://gpu-0:8080", token="sk-xxx", tags=["gpu"])
+g.add_worker("ws://cpu-0:8080", tags=["cpu"])
+
+# Mode C: Coordinator auto-discovery
+g.set_coordinator("http://coord:9090", token="sk-xxx")
+
+# List all workers
+for w in g.workers():
+    print(w["address"], w["tags"])
+```
 
 ### Study
 
@@ -93,37 +184,15 @@ study = Study(
 
 def executor(params):
     """Execute one trial. Returns dict of metric_name -> value."""
-    # Build and run pipeline with params...
-    return {"f1": 0.85}
+    g = Graph.somatize(Scaler() >> Model(lr=params["lr"]))
+    g.fit(train_data)
+    outputs = g.forward(test_data)
+    return {"f1": compute_f1(outputs)}
 
 study.run(executor)
 print(study.best_trial)     # {"id": "...", "params": {...}, "metrics": {...}}
 print(study.n_trials)       # 50
 print(study.progress)       # 1.0
-```
-
-#### Constructor
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | `str` | Study name |
-| `search_space` | `list[dict]` | List of dimension dicts |
-| `strategy` | `str` | `"grid"`, `"random"`, or `"bayesian"` |
-| `n_trials` | `int` | Number of trials |
-| `objectives` | `list[tuple]` | `[(metric_name, "maximize"\|"minimize")]` |
-| `seed` | `int\|None` | Random seed for reproducibility |
-
-#### Search Space Dimensions
-
-```python
-# Float
-{"type": "float", "name": "lr", "low": 0.001, "high": 0.1, "scale": "log"}
-
-# Integer
-{"type": "int", "name": "epochs", "low": 10, "high": 100}
-
-# Categorical
-{"type": "categorical", "name": "kernel", "choices": ["rbf", "linear"]}
 ```
 
 ### Lab
@@ -133,10 +202,9 @@ Connect to a remote Soma worker.
 ```python
 from soma import Lab
 
-lab = Lab.connect("http://localhost:3000")
+lab = Lab.connect("http://localhost:8080")
 lab.health()        # "ok"
 lab.info()          # Worker capabilities dict
-lab.workers()       # List of available workers
 ```
 
 ## Rust API
@@ -149,6 +217,6 @@ Key crates:
 - [`soma_core`](/api/soma_core/) — Types, traits, enums
 - [`soma_compiler`](/api/soma_compiler/) — Graph compilation
 - [`soma_runtime`](/api/soma_runtime/) — Execution engine
+- [`soma_worker`](/api/soma_worker/) — Worker daemon + coordinator
 - [`soma_memory`](/api/soma_memory/) — Knowledge base
 - [`soma_agent`](/api/soma_agent/) — Research agent
-- [`soma_worker`](/api/soma_worker/) — Worker daemon

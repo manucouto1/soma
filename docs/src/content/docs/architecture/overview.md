@@ -11,7 +11,7 @@ Soma is organized in three conceptual layers, each with clear responsibilities:
 ┌─────────────────────────────────────────────────────┐
 │  Layer 3: PLATFORM                                   │
 │  Agents, knowledge base, visual graph editor         │
-│  Pipelines become nodes in orchestration graphs      │
+│  Graphs become nodes in orchestration graphs          │
 ├─────────────────────────────────────────────────────┤
 │  Layer 2: COMPILER + PLANNER                        │
 │  Graph → ExecutionPlan                              │
@@ -47,10 +47,10 @@ The intelligence layer. Converts a user-defined `Graph` into an optimized `Execu
 
 ### Layer 3: Platform (Future)
 
-The orchestration layer. Enables visual composition of pipelines and agents:
+The orchestration layer. Enables visual composition of graphs and agents:
 
-- **Pipeline publishing**: A compiled pipeline becomes a node in the platform graph
-- **Agent integration**: Autonomous agents build, execute, and analyze pipelines
+- **Graph publishing**: A compiled graph becomes a node in the platform orchestration layer
+- **Agent integration**: Autonomous agents build, execute, and analyze graphs
 - **Knowledge base**: ChronosVector-powered temporal experiment tracking
 - **Workers**: Remote execution with configurable infrastructure
 
@@ -89,34 +89,38 @@ User defines Graph (code or visual)
 
 ## Execution Modes
 
-Soma supports three execution modes, all using the same pipeline definition:
+Soma supports three execution modes, all using the same graph definition:
 
 ### Local Execution
 
 ```python
-pipeline = Pipeline([MyScaler(), MyClassifier()])
-pipeline.fit(x_train, y_train)
-result = pipeline.predict(x_test)
+g = Graph.somatize(Scaler() >> Model())
+g.fit(train_data)
+result = g.forward(test_data)
 ```
 
-The runtime compiles and executes the pipeline in the current process. Cache is local (memory + disk).
+The runtime compiles and executes the graph in the current process. Cache is local (memory + disk).
 
 ### Remote Execution
 
 ```python
-lab = soma.connect("https://my-lab.soma.dev")
-result = lab.run(pipeline, data=x_train)
+g = Graph.somatize(Scaler() >> Model())
+g.add_worker("ws://gpu-0:8080", token="sk-xxx")
+g.set_strategy(DataParallel(num_replicas=2))
+g.fit(train_data)
 ```
 
-The pipeline is serialized (filters + config + plan), sent to a worker, executed remotely, and results returned. Cache can be shared (S3) across workers.
+The graph is compiled locally, the plan is sent to workers, executed remotely, and results returned. Cache can be shared (S3) across workers.
 
-### Platform Execution (Future)
+### Coordinator Execution
 
 ```python
-lab.publish(pipeline, name="my_experiment")
+g = Graph.somatize(Scaler() >> Model())
+g.set_coordinator("http://coord:9090", token="sk-xxx")
+g.fit(train_data)  # coordinator routes to available workers
 ```
 
-The pipeline becomes a node in the platform's visual graph editor, where it can be connected with agents and other pipelines in an orchestration graph.
+Workers self-register with the coordinator. The client submits plans and the coordinator routes to the best available worker based on tags, capacity, and strategy.
 
 ## Type System
 
@@ -135,7 +139,7 @@ enum Value {
 
 // Events emitted during execution
 enum Event {
-    // Pipeline level (per-run)
+    // Run level (per-execution)
     RunStarted { .. }, NodeStarted { .. }, NodeCompleted { .. }, ..
     // Trial level (per-hyperparameter evaluation)
     TrialStarted { .. }, TrialMetric { .. }, TrialPruned { .. }, ..

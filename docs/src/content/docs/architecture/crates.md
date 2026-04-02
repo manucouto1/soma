@@ -154,14 +154,13 @@ PyO3 bindings. Exposes the full API to Python.
 
 ```
 soma-python/
-├── src/lib.rs              # PyO3 module definition
+├── src/lib.rs              # PyO3 module definition (PyGraph, PyStudy, PyFilterBridge)
 ├── python/soma/
-│   ├── __init__.py         # re-exports
-│   ├── filter.py           # Filter base class with search() descriptors
-│   ├── pipeline.py         # Pipeline composition
-│   ├── study.py            # Study / Trial
+│   ├── __init__.py         # re-exports, Graph.somatize() classmethod
+│   ├── filter.py           # Filter base class with search(), >>, | operators
+│   ├── chain.py            # Chain/Fork lazy builder types
+│   ├── builder.py          # Graph materialization (_walk algorithm)
 │   ├── search.py           # search() descriptor for Python filters
-│   ├── value.py            # Value wrappers
 │   └── lab.py              # Remote connection
 ├── pyproject.toml          # maturin build config
 └── Cargo.toml
