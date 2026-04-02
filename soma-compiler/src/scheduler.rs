@@ -9,7 +9,6 @@
 
 use crate::ExecutionPlan;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A worker's capabilities and current load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,79 +83,78 @@ pub struct DataTransfer {
     pub transfer_type: String, // "s3", "direct", "cached"
 }
 
+/// Mutable state accumulated during scheduling.
+struct ScheduleState<'a> {
+    workers: Vec<&'a WorkerInfo>,
+    diff_nodes: &'a [String],
+    assignments: Vec<Assignment>,
+    phases: Vec<PlanPhase>,
+    transfers: Vec<DataTransfer>,
+    warnings: Vec<String>,
+    phase_index: usize,
+}
+
 /// Schedule an execution plan across available workers.
 pub fn schedule(
     plan: &ExecutionPlan,
     workers: &[WorkerInfo],
     differentiable_nodes: &[String],
 ) -> DistributionPlan {
-    let mut assignments = Vec::new();
-    let mut phases = Vec::new();
-    let mut data_transfers = Vec::new();
-    let mut warnings = Vec::new();
+    let mut state = ScheduleState {
+        workers: Vec::new(),
+        diff_nodes: differentiable_nodes,
+        assignments: Vec::new(),
+        phases: Vec::new(),
+        transfers: Vec::new(),
+        warnings: Vec::new(),
+        phase_index: 0,
+    };
 
     if workers.is_empty() {
-        warnings.push("No workers available — will execute locally".into());
+        state.warnings.push("No workers available — will execute locally".into());
         return DistributionPlan {
-            assignments,
-            phases,
-            data_transfers,
-            warnings,
+            assignments: state.assignments,
+            phases: state.phases,
+            data_transfers: state.transfers,
+            warnings: state.warnings,
         };
     }
 
-    let available: Vec<&WorkerInfo> = workers.iter().filter(|w| w.has_capacity()).collect();
-    if available.is_empty() {
-        warnings.push("All workers are at capacity".into());
+    state.workers = workers.iter().filter(|w| w.has_capacity()).collect();
+    if state.workers.is_empty() {
+        state.warnings.push("All workers are at capacity".into());
         return DistributionPlan {
-            assignments,
-            phases,
-            data_transfers,
-            warnings,
+            assignments: state.assignments,
+            phases: state.phases,
+            data_transfers: state.transfers,
+            warnings: state.warnings,
         };
     }
 
-    let mut phase_index = 0;
-    schedule_plan(
-        plan,
-        &available,
-        differentiable_nodes,
-        &mut assignments,
-        &mut phases,
-        &mut data_transfers,
-        &mut warnings,
-        &mut phase_index,
-        None, // no forced worker
-    );
+    schedule_plan(plan, &mut state, None);
 
     DistributionPlan {
-        assignments,
-        phases,
-        data_transfers,
-        warnings,
+        assignments: state.assignments,
+        phases: state.phases,
+        data_transfers: state.transfers,
+        warnings: state.warnings,
     }
 }
 
 fn schedule_plan(
     plan: &ExecutionPlan,
-    workers: &[&WorkerInfo],
-    diff_nodes: &[String],
-    assignments: &mut Vec<Assignment>,
-    phases: &mut Vec<PlanPhase>,
-    transfers: &mut Vec<DataTransfer>,
-    warnings: &mut Vec<String>,
-    phase_index: &mut usize,
+    state: &mut ScheduleState<'_>,
     forced_worker: Option<&str>,
 ) {
     match plan {
         ExecutionPlan::Execute { node_id } => {
             let worker = if let Some(fw) = forced_worker {
-                workers.iter().find(|w| w.id == fw).unwrap_or(&workers[0])
+                state.workers.iter().find(|w| w.id == fw).unwrap_or(&state.workers[0])
             } else {
-                pick_worker(workers, node_id, diff_nodes, assignments)
+                least_loaded(&state.workers)
             };
 
-            assignments.push(Assignment {
+            state.assignments.push(Assignment {
                 node_id: node_id.clone(),
                 worker_id: worker.id.clone(),
                 worker_name: worker.name.clone(),
@@ -170,84 +168,68 @@ fn schedule_plan(
         }
 
         ExecutionPlan::Sequence(steps) => {
-            // Sequential: all on the same worker to avoid data transfer
             let worker = forced_worker
-                .and_then(|fw| workers.iter().find(|w| w.id == fw).copied())
-                .unwrap_or_else(|| least_loaded(workers));
+                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
+                .unwrap_or_else(|| least_loaded(&state.workers));
 
-            let node_ids: Vec<String> = collect_node_ids(plan);
-
-            // Check if any nodes in the sequence are differentiable
-            // If so, keep them together on the same worker
-            let has_diff = node_ids.iter().any(|n| diff_nodes.contains(n));
+            let node_ids = collect_node_ids(plan);
+            let has_diff = node_ids.iter().any(|n| state.diff_nodes.contains(n));
             let force = if has_diff { Some(worker.id.as_str()) } else { forced_worker };
 
-            phases.push(PlanPhase {
-                phase_index: *phase_index,
+            state.phases.push(PlanPhase {
+                phase_index: state.phase_index,
                 phase_type: Phase::Sequential,
                 node_ids: node_ids.clone(),
                 worker_ids: vec![worker.id.clone()],
             });
-            *phase_index += 1;
+            state.phase_index += 1;
 
             for step in steps {
-                schedule_plan(step, workers, diff_nodes, assignments, phases, transfers, warnings, phase_index, force);
+                schedule_plan(step, state, force);
             }
         }
 
         ExecutionPlan::Parallel(branches) => {
-            // Parallel: distribute branches across workers
-            let branch_ids: Vec<Vec<String>> = branches.iter().map(|b| collect_node_ids(b)).collect();
+            let branch_ids: Vec<Vec<String>> = branches.iter().map(collect_node_ids).collect();
             let mut assigned_workers = Vec::new();
 
             for (i, branch) in branches.iter().enumerate() {
-                let worker_idx = i % workers.len();
-                let worker = workers[worker_idx];
+                let worker_idx = i % state.workers.len();
+                let worker = state.workers[worker_idx];
                 assigned_workers.push(worker.id.clone());
 
-                schedule_plan(
-                    branch,
-                    workers,
-                    diff_nodes,
-                    assignments,
-                    phases,
-                    transfers,
-                    warnings,
-                    phase_index,
-                    Some(&worker.id),
-                );
+                let worker_id = worker.id.clone();
+                schedule_plan(branch, state, Some(&worker_id));
 
                 // Check if data transfer is needed from previous phase
-                if let Some(prev_assignment) = assignments.iter().rev()
+                if let Some(prev) = state.assignments.iter().rev()
                     .find(|a| !branch_ids[i].contains(&a.node_id))
+                    .filter(|prev| prev.worker_id != state.workers[worker_idx].id)
                 {
-                    if prev_assignment.worker_id != worker.id {
-                        transfers.push(DataTransfer {
-                            from_node: prev_assignment.node_id.clone(),
-                            to_node: branch_ids[i].first().cloned().unwrap_or_default(),
-                            from_worker: prev_assignment.worker_id.clone(),
-                            to_worker: worker.id.clone(),
-                            transfer_type: "s3".into(),
-                        });
-                    }
+                    state.transfers.push(DataTransfer {
+                        from_node: prev.node_id.clone(),
+                        to_node: branch_ids[i].first().cloned().unwrap_or_default(),
+                        from_worker: prev.worker_id.clone(),
+                        to_worker: state.workers[worker_idx].id.clone(),
+                        transfer_type: "s3".into(),
+                    });
                 }
             }
 
-            phases.push(PlanPhase {
-                phase_index: *phase_index,
+            state.phases.push(PlanPhase {
+                phase_index: state.phase_index,
                 phase_type: Phase::Parallel,
                 node_ids: branch_ids.into_iter().flatten().collect(),
                 worker_ids: assigned_workers,
             });
-            *phase_index += 1;
+            state.phase_index += 1;
         }
 
         ExecutionPlan::Cached { node_id, .. } => {
-            // Cached: assigned to a worker but will skip execution
             let worker = forced_worker
-                .and_then(|fw| workers.iter().find(|w| w.id == fw).copied())
-                .unwrap_or_else(|| least_loaded(workers));
-            assignments.push(Assignment {
+                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
+                .unwrap_or_else(|| least_loaded(&state.workers));
+            state.assignments.push(Assignment {
                 node_id: node_id.clone(),
                 worker_id: worker.id.clone(),
                 worker_name: worker.name.clone(),
@@ -257,52 +239,43 @@ fn schedule_plan(
         }
 
         ExecutionPlan::Remote { plan, .. } => {
-            // Remote: the compiler already decided this should be remote
-            schedule_plan(plan, workers, diff_nodes, assignments, phases, transfers, warnings, phase_index, None);
+            schedule_plan(plan, state, None);
         }
 
         ExecutionPlan::Loop { body, node_id, .. } => {
-            // Loop body executed on same worker
             let worker = forced_worker
-                .and_then(|fw| workers.iter().find(|w| w.id == fw).copied())
-                .unwrap_or_else(|| least_loaded(workers));
-            assignments.push(Assignment {
+                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
+                .unwrap_or_else(|| least_loaded(&state.workers));
+            state.assignments.push(Assignment {
                 node_id: node_id.clone(),
                 worker_id: worker.id.clone(),
                 worker_name: worker.name.clone(),
                 phase: Phase::Sequential,
                 reason: "loop controller".into(),
             });
-            schedule_plan(body, workers, diff_nodes, assignments, phases, transfers, warnings, phase_index, Some(&worker.id));
+            let worker_id = worker.id.clone();
+            schedule_plan(body, state, Some(&worker_id));
         }
 
         ExecutionPlan::Branch { node_id, arms, .. } => {
             let worker = forced_worker
-                .and_then(|fw| workers.iter().find(|w| w.id == fw).copied())
-                .unwrap_or_else(|| least_loaded(workers));
-            assignments.push(Assignment {
+                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
+                .unwrap_or_else(|| least_loaded(&state.workers));
+            state.assignments.push(Assignment {
                 node_id: node_id.clone(),
                 worker_id: worker.id.clone(),
                 worker_name: worker.name.clone(),
                 phase: Phase::Sequential,
                 reason: "branch condition".into(),
             });
+            let worker_id = worker.id.clone();
             for (_, arm_plan) in arms {
-                schedule_plan(arm_plan, workers, diff_nodes, assignments, phases, transfers, warnings, phase_index, Some(&worker.id));
+                schedule_plan(arm_plan, state, Some(&worker_id));
             }
         }
 
         ExecutionPlan::Empty => {}
     }
-}
-
-fn pick_worker<'a>(
-    workers: &[&'a WorkerInfo],
-    _node_id: &str,
-    _diff_nodes: &[String],
-    _assignments: &[Assignment],
-) -> &'a WorkerInfo {
-    least_loaded(workers)
 }
 
 fn least_loaded<'a>(workers: &[&'a WorkerInfo]) -> &'a WorkerInfo {

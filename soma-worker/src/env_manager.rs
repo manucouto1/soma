@@ -53,20 +53,20 @@ impl EnvManager {
         let lockfile_path = env_dir.join("lockfile.json");
 
         // Check if env exists and is up to date
-        if env_dir.exists() {
-            if let Ok(lockfile) = self.read_lockfile(&lockfile_path) {
-                if lockfile.requirements_hash == req_hash {
-                    // Env is up to date, just return python path
-                    tracing::info!("Reusing env for pipeline {pipeline_id} (hash match)");
-                    return self.python_path(&env_dir);
-                }
-
-                // Requirements changed — do incremental update
-                tracing::info!("Updating env for pipeline {pipeline_id} (requirements changed)");
-                self.incremental_update(&env_dir, requirements, &lockfile)?;
-                self.write_lockfile(&lockfile_path, requirements, &req_hash)?;
+        if env_dir.exists()
+            && let Ok(lockfile) = self.read_lockfile(&lockfile_path)
+        {
+            if lockfile.requirements_hash == req_hash {
+                // Env is up to date, just return python path
+                tracing::info!("Reusing env for pipeline {pipeline_id} (hash match)");
                 return self.python_path(&env_dir);
             }
+
+            // Requirements changed — do incremental update
+            tracing::info!("Updating env for pipeline {pipeline_id} (requirements changed)");
+            self.incremental_update(&env_dir, requirements, &lockfile)?;
+            self.write_lockfile(&lockfile_path, requirements, &req_hash)?;
+            return self.python_path(&env_dir);
         }
 
         // Create new environment
@@ -83,13 +83,12 @@ impl EnvManager {
         let mut removed = 0;
         if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
             for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(modified) = meta.modified() {
-                        if modified.elapsed().unwrap_or_default() > max_age {
-                            let _ = std::fs::remove_dir_all(entry.path());
-                            removed += 1;
-                        }
-                    }
+                if let Ok(meta) = entry.metadata()
+                    && let Ok(modified) = meta.modified()
+                    && modified.elapsed().unwrap_or_default() > max_age
+                {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                    removed += 1;
                 }
             }
         }
