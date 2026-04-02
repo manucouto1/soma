@@ -33,30 +33,31 @@ cargo doc --workspace --open  # Rust API docs
 
 ```
 soma-macros     → proc macro (#[derive(SomaFilter)])
-soma-core       → types, traits: Filter, Value, Graph, Event, Schema, VirtualValue, Search, Study
-                  DataStore (Local/S3/Stream), StreamCache (inference chunk cache)
+soma-macros     → proc macro (#[derive(SomaFilter)])
+soma-core       → types, traits, serialization ONLY (no execution logic):
+                  Filter, Value, Graph, Event, Schema, VirtualValue, Search, Study,
+                  TrainingStrategy, DataStore (Local/S3/Zarr), StreamCache
 soma-compiler   → Graph → ExecutionPlan (cache resolution, schema validation, distribution)
-                  Scheduler (distribute plan across workers: sequential grouping,
-                  parallel distribution, differentiable node affinity)
-soma-runtime    → Pipeline, parallel executor (threads), stream executor,
-                  LRU cache, tiered cache, Grid/Random/Bayesian samplers,
-                  Median/Percentile pruners, StudyRunner with TrialOutcome
+                  Scheduler (distribute plan across workers), ExecutionPlan visualization
+soma-runtime    → GraphSession (primary orchestrator), parallel executor (threads),
+                  FilterLibrary (unified registry), stream executor,
+                  LRU/local/tiered cache, Grid/Random/Bayesian samplers,
+                  Median/Percentile pruners, StudyRunner, PbtRunner
 soma-memory     → KnowledgeBase trait + MemoryKB + ChronosKB (feature-gated)
-soma-worker     → Protocol (Rust plans + Python pipeline jobs), Worker, EnvManager
-                  (isolated venv/conda per pipeline with incremental dep updates),
-                  Axum HTTP/WebSocket server, Dockerfile (CPU + GPU variants)
+soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
+                  (isolated venv/conda per pipeline), Axum HTTP/WS server
 soma-agent      → Agent loop, Action, ResearchPlan trait
 soma-mcp        → MCP server (13 tools: code, execution, knowledge, project)
-soma-python     → PyO3 bindings: Pipeline, Filter, Study, Lab
+soma-python     → PyO3 bindings: Graph (primary API), Filter, Study, Lab
 docs/           → 24 Starlight pages
 ```
 
 ## Tests
 
 ```bash
-# 300+ total: 284+ Rust + 19 Python
+# 340+ total: 342 Rust + 17 Python
 cargo test --workspace                              # Rust tests
-cd soma-python && maturin develop && pytest tests/  # 19 Python tests
+cd soma-python && maturin develop && pytest tests/  # 17 Python tests
 cargo test -p soma-memory --features chronos        # +8 ChronosVector tests
 ```
 
@@ -73,7 +74,9 @@ cargo test -p soma-memory --features chronos        # +8 ChronosVector tests
 
 - **Filter trait**: `fit()` learns state, `forward()` transforms. Both independently cacheable.
 - **CacheKey**: SHA-256 content-addressable. `hash(config + input_hash)` with cascade invalidation.
-- **ExecutionPlan**: Compiled from Graph. Variants: Sequence, Parallel, Execute, Cached, Remote.
+- **GraphSession**: Primary orchestrator — binds Graph + FilterLibrary + cache + events. Methods: fit, forward, compile, run.
+- **FilterLibrary**: Unified registry — implements FilterRegistry (compiler) + holds filters + states (executor). Replaces old FilterStore.
+- **ExecutionPlan**: Compiled from Graph. Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote.
 - **VirtualValue**: Lazy references (Materialized | Cached | Deferred | Stream).
 - **Schema**: dtype + shape for compile-time type checking between connected filters.
 - **TrialOutcome**: Separates control flow (Completed | Pruned) from errors.
@@ -85,8 +88,13 @@ cargo test -p soma-memory --features chronos        # +8 ChronosVector tests
 - **StreamCache**: Inference optimization — caches filter states and chunk results by content hash.
 - **Scheduler**: Analyzes ExecutionPlan topology, assigns to workers (sequential→same worker,
   parallel→distribute, differentiable→group together). Produces DistributionPlan.
+- **TrainingStrategy**: Graph-level attribute (inherited by subgraphs): Local, DataParallel, ModelParallel, Federated, PopulationBased, Custom.
+- **Partition**: Maps arbitrary node subsets to RemoteTargets for model parallelism.
+- **PbtRunner**: Population-Based Training — cyclic train→evaluate→exploit/explore per generation.
+- **Graph visualization**: `to_mermaid()`, `to_graphviz()`, `to_text()` — pure data→string, no runtime deps.
 - **EnvManager**: Isolated Python environments per pipeline with incremental dependency updates.
   Hashes requirements to detect changes, only installs/upgrades/removes what changed.
+- **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.
 
 ## MCP Server
 
@@ -98,7 +106,7 @@ soma-mcp /path/to/project
 SOMA_PROJECT_DIR=/path/to/project soma-mcp
 ```
 
-13 tools: list_filters, read_filter_source, write_filter_source, run_pipeline,
+13 tools: list_filters, read_filter_source, write_filter_source, run_graph,
 run_study, record_experiment, query_knowledge_base, get_trajectory,
 get_change_points, list_research_lines, promising_lines,
 create_research_line, generate_report.
