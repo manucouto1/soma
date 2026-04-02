@@ -21,8 +21,8 @@ use soma_core::study::{Direction, Objective, SearchStrategy, Study};
 use soma_core::value::Value;
 use soma_runtime::EventBus;
 use soma_runtime::cache::MemoryCache;
+use soma_runtime::executor::{self, Context, GraphInfo};
 use soma_runtime::filter_library::FilterLibrary;
-use soma_runtime::graph_session;
 use soma_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
 use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
 
@@ -491,6 +491,7 @@ struct PyGraph {
     graph: Graph,
     library: FilterLibrary,
     cache: Arc<dyn soma_core::cache::CacheStore>,
+    event_bus: Arc<EventBus>,
     fitted: bool,
 }
 
@@ -502,6 +503,7 @@ impl PyGraph {
             graph: Graph::new(),
             library: FilterLibrary::new(),
             cache: Arc::new(MemoryCache::default()),
+            event_bus: Arc::new(EventBus::new(256)),
             fitted: false,
         }
     }
@@ -583,14 +585,89 @@ impl PyGraph {
             Some(v) => Some(py_to_value(py, v)?),
             None => None,
         };
-        graph_session::graph_fit(
-            &self.graph,
-            &self.library,
-            &x_val,
-            y_val.as_ref(),
-            self.cache.as_ref(),
-        )
-        .map_err(soma_err_to_py)?;
+
+        // Fit using shared event_bus so subscribers receive events
+        self.graph.validate().map_err(soma_err_to_py)?;
+        let sorted = self.graph.topological_sort().map_err(soma_err_to_py)?;
+        let graph_info = GraphInfo::from_graph(&self.graph);
+        let run_id = soma_core::util::timestamp_id("graph_fit");
+
+        let roots = self.graph.roots();
+        let mut outputs: std::collections::HashMap<String, Value> =
+            std::collections::HashMap::new();
+        for root_id in &roots {
+            outputs.insert(format!("__input_{root_id}"), x_val.clone());
+        }
+
+        for node_id in &sorted {
+            let filter = self
+                .library
+                .get(node_id)
+                .ok_or_else(|| PyRuntimeError::new_err(format!("filter not found: {node_id}")))?;
+
+            self.event_bus.emit(soma_core::event::Event::NodeStarted {
+                run_id: run_id.clone(),
+                node_id: node_id.to_string(),
+                kind: filter.meta().kind,
+            });
+
+            let preds = graph_info.predecessors(node_id);
+            let input = match preds.len() {
+                0 => x_val.clone(),
+                1 => outputs
+                    .get(&preds[0])
+                    .cloned()
+                    .unwrap_or_else(|| x_val.clone()),
+                _ => {
+                    let mut merged = serde_json::Map::new();
+                    for pred_id in preds {
+                        if let Some(val) = outputs.get(pred_id.as_str()) {
+                            let json_val =
+                                serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
+                            merged.insert(pred_id.clone(), json_val);
+                        }
+                    }
+                    Value::Json(serde_json::Value::Object(merged))
+                }
+            };
+
+            let meta = filter.meta();
+            let start = std::time::Instant::now();
+
+            let output = if meta.kind == soma_core::filter::FilterKind::Trainable {
+                let data_hash = soma_core::cache::CacheKey::hash_data(
+                    &serde_json::to_vec(&input).unwrap_or_default(),
+                );
+                let state_key =
+                    soma_core::cache::CacheKey::for_state(&filter.config_hash(), &data_hash);
+
+                let state = if let Ok(Some(cached)) = self.cache.get(&state_key) {
+                    cached
+                } else {
+                    let s = filter.fit(&input, y_val.as_ref()).map_err(soma_err_to_py)?;
+                    let _ = self.cache.put(&state_key, &s);
+                    s
+                };
+
+                let out = filter.forward(&input, &state).map_err(soma_err_to_py)?;
+                self.library.set_state(node_id.to_string(), state);
+                out
+            } else {
+                filter
+                    .forward(&input, &Value::Empty)
+                    .map_err(soma_err_to_py)?
+            };
+
+            self.event_bus.emit(soma_core::event::Event::NodeCompleted {
+                run_id: run_id.clone(),
+                node_id: node_id.to_string(),
+                duration: start.elapsed(),
+                output_summary: format!("{output}"),
+            });
+
+            outputs.insert(node_id.to_string(), output);
+        }
+
         self.fitted = true;
         Ok(())
     }
@@ -603,25 +680,83 @@ impl PyGraph {
             ));
         }
         let x_val = py_to_value(py, x)?;
-        let result =
-            graph_session::graph_predict(&self.graph, &self.library, &x_val, self.cache.as_ref())
-                .map_err(soma_err_to_py)?;
-        value_to_py(py, &result)
+
+        let compile_result = soma_compiler::compile(
+            &self.graph,
+            &self.library,
+            CompileMode::Inference,
+            Some(self.cache.as_ref()),
+        )
+        .map_err(soma_err_to_py)?;
+
+        let graph_info = GraphInfo::from_graph(&self.graph);
+        let mut ctx = Context::new(
+            self.event_bus.clone(),
+            soma_core::util::timestamp_id("graph_forward"),
+        )
+        .with_graph_info(graph_info);
+
+        let roots = self.graph.roots();
+        if roots.len() == 1 {
+            ctx.set(format!("__input_{}", roots[0]), x_val.clone());
+        }
+        ctx.set("__input__", x_val);
+
+        executor::execute(
+            &compile_result.plan,
+            &mut ctx,
+            &self.library,
+            self.cache.as_ref(),
+        )
+        .map_err(soma_err_to_py)?;
+
+        let leaves = self.graph.leaves();
+        let output = if let Some(leaf_id) = leaves.first() {
+            ctx.store
+                .remove(*leaf_id)
+                .and_then(|vv| vv.as_value().cloned())
+                .unwrap_or(Value::Empty)
+        } else {
+            ctx.execution_order
+                .last()
+                .and_then(|id| ctx.store.remove(id))
+                .and_then(|vv| vv.as_value().cloned())
+                .unwrap_or(Value::Empty)
+        };
+
+        value_to_py(py, &output)
     }
 
     /// Compile and execute, returning all node outputs as a dict.
     fn run(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let outputs = graph_session::graph_run(
+        let compile_result = soma_compiler::compile(
             &self.graph,
             &self.library,
             CompileMode::NoCache,
+            Some(self.cache.as_ref()),
+        )
+        .map_err(soma_err_to_py)?;
+
+        let graph_info = GraphInfo::from_graph(&self.graph);
+        let mut ctx = Context::new(
+            self.event_bus.clone(),
+            soma_core::util::timestamp_id("graph_run"),
+        )
+        .with_graph_info(graph_info);
+
+        executor::execute(
+            &compile_result.plan,
+            &mut ctx,
+            &self.library,
             self.cache.as_ref(),
         )
         .map_err(soma_err_to_py)?;
 
         let dict = PyDict::new(py);
-        for (k, v) in &outputs {
-            dict.set_item(k, value_to_py(py, v)?)?;
+        for (k, vv) in &ctx.store {
+            if let Some(v) = vv.as_value() {
+                dict.set_item(k, value_to_py(py, v)?)?;
+            }
         }
         Ok(dict.into_any().unbind())
     }
@@ -680,6 +815,38 @@ impl PyGraph {
     /// Render the graph as an ASCII text tree.
     fn to_text(&self) -> String {
         self.graph.to_text()
+    }
+
+    // ── Events ──
+
+    /// Register a Python callback to receive events during execution.
+    ///
+    /// The callback is called with a dict for each event. Events are
+    /// delivered in a background thread; the callback must be thread-safe.
+    ///
+    /// Usage:
+    /// ```python
+    /// def on_event(event):
+    ///     print(event["event_type"], event.get("node_id", ""))
+    /// g.on_event(on_event)
+    /// g.fit(data)
+    /// ```
+    fn on_event(&self, callback: PyObject) -> PyResult<()> {
+        let mut rx = self.event_bus.subscribe();
+        std::thread::spawn(move || {
+            while let Ok(event) = rx.blocking_recv() {
+                if let Ok(json_str) = serde_json::to_string(&event) {
+                    Python::with_gil(|py| {
+                        // Parse JSON string into Python dict via json.loads
+                        let json_mod = py.import("json").unwrap();
+                        if let Ok(dict) = json_mod.call_method1("loads", (json_str,)) {
+                            let _ = callback.call1(py, (dict,));
+                        }
+                    });
+                }
+            }
+        });
+        Ok(())
     }
 
     /// Number of nodes in the graph.
