@@ -157,6 +157,103 @@ impl ExecutionPlan {
     }
 }
 
+impl ExecutionPlan {
+    /// Render the execution plan as a Mermaid flowchart.
+    pub fn to_mermaid(&self) -> String {
+        let mut out = String::from("graph TD\n");
+        let mut counter = 0;
+        self.mermaid_nodes(&mut out, &mut counter, None);
+        out
+    }
+
+    fn mermaid_nodes(&self, out: &mut String, counter: &mut usize, parent: Option<&str>) {
+        use std::fmt::Write;
+        match self {
+            Self::Execute { node_id } => {
+                let _ = writeln!(out, "    {node_id}[{node_id}]");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {node_id}");
+                }
+            }
+            Self::Cached { node_id, .. } => {
+                let _ = writeln!(out, "    {node_id}[/{node_id} cached/]");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {node_id}");
+                }
+            }
+            Self::Sequence(steps) => {
+                let mut prev = parent.map(String::from);
+                for step in steps {
+                    step.mermaid_nodes(out, counter, prev.as_deref());
+                    prev = step.first_node_id().map(String::from);
+                }
+            }
+            Self::Parallel(branches) => {
+                let fork_id = format!("fork_{counter}");
+                *counter += 1;
+                let _ = writeln!(out, "    {fork_id}{{{{fork}}}}");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {fork_id}");
+                }
+                for branch in branches {
+                    branch.mermaid_nodes(out, counter, Some(&fork_id));
+                }
+            }
+            Self::Loop {
+                node_id,
+                body,
+                max_iterations,
+            } => {
+                let label = match max_iterations {
+                    Some(n) => format!("{node_id} loop max={n}"),
+                    None => format!("{node_id} loop"),
+                };
+                let _ = writeln!(out, "    {node_id}(({label}))");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {node_id}");
+                }
+                body.mermaid_nodes(out, counter, Some(node_id));
+            }
+            Self::Branch { node_id, arms } => {
+                let _ = writeln!(out, "    {node_id}{{{{{node_id}}}}}");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {node_id}");
+                }
+                for (label, plan) in arms {
+                    let arm_id = format!("arm_{counter}");
+                    *counter += 1;
+                    let _ = writeln!(out, "    {node_id} -->|{label}| {arm_id}[{label}]");
+                    plan.mermaid_nodes(out, counter, Some(&arm_id));
+                }
+            }
+            Self::Remote {
+                node_id,
+                target,
+                plan,
+            } => {
+                let _ = writeln!(out, "    {node_id}>{{{node_id} remote: {target:?}}}]");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {node_id}");
+                }
+                plan.mermaid_nodes(out, counter, Some(node_id));
+            }
+            Self::Empty => {}
+        }
+    }
+
+    fn first_node_id(&self) -> Option<&str> {
+        match self {
+            Self::Execute { node_id } | Self::Cached { node_id, .. } => Some(node_id),
+            Self::Sequence(steps) => steps.first().and_then(|s| s.first_node_id()),
+            Self::Parallel(_) => None,
+            Self::Loop { node_id, .. }
+            | Self::Branch { node_id, .. }
+            | Self::Remote { node_id, .. } => Some(node_id),
+            Self::Empty => None,
+        }
+    }
+}
+
 impl fmt::Display for ExecutionPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.fmt_indent(f, 0)
@@ -400,5 +497,48 @@ mod tests {
         assert_eq!(plan.node_count(), 0);
         assert_eq!(plan.cached_count(), 0);
         assert!(plan.node_ids().is_empty());
+    }
+
+    #[test]
+    fn to_mermaid_sequence() {
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "scaler".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "model".into(),
+            },
+        ]);
+        let m = plan.to_mermaid();
+        assert!(m.starts_with("graph TD"));
+        assert!(m.contains("scaler[scaler]"));
+        assert!(m.contains("model[model]"));
+        assert!(m.contains("scaler --> model"));
+    }
+
+    #[test]
+    fn to_mermaid_parallel() {
+        let plan = ExecutionPlan::Parallel(vec![
+            ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "b".into(),
+            },
+        ]);
+        let m = plan.to_mermaid();
+        assert!(m.contains("fork_0{"));
+        assert!(m.contains("fork_0 --> a"));
+        assert!(m.contains("fork_0 --> b"));
+    }
+
+    #[test]
+    fn to_mermaid_cached() {
+        let plan = ExecutionPlan::Cached {
+            node_id: "x".into(),
+            key: CacheKey::hash_data(b"x"),
+        };
+        let m = plan.to_mermaid();
+        assert!(m.contains("x[/x cached/]"));
     }
 }

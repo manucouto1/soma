@@ -659,8 +659,27 @@ impl PyGraph {
             diags.append(format!("{d:?}"))?;
         }
         dict.set_item("diagnostics", diags)?;
+        dict.set_item("plan_text", format!("{}", result.plan))?;
+        dict.set_item("plan_mermaid", result.plan.to_mermaid())?;
 
         Ok(dict.into_any().unbind())
+    }
+
+    // ── Visualization ──
+
+    /// Render the graph as a Mermaid diagram string.
+    fn to_mermaid(&self) -> String {
+        self.graph.to_mermaid()
+    }
+
+    /// Render the graph as a Graphviz DOT string.
+    fn to_graphviz(&self) -> String {
+        self.graph.to_graphviz()
+    }
+
+    /// Render the graph as an ASCII text tree.
+    fn to_text(&self) -> String {
+        self.graph.to_text()
     }
 
     /// Number of nodes in the graph.
@@ -675,6 +694,10 @@ impl PyGraph {
             "Graph({n} nodes, {e} edges, fitted={fitted})",
             fitted = self.fitted
         )
+    }
+
+    fn __str__(&self) -> String {
+        self.graph.to_text()
     }
 }
 

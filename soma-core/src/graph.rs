@@ -350,6 +350,148 @@ impl Graph {
     }
 }
 
+// ── Visualization ──
+
+impl Graph {
+    /// Render as a Mermaid diagram.
+    ///
+    /// ```text
+    /// graph LR
+    ///     scaler[scaler]
+    ///     model[model]
+    ///     scaler --> model
+    /// ```
+    pub fn to_mermaid(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::from("graph LR\n");
+        for node in &self.nodes {
+            let shape = match &node.kind {
+                NodeKind::Filter { .. } => format!("    {}[{}]", node.id, node.label),
+                NodeKind::SubGraph { .. } => format!("    {}[[{}]]", node.id, node.label),
+                NodeKind::Loop { max_iterations } => {
+                    let label = match max_iterations {
+                        Some(n) => format!("{} (max {})", node.label, n),
+                        None => node.label.clone(),
+                    };
+                    format!("    {}(({}))", node.id, label)
+                }
+                NodeKind::Branch => format!("    {}{{{{{}}}}}", node.id, node.label),
+            };
+            let _ = writeln!(out, "{shape}");
+        }
+        for edge in &self.edges {
+            let arrow = match edge.kind {
+                EdgeKind::Data => "-->",
+                EdgeKind::Control => "-.->",
+            };
+            if let Some(label) = &edge.label {
+                let _ = writeln!(
+                    out,
+                    "    {} {}|{}| {}",
+                    edge.source, arrow, label, edge.target
+                );
+            } else {
+                let _ = writeln!(out, "    {} {} {}", edge.source, arrow, edge.target);
+            }
+        }
+        out
+    }
+
+    /// Render as Graphviz DOT format.
+    pub fn to_graphviz(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::from("digraph G {\n    rankdir=LR;\n");
+        for node in &self.nodes {
+            let shape = match &node.kind {
+                NodeKind::Filter { .. } => "box",
+                NodeKind::SubGraph { .. } => "doubleoctagon",
+                NodeKind::Loop { .. } => "ellipse",
+                NodeKind::Branch => "diamond",
+            };
+            let _ = writeln!(
+                out,
+                "    \"{}\" [label=\"{}\" shape={}];",
+                node.id, node.label, shape
+            );
+        }
+        for edge in &self.edges {
+            let style = match edge.kind {
+                EdgeKind::Data => "",
+                EdgeKind::Control => " [style=dashed]",
+            };
+            let label = edge
+                .label
+                .as_ref()
+                .map(|l| format!(" [label=\"{l}\"]"))
+                .unwrap_or_default();
+            let attrs = if style.is_empty() && label.is_empty() {
+                String::new()
+            } else if label.is_empty() {
+                style.to_string()
+            } else {
+                label
+            };
+            let _ = writeln!(
+                out,
+                "    \"{}\" -> \"{}\"{};",
+                edge.source, edge.target, attrs
+            );
+        }
+        out.push_str("}\n");
+        out
+    }
+
+    /// Render as an ASCII text tree for terminal display.
+    pub fn to_text(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let sorted = self.topological_sort().unwrap_or_default();
+        let total_nodes = self.nodes.len();
+        let total_edges = self.edges.len();
+        let _ = writeln!(out, "Graph ({total_nodes} nodes, {total_edges} edges)");
+
+        for (i, node_id) in sorted.iter().enumerate() {
+            let node = match self.node(node_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            let is_last = i == sorted.len() - 1;
+            let prefix = if is_last { "└── " } else { "├── " };
+            let kind_tag = match &node.kind {
+                NodeKind::Filter { filter_name } => {
+                    if filter_name == &node.id {
+                        String::new()
+                    } else {
+                        format!(" ({})", filter_name)
+                    }
+                }
+                NodeKind::SubGraph { graph } => {
+                    format!(" [subgraph: {} nodes]", graph.nodes.len())
+                }
+                NodeKind::Loop { max_iterations } => match max_iterations {
+                    Some(n) => format!(" [loop max={n}]"),
+                    None => " [loop]".into(),
+                },
+                NodeKind::Branch => " [branch]".into(),
+            };
+            let preds = self.predecessors(node_id);
+            let pred_info = if preds.is_empty() {
+                String::new()
+            } else {
+                format!(" ← {}", preds.join(", "))
+            };
+            let _ = writeln!(out, "{prefix}{}{kind_tag}{pred_info}", node.id);
+        }
+        out
+    }
+}
+
+impl std::fmt::Display for Graph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_text())
+    }
+}
+
 impl Default for Graph {
     fn default() -> Self {
         Self::new()
@@ -568,6 +710,62 @@ mod tests {
             g.node("check_convergence").unwrap().kind,
             NodeKind::Branch
         ));
+    }
+
+    // ── Visualization tests ──
+
+    #[test]
+    fn to_mermaid_linear() {
+        let g = sample_linear_graph();
+        let m = g.to_mermaid();
+        assert!(m.starts_with("graph LR"));
+        assert!(m.contains("a[Scaler]"));
+        assert!(m.contains("b[PCA]"));
+        assert!(m.contains("c[SVM]"));
+        assert!(m.contains("a --> b"));
+        assert!(m.contains("b --> c"));
+    }
+
+    #[test]
+    fn to_mermaid_branch_and_loop() {
+        let mut g = Graph::new();
+        g.add_node(Node::loop_node("train", Some(100)));
+        g.add_node(Node::branch("check"));
+        g.add_edge(Edge::data("e1", "train", "check"));
+
+        let m = g.to_mermaid();
+        assert!(m.contains("train((train (max 100)))"));
+        assert!(m.contains("check{"));
+        assert!(m.contains("train --> check"));
+    }
+
+    #[test]
+    fn to_graphviz_output() {
+        let g = sample_linear_graph();
+        let dot = g.to_graphviz();
+        assert!(dot.starts_with("digraph G {"));
+        assert!(dot.contains("rankdir=LR"));
+        assert!(dot.contains("\"a\" [label=\"Scaler\" shape=box]"));
+        assert!(dot.contains("\"a\" -> \"b\""));
+        assert!(dot.ends_with("}\n"));
+    }
+
+    #[test]
+    fn to_text_output() {
+        let g = sample_linear_graph();
+        let text = g.to_text();
+        assert!(text.contains("Graph (3 nodes, 2 edges)"));
+        assert!(text.contains("a"));
+        assert!(text.contains("b"));
+        assert!(text.contains("c"));
+        assert!(text.contains("← a"));
+    }
+
+    #[test]
+    fn display_trait() {
+        let g = sample_linear_graph();
+        let s = format!("{g}");
+        assert!(s.contains("Graph (3 nodes"));
     }
 
     #[test]
