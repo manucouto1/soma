@@ -40,14 +40,15 @@ jobs:
           sleep 30
           cargo publish -p soma-agent --allow-dirty || true
 
-  # Publish Python package to PyPI
-  publish-pypi:
-    name: Publish to PyPI
+  # Build Python wheels
+  build-wheels:
+    name: Build wheels (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -63,27 +64,58 @@ jobs:
         run: pip install maturin
 
       - name: Build wheel
-        run: cd soma-python && maturin build --release
+        working-directory: soma-python
+        run: maturin build --release --out dist
+
+      - name: List built wheels
+        run: ls -la soma-python/dist/
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: soma-python/target/wheels/*.whl
+          path: soma-python/dist/*.whl
 
+  # Build sdist
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: soma-python
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: soma-python/dist/*.tar.gz
+
+  # Upload to PyPI
   upload-pypi:
     name: Upload to PyPI
-    needs: publish-pypi
+    needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # trusted publisher — no token needed
+      id-token: write
     steps:
-      - name: Download all wheels
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
+          pattern: "{wheels-*,sdist}"
           merge-multiple: true
           path: dist
+
+      - name: List dist contents
+        run: ls -la dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
