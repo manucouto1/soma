@@ -1,24 +1,7 @@
-# cargo-release configuration
-# Install: cargo install cargo-release
-# Usage: cargo release patch  (or minor/major)
-
-[workspace]
-# All crates share the same version
 shared-version = true
-# Consolidate into one commit + one tag
 consolidate-commits = true
-# Tag format
 tag-name = "v{{version}}"
-# Commit message
 pre-release-commit-message = "chore: release v{{version}}"
-# Push to remote
+publish = false
 push = true
-# Create git tag (triggers CI release workflow)
 tag = true
-# Don't publish to crates.io from local (CI does it)
-publish = false
-
-# soma-python is published via maturin/PyPI, not cargo
-[[package]]
-name = "soma-python"
-publish = false
