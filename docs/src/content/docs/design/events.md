@@ -22,10 +22,10 @@ Study (optimization session)
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Event {
     // ══════════════════════════════════════════
-    // Level 1: Pipeline execution (per run)
+    // Level 1: Graph execution (per run)
     // ══════════════════════════════════════════
 
-    /// A pipeline run has started
+    /// A graph run has started
     RunStarted {
         run_id: RunId,
         plan_summary: PlanSummary,
@@ -69,13 +69,13 @@ pub enum Event {
         error: String,
     },
 
-    /// The pipeline run completed
+    /// The graph run completed
     RunCompleted {
         run_id: RunId,
         duration: Duration,
     },
 
-    /// The pipeline run failed
+    /// The graph run failed
     RunFailed {
         run_id: RunId,
         error: String,
@@ -200,7 +200,7 @@ tokio::spawn(agent_inbox.run());
 
 The three levels of events map directly to UI components:
 
-### Pipeline Level → DAG Visualization
+### Graph Level → DAG Visualization
 
 ```
 Events used:

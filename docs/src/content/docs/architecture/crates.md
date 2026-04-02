@@ -142,7 +142,7 @@ Autonomous agent loop for research automation.
 | Module | Purpose |
 |---|---|
 | `agent.rs` | Agent struct (soul, skills, hands, memory) |
-| `planner.rs` | Hypothesis-to-pipeline generation |
+| `planner.rs` | Hypothesis-to-graph generation |
 | `analyzer.rs` | Result analysis and next-step decision |
 | `reporter.rs` | Automatic report and documentation generation |
 

@@ -27,8 +27,8 @@ Values in Soma are virtual references until someone needs the actual data. This 
 - Cache lookups happen before any real work
 
 ```
-pipeline.forward(x)           # lazy: returns VirtualValue
-pipeline.forward(x).collect() # eager: materializes the result
+g.forward(x)           # lazy: returns VirtualValue
+g.forward(x).collect() # eager: materializes the result
 ```
 
 ### Co-location of Concerns
@@ -67,7 +67,7 @@ Soma is written in Rust for:
 But the primary user interface is Python (via PyO3), because that's where researchers work. The Python API must be **as simple or simpler than LabChain**:
 
 ```python
-from soma import Pipeline, Filter
+from soma import Graph, Filter
 
 class MyFilter(Filter):
     scale: float = search(0.1, 10.0, scale="log")
@@ -78,9 +78,9 @@ class MyFilter(Filter):
     def forward(self, x, state):
         return (x - state["mean"]) * self.scale
 
-pipeline = Pipeline([MyFilter(scale=2.0)])
-pipeline.fit(train_data)
-result = pipeline.predict(test_data)
+g = Graph.somatize(MyFilter(scale=2.0))
+g.fit(train_data)
+result = g.forward(test_data)
 ```
 
 ### Extensibility Through Derivation
@@ -97,7 +97,7 @@ Users extend Soma by implementing the `Filter` trait (Rust) or inheriting from `
 
 Every execution produces a stream of structured events at three levels:
 
-1. **Pipeline level**: Node started, completed, cache hit, failed
+1. **Graph level**: Node started, completed, cache hit, failed
 2. **Trial level**: Metrics reported, trial pruned, trial completed
 3. **Study level**: Best updated, Pareto front changed, study completed
 
@@ -107,7 +107,7 @@ These events enable real-time visualization, monitoring, logging, and agent deci
 
 Soma doesn't embed agent logic into the runtime. Instead, agents interact with Soma the same way a human user does:
 
-- Define a pipeline (or ask the agent to generate one)
+- Define a graph (or ask the agent to generate one)
 - Submit it for execution (local or remote)
 - Receive events and results
 - Query the knowledge base

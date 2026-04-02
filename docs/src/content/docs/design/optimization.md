@@ -26,7 +26,7 @@ This co-location provides:
 - **Compile-time type validation**: The macro verifies that search annotations match field types
 - **No string references**: No risk of typos in parameter names
 - **Single source of truth**: Change the parameter, change the search space, in one place
-- **Automatic aggregation**: The pipeline collects all search spaces from its filters
+- **Automatic aggregation**: The graph collects all search spaces from its filters
 
 ## Search Dimensions
 
@@ -144,12 +144,12 @@ pub trait Searchable {
 }
 ```
 
-## Pipeline Search Space Aggregation
+## Graph Search Space Aggregation
 
-The pipeline automatically collects all search spaces:
+The graph automatically collects all search spaces:
 
 ```rust
-impl Pipeline {
+impl Graph {
     pub fn search_space(&self) -> SearchSpace {
         let mut combined = SearchSpace::new();
         for node in &self.nodes {
@@ -164,7 +164,7 @@ impl Pipeline {
 ```
 
 ```
-Pipeline([MyScaler(scale=2.0), MySVM(kernel=Rbf, C=1.0)])
+Graph.somatize(MyScaler(scale=2.0) >> MySVM(kernel=Rbf, C=1.0))
 
 search_space():
   MyScaler.scale:  Float[0.1, 10.0] log
@@ -253,8 +253,8 @@ A Study orchestrates the full optimization:
 pub struct Study {
     pub id: StudyId,
     pub name: String,
-    pub pipeline: Graph,
-    pub search_space: SearchSpace,     // aggregated from pipeline
+    pub graph: Graph,
+    pub search_space: SearchSpace,     // aggregated from graph
     pub strategy: SearchStrategy,
     pub pruning: PruningStrategy,
     pub objectives: Vec<Objective>,
@@ -300,7 +300,7 @@ Users can fix some parameters and only search over the rest:
 
 ```python
 study = Study(
-    pipeline=pipeline,
+    graph=g,
     freeze={"MySVM.kernel": "rbf"},  # fix kernel, search only C
     strategy=Bayesian(n_trials=50),
     objectives=[("f1", "maximize")],
@@ -310,15 +310,14 @@ study = Study(
 ## Python API
 
 ```python
-from soma import Pipeline, Study, Bayesian, Median
+from soma import Graph, Study, Bayesian, Median
 
-pipeline = Pipeline([
-    MyScaler(scale=2.0),
-    MySVM(kernel="rbf", C=1.0),
-])
+g = Graph.somatize(
+    MyScaler(scale=2.0) >> MySVM(kernel="rbf", C=1.0)
+)
 
 # View the auto-collected search space
-print(pipeline.search_space())
+print(g.search_space())
 # MyScaler.scale:  Float[0.1, 10.0] log
 # MySVM.kernel:    Categorical[Linear, Rbf, Polynomial]
 # MySVM.C:         Float[0.001, 100.0] log
@@ -326,7 +325,7 @@ print(pipeline.search_space())
 # Run optimization
 study = Study(
     name="svm_optimization",
-    pipeline=pipeline,
+    graph=g,
     strategy=Bayesian(n_trials=100),
     pruning=Median(n_warmup_steps=5),
     objectives=[("f1", "maximize")],

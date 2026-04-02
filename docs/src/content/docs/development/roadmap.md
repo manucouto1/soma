@@ -15,7 +15,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 
 ## Phase 1: LabChain in Rust (MVP)
 
-**Goal**: A functional replacement for LabChain, written in Rust, usable from Python. Pipelines with caching, optimization, and events.
+**Goal**: A functional replacement for LabChain, written in Rust, usable from Python. Graphs with caching, optimization, and events.
 
 ### 1.1 soma-core: Foundation Types
 
@@ -41,7 +41,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 | Task | Description | Priority |
 |---|---|---|
 | Topological sort | Kahn's algorithm, cycle detection | P0 |
-| Linear pipeline compilation | Sequence of Execute nodes | P0 |
+| Linear graph compilation | Sequence of Execute nodes | P0 |
 | Cache resolution | Compute keys, replace with Cached | P0 |
 | Cascade invalidation | Upstream change invalidates downstream | P0 |
 | Parallel branch detection | Fork-join pattern recognition | P1 |
@@ -62,7 +62,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 | Tiered cache | Multi-level with promotion | P1 |
 | Parallel executor | Tokio JoinSet for Parallel plans | P1 |
 | Context | Store + event emitter + metric reporter | P0 |
-| Pipeline struct | fit/predict/forward with caching | P0 |
+| Graph struct | fit/forward with caching | P0 |
 | Study runner | Sample → build → execute → record loop | P1 |
 | Grid sampler | Exhaustive search | P1 |
 | Random sampler | Random search | P1 |
@@ -77,7 +77,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 |---|---|---|
 | PyO3 module setup | maturin build, basic imports | P0 |
 | Filter base class | Python class with search() descriptors | P0 |
-| Pipeline class | fit/predict/forward | P0 |
+| Graph class | fit/forward | P0 |
 | Value wrappers | Tensor ↔ numpy, DataFrame ↔ polars | P0 |
 | Study class | Run optimization from Python | P1 |
 | Event subscription | Python callbacks for events | P1 |
@@ -86,7 +86,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 ### Phase 1 Deliverable
 
 ```python
-from soma import Pipeline, Filter, Study, Bayesian, search
+from soma import Graph, Filter, Study, Bayesian, search
 
 class MyScaler(Filter):
     scale: float = search(0.1, 10.0, scale="log")
@@ -97,18 +97,18 @@ class MyScaler(Filter):
     def forward(self, x, state):
         return (x - state["mean"]) / state["std"] * self.scale
 
-pipeline = Pipeline([MyScaler(scale=2.0), MyClassifier(C=1.0)])
-pipeline.fit(x_train, y_train)
-result = pipeline.predict(x_test)  # with automatic caching
+g = Graph.somatize(MyScaler(scale=2.0) >> MyClassifier(C=1.0))
+g.fit(x_train, y_train)
+result = g.forward(x_test)  # with automatic caching
 
-study = Study(pipeline=pipeline, strategy=Bayesian(n_trials=50))
+study = Study(graph=g, strategy=Bayesian(n_trials=50))
 study.run(x_train, y_train, x_val, y_val)
 print(study.best_trial.params)
 ```
 
 ## Phase 2: Distribution & Remote Execution
 
-**Goal**: Execute pipelines on remote workers. Shared caching across a lab.
+**Goal**: Execute graphs on remote workers. Shared caching across a lab.
 
 ### 2.1 soma-worker
 
@@ -140,7 +140,7 @@ print(study.best_trial.params)
 | Task | Description |
 |---|---|
 | `lab.connect()` | Connect to a Soma lab |
-| `lab.run()` | Submit pipelines for remote execution |
+| `lab.run()` | Submit graphs for remote execution |
 | `lab.workers()` | List available workers |
 
 ### Phase 2 Deliverable
@@ -171,16 +171,16 @@ lab.run(study, data=train_data)  # executes on remote workers
 |---|---|
 | Agent struct | Soul, skills, hands, memory |
 | Research loop | Hypothesize → build → execute → analyze → iterate |
-| Pipeline generation | LLM-driven pipeline construction |
+| Graph generation | LLM-driven graph construction |
 | Report generation | Automatic documentation of findings |
 
 ### 3.3 Platform Integration
 
 | Task | Description |
 |---|---|
-| Pipeline publishing | `lab.publish(pipeline)` |
-| Graph editor integration | Pipelines as platform nodes |
-| Visual pipeline editor | Drag-and-drop filter composition |
+| Graph publishing | `lab.publish(graph)` |
+| Graph editor integration | Graphs as platform nodes |
+| Visual graph editor | Drag-and-drop filter composition |
 
 ### Phase 3 Deliverable
 
@@ -215,7 +215,7 @@ Week 1-2: soma-core types
 Week 3-4: soma-compiler
   11. Topological sort
   12. ExecutionPlan enum
-  13. Linear pipeline compilation
+  13. Linear graph compilation
   14. Cache key computation for graph
   15. Cache resolution (Cached vs Execute)
   16. Cascade invalidation
@@ -226,7 +226,7 @@ Week 5-6: soma-runtime
   19. Context
   20. Memory cache (HashMap)
   21. Sequential executor
-  22. Pipeline (fit/predict)
+  22. Graph (fit/forward)
   23. Local cache (RocksDB/sled)
   24. Tiered cache
   25. Parallel executor
@@ -241,7 +241,7 @@ Week 7-8: soma-runtime optimization
 Week 9-10: soma-python
   31. PyO3 module setup
   32. Filter base class
-  33. Pipeline class
+  33. Graph class
   34. Value wrappers (numpy interop)
   35. Study class
   36. search() descriptor

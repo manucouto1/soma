@@ -90,10 +90,10 @@ pub trait EvolvingFilter: Filter {
 
 ### Barrier
 
-The filter cannot operate on partial data. The runtime detects this and switches to batch mode for that section of the pipeline.
+The filter cannot operate on partial data. The runtime detects this and switches to batch mode for that section of the graph.
 
 ```
-Pipeline: [Scaler] → [PCA] → [Classifier]
+Graph: [Scaler] → [PCA] → [Classifier]
            stream ✓   barrier   stream ✓
 
 Compiled plan:
@@ -154,12 +154,12 @@ This enables temporal queries on cached stream data:
 - "What's the most recent checkpoint for MyOnlineModel before 15:00?"
 - "How did this filter's output distribution change over the last 2 hours?"
 
-## Pipeline Streaming
+## Graph Streaming
 
-When a pipeline runs in streaming mode:
+When a graph runs in streaming mode:
 
 ```rust
-impl Pipeline {
+impl Graph {
     pub async fn process_stream(
         &self,
         stream: impl Stream<Item = Tensor>,

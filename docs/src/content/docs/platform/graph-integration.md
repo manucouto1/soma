@@ -1,48 +1,47 @@
 ---
 title: Graph Integration
-description: How pipelines become nodes in the platform's orchestration graphs.
+description: How graphs become nodes in the platform's orchestration graphs.
 ---
 
 ## The Bridge
 
-Soma pipelines and the platform's orchestration graphs serve different purposes:
+Soma graphs and the platform's orchestration graphs serve different purposes:
 
-| | Soma Pipeline | Platform Graph |
+| | Soma Graph | Platform Graph |
 |---|---|---|
-| **Node type** | Filters (data transformations) | LLM, Agent, Pipeline, Tool, IO |
+| **Node type** | Filters (data transformations) | LLM, Agent, Graph, Tool, IO |
 | **Purpose** | Compute | Orchestrate |
 | **Gradients** | Yes (when differentiable) | No |
 | **Caching** | Content-addressable | Not applicable |
 | **Execution** | Compiled to ExecutionPlan | Event-driven execution |
 
-The bridge between them: **a compiled pipeline can be published as a node** in the platform graph.
+The bridge between them: **a compiled graph can be published as a node** in the platform graph.
 
-## Publishing a Pipeline
+## Publishing a Graph
 
 ```python
-# User defines and tests a pipeline locally
-pipeline = Pipeline([
-    MyPreprocessor(scale=2.0),
-    MyClassifier(model="svm", C=1.0),
-])
-pipeline.fit(train_data, y_train)
+# User defines and tests a graph locally
+g = Graph.somatize(
+    MyPreprocessor(scale=2.0) >> MyClassifier(model="svm", C=1.0)
+)
+g.fit(train_data, y_train)
 
 # Publish to the platform
-lab.publish(pipeline, name="svm_classifier")
+lab.publish(g, name="svm_classifier")
 ```
 
 Once published, `svm_classifier` appears as a node type in the platform's visual graph editor, alongside LLM nodes, agent nodes, and other platform nodes.
 
 ## How It Works
 
-A published pipeline is wrapped as a platform node:
+A published graph is wrapped as a platform node:
 
 ```rust
 #[derive(Serialize, Deserialize)]
-pub struct PublishedPipeline {
-    pub id: PipelineId,
+pub struct PublishedGraph {
+    pub id: GraphId,
     pub name: String,
-    pub graph: Graph,                       // the pipeline as a graph
+    pub graph: Graph,                       // the computation graph
     pub search_space: Option<SearchSpace>,  // if optimization is available
     pub input_schema: Schema,               // what it expects
     pub output_schema: Schema,              // what it produces
@@ -57,7 +56,7 @@ Platform Graph:
   [Agent: Generate Hypothesis]
       │
       ▼
-  [Published Pipeline: svm_classifier]  ← Soma pipeline as a node
+  [Published Graph: svm_classifier]  ← Soma graph as a node
       │
       ▼
   [Agent: Analyze Results]
@@ -74,7 +73,7 @@ Platform Graph:
 ┌────────────────────────────────────────────────┐
 │  Platform Orchestration Graph                   │
 │                                                 │
-│  [Agent: Hypothesis] ──► [Pipeline: Train+Eval] │
+│  [Agent: Hypothesis] ──► [Graph: Train+Eval]    │
 │         ▲                       │               │
 │         │                       ▼               │
 │         └──── [Agent: Analyze Results]          │
@@ -92,13 +91,13 @@ Platform Graph:
 └────────────────────────────────────────────────┘
 ```
 
-### Multi-Pipeline Comparison
+### Multi-Graph Comparison
 
 ```
                 [Agent: Design Experiment]
                     /          \
                    /            \
-  [Pipeline: SVM Approach]  [Pipeline: Neural Approach]
+  [Graph: SVM Approach]  [Graph: Neural Approach]
                    \            /
                     \          /
               [Agent: Compare Results]
@@ -106,31 +105,31 @@ Platform Graph:
                   [Agent: Report]
 ```
 
-### Pipeline as Sub-Component
+### Graph as Sub-Component
 
-A published pipeline can also be used as a filter within another pipeline (recursive composition):
+A published graph can also be used as a filter within another graph (recursive composition):
 
 ```python
-# A published pipeline IS a filter
-svm_pipeline = lab.get_pipeline("svm_classifier")
+# A published graph IS a filter
+svm_graph = lab.get_graph("svm_classifier")
 
-# Use it inside a larger pipeline
-meta_pipeline = Pipeline([
-    DataLoader(source="s3://datasets/ucr"),
-    svm_pipeline,  # ← nested pipeline
-    MetricAggregator(metrics=["f1", "accuracy"]),
-])
+# Use it inside a larger graph
+meta_graph = Graph.somatize(
+    DataLoader(source="s3://datasets/ucr")
+    >> svm_graph  # ← nested graph
+    >> MetricAggregator(metrics=["f1", "accuracy"])
+)
 ```
 
 ## Event Flow
 
-When a platform graph executes a published pipeline, events from both layers are emitted:
+When a platform graph executes a published graph, events from both layers are emitted:
 
 ```
 Platform events:
   PlatformNodeStarted { node: "svm_classifier" }
 
-    Pipeline events (nested):
+    Graph events (nested):
       RunStarted { run_id }
         NodeStarted { node: "preprocessor" }
         NodeCacheHit { node: "preprocessor", tier: "Memory" }
@@ -141,11 +140,11 @@ Platform events:
   PlatformNodeCompleted { node: "svm_classifier", duration: 1.22s }
 ```
 
-The platform UI can display both levels: the high-level orchestration flow and the detailed pipeline execution within each node.
+The platform UI can display both levels: the high-level orchestration flow and the detailed graph execution within each node.
 
-## Future: Visual Pipeline Editor
+## Future: Visual Graph Editor
 
-Beyond publishing existing pipelines, the platform will support visual pipeline construction:
+Beyond publishing existing graphs, the platform will support visual graph construction:
 
 - Drag-and-drop filters from a library
 - Configure search spaces visually
@@ -154,4 +153,4 @@ Beyond publishing existing pipelines, the platform will support visual pipeline 
 - Launch optimization studies from the UI
 - View results in integrated dashboards
 
-This bridges the gap between code-defined pipelines and visual experimentation, letting researchers work in whichever mode suits them.
+This bridges the gap between code-defined graphs and visual experimentation, letting researchers work in whichever mode suits them.

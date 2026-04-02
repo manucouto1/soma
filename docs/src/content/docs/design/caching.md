@@ -75,7 +75,7 @@ Value = serialized Tensor (the output)
 When a filter's configuration changes, everything downstream is automatically invalidated because the cache keys change:
 
 ```
-Pipeline: [A] → [B] → [C]
+Graph: [A] → [B] → [C]
 
 Scenario: Change B's configuration
 

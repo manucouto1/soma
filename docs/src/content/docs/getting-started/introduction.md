@@ -17,7 +17,7 @@ Soma converges ideas from three prior projects:
 
 A Python framework for defining ML experiments as pipelines of reusable filters with content-addressable caching. Key contributions to Soma:
 
-- **Filter model**: `fit()` / `predict()` lifecycle for trainable transformations
+- **Filter model**: `fit()` / `forward()` lifecycle for trainable transformations
 - **Content-addressable caching**: SHA-based identity for filters and data, enabling automatic deduplication of computation across experiments
 - **Reproducibility**: Full experiment serialization to JSON
 - **Storage backends**: Local filesystem and S3 with distributed locking
@@ -44,15 +44,15 @@ A temporal vector database that indexes embeddings by both semantic proximity an
 
 | Capability | Description |
 |---|---|
-| **Computational Graphs** | Pipelines as executable, optionally differentiable graphs |
+| **Computational Graphs** | Executable, optionally differentiable graphs |
 | **Two-Phase Filters** | `fit()` learns state, `forward()` transforms data -- both cacheable independently |
 | **Content-Addressable Caching** | Automatic deduplication with cascade invalidation, resolved at compile time |
 | **Data Virtualization** | Every value is a lazy reference materialized on demand |
 | **Batch + Stream Unification** | Same filters work on complete datasets or chunked streams |
 | **Gradient Propagation** | Differentiable filters enable end-to-end backpropagation through the pipeline |
 | **Hyperparameter Optimization** | Search spaces defined at the filter level with Bayesian, Hyperband, and multi-objective strategies |
-| **Remote Execution** | Serialize and send pipelines to workers for distributed computation |
-| **Agent Integration** | Agents build, execute, and analyze pipelines autonomously |
+| **Remote Execution** | Serialize and send graphs to workers for distributed computation |
+| **Agent Integration** | Agents build, execute, and analyze graphs autonomously |
 | **Temporal Knowledge Base** | ChronosVector-powered experiment tracking with trajectory analysis |
 
 ## Who is Soma for?

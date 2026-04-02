@@ -78,37 +78,27 @@ pub enum FilterKind {
 │        │     + data_xy)      │    + state + data_x)   │
 │        │                     │                       │
 │        ▼                     ▼                       │
-│   ┌──────────┐        ┌──────────┐                   │
-│   │ PREDICT  │        │ FORWARD  │                   │
-│   │ (detach) │        │ (grads)  │                   │
-│   └──────────┘        └──────────┘                   │
+│   ┌──────────┐                                       │
+│   │ FORWARD  │                                       │
+│   │ (x,state)│                                       │
+│   └──────────┘                                       │
 │                                                      │
-│   predict = forward + detach (no gradient tracking)  │
-│   forward = raw differentiable computation           │
+│   forward = the transformation (differentiable       │
+│   if the filter supports it)                         │
 └─────────────────────────────────────────────────────┘
 ```
 
-### `predict` vs `forward`
+### `forward`
 
-- **`forward(x, state)`**: The raw transformation. If the filter is differentiable, this maintains the computational graph for backpropagation.
-- **`predict(x)`**: Convenience method. Calls `forward()` and detaches the result. Used in inference when gradients are not needed.
+- **`forward(x, state)`**: The transformation. If the filter is differentiable, this maintains the computational graph for backpropagation. The `Graph` calls `forward()` on each filter and detaches the result when gradients are not needed.
 
 ```rust
-impl Pipeline {
-    /// Inference: no gradient tracking
-    pub fn predict(&self, x: &Tensor) -> Result<Tensor> {
-        let mut current = x.clone();
-        for (filter, state) in &self.fitted_filters {
-            current = filter.forward(&current, state)?.detach();
-        }
-        Ok(current)
-    }
-
-    /// Training/differentiable: maintains computational graph
+impl Graph {
+    /// Inference: no gradient tracking, detaches results
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let mut current = x.clone();
         for (filter, state) in &self.fitted_filters {
-            current = filter.forward(&current, state)?;
+            current = filter.forward(&current, state)?.detach();
         }
         Ok(current)
     }

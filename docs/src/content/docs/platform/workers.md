@@ -1,11 +1,11 @@
 ---
 title: Workers & Remote Execution
-description: Distributed execution with serialized pipelines and configurable infrastructure.
+description: Distributed execution with serialized graphs and configurable infrastructure.
 ---
 
 ## Overview
 
-Soma supports remote execution by serializing compiled pipelines and sending them to **workers** -- daemon processes running on lab machines. This enables:
+Soma supports remote execution by serializing compiled graphs and sending them to **workers** -- daemon processes running on lab machines. This enables:
 
 - Offloading heavy computation to GPU clusters
 - Parallel execution across multiple machines
@@ -18,7 +18,7 @@ Soma supports remote execution by serializing compiled pipelines and sending the
 ┌─────────────────┐         ┌──────────────┐
 │  User / Agent   │         │  Worker 1    │
 │                 │         │  (GPU, 32GB) │
-│  pipeline.run() │────────►│              │
+│  graph.run()    │────────►│              │
 │  lab.run(study) │         │  soma-worker │
 │                 │◄────────│  daemon      │
 │  ← events       │         └──────────────┘

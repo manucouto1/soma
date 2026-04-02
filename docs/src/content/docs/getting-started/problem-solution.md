@@ -46,7 +46,7 @@ Soma provides a single execution model where:
 
 ### Solution 1: Computation as Graphs
 
-Every pipeline is a directed graph where:
+Every graph is a directed graph where:
 
 - **Nodes** are filters (trainable transformations)
 - **Edges** define data flow and dependencies
@@ -91,7 +91,7 @@ struct MyClassifier {
 }
 ```
 
-The pipeline aggregates all search spaces automatically. The Study orchestrates optimization without the user manually mapping parameters. Type validation happens at compile time.
+The graph aggregates all search spaces automatically. The Study orchestrates optimization without the user manually mapping parameters. Type validation happens at compile time.
 
 ### Solution 5: Unified Batch + Stream
 
@@ -102,6 +102,6 @@ Soma eliminates the traditional distinction between offline pipelines and real-t
 
 The filter declares its stream semantics (`FixedState`, `Evolving`, `Barrier`) and the runtime adapts execution accordingly.
 
-### Solution 6: Pipelines as Platform Nodes
+### Solution 6: Graphs as Platform Nodes
 
-A compiled pipeline can be published to the platform, where it becomes a node in a larger orchestration graph alongside agents. This enables visual composition of research workflows where agents analyze results, refine hypotheses, and launch new experiments.
+A compiled graph can be published to the platform, where it becomes a node in a larger orchestration graph alongside agents. This enables visual composition of research workflows where agents analyze results, refine hypotheses, and launch new experiments.
