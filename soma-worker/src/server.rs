@@ -98,16 +98,18 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         let messages = execute_python_job_with_progress(&state, &job);
                         // Send all but the last as intermediate messages
                         for msg in &messages[..messages.len().saturating_sub(1)] {
-                            if socket.send(Message::Text(msg.clone().into())).await.is_err() {
+                            if socket
+                                .send(Message::Text(msg.clone().into()))
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
                         // Return the last message (result) through the normal path
                         messages.into_iter().last().unwrap_or_default()
                     }
-                    Ok(CoordinatorToWorker::Ping) => {
-                        r#"{"type":"Pong"}"#.to_string()
-                    }
+                    Ok(CoordinatorToWorker::Ping) => r#"{"type":"Pong"}"#.to_string(),
                     Ok(CoordinatorToWorker::Registered { .. }) => continue,
                     Err(e) => {
                         format!(r#"{{"error": "invalid message: {e}"}}"#)
@@ -138,15 +140,20 @@ fn execute_python_job_with_progress(state: &ServerState, job: &PythonPipelineJob
             worker_id: wid.into(),
             job_id: jid.into(),
             phase: phase.into(),
-            step, total,
+            step,
+            total,
             metrics: serde_json::json!({}),
-        }).unwrap_or_default()
+        })
+        .unwrap_or_default()
     };
 
     // Phase 1/4: Environment setup
     messages.push(progress(&worker_id, &job.job_id, "environment", 1, 4));
 
-    let python = match state.env_manager.ensure_env(&job.pipeline_id, &job.requirements) {
+    let python = match state
+        .env_manager
+        .ensure_env(&job.pipeline_id, &job.requirements)
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("Failed to create env for pipeline {}: {e}", job.pipeline_id);
@@ -224,7 +231,11 @@ fn execute_python_job_with_progress(state: &ServerState, job: &PythonPipelineJob
                 .unwrap_or(serde_json::json!({}));
 
             if !success {
-                tracing::warn!("Job {} failed: {}", job.job_id, stderr.chars().take(200).collect::<String>());
+                tracing::warn!(
+                    "Job {} failed: {}",
+                    job.job_id,
+                    stderr.chars().take(200).collect::<String>()
+                );
             }
 
             WorkerToCoordinator::JobResult {
@@ -232,7 +243,11 @@ fn execute_python_job_with_progress(state: &ServerState, job: &PythonPipelineJob
                 job_id: job.job_id.clone(),
                 success,
                 metrics,
-                output: if success { stdout } else { format!("STDERR:\n{stderr}\nSTDOUT:\n{stdout}") },
+                output: if success {
+                    stdout
+                } else {
+                    format!("STDERR:\n{stderr}\nSTDOUT:\n{stdout}")
+                },
                 duration_ms,
             }
         }

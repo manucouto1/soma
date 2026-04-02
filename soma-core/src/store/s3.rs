@@ -106,7 +106,14 @@ impl S3DataStore {
         let key_secret = std::env::var("BUCKET_KEY_SECRET")
             .map_err(|_| SomaError::DataStore("BUCKET_KEY_SECRET not set".into()))?;
 
-        Self::new(bucket_name, prefix, endpoint, key_id, key_secret, local_cache)
+        Self::new(
+            bucket_name,
+            prefix,
+            endpoint,
+            key_id,
+            key_secret,
+            local_cache,
+        )
     }
 
     fn s3_key(&self, cache_key: &CacheKey) -> String {
@@ -146,8 +153,8 @@ impl DataStore for S3DataStore {
                 let hex = key.rsplit('/').next().unwrap_or(key);
                 let local_path = self.local_cache.join(hex);
                 if local_path.exists() {
-                    let bytes =
-                        std::fs::read(&local_path).map_err(|e| SomaError::DataStore(e.to_string()))?;
+                    let bytes = std::fs::read(&local_path)
+                        .map_err(|e| SomaError::DataStore(e.to_string()))?;
                     return serde_json::from_slice(&bytes)
                         .map_err(|e| SomaError::DataStore(e.to_string()));
                 }
@@ -166,8 +173,8 @@ impl DataStore for S3DataStore {
             DataRef::Cached { cache_key } => {
                 let local_path = self.local_path(cache_key);
                 if local_path.exists() {
-                    let bytes =
-                        std::fs::read(&local_path).map_err(|e| SomaError::DataStore(e.to_string()))?;
+                    let bytes = std::fs::read(&local_path)
+                        .map_err(|e| SomaError::DataStore(e.to_string()))?;
                     return serde_json::from_slice(&bytes)
                         .map_err(|e| SomaError::DataStore(e.to_string()));
                 }
@@ -273,8 +280,7 @@ mod tests {
 
     #[test]
     fn config_is_s3() {
-        let store =
-            S3DataStore::new("b", "p/", "localhost", "k", "s", "/tmp/s3test-cfg").unwrap();
+        let store = S3DataStore::new("b", "p/", "localhost", "k", "s", "/tmp/s3test-cfg").unwrap();
         assert!(matches!(store.config(), StorageConfig::S3 { .. }));
     }
 }

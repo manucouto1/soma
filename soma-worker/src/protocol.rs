@@ -169,7 +169,6 @@ pub enum CoordinatorToWorker {
     Ping,
 }
 
-
 /// Result of a plan execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
@@ -232,7 +231,9 @@ mod tests {
                 plan: ExecutionPlan::Execute {
                     node_id: "train".into(),
                 },
-                input: Some(InputSource::Inline { value: Value::tensor(vec![1.0, 2.0], vec![2]) }),
+                input: Some(InputSource::Inline {
+                    value: Value::tensor(vec![1.0, 2.0], vec![2]),
+                }),
                 metadata: serde_json::json!({"experiment": "test"}),
             },
         };

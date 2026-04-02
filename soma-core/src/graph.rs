@@ -49,7 +49,9 @@ impl Node {
         Self {
             id: id.into(),
             label: label.into(),
-            kind: NodeKind::Filter { filter_name: filter_name.into() },
+            kind: NodeKind::Filter {
+                filter_name: filter_name.into(),
+            },
         }
     }
 
@@ -59,7 +61,9 @@ impl Node {
         Self {
             label: id.clone(),
             id,
-            kind: NodeKind::Filter { filter_name: filter_name.into() },
+            kind: NodeKind::Filter {
+                filter_name: filter_name.into(),
+            },
         }
     }
 
@@ -79,7 +83,9 @@ impl Node {
         Self {
             id: id.clone(),
             label: id,
-            kind: NodeKind::SubGraph { graph: Box::new(graph) },
+            kind: NodeKind::SubGraph {
+                graph: Box::new(graph),
+            },
         }
     }
 
@@ -528,10 +534,7 @@ mod tests {
 
     #[test]
     fn subgraph_node() {
-        let inner = linear_pipeline(vec![
-            Node::new("a", "A", "F"),
-            Node::new("b", "B", "F"),
-        ]);
+        let inner = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
         let mut outer = Graph::new();
         outer.add_node(Node::new("input", "Input", "Input"));
@@ -555,8 +558,16 @@ mod tests {
         g.add_edge(Edge::data("e1", "train_loop", "check_convergence"));
 
         assert!(g.validate().is_ok());
-        assert!(matches!(g.node("train_loop").unwrap().kind, NodeKind::Loop { max_iterations: Some(100) }));
-        assert!(matches!(g.node("check_convergence").unwrap().kind, NodeKind::Branch));
+        assert!(matches!(
+            g.node("train_loop").unwrap().kind,
+            NodeKind::Loop {
+                max_iterations: Some(100)
+            }
+        ));
+        assert!(matches!(
+            g.node("check_convergence").unwrap().kind,
+            NodeKind::Branch
+        ));
     }
 
     #[test]

@@ -43,11 +43,7 @@ impl EnvManager {
 
     /// Get or create an environment for a pipeline.
     /// Returns the path to the Python binary.
-    pub fn ensure_env(
-        &self,
-        pipeline_id: &str,
-        requirements: &str,
-    ) -> Result<PathBuf, String> {
+    pub fn ensure_env(&self, pipeline_id: &str, requirements: &str) -> Result<PathBuf, String> {
         let req_hash = Self::hash_requirements(requirements);
         let env_dir = self.base_dir.join(format!("env-{pipeline_id}"));
         let lockfile_path = env_dir.join("lockfile.json");
@@ -143,9 +139,7 @@ impl EnvManager {
             .map_err(|e| format!("Failed to write requirements.txt: {e}"))?;
 
         // Always ensure soma is installed
-        let _ = Command::new(&pip)
-            .args(["install", "soma"])
-            .output();
+        let _ = Command::new(&pip).args(["install", "soma"]).output();
 
         let output = Command::new(&pip)
             .args(["install", "-r", &req_file.to_string_lossy(), "-q"])
@@ -275,12 +269,7 @@ impl EnvManager {
         serde_json::from_str(&content).map_err(|e| e.to_string())
     }
 
-    fn write_lockfile(
-        &self,
-        path: &Path,
-        requirements: &str,
-        hash: &str,
-    ) -> Result<(), String> {
+    fn write_lockfile(&self, path: &Path, requirements: &str, hash: &str) -> Result<(), String> {
         let lockfile = EnvLockfile {
             packages: Self::parse_requirements(requirements),
             requirements_hash: hash.to_string(),

@@ -386,10 +386,10 @@ impl SomaContext {
         if let Ok(lines) = self.kb.research_lines()
             && let Some(this_line) = lines.iter().find(|l| l.name == line)
         {
-                report.push_str(&format!(
-                    "\n## Status\n\n- **Trend**: {}\n- **Best metric**: {:?}\n",
-                    this_line.trend, this_line.best_metric_value
-                ));
+            report.push_str(&format!(
+                "\n## Status\n\n- **Trend**: {}\n- **Best metric**: {:?}\n",
+                this_line.trend, this_line.best_metric_value
+            ));
         }
 
         ToolCallResult::text(report)

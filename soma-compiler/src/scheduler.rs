@@ -111,7 +111,9 @@ pub fn schedule(
     };
 
     if workers.is_empty() {
-        state.warnings.push("No workers available — will execute locally".into());
+        state
+            .warnings
+            .push("No workers available — will execute locally".into());
         return DistributionPlan {
             assignments: state.assignments,
             phases: state.phases,
@@ -141,15 +143,15 @@ pub fn schedule(
     }
 }
 
-fn schedule_plan(
-    plan: &ExecutionPlan,
-    state: &mut ScheduleState<'_>,
-    forced_worker: Option<&str>,
-) {
+fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_worker: Option<&str>) {
     match plan {
         ExecutionPlan::Execute { node_id } => {
             let worker = if let Some(fw) = forced_worker {
-                state.workers.iter().find(|w| w.id == fw).unwrap_or(&state.workers[0])
+                state
+                    .workers
+                    .iter()
+                    .find(|w| w.id == fw)
+                    .unwrap_or(&state.workers[0])
             } else {
                 least_loaded(&state.workers)
             };
@@ -174,7 +176,11 @@ fn schedule_plan(
 
             let node_ids = collect_node_ids(plan);
             let has_diff = node_ids.iter().any(|n| state.diff_nodes.contains(n));
-            let force = if has_diff { Some(worker.id.as_str()) } else { forced_worker };
+            let force = if has_diff {
+                Some(worker.id.as_str())
+            } else {
+                forced_worker
+            };
 
             state.phases.push(PlanPhase {
                 phase_index: state.phase_index,
@@ -202,7 +208,10 @@ fn schedule_plan(
                 schedule_plan(branch, state, Some(&worker_id));
 
                 // Check if data transfer is needed from previous phase
-                if let Some(prev) = state.assignments.iter().rev()
+                if let Some(prev) = state
+                    .assignments
+                    .iter()
+                    .rev()
                     .find(|a| !branch_ids[i].contains(&a.node_id))
                     .filter(|prev| prev.worker_id != state.workers[worker_idx].id)
                 {
@@ -279,10 +288,7 @@ fn schedule_plan(
 }
 
 fn least_loaded<'a>(workers: &[&'a WorkerInfo]) -> &'a WorkerInfo {
-    workers
-        .iter()
-        .max_by_key(|w| w.available_slots())
-        .unwrap()
+    workers.iter().max_by_key(|w| w.available_slots()).unwrap()
 }
 
 fn collect_node_ids(plan: &ExecutionPlan) -> Vec<String> {
@@ -296,14 +302,22 @@ mod tests {
     fn test_workers() -> Vec<WorkerInfo> {
         vec![
             WorkerInfo {
-                id: "w1".into(), name: "GPU-A100".into(),
-                tags: vec!["gpu".into()], gpu: true, cpu_cores: 16,
-                active_jobs: 0, max_concurrent: 4,
+                id: "w1".into(),
+                name: "GPU-A100".into(),
+                tags: vec!["gpu".into()],
+                gpu: true,
+                cpu_cores: 16,
+                active_jobs: 0,
+                max_concurrent: 4,
             },
             WorkerInfo {
-                id: "w2".into(), name: "CPU-Server".into(),
-                tags: vec!["cpu".into()], gpu: false, cpu_cores: 64,
-                active_jobs: 1, max_concurrent: 8,
+                id: "w2".into(),
+                name: "CPU-Server".into(),
+                tags: vec!["cpu".into()],
+                gpu: false,
+                cpu_cores: 64,
+                active_jobs: 1,
+                max_concurrent: 8,
             },
         ]
     }
@@ -311,22 +325,36 @@ mod tests {
     #[test]
     fn sequential_same_worker() {
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Execute { node_id: "normalize".into() },
-            ExecutionPlan::Execute { node_id: "select".into() },
-            ExecutionPlan::Execute { node_id: "classify".into() },
+            ExecutionPlan::Execute {
+                node_id: "normalize".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "select".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "classify".into(),
+            },
         ]);
 
         let result = schedule(&plan, &test_workers(), &[]);
         // All should be on the same worker
-        let worker_ids: Vec<&str> = result.assignments.iter().map(|a| a.worker_id.as_str()).collect();
+        let worker_ids: Vec<&str> = result
+            .assignments
+            .iter()
+            .map(|a| a.worker_id.as_str())
+            .collect();
         assert!(worker_ids.windows(2).all(|w| w[0] == w[1]));
     }
 
     #[test]
     fn parallel_distributes() {
         let plan = ExecutionPlan::Parallel(vec![
-            ExecutionPlan::Execute { node_id: "train_svm".into() },
-            ExecutionPlan::Execute { node_id: "train_knn".into() },
+            ExecutionPlan::Execute {
+                node_id: "train_svm".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "train_knn".into(),
+            },
         ]);
 
         let result = schedule(&plan, &test_workers(), &[]);
@@ -340,7 +368,9 @@ mod tests {
 
     #[test]
     fn no_workers_warns() {
-        let plan = ExecutionPlan::Execute { node_id: "test".into() };
+        let plan = ExecutionPlan::Execute {
+            node_id: "test".into(),
+        };
         let result = schedule(&plan, &[], &[]);
         assert!(!result.warnings.is_empty());
     }
@@ -348,32 +378,55 @@ mod tests {
     #[test]
     fn sequence_then_parallel() {
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Execute { node_id: "load".into() },
-            ExecutionPlan::Execute { node_id: "normalize".into() },
+            ExecutionPlan::Execute {
+                node_id: "load".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "normalize".into(),
+            },
             ExecutionPlan::Parallel(vec![
-                ExecutionPlan::Execute { node_id: "train_a".into() },
-                ExecutionPlan::Execute { node_id: "train_b".into() },
+                ExecutionPlan::Execute {
+                    node_id: "train_a".into(),
+                },
+                ExecutionPlan::Execute {
+                    node_id: "train_b".into(),
+                },
             ]),
         ]);
 
         let result = schedule(&plan, &test_workers(), &[]);
         // load + normalize on same worker, train_a and train_b distributed
         assert!(result.assignments.len() >= 4);
-        assert_eq!(result.assignments[0].worker_id, result.assignments[1].worker_id);
+        assert_eq!(
+            result.assignments[0].worker_id,
+            result.assignments[1].worker_id
+        );
     }
 
     #[test]
     fn data_transfer_on_split() {
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Execute { node_id: "preprocess".into() },
+            ExecutionPlan::Execute {
+                node_id: "preprocess".into(),
+            },
             ExecutionPlan::Parallel(vec![
-                ExecutionPlan::Execute { node_id: "branch_a".into() },
-                ExecutionPlan::Execute { node_id: "branch_b".into() },
+                ExecutionPlan::Execute {
+                    node_id: "branch_a".into(),
+                },
+                ExecutionPlan::Execute {
+                    node_id: "branch_b".into(),
+                },
             ]),
         ]);
 
         let result = schedule(&plan, &test_workers(), &[]);
         // Should have at least one data transfer (preprocess → branch on different worker)
-        assert!(!result.data_transfers.is_empty() || result.assignments.iter().all(|a| a.worker_id == result.assignments[0].worker_id));
+        assert!(
+            !result.data_transfers.is_empty()
+                || result
+                    .assignments
+                    .iter()
+                    .all(|a| a.worker_id == result.assignments[0].worker_id)
+        );
     }
 }

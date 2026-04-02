@@ -40,9 +40,21 @@ impl StoreMeta {
                 shape_tail: shape.get(1..).unwrap_or_default().to_vec(),
                 dtype: "tensor".into(),
             },
-            Value::Json(_) => Self { total_rows: 1, shape_tail: vec![], dtype: "json".into() },
-            Value::Bytes(b) => Self { total_rows: b.len(), shape_tail: vec![], dtype: "bytes".into() },
-            Value::Empty => Self { total_rows: 0, shape_tail: vec![], dtype: "empty".into() },
+            Value::Json(_) => Self {
+                total_rows: 1,
+                shape_tail: vec![],
+                dtype: "json".into(),
+            },
+            Value::Bytes(b) => Self {
+                total_rows: b.len(),
+                shape_tail: vec![],
+                dtype: "bytes".into(),
+            },
+            Value::Empty => Self {
+                total_rows: 0,
+                shape_tail: vec![],
+                dtype: "empty".into(),
+            },
         }
     }
 }
@@ -66,9 +78,14 @@ pub fn slice_tensor_rows(value: &Value, start: usize, len: usize) -> Result<Valu
             }
             let mut new_shape = shape.clone();
             new_shape[0] = len;
-            Ok(Value::tensor(values[row_start..row_end].to_vec(), new_shape))
+            Ok(Value::tensor(
+                values[row_start..row_end].to_vec(),
+                new_shape,
+            ))
         }
-        _ => Err(SomaError::DataStore("get_rows only works on Tensor values".into())),
+        _ => Err(SomaError::DataStore(
+            "get_rows only works on Tensor values".into(),
+        )),
     }
 }
 
@@ -244,9 +261,7 @@ impl DataStore for LocalDataStore {
     fn exists(&self, data_ref: &DataRef) -> Result<bool> {
         match data_ref {
             DataRef::Local { path } => Ok(std::path::Path::new(path).exists()),
-            DataRef::Cached { cache_key } => {
-                Ok(self.base_path.join(cache_key.to_hex()).exists())
-            }
+            DataRef::Cached { cache_key } => Ok(self.base_path.join(cache_key.to_hex()).exists()),
             DataRef::Inline { .. } => Ok(true),
             _ => Ok(false),
         }
@@ -298,7 +313,8 @@ impl StreamCache {
 
     /// Load a filter's trained state into the stream cache.
     pub fn load_state(&mut self, filter_id: &str, state_key: CacheKey, state: Value) {
-        self.states.insert(filter_id.to_string(), (state_key, state));
+        self.states
+            .insert(filter_id.to_string(), (state_key, state));
     }
 
     /// Get a filter's cached state (for forward() during inference).
@@ -441,11 +457,25 @@ mod tests {
     #[test]
     fn data_ref_serde() {
         let refs = vec![
-            DataRef::Local { path: "/tmp/x".into() },
-            DataRef::S3 { bucket: "b".into(), key: "k".into(), region: None },
-            DataRef::Cached { cache_key: CacheKey::hash_data(b"x") },
-            DataRef::Inline { value: Value::Empty },
-            DataRef::Zarr { bucket: "b".into(), array_path: "data/abc".into(), region: None },
+            DataRef::Local {
+                path: "/tmp/x".into(),
+            },
+            DataRef::S3 {
+                bucket: "b".into(),
+                key: "k".into(),
+                region: None,
+            },
+            DataRef::Cached {
+                cache_key: CacheKey::hash_data(b"x"),
+            },
+            DataRef::Inline {
+                value: Value::Empty,
+            },
+            DataRef::Zarr {
+                bucket: "b".into(),
+                array_path: "data/abc".into(),
+                region: None,
+            },
         ];
         for r in &refs {
             let json = serde_json::to_string(r).unwrap();
@@ -457,7 +487,9 @@ mod tests {
     fn slice_tensor_rows_basic() {
         // 4 rows × 3 cols
         let v = Value::tensor(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
             vec![4, 3],
         );
         // Rows 1..3 → [[4,5,6], [7,8,9]]

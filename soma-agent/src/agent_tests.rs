@@ -80,11 +80,7 @@ mod tests {
         // Record results
         for (i, acc) in [0.85, 0.88, 0.91].iter().enumerate() {
             agent
-                .record_result(make_record(
-                    &format!("exp_{i:04}"),
-                    "k_exploration",
-                    *acc,
-                ))
+                .record_result(make_record(&format!("exp_{i:04}"), "k_exploration", *acc))
                 .unwrap();
         }
 

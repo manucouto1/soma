@@ -1,7 +1,7 @@
 //! Tests for Soma MCP tool handlers.
 
-use soma_mcp::context::SomaContext;
 use serde_json::json;
+use soma_mcp::context::SomaContext;
 use std::fs;
 
 fn setup_context() -> (SomaContext, tempfile::TempDir) {
@@ -17,7 +17,11 @@ fn setup_context() -> (SomaContext, tempfile::TempDir) {
 }
 
 fn result_text(r: &soma_mcp::protocol::ToolCallResult) -> String {
-    r.content.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join("\n")
+    r.content
+        .iter()
+        .map(|c| c.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn is_error(r: &soma_mcp::protocol::ToolCallResult) -> bool {

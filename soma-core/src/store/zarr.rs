@@ -22,16 +22,16 @@ use crate::cache::CacheKey;
 use crate::error::{Result, SomaError};
 use crate::store::{DataRef, DataStore, StorageConfig, StoreMeta};
 use crate::value::Value;
+use object_store::ObjectStore as ObjStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
-use object_store::ObjectStore as ObjStore;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 const ELEMENT_SIZE: usize = 8; // f64 = 8 bytes
-const ZSTD_LEVEL: i32 = 3;    // default zstd compression level
+const ZSTD_LEVEL: i32 = 3; // default zstd compression level
 
 /// Byte shuffle: transpose an array of N elements × 8 bytes.
 /// Groups all byte-0s together, then byte-1s, etc.
@@ -130,7 +130,12 @@ impl ZarrMeta {
     }
 
     fn cols(&self) -> usize {
-        self.shape.get(1..).unwrap_or_default().iter().product::<usize>().max(1)
+        self.shape
+            .get(1..)
+            .unwrap_or_default()
+            .iter()
+            .product::<usize>()
+            .max(1)
     }
 }
 
@@ -280,7 +285,10 @@ impl ZarrStore {
 
     /// Current local cache usage in bytes.
     pub fn cache_bytes(&self) -> u64 {
-        self.lru.lock().unwrap_or_else(|e| e.into_inner()).current_bytes()
+        self.lru
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current_bytes()
     }
 
     /// Number of cached chunk files.
@@ -505,9 +513,7 @@ impl ZarrStore {
 
     /// Extract CacheKey from array_path by parsing the hex suffix.
     fn key_from_path(&self, array_path: &str) -> CacheKey {
-        let hex = array_path
-            .strip_prefix(&self.prefix)
-            .unwrap_or(array_path);
+        let hex = array_path.strip_prefix(&self.prefix).unwrap_or(array_path);
         // Reconstruct key from hex (for local cache paths)
         CacheKey::hash_data(hex.as_bytes())
     }
@@ -525,10 +531,18 @@ impl ZarrStore {
     /// ```
     pub fn append(&self, data_ref: &DataRef, new_rows: &Value) -> Result<()> {
         let DataRef::Zarr { array_path, .. } = data_ref else {
-            return Err(SomaError::DataStore("append only works on Zarr DataRefs".into()));
+            return Err(SomaError::DataStore(
+                "append only works on Zarr DataRefs".into(),
+            ));
         };
-        let Value::Tensor { values: new_values, shape: new_shape } = new_rows else {
-            return Err(SomaError::DataStore("append only works on Tensor values".into()));
+        let Value::Tensor {
+            values: new_values,
+            shape: new_shape,
+        } = new_rows
+        else {
+            return Err(SomaError::DataStore(
+                "append only works on Tensor values".into(),
+            ));
         };
 
         let key = self.key_from_path(array_path);
@@ -537,7 +551,12 @@ impl ZarrStore {
         let cols = meta.cols();
 
         // Validate shape compatibility
-        let new_cols: usize = new_shape.get(1..).unwrap_or_default().iter().product::<usize>().max(1);
+        let new_cols: usize = new_shape
+            .get(1..)
+            .unwrap_or_default()
+            .iter()
+            .product::<usize>()
+            .max(1);
         if cols != new_cols {
             return Err(SomaError::DataStore(format!(
                 "shape mismatch: array has {} cols, new data has {new_cols}",
@@ -580,7 +599,9 @@ impl ZarrStore {
         // Write new full chunks from remaining data
         let remaining_elems = new_values.len() - cursor;
         let remaining_rows = remaining_elems / cols;
-        let first_new_chunk = (old_total + (chunk_rows - last_chunk_rows).min(append_rows) + chunk_rows - 1) / chunk_rows;
+        let first_new_chunk =
+            (old_total + (chunk_rows - last_chunk_rows).min(append_rows) + chunk_rows - 1)
+                / chunk_rows;
 
         let mut chunk_idx = first_new_chunk;
         let mut rows_written = 0;
@@ -713,11 +734,9 @@ impl DataStore for ZarrStore {
                 }
                 let _ = self.s3_delete(&format!("{array_path}/zarr.json"));
                 // Clean local cache
-                let local_dir = self.local_cache.join(
-                    array_path
-                        .strip_prefix(&self.prefix)
-                        .unwrap_or(array_path),
-                );
+                let local_dir = self
+                    .local_cache
+                    .join(array_path.strip_prefix(&self.prefix).unwrap_or(array_path));
                 let _ = std::fs::remove_dir_all(&local_dir);
             }
             DataRef::S3 { key, .. } => {

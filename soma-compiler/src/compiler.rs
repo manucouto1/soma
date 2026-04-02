@@ -162,10 +162,8 @@ impl<'a> Compiler<'a> {
             if level.len() == 1 {
                 plan_steps.push(self.plan_for_node(level[0]));
             } else {
-                let branches: Vec<ExecutionPlan> = level
-                    .iter()
-                    .map(|id| self.plan_for_node(id))
-                    .collect();
+                let branches: Vec<ExecutionPlan> =
+                    level.iter().map(|id| self.plan_for_node(id)).collect();
                 plan_steps.push(ExecutionPlan::Parallel(branches));
             }
         }
@@ -183,7 +181,11 @@ impl<'a> Compiler<'a> {
 
         let node = match self.graph.node(node_id) {
             Some(n) => n,
-            None => return ExecutionPlan::Execute { node_id: node_id.to_string() },
+            None => {
+                return ExecutionPlan::Execute {
+                    node_id: node_id.to_string(),
+                };
+            }
         };
 
         match &node.kind {
@@ -196,7 +198,9 @@ impl<'a> Compiler<'a> {
                 let inner_compiler = Compiler::new(graph, self.registry, self.mode);
                 match inner_compiler.compile(None) {
                     Ok(result) => result.plan,
-                    Err(_) => ExecutionPlan::Execute { node_id: node_id.to_string() },
+                    Err(_) => ExecutionPlan::Execute {
+                        node_id: node_id.to_string(),
+                    },
                 }
             }
 
@@ -207,10 +211,8 @@ impl<'a> Compiler<'a> {
                 let body = if successors.len() == 1 {
                     self.plan_for_node(successors[0])
                 } else if successors.len() > 1 {
-                    let branches: Vec<ExecutionPlan> = successors
-                        .iter()
-                        .map(|id| self.plan_for_node(id))
-                        .collect();
+                    let branches: Vec<ExecutionPlan> =
+                        successors.iter().map(|id| self.plan_for_node(id)).collect();
                     ExecutionPlan::Parallel(branches)
                 } else {
                     ExecutionPlan::Empty
@@ -224,7 +226,9 @@ impl<'a> Compiler<'a> {
 
             NodeKind::Branch => {
                 // Arms come from control edges leaving this node.
-                let arms: Vec<(String, ExecutionPlan)> = self.graph.edges
+                let arms: Vec<(String, ExecutionPlan)> = self
+                    .graph
+                    .edges
                     .iter()
                     .filter(|e| e.source == node_id)
                     .map(|e| {
@@ -239,7 +243,9 @@ impl<'a> Compiler<'a> {
                 }
             }
 
-            _ => ExecutionPlan::Execute { node_id: node_id.to_string() },
+            _ => ExecutionPlan::Execute {
+                node_id: node_id.to_string(),
+            },
         }
     }
 
