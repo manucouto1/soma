@@ -12,11 +12,11 @@ name = "soma-mcp"
 path = "src/main.rs"
 
 [dependencies]
-soma-core = { path = "../soma-core" }
-soma-compiler = { path = "../soma-compiler" }
-soma-runtime = { path = "../soma-runtime" }
-soma-memory = { path = "../soma-memory" }
-soma-agent = { path = "../soma-agent" }
+soma-core = { version = "0.2.1", path = "../soma-core" }
+soma-compiler = { version = "0.2.1", path = "../soma-compiler" }
+soma-runtime = { version = "0.2.1", path = "../soma-runtime" }
+soma-memory = { version = "0.2.1", path = "../soma-memory" }
+soma-agent = { version = "0.2.1", path = "../soma-agent" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
