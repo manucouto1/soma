@@ -4,7 +4,6 @@
 //! They create temporary directories and real virtual environments.
 
 use soma_worker::env_manager::{EnvManager, EnvType};
-use std::path::PathBuf;
 
 fn has_python3() -> bool {
     std::process::Command::new("python3")
