@@ -9,6 +9,7 @@ use soma_core::cache::{CacheKey, CacheStore};
 use soma_core::error::{Result, SomaError};
 use soma_core::event::Event;
 use soma_core::filter::Filter;
+use soma_core::graph::{Edge, Graph, Node};
 use soma_core::store::{DataRef, DataStore};
 use soma_core::value::Value;
 use std::sync::Arc;
@@ -143,16 +144,24 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Predict: forward data through all fitted filters.
-    /// Uses caching for outputs.
-    pub fn predict(&self, x: &Value) -> Result<Value> {
-        if !self.fitted {
-            return Err(SomaError::Execution {
-                node_id: "pipeline".into(),
-                message: "pipeline must be fitted before predict".into(),
-            });
+    /// Build a linear Graph from this pipeline's filters.
+    ///
+    /// Useful for composing pipelines into larger Graph topologies
+    /// or for compiling via `graph_run()` / `graph_fit()`.
+    pub fn as_graph(&self) -> Graph {
+        let mut graph = Graph::new();
+        let names: Vec<&str> = self.filters.iter().map(|(n, _)| n.as_str()).collect();
+        for &name in &names {
+            graph.nodes.push(Node::new(name, name, name));
         }
+        for (i, pair) in names.windows(2).enumerate() {
+            graph.edges.push(Edge::data(format!("e{i}"), pair[0], pair[1]));
+        }
+        graph
+    }
 
+    /// Predict: forward data through all fitted filters sequentially.
+    pub fn predict(&self, x: &Value) -> Result<Value> {
         let run_id = format!("predict_{}", timestamp_id());
         let start = Instant::now();
 
@@ -549,5 +558,53 @@ mod tests {
         ]);
 
         assert_eq!(pipeline.filter_names(), vec!["scaler", "square"]);
+    }
+
+    #[test]
+    fn as_graph_produces_valid_linear_graph() {
+        let pipeline = Pipeline::new(vec![
+            ("scaler".into(), Box::new(ScaleFilter { scale: 2.0 })),
+            ("square".into(), Box::new(SquareFilter)),
+        ]);
+
+        let graph = pipeline.as_graph();
+
+        // Valid graph with correct structure
+        assert!(graph.validate().is_ok());
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.roots(), vec!["scaler"]);
+        assert_eq!(graph.leaves(), vec!["square"]);
+    }
+
+    #[test]
+    fn as_graph_works_with_graph_fit() {
+        use crate::filter_library::FilterLibrary;
+        use crate::graph_session::graph_fit;
+
+        let train = Value::tensor(vec![2.0, 4.0, 6.0], vec![3]);
+
+        // Pipeline path: fit on training data, get final output
+        let mut pipeline = Pipeline::new(vec![
+            ("scaler".into(), Box::new(ScaleFilter { scale: 2.0 })),
+            ("square".into(), Box::new(SquareFilter)),
+        ]);
+        pipeline.fit(&train, None).unwrap();
+
+        // Graph path: fit on same training data
+        let graph = pipeline.as_graph();
+        let mut lib = FilterLibrary::new();
+        lib.register("scaler", Box::new(ScaleFilter { scale: 2.0 }));
+        lib.register("square", Box::new(SquareFilter));
+
+        let cache = MemoryCache::default();
+        let outputs = graph_fit(&graph, &lib, &train, None, &cache).unwrap();
+
+        // graph_fit produces outputs for training data propagated through all nodes.
+        // Pipeline.fit does the same internally (fit + forward at each step).
+        // The final node output should match what Pipeline would produce on training data.
+        let graph_result = outputs.get("square").unwrap();
+        let pipeline_on_train = pipeline.predict(&train).unwrap();
+        assert_eq!(pipeline_on_train, *graph_result);
     }
 }
