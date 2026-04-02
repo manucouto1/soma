@@ -72,7 +72,7 @@ impl Worker {
                 let output = ctx
                     .execution_order
                     .last()
-                    .and_then(|id| ctx.store.get(id))
+                    .and_then(|id| ctx.get(id))
                     .cloned()
                     .unwrap_or(soma_core::value::Value::Empty);
 

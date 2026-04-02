@@ -50,7 +50,12 @@ pub fn graph_run(
 
     executor::execute(&plan, &mut ctx, &filter_store, cache)?;
 
-    Ok(ctx.store)
+    // Extract materialized values from VirtualValue store
+    Ok(ctx
+        .store
+        .into_iter()
+        .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
+        .collect())
 }
 
 /// Fit all trainable filters in topological order, then return states + outputs.
@@ -187,17 +192,19 @@ pub fn graph_predict(
 
     executor::execute(&plan, &mut ctx, &filter_store, cache)?;
 
-    // Return the last leaf's output
+    // Return the last leaf's output (materialized)
     let leaves = graph.leaves();
+    let mut extract = |id: &str| -> Option<Value> {
+        ctx.store.remove(id).and_then(|vv| vv.as_value().cloned())
+    };
+
     if let Some(leaf_id) = leaves.first() {
-        ctx.store
-            .remove(*leaf_id)
+        extract(leaf_id)
             .ok_or_else(|| SomaError::Other(format!("leaf node '{leaf_id}' produced no output")))
     } else {
-        // Return last executed node's output
         ctx.execution_order
             .last()
-            .and_then(|id| ctx.store.remove(id))
+            .and_then(|id| extract(id))
             .ok_or_else(|| SomaError::Other("no output produced".into()))
     }
 }
@@ -312,7 +319,10 @@ mod tests {
                 .with_graph_info(GraphInfo::from_graph(&graph));
             ctx.set("__input__", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
             executor::execute(&plan, &mut ctx, &lib.to_filter_store(), &cache).unwrap();
-            ctx.store
+            // Extract materialized values
+            ctx.store.into_iter()
+                .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
+                .collect::<HashMap<String, Value>>()
         };
 
         // double: [1,2,3] → [2,4,6], add: [2,4,6] → [12,14,16]
@@ -364,7 +374,7 @@ mod tests {
         executor::execute(&plan, &mut ctx, &lib.to_filter_store(), &cache).unwrap();
 
         // merge should exist with JSON input from both branches
-        let merge_output = ctx.store.get("merge").unwrap();
+        let merge_output = ctx.get("merge").unwrap();
         assert!(merge_output.as_json().is_some(), "merge should receive JSON from multiple predecessors");
     }
 

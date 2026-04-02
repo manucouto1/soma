@@ -11,6 +11,7 @@ use soma_core::event::Event;
 use soma_core::filter::Filter;
 use soma_core::store::DataStore;
 use soma_core::value::Value;
+use soma_core::virtual_value::VirtualValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -88,9 +89,13 @@ pub trait RemoteExecutor: Send + Sync {
 }
 
 /// Execution context passed to filters during runtime.
+///
+/// Node outputs are stored as [`VirtualValue`]s — they may be materialized
+/// in memory, cached on disk, or deferred (not yet computed). The executor
+/// resolves them on demand when a downstream node needs the data.
 pub struct Context {
-    /// Outputs of completed nodes, keyed by node ID.
-    pub store: HashMap<String, Value>,
+    /// Node outputs as virtual values (may be lazy).
+    pub store: HashMap<String, VirtualValue>,
     /// Event bus for emitting runtime events.
     pub event_bus: Arc<EventBus>,
     /// Current run ID.
@@ -133,14 +138,28 @@ impl Context {
         self
     }
 
+    /// Get the materialized Value for a node, if present and materialized.
     pub fn get(&self, node_id: &str) -> Option<&Value> {
+        self.store.get(node_id).and_then(|vv| vv.as_value())
+    }
+
+    /// Get the raw VirtualValue for a node.
+    pub fn get_virtual(&self, node_id: &str) -> Option<&VirtualValue> {
         self.store.get(node_id)
     }
 
+    /// Store a materialized value for a node.
     pub fn set(&mut self, node_id: impl Into<String>, value: Value) {
         let id = node_id.into();
         self.execution_order.push(id.clone());
-        self.store.insert(id, value);
+        self.store.insert(id, VirtualValue::materialized(value));
+    }
+
+    /// Store a virtual value (which may be deferred or cached).
+    pub fn set_virtual(&mut self, node_id: impl Into<String>, vv: VirtualValue) {
+        let id = node_id.into();
+        self.execution_order.push(id.clone());
+        self.store.insert(id, vv);
     }
 
     fn snapshot(&self) -> Self {
@@ -248,7 +267,7 @@ pub fn execute(
                 let should_stop = ctx
                     .execution_order
                     .last()
-                    .and_then(|last_id| ctx.store.get(last_id))
+                    .and_then(|last_id| ctx.get(last_id))
                     .map(|v| match v {
                         Value::Json(j) => {
                             j.as_bool() == Some(true)
@@ -278,7 +297,7 @@ pub fn execute(
             execute_node(node_id, ctx, filters, cache)?;
 
             // Get the condition result
-            let condition = ctx.store.get(node_id).cloned().unwrap_or(Value::Empty);
+            let condition = ctx.get(node_id).cloned().unwrap_or(Value::Empty);
 
             // Match against arm labels
             let selected_arm = match &condition {
@@ -321,7 +340,7 @@ pub fn execute(
                     .graph_info
                     .predecessors(node_id)
                     .first()
-                    .and_then(|pred| ctx.store.get(pred));
+                    .and_then(|pred| ctx.get(pred));
 
                 let result = remote.execute_remote(node_id, target, input)?;
                 ctx.set(node_id.clone(), result);
@@ -401,7 +420,7 @@ fn execute_parallel(
         Arc::new(ctx.store.keys().cloned().collect());
 
     // Use scoped threads for true parallelism without Send requirements
-    let results: Vec<Result<Vec<(String, Value)>>> = std::thread::scope(|s| {
+    let results: Vec<Result<Vec<(String, VirtualValue)>>> = std::thread::scope(|s| {
         let handles: Vec<_> = branches
             .iter()
             .map(|branch| {
@@ -409,7 +428,7 @@ fn execute_parallel(
                 let keys = snapshot_keys.clone();
                 s.spawn(move || {
                     execute(branch, &mut branch_ctx, filters, cache)?;
-                    let new_entries: Vec<(String, Value)> = branch_ctx
+                    let new_entries: Vec<(String, VirtualValue)> = branch_ctx
                         .store
                         .into_iter()
                         .filter(|(k, _)| !keys.contains(k))
@@ -425,8 +444,8 @@ fn execute_parallel(
     // Merge results and propagate first error
     for result in results {
         let entries = result?;
-        for (key, value) in entries {
-            ctx.set(key, value);
+        for (key, vv) in entries {
+            ctx.set_virtual(key, vv);
         }
     }
 
@@ -441,14 +460,14 @@ fn resolve_input(node_id: &str, ctx: &Context) -> Value {
         0 => ctx
             .execution_order
             .last()
-            .and_then(|last_id| ctx.store.get(last_id))
+            .and_then(|last_id| ctx.get(last_id))
             .cloned()
             .unwrap_or(Value::Empty),
-        1 => ctx.store.get(&preds[0]).cloned().unwrap_or(Value::Empty),
+        1 => ctx.get(&preds[0]).cloned().unwrap_or(Value::Empty),
         _ => {
             let mut merged = serde_json::Map::new();
             for pred_id in preds {
-                if let Some(val) = ctx.store.get(pred_id) {
+                if let Some(val) = ctx.get(pred_id) {
                     let json_val = serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
                     merged.insert(pred_id.clone(), json_val);
                 }
