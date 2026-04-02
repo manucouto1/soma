@@ -171,6 +171,30 @@ pub enum Event {
         best_trial_id: TrialId,
         best_value: f64,
     },
+
+    // ── Level 4: Population-Based Training ──
+    /// A PBT generation started (train → evaluate → exploit/explore).
+    GenerationStarted {
+        study_id: StudyId,
+        generation: usize,
+        population_size: usize,
+    },
+
+    /// A PBT generation completed.
+    GenerationCompleted {
+        study_id: StudyId,
+        generation: usize,
+        best_fitness: f64,
+        mean_fitness: f64,
+    },
+
+    /// A population member was replaced during exploit step.
+    MemberExploited {
+        study_id: StudyId,
+        generation: usize,
+        replaced_id: String,
+        donor_id: String,
+    },
 }
 
 /// Serde helper: Duration as milliseconds (u64).
