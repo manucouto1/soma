@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "soma",
     "soma-core",
     "soma-compiler",
     "soma-runtime",

@@ -1,0 +1,26 @@
+[package]
+name = "soma"
+version.workspace = true
+edition.workspace = true
+readme = "../README.md"
+license.workspace = true
+repository.workspace = true
+description = "Computational graph runtime for research pipelines, agent orchestration, and data virtualization"
+keywords = ["graph", "ml", "optimization", "distributed", "pipeline"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+soma-core = { version = "0.2.1", path = "../soma-core" }
+soma-compiler = { version = "0.2.1", path = "../soma-compiler" }
+soma-runtime = { version = "0.2.1", path = "../soma-runtime" }
+soma-memory = { version = "0.2.1", path = "../soma-memory" }
+soma-worker = { version = "0.2.1", path = "../soma-worker" }
+soma-agent = { version = "0.2.1", path = "../soma-agent" }
+soma-macros = { version = "0.2.1", path = "../soma-macros" }
+
+[features]
+default = []
+s3 = ["soma-core/s3"]
+zarr = ["soma-core/zarr"]
+chronos = ["soma-memory/chronos"]
+full = ["s3", "zarr", "chronos"]

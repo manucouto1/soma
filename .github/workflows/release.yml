@@ -39,6 +39,8 @@ jobs:
           cargo publish -p soma-worker --allow-dirty || true
           sleep 30
           cargo publish -p soma-agent --allow-dirty || true
+          sleep 30
+          cargo publish -p soma --allow-dirty || true
 
   # Build Python wheels
   build-wheels:

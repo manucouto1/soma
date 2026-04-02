@@ -2773,6 +2773,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "soma"
+version = "0.2.1"
+dependencies = [
+ "soma-agent",
+ "soma-compiler",
+ "soma-core",
+ "soma-macros",
+ "soma-memory",
+ "soma-runtime",
+ "soma-worker",
+]
+
+[[package]]
 name = "soma-agent"
 version = "0.2.1"
 dependencies = [
