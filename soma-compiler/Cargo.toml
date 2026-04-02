@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Graph-to-execution-plan compiler for the Soma runtime"
 
 [dependencies]
-soma-core = { version = "0.2.6", path = "../soma-core" }
+soma-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

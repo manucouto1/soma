@@ -11,10 +11,10 @@ name = "_soma"
 crate-type = ["cdylib"]
 
 [dependencies]
-soma-core = { version = "0.2.6", path = "../soma-core" }
-soma-compiler = { version = "0.2.6", path = "../soma-compiler" }
-soma-runtime = { version = "0.2.6", path = "../soma-runtime" }
-soma-worker = { version = "0.2.6", path = "../soma-worker" }
+soma-core = { workspace = true }
+soma-compiler = { workspace = true }
+soma-runtime = { workspace = true }
+soma-worker = { workspace = true }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 hostname = "0.4"

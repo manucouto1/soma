@@ -10,13 +10,13 @@ keywords = ["graph", "ml", "optimization", "distributed", "pipeline"]
 categories = ["science", "algorithms"]
 
 [dependencies]
-soma-core = { version = "0.2.6", path = "../soma-core" }
-soma-compiler = { version = "0.2.6", path = "../soma-compiler" }
-soma-runtime = { version = "0.2.6", path = "../soma-runtime" }
-soma-memory = { version = "0.2.6", path = "../soma-memory" }
-soma-worker = { version = "0.2.6", path = "../soma-worker" }
-soma-agent = { version = "0.2.6", path = "../soma-agent" }
-soma-macros = { version = "0.2.6", path = "../soma-macros" }
+soma-core = { workspace = true }
+soma-compiler = { workspace = true }
+soma-runtime = { workspace = true }
+soma-memory = { workspace = true }
+soma-worker = { workspace = true }
+soma-agent = { workspace = true }
+soma-macros = { workspace = true }
 
 [features]
 default = []
