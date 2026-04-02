@@ -4,10 +4,10 @@
 //! the compiler reads metadata via [`FilterRegistry`], and the executor
 //! reads filters and states directly. No intermediate conversion needed.
 
-use soma_compiler::FilterRegistry;
-use soma_core::cache::CacheKey;
-use soma_core::filter::{Filter, FilterMeta};
-use soma_core::value::Value;
+use somatize_compiler::FilterRegistry;
+use somatize_core::cache::CacheKey;
+use somatize_core::filter::{Filter, FilterMeta};
+use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// lib.register("model", Box::new(MyModel::default()));
 ///
 /// // Use as compiler registry
-/// let result = soma_compiler::compile(&graph, &lib, mode, cache)?;
+/// let result = somatize_compiler::compile(&graph, &lib, mode, cache)?;
 ///
 /// // Use directly with executor — no conversion needed
 /// executor::execute(&plan, &mut ctx, &lib, &cache)?;
@@ -89,8 +89,8 @@ impl FilterRegistry for FilterLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::error::Result;
-    use soma_core::filter::{FilterKind, StreamMode};
+    use somatize_core::error::Result;
+    use somatize_core::filter::{FilterKind, StreamMode};
 
     struct DummyFilter {
         name: String,
@@ -113,7 +113,7 @@ mod tests {
                 cacheable: true,
                 differentiable: false,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }

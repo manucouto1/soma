@@ -4,9 +4,9 @@
 //! Plans are data-free (no filter implementations) and serializable.
 
 use serde::{Deserialize, Serialize};
-use soma_core::cache::CacheKey;
-use soma_core::filter::RemoteTarget;
-use soma_core::graph::NodeId;
+use somatize_core::cache::CacheKey;
+use somatize_core::filter::RemoteTarget;
+use somatize_core::graph::NodeId;
 use std::fmt;
 
 /// A compiled execution plan produced by the compiler.
@@ -123,8 +123,8 @@ impl ExecutionPlan {
     }
 
     /// Create a PlanSummary for event payloads.
-    pub fn summary(&self) -> soma_core::event::PlanSummary {
-        soma_core::event::PlanSummary {
+    pub fn summary(&self) -> somatize_core::event::PlanSummary {
+        somatize_core::event::PlanSummary {
             total_nodes: self.node_count(),
             cached_nodes: self.cached_count(),
             parallel_branches: self.parallel_branch_count(),

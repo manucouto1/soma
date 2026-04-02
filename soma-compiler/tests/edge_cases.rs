@@ -1,10 +1,10 @@
-use soma_compiler::{CompileMode, SimpleFilterRegistry, compile};
-use soma_core::cache::{CacheKey, CacheStore, EntryMeta};
-use soma_core::error::Result;
-use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
-use soma_core::schema::{DataType, Schema};
-use soma_core::value::Value;
+use somatize_compiler::{CompileMode, SimpleFilterRegistry, compile};
+use somatize_core::cache::{CacheKey, CacheStore, EntryMeta};
+use somatize_core::error::Result;
+use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
+use somatize_core::schema::{DataType, Schema};
+use somatize_core::value::Value;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
@@ -15,7 +15,7 @@ fn make_meta(kind: FilterKind, differentiable: bool) -> FilterMeta {
         cacheable: true,
         differentiable,
         stream_mode: StreamMode::FixedState,
-        distribution: soma_core::filter::Distribution::Local,
+        distribution: somatize_core::filter::Distribution::Local,
         input_schema: None,
         output_schema: None,
     }
@@ -289,7 +289,7 @@ fn meta_with_schemas(output: Option<Schema>, input: Option<Schema>) -> FilterMet
         cacheable: true,
         differentiable: true,
         stream_mode: StreamMode::FixedState,
-        distribution: soma_core::filter::Distribution::Local,
+        distribution: somatize_core::filter::Distribution::Local,
         input_schema: input,
         output_schema: output,
     }

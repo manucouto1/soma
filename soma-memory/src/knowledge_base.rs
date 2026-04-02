@@ -4,7 +4,7 @@
 //! and change points, and identifies promising directions.
 
 use crate::record::{ChangePoint, ExperimentRecord, ResearchLine, Trend};
-use soma_core::error::Result;
+use somatize_core::error::Result;
 use std::collections::HashMap;
 
 /// Trait for knowledge base backends.

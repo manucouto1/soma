@@ -3,7 +3,7 @@
 //! Emits [`Event`]s (node started/completed/failed, cache hits, run lifecycle)
 //! to all subscribers via a tokio broadcast channel.
 
-use soma_core::event::Event;
+use somatize_core::event::Event;
 use tokio::sync::broadcast;
 
 /// Async event bus for broadcasting execution events to multiple subscribers.
@@ -48,7 +48,7 @@ impl Default for EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::event::PlanSummary;
+    use somatize_core::event::PlanSummary;
     use std::time::Duration;
 
     #[tokio::test]

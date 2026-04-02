@@ -2773,102 +2773,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "soma"
-version = "0.2.6"
-dependencies = [
- "soma-agent",
- "soma-compiler",
- "soma-core",
- "soma-macros",
- "soma-memory",
- "soma-runtime",
- "soma-worker",
-]
-
-[[package]]
-name = "soma-agent"
-version = "0.2.6"
-dependencies = [
- "chrono",
- "proptest",
- "serde",
- "serde_json",
- "soma-core",
- "soma-memory",
- "soma-runtime",
- "tracing",
-]
-
-[[package]]
-name = "soma-compiler"
-version = "0.2.6"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
- "soma-core",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "soma-core"
-version = "0.2.6"
-dependencies = [
- "chrono",
- "object_store",
- "proptest",
- "rust-s3",
- "serde",
- "serde_json",
- "sha2",
- "soma-macros",
- "thiserror 2.0.18",
- "tokio",
- "zstd",
-]
-
-[[package]]
-name = "soma-macros"
-version = "0.2.6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "soma-mcp"
-version = "0.2.6"
-dependencies = [
- "chrono",
- "proptest",
- "serde",
- "serde_json",
- "soma-agent",
- "soma-compiler",
- "soma-core",
- "soma-memory",
- "soma-runtime",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "soma-memory"
-version = "0.2.6"
-dependencies = [
- "chrono",
- "chronos-vector",
- "proptest",
- "serde",
- "serde_json",
- "soma-core",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "soma-python"
 version = "0.2.6"
 dependencies = [
@@ -2879,23 +2783,119 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "soma-compiler",
- "soma-core",
- "soma-runtime",
- "soma-worker",
+ "somatize-compiler",
+ "somatize-core",
+ "somatize-runtime",
+ "somatize-worker",
  "tokio",
 ]
 
 [[package]]
-name = "soma-runtime"
+name = "somatize"
+version = "0.2.6"
+dependencies = [
+ "somatize-agent",
+ "somatize-compiler",
+ "somatize-core",
+ "somatize-macros",
+ "somatize-memory",
+ "somatize-runtime",
+ "somatize-worker",
+]
+
+[[package]]
+name = "somatize-agent"
 version = "0.2.6"
 dependencies = [
  "chrono",
  "proptest",
  "serde",
  "serde_json",
- "soma-compiler",
- "soma-core",
+ "somatize-core",
+ "somatize-memory",
+ "somatize-runtime",
+ "tracing",
+]
+
+[[package]]
+name = "somatize-compiler"
+version = "0.2.6"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "somatize-core",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "somatize-core"
+version = "0.2.6"
+dependencies = [
+ "chrono",
+ "object_store",
+ "proptest",
+ "rust-s3",
+ "serde",
+ "serde_json",
+ "sha2",
+ "somatize-macros",
+ "thiserror 2.0.18",
+ "tokio",
+ "zstd",
+]
+
+[[package]]
+name = "somatize-macros"
+version = "0.2.6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "somatize-mcp"
+version = "0.2.6"
+dependencies = [
+ "chrono",
+ "proptest",
+ "serde",
+ "serde_json",
+ "somatize-agent",
+ "somatize-compiler",
+ "somatize-core",
+ "somatize-memory",
+ "somatize-runtime",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "somatize-memory"
+version = "0.2.6"
+dependencies = [
+ "chrono",
+ "chronos-vector",
+ "proptest",
+ "serde",
+ "serde_json",
+ "somatize-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "somatize-runtime"
+version = "0.2.6"
+dependencies = [
+ "chrono",
+ "proptest",
+ "serde",
+ "serde_json",
+ "somatize-compiler",
+ "somatize-core",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2903,7 +2903,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "soma-worker"
+name = "somatize-worker"
 version = "0.2.6"
 dependencies = [
  "axum",
@@ -2917,9 +2917,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "soma-compiler",
- "soma-core",
- "soma-runtime",
+ "somatize-compiler",
+ "somatize-core",
+ "somatize-runtime",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",

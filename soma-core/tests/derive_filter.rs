@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use soma_core::SomaFilter;
-use soma_core::search::Searchable;
+use somatize_core::SomaFilter;
+use somatize_core::search::Searchable;
 use std::collections::HashMap;
 
 #[derive(SomaFilter, Serialize, Deserialize, Default)]
@@ -112,10 +112,13 @@ fn soma_meta_values() {
     let scaler = TestScaler::default();
     let meta = scaler.soma_meta();
     assert_eq!(meta.name, "TestScaler");
-    assert_eq!(meta.kind, soma_core::filter::FilterKind::Trainable);
+    assert_eq!(meta.kind, somatize_core::filter::FilterKind::Trainable);
     assert!(meta.cacheable);
     assert!(meta.differentiable);
-    assert_eq!(meta.stream_mode, soma_core::filter::StreamMode::FixedState);
+    assert_eq!(
+        meta.stream_mode,
+        somatize_core::filter::StreamMode::FixedState
+    );
 }
 
 // ── Test with auto bool search ──
@@ -134,7 +137,7 @@ fn auto_bool_search() {
     let dim = &space.active_dimensions()[0];
     assert_eq!(dim.name(), "enabled");
     // Should be Categorical with true/false
-    if let soma_core::search::SearchDimension::Categorical { choices, .. } = dim {
+    if let somatize_core::search::SearchDimension::Categorical { choices, .. } = dim {
         assert_eq!(choices.len(), 2);
     } else {
         panic!("expected Categorical for bool, got {dim:?}");
@@ -145,6 +148,6 @@ fn auto_bool_search() {
 fn opaque_meta() {
     let f = TestOpaque::default();
     let meta = f.soma_meta();
-    assert_eq!(meta.kind, soma_core::filter::FilterKind::Opaque);
+    assert_eq!(meta.kind, somatize_core::filter::FilterKind::Opaque);
     assert!(!meta.differentiable);
 }

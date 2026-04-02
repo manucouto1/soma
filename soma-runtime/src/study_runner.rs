@@ -6,9 +6,9 @@
 
 use crate::event_bus::EventBus;
 use crate::sampler::Sampler;
-use soma_core::error::Result;
-use soma_core::event::{Event, MetricRecord};
-use soma_core::study::{Study, Trial, TrialState};
+use somatize_core::error::Result;
+use somatize_core::event::{Event, MetricRecord};
+use somatize_core::study::{Study, Trial, TrialState};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -198,9 +198,9 @@ mod tests {
     use super::*;
     use crate::sampler::{GridSampler, RandomSampler};
     use chrono::Utc;
-    use soma_core::error::SomaError;
-    use soma_core::search::{Scale, SearchDimension, SearchSpace};
-    use soma_core::study::{Direction, Objective, SearchStrategy};
+    use somatize_core::error::SomaError;
+    use somatize_core::search::{Scale, SearchDimension, SearchSpace};
+    use somatize_core::study::{Direction, Objective, SearchStrategy};
 
     fn sample_space() -> SearchSpace {
         let mut space = SearchSpace::new();

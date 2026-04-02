@@ -1,6 +1,6 @@
 use crate::sampler::{Sampler, hash_u64, pseudo_random, sample_float};
-use soma_core::error::Result;
-use soma_core::search::{SearchDimension, SearchSpace};
+use somatize_core::error::Result;
+use somatize_core::search::{SearchDimension, SearchSpace};
 use std::collections::HashMap;
 
 /// Bayesian optimization sampler using Tree-Parzen Estimator (TPE).
@@ -186,7 +186,7 @@ impl Sampler for BayesianSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::search::Scale;
+    use somatize_core::search::Scale;
 
     fn sample_space() -> SearchSpace {
         let mut space = SearchSpace::new();

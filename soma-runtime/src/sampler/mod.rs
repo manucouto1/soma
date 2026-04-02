@@ -8,8 +8,8 @@ pub mod bayesian;
 
 pub use bayesian::BayesianSampler;
 
-use soma_core::error::Result;
-use soma_core::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::error::Result;
+use somatize_core::search::{Scale, SearchDimension, SearchSpace};
 use std::collections::HashMap;
 
 /// A sampler produces hyperparameter configurations from a search space.

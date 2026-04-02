@@ -1,5 +1,5 @@
 [package]
-name = "soma-runtime"
+name = "somatize-runtime"
 version.workspace = true
 edition.workspace = true
 readme = "../README.md"
@@ -8,8 +8,8 @@ repository.workspace = true
 description = "Execution engine for the Soma computational graph runtime"
 
 [dependencies]
-soma-core = { workspace = true }
-soma-compiler = { workspace = true }
+somatize-core = { workspace = true }
+somatize-compiler = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

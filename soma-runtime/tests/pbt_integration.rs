@@ -1,18 +1,18 @@
 //! Integration tests: PBT with real trainable filters and GraphSession.
 
-use soma_core::cache::CacheKey;
-use soma_core::error::Result;
-use soma_core::event::Event;
-use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Edge, Graph, Node};
-use soma_core::search::{Scale, SearchDimension, SearchSpace};
-use soma_core::strategy::{ExploitStrategy, ExploreStrategy};
-use soma_core::value::Value;
-use soma_runtime::EventBus;
-use soma_runtime::cache::MemoryCache;
-use soma_runtime::filter_library::FilterLibrary;
-use soma_runtime::graph_session::GraphSession;
-use soma_runtime::pbt_runner::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
+use somatize_core::cache::CacheKey;
+use somatize_core::error::Result;
+use somatize_core::event::Event;
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node};
+use somatize_core::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::strategy::{ExploitStrategy, ExploreStrategy};
+use somatize_core::value::Value;
+use somatize_runtime::EventBus;
+use somatize_runtime::cache::MemoryCache;
+use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::pbt_runner::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
 use std::sync::Arc;
 
 /// Trainable scaler that learns mean from data.
@@ -27,14 +27,14 @@ impl Filter for TrainableScaler {
     fn fit(&self, x: &Value, _y: Option<&Value>) -> Result<Value> {
         let (data, _) = x
             .as_tensor()
-            .ok_or(soma_core::error::SomaError::Other("need tensor".into()))?;
+            .ok_or(somatize_core::error::SomaError::Other("need tensor".into()))?;
         let mean = data.iter().sum::<f64>() / data.len() as f64;
         Ok(Value::json(serde_json::json!({"mean": mean})))
     }
     fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
         let (data, shape) = x
             .as_tensor()
-            .ok_or(soma_core::error::SomaError::Other("need tensor".into()))?;
+            .ok_or(somatize_core::error::SomaError::Other("need tensor".into()))?;
         let mean = state
             .as_json()
             .and_then(|j| j["mean"].as_f64())
@@ -49,7 +49,7 @@ impl Filter for TrainableScaler {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }

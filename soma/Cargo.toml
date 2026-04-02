@@ -1,5 +1,5 @@
 [package]
-name = "soma"
+name = "somatize"
 version.workspace = true
 edition.workspace = true
 readme = "../README.md"
@@ -10,17 +10,17 @@ keywords = ["graph", "ml", "optimization", "distributed", "pipeline"]
 categories = ["science", "algorithms"]
 
 [dependencies]
-soma-core = { workspace = true }
-soma-compiler = { workspace = true }
-soma-runtime = { workspace = true }
-soma-memory = { workspace = true }
-soma-worker = { workspace = true }
-soma-agent = { workspace = true }
-soma-macros = { workspace = true }
+somatize-core = { workspace = true }
+somatize-compiler = { workspace = true }
+somatize-runtime = { workspace = true }
+somatize-memory = { workspace = true }
+somatize-worker = { workspace = true }
+somatize-agent = { workspace = true }
+somatize-macros = { workspace = true }
 
 [features]
 default = []
-s3 = ["soma-core/s3"]
-zarr = ["soma-core/zarr"]
-chronos = ["soma-memory/chronos"]
+s3 = ["somatize-core/s3"]
+zarr = ["somatize-core/zarr"]
+chronos = ["somatize-memory/chronos"]
 full = ["s3", "zarr", "chronos"]

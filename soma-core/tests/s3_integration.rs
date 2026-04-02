@@ -7,13 +7,13 @@
 
 #![cfg(feature = "s3")]
 
-use soma_core::cache::CacheKey;
-use soma_core::store::{DataRef, DataStore};
-use soma_core::value::Value;
+use somatize_core::cache::CacheKey;
+use somatize_core::store::{DataRef, DataStore};
+use somatize_core::value::Value;
 
-fn store() -> Option<soma_core::store::S3DataStore> {
+fn store() -> Option<somatize_core::store::S3DataStore> {
     // Skip if env vars not set (CI without credentials)
-    soma_core::store::S3DataStore::from_env(
+    somatize_core::store::S3DataStore::from_env(
         "soma-test/",
         std::env::temp_dir().join("soma-s3-integration"),
     )

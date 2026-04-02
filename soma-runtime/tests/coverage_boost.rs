@@ -1,17 +1,17 @@
 //! Tests specifically targeting uncovered code paths in graph_session and executor.
 
-use soma_compiler::{CompileMode, ExecutionPlan};
-use soma_core::cache::CacheKey;
-use soma_core::error::{Result, SomaError};
-use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Edge, Graph, Node};
-use soma_core::store::{DataStore, LocalDataStore};
-use soma_core::value::Value;
-use soma_runtime::cache::MemoryCache;
-use soma_runtime::executor::{Context, RemoteExecutor};
-use soma_runtime::filter_library::FilterLibrary;
-use soma_runtime::graph_session::GraphSession;
-use soma_runtime::*;
+use somatize_compiler::{CompileMode, ExecutionPlan};
+use somatize_core::cache::CacheKey;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node};
+use somatize_core::store::{DataStore, LocalDataStore};
+use somatize_core::value::Value;
+use somatize_runtime::cache::MemoryCache;
+use somatize_runtime::executor::{Context, RemoteExecutor};
+use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::*;
 use std::sync::Arc;
 
 // ── Test filters ──
@@ -40,7 +40,7 @@ impl Filter for Doubler {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -79,7 +79,7 @@ impl Filter for MeanFilter {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -105,7 +105,7 @@ impl Filter for BranchCondition {
             cacheable: false,
             differentiable: false,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -141,7 +141,7 @@ impl Filter for StopFilter {
             cacheable: false,
             differentiable: false,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -237,7 +237,7 @@ fn session_with_remote_executor() {
         fn execute_remote(
             &self,
             _node_id: &str,
-            _target: &soma_core::filter::RemoteTarget,
+            _target: &somatize_core::filter::RemoteTarget,
             _input: Option<&Value>,
         ) -> Result<Value> {
             Ok(Value::tensor(vec![42.0], vec![1]))
@@ -404,7 +404,7 @@ fn executor_remote_falls_back_to_local() {
     // No remote executor set → should fall back to local
     let plan = ExecutionPlan::Remote {
         node_id: "doubler".into(),
-        target: soma_core::filter::RemoteTarget::Tag("gpu".into()),
+        target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
         plan: Box::new(ExecutionPlan::Execute {
             node_id: "doubler".into(),
         }),
@@ -426,7 +426,7 @@ fn executor_remote_with_executor() {
         fn execute_remote(
             &self,
             _node_id: &str,
-            _target: &soma_core::filter::RemoteTarget,
+            _target: &somatize_core::filter::RemoteTarget,
             input: Option<&Value>,
         ) -> Result<Value> {
             // Remote "doubles" the input
@@ -453,7 +453,7 @@ fn executor_remote_with_executor() {
 
     let plan = ExecutionPlan::Remote {
         node_id: "remote_node".into(),
-        target: soma_core::filter::RemoteTarget::Tag("gpu".into()),
+        target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
         plan: Box::new(ExecutionPlan::Execute {
             node_id: "remote_node".into(),
         }),
@@ -510,7 +510,7 @@ fn graph_run_free_function() {
     lib.register("doubler", Box::new(Doubler));
 
     let cache = MemoryCache::default();
-    let result = soma_runtime::graph_run(&graph, &lib, CompileMode::NoCache, &cache);
+    let result = somatize_runtime::graph_run(&graph, &lib, CompileMode::NoCache, &cache);
     assert!(result.is_ok());
 }
 
@@ -522,7 +522,7 @@ fn graph_fit_free_function_trainable() {
 
     let cache = MemoryCache::default();
     let x = Value::tensor(vec![10.0, 20.0], vec![2]);
-    let outputs = soma_runtime::graph_fit(&graph, &lib, &x, None, &cache).unwrap();
+    let outputs = somatize_runtime::graph_fit(&graph, &lib, &x, None, &cache).unwrap();
 
     assert!(outputs.contains_key("mean"));
     let (data, _) = outputs["mean"].as_tensor().unwrap();
@@ -538,7 +538,7 @@ fn graph_predict_free_function() {
 
     let cache = MemoryCache::default();
     let x = Value::tensor(vec![3.0], vec![1]);
-    let result = soma_runtime::graph_predict(&graph, &lib, &x, &cache);
+    let result = somatize_runtime::graph_predict(&graph, &lib, &x, &cache);
     // May or may not work depending on cache state, but the path is exercised
     let _ = result;
 }

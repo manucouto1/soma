@@ -10,21 +10,21 @@ use pyo3::types::{IntoPyDict, PyDict, PyList};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use soma_compiler::CompileMode;
-use soma_core::cache::CacheKey;
-use soma_core::error::{Result as SomaResult, SomaError};
-use soma_core::event::MetricRecord;
-use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Edge, Graph, Node};
-use soma_core::search::{Scale, SearchDimension, SearchSpace};
-use soma_core::study::{Direction, Objective, SearchStrategy, Study};
-use soma_core::value::Value;
-use soma_runtime::EventBus;
-use soma_runtime::cache::MemoryCache;
-use soma_runtime::executor::{self, Context, GraphInfo};
-use soma_runtime::filter_library::FilterLibrary;
-use soma_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
-use soma_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
+use somatize_compiler::CompileMode;
+use somatize_core::cache::CacheKey;
+use somatize_core::error::{Result as SomaResult, SomaError};
+use somatize_core::event::MetricRecord;
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node};
+use somatize_core::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::value::Value;
+use somatize_runtime::EventBus;
+use somatize_runtime::cache::MemoryCache;
+use somatize_runtime::executor::{self, Context, GraphInfo};
+use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
+use somatize_runtime::study_runner::{FnTrialExecutor, StudyRunner, TrialOutcome};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -219,7 +219,7 @@ impl Filter for PyFilterBridge {
             cacheable,
             differentiable,
             stream_mode,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -490,7 +490,7 @@ impl PyStudy {
 struct PyGraph {
     graph: Graph,
     library: FilterLibrary,
-    cache: Arc<dyn soma_core::cache::CacheStore>,
+    cache: Arc<dyn somatize_core::cache::CacheStore>,
     event_bus: Arc<EventBus>,
     fitted: bool,
     /// Registered remote workers: (address, token, tags).
@@ -596,7 +596,7 @@ impl PyGraph {
         self.graph.validate().map_err(soma_err_to_py)?;
         let sorted = self.graph.topological_sort().map_err(soma_err_to_py)?;
         let graph_info = GraphInfo::from_graph(&self.graph);
-        let run_id = soma_core::util::timestamp_id("graph_fit");
+        let run_id = somatize_core::util::timestamp_id("graph_fit");
 
         let roots = self.graph.roots();
         let mut outputs: std::collections::HashMap<String, Value> =
@@ -611,11 +611,12 @@ impl PyGraph {
                 .get(node_id)
                 .ok_or_else(|| PyRuntimeError::new_err(format!("filter not found: {node_id}")))?;
 
-            self.event_bus.emit(soma_core::event::Event::NodeStarted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                kind: filter.meta().kind,
-            });
+            self.event_bus
+                .emit(somatize_core::event::Event::NodeStarted {
+                    run_id: run_id.clone(),
+                    node_id: node_id.to_string(),
+                    kind: filter.meta().kind,
+                });
 
             let preds = graph_info.predecessors(node_id);
             let input = match preds.len() {
@@ -640,12 +641,12 @@ impl PyGraph {
             let meta = filter.meta();
             let start = std::time::Instant::now();
 
-            let output = if meta.kind == soma_core::filter::FilterKind::Trainable {
-                let data_hash = soma_core::cache::CacheKey::hash_data(
+            let output = if meta.kind == somatize_core::filter::FilterKind::Trainable {
+                let data_hash = somatize_core::cache::CacheKey::hash_data(
                     &serde_json::to_vec(&input).unwrap_or_default(),
                 );
                 let state_key =
-                    soma_core::cache::CacheKey::for_state(&filter.config_hash(), &data_hash);
+                    somatize_core::cache::CacheKey::for_state(&filter.config_hash(), &data_hash);
 
                 let state = if let Ok(Some(cached)) = self.cache.get(&state_key) {
                     cached
@@ -664,12 +665,13 @@ impl PyGraph {
                     .map_err(soma_err_to_py)?
             };
 
-            self.event_bus.emit(soma_core::event::Event::NodeCompleted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                duration: start.elapsed(),
-                output_summary: format!("{output}"),
-            });
+            self.event_bus
+                .emit(somatize_core::event::Event::NodeCompleted {
+                    run_id: run_id.clone(),
+                    node_id: node_id.to_string(),
+                    duration: start.elapsed(),
+                    output_summary: format!("{output}"),
+                });
 
             outputs.insert(node_id.to_string(), output);
         }
@@ -687,7 +689,7 @@ impl PyGraph {
         }
         let x_val = py_to_value(py, x)?;
 
-        let compile_result = soma_compiler::compile(
+        let compile_result = somatize_compiler::compile(
             &self.graph,
             &self.library,
             CompileMode::Inference,
@@ -698,7 +700,7 @@ impl PyGraph {
         let graph_info = GraphInfo::from_graph(&self.graph);
         let mut ctx = Context::new(
             self.event_bus.clone(),
-            soma_core::util::timestamp_id("graph_forward"),
+            somatize_core::util::timestamp_id("graph_forward"),
         )
         .with_graph_info(graph_info);
 
@@ -735,7 +737,7 @@ impl PyGraph {
 
     /// Compile and execute, returning all node outputs as a dict.
     fn run(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let compile_result = soma_compiler::compile(
+        let compile_result = somatize_compiler::compile(
             &self.graph,
             &self.library,
             CompileMode::NoCache,
@@ -746,7 +748,7 @@ impl PyGraph {
         let graph_info = GraphInfo::from_graph(&self.graph);
         let mut ctx = Context::new(
             self.event_bus.clone(),
-            soma_core::util::timestamp_id("graph_run"),
+            somatize_core::util::timestamp_id("graph_run"),
         )
         .with_graph_info(graph_info);
 
@@ -781,7 +783,7 @@ impl PyGraph {
             }
         };
 
-        let result = soma_compiler::compile(
+        let result = somatize_compiler::compile(
             &self.graph,
             &self.library,
             compile_mode,
@@ -1015,8 +1017,8 @@ impl PyWorker {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 // Auto-detect capabilities
-                let mut caps = soma_worker::protocol::Capabilities::detect();
-                let limits = soma_worker::detect::ResourceLimits {
+                let mut caps = somatize_worker::protocol::Capabilities::detect();
+                let limits = somatize_worker::detect::ResourceLimits {
                     max_cpus: cpus,
                     max_memory_bytes: memory,
                     max_gpus: gpus,
@@ -1038,7 +1040,7 @@ impl PyWorker {
                 eprintln!("Soma worker '{id}' starting on port {port}");
                 eprintln!("Capabilities: {}", caps.summary());
 
-                let worker = soma_worker::Worker::new(&id, caps.clone());
+                let worker = somatize_worker::Worker::new(&id, caps.clone());
                 let addr = format!("0.0.0.0:{port}");
 
                 // Register with coordinator if configured
@@ -1068,11 +1070,11 @@ impl PyWorker {
 
                 if let Some(t) = token {
                     eprintln!("Authentication enabled");
-                    soma_worker::serve_worker_authenticated(worker, &addr, &t)
+                    somatize_worker::serve_worker_authenticated(worker, &addr, &t)
                         .await
                         .unwrap();
                 } else {
-                    soma_worker::serve_worker(worker, &addr).await.unwrap();
+                    somatize_worker::serve_worker(worker, &addr).await.unwrap();
                 }
             });
         })
@@ -1084,7 +1086,7 @@ impl PyWorker {
 
     /// Get the worker info as a dict.
     fn info(&self) -> PyResult<String> {
-        let caps = soma_worker::protocol::Capabilities::detect();
+        let caps = somatize_worker::protocol::Capabilities::detect();
         Ok(caps.summary())
     }
 

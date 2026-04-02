@@ -28,21 +28,21 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cargo publish -p soma-macros --allow-dirty || true
+          cargo publish -p somatize-macros --allow-dirty || true
           sleep 30
-          cargo publish -p soma-core --allow-dirty || true
+          cargo publish -p somatize-core --allow-dirty || true
           sleep 30
-          cargo publish -p soma-compiler --allow-dirty || true
+          cargo publish -p somatize-compiler --allow-dirty || true
           sleep 30
-          cargo publish -p soma-runtime --allow-dirty || true
+          cargo publish -p somatize-runtime --allow-dirty || true
           sleep 30
-          cargo publish -p soma-memory --allow-dirty || true
+          cargo publish -p somatize-memory --allow-dirty || true
           sleep 30
-          cargo publish -p soma-worker --allow-dirty || true
+          cargo publish -p somatize-worker --allow-dirty || true
           sleep 30
-          cargo publish -p soma-agent --allow-dirty || true
+          cargo publish -p somatize-agent --allow-dirty || true
           sleep 30
-          cargo publish -p soma --allow-dirty || true
+          cargo publish -p somatize --allow-dirty || true
 
   # Build Python wheels
   build-wheels:

@@ -1,4 +1,4 @@
-use soma_mcp::{SomaContext, run_stdio};
+use somatize_mcp::{SomaContext, run_stdio};
 use std::env;
 
 fn main() {

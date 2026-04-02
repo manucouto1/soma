@@ -1,5 +1,5 @@
 [package]
-name = "soma-macros"
+name = "somatize-macros"
 version.workspace = true
 edition.workspace = true
 readme = "../README.md"

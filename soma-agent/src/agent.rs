@@ -2,8 +2,8 @@
 
 use crate::action::Action;
 use crate::planner::ResearchPlan;
-use soma_core::error::Result;
-use soma_memory::{ExperimentRecord, KnowledgeBase, ResearchLine, Trend};
+use somatize_core::error::Result;
+use somatize_memory::{ExperimentRecord, KnowledgeBase, ResearchLine, Trend};
 
 /// An autonomous research agent that plans, executes, and analyzes experiments.
 ///

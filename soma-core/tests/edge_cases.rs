@@ -1,10 +1,10 @@
-use soma_core::cache::CacheKey;
-use soma_core::error::SomaError;
-use soma_core::event::MetricRecord;
-use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
-use soma_core::search::{Scale, SearchDimension, SearchSpace};
-use soma_core::study::{Direction, Objective, SearchStrategy, Study, Trial, TrialState};
-use soma_core::value::Value;
+use somatize_core::cache::CacheKey;
+use somatize_core::error::SomaError;
+use somatize_core::event::MetricRecord;
+use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
+use somatize_core::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::study::{Direction, Objective, SearchStrategy, Study, Trial, TrialState};
+use somatize_core::value::Value;
 
 // ── Value edge cases ──
 

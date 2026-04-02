@@ -1,15 +1,15 @@
 //! Integration tests: TrainingStrategy affects Scheduler output.
 
-use soma_compiler::scheduler::{WorkerInfo, schedule};
-use soma_compiler::{CompileMode, compile};
-use soma_core::cache::CacheKey;
-use soma_core::error::Result;
-use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Edge, Graph, Node};
-use soma_core::strategy::{
+use somatize_compiler::scheduler::{WorkerInfo, schedule};
+use somatize_compiler::{CompileMode, compile};
+use somatize_core::cache::CacheKey;
+use somatize_core::error::Result;
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node};
+use somatize_core::strategy::{
     CommunicationProtocol, GradientAggregation, Partition, TrainingStrategy,
 };
-use soma_core::value::Value;
+use somatize_core::value::Value;
 
 struct DummyFilter(String);
 
@@ -30,7 +30,7 @@ impl Filter for DummyFilter {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -84,7 +84,7 @@ fn test_workers() -> Vec<WorkerInfo> {
 fn local_strategy_compiles_normally() {
     let graph = linear_graph(&["scaler", "model"]);
 
-    let mut registry = soma_compiler::SimpleFilterRegistry::new();
+    let mut registry = somatize_compiler::SimpleFilterRegistry::new();
     registry.register("scaler", &DummyFilter("Scaler".into()));
     registry.register("model", &DummyFilter("Model".into()));
 
@@ -104,7 +104,7 @@ fn scheduler_distributes_parallel_branches() {
     graph.edges.push(Edge::data("e3", "branch_a", "merge"));
     graph.edges.push(Edge::data("e4", "branch_b", "merge"));
 
-    let mut registry = soma_compiler::SimpleFilterRegistry::new();
+    let mut registry = somatize_compiler::SimpleFilterRegistry::new();
     for id in ["input", "branch_a", "branch_b", "merge"] {
         registry.register(id, &DummyFilter(id.into()));
     }
@@ -124,7 +124,7 @@ fn scheduler_distributes_parallel_branches() {
 fn scheduler_groups_differentiable_nodes() {
     let graph = linear_graph(&["encoder", "decoder"]);
 
-    let mut registry = soma_compiler::SimpleFilterRegistry::new();
+    let mut registry = somatize_compiler::SimpleFilterRegistry::new();
     registry.register("encoder", &DummyFilter("Encoder".into()));
     registry.register("decoder", &DummyFilter("Decoder".into()));
 
@@ -181,11 +181,11 @@ fn model_parallel_partition_validates() {
         partitions: vec![
             Partition {
                 node_ids: vec!["embed".into(), "backbone".into()],
-                target: soma_core::filter::RemoteTarget::Tag("gpu-0".into()),
+                target: somatize_core::filter::RemoteTarget::Tag("gpu-0".into()),
             },
             Partition {
                 node_ids: vec!["head".into()],
-                target: soma_core::filter::RemoteTarget::Tag("gpu-1".into()),
+                target: somatize_core::filter::RemoteTarget::Tag("gpu-1".into()),
             },
         ],
         communication: CommunicationProtocol::Pipeline {

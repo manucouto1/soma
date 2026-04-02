@@ -9,11 +9,11 @@
 
 use crate::event_bus::EventBus;
 use crate::sampler::{hash_u64, pseudo_random};
-use soma_core::error::Result;
-use soma_core::event::Event;
-use soma_core::search::{SearchDimension, SearchSpace};
-use soma_core::strategy::{ExploitStrategy, ExploreStrategy};
-use soma_core::value::Value;
+use somatize_core::error::Result;
+use somatize_core::event::Event;
+use somatize_core::search::{SearchDimension, SearchSpace};
+use somatize_core::strategy::{ExploitStrategy, ExploreStrategy};
+use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -82,7 +82,7 @@ impl PbtRunner {
         config: &PbtConfig,
         executor: &dyn PbtExecutor,
     ) -> Result<Vec<PopulationMember>> {
-        let study_id = soma_core::util::timestamp_id("pbt");
+        let study_id = somatize_core::util::timestamp_id("pbt");
         let mut rng_state: u64 = 42;
 
         // Initialize population with random params
@@ -314,7 +314,7 @@ fn perturb_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::search::Scale;
+    use somatize_core::search::Scale;
 
     fn test_config() -> PbtConfig {
         let mut space = SearchSpace::new();

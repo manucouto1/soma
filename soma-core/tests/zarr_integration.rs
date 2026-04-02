@@ -7,9 +7,9 @@
 
 #![cfg(feature = "zarr")]
 
-use soma_core::cache::CacheKey;
-use soma_core::store::{DataRef, DataStore, ZarrStore};
-use soma_core::value::Value;
+use somatize_core::cache::CacheKey;
+use somatize_core::store::{DataRef, DataStore, ZarrStore};
+use somatize_core::value::Value;
 
 fn store() -> Option<ZarrStore> {
     ZarrStore::from_env(

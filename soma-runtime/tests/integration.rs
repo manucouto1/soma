@@ -3,16 +3,16 @@
 //! These tests verify realistic researcher use cases:
 //! define filters → build graph → fit → forward → cache hit → invalidation.
 
-use soma_compiler::{CompileMode, SimpleFilterRegistry, compile};
-use soma_core::cache::CacheKey;
-use soma_core::error::{Result, SomaError};
-use soma_core::event::MetricRecord;
-use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
-use soma_core::search::{Scale, SearchDimension, SearchSpace};
-use soma_core::study::{Direction, Objective, SearchStrategy, Study};
-use soma_core::value::Value;
-use soma_runtime::*;
+use somatize_compiler::{CompileMode, SimpleFilterRegistry, compile};
+use somatize_core::cache::CacheKey;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::event::MetricRecord;
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
+use somatize_core::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::value::Value;
+use somatize_runtime::*;
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════
@@ -55,7 +55,7 @@ impl Filter for Normalizer {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -116,7 +116,7 @@ impl Filter for LinearModel {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -143,7 +143,7 @@ impl Filter for FailingFilter {
             cacheable: false,
             differentiable: false,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -420,7 +420,7 @@ fn study_continues_after_failed_trials() {
     let failed = study
         .trials
         .iter()
-        .filter(|t| matches!(t.state, soma_core::study::TrialState::Failed { .. }))
+        .filter(|t| matches!(t.state, somatize_core::study::TrialState::Failed { .. }))
         .count();
     assert!(completed > 0, "some trials should succeed");
     assert!(failed > 0, "some trials should fail");
@@ -494,7 +494,7 @@ fn compile_then_execute_with_cache() {
 
     // Execute
     let bus = Arc::new(EventBus::new(64));
-    let graph_info = soma_runtime::executor::GraphInfo::from_graph(&graph);
+    let graph_info = somatize_runtime::executor::GraphInfo::from_graph(&graph);
     let mut ctx = Context::new(bus, "run_1").with_graph_info(graph_info);
     ctx.set("input", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
 

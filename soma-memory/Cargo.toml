@@ -1,5 +1,5 @@
 [package]
-name = "soma-memory"
+name = "somatize-memory"
 version.workspace = true
 edition.workspace = true
 readme = "../README.md"
@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Knowledge base and temporal experiment tracking for the Soma runtime"
 
 [dependencies]
-soma-core = { workspace = true }
+somatize-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

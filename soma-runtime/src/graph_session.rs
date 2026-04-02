@@ -8,15 +8,15 @@ use crate::cache::MemoryCache;
 use crate::event_bus::EventBus;
 use crate::executor::{self, Context, GraphInfo, RemoteExecutor};
 use crate::filter_library::FilterLibrary;
-use soma_compiler::{CompileMode, CompileResult, compile};
-use soma_core::cache::{CacheKey, CacheStore};
-use soma_core::error::{Result, SomaError};
-use soma_core::event::Event;
-use soma_core::filter::FilterKind;
-use soma_core::graph::Graph;
-use soma_core::store::{DataRef, DataStore};
-use soma_core::util::timestamp_id;
-use soma_core::value::Value;
+use somatize_compiler::{CompileMode, CompileResult, compile};
+use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::error::{Result, SomaError};
+use somatize_core::event::Event;
+use somatize_core::filter::FilterKind;
+use somatize_core::graph::Graph;
+use somatize_core::store::{DataRef, DataStore};
+use somatize_core::util::timestamp_id;
+use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -549,16 +549,16 @@ pub fn graph_predict(
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
-    use soma_compiler::FilterRegistry;
-    use soma_core::cache::CacheKey;
-    use soma_core::error::Result;
-    use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
-    use soma_core::graph::{Edge, Node};
+    use somatize_compiler::FilterRegistry;
+    use somatize_core::cache::CacheKey;
+    use somatize_core::error::Result;
+    use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
+    use somatize_core::graph::{Edge, Node};
 
     // ── Test filters ──
 
     struct DoublerFilter;
-    impl soma_core::filter::Filter for DoublerFilter {
+    impl somatize_core::filter::Filter for DoublerFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Doubler"])
         }
@@ -581,7 +581,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -589,7 +589,7 @@ mod tests {
     }
 
     struct AdderFilter(f64);
-    impl soma_core::filter::Filter for AdderFilter {
+    impl somatize_core::filter::Filter for AdderFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Adder", &self.0.to_le_bytes()])
         }
@@ -612,7 +612,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -620,7 +620,7 @@ mod tests {
     }
 
     struct MeanFilter;
-    impl soma_core::filter::Filter for MeanFilter {
+    impl somatize_core::filter::Filter for MeanFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Mean"])
         }
@@ -651,7 +651,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -777,7 +777,7 @@ mod tests {
         lib.register("add", Box::new(AdderFilter(100.0)));
 
         struct MergeFilter;
-        impl soma_core::filter::Filter for MergeFilter {
+        impl somatize_core::filter::Filter for MergeFilter {
             fn config_hash(&self) -> CacheKey {
                 CacheKey::from_parts(&[b"Merge"])
             }
@@ -794,7 +794,7 @@ mod tests {
                     cacheable: true,
                     differentiable: false,
                     stream_mode: StreamMode::FixedState,
-                    distribution: soma_core::filter::Distribution::Local,
+                    distribution: somatize_core::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }

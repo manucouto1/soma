@@ -5,10 +5,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use soma_compiler::ExecutionPlan;
-use soma_core::event::Event;
-use soma_core::store::DataRef;
-use soma_core::value::Value;
+use somatize_compiler::ExecutionPlan;
+use somatize_core::event::Event;
+use somatize_core::store::DataRef;
+use somatize_core::value::Value;
 
 /// Unique worker identifier.
 pub type WorkerId = String;
@@ -180,7 +180,7 @@ pub enum PlanResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::event::PlanSummary;
+    use somatize_core::event::PlanSummary;
 
     #[test]
     fn capabilities_serde() {

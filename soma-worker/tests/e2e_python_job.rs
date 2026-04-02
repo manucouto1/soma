@@ -3,9 +3,9 @@
 //! Sends an AssignPythonJob message, verifies progress events and final result.
 //! Requires python3 on the system.
 
-use soma_worker::protocol::*;
-use soma_worker::worker::Worker;
-use soma_worker::worker_router;
+use somatize_worker::protocol::*;
+use somatize_worker::worker::Worker;
+use somatize_worker::worker_router;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 

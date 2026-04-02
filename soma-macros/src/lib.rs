@@ -83,60 +83,60 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
 
     // FilterKind
     let kind = match struct_attrs.kind.as_deref() {
-        Some("Stateless") => quote! { soma_core::filter::FilterKind::Stateless },
-        Some("Opaque") => quote! { soma_core::filter::FilterKind::Opaque },
-        _ => quote! { soma_core::filter::FilterKind::Trainable },
+        Some("Stateless") => quote! { somatize_core::filter::FilterKind::Stateless },
+        Some("Opaque") => quote! { somatize_core::filter::FilterKind::Opaque },
+        _ => quote! { somatize_core::filter::FilterKind::Trainable },
     };
 
     let cacheable = struct_attrs.cacheable;
     let differentiable = struct_attrs.differentiable;
 
     let stream_mode = match struct_attrs.stream.as_deref() {
-        Some("Barrier") => quote! { soma_core::filter::StreamMode::Barrier },
+        Some("Barrier") => quote! { somatize_core::filter::StreamMode::Barrier },
         Some("Evolving") => {
-            quote! { soma_core::filter::StreamMode::Evolving { checkpoint_every: 100 } }
+            quote! { somatize_core::filter::StreamMode::Evolving { checkpoint_every: 100 } }
         }
-        _ => quote! { soma_core::filter::StreamMode::FixedState },
+        _ => quote! { somatize_core::filter::StreamMode::FixedState },
     };
 
     let expanded = quote! {
         impl #name {
             /// Compute a content-addressable hash of this filter's configuration.
-            pub fn config_hash(&self) -> soma_core::cache::CacheKey {
+            pub fn config_hash(&self) -> somatize_core::cache::CacheKey {
                 let mut parts: Vec<Vec<u8>> = Vec::new();
                 // Include type name
                 parts.push(#name_str.as_bytes().to_vec());
                 // Include each non-skipped field
                 #(#hash_parts)*
                 let refs: Vec<&[u8]> = parts.iter().map(|p| p.as_slice()).collect();
-                soma_core::cache::CacheKey::from_parts(&refs)
+                somatize_core::cache::CacheKey::from_parts(&refs)
             }
 
             /// Filter metadata for the compiler.
-            pub fn soma_meta(&self) -> soma_core::filter::FilterMeta {
-                soma_core::filter::FilterMeta {
+            pub fn soma_meta(&self) -> somatize_core::filter::FilterMeta {
+                somatize_core::filter::FilterMeta {
                     name: #name_str.to_string(),
                     kind: #kind,
                     cacheable: #cacheable,
                     differentiable: #differentiable,
                     stream_mode: #stream_mode,
-                    distribution: soma_core::filter::Distribution::Local,
+                    distribution: somatize_core::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }
             }
         }
 
-        impl soma_core::search::Searchable for #name {
-            fn search_space() -> soma_core::search::SearchSpace {
-                let mut space = soma_core::search::SearchSpace::new();
+        impl somatize_core::search::Searchable for #name {
+            fn search_space() -> somatize_core::search::SearchSpace {
+                let mut space = somatize_core::search::SearchSpace::new();
                 #(#search_dims)*
                 space
             }
 
             fn from_sample(
                 params: &std::collections::HashMap<String, serde_json::Value>,
-            ) -> soma_core::error::Result<Self> {
+            ) -> somatize_core::error::Result<Self> {
                 Ok(Self {
                     #(#from_sample_fields)*
                 })
@@ -322,7 +322,7 @@ fn generate_search_dimension(
     if !search.choices.is_empty() {
         let choices = &search.choices;
         return quote! {
-            space.add(soma_core::search::SearchDimension::Categorical {
+            space.add(somatize_core::search::SearchDimension::Categorical {
                 name: #name.to_string(),
                 choices: vec![#(serde_json::json!(#choices)),*],
             });
@@ -332,7 +332,7 @@ fn generate_search_dimension(
     // Auto-detect for bool
     if search.auto && type_str == "bool" {
         return quote! {
-            space.add(soma_core::search::SearchDimension::Categorical {
+            space.add(somatize_core::search::SearchDimension::Categorical {
                 name: #name.to_string(),
                 choices: vec![serde_json::json!(true), serde_json::json!(false)],
             });
@@ -342,9 +342,9 @@ fn generate_search_dimension(
     // Float range
     if let (Some(low), Some(high)) = (search.low, search.high) {
         let scale = match search.scale.as_deref() {
-            Some("log") => quote! { soma_core::search::Scale::Log },
-            Some("reverse_log") => quote! { soma_core::search::Scale::ReverseLog },
-            _ => quote! { soma_core::search::Scale::Linear },
+            Some("log") => quote! { somatize_core::search::Scale::Log },
+            Some("reverse_log") => quote! { somatize_core::search::Scale::ReverseLog },
+            _ => quote! { somatize_core::search::Scale::Linear },
         };
 
         let is_int = type_str.contains("usize")
@@ -357,7 +357,7 @@ fn generate_search_dimension(
             let low_i = low as i64;
             let high_i = high as i64;
             return quote! {
-                space.add(soma_core::search::SearchDimension::Int {
+                space.add(somatize_core::search::SearchDimension::Int {
                     name: #name.to_string(),
                     low: #low_i,
                     high: #high_i,
@@ -366,7 +366,7 @@ fn generate_search_dimension(
             };
         } else {
             return quote! {
-                space.add(soma_core::search::SearchDimension::Float {
+                space.add(somatize_core::search::SearchDimension::Float {
                     name: #name.to_string(),
                     low: #low,
                     high: #high,

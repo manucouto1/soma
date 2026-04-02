@@ -48,4 +48,4 @@ pub use value::Value;
 pub use virtual_value::{ValueStatus, VirtualValue};
 
 // Re-export derive macro
-pub use soma_macros::SomaFilter;
+pub use somatize_macros::SomaFilter;

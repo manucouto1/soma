@@ -1,13 +1,13 @@
 //! End-to-end worker tests: start server, connect WebSocket, execute plans.
 
-use soma_compiler::ExecutionPlan;
-use soma_core::cache::CacheKey;
-use soma_core::error::Result as SomaResult;
-use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use soma_core::value::Value;
-use soma_worker::protocol::*;
-use soma_worker::worker::Worker;
-use soma_worker::{worker_router, worker_router_authenticated};
+use somatize_compiler::ExecutionPlan;
+use somatize_core::cache::CacheKey;
+use somatize_core::error::Result as SomaResult;
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::value::Value;
+use somatize_worker::protocol::*;
+use somatize_worker::worker::Worker;
+use somatize_worker::{worker_router, worker_router_authenticated};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -36,7 +36,7 @@ impl Filter for TestDoubler {
             cacheable: true,
             differentiable: true,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }

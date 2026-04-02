@@ -13,7 +13,7 @@ use chronos_vector::core::TemporalFilter;
 use chronos_vector::index::hnsw::HnswConfig;
 use chronos_vector::index::hnsw::temporal::TemporalHnsw;
 use chronos_vector::index::metrics::L2Distance;
-use soma_core::error::Result;
+use somatize_core::error::Result;
 use std::collections::HashMap;
 
 /// KnowledgeBase backed by ChronosVector's TemporalHnsw.

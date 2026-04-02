@@ -23,9 +23,9 @@
 //! ```
 
 use clap::Parser;
-use soma_worker::detect::ResourceLimits;
-use soma_worker::protocol::Capabilities;
-use soma_worker::worker::Worker;
+use somatize_worker::detect::ResourceLimits;
+use somatize_worker::protocol::Capabilities;
+use somatize_worker::worker::Worker;
 
 #[derive(Parser, Debug)]
 #[command(name = "soma-worker", about = "Soma distributed execution worker")]
@@ -160,11 +160,11 @@ async fn main() {
     // Start server
     if let Some(token) = args.token {
         tracing::info!("Authentication enabled");
-        soma_worker::serve_worker_authenticated(worker, &addr, &token)
+        somatize_worker::serve_worker_authenticated(worker, &addr, &token)
             .await
             .unwrap();
     } else {
-        soma_worker::serve_worker(worker, &addr).await.unwrap();
+        somatize_worker::serve_worker(worker, &addr).await.unwrap();
     }
 }
 

@@ -1,10 +1,10 @@
 //! Worker — receives and executes plans from a coordinator.
 
 use crate::protocol::*;
-use soma_core::cache::CacheStore;
-use soma_core::event::Event;
-use soma_core::filter::Filter;
-use soma_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
+use somatize_core::cache::CacheStore;
+use somatize_core::event::Event;
+use somatize_core::filter::Filter;
+use somatize_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -71,10 +71,10 @@ impl Worker {
                     if let Some(store) = &ctx.data_store {
                         store
                             .get(data_ref)
-                            .unwrap_or(soma_core::value::Value::Empty)
+                            .unwrap_or(somatize_core::value::Value::Empty)
                     } else {
                         tracing::warn!("DataRef input but no DataStore configured on worker");
-                        soma_core::value::Value::Empty
+                        somatize_core::value::Value::Empty
                     }
                 }
             };
@@ -89,7 +89,7 @@ impl Worker {
                     .last()
                     .and_then(|id| ctx.get(id))
                     .cloned()
-                    .unwrap_or(soma_core::value::Value::Empty);
+                    .unwrap_or(somatize_core::value::Value::Empty);
 
                 PlanResult::Success {
                     output,
@@ -104,10 +104,10 @@ impl Worker {
     }
 
     /// Check if this worker matches a remote target.
-    pub fn matches_target(&self, target: &soma_core::filter::RemoteTarget) -> bool {
+    pub fn matches_target(&self, target: &somatize_core::filter::RemoteTarget) -> bool {
         match target {
-            soma_core::filter::RemoteTarget::WorkerId(id) => &self.id == id,
-            soma_core::filter::RemoteTarget::Tag(tag) => self.capabilities.tags.contains(tag),
+            somatize_core::filter::RemoteTarget::WorkerId(id) => &self.id == id,
+            somatize_core::filter::RemoteTarget::Tag(tag) => self.capabilities.tags.contains(tag),
         }
     }
 }
@@ -115,11 +115,11 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_compiler::ExecutionPlan;
-    use soma_core::cache::CacheKey;
-    use soma_core::error::Result as SomaResult;
-    use soma_core::filter::{FilterKind, FilterMeta, StreamMode};
-    use soma_core::value::Value;
+    use somatize_compiler::ExecutionPlan;
+    use somatize_core::cache::CacheKey;
+    use somatize_core::error::Result as SomaResult;
+    use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
+    use somatize_core::value::Value;
 
     struct TestDoubler;
 
@@ -146,7 +146,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -235,19 +235,23 @@ mod tests {
     fn worker_matches_target_by_id() {
         let worker = make_worker();
         assert!(
-            worker.matches_target(&soma_core::filter::RemoteTarget::WorkerId(
+            worker.matches_target(&somatize_core::filter::RemoteTarget::WorkerId(
                 "test_worker".into()
             ))
         );
-        assert!(!worker.matches_target(&soma_core::filter::RemoteTarget::WorkerId("other".into())));
+        assert!(
+            !worker.matches_target(&somatize_core::filter::RemoteTarget::WorkerId(
+                "other".into()
+            ))
+        );
     }
 
     #[test]
     fn worker_matches_target_by_tag() {
         let worker = make_worker();
-        assert!(worker.matches_target(&soma_core::filter::RemoteTarget::Tag("cpu".into())));
-        assert!(worker.matches_target(&soma_core::filter::RemoteTarget::Tag("test".into())));
-        assert!(!worker.matches_target(&soma_core::filter::RemoteTarget::Tag("gpu".into())));
+        assert!(worker.matches_target(&somatize_core::filter::RemoteTarget::Tag("cpu".into())));
+        assert!(worker.matches_target(&somatize_core::filter::RemoteTarget::Tag("test".into())));
+        assert!(!worker.matches_target(&somatize_core::filter::RemoteTarget::Tag("gpu".into())));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Integration test: full autonomous research loop.
 
 use serde_json::json;
-use soma_agent::{Action, Agent, SimpleResearchPlan};
-use soma_memory::{ExperimentRecord, MemoryKnowledgeBase};
+use somatize_agent::{Action, Agent, SimpleResearchPlan};
+use somatize_memory::{ExperimentRecord, MemoryKnowledgeBase};
 use std::collections::HashMap;
 
 /// Simulate executing an experiment: returns a metric based on params.

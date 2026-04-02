@@ -4,10 +4,10 @@
 //! independently, Evolving updates state per chunk with checkpoints,
 //! Barrier accumulates all chunks before processing.
 
-use soma_core::cache::{CacheKey, CacheStore};
-use soma_core::error::{Result, SomaError};
-use soma_core::filter::{Filter, StreamMode};
-use soma_core::value::Value;
+use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::error::{Result, SomaError};
+use somatize_core::filter::{Filter, StreamMode};
+use somatize_core::value::Value;
 use std::sync::Arc;
 
 /// A fitted filter with its learned state, ready for streaming.
@@ -232,8 +232,8 @@ impl StreamExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::cache::CacheKey;
-    use soma_core::filter::{FilterKind, FilterMeta};
+    use somatize_core::cache::CacheKey;
+    use somatize_core::filter::{FilterKind, FilterMeta};
 
     // ── Test filters ──
 
@@ -261,7 +261,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -293,7 +293,7 @@ mod tests {
                 cacheable: false,
                 differentiable: false,
                 stream_mode: StreamMode::Barrier,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -322,7 +322,7 @@ mod tests {
                 stream_mode: StreamMode::Evolving {
                     checkpoint_every: 3,
                 },
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }

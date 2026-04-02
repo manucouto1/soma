@@ -40,48 +40,48 @@
 //! ```
 
 /// Core types and traits: Filter, Value, Graph, CacheKey, Schema, Event.
-pub use soma_core as core;
+pub use somatize_core as core;
 
 /// Graph → ExecutionPlan compiler, Scheduler.
-pub use soma_compiler as compiler;
+pub use somatize_compiler as compiler;
 
 /// Execution engine: GraphSession, executor, caches, samplers, StudyRunner, PbtRunner.
-pub use soma_runtime as runtime;
+pub use somatize_runtime as runtime;
 
 /// Knowledge base and experiment tracking.
-pub use soma_memory as memory;
+pub use somatize_memory as memory;
 
 /// Distributed worker: Worker, Coordinator, Protocol, EnvManager.
-pub use soma_worker as worker;
+pub use somatize_worker as worker;
 
 /// Autonomous research agent.
-pub use soma_agent as agent;
+pub use somatize_agent as agent;
 
 /// Derive macros (#[derive(SomaFilter)]).
-pub use soma_macros;
+pub use somatize_macros;
 
 /// Prelude — import the most commonly used types.
 pub mod prelude {
     // Core types
-    pub use soma_core::cache::{CacheKey, CacheStore};
-    pub use soma_core::error::{Result, SomaError};
-    pub use soma_core::event::Event;
-    pub use soma_core::filter::{Filter, FilterKind, FilterMeta};
-    pub use soma_core::graph::{Edge, Graph, Node, NodeKind, linear_pipeline};
-    pub use soma_core::schema::Schema;
-    pub use soma_core::strategy::TrainingStrategy;
-    pub use soma_core::value::Value;
-    pub use soma_core::virtual_value::VirtualValue;
+    pub use somatize_core::cache::{CacheKey, CacheStore};
+    pub use somatize_core::error::{Result, SomaError};
+    pub use somatize_core::event::Event;
+    pub use somatize_core::filter::{Filter, FilterKind, FilterMeta};
+    pub use somatize_core::graph::{Edge, Graph, Node, NodeKind, linear_pipeline};
+    pub use somatize_core::schema::Schema;
+    pub use somatize_core::strategy::TrainingStrategy;
+    pub use somatize_core::value::Value;
+    pub use somatize_core::virtual_value::VirtualValue;
 
     // Compiler
-    pub use soma_compiler::{CompileMode, ExecutionPlan};
+    pub use somatize_compiler::{CompileMode, ExecutionPlan};
 
     // Runtime
-    pub use soma_runtime::cache::MemoryCache;
-    pub use soma_runtime::filter_library::FilterLibrary;
-    pub use soma_runtime::graph_session::GraphSession;
-    pub use soma_runtime::{EventBus, execute};
+    pub use somatize_runtime::cache::MemoryCache;
+    pub use somatize_runtime::filter_library::FilterLibrary;
+    pub use somatize_runtime::graph_session::GraphSession;
+    pub use somatize_runtime::{EventBus, execute};
 
     // Derive macro
-    pub use soma_macros::SomaFilter;
+    pub use somatize_macros::SomaFilter;
 }

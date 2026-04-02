@@ -2,7 +2,7 @@
 
 use crate::protocol::ToolCallResult;
 use serde_json::json;
-use soma_memory::{ExperimentRecord, KnowledgeBase, MemoryKnowledgeBase};
+use somatize_memory::{ExperimentRecord, KnowledgeBase, MemoryKnowledgeBase};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

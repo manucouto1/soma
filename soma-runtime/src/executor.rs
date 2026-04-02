@@ -5,13 +5,13 @@
 
 use crate::event_bus::EventBus;
 use crate::filter_library::FilterLibrary;
-use soma_compiler::ExecutionPlan;
-use soma_core::cache::CacheStore;
-use soma_core::error::{Result, SomaError};
-use soma_core::event::Event;
-use soma_core::store::DataStore;
-use soma_core::value::Value;
-use soma_core::virtual_value::VirtualValue;
+use somatize_compiler::ExecutionPlan;
+use somatize_core::cache::CacheStore;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::event::Event;
+use somatize_core::store::DataStore;
+use somatize_core::value::Value;
+use somatize_core::virtual_value::VirtualValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,8 +36,8 @@ impl GraphInfo {
         self.predecessors.insert(node_id.into(), preds);
     }
 
-    /// Build GraphInfo from a soma_core::graph::Graph.
-    pub fn from_graph(graph: &soma_core::graph::Graph) -> Self {
+    /// Build GraphInfo from a somatize_core::graph::Graph.
+    pub fn from_graph(graph: &somatize_core::graph::Graph) -> Self {
         let mut info = Self::new();
         for node in &graph.nodes {
             let preds: Vec<String> = graph
@@ -83,7 +83,7 @@ pub trait RemoteExecutor: Send + Sync {
     fn execute_remote(
         &self,
         node_id: &str,
-        target: &soma_core::filter::RemoteTarget,
+        target: &somatize_core::filter::RemoteTarget,
         input: Option<&Value>,
     ) -> Result<Value>;
 }
@@ -158,7 +158,7 @@ impl Context {
         {
             let size = value.size() * 8; // approximate bytes (f64 = 8 bytes)
             if size >= self.spill_threshold {
-                let key = soma_core::cache::CacheKey::from_parts(&[
+                let key = somatize_core::cache::CacheKey::from_parts(&[
                     self.run_id.as_bytes(),
                     node_id.as_bytes(),
                 ]);
@@ -236,7 +236,7 @@ pub fn execute(
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.clone(),
                 key: key.clone(),
-                tier: soma_core::cache::CacheTier::Memory,
+                tier: somatize_core::cache::CacheTier::Memory,
                 load_time: start.elapsed(),
             });
             Ok(())
@@ -462,7 +462,7 @@ fn resolve_value(vv: &VirtualValue, data_store: &Option<Arc<dyn DataStore>>) -> 
         VirtualValue::Cached { key, .. } => {
             // Try to load from DataStore
             if let Some(store) = data_store {
-                let data_ref = soma_core::store::DataRef::Cached {
+                let data_ref = somatize_core::store::DataRef::Cached {
                     cache_key: key.clone(),
                 };
                 store.get(&data_ref).ok()
@@ -509,8 +509,8 @@ pub fn resolve_input(node_id: &str, ctx: &Context) -> Value {
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
-    use soma_core::cache::CacheKey;
-    use soma_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::cache::CacheKey;
+    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 
     struct DoublerFilter;
 
@@ -537,7 +537,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -571,7 +571,7 @@ mod tests {
                 cacheable: true,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -602,7 +602,7 @@ mod tests {
                 cacheable: false,
                 differentiable: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: soma_core::filter::Distribution::Local,
+                distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }

@@ -3,7 +3,7 @@
 //! These tests require `python3` to be available on the system.
 //! They create temporary directories and real virtual environments.
 
-use soma_worker::env_manager::{EnvManager, EnvType};
+use somatize_worker::env_manager::{EnvManager, EnvType};
 
 fn has_python3() -> bool {
     std::process::Command::new("python3")

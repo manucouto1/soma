@@ -4,10 +4,10 @@
 //! cache resolution → schema validation → distribution wrapping → simplification.
 
 use crate::plan::ExecutionPlan;
-use soma_core::cache::{CacheKey, CacheStore};
-use soma_core::error::Result;
-use soma_core::filter::{Filter, FilterMeta};
-use soma_core::graph::{Graph, NodeId};
+use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::error::Result;
+use somatize_core::filter::{Filter, FilterMeta};
+use somatize_core::graph::{Graph, NodeId};
 use std::collections::{HashMap, HashSet};
 
 /// Compilation mode affects caching behavior.
@@ -177,7 +177,7 @@ impl<'a> Compiler<'a> {
 
     /// Generate the execution plan for a single node based on its kind.
     fn plan_for_node(&self, node_id: &str) -> ExecutionPlan {
-        use soma_core::graph::NodeKind;
+        use somatize_core::graph::NodeKind;
 
         let node = match self.graph.node(node_id) {
             Some(n) => n,
@@ -388,11 +388,13 @@ impl<'a> Compiler<'a> {
             ExecutionPlan::Execute { ref node_id } => {
                 if let Some(meta) = self.registry.meta(node_id) {
                     match &meta.distribution {
-                        soma_core::filter::Distribution::Remote(target) => ExecutionPlan::Remote {
-                            node_id: node_id.clone(),
-                            target: target.clone(),
-                            plan: Box::new(plan),
-                        },
+                        somatize_core::filter::Distribution::Remote(target) => {
+                            ExecutionPlan::Remote {
+                                node_id: node_id.clone(),
+                                target: target.clone(),
+                                plan: Box::new(plan),
+                            }
+                        }
                         _ => plan,
                     }
                 } else {
@@ -502,11 +504,11 @@ pub fn compile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soma_core::cache::EntryMeta;
-    use soma_core::error::SomaError;
-    use soma_core::filter::{FilterKind, StreamMode};
-    use soma_core::graph::{Edge, Graph, Node, linear_pipeline};
-    use soma_core::value::Value;
+    use somatize_core::cache::EntryMeta;
+    use somatize_core::error::SomaError;
+    use somatize_core::filter::{FilterKind, StreamMode};
+    use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
+    use somatize_core::value::Value;
     use std::sync::Mutex;
 
     // ── Mock cache store ──
@@ -554,7 +556,7 @@ mod tests {
             cacheable: true,
             differentiable,
             stream_mode: StreamMode::FixedState,
-            distribution: soma_core::filter::Distribution::Local,
+            distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -905,8 +907,8 @@ mod tests {
         );
         // gpu_train: remote on GPU tag
         let mut gpu_meta = make_meta(FilterKind::Trainable, true);
-        gpu_meta.distribution = soma_core::filter::Distribution::Remote(
-            soma_core::filter::RemoteTarget::Tag("gpu".into()),
+        gpu_meta.distribution = somatize_core::filter::Distribution::Remote(
+            somatize_core::filter::RemoteTarget::Tag("gpu".into()),
         );
         registry.register_meta("gpu_train", gpu_meta, CacheKey::hash_data(b"gpu"));
         // evaluate: local
@@ -927,7 +929,7 @@ mod tests {
             assert!(
                 matches!(&steps[1], ExecutionPlan::Remote { node_id, target, .. }
                     if node_id == "gpu_train"
-                    && *target == soma_core::filter::RemoteTarget::Tag("gpu".into())
+                    && *target == somatize_core::filter::RemoteTarget::Tag("gpu".into())
                 ),
                 "expected Remote, got: {:?}",
                 steps[1]
