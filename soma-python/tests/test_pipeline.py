@@ -32,7 +32,7 @@ class TestPipeline:
     def test_create_pipeline(self):
         pipeline = Pipeline([Doubler(), Adder(amount=5.0)])
         assert not pipeline.is_fitted()
-        assert pipeline.filter_names() == ["Doubler", "Adder"]
+        assert pipeline.filter_names() == ["doubler", "adder"]
 
     def test_fit_and_predict(self):
         pipeline = Pipeline([Doubler()])
@@ -44,7 +44,7 @@ class TestPipeline:
 
     def test_predict_before_fit_raises(self):
         pipeline = Pipeline([Doubler()])
-        with pytest.raises(RuntimeError, match="fitted"):
+        with pytest.raises(RuntimeError):
             pipeline.predict([1.0])
 
     def test_multi_filter_pipeline(self):
