@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use soma_compiler::ExecutionPlan;
 use soma_core::event::Event;
+use soma_core::store::DataRef;
 use soma_core::value::Value;
 
 /// Unique worker identifier.
@@ -48,12 +49,24 @@ pub struct LoadMetrics {
     pub timestamp: DateTime<Utc>,
 }
 
+/// How input data is provided to a worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "source")]
+#[non_exhaustive]
+pub enum InputSource {
+    /// Data embedded directly in the message (small payloads).
+    Inline { value: Value },
+    /// Data referenced in a remote store (large payloads).
+    Reference { data_ref: DataRef },
+}
+
 /// A serialized plan ready for remote execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedPlan {
     pub plan_id: PlanId,
     pub plan: ExecutionPlan,
-    pub input_data: Option<Value>,
+    /// Input data — inline for small values, DataRef for large ones.
+    pub input: Option<InputSource>,
     pub metadata: serde_json::Value,
 }
 
@@ -219,7 +232,7 @@ mod tests {
                 plan: ExecutionPlan::Execute {
                     node_id: "train".into(),
                 },
-                input_data: Some(Value::tensor(vec![1.0, 2.0], vec![2])),
+                input: Some(InputSource::Inline { value: Value::tensor(vec![1.0, 2.0], vec![2]) }),
                 metadata: serde_json::json!({"experiment": "test"}),
             },
         };

@@ -108,6 +108,9 @@ pub struct Context {
     pub remote_executor: Option<Arc<dyn RemoteExecutor>>,
     /// Optional data store for persisting intermediate results.
     pub data_store: Option<Arc<dyn DataStore>>,
+    /// Minimum value size (bytes) to spill to DataStore instead of keeping in memory.
+    /// Default: 0 (disabled — all values stay in memory).
+    pub spill_threshold: usize,
 }
 
 impl Context {
@@ -120,6 +123,7 @@ impl Context {
             graph_info: GraphInfo::new(),
             remote_executor: None,
             data_store: None,
+            spill_threshold: 0,
         }
     }
 
@@ -136,6 +140,40 @@ impl Context {
     pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
         self.data_store = Some(store);
         self
+    }
+
+    /// Set spill threshold: values larger than this (in bytes) are offloaded
+    /// to the DataStore and replaced with a VirtualValue::Cached reference.
+    /// Requires a DataStore to be set via `with_data_store()`.
+    pub fn with_spill_threshold(mut self, bytes: usize) -> Self {
+        self.spill_threshold = bytes;
+        self
+    }
+
+    /// If a DataStore and spill threshold are configured, check if the value
+    /// should be offloaded. Returns VirtualValue (materialized or cached ref).
+    fn maybe_spill(&self, node_id: &str, value: Value) -> VirtualValue {
+        if self.spill_threshold > 0 {
+            if let Some(store) = &self.data_store {
+                let size = value.size() * 8; // approximate bytes (f64 = 8 bytes)
+                if size >= self.spill_threshold {
+                    let key = soma_core::cache::CacheKey::from_parts(&[
+                        self.run_id.as_bytes(),
+                        node_id.as_bytes(),
+                    ]);
+                    // Infer schema before spilling (we still have the value)
+                    let vv_for_schema = VirtualValue::materialized(value.clone());
+                    let schema = vv_for_schema.schema().clone();
+                    if let Ok(_data_ref) = store.put(&key, &value) {
+                        tracing::debug!(
+                            "spilled node `{node_id}` ({size} bytes) to DataStore"
+                        );
+                        return VirtualValue::cached(key, schema);
+                    }
+                }
+            }
+        }
+        VirtualValue::materialized(value)
     }
 
     /// Get the materialized Value for a node, if present and materialized.
@@ -171,6 +209,7 @@ impl Context {
             graph_info: self.graph_info.clone(),
             remote_executor: self.remote_executor.clone(),
             data_store: self.data_store.clone(),
+            spill_threshold: self.spill_threshold,
         }
     }
 }
@@ -386,7 +425,8 @@ fn execute_node(
         Ok(output) => {
             let duration = start.elapsed();
             let summary = format!("{output}");
-            ctx.set(node_id, output);
+            let vv = ctx.maybe_spill(node_id, output);
+            ctx.set_virtual(node_id, vv);
             ctx.event_bus.emit(Event::NodeCompleted {
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.to_string(),
@@ -452,23 +492,44 @@ fn execute_parallel(
     Ok(())
 }
 
+/// Resolve a VirtualValue to a concrete Value, loading from DataStore if needed.
+fn resolve_value(vv: &VirtualValue, data_store: &Option<Arc<dyn DataStore>>) -> Option<Value> {
+    match vv {
+        VirtualValue::Materialized { value, .. } => Some(value.clone()),
+        VirtualValue::Cached { key, .. } => {
+            // Try to load from DataStore
+            if let Some(store) = data_store {
+                let data_ref = soma_core::store::DataRef::Cached { cache_key: key.clone() };
+                store.get(&data_ref).ok()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Resolve the input for a node from the context store using graph topology.
+/// If a predecessor was spilled to DataStore, loads it back.
 fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     let preds = ctx.graph_info.predecessors(node_id);
+
+    let resolve_node = |id: &str| -> Option<Value> {
+        ctx.store.get(id).and_then(|vv| resolve_value(vv, &ctx.data_store))
+    };
 
     match preds.len() {
         0 => ctx
             .execution_order
             .last()
-            .and_then(|last_id| ctx.get(last_id))
-            .cloned()
+            .and_then(|id| resolve_node(id))
             .unwrap_or(Value::Empty),
-        1 => ctx.get(&preds[0]).cloned().unwrap_or(Value::Empty),
+        1 => resolve_node(&preds[0]).unwrap_or(Value::Empty),
         _ => {
             let mut merged = serde_json::Map::new();
             for pred_id in preds {
-                if let Some(val) = ctx.get(pred_id) {
-                    let json_val = serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
+                if let Some(val) = resolve_node(pred_id) {
+                    let json_val = serde_json::to_value(&val).unwrap_or(serde_json::Value::Null);
                     merged.insert(pred_id.clone(), json_val);
                 }
             }
