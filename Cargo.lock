@@ -2674,7 +2674,7 @@ dependencies = [
 
 [[package]]
 name = "soma-python"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "somatize"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "somatize-agent",
  "somatize-compiler",
@@ -2707,7 +2707,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-agent"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "chrono",
  "proptest",
@@ -2721,7 +2721,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-compiler"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "proptest",
  "serde",
@@ -2733,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-core"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "chrono",
  "object_store",
@@ -2750,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-macros"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-mcp"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "chrono",
  "proptest",
@@ -2777,7 +2777,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-memory"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "chrono",
  "chronos-vector",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-runtime"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "chrono",
  "proptest",
@@ -2806,7 +2806,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-worker"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "axum",
  "base64 0.22.1",
