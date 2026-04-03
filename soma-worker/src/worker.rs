@@ -5,6 +5,7 @@ use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::Result as SomaResult;
 use somatize_core::event::Event;
 use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
 use somatize_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
 use std::sync::Arc;
@@ -139,16 +140,25 @@ pub struct Worker {
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
     filters: FilterLibrary,
+    /// Optional persistent DataStore (S3, Zarr, etc.) — configured by user.
+    data_store: Option<Arc<dyn DataStore>>,
+    /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
+    temp_store: Arc<LocalDataStore>,
 }
 
 impl Worker {
     pub fn new(id: impl Into<String>, capabilities: Capabilities) -> Self {
+        let worker_id: String = id.into();
+        let temp_path = std::env::temp_dir().join(format!("soma-uploads-{worker_id}"));
+        let temp_store = LocalDataStore::new(temp_path);
         Self {
-            id: id.into(),
+            id: worker_id,
             capabilities,
             event_bus: Arc::new(EventBus::new(256)),
             cache: Arc::new(MemoryCache::default()),
             filters: FilterLibrary::new(),
+            data_store: None,
+            temp_store: Arc::new(temp_store),
         }
     }
 
@@ -156,6 +166,23 @@ impl Worker {
     pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
         self.cache = cache;
         self
+    }
+
+    /// Set a persistent DataStore (S3, Zarr, etc.) for large data references.
+    pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
+        self.data_store = Some(store);
+        self
+    }
+
+    /// Set a custom temp directory for HTTP bulk uploads.
+    pub fn with_temp_dir(mut self, path: std::path::PathBuf) -> Self {
+        self.temp_store = Arc::new(LocalDataStore::new(path));
+        self
+    }
+
+    /// Get the temp store (for HTTP upload endpoint).
+    pub fn temp_store(&self) -> &Arc<LocalDataStore> {
+        &self.temp_store
     }
 
     /// Register a filter that this worker can execute.
@@ -200,12 +227,20 @@ impl Worker {
             }
         }
 
-        // Resolve input
+        // Resolve input: inline, DataStore, or temp store (HTTP upload)
         let input_value = plan.input.as_ref().map(|src| match src {
             InputSource::Inline { value } => value.clone(),
-            InputSource::Reference { .. } => {
-                tracing::warn!("DataRef input not yet supported on worker");
-                Value::Empty
+            InputSource::Reference { data_ref } => {
+                // Try persistent DataStore first, then temp store (HTTP uploads)
+                if let Some(store) = &self.data_store
+                    && let Ok(val) = store.get(data_ref)
+                {
+                    return val;
+                }
+                self.temp_store.get(data_ref).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to resolve DataRef: {e}");
+                    Value::Empty
+                })
             }
         });
 

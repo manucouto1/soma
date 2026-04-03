@@ -11,7 +11,11 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
+use somatize_core::cache::CacheKey;
+use somatize_core::store::{DataStore, LocalDataStore};
+use somatize_core::value::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -23,6 +27,10 @@ struct ServerState {
     work_dir: PathBuf,
     /// Optional bearer token for authentication.
     token: Option<String>,
+    /// Temporary local store for HTTP bulk uploads.
+    temp_store: Arc<LocalDataStore>,
+    /// Track upload times for automatic cleanup.
+    temp_uploads: Mutex<HashMap<CacheKey, Instant>>,
 }
 
 /// Build a worker server router (no authentication).
@@ -57,15 +65,54 @@ fn worker_router_full(
 ) -> Router {
     let work = work_dir.into();
     std::fs::create_dir_all(&work).ok();
+    let temp_store = worker.temp_store().clone();
     let state = Arc::new(ServerState {
         worker: Mutex::new(worker),
         env_manager: EnvManager::new(env_dir, EnvType::Venv),
         work_dir: work,
         token,
+        temp_store,
+        temp_uploads: Mutex::new(HashMap::new()),
     });
+    // Background cleanup: remove temp uploads older than 1 hour
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            let cutoff = Instant::now() - std::time::Duration::from_secs(3600);
+            let expired: Vec<CacheKey> = {
+                let uploads = cleanup_state
+                    .temp_uploads
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                uploads
+                    .iter()
+                    .filter(|(_, created)| **created < cutoff)
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            };
+            if !expired.is_empty() {
+                let mut uploads = cleanup_state
+                    .temp_uploads
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                for key in &expired {
+                    let data_ref = somatize_core::store::DataRef::Cached {
+                        cache_key: key.clone(),
+                    };
+                    let _ = cleanup_state.temp_store.remove(&data_ref);
+                    uploads.remove(key);
+                }
+                tracing::info!("Cleaned up {} expired temp uploads", expired.len());
+            }
+        }
+    });
+
     Router::new()
         .route("/health", get(health))
         .route("/info", get(info))
+        .route("/upload", post(upload_data))
         .route("/ws", get(ws_handler))
         .with_state(state)
 }
@@ -99,6 +146,48 @@ async fn info(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
     let msg = worker.registration_message();
     axum::Json(serde_json::to_value(msg).unwrap_or_default())
+}
+
+/// Upload data via HTTP for large payloads that exceed WebSocket limits.
+///
+/// Accepts msgpack or JSON body, stores in temp_store, returns DataRef as JSON.
+/// Token auth via `?token=` query param (same as WebSocket).
+async fn upload_data(
+    Query(params): Query<WsParams>,
+    State(state): State<Arc<ServerState>>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Validate token
+    if let Some(expected) = &state.token {
+        match &params.token {
+            Some(provided) if provided == expected => {}
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    // Deserialize: try msgpack first, then JSON
+    let value: Value = rmp_serde::from_slice(&body)
+        .or_else(|_| serde_json::from_slice(&body))
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let key = CacheKey::hash_data(&body);
+    let data_ref = state
+        .temp_store
+        .put(&key, &value)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Track for cleanup
+    state
+        .temp_uploads
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, Instant::now());
+
+    tracing::info!("Uploaded {} bytes → {data_ref:?}", body.len());
+
+    Ok(axum::Json(
+        serde_json::to_value(&data_ref).unwrap_or_default(),
+    ))
 }
 
 /// Query params for WebSocket authentication.
@@ -341,8 +430,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn router_builds() {
+    #[tokio::test]
+    async fn router_builds() {
         let _router = worker_router(make_worker());
     }
 

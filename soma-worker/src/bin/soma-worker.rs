@@ -73,6 +73,10 @@ struct Args {
     /// Custom working directory for job execution.
     #[arg(long, default_value = "/tmp/soma-work")]
     work_dir: String,
+
+    /// Directory for temporary HTTP bulk uploads (auto-cleaned after 1h).
+    #[arg(long)]
+    temp_dir: Option<String>,
 }
 
 fn parse_memory(s: &str) -> u64 {
@@ -123,7 +127,10 @@ async fn main() {
     tracing::info!("Starting worker: {worker_id}");
     tracing::info!("Capabilities: {}", caps.summary());
 
-    let worker = Worker::new(&worker_id, caps.clone());
+    let mut worker = Worker::new(&worker_id, caps.clone());
+    if let Some(temp_dir) = args.temp_dir {
+        worker = worker.with_temp_dir(temp_dir.into());
+    }
     let addr = format!("0.0.0.0:{}", args.port);
 
     // Register with coordinator if configured

@@ -581,6 +581,76 @@ impl PyGraph {
         })
     }
 
+    /// Decide how to transport input data to the worker.
+    ///
+    /// - DataStore configured → upload to store, return Reference
+    /// - Large payload (≥ 10MB) → HTTP bulk upload to worker, return Reference
+    /// - Small payload → Inline (current WS behavior)
+    fn resolve_transport(
+        &self,
+        x: &Value,
+        addr: &str,
+        token: &Option<String>,
+    ) -> Result<somatize_worker::protocol::InputSource, PyErr> {
+        use somatize_worker::protocol::InputSource;
+
+        // TODO: Phase 2 — DataStore path
+        // if let Some(store) = &self.data_store { ... }
+
+        // Estimate payload size
+        let size_bytes = serde_json::to_vec(x).map(|v| v.len()).unwrap_or(0);
+        if size_bytes >= somatize_core::store::INLINE_THRESHOLD_BYTES {
+            let data_ref = self.http_upload(x, addr, token)?;
+            return Ok(InputSource::Reference { data_ref });
+        }
+
+        Ok(InputSource::Inline { value: x.clone() })
+    }
+
+    /// Upload a Value to the worker via HTTP POST /upload (msgpack body).
+    fn http_upload(
+        &self,
+        value: &Value,
+        addr: &str,
+        token: &Option<String>,
+    ) -> Result<somatize_core::store::DataRef, PyErr> {
+        // Worker addr is like "ws://host:port" — convert to HTTP
+        let http_addr = addr
+            .replace("ws://", "http://")
+            .replace("wss://", "https://");
+        let url = format!("{http_addr}/upload");
+
+        let body = rmp_serde::to_vec(value)
+            .map_err(|e| PyRuntimeError::new_err(format!("msgpack serialize: {e}")))?;
+
+        let client = reqwest::blocking::Client::new();
+        let mut req = client
+            .post(&url)
+            .header("Content-Type", "application/msgpack")
+            .body(body);
+
+        if let Some(t) = token {
+            req = req.query(&[("token", t.as_str())]);
+        }
+
+        let resp = req
+            .send()
+            .map_err(|e| PyRuntimeError::new_err(format!("HTTP upload: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(PyRuntimeError::new_err(format!(
+                "HTTP upload failed: {}",
+                resp.status()
+            )));
+        }
+
+        let data_ref: somatize_core::store::DataRef = resp
+            .json()
+            .map_err(|e| PyRuntimeError::new_err(format!("parse upload response: {e}")))?;
+
+        Ok(data_ref)
+    }
+
     /// Send a plan to a remote worker via WebSocket.
     /// Returns (output, trained_states) — states are non-empty after Fit mode.
     fn dispatch_to_worker(
@@ -638,10 +708,11 @@ impl PyGraph {
             })
             .collect();
 
+        let input_source = self.resolve_transport(x, &addr, &token)?;
         let plan = SerializedPlan {
             plan_id: somatize_core::util::timestamp_id("remote_plan"),
             plan: compile_result.plan,
-            input: Some(InputSource::Inline { value: x.clone() }),
+            input: Some(input_source),
             filters,
             mode,
             metadata: serde_json::json!({}),

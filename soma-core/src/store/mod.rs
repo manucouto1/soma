@@ -3,6 +3,10 @@
 //! Separates WHERE data lives from HOW it's processed.
 //! Workers use DataRef to reference data without materializing it.
 
+/// Maximum payload size for inline WebSocket transport.
+/// Payloads above this threshold are uploaded via HTTP bulk or DataStore.
+pub const INLINE_THRESHOLD_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+
 #[cfg(feature = "s3")]
 pub mod s3;
 
