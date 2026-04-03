@@ -7,6 +7,7 @@ use crate::env_manager::{EnvManager, EnvType};
 use crate::protocol::*;
 use crate::worker::Worker;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
@@ -117,6 +118,7 @@ fn worker_router_full(
         .route("/info", get(info))
         .route("/upload", post(upload_data))
         .route("/ws", get(ws_handler))
+        .layer(DefaultBodyLimit::disable()) // No limit — workers handle arbitrary data sizes
         .with_state(state)
 }
 
@@ -211,7 +213,10 @@ async fn ws_handler(
             _ => return Err(StatusCode::UNAUTHORIZED),
         }
     }
-    Ok(ws.on_upgrade(move |socket| handle_ws(socket, state)))
+    Ok(ws
+        .max_message_size(usize::MAX) // No limit on incoming WS messages
+        .max_frame_size(usize::MAX)
+        .on_upgrade(move |socket| handle_ws(socket, state)))
 }
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {

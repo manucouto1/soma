@@ -70,9 +70,17 @@ impl WsRemoteExecutor {
                 format!("{}/ws", worker.address)
             };
 
-            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
-                .await
-                .map_err(|e| SomaError::Other(format!("WS connect to {}: {e}", worker.address)))?;
+            // No size limits — workers handle arbitrary payloads (datasets, model weights, etc.)
+            let mut ws_config =
+                tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+            ws_config.max_message_size = None;
+            ws_config.max_frame_size = None;
+            let (mut ws, _) =
+                tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false)
+                    .await
+                    .map_err(|e| {
+                        SomaError::Other(format!("WS connect to {}: {e}", worker.address))
+                    })?;
 
             use futures_util::{SinkExt, StreamExt};
             use tokio_tungstenite::tungstenite::Message;
