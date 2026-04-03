@@ -353,36 +353,32 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
 
             // Register filters
             for sf in &plan.filters {
-                let filter: Box<dyn somatize_core::filter::Filter> = {
-                    #[cfg(feature = "embedded-python")]
-                    {
-                        match crate::py_filter::EmbeddedPyFilter::new(
-                            &sf.pickled_filter,
-                            sf.node_id.clone(),
-                            sf.trainable,
-                            None,
-                        ) {
-                            Ok(embedded) => Box::new(embedded),
-                            Err(_) => Box::new(crate::worker::PickledFilterRunner {
-                                pickled_bytes: sf.pickled_filter.clone(),
-                                node_id: sf.node_id.clone(),
-                                python_path: "python3".to_string(),
-                                requirements: sf.requirements.clone(),
-                                trainable: sf.trainable,
-                            }),
-                        }
-                    }
-                    #[cfg(not(feature = "embedded-python"))]
-                    {
-                        Box::new(crate::worker::PickledFilterRunner {
+                #[cfg(feature = "embedded-python")]
+                let filter: Box<dyn somatize_core::filter::Filter> =
+                    match crate::py_filter::EmbeddedPyFilter::new(
+                        &sf.pickled_filter,
+                        sf.node_id.clone(),
+                        sf.trainable,
+                        None,
+                    ) {
+                        Ok(embedded) => Box::new(embedded),
+                        Err(_) => Box::new(crate::worker::PickledFilterRunner {
                             pickled_bytes: sf.pickled_filter.clone(),
                             node_id: sf.node_id.clone(),
                             python_path: "python3".to_string(),
                             requirements: sf.requirements.clone(),
                             trainable: sf.trainable,
-                        })
-                    }
-                };
+                        }),
+                    };
+                #[cfg(not(feature = "embedded-python"))]
+                let filter: Box<dyn somatize_core::filter::Filter> =
+                    Box::new(crate::worker::PickledFilterRunner {
+                        pickled_bytes: sf.pickled_filter.clone(),
+                        node_id: sf.node_id.clone(),
+                        python_path: "python3".to_string(),
+                        requirements: sf.requirements.clone(),
+                        trainable: sf.trainable,
+                    });
                 worker.register_filter(&sf.node_id, filter);
                 if let Some(s) = &sf.state {
                     worker.set_filter_state(&sf.node_id, s.clone());
