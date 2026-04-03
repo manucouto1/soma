@@ -77,6 +77,11 @@ struct Args {
     /// Directory for temporary HTTP bulk uploads (auto-cleaned after 1h).
     #[arg(long)]
     temp_dir: Option<String>,
+
+    /// Persistent DataStore path for shared data (e.g. "/data/soma").
+    /// When set, workers can resolve DataRef::Local from this store.
+    #[arg(long, env = "SOMA_DATA_STORE")]
+    data_store: Option<String>,
 }
 
 fn parse_memory(s: &str) -> u64 {
@@ -130,6 +135,11 @@ async fn main() {
     let mut worker = Worker::new(&worker_id, caps.clone());
     if let Some(temp_dir) = args.temp_dir {
         worker = worker.with_temp_dir(temp_dir.into());
+    }
+    if let Some(store_path) = &args.data_store {
+        let store = somatize_core::store::LocalDataStore::new(store_path);
+        worker = worker.with_data_store(std::sync::Arc::new(store));
+        tracing::info!("DataStore configured: {store_path}");
     }
     let addr = format!("0.0.0.0:{}", args.port);
 

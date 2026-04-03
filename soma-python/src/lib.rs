@@ -529,6 +529,8 @@ struct PyGraph {
     /// Module source code per filter for Nous agent introspection/editing.
     /// node_id → full module source (imports + classes + helpers)
     filter_sources: std::collections::HashMap<String, String>,
+    /// Optional DataStore for persistent data transport (opt-in, costs storage).
+    data_store: Option<Arc<dyn somatize_core::store::DataStore>>,
 }
 
 impl PyGraph {
@@ -592,10 +594,16 @@ impl PyGraph {
         addr: &str,
         token: &Option<String>,
     ) -> Result<somatize_worker::protocol::InputSource, PyErr> {
+        use somatize_core::cache::CacheKey;
         use somatize_worker::protocol::InputSource;
 
-        // TODO: Phase 2 — DataStore path
-        // if let Some(store) = &self.data_store { ... }
+        // DataStore configured → always use it (user opted in)
+        if let Some(store) = &self.data_store {
+            let data_bytes = serde_json::to_vec(x).unwrap_or_default();
+            let key = CacheKey::hash_data(&data_bytes);
+            let data_ref = store.put(&key, x).map_err(soma_err_to_py)?;
+            return Ok(InputSource::Reference { data_ref });
+        }
 
         // Estimate payload size
         let size_bytes = serde_json::to_vec(x).map(|v| v.len()).unwrap_or(0);
@@ -782,6 +790,7 @@ impl PyGraph {
             coordinator: None,
             pickled_filters: std::collections::HashMap::new(),
             filter_sources: std::collections::HashMap::new(),
+            data_store: None,
         }
     }
 
@@ -1190,6 +1199,30 @@ impl PyGraph {
     fn add_worker(&mut self, address: String, token: Option<String>, tags: Option<Vec<String>>) {
         self.workers
             .push((address, token, tags.unwrap_or_default()));
+    }
+
+    /// Configure a DataStore for persistent data transport (opt-in).
+    ///
+    /// When set, large payloads are uploaded to the store and workers read
+    /// via DataRef instead of receiving data inline or via HTTP upload.
+    ///
+    /// Usage:
+    ///   g.set_data_store("local", path="/data/soma")
+    #[pyo3(signature = (store_type, path=None))]
+    fn set_data_store(&mut self, store_type: String, path: Option<String>) -> PyResult<()> {
+        match store_type.as_str() {
+            "local" => {
+                let p = path.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("local store requires 'path' argument")
+                })?;
+                let store = somatize_core::store::LocalDataStore::new(p);
+                self.data_store = Some(Arc::new(store));
+                Ok(())
+            }
+            other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown store type: '{other}'. Available: local (s3 and zarr require feature flags)"
+            ))),
+        }
     }
 
     /// Shutdown a specific worker by address.
