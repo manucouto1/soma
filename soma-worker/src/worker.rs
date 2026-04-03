@@ -161,6 +161,11 @@ impl Worker {
     ///
     /// If the plan contains serialized filter definitions, they are registered
     /// temporarily for this execution (alongside any pre-registered filters).
+    ///
+    /// In **Fit** mode: fits each filter (topological order), stores trained states,
+    /// then forwards to propagate outputs. Returns states so the client can cache them.
+    ///
+    /// In **Forward** mode: executes the compiled plan directly.
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
 
@@ -176,49 +181,157 @@ impl Worker {
             }
         }
 
+        // Resolve input
+        let input_value = plan.input.as_ref().map(|src| match src {
+            InputSource::Inline { value } => value.clone(),
+            InputSource::Reference { .. } => {
+                tracing::warn!("DataRef input not yet supported on worker");
+                Value::Empty
+            }
+        });
+
+        match &plan.mode {
+            ExecutionMode::Fit { y } => self.execute_fit(plan, input_value, y.as_ref(), start),
+            ExecutionMode::Forward => self.execute_forward(plan, input_value, start),
+        }
+    }
+
+    /// Forward mode: run the compiled execution plan.
+    fn execute_forward(
+        &mut self,
+        plan: &SerializedPlan,
+        input: Option<Value>,
+        start: Instant,
+    ) -> PlanResult {
         let mut ctx = Context::new(
             self.event_bus.clone(),
             format!("worker_run_{}", plan.plan_id),
         );
 
-        // Resolve input data (inline or from DataStore)
-        if let Some(input_source) = &plan.input {
-            use crate::protocol::InputSource;
-            let input_value = match input_source {
-                InputSource::Inline { value } => value.clone(),
-                InputSource::Reference { data_ref } => {
-                    if let Some(store) = &ctx.data_store {
-                        store
-                            .get(data_ref)
-                            .unwrap_or(somatize_core::value::Value::Empty)
-                    } else {
-                        tracing::warn!("DataRef input but no DataStore configured on worker");
-                        somatize_core::value::Value::Empty
-                    }
-                }
-            };
-            ctx.set("input", input_value);
+        if let Some(val) = input {
+            ctx.set("input", val.clone());
+            // Also set per-root input
+            if let somatize_compiler::ExecutionPlan::Execute { node_id } = &plan.plan {
+                ctx.set(format!("__input_{node_id}"), val);
+            }
         }
 
         match execute(&plan.plan, &mut ctx, &self.filters, self.cache.as_ref()) {
             Ok(()) => {
-                // Find the last output
                 let output = ctx
                     .execution_order
                     .last()
                     .and_then(|id| ctx.get(id))
                     .cloned()
-                    .unwrap_or(somatize_core::value::Value::Empty);
+                    .unwrap_or(Value::Empty);
 
                 PlanResult::Success {
                     output,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    states: std::collections::HashMap::new(),
                 }
             }
             Err(e) => PlanResult::Failed {
                 error: e.to_string(),
                 duration_ms: start.elapsed().as_millis() as u64,
             },
+        }
+    }
+
+    /// Fit mode: train each filter in topological order, return trained states.
+    fn execute_fit(
+        &mut self,
+        plan: &SerializedPlan,
+        input: Option<Value>,
+        y: Option<&Value>,
+        start: Instant,
+    ) -> PlanResult {
+        let run_id = format!("worker_fit_{}", plan.plan_id);
+        let x = input.unwrap_or(Value::Empty);
+
+        // Extract node execution order from plan
+        let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
+        let mut outputs: std::collections::HashMap<String, Value> =
+            std::collections::HashMap::new();
+        let mut trained_states: std::collections::HashMap<String, Value> =
+            std::collections::HashMap::new();
+
+        for node_id in &node_ids {
+            let filter = match self.filters.get(node_id) {
+                Some(f) => f,
+                None => {
+                    return PlanResult::Failed {
+                        error: format!("filter not found: {node_id}"),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+            };
+
+            let meta = filter.meta();
+
+            self.event_bus.emit(Event::NodeStarted {
+                run_id: run_id.clone(),
+                node_id: node_id.to_string(),
+                kind: meta.kind,
+            });
+
+            let node_start = Instant::now();
+
+            // Resolve input: predecessor output or original input
+            let node_input = outputs
+                .values()
+                .last()
+                .cloned()
+                .unwrap_or_else(|| x.clone());
+
+            // Fit trainable filters, get/use state for forward
+            let state = if meta.kind == FilterKind::Trainable {
+                match filter.fit(&node_input, y) {
+                    Ok(s) => {
+                        self.filters.set_state(node_id, s.clone());
+                        trained_states.insert(node_id.clone(), s.clone());
+                        s
+                    }
+                    Err(e) => {
+                        return PlanResult::Failed {
+                            error: format!("fit({node_id}): {e}"),
+                            duration_ms: start.elapsed().as_millis() as u64,
+                        };
+                    }
+                }
+            } else {
+                self.filters
+                    .get_state(node_id)
+                    .cloned()
+                    .unwrap_or(Value::Empty)
+            };
+
+            // Forward with trained state
+            match filter.forward(&node_input, &state) {
+                Ok(output) => {
+                    self.event_bus.emit(Event::NodeCompleted {
+                        run_id: run_id.clone(),
+                        node_id: node_id.to_string(),
+                        duration: node_start.elapsed(),
+                        output_summary: format!("{output}"),
+                    });
+                    outputs.insert(node_id.clone(), output);
+                }
+                Err(e) => {
+                    return PlanResult::Failed {
+                        error: format!("forward({node_id}): {e}"),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+            }
+        }
+
+        let output = outputs.values().last().cloned().unwrap_or(Value::Empty);
+
+        PlanResult::Success {
+            output,
+            duration_ms: start.elapsed().as_millis() as u64,
+            states: trained_states,
         }
     }
 
@@ -315,6 +428,7 @@ mod tests {
                 value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
             }),
             filters: vec![],
+            mode: ExecutionMode::default(),
             metadata: serde_json::json!({}),
         };
 
@@ -323,6 +437,7 @@ mod tests {
         if let PlanResult::Success {
             output,
             duration_ms,
+            ..
         } = result
         {
             let (data, _) = output.as_tensor().unwrap();
@@ -345,6 +460,7 @@ mod tests {
             },
             input: None,
             filters: vec![],
+            mode: ExecutionMode::default(),
             metadata: serde_json::json!({}),
         };
 
@@ -395,6 +511,7 @@ mod tests {
                 value: Value::tensor(vec![5.0], vec![1]),
             }),
             filters: vec![],
+            mode: ExecutionMode::default(),
             metadata: serde_json::json!({}),
         };
 
@@ -422,6 +539,7 @@ mod tests {
                 value: Value::tensor(vec![1.0], vec![1]),
             }),
             filters: vec![],
+            mode: ExecutionMode::default(),
             metadata: serde_json::json!({}),
         };
 

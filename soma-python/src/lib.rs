@@ -581,14 +581,25 @@ impl PyGraph {
         })
     }
 
-    /// Send the entire compiled plan to a remote worker via WebSocket.
-    fn dispatch_to_worker(&self, x: &Value) -> Result<Value, PyErr> {
+    /// Send a plan to a remote worker via WebSocket.
+    /// Returns (output, trained_states) — states are non-empty after Fit mode.
+    fn dispatch_to_worker(
+        &self,
+        x: &Value,
+        mode: somatize_worker::protocol::ExecutionMode,
+    ) -> Result<(Value, std::collections::HashMap<String, Value>), PyErr> {
         use somatize_worker::protocol::*;
+
+        let compile_mode = match &mode {
+            ExecutionMode::Fit { .. } => CompileMode::NoCache,
+            ExecutionMode::Forward => CompileMode::Inference,
+            _ => CompileMode::Inference,
+        };
 
         let compile_result = somatize_compiler::compile(
             &self.graph,
             &self.library,
-            CompileMode::Inference,
+            compile_mode,
             Some(self.cache.as_ref()),
         )
         .map_err(soma_err_to_py)?;
@@ -628,10 +639,11 @@ impl PyGraph {
             .collect();
 
         let plan = SerializedPlan {
-            plan_id: somatize_core::util::timestamp_id("remote_forward"),
+            plan_id: somatize_core::util::timestamp_id("remote_plan"),
             plan: compile_result.plan,
             input: Some(InputSource::Inline { value: x.clone() }),
             filters,
+            mode,
             metadata: serde_json::json!({}),
         };
 
@@ -666,9 +678,9 @@ impl PyGraph {
                 if let Ok(result) = serde_json::from_str::<WorkerToCoordinator>(&response) {
                     match result {
                         WorkerToCoordinator::PlanResult { result, .. } => match result {
-                            PlanResult::Success { output, .. } => {
+                            PlanResult::Success { output, states, .. } => {
                                 let _ = ws.close(None).await;
-                                return Ok(output);
+                                return Ok((output, states));
                             }
                             PlanResult::Failed { error, .. } => {
                                 let _ = ws.close(None).await;
@@ -782,6 +794,10 @@ impl PyGraph {
     }
 
     /// Fit all trainable filters in topological order.
+    ///
+    /// If workers are registered and no node forces local, training is
+    /// dispatched to a remote worker. Trained states are returned and
+    /// stored locally so that subsequent forward() calls include them.
     #[pyo3(signature = (x, y=None))]
     fn fit(
         &mut self,
@@ -795,7 +811,19 @@ impl PyGraph {
             None => None,
         };
 
-        // Fit using shared event_bus so subscribers receive events
+        // Dispatch fit to worker if possible
+        if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
+            let mode = somatize_worker::protocol::ExecutionMode::Fit { y: y_val.clone() };
+            let (_output, states) = self.dispatch_to_worker(&x_val, mode)?;
+            // Store trained states locally for future forward() calls
+            for (node_id, state) in states {
+                self.library.set_state(&node_id, state);
+            }
+            self.fitted = true;
+            return Ok(());
+        }
+
+        // Local fit
         self.graph.validate().map_err(soma_err_to_py)?;
         let sorted = self.graph.topological_sort().map_err(soma_err_to_py)?;
         let graph_info = GraphInfo::from_graph(&self.graph);
@@ -899,7 +927,8 @@ impl PyGraph {
 
         // Dispatch entire plan remotely if workers registered and no node forces local
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
-            let output = self.dispatch_to_worker(&x_val)?;
+            let (output, _states) =
+                self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)?;
             return value_to_py(py, &output);
         }
 

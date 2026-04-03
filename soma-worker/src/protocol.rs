@@ -90,6 +90,20 @@ mod base64_bytes {
     }
 }
 
+/// Execution mode: fit (training) or forward (inference).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+pub enum ExecutionMode {
+    /// Training: fit each filter, then forward to propagate outputs.
+    Fit {
+        /// Supervised labels (optional).
+        y: Option<Value>,
+    },
+    /// Inference: forward only (default).
+    #[default]
+    Forward,
+}
+
 /// A serialized plan ready for remote execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedPlan {
@@ -100,6 +114,9 @@ pub struct SerializedPlan {
     /// Filter definitions for the worker to reconstruct.
     #[serde(default)]
     pub filters: Vec<SerializedFilter>,
+    /// Fit or Forward.
+    #[serde(default)]
+    pub mode: ExecutionMode,
     pub metadata: serde_json::Value,
 }
 
@@ -209,8 +226,18 @@ pub enum CoordinatorToWorker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum PlanResult {
-    Success { output: Value, duration_ms: u64 },
-    Failed { error: String, duration_ms: u64 },
+    Success {
+        output: Value,
+        duration_ms: u64,
+        /// Trained states returned after Fit mode (node_id → state).
+        /// Empty for Forward mode.
+        #[serde(default)]
+        states: std::collections::HashMap<String, Value>,
+    },
+    Failed {
+        error: String,
+        duration_ms: u64,
+    },
 }
 
 #[cfg(test)]
@@ -271,6 +298,7 @@ mod tests {
                     value: Value::tensor(vec![1.0, 2.0], vec![2]),
                 }),
                 filters: vec![],
+                mode: ExecutionMode::default(),
                 metadata: serde_json::json!({"experiment": "test"}),
             },
         };
@@ -287,6 +315,7 @@ mod tests {
         let success = PlanResult::Success {
             output: Value::tensor(vec![0.95], vec![1]),
             duration_ms: 1234,
+            states: std::collections::HashMap::new(),
         };
         let json = serde_json::to_string(&success).unwrap();
         let deserialized: PlanResult = serde_json::from_str(&json).unwrap();

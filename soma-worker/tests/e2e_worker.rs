@@ -86,6 +86,7 @@ async fn worker_ws_execute_plan() {
             value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
         }),
         filters: vec![],
+        mode: somatize_worker::protocol::ExecutionMode::default(),
         metadata: serde_json::json!({}),
     };
 
@@ -107,6 +108,7 @@ async fn worker_ws_execute_plan() {
             if let PlanResult::Success {
                 output,
                 duration_ms,
+                ..
             } = result
             {
                 let (data, _) = output.as_tensor().unwrap();
@@ -158,6 +160,7 @@ async fn worker_ws_sequence_plan() {
             value: Value::tensor(vec![5.0], vec![1]),
         }),
         filters: vec![],
+        mode: somatize_worker::protocol::ExecutionMode::default(),
         metadata: serde_json::json!({}),
     };
 
