@@ -262,6 +262,16 @@ impl Worker {
             }
         });
 
+        // DataStore-backed streaming: if input is a large DataRef and we have a store,
+        // read chunks via get_rows() and process with StreamExecutor (no full materialization).
+        if let Some(InputSource::Reference { data_ref }) = &plan.input
+            && let Some(store) = self.data_store.clone()
+            && let Ok(meta) = store.meta(data_ref)
+            && meta.total_rows > 1024
+        {
+            return self.execute_streamed_from_store(plan, &store, data_ref, &meta, start);
+        }
+
         match &plan.mode {
             ExecutionMode::Fit { y } => self.execute_fit(plan, input_value, y.as_ref(), start),
             ExecutionMode::Forward => self.execute_forward(plan, input_value, start),
@@ -404,6 +414,98 @@ impl Worker {
             output,
             duration_ms: start.elapsed().as_millis() as u64,
             states: trained_states,
+        }
+    }
+
+    /// DataStore-backed streaming: read chunks via get_rows(), process with StreamExecutor.
+    /// Avoids loading the entire dataset into memory.
+    fn execute_streamed_from_store(
+        &mut self,
+        plan: &SerializedPlan,
+        store: &Arc<dyn DataStore>,
+        data_ref: &somatize_core::store::DataRef,
+        meta: &somatize_core::store::StoreMeta,
+        start: Instant,
+    ) -> PlanResult {
+        use somatize_runtime::stream::{FittedFilter, StreamExecutor};
+
+        let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
+        let fitted: Vec<FittedFilter> = node_ids
+            .iter()
+            .filter_map(|id| {
+                let filter = self.filters.get(id)?;
+                let state = self.filters.get_state(id).cloned().unwrap_or(Value::Empty);
+                Some(FittedFilter {
+                    name: id.clone(),
+                    filter,
+                    state,
+                })
+            })
+            .collect();
+
+        let mut executor = StreamExecutor::new(fitted);
+        let chunk_size = 1024;
+        let run_id = format!("worker_stream_{}", plan.plan_id);
+
+        self.event_bus.emit(Event::RunStarted {
+            run_id: run_id.clone(),
+            plan_summary: somatize_core::event::PlanSummary {
+                total_nodes: node_ids.len(),
+                cached_nodes: 0,
+                parallel_branches: 0,
+            },
+        });
+
+        let mut last_output = Value::Empty;
+        let total = meta.total_rows;
+        let mut chunk_idx = 0;
+
+        for row_start in (0..total).step_by(chunk_size) {
+            let len = chunk_size.min(total - row_start);
+            let chunk = match store.get_rows(data_ref, row_start, len) {
+                Ok(c) => c,
+                Err(e) => {
+                    return PlanResult::Failed {
+                        error: format!("get_rows({row_start}..{}): {e}", row_start + len),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+            };
+
+            match executor.process_chunk(chunk) {
+                Ok(Some(output)) => last_output = output,
+                Ok(None) => {} // Barrier — accumulating
+                Err(e) => {
+                    return PlanResult::Failed {
+                        error: format!("stream chunk {chunk_idx}: {e}"),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+            }
+            chunk_idx += 1;
+        }
+
+        // Flush barrier filters
+        match executor.flush() {
+            Ok(Some(output)) => last_output = output,
+            Ok(None) => {}
+            Err(e) => {
+                return PlanResult::Failed {
+                    error: format!("stream flush: {e}"),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                };
+            }
+        }
+
+        tracing::info!(
+            "Streamed {chunk_idx} chunks ({total} rows) in {}ms",
+            start.elapsed().as_millis()
+        );
+
+        PlanResult::Success {
+            output: last_output,
+            duration_ms: start.elapsed().as_millis() as u64,
+            states: std::collections::HashMap::new(),
         }
     }
 
