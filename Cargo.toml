@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.10"
+version = "0.2.11"
 edition = "2024"
 license = "Elastic-2.0"
 repository = "https://github.com/manucouto1/soma"
@@ -66,10 +66,10 @@ object_store = { version = "0.12", features = ["aws"] }
 zstd = "0.13"
 
 # Internal crates
-somatize-macros = { version = "0.2.10", path = "soma-macros" }
-somatize-core = { version = "0.2.10", path = "soma-core" }
-somatize-compiler = { version = "0.2.10", path = "soma-compiler" }
-somatize-runtime = { version = "0.2.10", path = "soma-runtime" }
-somatize-memory = { version = "0.2.10", path = "soma-memory" }
-somatize-worker = { version = "0.2.10", path = "soma-worker" }
-somatize-agent = { version = "0.2.10", path = "soma-agent" }
+somatize-macros = { version = "0.2.11", path = "soma-macros" }
+somatize-core = { version = "0.2.11", path = "soma-core" }
+somatize-compiler = { version = "0.2.11", path = "soma-compiler" }
+somatize-runtime = { version = "0.2.11", path = "soma-runtime" }
+somatize-memory = { version = "0.2.11", path = "soma-memory" }
+somatize-worker = { version = "0.2.11", path = "soma-worker" }
+somatize-agent = { version = "0.2.11", path = "soma-agent" }
