@@ -81,15 +81,33 @@ impl PickledFilterRunner {
             r#"
 import json, sys, base64, cloudpickle
 
+def unwrap_value(v):
+    """Convert Soma Value JSON to native Python types."""
+    if isinstance(v, dict) and "type" in v and "data" in v:
+        t = v["type"]
+        d = v["data"]
+        if t == "Tensor":
+            return d.get("values", [])
+        if t == "Json":
+            return d
+        if t == "Empty":
+            return {{}}
+        if t == "Bytes":
+            return bytes(d)
+    return v
+
 pickled_b64 = sys.stdin.readline().strip()
 input_line = sys.stdin.read()
 
 pickled = base64.b64decode(pickled_b64)
 obj = cloudpickle.loads(pickled)
-input_data = json.loads(input_line)
+raw = json.loads(input_line)
+input_data = unwrap_value(raw)
 
 if isinstance(input_data, dict) and "x" in input_data and "state" in input_data:
-    result = obj.{method}(input_data["x"], input_data["state"])
+    x = unwrap_value(input_data["x"])
+    state = unwrap_value(input_data["state"])
+    result = obj.{method}(x, state)
 else:
     result = obj.{method}(input_data, {{}})
 

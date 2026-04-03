@@ -1707,8 +1707,8 @@ impl PyWorker {
         }
     }
 
-    /// Start the worker server (blocking).
-    fn serve(&self) -> PyResult<()> {
+    /// Start the worker server (blocking). Releases the GIL so other threads can run.
+    fn serve(&self, py: Python<'_>) -> PyResult<()> {
         let port = self.port;
         let tags = self.tags.clone();
         let token = self.token.clone();
@@ -1719,8 +1719,8 @@ impl PyWorker {
         let worker_id = self.worker_id.clone();
         let coordinator = self.coordinator.clone();
 
-        // Build the runtime in a new thread to avoid GIL issues
-        std::thread::spawn(move || {
+        // Build the runtime in a new thread; release GIL so other Python threads can run.
+        let handle = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 // Auto-detect capabilities
@@ -1784,9 +1784,14 @@ impl PyWorker {
                     somatize_worker::serve_worker(worker, &addr).await.unwrap();
                 }
             });
-        })
-        .join()
-        .map_err(|_| PyRuntimeError::new_err("worker thread panicked"))?;
+        });
+
+        // Release GIL while waiting for server thread (allows other Python threads to proceed)
+        py.allow_threads(|| {
+            handle
+                .join()
+                .map_err(|_| PyRuntimeError::new_err("worker thread panicked"))
+        })?;
 
         Ok(())
     }
