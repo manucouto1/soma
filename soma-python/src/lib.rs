@@ -1392,19 +1392,67 @@ impl PyGraph {
     ///
     /// Usage:
     ///   g.set_data_store("local", path="/data/soma")
-    #[pyo3(signature = (store_type, path=None))]
-    fn set_data_store(&mut self, store_type: String, path: Option<String>) -> PyResult<()> {
+    ///   g.set_data_store("s3", bucket="my-lab", prefix="exp/",
+    ///                    endpoint="s3.amazonaws.com",
+    ///                    access_key="AK...", secret_key="SK...")
+    #[pyo3(signature = (store_type, path=None, bucket=None, prefix=None, endpoint=None, access_key=None, secret_key=None, cache_dir=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_data_store(
+        &mut self,
+        store_type: String,
+        path: Option<String>,
+        bucket: Option<String>,
+        prefix: Option<String>,
+        endpoint: Option<String>,
+        access_key: Option<String>,
+        secret_key: Option<String>,
+        cache_dir: Option<String>,
+    ) -> PyResult<()> {
         match store_type.as_str() {
             "local" => {
                 let p = path.ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err("local store requires 'path' argument")
+                    pyo3::exceptions::PyValueError::new_err("local store requires 'path'")
                 })?;
                 let store = somatize_core::store::LocalDataStore::new(p);
                 self.data_store = Some(Arc::new(store));
                 Ok(())
             }
+            "s3" => {
+                let bucket = bucket.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("s3 store requires 'bucket'")
+                })?;
+                let prefix = prefix.unwrap_or_default();
+                let endpoint = endpoint.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("s3 store requires 'endpoint'")
+                })?;
+                let ak = access_key
+                    .or_else(|| std::env::var("AWS_ACCESS_KEY_ID").ok())
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(
+                            "s3 store requires 'access_key' or AWS_ACCESS_KEY_ID env var",
+                        )
+                    })?;
+                let sk = secret_key
+                    .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(
+                            "s3 store requires 'secret_key' or AWS_SECRET_ACCESS_KEY env var",
+                        )
+                    })?;
+                let cache = cache_dir.unwrap_or_else(|| {
+                    std::env::temp_dir()
+                        .join(format!("soma-s3-cache-{bucket}"))
+                        .to_string_lossy()
+                        .to_string()
+                });
+                let store =
+                    somatize_core::store::S3DataStore::new(bucket, prefix, endpoint, ak, sk, cache)
+                        .map_err(soma_err_to_py)?;
+                self.data_store = Some(Arc::new(store));
+                Ok(())
+            }
             other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unknown store type: '{other}'. Available: local (s3 and zarr require feature flags)"
+                "unknown store type: '{other}'. Available: local, s3"
             ))),
         }
     }
