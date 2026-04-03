@@ -9,6 +9,7 @@ description = "Worker daemon for distributed execution in the Soma runtime"
 
 [dependencies]
 somatize-core = { workspace = true }
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
 serde = { workspace = true }
@@ -26,10 +27,14 @@ sysinfo = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = "0.3"
 hostname = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 rmp-serde = "1"
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
+
+[features]
+default = []
+embedded-python = ["dep:pyo3"]
 
 [dev-dependencies]
 proptest = { workspace = true }

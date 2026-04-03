@@ -2836,6 +2836,7 @@ dependencies = [
  "hex",
  "hostname",
  "proptest",
+ "pyo3",
  "reqwest",
  "rmp-serde",
  "serde",

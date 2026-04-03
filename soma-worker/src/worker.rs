@@ -361,15 +361,65 @@ impl Worker {
             }
         };
 
-        // Register pickled filters (from remote client via cloudpickle)
+        // Resolve venv site-packages path for EmbeddedPyFilter
+        #[cfg(feature = "embedded-python")]
+        let site_packages = if python_path != "python3" {
+            // Venv python path is like .../bin/python → site-packages is ../lib/pythonX.Y/site-packages
+            let venv_dir = std::path::Path::new(&python_path)
+                .parent()
+                .and_then(|bin| bin.parent());
+            venv_dir.and_then(|d| {
+                std::fs::read_dir(d.join("lib"))
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .find(|e| e.file_name().to_string_lossy().starts_with("python"))
+                    .map(|e| e.path().join("site-packages").to_string_lossy().to_string())
+            })
+        } else {
+            None
+        };
+
+        // Register filters: prefer EmbeddedPyFilter (PyO3) when available
         for sf in &plan.filters {
-            let filter = Box::new(PickledFilterRunner {
-                pickled_bytes: sf.pickled_filter.clone(),
-                node_id: sf.node_id.clone(),
-                python_path: python_path.clone(),
-                requirements: sf.requirements.clone(),
-                trainable: sf.trainable,
-            });
+            let filter: Box<dyn Filter> = {
+                #[cfg(feature = "embedded-python")]
+                {
+                    match crate::py_filter::EmbeddedPyFilter::new(
+                        &sf.pickled_filter,
+                        sf.node_id.clone(),
+                        sf.trainable,
+                        site_packages.as_deref(),
+                    ) {
+                        Ok(embedded) => {
+                            tracing::info!("Using embedded PyO3 filter for '{}'", sf.node_id);
+                            Box::new(embedded)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "PyO3 embed failed for '{}': {e}, falling back to subprocess",
+                                sf.node_id
+                            );
+                            Box::new(PickledFilterRunner {
+                                pickled_bytes: sf.pickled_filter.clone(),
+                                node_id: sf.node_id.clone(),
+                                python_path: python_path.clone(),
+                                requirements: sf.requirements.clone(),
+                                trainable: sf.trainable,
+                            })
+                        }
+                    }
+                }
+                #[cfg(not(feature = "embedded-python"))]
+                {
+                    Box::new(PickledFilterRunner {
+                        pickled_bytes: sf.pickled_filter.clone(),
+                        node_id: sf.node_id.clone(),
+                        python_path: python_path.clone(),
+                        requirements: sf.requirements.clone(),
+                        trainable: sf.trainable,
+                    })
+                }
+            };
             self.filters.register(&sf.node_id, filter);
             if let Some(state) = &sf.state {
                 self.filters.set_state(&sf.node_id, state.clone());
