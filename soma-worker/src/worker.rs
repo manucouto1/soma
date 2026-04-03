@@ -57,19 +57,24 @@ impl Filter for PickledFilterRunner {
 impl PickledFilterRunner {
     fn run_python(&self, method: &str, input: &Value) -> SomaResult<Value> {
         use base64::engine::{Engine, general_purpose::STANDARD};
+        use std::io::Write;
 
         let input_json = serde_json::to_string(input)
             .map_err(|e| somatize_core::error::SomaError::Other(format!("serialize input: {e}")))?;
         let pickled_b64 = STANDARD.encode(&self.pickled_bytes);
 
-        // Python script: deserialize filter with cloudpickle, call method, return JSON
+        // Python script: reads pickled filter + input from stdin (avoids ARG_MAX limits).
+        // Protocol: line 1 = base64 pickled filter, line 2 = JSON input data.
         let script = format!(
             r#"
 import json, sys, base64, cloudpickle
 
-pickled = base64.b64decode(sys.argv[1])
+pickled_b64 = sys.stdin.readline().strip()
+input_line = sys.stdin.read()
+
+pickled = base64.b64decode(pickled_b64)
 obj = cloudpickle.loads(pickled)
-input_data = json.loads(sys.argv[2])
+input_data = json.loads(input_line)
 
 if isinstance(input_data, dict) and "x" in input_data and "state" in input_data:
     result = obj.{method}(input_data["x"], input_data["state"])
@@ -80,12 +85,26 @@ print(json.dumps(result))
 "#,
         );
 
-        let output = std::process::Command::new("python3")
-            .args(["-c", &script, &pickled_b64, &input_json])
-            .output()
+        let mut child = std::process::Command::new("python3")
+            .args(["-c", &script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| {
-                somatize_core::error::SomaError::Other(format!("python exec failed: {e}"))
+                somatize_core::error::SomaError::Other(format!("python spawn failed: {e}"))
             })?;
+
+        // Write pickled filter + input data via stdin
+        if let Some(mut stdin) = child.stdin.take() {
+            // Ignore write errors — child may have exited early
+            let _ = writeln!(stdin, "{pickled_b64}");
+            let _ = write!(stdin, "{input_json}");
+        }
+
+        let output = child.wait_with_output().map_err(|e| {
+            somatize_core::error::SomaError::Other(format!("python exec failed: {e}"))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
