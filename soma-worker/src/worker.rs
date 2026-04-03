@@ -1,218 +1,14 @@
 //! Worker — receives and executes plans from a coordinator.
 
 use crate::protocol::*;
-use somatize_core::cache::{CacheKey, CacheStore};
-use somatize_core::error::Result as SomaResult;
+use somatize_core::cache::CacheStore;
 use somatize_core::event::Event;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::filter::{Filter, FilterKind};
 use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
 use somatize_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
 use std::sync::Arc;
 use std::time::Instant;
-
-/// A filter reconstructed from cloudpickle bytes.
-/// Deserializes the Python object on the worker and executes methods via subprocess.
-pub(crate) struct PickledFilterRunner {
-    /// cloudpickle.dumps() bytes of the original Python filter object.
-    pub(crate) pickled_bytes: Vec<u8>,
-    /// Node ID (for error messages).
-    pub(crate) node_id: String,
-    /// Path to the Python interpreter (venv or system).
-    pub(crate) python_path: String,
-    /// Pip requirements for retry-on-import-error.
-    pub(crate) requirements: Vec<String>,
-    /// Whether this filter is trainable (has meaningful fit()).
-    pub(crate) trainable: bool,
-}
-
-impl Filter for PickledFilterRunner {
-    fn config_hash(&self) -> CacheKey {
-        CacheKey::from_parts(&[&self.pickled_bytes])
-    }
-
-    fn fit(&self, x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
-        self.run_python("fit", x)
-    }
-
-    fn forward(&self, x: &Value, state: &Value) -> SomaResult<Value> {
-        let input = if matches!(state, Value::Empty) {
-            x.clone()
-        } else {
-            Value::json(serde_json::json!({
-                "x": serde_json::to_value(x).unwrap_or_default(),
-                "state": serde_json::to_value(state).unwrap_or_default(),
-            }))
-        };
-        self.run_python("forward", &input)
-    }
-
-    fn meta(&self) -> FilterMeta {
-        FilterMeta {
-            name: self.node_id.clone(),
-            kind: if self.trainable {
-                FilterKind::Trainable
-            } else {
-                FilterKind::Stateless
-            },
-            cacheable: true,
-            differentiable: false,
-            stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
-            input_schema: None,
-            output_schema: None,
-        }
-    }
-}
-
-impl PickledFilterRunner {
-    fn run_python(&self, method: &str, input: &Value) -> SomaResult<Value> {
-        self.run_python_with_retry(method, input, true)
-    }
-
-    fn run_python_with_retry(
-        &self,
-        method: &str,
-        input: &Value,
-        allow_retry: bool,
-    ) -> SomaResult<Value> {
-        use base64::engine::{Engine, general_purpose::STANDARD};
-        use std::io::Write;
-
-        let input_json = serde_json::to_string(input)
-            .map_err(|e| somatize_core::error::SomaError::Other(format!("serialize input: {e}")))?;
-        let pickled_b64 = STANDARD.encode(&self.pickled_bytes);
-
-        let script = format!(
-            r#"
-import json, sys, base64, cloudpickle
-
-def unwrap_value(v):
-    """Convert Soma Value JSON to native Python types."""
-    if isinstance(v, dict) and "type" in v and "data" in v:
-        t = v["type"]
-        d = v["data"]
-        if t == "Tensor":
-            return d.get("values", [])
-        if t == "Json":
-            return d
-        if t == "Empty":
-            return {{}}
-        if t == "Bytes":
-            return bytes(d)
-    return v
-
-pickled_b64 = sys.stdin.readline().strip()
-input_line = sys.stdin.read()
-
-pickled = base64.b64decode(pickled_b64)
-obj = cloudpickle.loads(pickled)
-raw = json.loads(input_line)
-input_data = unwrap_value(raw)
-
-if isinstance(input_data, dict) and "x" in input_data and "state" in input_data:
-    x = unwrap_value(input_data["x"])
-    state = unwrap_value(input_data["state"])
-    result = obj.{method}(x, state)
-else:
-    result = obj.{method}(input_data, {{}})
-
-print(json.dumps(result))
-"#,
-        );
-
-        let mut child = std::process::Command::new(&self.python_path)
-            .args(["-c", &script])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                somatize_core::error::SomaError::Other(format!("python spawn failed: {e}"))
-            })?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = writeln!(stdin, "{pickled_b64}");
-            let _ = write!(stdin, "{input_json}");
-        }
-
-        let output = child.wait_with_output().map_err(|e| {
-            somatize_core::error::SomaError::Other(format!("python exec failed: {e}"))
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            // Retry on ModuleNotFoundError: install known requirements + missing package
-            if allow_retry && stderr.contains("ModuleNotFoundError") {
-                let missing = Self::parse_missing_module(&stderr);
-                // Collect packages to install: known requirements + the missing one
-                let mut to_install: Vec<String> = self.requirements.clone();
-                if let Some(ref m) = missing
-                    && !to_install.iter().any(|r| r == m)
-                {
-                    to_install.push(m.clone());
-                }
-                if !to_install.is_empty() {
-                    let names = to_install.join(", ");
-                    tracing::warn!(
-                        "Missing module for filter '{}', installing: {names}",
-                        self.node_id
-                    );
-                    let mut args = vec!["-m", "pip", "install", "--quiet"];
-                    let refs: Vec<&str> = to_install.iter().map(|s| s.as_str()).collect();
-                    args.extend(refs);
-                    let install = std::process::Command::new(&self.python_path)
-                        .args(&args)
-                        .output();
-                    if let Ok(res) = install
-                        && res.status.success()
-                    {
-                        tracing::info!("Installed [{names}], retrying...");
-                        return self.run_python_with_retry(method, input, false);
-                    }
-                }
-            }
-
-            return Err(somatize_core::error::SomaError::Execution {
-                node_id: self.node_id.clone(),
-                message: format!("Python error: {stderr}"),
-            });
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let result: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| {
-            somatize_core::error::SomaError::Other(format!(
-                "parse python output: {e}\nstdout: {stdout}"
-            ))
-        })?;
-
-        if let Some(arr) = result.as_array() {
-            let values: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
-            if !values.is_empty() {
-                return Ok(Value::tensor(values.clone(), vec![values.len()]));
-            }
-        }
-
-        Ok(Value::json(result))
-    }
-
-    /// Parse "ModuleNotFoundError: No module named 'xxx'" from stderr.
-    fn parse_missing_module(stderr: &str) -> Option<String> {
-        for line in stderr.lines().rev() {
-            if line.contains("ModuleNotFoundError") {
-                // "ModuleNotFoundError: No module named 'xxx'"
-                if let Some(start) = line.find('\'') {
-                    let rest = &line[start + 1..];
-                    if let Some(end) = rest.find('\'') {
-                        return Some(rest[..end].split('.').next()?.to_string());
-                    }
-                }
-            }
-        }
-        None
-    }
-}
 
 /// Worker state: manages execution of plans received from a coordinator.
 pub struct Worker {
@@ -227,9 +23,6 @@ pub struct Worker {
     temp_store: Arc<LocalDataStore>,
     /// Environment manager for creating venvs with filter dependencies.
     env_manager: crate::env_manager::EnvManager,
-    /// Use embedded PyO3 for filter execution (true when worker is main process).
-    /// False when running inside another Python process (avoids GIL deadlock).
-    pub use_embedded_python: bool,
 }
 
 impl Worker {
@@ -250,7 +43,6 @@ impl Worker {
                 env_path,
                 crate::env_manager::EnvType::Venv,
             ),
-            use_embedded_python: false,
         }
     }
 
@@ -366,7 +158,6 @@ impl Worker {
         };
 
         // Resolve venv site-packages path for EmbeddedPyFilter
-        #[cfg(feature = "embedded-python")]
         let site_packages = if python_path != "python3" {
             let venv_dir = std::path::Path::new(&python_path)
                 .parent()
@@ -382,48 +173,31 @@ impl Worker {
             None
         };
 
-        // Register filters
+        // Register filters via EmbeddedPyFilter (PyO3 in-process, zero overhead)
         for sf in &plan.filters {
-            #[cfg(feature = "embedded-python")]
-            let filter: Box<dyn Filter> = if !self.use_embedded_python {
-                Box::new(PickledFilterRunner {
-                    pickled_bytes: sf.pickled_filter.clone(),
-                    node_id: sf.node_id.clone(),
-                    python_path: python_path.clone(),
-                    requirements: sf.requirements.clone(),
-                    trainable: sf.trainable,
-                })
-            } else {
-                match crate::py_filter::EmbeddedPyFilter::new(
+            #[cfg(feature = "pyo3")]
+            let filter: Box<dyn Filter> = Box::new(
+                crate::py_filter::EmbeddedPyFilter::new(
                     &sf.pickled_filter,
                     sf.node_id.clone(),
                     sf.trainable,
                     site_packages.as_deref(),
-                ) {
-                    Ok(embedded) => Box::new(embedded),
-                    Err(e) => {
-                        tracing::warn!(
-                            "PyO3 failed for '{}': {e}, falling back to subprocess",
-                            sf.node_id
-                        );
-                        Box::new(PickledFilterRunner {
-                            pickled_bytes: sf.pickled_filter.clone(),
-                            node_id: sf.node_id.clone(),
-                            python_path: python_path.clone(),
-                            requirements: sf.requirements.clone(),
-                            trainable: sf.trainable,
-                        })
-                    }
-                }
+                )
+                .map_err(|e| {
+                    tracing::error!("Failed to load filter '{}': {e}", sf.node_id);
+                })
+                .expect("EmbeddedPyFilter creation failed"),
+            );
+            #[cfg(not(feature = "pyo3"))]
+            let filter: Box<dyn Filter> = {
+                let _ = (
+                    &sf.pickled_filter,
+                    &sf.node_id,
+                    sf.trainable,
+                    &site_packages,
+                );
+                panic!("Python filter execution requires the 'pyo3' feature (enabled by default)")
             };
-            #[cfg(not(feature = "embedded-python"))]
-            let filter: Box<dyn Filter> = Box::new(PickledFilterRunner {
-                pickled_bytes: sf.pickled_filter.clone(),
-                node_id: sf.node_id.clone(),
-                python_path: python_path.clone(),
-                requirements: sf.requirements.clone(),
-                trainable: sf.trainable,
-            });
             self.filters.register(&sf.node_id, filter);
             if let Some(state) = &sf.state {
                 self.filters.set_state(&sf.node_id, state.clone());

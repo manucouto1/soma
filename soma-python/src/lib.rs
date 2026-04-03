@@ -1217,11 +1217,12 @@ impl PyGraph {
             None => None,
         };
 
-        // Dispatch fit to worker if possible
+        // Dispatch fit to worker if possible.
+        // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
             let mode = somatize_worker::protocol::ExecutionMode::Fit { y: y_val.clone() };
-            let (_output, states) = self.dispatch_to_worker(&x_val, mode)?;
-            // Store trained states locally for future forward() calls
+            let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
+            let (_output, states) = result?;
             for (node_id, state) in states {
                 self.library.set_state(&node_id, state);
             }
@@ -1340,15 +1341,17 @@ impl PyGraph {
         let x_val = py_to_value(py, x)?;
 
         // Streaming mode: send chunks via WS Binary
+        // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
         if stream && !self.workers.is_empty() {
-            let output = self.dispatch_streamed(&x_val, chunk_size)?;
+            let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
             return value_to_py(py, &output);
         }
 
         // Dispatch entire plan remotely if workers registered and no node forces local
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
-            let (output, _states) =
-                self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)?;
+            let (output, _states) = py.allow_threads(|| {
+                self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)
+            })?;
             return value_to_py(py, &output);
         }
 

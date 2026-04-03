@@ -9,7 +9,7 @@ pub mod coordinator_server;
 pub mod detect;
 pub mod env_manager;
 pub mod protocol;
-#[cfg(feature = "embedded-python")]
+#[cfg(feature = "pyo3")]
 pub mod py_filter;
 pub mod remote_executor;
 pub mod server;
@@ -20,7 +20,7 @@ pub use coordinator_server::{coordinator_router, serve_coordinator};
 pub use detect::ResourceLimits;
 pub use env_manager::EnvManager;
 pub use protocol::*;
-#[cfg(feature = "embedded-python")]
+#[cfg(feature = "pyo3")]
 pub use py_filter::EmbeddedPyFilter;
 pub use remote_executor::WsRemoteExecutor;
 pub use server::{

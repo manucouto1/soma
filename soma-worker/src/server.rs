@@ -351,34 +351,23 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
             // Build StreamExecutor from the plan's filters
             let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
 
-            // Register filters
+            // Register filters via EmbeddedPyFilter
             for sf in &plan.filters {
-                #[cfg(feature = "embedded-python")]
-                let filter: Box<dyn somatize_core::filter::Filter> =
-                    match crate::py_filter::EmbeddedPyFilter::new(
+                #[cfg(feature = "pyo3")]
+                let filter: Box<dyn somatize_core::filter::Filter> = Box::new(
+                    crate::py_filter::EmbeddedPyFilter::new(
                         &sf.pickled_filter,
                         sf.node_id.clone(),
                         sf.trainable,
                         None,
-                    ) {
-                        Ok(embedded) => Box::new(embedded),
-                        Err(_) => Box::new(crate::worker::PickledFilterRunner {
-                            pickled_bytes: sf.pickled_filter.clone(),
-                            node_id: sf.node_id.clone(),
-                            python_path: "python3".to_string(),
-                            requirements: sf.requirements.clone(),
-                            trainable: sf.trainable,
-                        }),
-                    };
-                #[cfg(not(feature = "embedded-python"))]
-                let filter: Box<dyn somatize_core::filter::Filter> =
-                    Box::new(crate::worker::PickledFilterRunner {
-                        pickled_bytes: sf.pickled_filter.clone(),
-                        node_id: sf.node_id.clone(),
-                        python_path: "python3".to_string(),
-                        requirements: sf.requirements.clone(),
-                        trainable: sf.trainable,
-                    });
+                    )
+                    .expect("EmbeddedPyFilter creation failed"),
+                );
+                #[cfg(not(feature = "pyo3"))]
+                let filter: Box<dyn somatize_core::filter::Filter> = {
+                    let _ = (&sf.pickled_filter, &sf.node_id, sf.trainable);
+                    panic!("Python filter execution requires the 'pyo3' feature")
+                };
                 worker.register_filter(&sf.node_id, filter);
                 if let Some(s) = &sf.state {
                     worker.set_filter_state(&sf.node_id, s.clone());

@@ -133,8 +133,6 @@ async fn main() {
     tracing::info!("Capabilities: {}", caps.summary());
 
     let mut worker = Worker::new(&worker_id, caps.clone());
-    // Standalone binary: use embedded Python (PyO3 in-process)
-    worker.use_embedded_python = true;
     if let Some(temp_dir) = args.temp_dir {
         worker = worker.with_temp_dir(temp_dir.into());
     }

@@ -33,8 +33,7 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 [features]
-default = []
-embedded-python = ["dep:pyo3"]
+default = ["pyo3"]
 
 [dev-dependencies]
 proptest = { workspace = true }
