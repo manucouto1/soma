@@ -134,14 +134,23 @@ impl PyFilterBridge {
 
         // Serialize with cloudpickle (like Spark/Dask/Ray) — captures bytecode,
         // closures, cross-module imports, and all dependencies automatically.
+        // Register the filter's module for by-value pickling so cloudpickle embeds
+        // the full class definition instead of just the import path. Without this,
+        // the worker would need the exact same source tree (e.g. src.filters.classifiers).
         let cloudpickle = py.import("cloudpickle")?;
-        let pickled = cloudpickle.call_method1("dumps", (obj,))?;
-        let pickled_bytes: Vec<u8> = pickled.extract()?;
-
-        // Capture full module source (imports + classes + helpers) for Nous introspection.
-        // Not used for execution — that's cloudpickle's job.
         let inspect = py.import("inspect")?;
         let module = inspect.call_method1("getmodule", (obj.get_type(),))?;
+        if !module.is_none() {
+            let mod_name: String = module
+                .getattr("__name__")
+                .and_then(|n| n.extract())
+                .unwrap_or_default();
+            if !mod_name.is_empty() && mod_name != "__main__" && !mod_name.starts_with("builtins") {
+                let _ = cloudpickle.call_method1("register_pickle_by_value", (&module,));
+            }
+        }
+        let pickled = cloudpickle.call_method1("dumps", (obj,))?;
+        let pickled_bytes: Vec<u8> = pickled.extract()?;
         let source = if !module.is_none() {
             inspect
                 .call_method1("getsource", (&module,))
