@@ -774,6 +774,176 @@ impl PyGraph {
             Err(PyRuntimeError::new_err("worker closed without result"))
         })
     }
+
+    /// Stream data to a worker in chunks via WebSocket Binary frames.
+    /// Chunks are processed by StreamExecutor on the worker — no full materialization.
+    fn dispatch_streamed(&self, x: &Value, chunk_size: usize) -> Result<Value, PyErr> {
+        use somatize_worker::protocol::*;
+
+        let compile_result = somatize_compiler::compile(
+            &self.graph,
+            &self.library,
+            CompileMode::Inference,
+            Some(self.cache.as_ref()),
+        )
+        .map_err(soma_err_to_py)?;
+
+        let first_target = self
+            .graph
+            .nodes
+            .iter()
+            .find_map(|n| n.target.as_deref())
+            .unwrap_or("default");
+
+        let (addr, token) = self
+            .workers
+            .iter()
+            .find(|(_, _, tags)| {
+                first_target == "default" || tags.contains(&first_target.to_string())
+            })
+            .or_else(|| self.workers.first())
+            .map(|(a, t, _)| (a.clone(), t.clone()))
+            .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
+
+        let filters: Vec<SerializedFilter> = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let pickled = self.pickled_filters.get(&node.id)?;
+                let state = self.library.get_state(&node.id).cloned();
+                Some(SerializedFilter {
+                    node_id: node.id.clone(),
+                    pickled_filter: pickled.clone(),
+                    state,
+                })
+            })
+            .collect();
+
+        // Split Value into chunks
+        let chunks = Self::chunk_value(x, chunk_size);
+        let total_chunks = chunks.len();
+        let stream_id = somatize_core::util::timestamp_id("stream");
+
+        let plan = SerializedPlan {
+            plan_id: stream_id.clone(),
+            plan: compile_result.plan,
+            input: None, // input comes via chunks
+            filters,
+            mode: ExecutionMode::Forward,
+            metadata: serde_json::json!({}),
+        };
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
+
+        rt.block_on(async {
+            let url = if let Some(t) = &token {
+                format!("{addr}/ws?token={t}")
+            } else {
+                format!("{addr}/ws")
+            };
+
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS connect: {e}")))?;
+
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::tungstenite::Message;
+
+            // 1. Send StreamBegin
+            let begin = StreamMessage::StreamBegin {
+                stream_id: stream_id.clone(),
+                plan_id: stream_id.clone(),
+                total_chunks: Some(total_chunks),
+                plan: Box::new(plan),
+            };
+            let bytes = rmp_serde::to_vec(&begin)
+                .map_err(|e| PyRuntimeError::new_err(format!("msgpack: {e}")))?;
+            ws.send(Message::Binary(bytes.into()))
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
+
+            // 2. Send chunks
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                let chunk_msg = StreamMessage::ChunkData {
+                    stream_id: stream_id.clone(),
+                    chunk_index: i,
+                    value: chunk,
+                };
+                let bytes = rmp_serde::to_vec(&chunk_msg)
+                    .map_err(|e| PyRuntimeError::new_err(format!("msgpack: {e}")))?;
+                ws.send(Message::Binary(bytes.into()))
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(format!("WS send chunk: {e}")))?;
+
+                // Drain any ChunkResults that came back
+                while let Ok(Some(Ok(Message::Binary(resp)))) =
+                    tokio::time::timeout(std::time::Duration::from_millis(1), ws.next()).await
+                {
+                    // ChunkResults are collected but not blocking
+                    let _ = rmp_serde::from_slice::<StreamMessage>(&resp);
+                }
+            }
+
+            // 3. Send StreamEnd
+            let end = StreamMessage::StreamEnd {
+                stream_id: stream_id.clone(),
+            };
+            let bytes = rmp_serde::to_vec(&end)
+                .map_err(|e| PyRuntimeError::new_err(format!("msgpack: {e}")))?;
+            ws.send(Message::Binary(bytes.into()))
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS send end: {e}")))?;
+
+            // 4. Wait for StreamComplete
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Binary(resp) = msg
+                    && let Ok(StreamMessage::StreamComplete { result, .. }) =
+                        rmp_serde::from_slice(&resp)
+                {
+                    match result {
+                        PlanResult::Success { output, .. } => return Ok(output),
+                        PlanResult::Failed { error, .. } => {
+                            return Err(PyRuntimeError::new_err(format!("stream error: {error}")));
+                        }
+                    }
+                }
+            }
+
+            Err(PyRuntimeError::new_err("stream closed without result"))
+        })
+    }
+
+    /// Split a Value into chunks for streaming.
+    fn chunk_value(x: &Value, chunk_size: usize) -> Vec<Value> {
+        match x {
+            Value::Tensor { values, shape } if !values.is_empty() => {
+                // Split along first dimension
+                let row_size = if shape.len() > 1 {
+                    shape[1..].iter().product()
+                } else {
+                    1
+                };
+                let n_rows = shape[0];
+                let mut chunks = Vec::new();
+                for start in (0..n_rows).step_by(chunk_size) {
+                    let end = (start + chunk_size).min(n_rows);
+                    let flat_start = start * row_size;
+                    let flat_end = end * row_size;
+                    let chunk_vals = values[flat_start..flat_end].to_vec();
+                    let mut chunk_shape = shape.clone();
+                    chunk_shape[0] = end - start;
+                    chunks.push(Value::tensor(chunk_vals, chunk_shape));
+                }
+                chunks
+            }
+            // For non-tensor or small data, single chunk
+            _ => vec![x.clone()],
+        }
+    }
 }
 
 #[pymethods]
@@ -994,16 +1164,30 @@ impl PyGraph {
     /// Forward data through the compiled graph (inference mode).
     ///
     /// Routing:
+    /// - stream=True → chunks sent via WS Binary to StreamExecutor on worker
     /// - No workers → local execution
     /// - Workers + all nodes non-local → entire plan dispatched to worker
     /// - Workers + mixed (some local) → local execution with remote fallback
-    fn forward(&self, py: Python<'_>, x: &Bound<'_, pyo3::types::PyAny>) -> PyResult<PyObject> {
+    #[pyo3(signature = (x, stream=false, chunk_size=1024))]
+    fn forward(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, pyo3::types::PyAny>,
+        stream: bool,
+        chunk_size: usize,
+    ) -> PyResult<PyObject> {
         if !self.fitted {
             return Err(PyRuntimeError::new_err(
                 "graph must be fitted before forward",
             ));
         }
         let x_val = py_to_value(py, x)?;
+
+        // Streaming mode: send chunks via WS Binary
+        if stream && !self.workers.is_empty() {
+            let output = self.dispatch_streamed(&x_val, chunk_size)?;
+            return value_to_py(py, &output);
+        }
 
         // Dispatch entire plan remotely if workers registered and no node forces local
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {

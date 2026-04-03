@@ -31,6 +31,8 @@ struct ServerState {
     temp_store: Arc<LocalDataStore>,
     /// Track upload times for automatic cleanup.
     temp_uploads: Mutex<HashMap<CacheKey, Instant>>,
+    /// Active streaming sessions: stream_id → StreamExecutor.
+    active_streams: Mutex<HashMap<String, somatize_runtime::stream::StreamExecutor>>,
 }
 
 /// Build a worker server router (no authentication).
@@ -73,6 +75,7 @@ fn worker_router_full(
         token,
         temp_store,
         temp_uploads: Mutex::new(HashMap::new()),
+        active_streams: Mutex::new(HashMap::new()),
     });
     // Background cleanup: remove temp uploads older than 1 hour
     let cleanup_state = state.clone();
@@ -269,9 +272,133 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                     break;
                 }
             }
+            Some(Ok(Message::Binary(bytes))) => {
+                if let Ok(stream_msg) = rmp_serde::from_slice::<StreamMessage>(&bytes) {
+                    let reply = handle_stream_message(stream_msg, &state);
+                    if let Some(reply_msg) = reply {
+                        let reply_bytes = rmp_serde::to_vec(&reply_msg).unwrap_or_default();
+                        if socket
+                            .send(Message::Binary(reply_bytes.into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
             Some(Ok(Message::Close(_))) | None => break,
             _ => {}
         }
+    }
+}
+
+/// Handle a streaming protocol message. Returns an optional reply.
+fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option<StreamMessage> {
+    use somatize_runtime::stream::{FittedFilter, StreamExecutor};
+
+    match msg {
+        StreamMessage::StreamBegin {
+            stream_id, plan, ..
+        } => {
+            // Build StreamExecutor from the plan's filters
+            let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+
+            // Register pickled filters
+            for sf in &plan.filters {
+                let filter = Box::new(crate::worker::PickledFilterRunner {
+                    pickled_bytes: sf.pickled_filter.clone(),
+                    node_id: sf.node_id.clone(),
+                });
+                worker.register_filter(&sf.node_id, filter);
+                if let Some(s) = &sf.state {
+                    worker.set_filter_state(&sf.node_id, s.clone());
+                }
+            }
+
+            // Build FittedFilter list from plan node order
+            let node_ids = plan.plan.node_ids();
+            let fitted: Vec<FittedFilter> = node_ids
+                .iter()
+                .filter_map(|id| {
+                    let filter = worker.get_filter(id)?;
+                    let filter_state = worker.get_filter_state(id);
+                    Some(FittedFilter {
+                        name: id.to_string(),
+                        filter,
+                        state: filter_state,
+                    })
+                })
+                .collect();
+
+            let executor = StreamExecutor::new(fitted);
+            state
+                .active_streams
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(stream_id, executor);
+
+            None // No reply for StreamBegin
+        }
+        StreamMessage::ChunkData {
+            stream_id,
+            chunk_index,
+            value,
+        } => {
+            let mut streams = state
+                .active_streams
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(executor) = streams.get_mut(&stream_id) {
+                match executor.process_chunk(value) {
+                    Ok(Some(result)) => Some(StreamMessage::ChunkResult {
+                        stream_id,
+                        chunk_index,
+                        value: result,
+                    }),
+                    Ok(None) => None, // Barrier mode — no result yet
+                    Err(e) => Some(StreamMessage::StreamComplete {
+                        stream_id,
+                        result: PlanResult::Failed {
+                            error: e.to_string(),
+                            duration_ms: 0,
+                        },
+                    }),
+                }
+            } else {
+                Some(StreamMessage::StreamComplete {
+                    stream_id,
+                    result: PlanResult::Failed {
+                        error: "unknown stream_id".to_string(),
+                        duration_ms: 0,
+                    },
+                })
+            }
+        }
+        StreamMessage::StreamEnd { stream_id } => {
+            let mut streams = state
+                .active_streams
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(mut executor) = streams.remove(&stream_id) {
+                // Flush barrier filters
+                let output = executor
+                    .flush()
+                    .unwrap_or(None)
+                    .unwrap_or(somatize_core::value::Value::Empty);
+                Some(StreamMessage::StreamComplete {
+                    stream_id,
+                    result: PlanResult::Success {
+                        output,
+                        duration_ms: 0,
+                        states: std::collections::HashMap::new(),
+                    },
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 

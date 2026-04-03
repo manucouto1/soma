@@ -13,11 +13,11 @@ use std::time::Instant;
 
 /// A filter reconstructed from cloudpickle bytes.
 /// Deserializes the Python object on the worker and executes methods via subprocess.
-struct PickledFilterRunner {
+pub(crate) struct PickledFilterRunner {
     /// cloudpickle.dumps() bytes of the original Python filter object.
-    pickled_bytes: Vec<u8>,
+    pub(crate) pickled_bytes: Vec<u8>,
     /// Node ID (for error messages).
-    node_id: String,
+    pub(crate) node_id: String,
 }
 
 impl Filter for PickledFilterRunner {
@@ -188,6 +188,24 @@ impl Worker {
     /// Register a filter that this worker can execute.
     pub fn register_filter(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
         self.filters.register(node_id, filter);
+    }
+
+    /// Get a filter by node_id (for stream executor construction).
+    pub fn get_filter(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
+        self.filters.get(node_id)
+    }
+
+    /// Get trained state for a filter.
+    pub fn get_filter_state(&self, node_id: &str) -> Value {
+        self.filters
+            .get_state(node_id)
+            .cloned()
+            .unwrap_or(Value::Empty)
+    }
+
+    /// Set trained state for a filter.
+    pub fn set_filter_state(&mut self, node_id: &str, state: Value) {
+        self.filters.set_state(node_id, state);
     }
 
     /// Subscribe to execution events.

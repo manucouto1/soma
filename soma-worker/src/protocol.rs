@@ -240,6 +240,45 @@ pub enum PlanResult {
     },
 }
 
+/// Streaming protocol: chunked data transfer over WebSocket Binary frames.
+///
+/// Wire format: msgpack-encoded StreamMessage (efficient binary, no JSON overhead).
+/// Client sends StreamBegin + N × ChunkData + StreamEnd.
+/// Worker responds with ChunkResult per chunk + StreamComplete at the end.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[non_exhaustive]
+pub enum StreamMessage {
+    /// Begin a streaming session.
+    StreamBegin {
+        stream_id: String,
+        plan_id: PlanId,
+        /// Number of chunks (None if unknown ahead of time).
+        total_chunks: Option<usize>,
+        /// The plan to execute — input comes via chunks, not inline.
+        plan: Box<SerializedPlan>,
+    },
+    /// A single chunk of input data.
+    ChunkData {
+        stream_id: String,
+        chunk_index: usize,
+        value: Value,
+    },
+    /// All chunks have been sent.
+    StreamEnd { stream_id: String },
+    /// Result for a processed chunk (streamed back to client).
+    ChunkResult {
+        stream_id: String,
+        chunk_index: usize,
+        value: Value,
+    },
+    /// Final result after all chunks processed.
+    StreamComplete {
+        stream_id: String,
+        result: PlanResult,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
