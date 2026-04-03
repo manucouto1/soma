@@ -200,6 +200,9 @@ pub enum CoordinatorToWorker {
 
     /// Ping for keepalive.
     Ping,
+
+    /// Graceful shutdown: worker should finish running plans and exit.
+    Shutdown { reason: String },
 }
 
 /// Result of a plan execution.

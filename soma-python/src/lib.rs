@@ -544,6 +544,43 @@ impl PyGraph {
         Some(Arc::new(executor))
     }
 
+    /// Send a Shutdown message to a worker via WebSocket.
+    fn send_shutdown(address: &str, token: Option<&str>, reason: &str) -> PyResult<()> {
+        use somatize_worker::protocol::CoordinatorToWorker;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
+
+        rt.block_on(async {
+            let url = if let Some(t) = token {
+                format!("{address}/ws?token={t}")
+            } else {
+                format!("{address}/ws")
+            };
+
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS connect: {e}")))?;
+
+            use futures_util::SinkExt;
+            use tokio_tungstenite::tungstenite::Message;
+
+            let msg = CoordinatorToWorker::Shutdown {
+                reason: reason.to_string(),
+            };
+            let json = serde_json::to_string(&msg)
+                .map_err(|e| PyRuntimeError::new_err(format!("serialize: {e}")))?;
+
+            ws.send(Message::Text(json.into()))
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
+
+            Ok(())
+        })
+    }
+
     /// Send the entire compiled plan to a remote worker via WebSocket.
     fn dispatch_to_worker(&self, x: &Value) -> Result<Value, PyErr> {
         use somatize_worker::protocol::*;
@@ -1053,6 +1090,37 @@ impl PyGraph {
     fn add_worker(&mut self, address: String, token: Option<String>, tags: Option<Vec<String>>) {
         self.workers
             .push((address, token, tags.unwrap_or_default()));
+    }
+
+    /// Shutdown a specific worker by address.
+    ///
+    /// Usage:
+    ///   g.shutdown_worker("ws://worker:8080")
+    ///   g.shutdown_worker("ws://worker:8080", reason="maintenance")
+    #[pyo3(signature = (address, reason=None))]
+    fn shutdown_worker(&self, address: String, reason: Option<String>) -> PyResult<()> {
+        let token = self
+            .workers
+            .iter()
+            .find(|(a, _, _)| *a == address)
+            .and_then(|(_, t, _)| t.clone());
+        Self::send_shutdown(&address, token.as_deref(), &reason.unwrap_or_default())
+    }
+
+    /// Shutdown all registered workers.
+    ///
+    /// Usage:
+    ///   g.shutdown_workers()
+    ///   g.shutdown_workers(reason="end of experiment")
+    #[pyo3(signature = (reason=None))]
+    fn shutdown_workers(&self, reason: Option<String>) -> PyResult<()> {
+        let reason = reason.unwrap_or_default();
+        for (addr, token, _) in &self.workers {
+            if let Err(e) = Self::send_shutdown(addr, token.as_deref(), &reason) {
+                eprintln!("Warning: failed to shutdown {addr}: {e}");
+            }
+        }
+        Ok(())
     }
 
     /// Set a coordinator for auto-discovery (mode C).

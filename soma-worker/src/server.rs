@@ -164,6 +164,13 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                     }
                     Ok(CoordinatorToWorker::Ping) => r#"{"type":"Pong"}"#.to_string(),
                     Ok(CoordinatorToWorker::Registered { .. }) => continue,
+                    Ok(CoordinatorToWorker::Shutdown { reason }) => {
+                        tracing::info!("Shutdown requested: {reason}");
+                        let _ = socket
+                            .send(Message::Text(r#"{"type":"ShutdownAck"}"#.into()))
+                            .await;
+                        std::process::exit(0);
+                    }
                     Err(e) => {
                         format!(r#"{{"error": "invalid message: {e}"}}"#)
                     }
