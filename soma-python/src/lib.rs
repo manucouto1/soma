@@ -132,23 +132,49 @@ impl PyFilterBridge {
         let params_json: String = dict_sorted.extract()?;
         let config_hash = CacheKey::from_parts(&[name.as_bytes(), params_json.as_bytes()]);
 
-        // Serialize with cloudpickle (like Spark/Dask/Ray) — captures bytecode,
-        // closures, cross-module imports, and all dependencies automatically.
-        // Register the filter's module for by-value pickling so cloudpickle embeds
-        // the full class definition instead of just the import path. Without this,
-        // the worker would need the exact same source tree (e.g. src.filters.classifiers).
+        // Serialize with cloudpickle (like Spark/Dask/Ray).
+        // Register the filter's module AND all its transitive local dependencies
+        // for by-value pickling. Without this, the worker would need the exact
+        // same source tree installed (e.g. src.filters.classifiers, src.utils).
         let cloudpickle = py.import("cloudpickle")?;
         let inspect = py.import("inspect")?;
         let module = inspect.call_method1("getmodule", (obj.get_type(),))?;
-        if !module.is_none() {
-            let mod_name: String = module
-                .getattr("__name__")
-                .and_then(|n| n.extract())
-                .unwrap_or_default();
-            if !mod_name.is_empty() && mod_name != "__main__" && !mod_name.starts_with("builtins") {
-                let _ = cloudpickle.call_method1("register_pickle_by_value", (&module,));
-            }
-        }
+        // Python helper: walk module globals, find all non-stdlib imported modules,
+        // register them for by-value serialization (transitive).
+        py.run(
+            c"
+import sys, types, cloudpickle as _cp
+
+def _register_transitive(mod, visited=None):
+    if visited is None:
+        visited = set()
+    name = getattr(mod, '__name__', '')
+    if not name or name in visited or name == '__main__':
+        return
+    visited.add(name)
+    # Skip stdlib and installed packages (only register project-local modules)
+    f = getattr(mod, '__file__', None)
+    if f is None:
+        return
+    # Heuristic: stdlib/site-packages have these in their paths
+    if 'site-packages' in f or 'lib/python' in f:
+        return
+    _cp.register_pickle_by_value(mod)
+    # Walk globals for imported modules
+    for v in vars(mod).values():
+        if isinstance(v, types.ModuleType):
+            _register_transitive(v, visited)
+        elif isinstance(v, type):
+            m = sys.modules.get(v.__module__)
+            if m and m.__name__ not in visited:
+                _register_transitive(m, visited)
+
+if _soma_module is not None:
+    _register_transitive(_soma_module)
+",
+            Some(&[("_soma_module", &module)].into_py_dict(py)?),
+            None,
+        )?;
         let pickled = cloudpickle.call_method1("dumps", (obj,))?;
         let pickled_bytes: Vec<u8> = pickled.extract()?;
         let source = if !module.is_none() {
