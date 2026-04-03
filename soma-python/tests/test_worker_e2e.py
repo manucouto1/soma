@@ -212,10 +212,8 @@ class TestFitForwardStateRoundTrip:
         result = g.forward([10.0])
         assert isinstance(result, list)
         assert len(result) == 1
-        # State should be preserved: (10 - mean) * factor
-        # If state persists: (10 - 4) * 10 = 60
-        # If state lost: (10 - 0) * 10 = 100
-        assert result[0] != 0, "forward returned zero — something is wrong"
+        # State must be preserved: (10 - 4) * 10 = 60
+        assert abs(result[0] - 60.0) < 0.01, f"Expected 60.0 got {result[0]}"
 
     def test_multiple_trainable_in_chain(self):
         g = make_graph()

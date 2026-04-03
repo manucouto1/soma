@@ -108,6 +108,8 @@ struct PyFilterBridge {
     source: String,
     /// Pip requirements detected from the filter's imports.
     requirements: Vec<String>,
+    /// Whether this filter is trainable (has meaningful fit()).
+    trainable: bool,
 }
 
 impl PyFilterBridge {
@@ -222,6 +224,14 @@ _reqs = sorted(_reqs)
             Vec::new()
         };
 
+        // Detect if the filter is trainable (has _kind = "trainable")
+        let trainable = obj
+            .get_type()
+            .getattr("_kind")
+            .and_then(|v| v.extract::<String>())
+            .map(|s| s != "stateless")
+            .unwrap_or(true); // default to trainable if not specified
+
         Ok(Self {
             py_obj: obj.clone().unbind(),
             name,
@@ -229,6 +239,7 @@ _reqs = sorted(_reqs)
             pickled_bytes,
             source,
             requirements,
+            trainable,
         })
     }
 }
@@ -600,6 +611,8 @@ struct PyGraph {
     filter_sources: std::collections::HashMap<String, String>,
     /// Optional DataStore for persistent data transport (opt-in, costs storage).
     data_store: Option<Arc<dyn somatize_core::store::DataStore>>,
+    /// Whether each filter is trainable (node_id → bool).
+    filter_trainable: std::collections::HashMap<String, bool>,
 }
 
 impl PyGraph {
@@ -777,11 +790,13 @@ impl PyGraph {
             .filter_map(|node| {
                 let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
+                let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
                     pickled_filter: pickled.clone(),
                     state,
                     requirements: reqs.clone(),
+                    trainable,
                 })
             })
             .collect();
@@ -882,11 +897,13 @@ impl PyGraph {
             .filter_map(|node| {
                 let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
+                let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
                     pickled_filter: pickled.clone(),
                     state,
                     requirements: reqs.clone(),
+                    trainable,
                 })
             })
             .collect();
@@ -1032,6 +1049,7 @@ impl PyGraph {
             pickled_filters: std::collections::HashMap::new(),
             filter_sources: std::collections::HashMap::new(),
             data_store: None,
+            filter_trainable: std::collections::HashMap::new(),
         }
     }
 
@@ -1100,6 +1118,8 @@ impl PyGraph {
         );
         self.filter_sources
             .insert(actual_id.clone(), bridge.source.clone());
+        self.filter_trainable
+            .insert(actual_id.clone(), bridge.trainable);
         self.library.register(actual_id.clone(), Box::new(bridge));
 
         Ok(actual_id)

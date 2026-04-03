@@ -76,6 +76,9 @@ pub struct SerializedFilter {
     /// Pip requirements detected from the filter's imports (e.g. ["torch", "transformers"]).
     #[serde(default)]
     pub requirements: Vec<String>,
+    /// Whether the filter is trainable (has meaningful fit()) or stateless.
+    #[serde(default)]
+    pub trainable: bool,
 }
 
 /// Serde helper: Vec<u8> ↔ base64 string for JSON-safe binary transport.

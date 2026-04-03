@@ -311,6 +311,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                     node_id: sf.node_id.clone(),
                     python_path: "python3".to_string(),
                     requirements: sf.requirements.clone(),
+                    trainable: sf.trainable,
                 });
                 worker.register_filter(&sf.node_id, filter);
                 if let Some(s) = &sf.state {

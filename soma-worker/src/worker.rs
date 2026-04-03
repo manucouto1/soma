@@ -22,6 +22,8 @@ pub(crate) struct PickledFilterRunner {
     pub(crate) python_path: String,
     /// Pip requirements for retry-on-import-error.
     pub(crate) requirements: Vec<String>,
+    /// Whether this filter is trainable (has meaningful fit()).
+    pub(crate) trainable: bool,
 }
 
 impl Filter for PickledFilterRunner {
@@ -48,7 +50,11 @@ impl Filter for PickledFilterRunner {
     fn meta(&self) -> FilterMeta {
         FilterMeta {
             name: self.node_id.clone(),
-            kind: FilterKind::Stateless,
+            kind: if self.trainable {
+                FilterKind::Trainable
+            } else {
+                FilterKind::Stateless
+            },
             cacheable: true,
             differentiable: false,
             stream_mode: StreamMode::FixedState,
@@ -348,6 +354,7 @@ impl Worker {
                 node_id: sf.node_id.clone(),
                 python_path: python_path.clone(),
                 requirements: sf.requirements.clone(),
+                trainable: sf.trainable,
             });
             self.filters.register(&sf.node_id, filter);
             if let Some(state) = &sf.state {
