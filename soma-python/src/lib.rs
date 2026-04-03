@@ -511,6 +511,96 @@ impl PyGraph {
         }
         Some(Arc::new(executor))
     }
+
+    /// Send the entire compiled plan to a remote worker for execution.
+    fn forward_remote(&self, py: Python<'_>, x: &Value) -> PyResult<PyObject> {
+        use somatize_worker::protocol::*;
+
+        let compile_result = somatize_compiler::compile(
+            &self.graph,
+            &self.library,
+            CompileMode::Inference,
+            Some(self.cache.as_ref()),
+        )
+        .map_err(soma_err_to_py)?;
+
+        // Find the best worker: first with matching target, or first available
+        let first_target = self
+            .graph
+            .nodes
+            .iter()
+            .find_map(|n| n.target.as_deref())
+            .unwrap_or("default");
+
+        let (addr, token) = self
+            .workers
+            .iter()
+            .find(|(_, _, tags)| {
+                first_target == "default" || tags.contains(&first_target.to_string())
+            })
+            .or_else(|| self.workers.first())
+            .map(|(a, t, _)| (a.clone(), t.clone()))
+            .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
+
+        // Build serialized plan
+        let plan = SerializedPlan {
+            plan_id: somatize_core::util::timestamp_id("remote_forward"),
+            plan: compile_result.plan,
+            input: Some(InputSource::Inline { value: x.clone() }),
+            metadata: serde_json::json!({}),
+        };
+
+        // Send via WebSocket
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
+
+        let output = rt.block_on(async {
+            let url = if let Some(t) = &token {
+                format!("{addr}/ws?token={t}")
+            } else {
+                format!("{addr}/ws")
+            };
+
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS connect: {e}")))?;
+
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::tungstenite::Message;
+
+            let msg = CoordinatorToWorker::AssignPlan { plan };
+            let json = serde_json::to_string(&msg)
+                .map_err(|e| PyRuntimeError::new_err(format!("serialize: {e}")))?;
+
+            ws.send(Message::Text(json.into()))
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
+
+            while let Some(Ok(Message::Text(response))) = ws.next().await {
+                if let Ok(result) = serde_json::from_str::<WorkerToCoordinator>(&response) {
+                    match result {
+                        WorkerToCoordinator::PlanResult { result, .. } => match result {
+                            PlanResult::Success { output, .. } => {
+                                let _ = ws.close(None).await;
+                                return Ok(output);
+                            }
+                            PlanResult::Failed { error, .. } => {
+                                let _ = ws.close(None).await;
+                                return Err(PyRuntimeError::new_err(format!("remote: {error}")));
+                            }
+                        },
+                        _ => continue,
+                    }
+                }
+            }
+
+            Err(PyRuntimeError::new_err("worker closed without result"))
+        })?;
+
+        value_to_py(py, &output)
+    }
 }
 
 #[pymethods]
@@ -528,14 +618,20 @@ impl PyGraph {
         }
     }
 
-    /// Add a filter node. If only a filter is given, the node id defaults
-    /// to the snake_case class name. Returns the node id.
+    /// Add a filter node. Returns the node id.
     ///
     /// Usage:
-    ///   g.node(MyFilter())           # id = "my_filter"
-    ///   g.node("scaler", MyFilter()) # id = "scaler"
-    #[pyo3(signature = (*args))]
-    fn node(&mut self, py: Python<'_>, args: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<String> {
+    ///   g.node(MyFilter())                        # auto-named
+    ///   g.node("scaler", MyFilter())              # explicit id
+    ///   g.node(MyFilter(), target="gpu")           # route to gpu worker
+    ///   g.node("model", MyFilter(), target="local") # force local execution
+    #[pyo3(signature = (*args, target=None))]
+    fn node(
+        &mut self,
+        py: Python<'_>,
+        args: &Bound<'_, pyo3::types::PyTuple>,
+        target: Option<String>,
+    ) -> PyResult<String> {
         let (node_id, filter_obj) = match args.len() {
             1 => {
                 let filter_obj = args.get_item(0)?;
@@ -553,7 +649,7 @@ impl PyGraph {
             }
             n => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "node() takes 1 or 2 arguments, got {n}"
+                    "node() takes 1 or 2 positional arguments, got {n}"
                 )));
             }
         };
@@ -574,8 +670,11 @@ impl PyGraph {
             node_id.clone()
         };
 
-        self.graph
-            .add_node(Node::filter_with_id(&actual_id, &bridge.name));
+        let mut node = Node::filter_with_id(&actual_id, &bridge.name);
+        if let Some(t) = target {
+            node = node.with_target(t);
+        }
+        self.graph.add_node(node);
         self.library.register(actual_id.clone(), Box::new(bridge));
 
         Ok(actual_id)
@@ -695,6 +794,11 @@ impl PyGraph {
     }
 
     /// Forward data through the compiled graph (inference mode).
+    ///
+    /// Routing logic:
+    /// - No workers registered → all local
+    /// - Workers registered + all nodes non-local → send entire plan to worker
+    /// - Workers registered + mixed targets → per-node dispatch via RemoteExecutor
     fn forward(&self, py: Python<'_>, x: &Bound<'_, pyo3::types::PyAny>) -> PyResult<PyObject> {
         if !self.fitted {
             return Err(PyRuntimeError::new_err(
@@ -702,6 +806,14 @@ impl PyGraph {
             ));
         }
         let x_val = py_to_value(py, x)?;
+
+        // Check if we should dispatch the whole plan to a remote worker
+        if !self.workers.is_empty() {
+            let all_remote = self.graph.nodes.iter().all(|n| !n.is_local());
+            if all_remote {
+                return self.forward_remote(py, &x_val);
+            }
+        }
 
         let compile_result = somatize_compiler::compile(
             &self.graph,
@@ -718,7 +830,7 @@ impl PyGraph {
         )
         .with_graph_info(graph_info);
 
-        // Wire remote executor if workers are registered
+        // Wire remote executor for mixed local/remote graphs
         if let Some(remote) = self.make_remote_executor() {
             ctx = ctx.with_remote_executor(remote);
         }

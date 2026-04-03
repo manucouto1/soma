@@ -38,6 +38,10 @@ pub struct Node {
     pub id: NodeId,
     pub label: String,
     pub kind: NodeKind,
+    /// Execution target: "local" (reserved, always local), or a worker tag.
+    /// None means: use default (remote if workers available, else local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 impl Node {
@@ -53,6 +57,7 @@ impl Node {
             kind: NodeKind::Filter {
                 filter_name: filter_name.into(),
             },
+            target: None,
         }
     }
 
@@ -65,6 +70,7 @@ impl Node {
             kind: NodeKind::Filter {
                 filter_name: filter_name.into(),
             },
+            target: None,
         }
     }
 
@@ -75,6 +81,7 @@ impl Node {
             id: name.clone(),
             label: name.clone(),
             kind: NodeKind::Filter { filter_name: name },
+            target: None,
         }
     }
 
@@ -87,6 +94,7 @@ impl Node {
             kind: NodeKind::SubGraph {
                 graph: Box::new(graph),
             },
+            target: None,
         }
     }
 
@@ -97,6 +105,7 @@ impl Node {
             id: id.clone(),
             label: id,
             kind: NodeKind::Loop { max_iterations },
+            target: None,
         }
     }
 
@@ -107,7 +116,19 @@ impl Node {
             id: id.clone(),
             label: id,
             kind: NodeKind::Branch,
+            target: None,
         }
+    }
+
+    /// Set the execution target for this node.
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// Whether this node is forced local.
+    pub fn is_local(&self) -> bool {
+        self.target.as_deref() == Some("local")
     }
 
     /// Get the filter name if this is a Filter node.

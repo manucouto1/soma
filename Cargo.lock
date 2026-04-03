@@ -2677,6 +2677,7 @@ name = "soma-python"
 version = "0.2.9"
 dependencies = [
  "chrono",
+ "futures-util",
  "hostname",
  "numpy",
  "pyo3",
@@ -2688,6 +2689,7 @@ dependencies = [
  "somatize-runtime",
  "somatize-worker",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
