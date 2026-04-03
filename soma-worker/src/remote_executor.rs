@@ -112,7 +112,46 @@ impl WsRemoteExecutor {
                         WorkerToCoordinator::PlanResult { result, .. } => match result {
                             PlanResult::Success { output, .. } => {
                                 let _ = ws.close(None).await;
-                                return Ok(output);
+                                let value = match output {
+                                    OutputDelivery::Inline { value } => value,
+                                    OutputDelivery::Reference { data_ref } => {
+                                        // Download from worker via HTTP
+                                        let http_addr = worker
+                                            .address
+                                            .replace("ws://", "http://")
+                                            .replace("wss://", "https://");
+                                        let url = format!("{http_addr}/download");
+                                        let ref_json =
+                                            serde_json::to_string(&data_ref).map_err(|e| {
+                                                SomaError::Other(format!("serialize data_ref: {e}"))
+                                            })?;
+                                        let client = reqwest::blocking::Client::new();
+                                        let mut req = client.get(&url).query(&[("ref", &ref_json)]);
+                                        if let Some(token) = &worker.token {
+                                            req = req.query(&[("token", token)]);
+                                        }
+                                        let resp = req.send().map_err(|e| {
+                                            SomaError::Other(format!("HTTP download: {e}"))
+                                        })?;
+                                        if !resp.status().is_success() {
+                                            return Err(SomaError::Other(format!(
+                                                "download failed: {}",
+                                                resp.status()
+                                            )));
+                                        }
+                                        let bytes = resp.bytes().map_err(|e| {
+                                            SomaError::Other(format!("read response: {e}"))
+                                        })?;
+                                        rmp_serde::from_slice(&bytes).or_else(|_| {
+                                            serde_json::from_slice(&bytes).map_err(|e| {
+                                                SomaError::Other(format!(
+                                                    "deserialize download: {e}"
+                                                ))
+                                            })
+                                        })?
+                                    }
+                                };
+                                return Ok(value);
                             }
                             PlanResult::Failed { error, .. } => {
                                 let _ = ws.close(None).await;

@@ -741,6 +741,65 @@ impl PyGraph {
         Ok(data_ref)
     }
 
+    /// Resolve an OutputDelivery into a Value.
+    ///
+    /// Inline → return value directly.
+    /// Reference → download from worker via HTTP GET /download.
+    fn resolve_output(
+        delivery: somatize_worker::protocol::OutputDelivery,
+        addr: &str,
+        token: &Option<String>,
+    ) -> Result<Value, PyErr> {
+        use somatize_worker::protocol::OutputDelivery;
+        match delivery {
+            OutputDelivery::Inline { value } => Ok(value),
+            OutputDelivery::Reference { data_ref } => Self::http_download(&data_ref, addr, token),
+            _ => Err(PyRuntimeError::new_err("unknown OutputDelivery variant")),
+        }
+    }
+
+    /// Download a Value from a worker via HTTP GET /download.
+    fn http_download(
+        data_ref: &somatize_core::store::DataRef,
+        addr: &str,
+        token: &Option<String>,
+    ) -> Result<Value, PyErr> {
+        let http_addr = addr
+            .replace("ws://", "http://")
+            .replace("wss://", "https://");
+        let url = format!("{http_addr}/download");
+
+        let ref_json = serde_json::to_string(data_ref)
+            .map_err(|e| PyRuntimeError::new_err(format!("serialize data_ref: {e}")))?;
+
+        let client = reqwest::blocking::Client::new();
+        let mut req = client.get(&url).query(&[("ref", &ref_json)]);
+
+        if let Some(t) = token {
+            req = req.query(&[("token", t.as_str())]);
+        }
+
+        let resp = req
+            .send()
+            .map_err(|e| PyRuntimeError::new_err(format!("HTTP download: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(PyRuntimeError::new_err(format!(
+                "HTTP download failed: {}",
+                resp.status()
+            )));
+        }
+
+        let bytes = resp
+            .bytes()
+            .map_err(|e| PyRuntimeError::new_err(format!("read download response: {e}")))?;
+
+        rmp_serde::from_slice(&bytes).or_else(|_| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| PyRuntimeError::new_err(format!("deserialize download: {e}")))
+        })
+    }
+
     /// Send a plan to a remote worker via WebSocket.
     /// Returns (output, trained_states) — states are non-empty after Fit mode.
     fn dispatch_to_worker(
@@ -844,7 +903,8 @@ impl PyGraph {
                         WorkerToCoordinator::PlanResult { result, .. } => match result {
                             PlanResult::Success { output, states, .. } => {
                                 let _ = ws.close(None).await;
-                                return Ok((output, states));
+                                let value = Self::resolve_output(output, &addr, &token)?;
+                                return Ok((value, states));
                             }
                             PlanResult::Failed { error, .. } => {
                                 let _ = ws.close(None).await;
@@ -993,7 +1053,10 @@ impl PyGraph {
                         rmp_serde::from_slice(&resp)
                 {
                     match result {
-                        PlanResult::Success { output, .. } => return Ok(output),
+                        PlanResult::Success { output, .. } => {
+                            let value = Self::resolve_output(output, &addr, &token)?;
+                            return Ok(value);
+                        }
                         PlanResult::Failed { error, .. } => {
                             return Err(PyRuntimeError::new_err(format!("stream error: {error}")));
                         }

@@ -296,6 +296,20 @@ impl Worker {
         self.filters.set_state(node_id, state);
     }
 
+    /// Wrap output in the right delivery: inline for small, DataRef for large.
+    pub fn wrap_output(&self, output: Value) -> OutputDelivery {
+        let size = serde_json::to_vec(&output).map(|v| v.len()).unwrap_or(0);
+        if size >= somatize_core::store::INLINE_THRESHOLD_BYTES {
+            let key = somatize_core::cache::CacheKey::hash_data(
+                &serde_json::to_vec(&output).unwrap_or_default(),
+            );
+            if let Ok(data_ref) = self.temp_store.put(&key, &output) {
+                return OutputDelivery::Reference { data_ref };
+            }
+        }
+        OutputDelivery::Inline { value: output }
+    }
+
     /// Subscribe to execution events.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
         self.event_bus.subscribe()
@@ -425,7 +439,7 @@ impl Worker {
                     .unwrap_or(Value::Empty);
 
                 PlanResult::Success {
-                    output,
+                    output: self.wrap_output(output),
                     duration_ms: start.elapsed().as_millis() as u64,
                     states: std::collections::HashMap::new(),
                 }
@@ -528,7 +542,7 @@ impl Worker {
         let output = outputs.values().last().cloned().unwrap_or(Value::Empty);
 
         PlanResult::Success {
-            output,
+            output: self.wrap_output(output),
             duration_ms: start.elapsed().as_millis() as u64,
             states: trained_states,
         }
@@ -620,7 +634,7 @@ impl Worker {
         );
 
         PlanResult::Success {
-            output: last_output,
+            output: self.wrap_output(last_output),
             duration_ms: start.elapsed().as_millis() as u64,
             states: std::collections::HashMap::new(),
         }
@@ -731,7 +745,11 @@ mod tests {
             ..
         } = result
         {
-            let (data, _) = output.as_tensor().unwrap();
+            let value = match output {
+                OutputDelivery::Inline { value } => value,
+                _ => panic!("expected inline output"),
+            };
+            let (data, _) = value.as_tensor().unwrap();
             assert_eq!(data, &[2.0, 4.0, 6.0]);
             assert!(duration_ms < 1000);
         } else {
@@ -808,7 +826,11 @@ mod tests {
 
         let result = worker.execute_plan(&plan);
         if let PlanResult::Success { output, .. } = result {
-            let (data, _) = output.as_tensor().unwrap();
+            let value = match output {
+                OutputDelivery::Inline { value } => value,
+                _ => panic!("expected inline output"),
+            };
+            let (data, _) = value.as_tensor().unwrap();
             assert_eq!(data, &[20.0]); // 5 * 2 * 2
         } else {
             panic!("expected success");

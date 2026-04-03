@@ -117,6 +117,7 @@ fn worker_router_full(
         .route("/health", get(health))
         .route("/info", get(info))
         .route("/upload", post(upload_data))
+        .route("/download", get(download_data))
         .route("/ws", get(ws_handler))
         .layer(DefaultBodyLimit::disable()) // No limit — workers handle arbitrary data sizes
         .with_state(state)
@@ -192,6 +193,47 @@ async fn upload_data(
 
     Ok(axum::Json(
         serde_json::to_value(&data_ref).unwrap_or_default(),
+    ))
+}
+
+/// Query params for data download.
+#[derive(serde::Deserialize)]
+struct DownloadParams {
+    /// JSON-serialized DataRef (same format returned by /upload).
+    #[serde(rename = "ref")]
+    data_ref: String,
+    token: Option<String>,
+}
+
+/// Download data from the worker's temp store by DataRef.
+///
+/// Returns msgpack-encoded Value. Used by clients to resolve
+/// `OutputDelivery::Reference` results after plan execution.
+async fn download_data(
+    Query(params): Query<DownloadParams>,
+    State(state): State<Arc<ServerState>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Validate token
+    if let Some(expected) = &state.token {
+        match &params.token {
+            Some(provided) if provided == expected => {}
+            _ => return Err(StatusCode::UNAUTHORIZED),
+        }
+    }
+
+    let data_ref: somatize_core::store::DataRef =
+        serde_json::from_str(&params.data_ref).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let value = state
+        .temp_store
+        .get(&data_ref)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let bytes = rmp_serde::to_vec(&value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/msgpack")],
+        bytes,
     ))
 }
 
@@ -397,7 +439,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 Some(StreamMessage::StreamComplete {
                     stream_id,
                     result: PlanResult::Success {
-                        output,
+                        output: OutputDelivery::Inline { value: output },
                         duration_ms: 0,
                         states: std::collections::HashMap::new(),
                     },

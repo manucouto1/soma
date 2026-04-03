@@ -228,12 +228,25 @@ pub enum CoordinatorToWorker {
     Shutdown { reason: String },
 }
 
+/// How output is delivered in PlanResult.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "delivery")]
+#[non_exhaustive]
+pub enum OutputDelivery {
+    /// Small output — embedded directly in the WS message.
+    Inline { value: Value },
+    /// Large output — stored on worker, download via HTTP GET /download?key=...
+    Reference {
+        data_ref: somatize_core::store::DataRef,
+    },
+}
+
 /// Result of a plan execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum PlanResult {
     Success {
-        output: Value,
+        output: OutputDelivery,
         duration_ms: u64,
         /// Trained states returned after Fit mode (node_id → state).
         /// Empty for Forward mode.
@@ -358,7 +371,9 @@ mod tests {
     #[test]
     fn plan_result_serde() {
         let success = PlanResult::Success {
-            output: Value::tensor(vec![0.95], vec![1]),
+            output: OutputDelivery::Inline {
+                value: Value::tensor(vec![0.95], vec![1]),
+            },
             duration_ms: 1234,
             states: std::collections::HashMap::new(),
         };

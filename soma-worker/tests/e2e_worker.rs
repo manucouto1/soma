@@ -111,7 +111,11 @@ async fn worker_ws_execute_plan() {
                 ..
             } = result
             {
-                let (data, _) = output.as_tensor().unwrap();
+                let value = match output {
+                    somatize_worker::protocol::OutputDelivery::Inline { value } => value,
+                    _ => panic!("expected inline output"),
+                };
+                let (data, _) = value.as_tensor().unwrap();
                 assert_eq!(data, &[2.0, 4.0, 6.0]);
                 assert!(duration_ms < 5000);
             } else {
@@ -173,7 +177,11 @@ async fn worker_ws_sequence_plan() {
         let result: WorkerToCoordinator = serde_json::from_str(&response).unwrap();
         if let WorkerToCoordinator::PlanResult { result, .. } = result {
             if let PlanResult::Success { output, .. } = result {
-                let (data, _) = output.as_tensor().unwrap();
+                let value = match output {
+                    somatize_worker::protocol::OutputDelivery::Inline { value } => value,
+                    _ => panic!("expected inline output"),
+                };
+                let (data, _) = value.as_tensor().unwrap();
                 assert_eq!(data, &[20.0]); // 5 * 2 * 2
             } else {
                 panic!("expected success");
