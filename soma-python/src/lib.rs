@@ -102,10 +102,12 @@ struct PyFilterBridge {
     py_obj: PyObject,
     name: String,
     config_hash_val: CacheKey,
-    /// Python source code of the filter class (for remote serialization).
+    /// Full module source code (imports + classes) for remote serialization.
     source: String,
     /// Constructor params as JSON (for remote reconstruction).
     params_json: String,
+    /// Pip requirements (from _requirements class attribute).
+    requirements: String,
 }
 
 impl PyFilterBridge {
@@ -132,11 +134,32 @@ impl PyFilterBridge {
         let params_json: String = dict_sorted.extract()?;
         let config_hash = CacheKey::from_parts(&[name.as_bytes(), params_json.as_bytes()]);
 
-        // Capture source code for remote serialization
-        let source = py
-            .import("inspect")
-            .and_then(|inspect| inspect.call_method1("getsource", (obj.get_type(),)))
-            .and_then(|s| s.extract::<String>())
+        // Capture full module source (imports + all classes/functions) for remote execution.
+        // Falls back to class-only source, then empty string.
+        let inspect = py.import("inspect")?;
+        let module = inspect.call_method1("getmodule", (obj.get_type(),))?;
+        let source = if !module.is_none() {
+            inspect
+                .call_method1("getsource", (module,))
+                .and_then(|s| s.extract::<String>())
+                .unwrap_or_default()
+        } else {
+            inspect
+                .call_method1("getsource", (obj.get_type(),))
+                .and_then(|s| s.extract::<String>())
+                .unwrap_or_default()
+        };
+
+        // Capture pip requirements from _requirements class attribute
+        let requirements: String = obj
+            .get_type()
+            .getattr("_requirements")
+            .and_then(|r| {
+                let list = r.downcast::<pyo3::types::PyList>()?;
+                let reqs: Vec<String> =
+                    list.iter().filter_map(|item| item.extract().ok()).collect();
+                Ok(reqs.join("\n"))
+            })
             .unwrap_or_default();
 
         Ok(Self {
@@ -144,6 +167,7 @@ impl PyFilterBridge {
             name,
             config_hash_val: config_hash,
             source,
+            requirements,
             params_json,
         })
     }
@@ -508,8 +532,9 @@ struct PyGraph {
     workers: Vec<(String, Option<String>, Vec<String>)>,
     /// Coordinator URL + token.
     coordinator: Option<(String, Option<String>)>,
-    /// Filter source code + params for remote serialization: node_id → (source, class_name, params_json).
-    filter_sources: std::collections::HashMap<String, (String, String, String)>,
+    /// Filter source + params + requirements for remote serialization.
+    /// node_id → (module_source, class_name, params_json, requirements)
+    filter_sources: std::collections::HashMap<String, (String, String, String, String)>,
 }
 
 impl PyGraph {
@@ -561,7 +586,8 @@ impl PyGraph {
             .nodes
             .iter()
             .filter_map(|node| {
-                let (source, class_name, params_json) = self.filter_sources.get(&node.id)?;
+                let (source, class_name, params_json, _requirements) =
+                    self.filter_sources.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
                 let params: serde_json::Value =
                     serde_json::from_str(params_json).unwrap_or_default();
@@ -714,6 +740,7 @@ impl PyGraph {
                 bridge.source.clone(),
                 bridge.name.clone(),
                 bridge.params_json.clone(),
+                bridge.requirements.clone(),
             ),
         );
         self.library.register(actual_id.clone(), Box::new(bridge));
