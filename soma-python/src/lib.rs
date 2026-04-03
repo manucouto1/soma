@@ -106,6 +106,8 @@ struct PyFilterBridge {
     pickled_bytes: Vec<u8>,
     /// Full module source code (imports + classes + helpers) for introspection by Nous agents.
     source: String,
+    /// Pip requirements detected from the filter's imports.
+    requirements: Vec<String>,
 }
 
 impl PyFilterBridge {
@@ -189,12 +191,44 @@ if _soma_module is not None:
                 .unwrap_or_default()
         };
 
+        // Detect pip requirements from the filter module's imports.
+        // Collects top-level package names of all site-packages imports.
+        let reqs_result = py.run(
+            c"
+import types, sys
+_reqs = set()
+if _mod is not None:
+    for v in vars(_mod).values():
+        if isinstance(v, types.ModuleType):
+            f = getattr(v, '__file__', '') or ''
+            if 'site-packages' in f:
+                _reqs.add(v.__name__.split('.')[0])
+        elif isinstance(v, type):
+            m = sys.modules.get(v.__module__)
+            if m:
+                f = getattr(m, '__file__', '') or ''
+                if 'site-packages' in f:
+                    _reqs.add(m.__name__.split('.')[0])
+_reqs = sorted(_reqs)
+",
+            Some(&[("_mod", &module)].into_py_dict(py)?),
+            None,
+        );
+        let requirements: Vec<String> = if reqs_result.is_ok() {
+            py.eval(c"_reqs", None, None)
+                .and_then(|r| r.extract())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         Ok(Self {
             py_obj: obj.clone().unbind(),
             name,
             config_hash_val: config_hash,
             pickled_bytes,
             source,
+            requirements,
         })
     }
 }
@@ -558,9 +592,9 @@ struct PyGraph {
     workers: Vec<(String, Option<String>, Vec<String>)>,
     /// Coordinator URL + token.
     coordinator: Option<(String, Option<String>)>,
-    /// Pickled filter bytes for remote serialization (cloudpickle).
-    /// node_id → cloudpickle.dumps() bytes
-    pickled_filters: std::collections::HashMap<String, Vec<u8>>,
+    /// Pickled filter bytes + requirements for remote serialization.
+    /// node_id → (cloudpickle bytes, pip requirements)
+    pickled_filters: std::collections::HashMap<String, (Vec<u8>, Vec<String>)>,
     /// Module source code per filter for Nous agent introspection/editing.
     /// node_id → full module source (imports + classes + helpers)
     filter_sources: std::collections::HashMap<String, String>,
@@ -741,12 +775,13 @@ impl PyGraph {
             .nodes
             .iter()
             .filter_map(|node| {
-                let pickled = self.pickled_filters.get(&node.id)?;
+                let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
                     pickled_filter: pickled.clone(),
                     state,
+                    requirements: reqs.clone(),
                 })
             })
             .collect();
@@ -845,12 +880,13 @@ impl PyGraph {
             .nodes
             .iter()
             .filter_map(|node| {
-                let pickled = self.pickled_filters.get(&node.id)?;
+                let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
                     pickled_filter: pickled.clone(),
                     state,
+                    requirements: reqs.clone(),
                 })
             })
             .collect();
@@ -1057,9 +1093,11 @@ impl PyGraph {
         }
         self.graph.add_node(node);
 
-        // Store pickled bytes for remote execution + source for Nous introspection
-        self.pickled_filters
-            .insert(actual_id.clone(), bridge.pickled_bytes.clone());
+        // Store pickled bytes + requirements for remote execution, source for Nous
+        self.pickled_filters.insert(
+            actual_id.clone(),
+            (bridge.pickled_bytes.clone(), bridge.requirements.clone()),
+        );
         self.filter_sources
             .insert(actual_id.clone(), bridge.source.clone());
         self.library.register(actual_id.clone(), Box::new(bridge));

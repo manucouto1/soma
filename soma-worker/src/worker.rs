@@ -18,6 +18,10 @@ pub(crate) struct PickledFilterRunner {
     pub(crate) pickled_bytes: Vec<u8>,
     /// Node ID (for error messages).
     pub(crate) node_id: String,
+    /// Path to the Python interpreter (venv or system).
+    pub(crate) python_path: String,
+    /// Pip requirements for retry-on-import-error.
+    pub(crate) requirements: Vec<String>,
 }
 
 impl Filter for PickledFilterRunner {
@@ -57,6 +61,15 @@ impl Filter for PickledFilterRunner {
 
 impl PickledFilterRunner {
     fn run_python(&self, method: &str, input: &Value) -> SomaResult<Value> {
+        self.run_python_with_retry(method, input, true)
+    }
+
+    fn run_python_with_retry(
+        &self,
+        method: &str,
+        input: &Value,
+        allow_retry: bool,
+    ) -> SomaResult<Value> {
         use base64::engine::{Engine, general_purpose::STANDARD};
         use std::io::Write;
 
@@ -64,8 +77,6 @@ impl PickledFilterRunner {
             .map_err(|e| somatize_core::error::SomaError::Other(format!("serialize input: {e}")))?;
         let pickled_b64 = STANDARD.encode(&self.pickled_bytes);
 
-        // Python script: reads pickled filter + input from stdin (avoids ARG_MAX limits).
-        // Protocol: line 1 = base64 pickled filter, line 2 = JSON input data.
         let script = format!(
             r#"
 import json, sys, base64, cloudpickle
@@ -86,7 +97,7 @@ print(json.dumps(result))
 "#,
         );
 
-        let mut child = std::process::Command::new("python3")
+        let mut child = std::process::Command::new(&self.python_path)
             .args(["-c", &script])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -96,9 +107,7 @@ print(json.dumps(result))
                 somatize_core::error::SomaError::Other(format!("python spawn failed: {e}"))
             })?;
 
-        // Write pickled filter + input data via stdin
         if let Some(mut stdin) = child.stdin.take() {
-            // Ignore write errors — child may have exited early
             let _ = writeln!(stdin, "{pickled_b64}");
             let _ = write!(stdin, "{input_json}");
         }
@@ -109,6 +118,38 @@ print(json.dumps(result))
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Retry on ModuleNotFoundError: install known requirements + missing package
+            if allow_retry && stderr.contains("ModuleNotFoundError") {
+                let missing = Self::parse_missing_module(&stderr);
+                // Collect packages to install: known requirements + the missing one
+                let mut to_install: Vec<String> = self.requirements.clone();
+                if let Some(ref m) = missing
+                    && !to_install.iter().any(|r| r == m)
+                {
+                    to_install.push(m.clone());
+                }
+                if !to_install.is_empty() {
+                    let names = to_install.join(", ");
+                    tracing::warn!(
+                        "Missing module for filter '{}', installing: {names}",
+                        self.node_id
+                    );
+                    let mut args = vec!["-m", "pip", "install", "--quiet"];
+                    let refs: Vec<&str> = to_install.iter().map(|s| s.as_str()).collect();
+                    args.extend(refs);
+                    let install = std::process::Command::new(&self.python_path)
+                        .args(&args)
+                        .output();
+                    if let Ok(res) = install
+                        && res.status.success()
+                    {
+                        tracing::info!("Installed [{names}], retrying...");
+                        return self.run_python_with_retry(method, input, false);
+                    }
+                }
+            }
+
             return Err(somatize_core::error::SomaError::Execution {
                 node_id: self.node_id.clone(),
                 message: format!("Python error: {stderr}"),
@@ -131,6 +172,22 @@ print(json.dumps(result))
 
         Ok(Value::json(result))
     }
+
+    /// Parse "ModuleNotFoundError: No module named 'xxx'" from stderr.
+    fn parse_missing_module(stderr: &str) -> Option<String> {
+        for line in stderr.lines().rev() {
+            if line.contains("ModuleNotFoundError") {
+                // "ModuleNotFoundError: No module named 'xxx'"
+                if let Some(start) = line.find('\'') {
+                    let rest = &line[start + 1..];
+                    if let Some(end) = rest.find('\'') {
+                        return Some(rest[..end].split('.').next()?.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Worker state: manages execution of plans received from a coordinator.
@@ -144,6 +201,8 @@ pub struct Worker {
     data_store: Option<Arc<dyn DataStore>>,
     /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
     temp_store: Arc<LocalDataStore>,
+    /// Environment manager for creating venvs with filter dependencies.
+    env_manager: crate::env_manager::EnvManager,
 }
 
 impl Worker {
@@ -151,6 +210,7 @@ impl Worker {
         let worker_id: String = id.into();
         let temp_path = std::env::temp_dir().join(format!("soma-uploads-{worker_id}"));
         let temp_store = LocalDataStore::new(temp_path);
+        let env_path = std::env::temp_dir().join(format!("soma-envs-{worker_id}"));
         Self {
             id: worker_id,
             capabilities,
@@ -159,6 +219,10 @@ impl Worker {
             filters: FilterLibrary::new(),
             data_store: None,
             temp_store: Arc::new(temp_store),
+            env_manager: crate::env_manager::EnvManager::new(
+                env_path,
+                crate::env_manager::EnvType::Venv,
+            ),
         }
     }
 
@@ -233,11 +297,39 @@ impl Worker {
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
 
+        // Collect all requirements from serialized filters
+        let all_reqs: Vec<String> = plan
+            .filters
+            .iter()
+            .flat_map(|sf| sf.requirements.iter().cloned())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Create/reuse venv if there are pip requirements, otherwise use system python
+        let python_path = if all_reqs.is_empty() {
+            "python3".to_string()
+        } else {
+            let reqs_str = all_reqs.join("\n");
+            match self.env_manager.ensure_env(&plan.plan_id, &reqs_str) {
+                Ok(path) => {
+                    tracing::info!("Using venv for plan {}: {:?}", plan.plan_id, path);
+                    path.to_string_lossy().to_string()
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create venv, falling back to system python: {e}");
+                    "python3".to_string()
+                }
+            }
+        };
+
         // Register pickled filters (from remote client via cloudpickle)
         for sf in &plan.filters {
             let filter = Box::new(PickledFilterRunner {
                 pickled_bytes: sf.pickled_filter.clone(),
                 node_id: sf.node_id.clone(),
+                python_path: python_path.clone(),
+                requirements: sf.requirements.clone(),
             });
             self.filters.register(&sf.node_id, filter);
             if let Some(state) = &sf.state {

@@ -73,6 +73,9 @@ pub struct SerializedFilter {
     pub pickled_filter: Vec<u8>,
     /// Trained state (if fitted).
     pub state: Option<Value>,
+    /// Pip requirements detected from the filter's imports (e.g. ["torch", "transformers"]).
+    #[serde(default)]
+    pub requirements: Vec<String>,
 }
 
 /// Serde helper: Vec<u8> ↔ base64 string for JSON-safe binary transport.

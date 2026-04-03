@@ -304,11 +304,13 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
             // Build StreamExecutor from the plan's filters
             let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
 
-            // Register pickled filters
+            // Register pickled filters (streaming uses system python — venv managed by execute_plan)
             for sf in &plan.filters {
                 let filter = Box::new(crate::worker::PickledFilterRunner {
                     pickled_bytes: sf.pickled_filter.clone(),
                     node_id: sf.node_id.clone(),
+                    python_path: "python3".to_string(),
+                    requirements: sf.requirements.clone(),
                 });
                 worker.register_filter(&sf.node_id, filter);
                 if let Some(s) = &sf.state {
