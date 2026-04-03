@@ -499,6 +499,20 @@ struct PyGraph {
     coordinator: Option<(String, Option<String>)>,
 }
 
+impl PyGraph {
+    /// Build a remote executor from registered workers (if any).
+    fn make_remote_executor(&self) -> Option<Arc<dyn somatize_runtime::executor::RemoteExecutor>> {
+        if self.workers.is_empty() {
+            return None;
+        }
+        let executor = somatize_worker::WsRemoteExecutor::new();
+        for (addr, token, tags) in &self.workers {
+            executor.add_worker(addr, token.clone(), tags.clone());
+        }
+        Some(Arc::new(executor))
+    }
+}
+
 #[pymethods]
 impl PyGraph {
     #[new]
@@ -704,6 +718,11 @@ impl PyGraph {
         )
         .with_graph_info(graph_info);
 
+        // Wire remote executor if workers are registered
+        if let Some(remote) = self.make_remote_executor() {
+            ctx = ctx.with_remote_executor(remote);
+        }
+
         let roots = self.graph.roots();
         if roots.len() == 1 {
             ctx.set(format!("__input_{}", roots[0]), x_val.clone());
@@ -751,6 +770,10 @@ impl PyGraph {
             somatize_core::util::timestamp_id("graph_run"),
         )
         .with_graph_info(graph_info);
+
+        if let Some(remote) = self.make_remote_executor() {
+            ctx = ctx.with_remote_executor(remote);
+        }
 
         executor::execute(
             &compile_result.plan,
