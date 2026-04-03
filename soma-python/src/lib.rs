@@ -102,6 +102,10 @@ struct PyFilterBridge {
     py_obj: PyObject,
     name: String,
     config_hash_val: CacheKey,
+    /// Python source code of the filter class (for remote serialization).
+    source: String,
+    /// Constructor params as JSON (for remote reconstruction).
+    params_json: String,
 }
 
 impl PyFilterBridge {
@@ -109,8 +113,6 @@ impl PyFilterBridge {
         let name: String = obj.get_type().name()?.to_string();
 
         // Build config hash from public attributes only.
-        // Private attrs (_name) are internal state, not parameters.
-        // This ensures: same params → same cache key, regardless of internal state.
         let dict = obj.getattr("__dict__")?;
         let dict_ref = dict.downcast::<pyo3::types::PyDict>()?;
         let params = pyo3::types::PyDict::new(py);
@@ -127,13 +129,22 @@ impl PyFilterBridge {
             (params,),
             Some(&[("sort_keys", true)].into_py_dict(py)?),
         )?;
-        let dict_str: String = dict_sorted.extract()?;
-        let config_hash = CacheKey::from_parts(&[name.as_bytes(), dict_str.as_bytes()]);
+        let params_json: String = dict_sorted.extract()?;
+        let config_hash = CacheKey::from_parts(&[name.as_bytes(), params_json.as_bytes()]);
+
+        // Capture source code for remote serialization
+        let source = py
+            .import("inspect")
+            .and_then(|inspect| inspect.call_method1("getsource", (obj.get_type(),)))
+            .and_then(|s| s.extract::<String>())
+            .unwrap_or_default();
 
         Ok(Self {
             py_obj: obj.clone().unbind(),
             name,
             config_hash_val: config_hash,
+            source,
+            params_json,
         })
     }
 }
@@ -497,6 +508,8 @@ struct PyGraph {
     workers: Vec<(String, Option<String>, Vec<String>)>,
     /// Coordinator URL + token.
     coordinator: Option<(String, Option<String>)>,
+    /// Filter source code + params for remote serialization: node_id → (source, class_name, params_json).
+    filter_sources: std::collections::HashMap<String, (String, String, String)>,
 }
 
 impl PyGraph {
@@ -542,19 +555,21 @@ impl PyGraph {
             .map(|(a, t, _)| (a.clone(), t.clone()))
             .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
 
-        // Serialize filters so the worker can reconstruct them
+        // Serialize filters with source code so the worker can reconstruct them
         let filters: Vec<SerializedFilter> = self
             .graph
             .nodes
             .iter()
             .filter_map(|node| {
-                let filter = self.library.get(&node.id)?;
+                let (source, class_name, params_json) = self.filter_sources.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
+                let params: serde_json::Value =
+                    serde_json::from_str(params_json).unwrap_or_default();
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
-                    source: String::new(), // TODO: capture Python source
-                    class_name: filter.meta().name.clone(),
-                    params: serde_json::json!({}),
+                    source: source.clone(),
+                    class_name: class_name.clone(),
+                    params,
                     state,
                 })
             })
@@ -630,6 +645,7 @@ impl PyGraph {
             fitted: false,
             workers: Vec::new(),
             coordinator: None,
+            filter_sources: std::collections::HashMap::new(),
         }
     }
 
@@ -690,6 +706,16 @@ impl PyGraph {
             node = node.with_target(t);
         }
         self.graph.add_node(node);
+
+        // Store source for remote serialization
+        self.filter_sources.insert(
+            actual_id.clone(),
+            (
+                bridge.source.clone(),
+                bridge.name.clone(),
+                bridge.params_json.clone(),
+            ),
+        );
         self.library.register(actual_id.clone(), Box::new(bridge));
 
         Ok(actual_id)
