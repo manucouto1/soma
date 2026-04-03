@@ -2809,6 +2809,7 @@ name = "somatize-worker"
 version = "0.2.12"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "futures-util",

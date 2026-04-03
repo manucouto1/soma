@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
 ]
-dependencies = ["numpy>=1.20"]
+dependencies = ["numpy>=1.20", "cloudpickle>=3.0"]
 
 [project.scripts]
 somatize-worker = "soma.cli:main"

@@ -102,12 +102,10 @@ struct PyFilterBridge {
     py_obj: PyObject,
     name: String,
     config_hash_val: CacheKey,
-    /// Full module source code (imports + classes) for remote serialization.
+    /// cloudpickle.dumps() bytes — serializes the full object (bytecode + closures + deps).
+    pickled_bytes: Vec<u8>,
+    /// Full module source code (imports + classes + helpers) for introspection by Nous agents.
     source: String,
-    /// Constructor params as JSON (for remote reconstruction).
-    params_json: String,
-    /// Pip requirements (from _requirements class attribute).
-    requirements: String,
 }
 
 impl PyFilterBridge {
@@ -134,13 +132,19 @@ impl PyFilterBridge {
         let params_json: String = dict_sorted.extract()?;
         let config_hash = CacheKey::from_parts(&[name.as_bytes(), params_json.as_bytes()]);
 
-        // Capture full module source (imports + all classes/functions) for remote execution.
-        // Falls back to class-only source, then empty string.
+        // Serialize with cloudpickle (like Spark/Dask/Ray) — captures bytecode,
+        // closures, cross-module imports, and all dependencies automatically.
+        let cloudpickle = py.import("cloudpickle")?;
+        let pickled = cloudpickle.call_method1("dumps", (obj,))?;
+        let pickled_bytes: Vec<u8> = pickled.extract()?;
+
+        // Capture full module source (imports + classes + helpers) for Nous introspection.
+        // Not used for execution — that's cloudpickle's job.
         let inspect = py.import("inspect")?;
         let module = inspect.call_method1("getmodule", (obj.get_type(),))?;
         let source = if !module.is_none() {
             inspect
-                .call_method1("getsource", (module,))
+                .call_method1("getsource", (&module,))
                 .and_then(|s| s.extract::<String>())
                 .unwrap_or_default()
         } else {
@@ -150,25 +154,12 @@ impl PyFilterBridge {
                 .unwrap_or_default()
         };
 
-        // Capture pip requirements from _requirements class attribute
-        let requirements: String = obj
-            .get_type()
-            .getattr("_requirements")
-            .and_then(|r| {
-                let list = r.downcast::<pyo3::types::PyList>()?;
-                let reqs: Vec<String> =
-                    list.iter().filter_map(|item| item.extract().ok()).collect();
-                Ok(reqs.join("\n"))
-            })
-            .unwrap_or_default();
-
         Ok(Self {
             py_obj: obj.clone().unbind(),
             name,
             config_hash_val: config_hash,
+            pickled_bytes,
             source,
-            requirements,
-            params_json,
         })
     }
 }
@@ -532,9 +523,12 @@ struct PyGraph {
     workers: Vec<(String, Option<String>, Vec<String>)>,
     /// Coordinator URL + token.
     coordinator: Option<(String, Option<String>)>,
-    /// Filter source + params + requirements for remote serialization.
-    /// node_id → (module_source, class_name, params_json, requirements)
-    filter_sources: std::collections::HashMap<String, (String, String, String, String)>,
+    /// Pickled filter bytes for remote serialization (cloudpickle).
+    /// node_id → cloudpickle.dumps() bytes
+    pickled_filters: std::collections::HashMap<String, Vec<u8>>,
+    /// Module source code per filter for Nous agent introspection/editing.
+    /// node_id → full module source (imports + classes + helpers)
+    filter_sources: std::collections::HashMap<String, String>,
 }
 
 impl PyGraph {
@@ -580,22 +574,17 @@ impl PyGraph {
             .map(|(a, t, _)| (a.clone(), t.clone()))
             .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
 
-        // Serialize filters with source code so the worker can reconstruct them
+        // Serialize filters with cloudpickle bytes so the worker can reconstruct them
         let filters: Vec<SerializedFilter> = self
             .graph
             .nodes
             .iter()
             .filter_map(|node| {
-                let (source, class_name, params_json, _requirements) =
-                    self.filter_sources.get(&node.id)?;
+                let pickled = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).cloned();
-                let params: serde_json::Value =
-                    serde_json::from_str(params_json).unwrap_or_default();
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
-                    source: source.clone(),
-                    class_name: class_name.clone(),
-                    params,
+                    pickled_filter: pickled.clone(),
                     state,
                 })
             })
@@ -671,6 +660,7 @@ impl PyGraph {
             fitted: false,
             workers: Vec::new(),
             coordinator: None,
+            pickled_filters: std::collections::HashMap::new(),
             filter_sources: std::collections::HashMap::new(),
         }
     }
@@ -733,16 +723,11 @@ impl PyGraph {
         }
         self.graph.add_node(node);
 
-        // Store source for remote serialization
-        self.filter_sources.insert(
-            actual_id.clone(),
-            (
-                bridge.source.clone(),
-                bridge.name.clone(),
-                bridge.params_json.clone(),
-                bridge.requirements.clone(),
-            ),
-        );
+        // Store pickled bytes for remote execution + source for Nous introspection
+        self.pickled_filters
+            .insert(actual_id.clone(), bridge.pickled_bytes.clone());
+        self.filter_sources
+            .insert(actual_id.clone(), bridge.source.clone());
         self.library.register(actual_id.clone(), Box::new(bridge));
 
         Ok(actual_id)
@@ -1118,6 +1103,21 @@ impl PyGraph {
         }
 
         Ok(list.into_any().unbind())
+    }
+
+    /// Get the full module source code for a filter node (for Nous agent introspection).
+    /// Returns None if the node has no captured source.
+    fn filter_source(&self, node_id: String) -> Option<String> {
+        self.filter_sources.get(&node_id).cloned()
+    }
+
+    /// Get all filter sources as a dict: {node_id: source_code}.
+    fn filter_sources_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let dict = PyDict::new(py);
+        for (node_id, source) in &self.filter_sources {
+            dict.set_item(node_id, source)?;
+        }
+        Ok(dict.into_any().unbind())
     }
 
     /// Number of nodes in the graph.

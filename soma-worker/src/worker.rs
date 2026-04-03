@@ -10,20 +10,18 @@ use somatize_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
 use std::sync::Arc;
 use std::time::Instant;
 
-/// A filter reconstructed from serialized source code.
-/// Executes Python code via subprocess on the worker.
-struct SerializedFilterRunner {
-    source: String,
-    class_name: String,
-    params: serde_json::Value,
+/// A filter reconstructed from cloudpickle bytes.
+/// Deserializes the Python object on the worker and executes methods via subprocess.
+struct PickledFilterRunner {
+    /// cloudpickle.dumps() bytes of the original Python filter object.
+    pickled_bytes: Vec<u8>,
+    /// Node ID (for error messages).
+    node_id: String,
 }
 
-impl Filter for SerializedFilterRunner {
+impl Filter for PickledFilterRunner {
     fn config_hash(&self) -> CacheKey {
-        CacheKey::from_parts(&[
-            self.class_name.as_bytes(),
-            self.params.to_string().as_bytes(),
-        ])
+        CacheKey::from_parts(&[&self.pickled_bytes])
     }
 
     fn fit(&self, x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
@@ -31,7 +29,6 @@ impl Filter for SerializedFilterRunner {
     }
 
     fn forward(&self, x: &Value, state: &Value) -> SomaResult<Value> {
-        // Pass state as second input via JSON
         let input = if matches!(state, Value::Empty) {
             x.clone()
         } else {
@@ -45,7 +42,7 @@ impl Filter for SerializedFilterRunner {
 
     fn meta(&self) -> FilterMeta {
         FilterMeta {
-            name: self.class_name.clone(),
+            name: self.node_id.clone(),
             kind: FilterKind::Stateless,
             cacheable: true,
             differentiable: false,
@@ -57,35 +54,34 @@ impl Filter for SerializedFilterRunner {
     }
 }
 
-impl SerializedFilterRunner {
+impl PickledFilterRunner {
     fn run_python(&self, method: &str, input: &Value) -> SomaResult<Value> {
+        use base64::engine::{Engine, general_purpose::STANDARD};
+
         let input_json = serde_json::to_string(input)
             .map_err(|e| somatize_core::error::SomaError::Other(format!("serialize input: {e}")))?;
+        let pickled_b64 = STANDARD.encode(&self.pickled_bytes);
 
+        // Python script: deserialize filter with cloudpickle, call method, return JSON
         let script = format!(
             r#"
-import json, sys
-{}
+import json, sys, base64, cloudpickle
 
-obj = {}(**json.loads('{}'))
-input_data = json.loads(sys.argv[1])
+pickled = base64.b64decode(sys.argv[1])
+obj = cloudpickle.loads(pickled)
+input_data = json.loads(sys.argv[2])
 
 if isinstance(input_data, dict) and "x" in input_data and "state" in input_data:
-    result = obj.{}(input_data["x"], input_data["state"])
+    result = obj.{method}(input_data["x"], input_data["state"])
 else:
-    result = obj.{}(input_data, {{}})
+    result = obj.{method}(input_data, {{}})
 
 print(json.dumps(result))
 "#,
-            self.source,
-            self.class_name,
-            self.params.to_string().replace('\'', "\\'"),
-            method,
-            method,
         );
 
         let output = std::process::Command::new("python3")
-            .args(["-c", &script, &input_json])
+            .args(["-c", &script, &pickled_b64, &input_json])
             .output()
             .map_err(|e| {
                 somatize_core::error::SomaError::Other(format!("python exec failed: {e}"))
@@ -94,7 +90,7 @@ print(json.dumps(result))
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(somatize_core::error::SomaError::Execution {
-                node_id: self.class_name.clone(),
+                node_id: self.node_id.clone(),
                 message: format!("Python error: {stderr}"),
             });
         }
@@ -106,7 +102,6 @@ print(json.dumps(result))
             ))
         })?;
 
-        // Convert JSON result back to Value
         if let Some(arr) = result.as_array() {
             let values: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
             if !values.is_empty() {
@@ -169,12 +164,11 @@ impl Worker {
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
 
-        // Register serialized filters (from remote client)
+        // Register pickled filters (from remote client via cloudpickle)
         for sf in &plan.filters {
-            let filter = Box::new(SerializedFilterRunner {
-                source: sf.source.clone(),
-                class_name: sf.class_name.clone(),
-                params: sf.params.clone(),
+            let filter = Box::new(PickledFilterRunner {
+                pickled_bytes: sf.pickled_filter.clone(),
+                node_id: sf.node_id.clone(),
             });
             self.filters.register(&sf.node_id, filter);
             if let Some(state) = &sf.state {

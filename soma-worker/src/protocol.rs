@@ -60,19 +60,34 @@ pub enum InputSource {
     Reference { data_ref: DataRef },
 }
 
-/// A serialized filter: source code + parameters to reconstruct on the worker.
+/// A serialized filter: cloudpickle bytes to reconstruct on the worker.
+///
+/// Uses cloudpickle (like Spark/Dask/Ray) to serialize the full Python object
+/// including bytecode, closures, and cross-module dependencies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedFilter {
     /// Node ID this filter is registered under.
     pub node_id: String,
-    /// Python class source code.
-    pub source: String,
-    /// Class name to instantiate.
-    pub class_name: String,
-    /// Constructor parameters (JSON).
-    pub params: serde_json::Value,
+    /// cloudpickle.dumps() bytes (base64-encoded for JSON transport).
+    #[serde(with = "base64_bytes")]
+    pub pickled_filter: Vec<u8>,
     /// Trained state (if fitted).
     pub state: Option<Value>,
+}
+
+/// Serde helper: Vec<u8> ↔ base64 string for JSON-safe binary transport.
+mod base64_bytes {
+    use base64::engine::{Engine, general_purpose::STANDARD};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+        STANDARD.encode(bytes).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(d)?;
+        STANDARD.decode(s).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A serialized plan ready for remote execution.

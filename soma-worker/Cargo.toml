@@ -19,6 +19,7 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
+base64 = "0.22"
 sha2 = "0.10"
 hex = "0.4"
 sysinfo = { workspace = true }
