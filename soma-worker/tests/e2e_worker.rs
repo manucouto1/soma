@@ -85,6 +85,7 @@ async fn worker_ws_execute_plan() {
         input: Some(InputSource::Inline {
             value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
         }),
+        filters: vec![],
         metadata: serde_json::json!({}),
     };
 
@@ -156,6 +157,7 @@ async fn worker_ws_sequence_plan() {
         input: Some(InputSource::Inline {
             value: Value::tensor(vec![5.0], vec![1]),
         }),
+        filters: vec![],
         metadata: serde_json::json!({}),
     };
 

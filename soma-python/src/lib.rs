@@ -512,8 +512,8 @@ impl PyGraph {
         Some(Arc::new(executor))
     }
 
-    /// Send the entire compiled plan to a remote worker for execution.
-    fn forward_remote(&self, py: Python<'_>, x: &Value) -> PyResult<PyObject> {
+    /// Send the entire compiled plan to a remote worker via WebSocket.
+    fn dispatch_to_worker(&self, x: &Value) -> Result<Value, PyErr> {
         use somatize_worker::protocol::*;
 
         let compile_result = somatize_compiler::compile(
@@ -524,7 +524,7 @@ impl PyGraph {
         )
         .map_err(soma_err_to_py)?;
 
-        // Find the best worker: first with matching target, or first available
+        // Find the best worker by target tag or first available
         let first_target = self
             .graph
             .nodes
@@ -542,21 +542,38 @@ impl PyGraph {
             .map(|(a, t, _)| (a.clone(), t.clone()))
             .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
 
-        // Build serialized plan
+        // Serialize filters so the worker can reconstruct them
+        let filters: Vec<SerializedFilter> = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let filter = self.library.get(&node.id)?;
+                let state = self.library.get_state(&node.id).cloned();
+                Some(SerializedFilter {
+                    node_id: node.id.clone(),
+                    source: String::new(), // TODO: capture Python source
+                    class_name: filter.meta().name.clone(),
+                    params: serde_json::json!({}),
+                    state,
+                })
+            })
+            .collect();
+
         let plan = SerializedPlan {
             plan_id: somatize_core::util::timestamp_id("remote_forward"),
             plan: compile_result.plan,
             input: Some(InputSource::Inline { value: x.clone() }),
+            filters,
             metadata: serde_json::json!({}),
         };
 
-        // Send via WebSocket
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
 
-        let output = rt.block_on(async {
+        rt.block_on(async {
             let url = if let Some(t) = &token {
                 format!("{addr}/ws?token={t}")
             } else {
@@ -597,9 +614,7 @@ impl PyGraph {
             }
 
             Err(PyRuntimeError::new_err("worker closed without result"))
-        })?;
-
-        value_to_py(py, &output)
+        })
     }
 }
 
@@ -795,10 +810,10 @@ impl PyGraph {
 
     /// Forward data through the compiled graph (inference mode).
     ///
-    /// Routing logic:
-    /// - No workers registered → all local
-    /// - Workers registered + all nodes non-local → send entire plan to worker
-    /// - Workers registered + mixed targets → per-node dispatch via RemoteExecutor
+    /// Routing:
+    /// - No workers → local execution
+    /// - Workers + all nodes non-local → entire plan dispatched to worker
+    /// - Workers + mixed (some local) → local execution with remote fallback
     fn forward(&self, py: Python<'_>, x: &Bound<'_, pyo3::types::PyAny>) -> PyResult<PyObject> {
         if !self.fitted {
             return Err(PyRuntimeError::new_err(
@@ -807,14 +822,13 @@ impl PyGraph {
         }
         let x_val = py_to_value(py, x)?;
 
-        // Check if we should dispatch the whole plan to a remote worker
-        if !self.workers.is_empty() {
-            let all_remote = self.graph.nodes.iter().all(|n| !n.is_local());
-            if all_remote {
-                return self.forward_remote(py, &x_val);
-            }
+        // Dispatch entire plan remotely if workers registered and no node forces local
+        if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
+            let output = self.dispatch_to_worker(&x_val)?;
+            return value_to_py(py, &output);
         }
 
+        // Local execution (with optional remote executor for mixed graphs)
         let compile_result = somatize_compiler::compile(
             &self.graph,
             &self.library,
@@ -830,7 +844,6 @@ impl PyGraph {
         )
         .with_graph_info(graph_info);
 
-        // Wire remote executor for mixed local/remote graphs
         if let Some(remote) = self.make_remote_executor() {
             ctx = ctx.with_remote_executor(remote);
         }

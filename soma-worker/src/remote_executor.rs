@@ -84,6 +84,7 @@ impl WsRemoteExecutor {
                     node_id: node_id.to_string(),
                 },
                 input: input.map(|v| InputSource::Inline { value: v.clone() }),
+                filters: vec![],
                 metadata: serde_json::json!({}),
             };
 

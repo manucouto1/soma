@@ -60,6 +60,21 @@ pub enum InputSource {
     Reference { data_ref: DataRef },
 }
 
+/// A serialized filter: source code + parameters to reconstruct on the worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedFilter {
+    /// Node ID this filter is registered under.
+    pub node_id: String,
+    /// Python class source code.
+    pub source: String,
+    /// Class name to instantiate.
+    pub class_name: String,
+    /// Constructor parameters (JSON).
+    pub params: serde_json::Value,
+    /// Trained state (if fitted).
+    pub state: Option<Value>,
+}
+
 /// A serialized plan ready for remote execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedPlan {
@@ -67,6 +82,9 @@ pub struct SerializedPlan {
     pub plan: ExecutionPlan,
     /// Input data — inline for small values, DataRef for large ones.
     pub input: Option<InputSource>,
+    /// Filter definitions for the worker to reconstruct.
+    #[serde(default)]
+    pub filters: Vec<SerializedFilter>,
     pub metadata: serde_json::Value,
 }
 
@@ -234,6 +252,7 @@ mod tests {
                 input: Some(InputSource::Inline {
                     value: Value::tensor(vec![1.0, 2.0], vec![2]),
                 }),
+                filters: vec![],
                 metadata: serde_json::json!({"experiment": "test"}),
             },
         };

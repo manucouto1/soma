@@ -1,12 +1,122 @@
 //! Worker — receives and executes plans from a coordinator.
 
 use crate::protocol::*;
-use somatize_core::cache::CacheStore;
+use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::error::Result as SomaResult;
 use somatize_core::event::Event;
-use somatize_core::filter::Filter;
+use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::value::Value;
 use somatize_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
 use std::sync::Arc;
 use std::time::Instant;
+
+/// A filter reconstructed from serialized source code.
+/// Executes Python code via subprocess on the worker.
+struct SerializedFilterRunner {
+    source: String,
+    class_name: String,
+    params: serde_json::Value,
+}
+
+impl Filter for SerializedFilterRunner {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[
+            self.class_name.as_bytes(),
+            self.params.to_string().as_bytes(),
+        ])
+    }
+
+    fn fit(&self, x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
+        self.run_python("fit", x)
+    }
+
+    fn forward(&self, x: &Value, state: &Value) -> SomaResult<Value> {
+        // Pass state as second input via JSON
+        let input = if matches!(state, Value::Empty) {
+            x.clone()
+        } else {
+            Value::json(serde_json::json!({
+                "x": serde_json::to_value(x).unwrap_or_default(),
+                "state": serde_json::to_value(state).unwrap_or_default(),
+            }))
+        };
+        self.run_python("forward", &input)
+    }
+
+    fn meta(&self) -> FilterMeta {
+        FilterMeta {
+            name: self.class_name.clone(),
+            kind: FilterKind::Stateless,
+            cacheable: true,
+            differentiable: false,
+            stream_mode: StreamMode::FixedState,
+            distribution: somatize_core::filter::Distribution::Local,
+            input_schema: None,
+            output_schema: None,
+        }
+    }
+}
+
+impl SerializedFilterRunner {
+    fn run_python(&self, method: &str, input: &Value) -> SomaResult<Value> {
+        let input_json = serde_json::to_string(input)
+            .map_err(|e| somatize_core::error::SomaError::Other(format!("serialize input: {e}")))?;
+
+        let script = format!(
+            r#"
+import json, sys
+{}
+
+obj = {}(**json.loads('{}'))
+input_data = json.loads(sys.argv[1])
+
+if isinstance(input_data, dict) and "x" in input_data and "state" in input_data:
+    result = obj.{}(input_data["x"], input_data["state"])
+else:
+    result = obj.{}(input_data, {{}})
+
+print(json.dumps(result))
+"#,
+            self.source,
+            self.class_name,
+            self.params.to_string().replace('\'', "\\'"),
+            method,
+            method,
+        );
+
+        let output = std::process::Command::new("python3")
+            .args(["-c", &script, &input_json])
+            .output()
+            .map_err(|e| {
+                somatize_core::error::SomaError::Other(format!("python exec failed: {e}"))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(somatize_core::error::SomaError::Execution {
+                node_id: self.class_name.clone(),
+                message: format!("Python error: {stderr}"),
+            });
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let result: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| {
+            somatize_core::error::SomaError::Other(format!(
+                "parse python output: {e}\nstdout: {stdout}"
+            ))
+        })?;
+
+        // Convert JSON result back to Value
+        if let Some(arr) = result.as_array() {
+            let values: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
+            if !values.is_empty() {
+                return Ok(Value::tensor(values.clone(), vec![values.len()]));
+            }
+        }
+
+        Ok(Value::json(result))
+    }
+}
 
 /// Worker state: manages execution of plans received from a coordinator.
 pub struct Worker {
@@ -53,8 +163,24 @@ impl Worker {
     }
 
     /// Execute a serialized plan.
+    ///
+    /// If the plan contains serialized filter definitions, they are registered
+    /// temporarily for this execution (alongside any pre-registered filters).
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
+
+        // Register serialized filters (from remote client)
+        for sf in &plan.filters {
+            let filter = Box::new(SerializedFilterRunner {
+                source: sf.source.clone(),
+                class_name: sf.class_name.clone(),
+                params: sf.params.clone(),
+            });
+            self.filters.register(&sf.node_id, filter);
+            if let Some(state) = &sf.state {
+                self.filters.set_state(&sf.node_id, state.clone());
+            }
+        }
 
         let mut ctx = Context::new(
             self.event_bus.clone(),
@@ -67,7 +193,6 @@ impl Worker {
             let input_value = match input_source {
                 InputSource::Inline { value } => value.clone(),
                 InputSource::Reference { data_ref } => {
-                    // Try to load from context's data store
                     if let Some(store) = &ctx.data_store {
                         store
                             .get(data_ref)
@@ -195,6 +320,7 @@ mod tests {
             input: Some(crate::protocol::InputSource::Inline {
                 value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
             }),
+            filters: vec![],
             metadata: serde_json::json!({}),
         };
 
@@ -224,6 +350,7 @@ mod tests {
                 node_id: "nonexistent".into(),
             },
             input: None,
+            filters: vec![],
             metadata: serde_json::json!({}),
         };
 
@@ -273,6 +400,7 @@ mod tests {
             input: Some(crate::protocol::InputSource::Inline {
                 value: Value::tensor(vec![5.0], vec![1]),
             }),
+            filters: vec![],
             metadata: serde_json::json!({}),
         };
 
@@ -299,6 +427,7 @@ mod tests {
             input: Some(crate::protocol::InputSource::Inline {
                 value: Value::tensor(vec![1.0], vec![1]),
             }),
+            filters: vec![],
             metadata: serde_json::json!({}),
         };
 
