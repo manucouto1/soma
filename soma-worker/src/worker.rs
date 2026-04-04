@@ -157,50 +157,36 @@ impl Worker {
             }
         };
 
-        // Resolve venv site-packages path for EmbeddedPyFilter
-        let site_packages = if python_path != "python3" {
-            let venv_dir = std::path::Path::new(&python_path)
-                .parent()
-                .and_then(|bin| bin.parent());
-            venv_dir.and_then(|d| {
-                std::fs::read_dir(d.join("lib"))
-                    .ok()?
-                    .filter_map(|e| e.ok())
-                    .find(|e| e.file_name().to_string_lossy().starts_with("python"))
-                    .map(|e| e.path().join("site-packages").to_string_lossy().to_string())
-            })
-        } else {
-            None
-        };
+        // No site-packages resolution needed — subprocess uses the venv python directly
 
-        // Register filters via EmbeddedPyFilter (PyO3 in-process, zero overhead)
-        for sf in &plan.filters {
-            #[cfg(feature = "pyo3")]
-            let filter: Box<dyn Filter> = Box::new(
-                crate::py_filter::EmbeddedPyFilter::new(
-                    &sf.pickled_filter,
+        // Spawn ONE Python subprocess for all filters in this plan.
+        // All filters share the same process (needed for Composite autograd).
+        let filter_specs: Vec<(String, Vec<u8>, bool)> = plan
+            .filters
+            .iter()
+            .map(|sf| (sf.node_id.clone(), sf.pickled_filter.clone(), sf.trainable))
+            .collect();
+
+        if !filter_specs.is_empty() {
+            let process = Arc::new(std::sync::Mutex::new(
+                crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
+                    .map_err(|e| {
+                        tracing::error!("Failed to spawn Python process: {e}");
+                        e
+                    })
+                    .expect("PythonProcess spawn failed"),
+            ));
+
+            for sf in &plan.filters {
+                let filter = Box::new(crate::python_process::SubprocessFilter::new(
+                    process.clone(),
                     sf.node_id.clone(),
                     sf.trainable,
-                    site_packages.as_deref(),
-                )
-                .map_err(|e| {
-                    tracing::error!("Failed to load filter '{}': {e}", sf.node_id);
-                })
-                .expect("EmbeddedPyFilter creation failed"),
-            );
-            #[cfg(not(feature = "pyo3"))]
-            let filter: Box<dyn Filter> = {
-                let _ = (
-                    &sf.pickled_filter,
-                    &sf.node_id,
-                    sf.trainable,
-                    &site_packages,
-                );
-                panic!("Python filter execution requires the 'pyo3' feature (enabled by default)")
-            };
-            self.filters.register(&sf.node_id, filter);
-            if let Some(state) = &sf.state {
-                self.filters.set_state(&sf.node_id, state.clone());
+                ));
+                self.filters.register(&sf.node_id, filter);
+                if let Some(state) = &sf.state {
+                    self.filters.set_state(&sf.node_id, state.clone());
+                }
             }
         }
 
