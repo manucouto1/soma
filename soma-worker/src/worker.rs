@@ -130,6 +130,19 @@ impl Worker {
     /// In **Forward** mode: executes the compiled plan directly.
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
+        let _span = tracing::info_span!(
+            "execute_plan",
+            plan_id = %plan.plan_id,
+            n_filters = plan.filters.len(),
+            mode = ?plan.mode,
+        )
+        .entered();
+
+        tracing::info!(
+            "Plan received: {} filters, mode={:?}",
+            plan.filters.len(),
+            plan.mode
+        );
 
         // Collect all requirements from serialized filters
         let all_reqs: Vec<String> = plan
@@ -168,14 +181,45 @@ impl Worker {
             .collect();
 
         if !filter_specs.is_empty() {
-            let process = Arc::new(std::sync::Mutex::new(
-                crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
-                    .map_err(|e| {
-                        tracing::error!("Failed to spawn Python process: {e}");
-                        e
-                    })
-                    .expect("PythonProcess spawn failed"),
-            ));
+            let filter_names: Vec<&str> =
+                plan.filters.iter().map(|sf| sf.node_id.as_str()).collect();
+            tracing::info!(
+                python = %python_path,
+                filters = ?filter_names,
+                "Spawning Python process for {} filters",
+                filter_specs.len()
+            );
+
+            let mut proc = crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
+                .map_err(|e| {
+                    tracing::error!("Failed to spawn Python process: {e}");
+                    e
+                })
+                .expect("PythonProcess spawn failed");
+
+            // Load trained states from previous epochs (SET_STATE)
+            for sf in &plan.filters {
+                if let Some(state) = &sf.state {
+                    let size = match state {
+                        Value::Bytes(b) => b.len(),
+                        _ => 0,
+                    };
+                    tracing::info!(
+                        node_id = %sf.node_id,
+                        size_bytes = size,
+                        "Loading trained state from previous epoch"
+                    );
+                    if let Err(e) = proc.set_state(&sf.node_id, state) {
+                        tracing::warn!(
+                            node_id = %sf.node_id,
+                            error = %e,
+                            "Failed to load state (will use fresh weights)"
+                        );
+                    }
+                }
+            }
+
+            let process = Arc::new(std::sync::Mutex::new(proc));
 
             for sf in &plan.filters {
                 let filter = Box::new(crate::python_process::SubprocessFilter::new(
@@ -188,6 +232,8 @@ impl Worker {
                     self.filters.set_state(&sf.node_id, state.clone());
                 }
             }
+
+            tracing::info!("Filters registered, Python process ready");
         }
 
         // Resolve input via InputSource::resolve()
@@ -242,16 +288,27 @@ impl Worker {
                 .map(|output| (output, std::collections::HashMap::new())),
         };
 
+        let elapsed = start.elapsed().as_millis() as u64;
         match result {
-            Ok((output, states)) => PlanResult::Success {
-                output: self.wrap_output(output),
-                duration_ms: start.elapsed().as_millis() as u64,
-                states,
-            },
-            Err(e) => PlanResult::Failed {
-                error: e.to_string(),
-                duration_ms: start.elapsed().as_millis() as u64,
-            },
+            Ok((output, states)) => {
+                tracing::info!(
+                    duration_ms = elapsed,
+                    n_states = states.len(),
+                    "Plan completed successfully"
+                );
+                PlanResult::Success {
+                    output: self.wrap_output(output),
+                    duration_ms: elapsed,
+                    states,
+                }
+            }
+            Err(e) => {
+                tracing::error!(duration_ms = elapsed, error = %e, "Plan failed");
+                PlanResult::Failed {
+                    error: e.to_string(),
+                    duration_ms: elapsed,
+                }
+            }
         }
     }
 

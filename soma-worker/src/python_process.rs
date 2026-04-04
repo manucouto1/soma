@@ -313,6 +313,20 @@ impl PythonProcess {
 
     /// Send a JSON command and read the JSON response.
     fn send(&mut self, cmd: serde_json::Value) -> Result<serde_json::Value> {
+        let action = cmd
+            .get("cmd")
+            .and_then(|c| c.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let node_id = cmd
+            .get("node_id")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        tracing::debug!(action = %action, node_id = %node_id, "→ Python");
+        let start = std::time::Instant::now();
+
         let line = serde_json::to_string(&cmd)
             .map_err(|e| SomaError::Other(format!("serialize cmd: {e}")))?;
 
@@ -327,15 +341,35 @@ impl PythonProcess {
             .read_line(&mut response)
             .map_err(|e| SomaError::Other(format!("read from python stdout: {e}")))?;
 
+        let duration_ms = start.elapsed().as_millis();
+
         if response.is_empty() {
-            // Process probably died
+            tracing::error!(action = %action, "Python process closed stdout (crashed?)");
             return Err(SomaError::Other(
                 "python process closed stdout (crashed?)".into(),
             ));
         }
 
-        serde_json::from_str(&response)
-            .map_err(|e| SomaError::Other(format!("parse python response: {e}\nraw: {response}")))
+        let parsed: serde_json::Value = serde_json::from_str(&response).map_err(|e| {
+            SomaError::Other(format!("parse python response: {e}\nraw: {response}"))
+        })?;
+
+        let ok = parsed.get("ok") == Some(&serde_json::Value::Bool(true));
+        if ok {
+            tracing::debug!(action = %action, node_id = %node_id, duration_ms, "← Python OK");
+        } else {
+            let error = parsed.get("error").and_then(|e| e.as_str()).unwrap_or("?");
+            let traceback = parsed
+                .get("traceback")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            tracing::error!(action = %action, node_id = %node_id, error, "Python filter error");
+            if !traceback.is_empty() {
+                tracing::error!("Python traceback:\n{traceback}");
+            }
+        }
+
+        Ok(parsed)
     }
 
     /// Convert a response to a Value, handling errors.
@@ -585,5 +619,20 @@ impl Filter for SubprocessFilter {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn composite_fit(
+        &self,
+        node_ids: &[String],
+        x: &Value,
+        y: Option<&Value>,
+    ) -> Option<Result<(Value, HashMap<String, Value>)>> {
+        tracing::info!(nodes = ?node_ids, "Composite fit via subprocess");
+        Some(
+            self.process
+                .lock()
+                .map_err(|e| SomaError::Other(format!("process mutex poisoned: {e}")))
+                .and_then(|mut proc| proc.composite_fit(node_ids, x, y)),
+        )
     }
 }
