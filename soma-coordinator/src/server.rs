@@ -10,14 +10,14 @@
 //!
 //! All mutating endpoints require `?token=sk-xxx` when a token is configured.
 
-use crate::coordinator::WorkerRegistry;
-use crate::protocol::{Capabilities, LoadMetrics, SerializedPlan};
+use crate::registry::WorkerRegistry;
 use axum::Router;
 use axum::extract::{Json, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
+use somatize_worker::protocol::{Capabilities, LoadMetrics, SerializedPlan};
 use std::sync::Arc;
 
 /// Shared coordinator server state.
@@ -215,7 +215,7 @@ async fn submit_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coordinator::WorkerStatus;
+    use crate::registry::WorkerStatus;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;

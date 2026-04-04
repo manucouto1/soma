@@ -11,6 +11,7 @@ members = [
     "soma-memory",
     "soma-agent",
     "soma-mcp",
+    "soma-coordinator",
 ]
 
 [workspace.package]
