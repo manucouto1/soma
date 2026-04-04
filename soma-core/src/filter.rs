@@ -114,6 +114,11 @@ pub trait Filter: Send + Sync {
 
     /// Metadata for the compiler.
     fn meta(&self) -> FilterMeta;
+
+    /// Downcast support for composite execution.
+    /// Enables the executor to extract Python objects from filters
+    /// without soma-core depending on PyO3.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[cfg(test)]
@@ -164,6 +169,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 
@@ -243,6 +252,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 

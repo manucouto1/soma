@@ -266,6 +266,10 @@ mod tests {
                 output_schema: None,
             }
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     struct Accumulator;
@@ -298,6 +302,10 @@ mod tests {
                 output_schema: None,
             }
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     struct RunningSum;
@@ -326,6 +334,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 

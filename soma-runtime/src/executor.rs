@@ -551,6 +551,10 @@ mod tests {
                 output_schema: None,
             }
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     struct AdderFilter {
@@ -585,6 +589,10 @@ mod tests {
                 output_schema: None,
             }
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     /// Slow filter that sleeps to verify parallelism.
@@ -615,6 +623,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 

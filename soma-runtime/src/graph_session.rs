@@ -586,6 +586,10 @@ mod tests {
                 output_schema: None,
             }
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     struct AdderFilter(f64);
@@ -616,6 +620,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 
@@ -655,6 +663,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 
@@ -798,6 +810,10 @@ mod tests {
                     input_schema: None,
                     output_schema: None,
                 }
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
             }
         }
         lib.register("merge", Box::new(MergeFilter));

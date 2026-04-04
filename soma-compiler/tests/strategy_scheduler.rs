@@ -35,6 +35,10 @@ impl Filter for DummyFilter {
             output_schema: None,
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 fn linear_graph(ids: &[&str]) -> Graph {

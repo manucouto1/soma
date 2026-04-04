@@ -92,6 +92,66 @@ impl Worker {
         self.filters.set_state(node_id, state);
     }
 
+    /// Execute a Composite plan: all filters in a single Python with_gil block,
+    /// tensors passed directly between filters (autograd connected).
+    #[cfg(feature = "pyo3")]
+    fn execute_composite(
+        &mut self,
+        node_ids: &[String],
+        input: Option<Value>,
+        mode: crate::py_filter::CompositeMode,
+        start: Instant,
+    ) -> PlanResult {
+        let x = input.unwrap_or(Value::Empty);
+
+        // Collect PyObjects from filters
+        let mut py_objects: Vec<(String, pyo3::PyObject)> = Vec::new();
+        for id in node_ids {
+            if let Some(filter) = self.filters.get(id)
+                && let Some(embedded) = filter
+                    .as_any()
+                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>()
+            {
+                let cloned = pyo3::Python::with_gil(|py| embedded.py_object().clone_ref(py));
+                py_objects.push((id.clone(), cloned));
+            }
+        }
+
+        if py_objects.len() != node_ids.len() {
+            return PlanResult::Failed {
+                error: format!(
+                    "Composite: not all filters are EmbeddedPyFilter ({}/{})",
+                    py_objects.len(),
+                    node_ids.len()
+                ),
+                duration_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+
+        let states: std::collections::HashMap<String, Value> = node_ids
+            .iter()
+            .filter_map(|id| self.filters.get_state(id).map(|s| (id.clone(), s.clone())))
+            .collect();
+
+        match crate::py_filter::execute_composite_python(&py_objects, &x, &states, mode) {
+            Ok((output, trained_states)) => {
+                // Store trained states back
+                for (id, state) in &trained_states {
+                    self.filters.set_state(id, state.clone());
+                }
+                PlanResult::Success {
+                    output: self.wrap_output(output),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    states: trained_states,
+                }
+            }
+            Err(e) => PlanResult::Failed {
+                error: format!("Composite execution: {e}"),
+                duration_ms: start.elapsed().as_millis() as u64,
+            },
+        }
+    }
+
     /// Wrap output in the right delivery: inline for small, DataRef for large.
     pub fn wrap_output(&self, output: Value) -> OutputDelivery {
         let size = serde_json::to_vec(&output).map(|v| v.len()).unwrap_or(0);
@@ -244,6 +304,17 @@ impl Worker {
         input: Option<Value>,
         start: Instant,
     ) -> PlanResult {
+        // Composite plan: execute in a single Python block with autograd
+        #[cfg(feature = "pyo3")]
+        if let somatize_compiler::ExecutionPlan::Composite { ref node_ids } = plan.plan {
+            return self.execute_composite(
+                node_ids,
+                input,
+                crate::py_filter::CompositeMode::Forward,
+                start,
+            );
+        }
+
         let mut ctx = Context::new(
             self.event_bus.clone(),
             format!("worker_run_{}", plan.plan_id),
@@ -251,7 +322,6 @@ impl Worker {
 
         if let Some(val) = input {
             ctx.set("input", val.clone());
-            // Also set per-root input
             if let somatize_compiler::ExecutionPlan::Execute { node_id } = &plan.plan {
                 ctx.set(format!("__input_{node_id}"), val);
             }
@@ -287,6 +357,17 @@ impl Worker {
         y: Option<&Value>,
         start: Instant,
     ) -> PlanResult {
+        // Composite plan: fit in a single Python block with autograd
+        #[cfg(feature = "pyo3")]
+        if let somatize_compiler::ExecutionPlan::Composite { ref node_ids } = plan.plan {
+            return self.execute_composite(
+                node_ids,
+                input,
+                crate::py_filter::CompositeMode::Fit { y: y.cloned() },
+                start,
+            );
+        }
+
         let run_id = format!("worker_fit_{}", plan.plan_id);
         let x = input.unwrap_or(Value::Empty);
 
@@ -515,6 +596,10 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 

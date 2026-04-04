@@ -330,6 +330,10 @@ impl Filter for PyFilterBridge {
             output_schema: None,
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 // ── Search dimension parsing ──

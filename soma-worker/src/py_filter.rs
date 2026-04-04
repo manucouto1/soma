@@ -137,6 +137,11 @@ impl EmbeddedPyFilter {
         })
     }
 
+    /// Get the underlying Python object (for composite execution).
+    pub fn py_object(&self) -> &PyObject {
+        &self.py_obj
+    }
+
     // ── Strategy methods ──
 
     /// Serialize trained state: torch.save(state_dict) or cloudpickle.dumps(obj).
@@ -326,4 +331,159 @@ impl Filter for EmbeddedPyFilter {
             output_schema: None,
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// ── Composite execution ──
+
+/// Mode for composite execution.
+pub enum CompositeMode {
+    Forward,
+    Fit { y: Option<Value> },
+}
+
+/// Execute N Python filters in a single with_gil block.
+/// Tensors pass directly between filters as PyObjects — autograd stays connected.
+/// Works for both local (PyFilterBridge) and remote (EmbeddedPyFilter) execution.
+pub fn execute_composite_python(
+    py_objects: &[(String, PyObject)],
+    x: &Value,
+    states: &std::collections::HashMap<String, Value>,
+    mode: CompositeMode,
+) -> SomaResult<(Value, std::collections::HashMap<String, Value>)> {
+    Python::with_gil(|py| {
+        let filter_list = PyList::empty(py);
+        let node_ids = PyList::empty(py);
+        let state_dict = PyDict::new(py);
+
+        for (node_id, py_obj) in py_objects {
+            filter_list
+                .append(py_obj.bind(py))
+                .map_err(py_err_to_soma)?;
+            node_ids.append(node_id.as_str()).map_err(py_err_to_soma)?;
+
+            if let Some(state) = states.get(node_id) {
+                let py_state = value_to_py(py, state).map_err(py_err_to_soma)?;
+                state_dict
+                    .set_item(node_id.as_str(), py_state)
+                    .map_err(py_err_to_soma)?;
+            }
+        }
+
+        let py_x = value_to_py(py, x).map_err(py_err_to_soma)?;
+
+        let (py_y, is_fit) = match &mode {
+            CompositeMode::Fit { y: Some(y_val) } => {
+                (value_to_py(py, y_val).map_err(py_err_to_soma)?, true)
+            }
+            CompositeMode::Fit { y: None } => (py.None(), true),
+            CompositeMode::Forward => (py.None(), false),
+        };
+
+        let locals = PyDict::new(py);
+        locals
+            .set_item("_filters", filter_list)
+            .map_err(py_err_to_soma)?;
+        locals
+            .set_item("_node_ids", node_ids)
+            .map_err(py_err_to_soma)?;
+        locals
+            .set_item("_states", state_dict)
+            .map_err(py_err_to_soma)?;
+        locals.set_item("_x", py_x).map_err(py_err_to_soma)?;
+        locals.set_item("_y", py_y).map_err(py_err_to_soma)?;
+        locals.set_item("_is_fit", is_fit).map_err(py_err_to_soma)?;
+
+        py.run(
+            c"
+import torch as _torch
+
+# Convert input to tensor with grad tracking
+if isinstance(_x, list):
+    _x = _torch.tensor(_x, dtype=_torch.float32, requires_grad=True)
+elif not isinstance(_x, _torch.Tensor):
+    _x = _torch.tensor([_x] if isinstance(_x, (int, float)) else list(_x), dtype=_torch.float32, requires_grad=True)
+
+# Forward through all filters — tensors passed directly, autograd connected
+_out = _x
+for _nid, _f in zip(_node_ids, _filters):
+    _s = _states.get(_nid, {})
+    _out = _f.forward(_out, _s)
+
+# Fit mode: backward + optimizer step
+_trained_states = {}
+if _is_fit:
+    # Last filter should have loss_fn, or we use MSE as default
+    _last = _filters[-1]
+    if _y is not None and hasattr(_last, 'loss_fn'):
+        if isinstance(_y, list):
+            _y_t = _torch.tensor(_y, dtype=_torch.float32)
+        elif not isinstance(_y, _torch.Tensor):
+            _y_t = _torch.tensor([_y], dtype=_torch.float32)
+        else:
+            _y_t = _y
+        _loss = _last.loss_fn(_out, _y_t)
+        _loss.backward()
+    elif _y is not None:
+        # Default: MSE loss
+        if isinstance(_y, list):
+            _y_t = _torch.tensor(_y, dtype=_torch.float32)
+        else:
+            _y_t = _torch.tensor([_y], dtype=_torch.float32)
+        _loss = _torch.nn.functional.mse_loss(_out, _y_t)
+        _loss.backward()
+    elif hasattr(_out, 'backward'):
+        # No y: assume output is the loss (unsupervised)
+        _out.backward()
+
+    # Optimizer step for each filter
+    for _nid, _f in zip(_node_ids, _filters):
+        if hasattr(_f, 'optimizer'):
+            _f.optimizer.step()
+            _f.optimizer.zero_grad()
+
+    # Extract trained states
+    for _nid, _f in zip(_node_ids, _filters):
+        if hasattr(_f, 'state_dict'):
+            _sd = _f.state_dict()
+            _trained_states[_nid] = {k: v.detach().tolist() for k, v in _sd.items()}
+
+# Convert output
+_result = _out.detach().tolist() if isinstance(_out, _torch.Tensor) else _out
+",
+            None,
+            Some(&locals),
+        )
+        .map_err(py_err_to_soma)?;
+
+        // Extract result
+        let py_result = locals
+            .get_item("_result")
+            .map_err(py_err_to_soma)?
+            .ok_or_else(|| SomaError::Other("composite: no _result".into()))?;
+        let output = py_to_value(py, &py_result).map_err(py_err_to_soma)?;
+
+        // Extract trained states
+        let py_states = locals
+            .get_item("_trained_states")
+            .map_err(py_err_to_soma)?
+            .ok_or_else(|| SomaError::Other("composite: no _trained_states".into()))?;
+        let trained: std::collections::HashMap<String, Value> =
+            if let Ok(dict) = py_states.downcast::<PyDict>() {
+                let mut map = std::collections::HashMap::new();
+                for (k, v) in dict.iter() {
+                    let key: String = k.extract().map_err(py_err_to_soma)?;
+                    let val = py_to_value(py, &v).map_err(py_err_to_soma)?;
+                    map.insert(key, val);
+                }
+                map
+            } else {
+                std::collections::HashMap::new()
+            };
+
+        Ok((output, trained))
+    })
 }

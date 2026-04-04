@@ -60,6 +60,10 @@ impl Filter for Normalizer {
             output_schema: None,
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Linear transformation: y = x * weight + bias
@@ -121,6 +125,10 @@ impl Filter for LinearModel {
             output_schema: None,
         }
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Always fails
@@ -147,6 +155,10 @@ impl Filter for FailingFilter {
             input_schema: None,
             output_schema: None,
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
