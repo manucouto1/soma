@@ -234,12 +234,16 @@ impl Worker {
                     &x,
                     y.as_ref(),
                 )
-                .map(|(output, states)| {
-                    // Store states in library for subsequent forward calls
-                    for (id, state) in &states {
-                        self.filters.set_state(id, state.clone());
+                .map(|(output, all_outputs)| {
+                    // Extract trained states (prefixed __state_) and store in library
+                    let mut trained_states = std::collections::HashMap::new();
+                    for (key, value) in &all_outputs {
+                        if let Some(node_id) = key.strip_prefix("__state_") {
+                            self.filters.set_state(node_id, value.clone());
+                            trained_states.insert(node_id.to_string(), value.clone());
+                        }
                     }
-                    (output, states)
+                    (output, trained_states)
                 }),
             ExecutionMode::Forward => runner
                 .forward(
@@ -275,7 +279,7 @@ impl Worker {
         meta: &somatize_core::store::StoreMeta,
         start: Instant,
     ) -> PlanResult {
-        use somatize_runtime::runner::stream::{FittedFilter, StreamExecutor};
+        use somatize_runtime::executors::stream::{FittedFilter, StreamExecutor};
 
         let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
         let fitted: Vec<FittedFilter> = node_ids

@@ -13,8 +13,8 @@ pub mod protocol;
 pub mod py_filter;
 pub mod remote_executor;
 pub mod server;
-pub mod strategy_executor;
 pub mod worker;
+pub mod ws_transport;
 
 pub use coordinator::{WorkerRegistry, WorkerStatus};
 pub use coordinator_server::{coordinator_router, serve_coordinator};
@@ -28,3 +28,4 @@ pub use server::{
     serve_worker, serve_worker_authenticated, worker_router, worker_router_authenticated,
 };
 pub use worker::Worker;
+pub use ws_transport::WsTransport;
