@@ -174,15 +174,39 @@ async fn main() {
         }
     }
 
-    // Start server
+    // Start server with graceful shutdown on Ctrl+C
+    let shutdown = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for Ctrl+C");
+        tracing::info!("Ctrl+C received, shutting down...");
+    };
+
     if let Some(token) = args.token {
         tracing::info!("Authentication enabled");
-        somatize_worker::serve_worker_authenticated(worker, &addr, &token)
+        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+        tracing::info!("Worker listening on {addr}");
+        let router = somatize_worker::worker_router_authenticated(
+            worker,
+            &args.env_dir,
+            &args.work_dir,
+            &token,
+        );
+        axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown)
             .await
             .unwrap();
     } else {
-        somatize_worker::serve_worker(worker, &addr).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+        tracing::info!("Worker listening on {addr}");
+        let router = somatize_worker::worker_router(worker);
+        axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown)
+            .await
+            .unwrap();
     }
+
+    tracing::info!("Worker stopped.");
 }
 
 fn local_ip() -> String {
