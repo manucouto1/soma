@@ -113,13 +113,12 @@ impl Runner for LocalRunner {
 
         let last_output = outputs.values().last().cloned().unwrap_or(Value::Empty);
 
-        // Merge: trained states + forward outputs (keyed by node_id)
-        // Worker uses states for set_state, GraphSession uses outputs for inspection
-        let mut result = trained_states;
-        for (id, output) in outputs {
-            result.entry(id).or_insert(output);
+        // Forward outputs keyed by node_id (for GraphSession inspection).
+        // Trained states added with __state_ prefix (for Worker to extract).
+        for (id, state) in &trained_states {
+            outputs.insert(format!("__state_{id}"), state.clone());
         }
-        Ok((last_output, result))
+        Ok((last_output, outputs))
     }
 
     fn forward(

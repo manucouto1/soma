@@ -91,18 +91,12 @@ fn py_err_to_soma(e: PyErr) -> SomaError {
 /// A Python filter deserialized from cloudpickle bytes and kept alive in-process.
 /// Uses PyO3 `auto-initialize` to embed the Python interpreter directly.
 pub struct EmbeddedPyFilter {
-    /// The live Python filter object (persists between calls).
-    py_obj: PyObject,
+    /// The live Python filter object, protected by Mutex for thread safety.
+    /// PyObject is Send (PyO3 0.24) but NOT Sync — Mutex makes the struct Sync.
+    py_obj: Mutex<PyObject>,
     node_id: String,
     trainable: bool,
-    /// Mutex for interior mutability — Filter trait requires &self.
-    _lock: Mutex<()>,
 }
-
-// Safety: PyObject is Send when we use GIL properly.
-// The Mutex ensures single-threaded access to the Python object.
-unsafe impl Send for EmbeddedPyFilter {}
-unsafe impl Sync for EmbeddedPyFilter {}
 
 impl EmbeddedPyFilter {
     /// Deserialize a filter from cloudpickle bytes.
@@ -129,17 +123,16 @@ impl EmbeddedPyFilter {
                 .map_err(|e| SomaError::Other(format!("cloudpickle.loads failed: {e}")))?;
 
             Ok(Self {
-                py_obj: obj.unbind(),
+                py_obj: Mutex::new(obj.unbind()),
                 node_id,
                 trainable,
-                _lock: Mutex::new(()),
             })
         })
     }
 
     /// Get the underlying Python object (for composite execution).
-    pub fn py_object(&self) -> &PyObject {
-        &self.py_obj
+    pub fn py_object(&self) -> PyObject {
+        Python::with_gil(|py| self.py_obj.lock().unwrap().clone_ref(py))
     }
 
     // ── Strategy methods ──
@@ -149,7 +142,7 @@ impl EmbeddedPyFilter {
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.bind(py))
+                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
                 .map_err(py_err_to_soma)?;
             py.run(
                 c"
@@ -186,7 +179,7 @@ _result = _buf.getvalue()
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.bind(py))
+                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
                 .map_err(py_err_to_soma)?;
             locals
                 .set_item("_state_bytes", pyo3::types::PyBytes::new(py, &bytes))
@@ -215,7 +208,7 @@ else:
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.bind(py))
+                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
                 .map_err(py_err_to_soma)?;
             py.run(
                 c"
@@ -254,7 +247,7 @@ _result = _buf.getvalue()
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.bind(py))
+                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
                 .map_err(py_err_to_soma)?;
             locals
                 .set_item("_grad_bytes", pyo3::types::PyBytes::new(py, &bytes))
@@ -287,7 +280,6 @@ impl Filter for EmbeddedPyFilter {
     }
 
     fn fit(&self, x: &Value, y: Option<&Value>) -> SomaResult<Value> {
-        let _guard = self._lock.lock().unwrap();
         Python::with_gil(|py| {
             let py_x = value_to_py(py, x).map_err(py_err_to_soma)?;
             let py_y = match y {
@@ -296,6 +288,8 @@ impl Filter for EmbeddedPyFilter {
             };
             let result = self
                 .py_obj
+                .lock()
+                .unwrap()
                 .call_method1(py, "fit", (py_x, py_y))
                 .map_err(|e| SomaError::Other(format!("Python fit() error: {e}")))?;
             py_to_value(py, result.bind(py)).map_err(py_err_to_soma)
@@ -303,12 +297,13 @@ impl Filter for EmbeddedPyFilter {
     }
 
     fn forward(&self, x: &Value, state: &Value) -> SomaResult<Value> {
-        let _guard = self._lock.lock().unwrap();
         Python::with_gil(|py| {
             let py_x = value_to_py(py, x).map_err(py_err_to_soma)?;
             let py_state = value_to_py(py, state).map_err(py_err_to_soma)?;
             let result = self
                 .py_obj
+                .lock()
+                .unwrap()
                 .call_method1(py, "forward", (py_x, py_state))
                 .map_err(|e| SomaError::Other(format!("Python forward() error: {e}")))?;
             py_to_value(py, result.bind(py)).map_err(py_err_to_soma)

@@ -124,7 +124,7 @@ impl GraphSession {
         )?;
 
         let runner = crate::runner::LocalRunner;
-        let (_last_output, all_outputs) = runner.fit(
+        let (_last_output, mut all_outputs) = runner.fit(
             &plan,
             &self.library,
             self.cache.as_ref(),
@@ -133,20 +133,15 @@ impl GraphSession {
             y,
         )?;
 
-        // Store trained states in library for subsequent forward() calls
-        // LocalRunner caches in CacheStore but can't mutate FilterLibrary
-        for node_id in plan.node_ids() {
-            if let Some(filter) = self.library.get(node_id)
-                && filter.meta().kind == FilterKind::Trainable
-                && all_outputs.contains_key(node_id)
-            {
-                let data_hash = CacheKey::hash_data(&serde_json::to_vec(x).unwrap_or_default());
-                let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
-                if let Ok(Some(state)) = self.cache.get(&state_key) {
-                    self.library.set_state(node_id, state);
-                }
+        // Store trained states from __state_ keys into FilterLibrary
+        for (key, value) in &all_outputs {
+            if let Some(node_id) = key.strip_prefix("__state_") {
+                self.library.set_state(node_id, value.clone());
             }
         }
+
+        // Remove __state_ keys from returned outputs (callers expect node IDs only)
+        all_outputs.retain(|k, _| !k.starts_with("__state_"));
 
         self.fitted = true;
         Ok(all_outputs)
