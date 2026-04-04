@@ -411,9 +411,31 @@ fn execute_node(
         kind: filter.meta().kind,
     });
 
+    let _span = tracing::info_span!("execute_node", %node_id).entered();
+
     let input = resolve_input(node_id, ctx);
     let state = filters.get_state(node_id).cloned().unwrap_or(Value::Empty);
-    let result = filter.forward(&input, &state);
+
+    // catch_unwind: a panic in a user filter must not crash the process
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        filter.forward(&input, &state)
+    }));
+
+    let result = match result {
+        Ok(inner) => inner,
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            tracing::error!(node_id, "filter panicked: {msg}");
+            Err(SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!("filter panicked: {msg}"),
+            })
+        }
+    };
 
     match result {
         Ok(output) => {
@@ -430,6 +452,7 @@ fn execute_node(
             Ok(())
         }
         Err(e) => {
+            tracing::error!(node_id, error = %e, "node execution failed");
             ctx.event_bus.emit(Event::NodeFailed {
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.to_string(),

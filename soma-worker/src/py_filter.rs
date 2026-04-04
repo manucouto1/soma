@@ -132,7 +132,12 @@ impl EmbeddedPyFilter {
 
     /// Get the underlying Python object (for composite execution).
     pub fn py_object(&self) -> PyObject {
-        Python::with_gil(|py| self.py_obj.lock().unwrap().clone_ref(py))
+        Python::with_gil(|py| {
+            self.py_obj
+                .lock()
+                .expect("PyObject mutex poisoned")
+                .clone_ref(py)
+        })
     }
 
     // ── Strategy methods ──
@@ -142,7 +147,13 @@ impl EmbeddedPyFilter {
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
+                .set_item(
+                    "_obj",
+                    self.py_obj
+                        .lock()
+                        .expect("PyObject mutex poisoned")
+                        .bind(py),
+                )
                 .map_err(py_err_to_soma)?;
             py.run(
                 c"
@@ -179,7 +190,13 @@ _result = _buf.getvalue()
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
+                .set_item(
+                    "_obj",
+                    self.py_obj
+                        .lock()
+                        .expect("PyObject mutex poisoned")
+                        .bind(py),
+                )
                 .map_err(py_err_to_soma)?;
             locals
                 .set_item("_state_bytes", pyo3::types::PyBytes::new(py, &bytes))
@@ -208,7 +225,13 @@ else:
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
+                .set_item(
+                    "_obj",
+                    self.py_obj
+                        .lock()
+                        .expect("PyObject mutex poisoned")
+                        .bind(py),
+                )
                 .map_err(py_err_to_soma)?;
             py.run(
                 c"
@@ -247,7 +270,13 @@ _result = _buf.getvalue()
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             locals
-                .set_item("_obj", self.py_obj.lock().unwrap().bind(py))
+                .set_item(
+                    "_obj",
+                    self.py_obj
+                        .lock()
+                        .expect("PyObject mutex poisoned")
+                        .bind(py),
+                )
                 .map_err(py_err_to_soma)?;
             locals
                 .set_item("_grad_bytes", pyo3::types::PyBytes::new(py, &bytes))

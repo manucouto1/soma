@@ -88,7 +88,20 @@ impl Runner for LocalRunner {
                 let s = if let Some(cached) = cache.get(&state_key)? {
                     cached
                 } else {
-                    let fitted = filter.fit(&node_input, y)?;
+                    let fitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        filter.fit(&node_input, y)
+                    }))
+                    .map_err(|panic| {
+                        let msg = panic
+                            .downcast_ref::<String>()
+                            .map(|s| s.as_str())
+                            .or_else(|| panic.downcast_ref::<&str>().copied())
+                            .unwrap_or("unknown panic");
+                        SomaError::Execution {
+                            node_id: node_id.clone(),
+                            message: format!("fit panicked: {msg}"),
+                        }
+                    })??;
                     let _ = cache.put(&state_key, &fitted);
                     fitted
                 };
@@ -98,8 +111,21 @@ impl Runner for LocalRunner {
                 filters.get_state(node_id).cloned().unwrap_or(Value::Empty)
             };
 
-            // Forward with state
-            let output = filter.forward(&node_input, &state)?;
+            // Forward with state (catch panics)
+            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                filter.forward(&node_input, &state)
+            }))
+            .map_err(|panic| {
+                let msg = panic
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown panic");
+                SomaError::Execution {
+                    node_id: node_id.clone(),
+                    message: format!("forward panicked: {msg}"),
+                }
+            })??;
 
             event_bus.emit(Event::NodeCompleted {
                 run_id: run_id.clone(),
