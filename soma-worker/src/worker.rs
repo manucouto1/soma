@@ -257,26 +257,72 @@ impl Worker {
         let x = input_value.unwrap_or(Value::Empty);
 
         let result = match &plan.mode {
-            ExecutionMode::Fit { y } => runner
-                .fit(
-                    &plan.plan,
-                    &self.filters,
-                    self.cache.as_ref(),
-                    &self.event_bus,
-                    &x,
-                    y.as_ref(),
-                )
-                .map(|(output, all_outputs)| {
-                    // Extract trained states (prefixed __state_) and store in library
-                    let mut trained_states = std::collections::HashMap::new();
-                    for (key, value) in &all_outputs {
-                        if let Some(node_id) = key.strip_prefix("__state_") {
-                            self.filters.set_state(node_id, value.clone());
-                            trained_states.insert(node_id.to_string(), value.clone());
+            ExecutionMode::Fit { y, batch_size } => {
+                // If batch_size is set, use BATCHED_FIT on the subprocess directly
+                if let Some(bs) = batch_size {
+                    tracing::info!(batch_size = bs, "Using batched fit");
+                    let node_ids = plan
+                        .plan
+                        .node_ids()
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>();
+                    if let Some(filter) = self.filters.get(&node_ids[0]) {
+                        if let Some(sf) = filter
+                            .as_any()
+                            .downcast_ref::<crate::python_process::SubprocessFilter>()
+                        {
+                            let result = sf
+                                .process
+                                .lock()
+                                .map_err(|e| {
+                                    somatize_core::error::SomaError::Other(format!("mutex: {e}"))
+                                })
+                                .and_then(|mut proc| {
+                                    proc.batched_fit(&node_ids, &x, y.as_ref(), *bs)
+                                });
+                            match result {
+                                Ok((output, states)) => {
+                                    for (id, state) in &states {
+                                        self.filters.set_state(id, state.clone());
+                                    }
+                                    Ok((output, states))
+                                }
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            Err(somatize_core::error::SomaError::Other(
+                                "batched_fit requires SubprocessFilter".into(),
+                            ))
                         }
+                    } else {
+                        Err(somatize_core::error::SomaError::Other(
+                            "no filters found".into(),
+                        ))
                     }
-                    (output, trained_states)
-                }),
+                } else {
+                    runner
+                        .fit(
+                            &plan.plan,
+                            &self.filters,
+                            self.cache.as_ref(),
+                            &self.event_bus,
+                            &x,
+                            y.as_ref(),
+                        )
+                        .map(|(output, all_outputs)| {
+                            // Extract trained states (prefixed __state_) and store in library
+                            let mut trained_states = std::collections::HashMap::new();
+                            for (key, value) in &all_outputs {
+                                if let Some(node_id) = key.strip_prefix("__state_") {
+                                    self.filters.set_state(node_id, value.clone());
+                                    trained_states.insert(node_id.to_string(), value.clone());
+                                }
+                            }
+                            (output, trained_states)
+                        })
+                }
+            }
             ExecutionMode::Forward => runner
                 .forward(
                     &plan.plan,

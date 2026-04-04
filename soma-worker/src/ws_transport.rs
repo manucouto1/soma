@@ -126,7 +126,10 @@ impl Transport for WsTransport {
             }),
             filters: vec![], // TODO: serialize from FilterLibrary if needed
             mode: if fit_mode {
-                ExecutionMode::Fit { y: y.cloned() }
+                ExecutionMode::Fit {
+                    y: y.cloned(),
+                    batch_size: None,
+                }
             } else {
                 ExecutionMode::Forward
             },

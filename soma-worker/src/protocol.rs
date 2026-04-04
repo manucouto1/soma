@@ -129,6 +129,10 @@ pub enum ExecutionMode {
     Fit {
         /// Supervised labels (optional).
         y: Option<Value>,
+        /// If set, the worker splits the input into batches internally.
+        /// Model is loaded once, batches processed in a loop.
+        #[serde(default)]
+        batch_size: Option<usize>,
     },
     /// Inference: forward only (default).
     #[default]

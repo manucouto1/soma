@@ -113,6 +113,20 @@ for line in sys.stdin:
             data = _decode(cmd.get("data"))
             y = _decode(cmd.get("y"))
 
+            # Step 1: fit each trainable filter to get states
+            fit_states = {}
+            fit_input = data
+            for nid in node_ids:
+                f = filters[nid]["obj"]
+                if filters[nid].get("trainable", True):
+                    state = f.fit(fit_input, y)
+                    fit_states[nid] = state
+                else:
+                    fit_states[nid] = {}
+                # Forward to propagate output to next filter
+                fit_input = f.forward(fit_input, fit_states[nid])
+
+            # Step 2: forward with autograd if torch available
             try:
                 import torch
                 if isinstance(data, list):
@@ -125,7 +139,7 @@ for line in sys.stdin:
             out = x
             for nid in node_ids:
                 f = filters[nid]["obj"]
-                out = f.forward(out, {})
+                out = f.forward(out, fit_states.get(nid, {}))
 
             # Backward
             if y is not None and hasattr(out, 'backward'):
@@ -225,6 +239,74 @@ for line in sys.stdin:
                 except ImportError:
                     pass
             print(json.dumps({"ok": True}), flush=True)
+
+        elif action == "BATCHED_FIT":
+            # Process dataset in batches — model loaded ONCE, batches processed in loop
+            node_ids = cmd["node_ids"]
+            data = _decode(cmd.get("data"))
+            y = _decode(cmd.get("y"))
+            batch_size = cmd.get("batch_size", 32)
+
+            # Find the list dimension to batch on
+            if isinstance(data, dict):
+                list_keys = [k for k, v in data.items() if isinstance(v, list)]
+                total = len(data[list_keys[0]]) if list_keys else 0
+            elif isinstance(data, list):
+                total = len(data)
+            else:
+                total = 0
+
+            all_states = {}
+            n_batches = (total + batch_size - 1) // batch_size if total > 0 else 1
+
+            for b in range(n_batches):
+                start = b * batch_size
+                end = min(start + batch_size, total)
+
+                # Slice the batch
+                if isinstance(data, dict):
+                    batch = {}
+                    for k, v in data.items():
+                        if isinstance(v, list):
+                            batch[k] = v[start:end]
+                        else:
+                            batch[k] = v
+                elif isinstance(data, list):
+                    batch = data[start:end]
+                else:
+                    batch = data
+
+                y_batch = None
+                if y is not None:
+                    if isinstance(y, list):
+                        y_batch = y[start:end]
+                    elif isinstance(y, dict):
+                        y_batch = {k: (v[start:end] if isinstance(v, list) else v) for k, v in y.items()}
+                    else:
+                        y_batch = y
+
+                # Fit + forward for this batch through all filters
+                batch_input = batch
+                for nid in node_ids:
+                    f = filters[nid]["obj"]
+                    if filters[nid].get("trainable", True):
+                        state = f.fit(batch_input, y_batch)
+                        all_states[nid] = state
+                    else:
+                        if nid not in all_states:
+                            all_states[nid] = {}
+                    batch_input = f.forward(batch_input, all_states.get(nid, {}))
+
+                import sys
+                print(f"    Batch {b+1}/{n_batches} complete", file=sys.stderr, flush=True)
+
+            # Encode final states
+            encoded_states = {}
+            for nid, state in all_states.items():
+                encoded_states[nid] = _encode(state)
+
+            result = _encode(batch_input) if batch_input is not None else None
+            print(json.dumps({"ok": True, "result": result, "states": encoded_states}), flush=True)
 
         elif action == "SHUTDOWN":
             print(json.dumps({"ok": True}), flush=True)
@@ -482,6 +564,38 @@ impl PythonProcess {
         Ok((output, states))
     }
 
+    /// Batched fit: send full dataset + batch_size, daemon splits internally.
+    /// Model loaded ONCE, batches processed in a loop.
+    pub fn batched_fit(
+        &mut self,
+        node_ids: &[String],
+        data: &Value,
+        y: Option<&Value>,
+        batch_size: usize,
+    ) -> Result<(Value, HashMap<String, Value>)> {
+        let mut cmd = serde_json::json!({
+            "cmd": "BATCHED_FIT",
+            "node_ids": node_ids,
+            "data": Self::value_to_json(data),
+            "batch_size": batch_size,
+        });
+        if let Some(y_val) = y {
+            cmd["y"] = Self::value_to_json(y_val);
+        }
+        let resp = self.send(cmd)?;
+        let output = Self::response_to_value(&resp)?;
+
+        let mut states = HashMap::new();
+        if let Some(state_map) = resp.get("states").and_then(|s| s.as_object()) {
+            for (id, val) in state_map {
+                if let Ok(v) = Self::json_to_value(val) {
+                    states.insert(id.clone(), v);
+                }
+            }
+        }
+        Ok((output, states))
+    }
+
     pub fn composite_forward(&mut self, node_ids: &[String], data: &Value) -> Result<Value> {
         let resp = self.send(serde_json::json!({
             "cmd": "COMPOSITE_FORWARD",
@@ -566,7 +680,7 @@ impl Drop for PythonProcess {
 /// A filter that delegates to a shared PythonProcess via stdin/stdout.
 /// Multiple SubprocessFilters can share the same process (Arc<Mutex>).
 pub struct SubprocessFilter {
-    process: Arc<Mutex<PythonProcess>>,
+    pub(crate) process: Arc<Mutex<PythonProcess>>,
     node_id: String,
     trainable: bool,
 }

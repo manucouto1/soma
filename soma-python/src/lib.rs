@@ -622,6 +622,7 @@ struct PyGraph {
 impl PyGraph {
     /// Split a Value into batches along the first axis.
     /// For Tensor: splits rows. For Json dict with lists: splits list values.
+    #[allow(dead_code)]
     fn split_value_into_batches(value: &Value, batch_size: usize) -> Vec<Value> {
         match value {
             Value::Tensor { values, shape } if !shape.is_empty() && shape[0] > batch_size => {
@@ -1285,28 +1286,24 @@ impl PyGraph {
         // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
             if let Some(bs) = batch_size {
-                // Batched fit: split input, dispatch each batch, accumulate states
-                let batches = Self::split_value_into_batches(&x_val, bs);
-                let y_batches = y_val
-                    .as_ref()
-                    .map(|yv| Self::split_value_into_batches(yv, bs));
-                let n_batches = batches.len();
-
-                for (i, batch) in batches.into_iter().enumerate() {
-                    let y_batch = y_batches.as_ref().and_then(|ybs| ybs.get(i).cloned());
-                    let mode = somatize_worker::protocol::ExecutionMode::Fit { y: y_batch };
-                    let result = py.allow_threads(|| self.dispatch_to_worker(&batch, mode));
-                    let (_output, states) = result?;
-                    for (node_id, state) in states {
-                        self.library.set_state(&node_id, state);
-                    }
-                    eprintln!("  Batch {}/{n_batches} complete", i + 1);
+                // Batched fit: dispatch once with batch_size so the worker handles batching
+                let mode = somatize_worker::protocol::ExecutionMode::Fit {
+                    y: y_val.clone(),
+                    batch_size: Some(bs),
+                };
+                let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
+                let (_output, states) = result?;
+                for (node_id, state) in states {
+                    self.library.set_state(&node_id, state);
                 }
                 self.fitted = true;
                 return Ok(());
             }
 
-            let mode = somatize_worker::protocol::ExecutionMode::Fit { y: y_val.clone() };
+            let mode = somatize_worker::protocol::ExecutionMode::Fit {
+                y: y_val.clone(),
+                batch_size: None,
+            };
             let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
             let (_output, states) = result?;
             for (node_id, state) in states {
