@@ -11,6 +11,7 @@
 pub mod cache;
 pub mod event_bus;
 pub mod executor;
+pub mod executors;
 pub mod filter_library;
 pub mod graph_session;
 pub mod pruner;
@@ -20,11 +21,12 @@ pub mod sampler;
 pub use cache::{LocalCache, MemoryCache, TieredCache};
 pub use event_bus::EventBus;
 pub use executor::{Context, GraphInfo, RemoteExecutor, execute, resolve_input};
+pub use executors::{
+    FittedFilter, FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner,
+    PopulationMember, StreamExecutor, StudyRunner, TrialExecutor, TrialOutcome,
+};
 pub use filter_library::FilterLibrary;
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
-pub use runner::{
-    FittedFilter, FnPbtExecutor, FnTrialExecutor, LocalRunner, PbtConfig, PbtExecutor, PbtRunner,
-    PopulationMember, Runner, StreamExecutor, StudyRunner, TrialExecutor, TrialOutcome,
-};
+pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};

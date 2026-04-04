@@ -22,8 +22,8 @@ use somatize_core::value::Value;
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::executor::{self, Context, GraphInfo};
+use somatize_runtime::executors::study::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use somatize_runtime::filter_library::FilterLibrary;
-use somatize_runtime::runner::study::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
