@@ -213,161 +213,183 @@ impl Context {
 
 /// Execute a compiled plan synchronously.
 /// For parallel branches, uses the async executor under the hood.
+/// Contract for executing a plan.
+pub trait Executable {
+    fn execute(
+        &self,
+        ctx: &mut Context,
+        filters: &FilterLibrary,
+        cache: &dyn CacheStore,
+    ) -> Result<()>;
+}
+
+impl Executable for ExecutionPlan {
+    fn execute(
+        &self,
+        ctx: &mut Context,
+        filters: &FilterLibrary,
+        cache: &dyn CacheStore,
+    ) -> Result<()> {
+        match self {
+            ExecutionPlan::Empty => Ok(()),
+
+            ExecutionPlan::Execute { node_id } => execute_node(node_id, ctx, filters, cache),
+
+            ExecutionPlan::Cached { node_id, key } => {
+                let start = Instant::now();
+                let value = cache.get(key)?.ok_or_else(|| {
+                    SomaError::Cache(format!(
+                        "expected cached value for node `{node_id}` not found"
+                    ))
+                })?;
+                ctx.set(node_id.clone(), value);
+                ctx.event_bus.emit(Event::NodeCacheHit {
+                    run_id: ctx.run_id.clone(),
+                    node_id: node_id.clone(),
+                    key: key.clone(),
+                    tier: somatize_core::cache::CacheTier::Memory,
+                    load_time: start.elapsed(),
+                });
+                Ok(())
+            }
+
+            ExecutionPlan::Sequence(steps) => {
+                for step in steps {
+                    step.execute(ctx, filters, cache)?;
+                }
+                Ok(())
+            }
+
+            ExecutionPlan::Parallel(branches) => execute_parallel(branches, ctx, filters, cache),
+
+            ExecutionPlan::Loop {
+                node_id,
+                body,
+                max_iterations,
+            } => {
+                let max = max_iterations.unwrap_or(100);
+                for i in 0..max {
+                    body.execute(ctx, filters, cache)?;
+
+                    // Check termination: if the last executed node produced a Value
+                    // that indicates "done" (true, "done", "stop", or empty), break.
+                    let should_stop = ctx
+                        .execution_order
+                        .last()
+                        .and_then(|last_id| ctx.get(last_id))
+                        .map(|v| match v {
+                            Value::Json(j) => {
+                                j.as_bool() == Some(true)
+                                    || j.as_str().map(|s| s == "done" || s == "stop") == Some(true)
+                                    || j.get("done").and_then(|d| d.as_bool()) == Some(true)
+                            }
+                            Value::Empty => true,
+                            _ => false,
+                        })
+                        .unwrap_or(false);
+
+                    if should_stop {
+                        ctx.event_bus.emit(Event::NodeCompleted {
+                            run_id: ctx.run_id.clone(),
+                            node_id: node_id.clone(),
+                            duration: std::time::Duration::ZERO,
+                            output_summary: format!("Loop terminated at iteration {}", i + 1),
+                        });
+                        break;
+                    }
+                }
+                Ok(())
+            }
+
+            ExecutionPlan::Branch { node_id, arms } => {
+                // Execute the branch node first (it produces the condition value)
+                execute_node(node_id, ctx, filters, cache)?;
+
+                // Get the condition result
+                let condition = ctx.get(node_id).cloned().unwrap_or(Value::Empty);
+
+                // Match against arm labels
+                let selected_arm = match &condition {
+                    Value::Json(j) => {
+                        // Try matching by string value, bool, or "branch" field
+                        let selector = j
+                            .as_str()
+                            .map(String::from)
+                            .or_else(|| j.as_bool().map(|b| b.to_string()))
+                            .or_else(|| j.get("branch").and_then(|b| b.as_str()).map(String::from))
+                            .unwrap_or_else(|| "true".to_string());
+
+                        arms.iter()
+                            .find(|(label, _)| label == &selector)
+                            .or_else(|| {
+                                arms.iter()
+                                    .find(|(label, _)| label == "default" || label == "else")
+                            })
+                            .or_else(|| arms.first())
+                    }
+                    _ => arms.first(),
+                };
+
+                if let Some((label, plan)) = selected_arm {
+                    ctx.event_bus.emit(Event::NodeCompleted {
+                        run_id: ctx.run_id.clone(),
+                        node_id: node_id.clone(),
+                        duration: std::time::Duration::ZERO,
+                        output_summary: format!("Branch selected: {label}"),
+                    });
+                    plan.execute(ctx, filters, cache)?;
+                }
+                Ok(())
+            }
+
+            ExecutionPlan::Remote {
+                node_id,
+                target,
+                plan,
+            } => {
+                if let Some(remote) = &ctx.remote_executor {
+                    // Gather input from predecessors
+                    let input = ctx
+                        .graph_info
+                        .predecessors(node_id)
+                        .first()
+                        .and_then(|pred| ctx.get(pred));
+
+                    let result = remote.execute_remote(node_id, target, input)?;
+                    ctx.set(node_id.clone(), result);
+                    ctx.execution_order.push(node_id.clone());
+                    Ok(())
+                } else {
+                    // No remote executor — fall back to local execution
+                    plan.execute(ctx, filters, cache)
+                }
+            }
+
+            ExecutionPlan::Composite { node_ids } => {
+                // Sequential fallback — execute each node in order.
+                // A future Python-aware executor will pass tensors directly.
+                for nid in node_ids {
+                    execute_node(nid, ctx, filters, cache)?;
+                }
+                Ok(())
+            }
+
+            _ => {
+                tracing::warn!("Unhandled ExecutionPlan variant");
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Execute a plan (convenience function, delegates to `Executable` trait).
 pub fn execute(
     plan: &ExecutionPlan,
     ctx: &mut Context,
     filters: &FilterLibrary,
     cache: &dyn CacheStore,
 ) -> Result<()> {
-    match plan {
-        ExecutionPlan::Empty => Ok(()),
-
-        ExecutionPlan::Execute { node_id } => execute_node(node_id, ctx, filters, cache),
-
-        ExecutionPlan::Cached { node_id, key } => {
-            let start = Instant::now();
-            let value = cache.get(key)?.ok_or_else(|| {
-                SomaError::Cache(format!(
-                    "expected cached value for node `{node_id}` not found"
-                ))
-            })?;
-            ctx.set(node_id.clone(), value);
-            ctx.event_bus.emit(Event::NodeCacheHit {
-                run_id: ctx.run_id.clone(),
-                node_id: node_id.clone(),
-                key: key.clone(),
-                tier: somatize_core::cache::CacheTier::Memory,
-                load_time: start.elapsed(),
-            });
-            Ok(())
-        }
-
-        ExecutionPlan::Sequence(steps) => {
-            for step in steps {
-                execute(step, ctx, filters, cache)?;
-            }
-            Ok(())
-        }
-
-        ExecutionPlan::Parallel(branches) => execute_parallel(branches, ctx, filters, cache),
-
-        ExecutionPlan::Loop {
-            node_id,
-            body,
-            max_iterations,
-        } => {
-            let max = max_iterations.unwrap_or(100);
-            for i in 0..max {
-                execute(body, ctx, filters, cache)?;
-
-                // Check termination: if the last executed node produced a Value
-                // that indicates "done" (true, "done", "stop", or empty), break.
-                let should_stop = ctx
-                    .execution_order
-                    .last()
-                    .and_then(|last_id| ctx.get(last_id))
-                    .map(|v| match v {
-                        Value::Json(j) => {
-                            j.as_bool() == Some(true)
-                                || j.as_str().map(|s| s == "done" || s == "stop") == Some(true)
-                                || j.get("done").and_then(|d| d.as_bool()) == Some(true)
-                        }
-                        Value::Empty => true,
-                        _ => false,
-                    })
-                    .unwrap_or(false);
-
-                if should_stop {
-                    ctx.event_bus.emit(Event::NodeCompleted {
-                        run_id: ctx.run_id.clone(),
-                        node_id: node_id.clone(),
-                        duration: std::time::Duration::ZERO,
-                        output_summary: format!("Loop terminated at iteration {}", i + 1),
-                    });
-                    break;
-                }
-            }
-            Ok(())
-        }
-
-        ExecutionPlan::Branch { node_id, arms } => {
-            // Execute the branch node first (it produces the condition value)
-            execute_node(node_id, ctx, filters, cache)?;
-
-            // Get the condition result
-            let condition = ctx.get(node_id).cloned().unwrap_or(Value::Empty);
-
-            // Match against arm labels
-            let selected_arm = match &condition {
-                Value::Json(j) => {
-                    // Try matching by string value, bool, or "branch" field
-                    let selector = j
-                        .as_str()
-                        .map(String::from)
-                        .or_else(|| j.as_bool().map(|b| b.to_string()))
-                        .or_else(|| j.get("branch").and_then(|b| b.as_str()).map(String::from))
-                        .unwrap_or_else(|| "true".to_string());
-
-                    arms.iter()
-                        .find(|(label, _)| label == &selector)
-                        .or_else(|| {
-                            arms.iter()
-                                .find(|(label, _)| label == "default" || label == "else")
-                        })
-                        .or_else(|| arms.first())
-                }
-                _ => arms.first(),
-            };
-
-            if let Some((label, plan)) = selected_arm {
-                ctx.event_bus.emit(Event::NodeCompleted {
-                    run_id: ctx.run_id.clone(),
-                    node_id: node_id.clone(),
-                    duration: std::time::Duration::ZERO,
-                    output_summary: format!("Branch selected: {label}"),
-                });
-                execute(plan, ctx, filters, cache)?;
-            }
-            Ok(())
-        }
-
-        ExecutionPlan::Remote {
-            node_id,
-            target,
-            plan,
-        } => {
-            if let Some(remote) = &ctx.remote_executor {
-                // Gather input from predecessors
-                let input = ctx
-                    .graph_info
-                    .predecessors(node_id)
-                    .first()
-                    .and_then(|pred| ctx.get(pred));
-
-                let result = remote.execute_remote(node_id, target, input)?;
-                ctx.set(node_id.clone(), result);
-                ctx.execution_order.push(node_id.clone());
-                Ok(())
-            } else {
-                // No remote executor — fall back to local execution
-                execute(plan, ctx, filters, cache)
-            }
-        }
-
-        ExecutionPlan::Composite { node_ids } => {
-            // Sequential fallback — execute each node in order.
-            // A future Python-aware executor will pass tensors directly.
-            for nid in node_ids {
-                execute_node(nid, ctx, filters, cache)?;
-            }
-            Ok(())
-        }
-
-        _ => {
-            tracing::warn!("Unhandled ExecutionPlan variant");
-            Ok(())
-        }
-    }
+    plan.execute(ctx, filters, cache)
 }
 
 /// Execute a single filter node.

@@ -17,20 +17,24 @@ pub struct FittedFilter {
     pub state: Value,
 }
 
+/// Per-filter streaming state — one per filter in the pipeline.
+struct FilterStreamState {
+    /// Accumulated chunks for Barrier mode.
+    barrier_buffer: Vec<Value>,
+    /// Evolving state (mutated per chunk).
+    evolving_state: Option<Value>,
+}
+
 /// Processes a stream of chunks through a sequence of fitted filters.
 ///
-/// Respects each filter's StreamMode:
+/// Each filter's StreamMode defines its contract:
 /// - FixedState: each chunk processed independently, cacheable per chunk
 /// - Evolving: state mutates with each chunk, periodic checkpoints
-/// - Barrier: accumulates all chunks, processes as batch
+/// - Barrier: accumulates all chunks, processes as batch on flush
 pub struct StreamExecutor {
     filters: Vec<FittedFilter>,
     cache: Option<Arc<dyn CacheStore>>,
-    /// Accumulated chunks for Barrier filters (keyed by filter index).
-    barrier_buffers: Vec<Vec<Value>>,
-    /// Evolving states (keyed by filter index, mutated on each chunk).
-    evolving_states: Vec<Option<Value>>,
-    /// Chunk counter for checkpoint scheduling.
+    states: Vec<FilterStreamState>,
     chunk_count: usize,
 }
 
@@ -40,8 +44,12 @@ impl StreamExecutor {
         Self {
             filters,
             cache: None,
-            barrier_buffers: vec![Vec::new(); n],
-            evolving_states: vec![None; n],
+            states: (0..n)
+                .map(|_| FilterStreamState {
+                    barrier_buffer: Vec::new(),
+                    evolving_state: None,
+                })
+                .collect(),
             chunk_count: 0,
         }
     }
@@ -52,30 +60,23 @@ impl StreamExecutor {
     }
 
     /// Process a single chunk through the pipeline.
-    ///
     /// Returns the output chunk, or None if a Barrier filter is still accumulating.
     pub fn process_chunk(&mut self, chunk: Value) -> Result<Option<Value>> {
         let mut current = chunk;
         self.chunk_count += 1;
 
-        let n = self.filters.len();
-        for i in 0..n {
+        for i in 0..self.filters.len() {
             let mode = self.filters[i].filter.meta().stream_mode;
-
-            match mode {
-                StreamMode::FixedState => {
-                    current = self.process_fixed_state(i, &current)?;
-                }
-                StreamMode::Evolving { checkpoint_every } => {
-                    current = self.process_evolving(i, &current, checkpoint_every)?;
-                }
-                StreamMode::Barrier => {
-                    self.barrier_buffers[i].push(current);
-                    return Ok(None);
-                }
-                _ => {
-                    current = self.process_fixed_state(i, &current)?;
-                }
+            match process_by_mode(
+                &mode,
+                &self.filters[i],
+                &current,
+                &mut self.states[i],
+                self.cache.as_deref(),
+                self.chunk_count,
+            )? {
+                ChunkResult::Output(val) => current = val,
+                ChunkResult::Buffered => return Ok(None),
             }
         }
 
@@ -83,27 +84,19 @@ impl StreamExecutor {
     }
 
     /// Flush barrier filters and process remaining data as batch.
-    ///
-    /// Call this after the stream ends to materialize barrier outputs.
     pub fn flush(&mut self) -> Result<Option<Value>> {
         let mut current: Option<Value> = None;
-        let n = self.filters.len();
 
-        for i in 0..n {
+        for i in 0..self.filters.len() {
             let mode = self.filters[i].filter.meta().stream_mode;
-
-            if mode == StreamMode::Barrier && !self.barrier_buffers[i].is_empty() {
-                let materialized = self.materialize_buffer(i)?;
-                let result = self.filters[i]
-                    .filter
-                    .forward(&materialized, &self.filters[i].state)?;
-                self.barrier_buffers[i].clear();
-                current = Some(result);
+            if let Some(val) = flush_by_mode(&mode, &self.filters[i], &mut self.states[i])? {
+                current = Some(val);
             } else if let Some(val) = current.take() {
-                let result = self.filters[i]
-                    .filter
-                    .forward(&val, &self.filters[i].state)?;
-                current = Some(result);
+                current = Some(
+                    self.filters[i]
+                        .filter
+                        .forward(&val, &self.filters[i].state)?,
+                );
             }
         }
 
@@ -113,18 +106,14 @@ impl StreamExecutor {
     /// Process multiple chunks and collect outputs.
     pub fn process_all(&mut self, chunks: Vec<Value>) -> Result<Vec<Value>> {
         let mut outputs = Vec::new();
-
         for chunk in chunks {
             if let Some(output) = self.process_chunk(chunk)? {
                 outputs.push(output);
             }
         }
-
-        // Flush any barrier buffers
         if let Some(flushed) = self.flush()? {
             outputs.push(flushed);
         }
-
         Ok(outputs)
     }
 
@@ -132,100 +121,134 @@ impl StreamExecutor {
     pub fn chunks_processed(&self) -> usize {
         self.chunk_count
     }
+}
 
-    fn process_fixed_state(&self, filter_idx: usize, input: &Value) -> Result<Value> {
-        let fitted = &self.filters[filter_idx];
+/// Result of processing a chunk through one filter.
+enum ChunkResult {
+    /// Filter produced output — pass to next filter.
+    Output(Value),
+    /// Filter is buffering (Barrier) — no output yet.
+    Buffered,
+}
 
-        // Try cache
-        if let Some(cache) = &self.cache {
-            let chunk_hash = CacheKey::hash_data(&serde_json::to_vec(input).unwrap_or_default());
-            let cache_key = CacheKey::for_output(
-                &fitted.filter.config_hash(),
-                &CacheKey::hash_data(&serde_json::to_vec(&fitted.state).unwrap_or_default()),
-                &chunk_hash,
-            );
-            if let Some(cached) = cache.get(&cache_key)? {
-                return Ok(cached);
-            }
-            let result = fitted.filter.forward(input, &fitted.state)?;
-            let _ = cache.put(&cache_key, &result);
-            return Ok(result);
+// ── StreamMode dispatch ──
+
+/// Process one chunk according to the stream mode.
+fn process_by_mode(
+    mode: &StreamMode,
+    fitted: &FittedFilter,
+    input: &Value,
+    state: &mut FilterStreamState,
+    cache: Option<&dyn CacheStore>,
+    chunk_count: usize,
+) -> Result<ChunkResult> {
+    match mode {
+        StreamMode::FixedState => {
+            let result = forward_cached(fitted, input, cache)?;
+            Ok(ChunkResult::Output(result))
         }
+        StreamMode::Evolving { checkpoint_every } => {
+            let filter_state = state.evolving_state.as_ref().unwrap_or(&fitted.state);
+            let result = fitted.filter.forward(input, filter_state)?;
+            state.evolving_state = Some(result.clone());
 
-        fitted.filter.forward(input, &fitted.state)
+            if *checkpoint_every > 0
+                && chunk_count.is_multiple_of(*checkpoint_every)
+                && let Some(c) = cache
+            {
+                let key = CacheKey::from_parts(&[
+                    b"checkpoint",
+                    fitted.name.as_bytes(),
+                    &(chunk_count as u64).to_le_bytes(),
+                ]);
+                let _ = c.put(&key, &result);
+            }
+            Ok(ChunkResult::Output(result))
+        }
+        StreamMode::Barrier => {
+            state.barrier_buffer.push(input.clone());
+            Ok(ChunkResult::Buffered)
+        }
+        _ => {
+            // Default: treat as FixedState
+            let result = forward_cached(fitted, input, cache)?;
+            Ok(ChunkResult::Output(result))
+        }
+    }
+}
+
+/// Flush a filter by mode. Only Barrier has work to do.
+fn flush_by_mode(
+    mode: &StreamMode,
+    fitted: &FittedFilter,
+    state: &mut FilterStreamState,
+) -> Result<Option<Value>> {
+    match mode {
+        StreamMode::Barrier if !state.barrier_buffer.is_empty() => {
+            let materialized = materialize_buffer(&state.barrier_buffer)?;
+            state.barrier_buffer.clear();
+            let result = fitted.filter.forward(&materialized, &fitted.state)?;
+            Ok(Some(result))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Forward with optional cache lookup.
+fn forward_cached(
+    fitted: &FittedFilter,
+    input: &Value,
+    cache: Option<&dyn CacheStore>,
+) -> Result<Value> {
+    if let Some(c) = cache {
+        let chunk_hash = CacheKey::hash_data(&serde_json::to_vec(input).unwrap_or_default());
+        let state_hash =
+            CacheKey::hash_data(&serde_json::to_vec(&fitted.state).unwrap_or_default());
+        let cache_key =
+            CacheKey::for_output(&fitted.filter.config_hash(), &state_hash, &chunk_hash);
+        if let Some(cached) = c.get(&cache_key)? {
+            return Ok(cached);
+        }
+        let result = fitted.filter.forward(input, &fitted.state)?;
+        let _ = c.put(&cache_key, &result);
+        return Ok(result);
+    }
+    fitted.filter.forward(input, &fitted.state)
+}
+
+/// Concatenate tensor chunks along first dimension.
+fn materialize_buffer(buffer: &[Value]) -> Result<Value> {
+    if buffer.is_empty() {
+        return Ok(Value::Empty);
+    }
+    let mut all_data = Vec::new();
+    let mut total_rows = 0;
+    let mut cols = 0;
+
+    for chunk in buffer {
+        match chunk {
+            Value::Tensor { values, shape } => {
+                all_data.extend(values);
+                if shape.len() == 1 {
+                    total_rows += shape[0];
+                    cols = 1;
+                } else if shape.len() >= 2 {
+                    total_rows += shape[0];
+                    cols = shape[1];
+                }
+            }
+            _ => {
+                return Err(SomaError::Other(
+                    "barrier buffer contains non-tensor values".into(),
+                ));
+            }
+        }
     }
 
-    fn process_evolving(
-        &mut self,
-        filter_idx: usize,
-        input: &Value,
-        checkpoint_every: usize,
-    ) -> Result<Value> {
-        let fitted = &self.filters[filter_idx];
-
-        // Use evolving state if available, else initial state
-        let state = self.evolving_states[filter_idx]
-            .as_ref()
-            .unwrap_or(&fitted.state);
-
-        let result = fitted.filter.forward(input, state)?;
-
-        // For evolving: the output becomes the new state for next chunk
-        // (simplified model: state = last output)
-        self.evolving_states[filter_idx] = Some(result.clone());
-
-        // Checkpoint
-        if checkpoint_every > 0
-            && self.chunk_count.is_multiple_of(checkpoint_every)
-            && let Some(cache) = &self.cache
-        {
-            let checkpoint_key = CacheKey::from_parts(&[
-                b"checkpoint",
-                fitted.name.as_bytes(),
-                &(self.chunk_count as u64).to_le_bytes(),
-            ]);
-            let _ = cache.put(&checkpoint_key, &result);
-        }
-
-        Ok(result)
-    }
-
-    fn materialize_buffer(&self, filter_idx: usize) -> Result<Value> {
-        let buffer = &self.barrier_buffers[filter_idx];
-        if buffer.is_empty() {
-            return Ok(Value::Empty);
-        }
-
-        // Concatenate tensor chunks along first dimension
-        let mut all_data = Vec::new();
-        let mut total_rows = 0;
-        let mut cols = 0;
-
-        for chunk in buffer {
-            match chunk {
-                Value::Tensor { values, shape } => {
-                    all_data.extend(values);
-                    if shape.len() == 1 {
-                        total_rows += shape[0];
-                        cols = 1;
-                    } else if shape.len() >= 2 {
-                        total_rows += shape[0];
-                        cols = shape[1];
-                    }
-                }
-                _ => {
-                    return Err(SomaError::Other(
-                        "barrier buffer contains non-tensor values".into(),
-                    ));
-                }
-            }
-        }
-
-        if cols <= 1 {
-            Ok(Value::tensor(all_data, vec![total_rows]))
-        } else {
-            Ok(Value::tensor(all_data, vec![total_rows, cols]))
-        }
+    if cols <= 1 {
+        Ok(Value::tensor(all_data, vec![total_rows]))
+    } else {
+        Ok(Value::tensor(all_data, vec![total_rows, cols]))
     }
 }
 
@@ -233,25 +256,24 @@ impl StreamExecutor {
 mod tests {
     use super::*;
     use somatize_core::cache::CacheKey;
-    use somatize_core::filter::{FilterKind, FilterMeta};
-
-    // ── Test filters ──
+    use somatize_core::error::Result as SomaResult;
+    use somatize_core::filter::{Distribution, FilterKind, FilterMeta};
 
     struct DoubleChunk;
+
     impl Filter for DoubleChunk {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"DoubleChunk"])
         }
-        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> {
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
             Ok(Value::Empty)
         }
-        fn forward(&self, x: &Value, _: &Value) -> Result<Value> {
-            match x {
-                Value::Tensor { values, shape } => Ok(Value::tensor(
-                    values.iter().map(|v| v * 2.0).collect(),
-                    shape.clone(),
-                )),
-                _ => Ok(x.clone()),
+        fn forward(&self, x: &Value, _state: &Value) -> SomaResult<Value> {
+            if let Value::Tensor { values, shape } = x {
+                let doubled: Vec<f64> = values.iter().map(|v| v * 2.0).collect();
+                Ok(Value::tensor(doubled, shape.clone()))
+            } else {
+                Ok(x.clone())
             }
         }
         fn meta(&self) -> FilterMeta {
@@ -259,67 +281,66 @@ mod tests {
                 name: "DoubleChunk".into(),
                 kind: FilterKind::Stateless,
                 cacheable: true,
-                differentiable: true,
+                differentiable: false,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
         }
-
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
     }
 
     struct Accumulator;
+
     impl Filter for Accumulator {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Accumulator"])
         }
-        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> {
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
             Ok(Value::Empty)
         }
-        fn forward(&self, x: &Value, _: &Value) -> Result<Value> {
-            // For barrier: receives concatenated tensor, computes mean
-            match x {
-                Value::Tensor { values, shape: _ } => {
-                    let mean = values.iter().sum::<f64>() / values.len() as f64;
-                    Ok(Value::tensor(vec![mean], vec![1]))
-                }
-                _ => Ok(x.clone()),
-            }
+        fn forward(&self, x: &Value, _state: &Value) -> SomaResult<Value> {
+            Ok(x.clone())
         }
         fn meta(&self) -> FilterMeta {
             FilterMeta {
                 name: "Accumulator".into(),
-                kind: FilterKind::Trainable,
+                kind: FilterKind::Stateless,
                 cacheable: false,
                 differentiable: false,
                 stream_mode: StreamMode::Barrier,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
         }
-
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
     }
 
     struct RunningSum;
+
     impl Filter for RunningSum {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"RunningSum"])
         }
-        fn fit(&self, _: &Value, _: Option<&Value>) -> Result<Value> {
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
             Ok(Value::tensor(vec![0.0], vec![1]))
         }
-        fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
-            let x_val = x.as_tensor().map(|(d, _)| d[0]).unwrap_or(0.0);
-            let s_val = state.as_tensor().map(|(d, _)| d[0]).unwrap_or(0.0);
-            Ok(Value::tensor(vec![x_val + s_val], vec![1]))
+        fn forward(&self, x: &Value, state: &Value) -> SomaResult<Value> {
+            let x_sum: f64 = match x {
+                Value::Tensor { values, .. } => values.iter().sum(),
+                _ => 0.0,
+            };
+            let state_sum: f64 = match state {
+                Value::Tensor { values, .. } => values.first().copied().unwrap_or(0.0),
+                _ => 0.0,
+            };
+            Ok(Value::tensor(vec![x_sum + state_sum], vec![1]))
         }
         fn meta(&self) -> FilterMeta {
             FilterMeta {
@@ -328,186 +349,138 @@ mod tests {
                 cacheable: false,
                 differentiable: false,
                 stream_mode: StreamMode::Evolving {
-                    checkpoint_every: 3,
+                    checkpoint_every: 2,
                 },
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
         }
-
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
     }
 
-    // ── Tests ──
+    fn make_fitted(filter: impl Filter + 'static, state: Value) -> FittedFilter {
+        let name = filter.meta().name.clone();
+        FittedFilter {
+            name,
+            filter: Arc::new(filter),
+            state,
+        }
+    }
 
     #[test]
     fn fixed_state_processes_each_chunk() {
-        let mut executor = StreamExecutor::new(vec![FittedFilter {
-            name: "double".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Value::Empty,
-        }]);
+        let f = make_fitted(DoubleChunk, Value::Empty);
+        let mut exec = StreamExecutor::new(vec![f]);
 
-        let chunks = vec![
-            Value::tensor(vec![1.0, 2.0], vec![2]),
-            Value::tensor(vec![3.0, 4.0], vec![2]),
-            Value::tensor(vec![5.0], vec![1]),
-        ];
+        let out1 = exec
+            .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
+            .unwrap();
+        assert_eq!(out1, Some(Value::tensor(vec![2.0, 4.0], vec![2])));
 
-        let outputs = executor.process_all(chunks).unwrap();
-        assert_eq!(outputs.len(), 3);
-
-        let (d0, _) = outputs[0].as_tensor().unwrap();
-        assert_eq!(d0, &[2.0, 4.0]);
-        let (d1, _) = outputs[1].as_tensor().unwrap();
-        assert_eq!(d1, &[6.0, 8.0]);
-        let (d2, _) = outputs[2].as_tensor().unwrap();
-        assert_eq!(d2, &[10.0]);
+        let out2 = exec
+            .process_chunk(Value::tensor(vec![3.0], vec![1]))
+            .unwrap();
+        assert_eq!(out2, Some(Value::tensor(vec![6.0], vec![1])));
     }
 
     #[test]
     fn barrier_accumulates_then_flushes() {
-        let mut executor = StreamExecutor::new(vec![FittedFilter {
-            name: "acc".into(),
-            filter: Arc::new(Accumulator),
-            state: Value::Empty,
-        }]);
+        let f = make_fitted(Accumulator, Value::Empty);
+        let mut exec = StreamExecutor::new(vec![f]);
 
-        // Process chunks: barrier should return None for each
-        assert!(
-            executor
-                .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            executor
-                .process_chunk(Value::tensor(vec![3.0, 4.0], vec![2]))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            executor
-                .process_chunk(Value::tensor(vec![5.0, 6.0], vec![2]))
-                .unwrap()
-                .is_none()
-        );
+        let r1 = exec
+            .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
+            .unwrap();
+        assert_eq!(r1, None);
 
-        // Flush: should materialize and compute mean of [1,2,3,4,5,6]
-        let result = executor.flush().unwrap().unwrap();
-        let (data, _) = result.as_tensor().unwrap();
-        assert!((data[0] - 3.5).abs() < 0.01); // mean of 1..6
+        let r2 = exec
+            .process_chunk(Value::tensor(vec![3.0, 4.0], vec![2]))
+            .unwrap();
+        assert_eq!(r2, None);
+
+        let flushed = exec.flush().unwrap().unwrap();
+        let (data, shape) = flushed.as_tensor().unwrap();
+        assert_eq!(data, &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(shape, &[4]);
     }
 
     #[test]
     fn evolving_state_accumulates() {
-        let mut executor = StreamExecutor::new(vec![FittedFilter {
-            name: "sum".into(),
-            filter: Arc::new(RunningSum),
-            state: Value::tensor(vec![0.0], vec![1]), // initial sum = 0
-        }]);
+        let f = make_fitted(RunningSum, Value::tensor(vec![0.0], vec![1]));
+        let mut exec = StreamExecutor::new(vec![f]);
 
-        let r1 = executor
+        let r1 = exec
+            .process_chunk(Value::tensor(vec![10.0], vec![1]))
+            .unwrap()
+            .unwrap();
+        let (d1, _) = r1.as_tensor().unwrap();
+        assert_eq!(d1, &[10.0]);
+
+        let r2 = exec
             .process_chunk(Value::tensor(vec![5.0], vec![1]))
             .unwrap()
             .unwrap();
-        assert_eq!(r1.as_tensor().unwrap().0, &[5.0]); // 0+5=5
-
-        let r2 = executor
-            .process_chunk(Value::tensor(vec![3.0], vec![1]))
-            .unwrap()
-            .unwrap();
-        assert_eq!(r2.as_tensor().unwrap().0, &[8.0]); // 5+3=8
-
-        let r3 = executor
-            .process_chunk(Value::tensor(vec![2.0], vec![1]))
-            .unwrap()
-            .unwrap();
-        assert_eq!(r3.as_tensor().unwrap().0, &[10.0]); // 8+2=10
+        let (d2, _) = r2.as_tensor().unwrap();
+        assert_eq!(d2, &[15.0]); // 10 + 5
     }
 
     #[test]
     fn mixed_pipeline_fixed_then_barrier() {
-        let mut executor = StreamExecutor::new(vec![
-            FittedFilter {
-                name: "double".into(),
-                filter: Arc::new(DoubleChunk),
-                state: Value::Empty,
-            },
-            FittedFilter {
-                name: "acc".into(),
-                filter: Arc::new(Accumulator),
-                state: Value::Empty,
-            },
-        ]);
+        let f1 = make_fitted(DoubleChunk, Value::Empty);
+        let f2 = make_fitted(Accumulator, Value::Empty);
+        let mut exec = StreamExecutor::new(vec![f1, f2]);
 
-        let chunks = vec![
-            Value::tensor(vec![1.0], vec![1]),
-            Value::tensor(vec![2.0], vec![1]),
-            Value::tensor(vec![3.0], vec![1]),
-        ];
+        let r1 = exec
+            .process_chunk(Value::tensor(vec![1.0], vec![1]))
+            .unwrap();
+        assert_eq!(r1, None); // barrier
 
-        let outputs = executor.process_all(chunks).unwrap();
-        // DoubleChunk doubles: [2,4,6]. Accumulator sees barrier after double.
-        // After flush: mean of [2,4,6] = 4.0
-        assert_eq!(outputs.len(), 1);
-        let (data, _) = outputs[0].as_tensor().unwrap();
-        assert!((data[0] - 4.0).abs() < 0.01);
+        let r2 = exec
+            .process_chunk(Value::tensor(vec![2.0], vec![1]))
+            .unwrap();
+        assert_eq!(r2, None);
+
+        let flushed = exec.flush().unwrap().unwrap();
+        let (data, _) = flushed.as_tensor().unwrap();
+        assert_eq!(data, &[2.0, 4.0]); // doubled then accumulated
+    }
+
+    #[test]
+    fn process_all_combines_chunks() {
+        let f = make_fitted(DoubleChunk, Value::Empty);
+        let mut exec = StreamExecutor::new(vec![f]);
+
+        let outputs = exec
+            .process_all(vec![
+                Value::tensor(vec![1.0], vec![1]),
+                Value::tensor(vec![2.0], vec![1]),
+                Value::tensor(vec![3.0], vec![1]),
+            ])
+            .unwrap();
+
+        assert_eq!(outputs.len(), 3);
+        let (d, _) = outputs[0].as_tensor().unwrap();
+        assert_eq!(d, &[2.0]);
     }
 
     #[test]
     fn fixed_state_with_cache() {
+        let f = make_fitted(DoubleChunk, Value::Empty);
         let cache = Arc::new(crate::MemoryCache::default());
-        let mut executor = StreamExecutor::new(vec![FittedFilter {
-            name: "double".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Value::Empty,
-        }])
-        .with_cache(cache.clone());
+        let mut exec = StreamExecutor::new(vec![f]).with_cache(cache);
 
-        let chunk = Value::tensor(vec![7.0], vec![1]);
-
-        // First call: cache miss
-        let r1 = executor.process_chunk(chunk.clone()).unwrap().unwrap();
-        assert_eq!(r1.as_tensor().unwrap().0, &[14.0]);
-        assert!(!cache.is_empty()); // cached
-
-        // Second call with same chunk: cache hit
-        let r2 = executor.process_chunk(chunk).unwrap().unwrap();
-        assert_eq!(r2.as_tensor().unwrap().0, &[14.0]);
-    }
-
-    #[test]
-    fn chunks_processed_counter() {
-        let mut executor = StreamExecutor::new(vec![FittedFilter {
-            name: "double".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Value::Empty,
-        }]);
-
-        assert_eq!(executor.chunks_processed(), 0);
-        executor
-            .process_chunk(Value::tensor(vec![1.0], vec![1]))
+        let r1 = exec
+            .process_chunk(Value::tensor(vec![5.0], vec![1]))
+            .unwrap()
             .unwrap();
-        assert_eq!(executor.chunks_processed(), 1);
-        executor
-            .process_chunk(Value::tensor(vec![2.0], vec![1]))
+        // Second call with same input should hit cache
+        let r2 = exec
+            .process_chunk(Value::tensor(vec![5.0], vec![1]))
+            .unwrap()
             .unwrap();
-        assert_eq!(executor.chunks_processed(), 2);
-    }
-
-    #[test]
-    fn empty_stream() {
-        let mut executor = StreamExecutor::new(vec![FittedFilter {
-            name: "double".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Value::Empty,
-        }]);
-
-        let outputs = executor.process_all(vec![]).unwrap();
-        assert!(outputs.is_empty());
+        assert_eq!(r1, r2);
     }
 }
