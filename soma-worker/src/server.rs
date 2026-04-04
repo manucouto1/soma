@@ -310,92 +310,14 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                             .await;
                         std::process::exit(0);
                     }
-                    #[cfg(feature = "pyo3")]
-                    Ok(CoordinatorToWorker::GetState {
-                        plan_id, node_ids, ..
-                    }) => {
-                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        let mut states = std::collections::HashMap::new();
-                        for nid in &node_ids {
-                            if let Some(filter) = worker.get_filter(nid)
-                                && let Some(embedded) = filter
-                                    .as_any()
-                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
-                                )
-                                && let Ok(s) = embedded.get_state()
-                            {
-                                states.insert(nid.clone(), s);
-                            }
-                        }
-                        let msg = WorkerToCoordinator::StateResult {
-                            worker_id: worker.id.clone(),
-                            plan_id,
-                            states,
-                        };
-                        serde_json::to_string(&msg).unwrap_or_default()
-                    }
-                    #[cfg(feature = "pyo3")]
-                    Ok(CoordinatorToWorker::SetState { states, .. }) => {
-                        let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        for (nid, s) in &states {
-                            if let Some(filter) = worker.get_filter(nid)
-                                && let Some(embedded) = filter
-                                    .as_any()
-                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
-                                )
-                            {
-                                let _ = embedded.set_state(s);
-                            }
-                            worker.set_filter_state(nid, s.clone());
-                        }
-                        r#"{"type":"Ok"}"#.to_string()
-                    }
-                    #[cfg(feature = "pyo3")]
-                    Ok(CoordinatorToWorker::GetGradients {
-                        plan_id, node_ids, ..
-                    }) => {
-                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        let mut gradients = std::collections::HashMap::new();
-                        for nid in &node_ids {
-                            if let Some(filter) = worker.get_filter(nid)
-                                && let Some(embedded) = filter
-                                    .as_any()
-                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
-                                )
-                                && let Ok(g) = embedded.get_gradients()
-                            {
-                                gradients.insert(nid.clone(), g);
-                            }
-                        }
-                        let msg = WorkerToCoordinator::GradientsResult {
-                            worker_id: worker.id.clone(),
-                            plan_id,
-                            gradients,
-                        };
-                        serde_json::to_string(&msg).unwrap_or_default()
-                    }
-                    #[cfg(feature = "pyo3")]
-                    Ok(CoordinatorToWorker::ApplyGradients { gradients, .. }) => {
-                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        for (nid, g) in &gradients {
-                            if let Some(filter) = worker.get_filter(nid)
-                                && let Some(embedded) = filter
-                                    .as_any()
-                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
-                                )
-                            {
-                                let _ = embedded.apply_gradients(g);
-                            }
-                        }
-                        r#"{"type":"Ok"}"#.to_string()
-                    }
-                    #[cfg(not(feature = "pyo3"))]
                     Ok(
                         CoordinatorToWorker::GetState { .. }
                         | CoordinatorToWorker::SetState { .. }
                         | CoordinatorToWorker::GetGradients { .. }
                         | CoordinatorToWorker::ApplyGradients { .. },
-                    ) => r#"{"error":"requires pyo3 feature"}"#.to_string(),
+                    ) => {
+                        r#"{"error":"get_state/set_state/get_gradients/apply_gradients not yet implemented for SubprocessFilter"}"#.to_string()
+                    }
                     Err(e) => {
                         format!(r#"{{"error": "invalid message: {e}"}}"#)
                     }
@@ -437,26 +359,30 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
             // Build StreamExecutor from the plan's filters
             let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
 
-            // Register filters via EmbeddedPyFilter
-            for sf in &plan.filters {
-                #[cfg(feature = "pyo3")]
-                let filter: Box<dyn somatize_core::filter::Filter> = Box::new(
-                    crate::py_filter::EmbeddedPyFilter::new(
-                        &sf.pickled_filter,
-                        sf.node_id.clone(),
-                        sf.trainable,
-                        None,
-                    )
-                    .expect("EmbeddedPyFilter creation failed"),
-                );
-                #[cfg(not(feature = "pyo3"))]
-                let filter: Box<dyn somatize_core::filter::Filter> = {
-                    let _ = (&sf.pickled_filter, &sf.node_id, sf.trainable);
-                    panic!("Python filter execution requires the 'pyo3' feature")
-                };
-                worker.register_filter(&sf.node_id, filter);
-                if let Some(s) = &sf.state {
-                    worker.set_filter_state(&sf.node_id, s.clone());
+            // Register filters via SubprocessFilter backed by a shared PythonProcess
+            let filter_specs: Vec<(String, Vec<u8>, bool)> = plan
+                .filters
+                .iter()
+                .map(|sf| (sf.node_id.clone(), sf.pickled_filter.clone(), sf.trainable))
+                .collect();
+
+            if !filter_specs.is_empty() {
+                let process = Arc::new(std::sync::Mutex::new(
+                    crate::python_process::PythonProcess::spawn("python3", &filter_specs)
+                        .expect("PythonProcess spawn failed"),
+                ));
+
+                for sf in &plan.filters {
+                    let filter: Box<dyn somatize_core::filter::Filter> =
+                        Box::new(crate::python_process::SubprocessFilter::new(
+                            process.clone(),
+                            sf.node_id.clone(),
+                            sf.trainable,
+                        ));
+                    worker.register_filter(&sf.node_id, filter);
+                    if let Some(s) = &sf.state {
+                        worker.set_filter_state(&sf.node_id, s.clone());
+                    }
                 }
             }
 
