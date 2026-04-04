@@ -620,6 +620,53 @@ struct PyGraph {
 }
 
 impl PyGraph {
+    /// Split a Value into batches along the first axis.
+    /// For Tensor: splits rows. For Json dict with lists: splits list values.
+    fn split_value_into_batches(value: &Value, batch_size: usize) -> Vec<Value> {
+        match value {
+            Value::Tensor { values, shape } if !shape.is_empty() && shape[0] > batch_size => {
+                let rows = shape[0];
+                let row_size: usize = shape[1..].iter().product::<usize>().max(1);
+                let mut batches = Vec::new();
+                for start in (0..rows).step_by(batch_size) {
+                    let end = (start + batch_size).min(rows);
+                    let flat_start = start * row_size;
+                    let flat_end = end * row_size;
+                    let batch_vals = values[flat_start..flat_end].to_vec();
+                    let mut batch_shape = shape.clone();
+                    batch_shape[0] = end - start;
+                    batches.push(Value::tensor(batch_vals, batch_shape));
+                }
+                batches
+            }
+            Value::Json(serde_json::Value::Object(map)) => {
+                let total = map
+                    .values()
+                    .find_map(|v| v.as_array().map(|a| a.len()))
+                    .unwrap_or(0);
+                if total <= batch_size {
+                    return vec![value.clone()];
+                }
+                let mut batches = Vec::new();
+                for start in (0..total).step_by(batch_size) {
+                    let end = (start + batch_size).min(total);
+                    let mut batch_map = serde_json::Map::new();
+                    for (k, v) in map {
+                        if let Some(arr) = v.as_array() {
+                            let slice = arr[start..end.min(arr.len())].to_vec();
+                            batch_map.insert(k.clone(), serde_json::Value::Array(slice));
+                        } else {
+                            batch_map.insert(k.clone(), v.clone());
+                        }
+                    }
+                    batches.push(Value::Json(serde_json::Value::Object(batch_map)));
+                }
+                batches
+            }
+            _ => vec![value.clone()],
+        }
+    }
+
     /// Build a transport from the first registered worker (if any).
     fn make_transport(&self) -> Option<Arc<dyn somatize_runtime::runner::Transport>> {
         if self.workers.is_empty() {
@@ -1214,15 +1261,19 @@ impl PyGraph {
 
     /// Fit all trainable filters in topological order.
     ///
+    /// If `batch_size` is set, the input is split into batches and each batch
+    /// is processed through the entire pipeline (encoder → classifier) before
+    /// moving to the next. This keeps memory bounded.
+    ///
     /// If workers are registered and no node forces local, training is
-    /// dispatched to a remote worker. Trained states are returned and
-    /// stored locally so that subsequent forward() calls include them.
-    #[pyo3(signature = (x, y=None))]
+    /// dispatched to a remote worker.
+    #[pyo3(signature = (x, y=None, batch_size=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
         x: &Bound<'_, pyo3::types::PyAny>,
         y: Option<&Bound<'_, pyo3::types::PyAny>>,
+        batch_size: Option<usize>,
     ) -> PyResult<()> {
         let x_val = py_to_value(py, x)?;
         let y_val = match y {
@@ -1233,6 +1284,28 @@ impl PyGraph {
         // Dispatch fit to worker if possible.
         // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
+            if let Some(bs) = batch_size {
+                // Batched fit: split input, dispatch each batch, accumulate states
+                let batches = Self::split_value_into_batches(&x_val, bs);
+                let y_batches = y_val
+                    .as_ref()
+                    .map(|yv| Self::split_value_into_batches(yv, bs));
+                let n_batches = batches.len();
+
+                for (i, batch) in batches.into_iter().enumerate() {
+                    let y_batch = y_batches.as_ref().and_then(|ybs| ybs.get(i).cloned());
+                    let mode = somatize_worker::protocol::ExecutionMode::Fit { y: y_batch };
+                    let result = py.allow_threads(|| self.dispatch_to_worker(&batch, mode));
+                    let (_output, states) = result?;
+                    for (node_id, state) in states {
+                        self.library.set_state(&node_id, state);
+                    }
+                    eprintln!("  Batch {}/{n_batches} complete", i + 1);
+                }
+                self.fitted = true;
+                return Ok(());
+            }
+
             let mode = somatize_worker::protocol::ExecutionMode::Fit { y: y_val.clone() };
             let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
             let (_output, states) = result?;
