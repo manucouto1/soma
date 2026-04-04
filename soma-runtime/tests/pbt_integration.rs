@@ -12,7 +12,7 @@ use somatize_runtime::EventBus;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::pbt_runner::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
+use somatize_runtime::runner::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
 use std::sync::Arc;
 
 /// Trainable scaler that learns mean from data.

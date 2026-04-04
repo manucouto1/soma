@@ -275,7 +275,7 @@ impl Worker {
         meta: &somatize_core::store::StoreMeta,
         start: Instant,
     ) -> PlanResult {
-        use somatize_runtime::stream::{FittedFilter, StreamExecutor};
+        use somatize_runtime::runner::stream::{FittedFilter, StreamExecutor};
 
         let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
         let fitted: Vec<FittedFilter> = node_ids

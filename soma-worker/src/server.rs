@@ -33,7 +33,7 @@ struct ServerState {
     /// Track upload times for automatic cleanup.
     temp_uploads: Mutex<HashMap<CacheKey, Instant>>,
     /// Active streaming sessions: stream_id → StreamExecutor.
-    active_streams: Mutex<HashMap<String, somatize_runtime::stream::StreamExecutor>>,
+    active_streams: Mutex<HashMap<String, somatize_runtime::runner::stream::StreamExecutor>>,
 }
 
 /// Build a worker server router (no authentication).
@@ -428,7 +428,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
 
 /// Handle a streaming protocol message. Returns an optional reply.
 fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option<StreamMessage> {
-    use somatize_runtime::stream::{FittedFilter, StreamExecutor};
+    use somatize_runtime::runner::stream::{FittedFilter, StreamExecutor};
 
     match msg {
         StreamMessage::StreamBegin {
