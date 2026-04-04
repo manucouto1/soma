@@ -113,7 +113,7 @@ impl Runner for LocalRunner {
 
         let last_output = outputs.values().last().cloned().unwrap_or(Value::Empty);
 
-        Ok((last_output, trained_states))
+        Ok((last_output, outputs))
     }
 
     fn forward(

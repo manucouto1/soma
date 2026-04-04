@@ -8,6 +8,7 @@ use crate::cache::MemoryCache;
 use crate::event_bus::EventBus;
 use crate::executor::{self, Context, GraphInfo, RemoteExecutor};
 use crate::filter_library::FilterLibrary;
+use crate::runner::Runner;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
@@ -111,102 +112,52 @@ impl GraphSession {
     }
 
     /// Fit all trainable filters in topological order.
-    ///
-    /// For each node in topo order:
-    /// 1. Resolve input from predecessors
-    /// 2. If trainable: call `fit(input, y)`, cache state, then `forward(input, state)`
-    /// 3. If stateless: call `forward(input, Empty)`
-    /// 4. Store output for downstream nodes
+    /// Delegates to LocalRunner — same execution path as remote workers.
     pub fn fit(&mut self, x: &Value, y: Option<&Value>) -> Result<HashMap<String, Value>> {
         self.graph.validate()?;
-        let sorted = self.graph.topological_sort()?;
-        let graph_info = GraphInfo::from_graph(&self.graph);
 
-        let run_id = timestamp_id("graph_fit");
-        let mut outputs: HashMap<String, Value> = HashMap::new();
+        let CompileResult { plan, .. } = compile(
+            &self.graph,
+            &self.library,
+            CompileMode::NoCache,
+            Some(self.cache.as_ref()),
+        )?;
 
-        // Set initial input for root nodes
-        let roots = self.graph.roots();
-        for root_id in &roots {
-            outputs.insert(format!("__input_{root_id}"), x.clone());
-        }
+        let runner = crate::runner::LocalRunner;
+        let (_last_output, all_outputs) = runner.fit(
+            &plan,
+            &self.library,
+            self.cache.as_ref(),
+            &self.event_bus,
+            x,
+            y,
+        )?;
 
-        for node_id in &sorted {
-            let filter = self
-                .library
-                .get(node_id)
-                .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
-
-            self.event_bus.emit(Event::NodeStarted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                kind: filter.meta().kind,
-            });
-
-            // Resolve input from predecessors
-            let preds = graph_info.predecessors(node_id);
-            let input = match preds.len() {
-                0 => x.clone(),
-                1 => outputs.get(&preds[0]).cloned().unwrap_or_else(|| x.clone()),
-                _ => {
-                    let mut merged = serde_json::Map::new();
-                    for pred_id in preds {
-                        if let Some(val) = outputs.get(pred_id.as_str()) {
-                            let json_val =
-                                serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
-                            merged.insert(pred_id.clone(), json_val);
-                        }
-                    }
-                    Value::Json(serde_json::Value::Object(merged))
-                }
-            };
-
-            let meta = filter.meta();
-            let start = std::time::Instant::now();
-
-            // Fit trainable filters, forward all
-            let (state, output) = if meta.kind == FilterKind::Trainable {
-                let data_hash =
-                    CacheKey::hash_data(&serde_json::to_vec(&input).unwrap_or_default());
+        // Store trained states in library for subsequent forward() calls
+        // LocalRunner caches in CacheStore but can't mutate FilterLibrary
+        for node_id in plan.node_ids() {
+            if let Some(filter) = self.library.get(node_id)
+                && filter.meta().kind == FilterKind::Trainable
+                && all_outputs.contains_key(node_id)
+            {
+                let data_hash = CacheKey::hash_data(&serde_json::to_vec(x).unwrap_or_default());
                 let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
-
-                let state = if let Some(cached) = self.cache.get(&state_key)? {
-                    cached
-                } else {
-                    let s = filter.fit(&input, y)?;
-                    self.cache.put(&state_key, &s)?;
-                    s
-                };
-
-                let output = filter.forward(&input, &state)?;
-                // Store state in library for later use by forward()
-                self.library.set_state(node_id.to_string(), state.clone());
-                (state, output)
-            } else {
-                let output = filter.forward(&input, &Value::Empty)?;
-                (Value::Empty, output)
-            };
-
-            let _ = state; // state already cached above
-
-            self.event_bus.emit(Event::NodeCompleted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                duration: start.elapsed(),
-                output_summary: format!("{output}"),
-            });
-
-            outputs.insert(node_id.to_string(), output);
+                if let Ok(Some(state)) = self.cache.get(&state_key) {
+                    self.library.set_state(node_id, state);
+                }
+            }
         }
 
         self.fitted = true;
-        Ok(outputs)
+        Ok(all_outputs)
     }
 
     /// Forward pass through the fitted graph (inference).
     ///
     /// Compiles in Inference mode and executes. Trainable filters
     /// use states cached during `fit()`.
+    /// Forward pass through the fitted graph (inference).
+    /// Delegates to LocalRunner — same execution path as remote workers.
     pub fn forward(&self, x: &Value) -> Result<Value> {
         let CompileResult { plan, .. } = compile(
             &self.graph,
@@ -215,42 +166,14 @@ impl GraphSession {
             Some(self.cache.as_ref()),
         )?;
 
-        let graph_info = GraphInfo::from_graph(&self.graph);
-        let mut ctx = Context::new(self.event_bus.clone(), timestamp_id("graph_forward"))
-            .with_graph_info(graph_info);
-
-        if let Some(store) = &self.data_store {
-            ctx = ctx.with_data_store(store.clone());
-        }
-        if let Some(remote) = &self.remote_executor {
-            ctx = ctx.with_remote_executor(remote.clone());
-        }
-
-        // Set input for root nodes
-        let roots = self.graph.roots();
-        if roots.len() == 1 {
-            ctx.set(format!("__input_{}", roots[0]), x.clone());
-        }
-        ctx.set("__input__", x.clone());
-
-        executor::execute(&plan, &mut ctx, &self.library, self.cache.as_ref())?;
-
-        // Return the last leaf's output
-        let leaves = self.graph.leaves();
-        let mut extract = |id: &str| -> Option<Value> {
-            ctx.store.remove(id).and_then(|vv| vv.as_value().cloned())
-        };
-
-        if let Some(leaf_id) = leaves.first() {
-            extract(leaf_id).ok_or_else(|| {
-                SomaError::Other(format!("leaf node '{leaf_id}' produced no output"))
-            })
-        } else {
-            ctx.execution_order
-                .last()
-                .and_then(|id| extract(id))
-                .ok_or_else(|| SomaError::Other("no output produced".into()))
-        }
+        let runner = crate::runner::LocalRunner;
+        runner.forward(
+            &plan,
+            &self.library,
+            self.cache.as_ref(),
+            &self.event_bus,
+            x,
+        )
     }
 
     /// Forward pass in batches from a DataStore reference.

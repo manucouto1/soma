@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// implements this trait. One interface, polymorphic dispatch.
 pub trait Runner: Send + Sync {
     /// Train: fit each filter, forward to propagate outputs.
-    /// Returns (last output, trained states per node).
+    /// Returns (last output, all node outputs).
     fn fit(
         &self,
         plan: &ExecutionPlan,
