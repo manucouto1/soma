@@ -5,6 +5,9 @@
 //! The worker's `RemoteRunner` prepares the environment and delegates to `LocalRunner`.
 
 pub mod local;
+pub mod pbt;
+pub mod stream;
+pub mod study;
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
@@ -43,3 +46,6 @@ pub trait Runner: Send + Sync {
 }
 
 pub use local::LocalRunner;
+pub use pbt::{FnPbtExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember};
+pub use stream::{FittedFilter, StreamExecutor};
+pub use study::{FnTrialExecutor, StudyRunner, TrialExecutor, TrialOutcome};
