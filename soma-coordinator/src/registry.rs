@@ -11,9 +11,9 @@
 //! 3. Routes client plan submissions to appropriate workers
 //! 4. Forwards worker events back to the client
 
-use crate::protocol::{Capabilities, LoadMetrics, WorkerId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use somatize_worker::protocol::{Capabilities, LoadMetrics, WorkerId};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -180,7 +180,7 @@ impl Default for WorkerRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::GpuInfo;
+    use somatize_worker::protocol::GpuInfo;
 
     fn test_caps(tags: Vec<String>) -> Capabilities {
         Capabilities {

@@ -2752,6 +2752,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "somatize-coordinator"
+version = "0.2.36"
+dependencies = [
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "somatize-compiler",
+ "somatize-core",
+ "somatize-worker",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "somatize-core"
 version = "0.2.36"
 dependencies = [

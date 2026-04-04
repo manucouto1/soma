@@ -6,9 +6,10 @@
 
 use crate::cache::MemoryCache;
 use crate::event_bus::EventBus;
-use crate::executor::{self, Context, GraphInfo, RemoteExecutor};
+use crate::executor::{self, Context, GraphInfo};
 use crate::filter_library::FilterLibrary;
 use crate::runner::Runner;
+use crate::runner::Transport;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
@@ -38,7 +39,7 @@ pub struct GraphSession {
     cache: Arc<dyn CacheStore>,
     event_bus: Arc<EventBus>,
     data_store: Option<Arc<dyn DataStore>>,
-    remote_executor: Option<Arc<dyn RemoteExecutor>>,
+    transport: Option<Arc<dyn Transport>>,
     fitted: bool,
 }
 
@@ -50,7 +51,7 @@ impl GraphSession {
             cache: Arc::new(MemoryCache::default()),
             event_bus: Arc::new(EventBus::new(256)),
             data_store: None,
-            remote_executor: None,
+            transport: None,
             fitted: false,
         }
     }
@@ -70,8 +71,8 @@ impl GraphSession {
         self
     }
 
-    pub fn with_remote_executor(mut self, executor: Arc<dyn RemoteExecutor>) -> Self {
-        self.remote_executor = Some(executor);
+    pub fn with_transport(mut self, transport: Arc<dyn Transport>) -> Self {
+        self.transport = Some(transport);
         self
     }
 
@@ -98,8 +99,8 @@ impl GraphSession {
         if let Some(store) = &self.data_store {
             ctx = ctx.with_data_store(store.clone());
         }
-        if let Some(remote) = &self.remote_executor {
-            ctx = ctx.with_remote_executor(remote.clone());
+        if let Some(transport) = &self.transport {
+            ctx = ctx.with_transport(transport.clone());
         }
 
         executor::execute(&plan, &mut ctx, &self.library, self.cache.as_ref())?;

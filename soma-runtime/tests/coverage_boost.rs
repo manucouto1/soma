@@ -8,9 +8,10 @@ use somatize_core::graph::{Edge, Graph, Node};
 use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::executor::{Context, RemoteExecutor};
+use somatize_runtime::executor::Context;
 use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::runner::Transport;
 use somatize_runtime::*;
 use std::sync::Arc;
 
@@ -247,16 +248,42 @@ fn session_with_data_store() {
 }
 
 #[test]
-fn session_with_remote_executor() {
-    struct DummyRemote;
-    impl RemoteExecutor for DummyRemote {
-        fn execute_remote(
+fn session_with_transport() {
+    struct DummyTransport;
+    impl Transport for DummyTransport {
+        fn execute(
             &self,
-            _node_id: &str,
-            _target: &somatize_core::filter::RemoteTarget,
-            _input: Option<&Value>,
-        ) -> Result<Value> {
-            Ok(Value::tensor(vec![42.0], vec![1]))
+            _plan: &ExecutionPlan,
+            _filters: &FilterLibrary,
+            _input: &Value,
+            _y: Option<&Value>,
+            _fit_mode: bool,
+        ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
+            Ok((
+                Value::tensor(vec![42.0], vec![1]),
+                std::collections::HashMap::new(),
+            ))
+        }
+        fn get_state(
+            &self,
+            _node_ids: &[String],
+        ) -> Result<std::collections::HashMap<String, Value>> {
+            Ok(std::collections::HashMap::new())
+        }
+        fn set_state(&self, _states: &std::collections::HashMap<String, Value>) -> Result<()> {
+            Ok(())
+        }
+        fn get_gradients(
+            &self,
+            _node_ids: &[String],
+        ) -> Result<std::collections::HashMap<String, Value>> {
+            Ok(std::collections::HashMap::new())
+        }
+        fn apply_gradients(
+            &self,
+            _gradients: &std::collections::HashMap<String, Value>,
+        ) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -264,7 +291,7 @@ fn session_with_remote_executor() {
     let mut lib = FilterLibrary::new();
     lib.register("doubler", Box::new(Doubler));
 
-    let session = GraphSession::new(graph, lib).with_remote_executor(Arc::new(DummyRemote));
+    let session = GraphSession::new(graph, lib).with_transport(Arc::new(DummyTransport));
 
     let result = session.compile(CompileMode::NoCache);
     assert!(result.is_ok());
@@ -433,33 +460,59 @@ fn executor_remote_falls_back_to_local() {
     assert_eq!(data, &[10.0]); // fell back to local execution
 }
 
-// ── Executor coverage: Remote with executor ──
+// ── Executor coverage: Remote with transport ──
 
 #[test]
-fn executor_remote_with_executor() {
-    struct TestRemote;
-    impl RemoteExecutor for TestRemote {
-        fn execute_remote(
+fn executor_remote_with_transport() {
+    struct TestTransport;
+    impl Transport for TestTransport {
+        fn execute(
             &self,
-            _node_id: &str,
-            _target: &somatize_core::filter::RemoteTarget,
-            input: Option<&Value>,
-        ) -> Result<Value> {
+            _plan: &ExecutionPlan,
+            _filters: &FilterLibrary,
+            input: &Value,
+            _y: Option<&Value>,
+            _fit_mode: bool,
+        ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             // Remote "doubles" the input
             match input {
-                Some(Value::Tensor { values, shape }) => Ok(Value::tensor(
-                    values.iter().map(|v| v * 2.0).collect(),
-                    shape.clone(),
+                Value::Tensor { values, shape } => Ok((
+                    Value::tensor(values.iter().map(|v| v * 2.0).collect(), shape.clone()),
+                    std::collections::HashMap::new(),
                 )),
-                _ => Ok(Value::tensor(vec![99.0], vec![1])),
+                _ => Ok((
+                    Value::tensor(vec![99.0], vec![1]),
+                    std::collections::HashMap::new(),
+                )),
             }
+        }
+        fn get_state(
+            &self,
+            _node_ids: &[String],
+        ) -> Result<std::collections::HashMap<String, Value>> {
+            Ok(std::collections::HashMap::new())
+        }
+        fn set_state(&self, _states: &std::collections::HashMap<String, Value>) -> Result<()> {
+            Ok(())
+        }
+        fn get_gradients(
+            &self,
+            _node_ids: &[String],
+        ) -> Result<std::collections::HashMap<String, Value>> {
+            Ok(std::collections::HashMap::new())
+        }
+        fn apply_gradients(
+            &self,
+            _gradients: &std::collections::HashMap<String, Value>,
+        ) -> Result<()> {
+            Ok(())
         }
     }
 
     let bus = Arc::new(EventBus::new(64));
     let cache = MemoryCache::default();
 
-    let mut ctx = Context::new(bus, "remote_exec_test").with_remote_executor(Arc::new(TestRemote));
+    let mut ctx = Context::new(bus, "remote_exec_test").with_transport(Arc::new(TestTransport));
     ctx.set("input", Value::tensor(vec![7.0], vec![1]));
     ctx.graph_info
         .set_predecessors("remote_node", vec!["input".into()]);

@@ -620,16 +620,14 @@ struct PyGraph {
 }
 
 impl PyGraph {
-    /// Build a remote executor from registered workers (if any).
-    fn make_remote_executor(&self) -> Option<Arc<dyn somatize_runtime::executor::RemoteExecutor>> {
+    /// Build a transport from the first registered worker (if any).
+    fn make_transport(&self) -> Option<Arc<dyn somatize_runtime::runner::Transport>> {
         if self.workers.is_empty() {
             return None;
         }
-        let executor = somatize_worker::WsRemoteExecutor::new();
-        for (addr, token, tags) in &self.workers {
-            executor.add_worker(addr, token.clone(), tags.clone());
-        }
-        Some(Arc::new(executor))
+        let (addr, token, _tags) = &self.workers[0];
+        let transport = somatize_worker::WsTransport::new(addr, token.clone());
+        Some(Arc::new(transport))
     }
 
     /// Send a Shutdown message to a worker via WebSocket.
@@ -1386,8 +1384,8 @@ impl PyGraph {
         )
         .with_graph_info(graph_info);
 
-        if let Some(remote) = self.make_remote_executor() {
-            ctx = ctx.with_remote_executor(remote);
+        if let Some(transport) = self.make_transport() {
+            ctx = ctx.with_transport(transport);
         }
 
         let roots = self.graph.roots();
@@ -1438,8 +1436,8 @@ impl PyGraph {
         )
         .with_graph_info(graph_info);
 
-        if let Some(remote) = self.make_remote_executor() {
-            ctx = ctx.with_remote_executor(remote);
+        if let Some(transport) = self.make_transport() {
+            ctx = ctx.with_transport(transport);
         }
 
         executor::execute(

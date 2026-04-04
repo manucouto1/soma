@@ -73,21 +73,6 @@ impl GraphInfo {
     }
 }
 
-/// Trait for executing plan nodes on remote workers.
-///
-/// When set on Context, `ExecutionPlan::Remote` nodes delegate to this
-/// instead of executing locally. The implementation sends the sub-plan
-/// to a worker and returns the result.
-pub trait RemoteExecutor: Send + Sync {
-    /// Execute a sub-plan remotely and return the output value.
-    fn execute_remote(
-        &self,
-        node_id: &str,
-        target: &somatize_core::filter::RemoteTarget,
-        input: Option<&Value>,
-    ) -> Result<Value>;
-}
-
 /// Execution context passed to filters during runtime.
 ///
 /// Node outputs are stored as [`VirtualValue`]s — they may be materialized
@@ -104,8 +89,8 @@ pub struct Context {
     pub execution_order: Vec<String>,
     /// Graph topology for input resolution.
     pub graph_info: GraphInfo,
-    /// Optional remote executor for distributed plans.
-    pub remote_executor: Option<Arc<dyn RemoteExecutor>>,
+    /// Optional transport for distributed plans.
+    pub transport: Option<Arc<dyn crate::runner::Transport>>,
     /// Optional data store for persisting intermediate results.
     pub data_store: Option<Arc<dyn DataStore>>,
     /// Minimum value size (bytes) to spill to DataStore instead of keeping in memory.
@@ -121,7 +106,7 @@ impl Context {
             run_id: run_id.into(),
             execution_order: Vec::new(),
             graph_info: GraphInfo::new(),
-            remote_executor: None,
+            transport: None,
             data_store: None,
             spill_threshold: 0,
         }
@@ -132,8 +117,8 @@ impl Context {
         self
     }
 
-    pub fn with_remote_executor(mut self, executor: Arc<dyn RemoteExecutor>) -> Self {
-        self.remote_executor = Some(executor);
+    pub fn with_transport(mut self, transport: Arc<dyn crate::runner::Transport>) -> Self {
+        self.transport = Some(transport);
         self
     }
 
@@ -204,7 +189,7 @@ impl Context {
             run_id: self.run_id.clone(),
             execution_order: self.execution_order.clone(),
             graph_info: self.graph_info.clone(),
-            remote_executor: self.remote_executor.clone(),
+            transport: self.transport.clone(),
             data_store: self.data_store.clone(),
             spill_threshold: self.spill_threshold,
         }
@@ -344,10 +329,10 @@ impl Executable for ExecutionPlan {
 
             ExecutionPlan::Remote {
                 node_id,
-                target,
+                target: _,
                 plan,
             } => {
-                if let Some(remote) = &ctx.remote_executor {
+                if let Some(transport) = &ctx.transport {
                     // Gather input from predecessors
                     let input = ctx
                         .graph_info
@@ -355,12 +340,11 @@ impl Executable for ExecutionPlan {
                         .first()
                         .and_then(|pred| ctx.get(pred));
 
-                    let result = remote.execute_remote(node_id, target, input)?;
+                    let result = transport.execute_node(node_id, input)?;
                     ctx.set(node_id.clone(), result);
-                    ctx.execution_order.push(node_id.clone());
                     Ok(())
                 } else {
-                    // No remote executor — fall back to local execution
+                    // No transport — fall back to local execution
                     plan.execute(ctx, filters, cache)
                 }
             }
@@ -411,9 +395,31 @@ fn execute_node(
         kind: filter.meta().kind,
     });
 
+    let _span = tracing::info_span!("execute_node", %node_id).entered();
+
     let input = resolve_input(node_id, ctx);
     let state = filters.get_state(node_id).cloned().unwrap_or(Value::Empty);
-    let result = filter.forward(&input, &state);
+
+    // catch_unwind: a panic in a user filter must not crash the process
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        filter.forward(&input, &state)
+    }));
+
+    let result = match result {
+        Ok(inner) => inner,
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic");
+            tracing::error!(node_id, "filter panicked: {msg}");
+            Err(SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!("filter panicked: {msg}"),
+            })
+        }
+    };
 
     match result {
         Ok(output) => {
@@ -430,6 +436,7 @@ fn execute_node(
             Ok(())
         }
         Err(e) => {
+            tracing::error!(node_id, error = %e, "node execution failed");
             ctx.event_bus.emit(Event::NodeFailed {
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.to_string(),
