@@ -143,6 +143,9 @@ impl<'a> Compiler<'a> {
         // Resolve distribution (wrap Remote nodes)
         let plan = self.resolve_distribution(plan);
 
+        // Collapse consecutive differentiable nodes into Composite blocks
+        let plan = self.collapse_differentiable(plan);
+
         let plan = plan.simplify();
 
         Ok(CompileResult {
@@ -442,6 +445,68 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Collapse consecutive differentiable Execute nodes into Composite blocks.
+    ///
+    /// A `Composite` groups nodes that should share a PyTorch autograd session.
+    /// Only groups 2+ consecutive `Execute` nodes where `meta.differentiable == true`.
+    fn collapse_differentiable(&self, plan: ExecutionPlan) -> ExecutionPlan {
+        match plan {
+            ExecutionPlan::Sequence(steps) => {
+                let mut result: Vec<ExecutionPlan> = Vec::new();
+                let mut diff_group: Vec<String> = Vec::new();
+
+                for step in steps {
+                    if let ExecutionPlan::Execute { ref node_id } = step
+                        && self
+                            .registry
+                            .meta(node_id)
+                            .map(|m| m.differentiable)
+                            .unwrap_or(false)
+                    {
+                        diff_group.push(node_id.clone());
+                        continue;
+                    }
+                    // Flush accumulated differentiable group
+                    Self::flush_diff_group(&mut diff_group, &mut result);
+                    result.push(self.collapse_differentiable(step));
+                }
+                Self::flush_diff_group(&mut diff_group, &mut result);
+
+                if result.len() == 1 {
+                    result.pop().unwrap()
+                } else {
+                    ExecutionPlan::Sequence(result)
+                }
+            }
+            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
+                branches
+                    .into_iter()
+                    .map(|b| self.collapse_differentiable(b))
+                    .collect(),
+            ),
+            ExecutionPlan::Remote {
+                node_id,
+                target,
+                plan,
+            } => ExecutionPlan::Remote {
+                node_id,
+                target,
+                plan: Box::new(self.collapse_differentiable(*plan)),
+            },
+            other => other,
+        }
+    }
+
+    fn flush_diff_group(group: &mut Vec<String>, result: &mut Vec<ExecutionPlan>) {
+        if group.len() > 1 {
+            result.push(ExecutionPlan::Composite {
+                node_ids: std::mem::take(group),
+            });
+        } else if let Some(id) = group.pop() {
+            result.push(ExecutionPlan::Execute { node_id: id });
+        }
+    }
+
     /// Validate schema compatibility between connected filters.
     ///
     /// For each edge (A → B), checks that A's output_schema is compatible
@@ -635,15 +700,11 @@ mod tests {
 
         let result = compile(&graph, &registry, CompileMode::Inference, None).unwrap();
 
-        if let ExecutionPlan::Sequence(steps) = &result.plan {
-            assert_eq!(steps.len(), 3);
-            assert!(
-                steps
-                    .iter()
-                    .all(|s| matches!(s, ExecutionPlan::Execute { .. }))
-            );
+        // All 3 nodes are differentiable → collapsed into Composite
+        if let ExecutionPlan::Composite { node_ids } = &result.plan {
+            assert_eq!(node_ids, &["a", "b", "c"]);
         } else {
-            panic!("expected Sequence, got: {:?}", result.plan);
+            panic!("expected Composite, got: {:?}", result.plan);
         }
     }
 
@@ -723,14 +784,18 @@ mod tests {
 
         let result = compile(&graph, &registry, CompileMode::Inference, Some(&cache)).unwrap();
 
+        // "a" is cached, "b"+"c" are differentiable → Composite
         if let ExecutionPlan::Sequence(steps) = &result.plan {
             assert!(
                 matches!(&steps[0], ExecutionPlan::Cached { node_id, .. } if node_id == "a"),
                 "first node should be cached, got: {:?}",
                 steps[0]
             );
-            assert!(matches!(&steps[1], ExecutionPlan::Execute { .. }));
-            assert!(matches!(&steps[2], ExecutionPlan::Execute { .. }));
+            assert!(
+                matches!(&steps[1], ExecutionPlan::Composite { node_ids } if node_ids == &["b", "c"]),
+                "b+c should be Composite, got: {:?}",
+                steps[1]
+            );
         } else {
             panic!("expected Sequence, got: {:?}", result.plan);
         }
