@@ -264,22 +264,11 @@ impl Worker {
             }
         }
 
-        // Resolve input: inline, DataStore, or temp store (HTTP upload)
-        let input_value = plan.input.as_ref().map(|src| match src {
-            InputSource::Inline { value } => value.clone(),
-            InputSource::Reference { data_ref } => {
-                // Try persistent DataStore first, then temp store (HTTP uploads)
-                if let Some(store) = &self.data_store
-                    && let Ok(val) = store.get(data_ref)
-                {
-                    return val;
-                }
-                self.temp_store.get(data_ref).unwrap_or_else(|e| {
-                    tracing::warn!("Failed to resolve DataRef: {e}");
-                    Value::Empty
-                })
-            }
-        });
+        // Resolve input via InputSource::resolve()
+        let input_value = plan
+            .input
+            .as_ref()
+            .map(|src| src.resolve(self.data_store.as_deref(), &self.temp_store));
 
         // DataStore-backed streaming: if input is a large DataRef and we have a store,
         // read chunks via get_rows() and process with StreamExecutor (no full materialization).
@@ -291,13 +280,24 @@ impl Worker {
             return self.execute_streamed_from_store(plan, &store, data_ref, &meta, start);
         }
 
-        match &plan.mode {
-            ExecutionMode::Fit { y } => self.execute_fit(plan, input_value, y.as_ref(), start),
-            ExecutionMode::Forward => self.execute_forward(plan, input_value, start),
-        }
+        self.execute_mode(&plan.mode.clone(), plan, input_value, start)
     }
 
     /// Forward mode: run the compiled execution plan.
+    /// Dispatch execution by mode.
+    fn execute_mode(
+        &mut self,
+        mode: &ExecutionMode,
+        plan: &SerializedPlan,
+        input: Option<Value>,
+        start: Instant,
+    ) -> PlanResult {
+        match mode {
+            ExecutionMode::Fit { y } => self.execute_fit(plan, input, y.as_ref(), start),
+            ExecutionMode::Forward => self.execute_forward(plan, input, start),
+        }
+    }
+
     fn execute_forward(
         &mut self,
         plan: &SerializedPlan,

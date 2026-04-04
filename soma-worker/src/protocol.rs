@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use somatize_compiler::ExecutionPlan;
 use somatize_core::event::Event;
-use somatize_core::store::DataRef;
+use somatize_core::store::{DataRef, DataStore};
 use somatize_core::value::Value;
 
 /// Unique worker identifier.
@@ -58,6 +58,31 @@ pub enum InputSource {
     Inline { value: Value },
     /// Data referenced in a remote store (large payloads).
     Reference { data_ref: DataRef },
+}
+
+impl InputSource {
+    /// Resolve the input to a concrete Value.
+    /// Tries persistent DataStore first, then temp store for HTTP uploads.
+    pub fn resolve(
+        &self,
+        data_store: Option<&dyn somatize_core::store::DataStore>,
+        temp_store: &somatize_core::store::LocalDataStore,
+    ) -> Value {
+        match self {
+            InputSource::Inline { value } => value.clone(),
+            InputSource::Reference { data_ref } => {
+                if let Some(store) = data_store
+                    && let Ok(val) = store.get(data_ref)
+                {
+                    return val;
+                }
+                temp_store.get(data_ref).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to resolve DataRef: {e}");
+                    Value::Empty
+                })
+            }
+        }
+    }
 }
 
 /// A serialized filter: cloudpickle bytes to reconstruct on the worker.
@@ -279,6 +304,40 @@ pub enum OutputDelivery {
     Reference {
         data_ref: somatize_core::store::DataRef,
     },
+}
+
+impl OutputDelivery {
+    /// Resolve the output to a concrete Value.
+    /// For Reference: downloads via HTTP from the worker.
+    pub fn resolve(&self, addr: &str, token: &Option<String>) -> Value {
+        match self {
+            OutputDelivery::Inline { value } => value.clone(),
+            OutputDelivery::Reference { data_ref } => {
+                // HTTP download in a dedicated thread (avoids tokio nesting)
+                let http_addr = addr
+                    .replace("ws://", "http://")
+                    .replace("wss://", "https://");
+                let url = format!("{http_addr}/download");
+                let ref_json = serde_json::to_string(data_ref).unwrap_or_default();
+                let token = token.clone();
+
+                std::thread::spawn(move || {
+                    let client = reqwest::blocking::Client::new();
+                    let mut req = client.get(&url).query(&[("ref", &ref_json)]);
+                    if let Some(t) = &token {
+                        req = req.query(&[("token", t.as_str())]);
+                    }
+                    let resp = req.send().ok()?;
+                    let bytes = resp.bytes().ok()?;
+                    serde_json::from_slice(&bytes).ok()
+                })
+                .join()
+                .ok()
+                .flatten()
+                .unwrap_or(Value::Empty)
+            }
+        }
+    }
 }
 
 /// Result of a plan execution.
