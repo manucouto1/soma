@@ -413,6 +413,31 @@ impl<'a> Compiler<'a> {
                     .map(|b| self.resolve_distribution(b))
                     .collect(),
             ),
+            ExecutionPlan::Composite { ref node_ids } => {
+                // If ALL nodes in the composite have a Remote target, wrap the
+                // entire composite in a single Remote (using the first node's
+                // target). Otherwise keep it local.
+                let targets: Vec<_> = node_ids
+                    .iter()
+                    .filter_map(|nid| {
+                        self.registry.meta(nid).and_then(|m| match &m.distribution {
+                            somatize_core::filter::Distribution::Remote(t) => Some(t.clone()),
+                            _ => None,
+                        })
+                    })
+                    .collect();
+
+                if targets.len() == node_ids.len() && !targets.is_empty() {
+                    let first_id = node_ids[0].clone();
+                    ExecutionPlan::Remote {
+                        node_id: first_id,
+                        target: targets.into_iter().next().unwrap(),
+                        plan: Box::new(plan),
+                    }
+                } else {
+                    plan
+                }
+            }
             other => other,
         }
     }

@@ -49,6 +49,11 @@ pub enum ExecutionPlan {
         plan: Box<ExecutionPlan>,
     },
 
+    /// Execute multiple differentiable nodes as a single block.
+    /// The executor passes tensors directly between filters (no Value conversion),
+    /// preserving PyTorch autograd for gradient flow.
+    Composite { node_ids: Vec<NodeId> },
+
     /// No-op: nothing to execute (e.g. empty graph).
     Empty,
 }
@@ -58,6 +63,7 @@ impl ExecutionPlan {
     pub fn node_count(&self) -> usize {
         match self {
             Self::Execute { .. } | Self::Cached { .. } => 1,
+            Self::Composite { node_ids } => node_ids.len(),
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().map(|s| s.node_count()).sum()
             }
@@ -74,7 +80,7 @@ impl ExecutionPlan {
     pub fn cached_count(&self) -> usize {
         match self {
             Self::Cached { .. } => 1,
-            Self::Execute { .. } => 0,
+            Self::Execute { .. } | Self::Composite { .. } => 0,
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().map(|s| s.cached_count()).sum()
             }
@@ -118,6 +124,7 @@ impl ExecutionPlan {
                 ids.extend(plan.node_ids());
                 ids
             }
+            Self::Composite { node_ids } => node_ids.iter().map(|s| s.as_str()).collect(),
             Self::Empty => vec![],
         }
     }
@@ -237,6 +244,17 @@ impl ExecutionPlan {
                 }
                 plan.mermaid_nodes(out, counter, Some(node_id));
             }
+            Self::Composite { node_ids } => {
+                use std::fmt::Write;
+                let mut prev: Option<&str> = None;
+                for nid in node_ids {
+                    let _ = writeln!(out, "    {nid}[{nid}]");
+                    if let Some(p) = prev.or(parent) {
+                        let _ = writeln!(out, "    {p} --> {nid}");
+                    }
+                    prev = Some(nid);
+                }
+            }
             Self::Empty => {}
         }
     }
@@ -249,6 +267,7 @@ impl ExecutionPlan {
             Self::Loop { node_id, .. }
             | Self::Branch { node_id, .. }
             | Self::Remote { node_id, .. } => Some(node_id),
+            Self::Composite { node_ids } => node_ids.first().map(|s| s.as_str()),
             Self::Empty => None,
         }
     }
@@ -303,6 +322,14 @@ impl ExecutionPlan {
             } => {
                 writeln!(f, "{pad}Remote({node_id}, target={target:?}):")?;
                 plan.fmt_indent(f, indent + 1)
+            }
+            Self::Composite { node_ids } => {
+                let ids = node_ids
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" \u{2192} ");
+                writeln!(f, "{pad}Composite[{ids}]")
             }
             Self::Empty => writeln!(f, "{pad}Empty"),
         }

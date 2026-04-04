@@ -283,6 +283,32 @@ fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_wor
             }
         }
 
+        ExecutionPlan::Composite { node_ids } => {
+            let worker = forced_worker
+                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
+                .unwrap_or_else(|| least_loaded(&state.workers));
+
+            state.phases.push(PlanPhase {
+                phase_index: state.phase_index,
+                phase_type: Phase::Sequential,
+                node_ids: node_ids.clone(),
+                worker_ids: vec![worker.id.clone()],
+            });
+            state.phase_index += 1;
+
+            let worker_id = worker.id.clone();
+            for nid in node_ids {
+                state.assignments.push(Assignment {
+                    node_id: nid.clone(),
+                    worker_id: worker.id.clone(),
+                    worker_name: worker.name.clone(),
+                    phase: Phase::Sequential,
+                    reason: "composite block — same worker for gradient flow".into(),
+                });
+            }
+            drop(worker_id);
+        }
+
         ExecutionPlan::Empty => {}
     }
 }

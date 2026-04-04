@@ -354,6 +354,15 @@ pub fn execute(
             }
         }
 
+        ExecutionPlan::Composite { node_ids } => {
+            // Sequential fallback — execute each node in order.
+            // A future Python-aware executor will pass tensors directly.
+            for nid in node_ids {
+                execute_node(nid, ctx, filters, cache)?;
+            }
+            Ok(())
+        }
+
         _ => {
             tracing::warn!("Unhandled ExecutionPlan variant");
             Ok(())
