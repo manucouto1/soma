@@ -21,6 +21,57 @@ use std::sync::Arc;
 /// Executes plans locally — same logic for local and remote execution.
 pub struct LocalRunner;
 
+impl LocalRunner {
+    /// Fit a Sequence plan, handling Composite steps as blocks.
+    fn fit_sequence(
+        &self,
+        steps: &[ExecutionPlan],
+        filters: &FilterLibrary,
+        cache: &dyn CacheStore,
+        event_bus: &Arc<EventBus>,
+        input: &Value,
+        y: Option<&Value>,
+    ) -> Result<(Value, HashMap<String, Value>)> {
+        let mut current_input = input.clone();
+        let mut all_outputs = HashMap::new();
+
+        for step in steps {
+            let handled = if let ExecutionPlan::Composite { node_ids } = step
+                && let Some(filter) = filters.get(&node_ids[0])
+                && let Some(result) = filter.composite_fit(node_ids, &current_input, y)
+            {
+                let (output, states) = result?;
+                for (id, state) in &states {
+                    all_outputs.insert(format!("__state_{id}"), state.clone());
+                }
+                if let Some(last_id) = node_ids.last() {
+                    all_outputs.insert(last_id.clone(), output.clone());
+                }
+                current_input = output;
+                true
+            } else {
+                false
+            };
+
+            if !handled {
+                let sub_result = <Self as Runner>::fit(
+                    self,
+                    step,
+                    filters,
+                    cache,
+                    event_bus,
+                    &current_input,
+                    y,
+                )?;
+                current_input = sub_result.0;
+                all_outputs.extend(sub_result.1);
+            }
+        }
+
+        Ok((current_input, all_outputs))
+    }
+}
+
 impl Runner for LocalRunner {
     fn fit(
         &self,
@@ -31,6 +82,21 @@ impl Runner for LocalRunner {
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
+        // Handle Composite plan: delegate to composite_fit on the first filter
+        if let ExecutionPlan::Composite { node_ids } = plan
+            && let Some(filter) = filters.get(&node_ids[0])
+            && let Some(result) = filter.composite_fit(node_ids, input, y)
+        {
+            return result;
+            // Fallback: treat as sequential if composite_fit not supported
+        }
+
+        // Handle Sequence that may contain Composite steps
+        if let ExecutionPlan::Sequence(steps) = plan {
+            return self.fit_sequence(steps, filters, cache, event_bus, input, y);
+        }
+
+        // Single node or other plan types: sequential fit
         let node_id_refs = plan.node_ids();
         let node_ids: Vec<String> = node_id_refs.iter().map(|s| s.to_string()).collect();
         let graph_info = GraphInfo::for_linear(&node_id_refs);
@@ -38,7 +104,6 @@ impl Runner for LocalRunner {
         let mut outputs: HashMap<String, Value> = HashMap::new();
         let mut trained_states: HashMap<String, Value> = HashMap::new();
 
-        // Set initial input for first node
         if let Some(first) = node_ids.first() {
             outputs.insert(format!("__input_{first}"), input.clone());
         }

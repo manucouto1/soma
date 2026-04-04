@@ -116,9 +116,19 @@ pub trait Filter: Send + Sync {
     fn meta(&self) -> FilterMeta;
 
     /// Downcast support for composite execution.
-    /// Enables the executor to extract Python objects from filters
-    /// without soma-core depending on PyO3.
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Execute a composite fit across multiple filters that share an execution context.
+    /// Used for differentiable filter chains where autograd must flow between them.
+    /// Returns None if this filter doesn't support composite execution (default).
+    fn composite_fit(
+        &self,
+        _node_ids: &[String],
+        _x: &Value,
+        _y: Option<&Value>,
+    ) -> Option<Result<(Value, std::collections::HashMap<String, Value>)>> {
+        None
+    }
 }
 
 #[cfg(test)]
