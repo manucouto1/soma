@@ -39,6 +39,17 @@ pub trait Transport: Send + Sync {
 
     /// Apply aggregated gradients on the remote worker.
     fn apply_gradients(&self, gradients: &HashMap<String, Value>) -> Result<()>;
+
+    /// Convenience: execute a single node remotely (used by the plan executor).
+    fn execute_node(&self, node_id: &str, input: Option<&Value>) -> Result<Value> {
+        let plan = ExecutionPlan::Execute {
+            node_id: node_id.to_string(),
+        };
+        let input_val = input.cloned().unwrap_or(Value::Empty);
+        let filters = crate::filter_library::FilterLibrary::new();
+        let (output, _) = self.execute(&plan, &filters, &input_val, None, false)?;
+        Ok(output)
+    }
 }
 
 /// A Runner that delegates execution to a remote worker via Transport.

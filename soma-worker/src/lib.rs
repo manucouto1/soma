@@ -11,7 +11,6 @@ pub mod env_manager;
 pub mod protocol;
 #[cfg(feature = "pyo3")]
 pub mod py_filter;
-pub mod remote_executor;
 pub mod server;
 pub mod worker;
 pub mod ws_transport;
@@ -23,7 +22,6 @@ pub use env_manager::EnvManager;
 pub use protocol::*;
 #[cfg(feature = "pyo3")]
 pub use py_filter::EmbeddedPyFilter;
-pub use remote_executor::WsRemoteExecutor;
 pub use server::{
     serve_worker, serve_worker_authenticated, worker_router, worker_router_authenticated,
 };

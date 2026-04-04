@@ -20,7 +20,7 @@ pub mod sampler;
 
 pub use cache::{LocalCache, MemoryCache, TieredCache};
 pub use event_bus::EventBus;
-pub use executor::{Context, GraphInfo, RemoteExecutor, execute, resolve_input};
+pub use executor::{Context, GraphInfo, execute, resolve_input};
 pub use executors::{
     FittedFilter, FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner,
     PopulationMember, StreamExecutor, StudyRunner, TrialExecutor, TrialOutcome,
