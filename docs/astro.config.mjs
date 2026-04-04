@@ -28,6 +28,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Guides',
+					items: [
+						{ label: 'Execution Modes & Data Transport', slug: 'guides/execution-modes' },
+					],
+				},
+				{
 					label: 'Design',
 					items: [
 						{ label: 'Filter Model', slug: 'design/filter-model' },
