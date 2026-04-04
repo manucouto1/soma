@@ -3,10 +3,10 @@
 use crate::protocol::*;
 use somatize_core::cache::CacheStore;
 use somatize_core::event::Event;
-use somatize_core::filter::{Filter, FilterKind};
+use somatize_core::filter::Filter;
 use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
-use somatize_runtime::{Context, EventBus, FilterLibrary, MemoryCache, execute};
+use somatize_runtime::{EventBus, FilterLibrary, MemoryCache, Runner};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -90,66 +90,6 @@ impl Worker {
     /// Set trained state for a filter.
     pub fn set_filter_state(&mut self, node_id: &str, state: Value) {
         self.filters.set_state(node_id, state);
-    }
-
-    /// Execute a Composite plan: all filters in a single Python with_gil block,
-    /// tensors passed directly between filters (autograd connected).
-    #[cfg(feature = "pyo3")]
-    fn execute_composite(
-        &mut self,
-        node_ids: &[String],
-        input: Option<Value>,
-        mode: crate::py_filter::CompositeMode,
-        start: Instant,
-    ) -> PlanResult {
-        let x = input.unwrap_or(Value::Empty);
-
-        // Collect PyObjects from filters
-        let mut py_objects: Vec<(String, pyo3::PyObject)> = Vec::new();
-        for id in node_ids {
-            if let Some(filter) = self.filters.get(id)
-                && let Some(embedded) = filter
-                    .as_any()
-                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>()
-            {
-                let cloned = pyo3::Python::with_gil(|py| embedded.py_object().clone_ref(py));
-                py_objects.push((id.clone(), cloned));
-            }
-        }
-
-        if py_objects.len() != node_ids.len() {
-            return PlanResult::Failed {
-                error: format!(
-                    "Composite: not all filters are EmbeddedPyFilter ({}/{})",
-                    py_objects.len(),
-                    node_ids.len()
-                ),
-                duration_ms: start.elapsed().as_millis() as u64,
-            };
-        }
-
-        let states: std::collections::HashMap<String, Value> = node_ids
-            .iter()
-            .filter_map(|id| self.filters.get_state(id).map(|s| (id.clone(), s.clone())))
-            .collect();
-
-        match crate::py_filter::execute_composite_python(&py_objects, &x, &states, mode) {
-            Ok((output, trained_states)) => {
-                // Store trained states back
-                for (id, state) in &trained_states {
-                    self.filters.set_state(id, state.clone());
-                }
-                PlanResult::Success {
-                    output: self.wrap_output(output),
-                    duration_ms: start.elapsed().as_millis() as u64,
-                    states: trained_states,
-                }
-            }
-            Err(e) => PlanResult::Failed {
-                error: format!("Composite execution: {e}"),
-                duration_ms: start.elapsed().as_millis() as u64,
-            },
-        }
     }
 
     /// Wrap output in the right delivery: inline for small, DataRef for large.
@@ -280,180 +220,48 @@ impl Worker {
             return self.execute_streamed_from_store(plan, &store, data_ref, &meta, start);
         }
 
-        self.execute_mode(&plan.mode.clone(), plan, input_value, start)
-    }
+        // Delegate to LocalRunner (same execution path as local)
+        let runner = somatize_runtime::LocalRunner;
+        let x = input_value.unwrap_or(Value::Empty);
 
-    /// Forward mode: run the compiled execution plan.
-    /// Dispatch execution by mode.
-    fn execute_mode(
-        &mut self,
-        mode: &ExecutionMode,
-        plan: &SerializedPlan,
-        input: Option<Value>,
-        start: Instant,
-    ) -> PlanResult {
-        match mode {
-            ExecutionMode::Fit { y } => self.execute_fit(plan, input, y.as_ref(), start),
-            ExecutionMode::Forward => self.execute_forward(plan, input, start),
-        }
-    }
+        let result = match &plan.mode {
+            ExecutionMode::Fit { y } => runner
+                .fit(
+                    &plan.plan,
+                    &self.filters,
+                    self.cache.as_ref(),
+                    &self.event_bus,
+                    &x,
+                    y.as_ref(),
+                )
+                .map(|(output, states)| {
+                    // Store states in library for subsequent forward calls
+                    for (id, state) in &states {
+                        self.filters.set_state(id, state.clone());
+                    }
+                    (output, states)
+                }),
+            ExecutionMode::Forward => runner
+                .forward(
+                    &plan.plan,
+                    &self.filters,
+                    self.cache.as_ref(),
+                    &self.event_bus,
+                    &x,
+                )
+                .map(|output| (output, std::collections::HashMap::new())),
+        };
 
-    fn execute_forward(
-        &mut self,
-        plan: &SerializedPlan,
-        input: Option<Value>,
-        start: Instant,
-    ) -> PlanResult {
-        // Composite plan: execute in a single Python block with autograd
-        #[cfg(feature = "pyo3")]
-        if let somatize_compiler::ExecutionPlan::Composite { ref node_ids } = plan.plan {
-            return self.execute_composite(
-                node_ids,
-                input,
-                crate::py_filter::CompositeMode::Forward,
-                start,
-            );
-        }
-
-        let mut ctx = Context::new(
-            self.event_bus.clone(),
-            format!("worker_run_{}", plan.plan_id),
-        );
-
-        if let Some(val) = input {
-            ctx.set("input", val.clone());
-            if let somatize_compiler::ExecutionPlan::Execute { node_id } = &plan.plan {
-                ctx.set(format!("__input_{node_id}"), val);
-            }
-        }
-
-        match execute(&plan.plan, &mut ctx, &self.filters, self.cache.as_ref()) {
-            Ok(()) => {
-                let output = ctx
-                    .execution_order
-                    .last()
-                    .and_then(|id| ctx.get(id))
-                    .cloned()
-                    .unwrap_or(Value::Empty);
-
-                PlanResult::Success {
-                    output: self.wrap_output(output),
-                    duration_ms: start.elapsed().as_millis() as u64,
-                    states: std::collections::HashMap::new(),
-                }
-            }
+        match result {
+            Ok((output, states)) => PlanResult::Success {
+                output: self.wrap_output(output),
+                duration_ms: start.elapsed().as_millis() as u64,
+                states,
+            },
             Err(e) => PlanResult::Failed {
                 error: e.to_string(),
                 duration_ms: start.elapsed().as_millis() as u64,
             },
-        }
-    }
-
-    /// Fit mode: train each filter in topological order, return trained states.
-    fn execute_fit(
-        &mut self,
-        plan: &SerializedPlan,
-        input: Option<Value>,
-        y: Option<&Value>,
-        start: Instant,
-    ) -> PlanResult {
-        // Composite plan: fit in a single Python block with autograd
-        #[cfg(feature = "pyo3")]
-        if let somatize_compiler::ExecutionPlan::Composite { ref node_ids } = plan.plan {
-            return self.execute_composite(
-                node_ids,
-                input,
-                crate::py_filter::CompositeMode::Fit { y: y.cloned() },
-                start,
-            );
-        }
-
-        let run_id = format!("worker_fit_{}", plan.plan_id);
-        let x = input.unwrap_or(Value::Empty);
-
-        // Extract node execution order from plan
-        let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
-        let mut outputs: std::collections::HashMap<String, Value> =
-            std::collections::HashMap::new();
-        let mut trained_states: std::collections::HashMap<String, Value> =
-            std::collections::HashMap::new();
-
-        for node_id in &node_ids {
-            let filter = match self.filters.get(node_id) {
-                Some(f) => f,
-                None => {
-                    return PlanResult::Failed {
-                        error: format!("filter not found: {node_id}"),
-                        duration_ms: start.elapsed().as_millis() as u64,
-                    };
-                }
-            };
-
-            let meta = filter.meta();
-
-            self.event_bus.emit(Event::NodeStarted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                kind: meta.kind,
-            });
-
-            let node_start = Instant::now();
-
-            // Resolve input: predecessor output or original input
-            let node_input = outputs
-                .values()
-                .last()
-                .cloned()
-                .unwrap_or_else(|| x.clone());
-
-            // Fit trainable filters, get/use state for forward
-            let state = if meta.kind == FilterKind::Trainable {
-                match filter.fit(&node_input, y) {
-                    Ok(s) => {
-                        self.filters.set_state(node_id, s.clone());
-                        trained_states.insert(node_id.clone(), s.clone());
-                        s
-                    }
-                    Err(e) => {
-                        return PlanResult::Failed {
-                            error: format!("fit({node_id}): {e}"),
-                            duration_ms: start.elapsed().as_millis() as u64,
-                        };
-                    }
-                }
-            } else {
-                self.filters
-                    .get_state(node_id)
-                    .cloned()
-                    .unwrap_or(Value::Empty)
-            };
-
-            // Forward with trained state
-            match filter.forward(&node_input, &state) {
-                Ok(output) => {
-                    self.event_bus.emit(Event::NodeCompleted {
-                        run_id: run_id.clone(),
-                        node_id: node_id.to_string(),
-                        duration: node_start.elapsed(),
-                        output_summary: format!("{output}"),
-                    });
-                    outputs.insert(node_id.clone(), output);
-                }
-                Err(e) => {
-                    return PlanResult::Failed {
-                        error: format!("forward({node_id}): {e}"),
-                        duration_ms: start.elapsed().as_millis() as u64,
-                    };
-                }
-            }
-        }
-
-        let output = outputs.values().last().cloned().unwrap_or(Value::Empty);
-
-        PlanResult::Success {
-            output: self.wrap_output(output),
-            duration_ms: start.elapsed().as_millis() as u64,
-            states: trained_states,
         }
     }
 
