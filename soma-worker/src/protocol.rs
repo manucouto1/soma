@@ -175,6 +175,21 @@ pub enum WorkerToCoordinator {
         output: String,
         duration_ms: u64,
     },
+
+    // ── Distributed training responses ──
+    /// Response to GetState: trained filter states.
+    StateResult {
+        worker_id: WorkerId,
+        plan_id: PlanId,
+        states: std::collections::HashMap<String, Value>,
+    },
+
+    /// Response to GetGradients: gradient data.
+    GradientsResult {
+        worker_id: WorkerId,
+        plan_id: PlanId,
+        gradients: std::collections::HashMap<String, Value>,
+    },
 }
 
 /// A Python pipeline job: source files + requirements for isolated execution.
@@ -226,6 +241,31 @@ pub enum CoordinatorToWorker {
 
     /// Graceful shutdown: worker should finish running plans and exit.
     Shutdown { reason: String },
+
+    // ── Distributed training messages ──
+    /// Request trained states from specific filters.
+    GetState {
+        plan_id: PlanId,
+        node_ids: Vec<String>,
+    },
+
+    /// Load states into filters (e.g. after FedAvg aggregation).
+    SetState {
+        plan_id: PlanId,
+        states: std::collections::HashMap<String, Value>,
+    },
+
+    /// Request gradients from filters (for AllReduce in DataParallel).
+    GetGradients {
+        plan_id: PlanId,
+        node_ids: Vec<String>,
+    },
+
+    /// Apply aggregated gradients (after AllReduce).
+    ApplyGradients {
+        plan_id: PlanId,
+        gradients: std::collections::HashMap<String, Value>,
+    },
 }
 
 /// How output is delivered in PlanResult.

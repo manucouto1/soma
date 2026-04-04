@@ -310,6 +310,92 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                             .await;
                         std::process::exit(0);
                     }
+                    #[cfg(feature = "pyo3")]
+                    Ok(CoordinatorToWorker::GetState {
+                        plan_id, node_ids, ..
+                    }) => {
+                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut states = std::collections::HashMap::new();
+                        for nid in &node_ids {
+                            if let Some(filter) = worker.get_filter(nid)
+                                && let Some(embedded) = filter
+                                    .as_any()
+                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
+                                )
+                                && let Ok(s) = embedded.get_state()
+                            {
+                                states.insert(nid.clone(), s);
+                            }
+                        }
+                        let msg = WorkerToCoordinator::StateResult {
+                            worker_id: worker.id.clone(),
+                            plan_id,
+                            states,
+                        };
+                        serde_json::to_string(&msg).unwrap_or_default()
+                    }
+                    #[cfg(feature = "pyo3")]
+                    Ok(CoordinatorToWorker::SetState { states, .. }) => {
+                        let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+                        for (nid, s) in &states {
+                            if let Some(filter) = worker.get_filter(nid)
+                                && let Some(embedded) = filter
+                                    .as_any()
+                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
+                                )
+                            {
+                                let _ = embedded.set_state(s);
+                            }
+                            worker.set_filter_state(nid, s.clone());
+                        }
+                        r#"{"type":"Ok"}"#.to_string()
+                    }
+                    #[cfg(feature = "pyo3")]
+                    Ok(CoordinatorToWorker::GetGradients {
+                        plan_id, node_ids, ..
+                    }) => {
+                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut gradients = std::collections::HashMap::new();
+                        for nid in &node_ids {
+                            if let Some(filter) = worker.get_filter(nid)
+                                && let Some(embedded) = filter
+                                    .as_any()
+                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
+                                )
+                                && let Ok(g) = embedded.get_gradients()
+                            {
+                                gradients.insert(nid.clone(), g);
+                            }
+                        }
+                        let msg = WorkerToCoordinator::GradientsResult {
+                            worker_id: worker.id.clone(),
+                            plan_id,
+                            gradients,
+                        };
+                        serde_json::to_string(&msg).unwrap_or_default()
+                    }
+                    #[cfg(feature = "pyo3")]
+                    Ok(CoordinatorToWorker::ApplyGradients { gradients, .. }) => {
+                        let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
+                        for (nid, g) in &gradients {
+                            if let Some(filter) = worker.get_filter(nid)
+                                && let Some(embedded) = filter
+                                    .as_any()
+                                    .downcast_ref::<crate::py_filter::EmbeddedPyFilter>(
+                                )
+                            {
+                                let _ = embedded.apply_gradients(g);
+                            }
+                        }
+                        r#"{"type":"Ok"}"#.to_string()
+                    }
+                    #[cfg(not(feature = "pyo3"))]
+                    Ok(
+                        CoordinatorToWorker::GetState { .. }
+                        | CoordinatorToWorker::SetState { .. }
+                        | CoordinatorToWorker::GetGradients { .. }
+                        | CoordinatorToWorker::ApplyGradients { .. },
+                    ) => r#"{"error":"requires pyo3 feature"}"#.to_string(),
                     Err(e) => {
                         format!(r#"{{"error": "invalid message: {e}"}}"#)
                     }
