@@ -697,48 +697,52 @@ impl PyGraph {
         Ok(InputSource::Inline { value: x.clone() })
     }
 
-    /// Upload a Value to the worker via HTTP POST /upload (msgpack body).
+    /// Upload a Value to the worker via HTTP POST /upload.
+    /// Runs in a dedicated thread to avoid tokio runtime nesting.
     fn http_upload(
         &self,
         value: &Value,
         addr: &str,
         token: &Option<String>,
     ) -> Result<somatize_core::store::DataRef, PyErr> {
-        // Worker addr is like "ws://host:port" — convert to HTTP
         let http_addr = addr
             .replace("ws://", "http://")
             .replace("wss://", "https://");
         let url = format!("{http_addr}/upload");
 
-        let body = rmp_serde::to_vec(value)
-            .map_err(|e| PyRuntimeError::new_err(format!("msgpack serialize: {e}")))?;
+        let body = serde_json::to_vec(value)
+            .map_err(|e| PyRuntimeError::new_err(format!("json serialize: {e}")))?;
 
-        let client = reqwest::blocking::Client::new();
-        let mut req = client
-            .post(&url)
-            .header("Content-Type", "application/msgpack")
-            .body(body);
+        let token = token.clone();
 
-        if let Some(t) = token {
-            req = req.query(&[("token", t.as_str())]);
-        }
+        // Run blocking HTTP in a dedicated thread to avoid tokio runtime conflicts
+        std::thread::spawn(move || {
+            let client = reqwest::blocking::Client::new();
+            let mut req = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(body);
 
-        let resp = req
-            .send()
-            .map_err(|e| PyRuntimeError::new_err(format!("HTTP upload: {e}")))?;
+            if let Some(t) = &token {
+                req = req.query(&[("token", t.as_str())]);
+            }
 
-        if !resp.status().is_success() {
-            return Err(PyRuntimeError::new_err(format!(
-                "HTTP upload failed: {}",
-                resp.status()
-            )));
-        }
+            let resp = req
+                .send()
+                .map_err(|e| PyRuntimeError::new_err(format!("HTTP upload: {e}")))?;
 
-        let data_ref: somatize_core::store::DataRef = resp
-            .json()
-            .map_err(|e| PyRuntimeError::new_err(format!("parse upload response: {e}")))?;
+            if !resp.status().is_success() {
+                return Err(PyRuntimeError::new_err(format!(
+                    "HTTP upload failed: {}",
+                    resp.status()
+                )));
+            }
 
-        Ok(data_ref)
+            resp.json::<somatize_core::store::DataRef>()
+                .map_err(|e| PyRuntimeError::new_err(format!("parse upload response: {e}")))
+        })
+        .join()
+        .map_err(|_| PyRuntimeError::new_err("HTTP upload thread panicked"))?
     }
 
     /// Resolve an OutputDelivery into a Value.
@@ -772,32 +776,39 @@ impl PyGraph {
         let ref_json = serde_json::to_string(data_ref)
             .map_err(|e| PyRuntimeError::new_err(format!("serialize data_ref: {e}")))?;
 
-        let client = reqwest::blocking::Client::new();
-        let mut req = client.get(&url).query(&[("ref", &ref_json)]);
+        let token = token.clone();
 
-        if let Some(t) = token {
-            req = req.query(&[("token", t.as_str())]);
-        }
+        // Run blocking HTTP in a dedicated thread to avoid tokio runtime conflicts
+        std::thread::spawn(move || {
+            let client = reqwest::blocking::Client::new();
+            let mut req = client.get(&url).query(&[("ref", &ref_json)]);
 
-        let resp = req
-            .send()
-            .map_err(|e| PyRuntimeError::new_err(format!("HTTP download: {e}")))?;
+            if let Some(t) = &token {
+                req = req.query(&[("token", t.as_str())]);
+            }
 
-        if !resp.status().is_success() {
-            return Err(PyRuntimeError::new_err(format!(
-                "HTTP download failed: {}",
-                resp.status()
-            )));
-        }
+            let resp = req
+                .send()
+                .map_err(|e| PyRuntimeError::new_err(format!("HTTP download: {e}")))?;
 
-        let bytes = resp
-            .bytes()
-            .map_err(|e| PyRuntimeError::new_err(format!("read download response: {e}")))?;
+            if !resp.status().is_success() {
+                return Err(PyRuntimeError::new_err(format!(
+                    "HTTP download failed: {}",
+                    resp.status()
+                )));
+            }
 
-        rmp_serde::from_slice(&bytes).or_else(|_| {
-            serde_json::from_slice(&bytes)
-                .map_err(|e| PyRuntimeError::new_err(format!("deserialize download: {e}")))
+            let bytes = resp
+                .bytes()
+                .map_err(|e| PyRuntimeError::new_err(format!("read download response: {e}")))?;
+
+            rmp_serde::from_slice(&bytes).or_else(|_| {
+                serde_json::from_slice(&bytes)
+                    .map_err(|e| PyRuntimeError::new_err(format!("deserialize download: {e}")))
+            })
         })
+        .join()
+        .map_err(|_| PyRuntimeError::new_err("HTTP download thread panicked"))?
     }
 
     /// Send a plan to a remote worker via WebSocket.

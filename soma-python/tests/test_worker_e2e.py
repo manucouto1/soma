@@ -187,18 +187,28 @@ class TestHTTPBulkTransport:
     """Large payloads (>10MB) go via HTTP upload."""
 
     def test_large_tensor_upload(self):
+        """Payload >10MB triggers HTTP /upload automatically."""
         g = make_graph()
         g.node("identity", IdentityFilter())
         g.fit([1.0])
 
-        # Create a >10MB payload (~1.3M floats × 8 bytes ≈ 10.4MB)
-        big_data = list(range(1_300_001))
-        big_data_float = [float(x) for x in big_data[:100]]  # Only send 100 for speed
-
-        # This should work via inline (small), but let's verify the path exists
-        result = g.forward(big_data_float)
+        # 1.4M floats × 8 bytes ≈ 11.2MB → exceeds INLINE_THRESHOLD_BYTES (10MB)
+        big_data = [float(i) for i in range(1_400_000)]
+        result = g.forward(big_data)
         assert isinstance(result, list)
-        assert len(result) == 100
+        assert len(result) == 1_400_000
+        assert result[0] == 0.0
+        assert result[-1] == 1_399_999.0
+
+    def test_large_fit_via_http(self):
+        """Fit with >10MB data also goes through HTTP upload."""
+        g = make_graph()
+        g.node("scaler", ScaleFilter(factor=1.0))
+        big_data = [float(i) for i in range(1_400_000)]
+        g.fit(big_data)  # Should upload via HTTP, train remotely
+        result = g.forward([100.0])
+        assert isinstance(result, list)
+        assert len(result) == 1
 
 
 class TestFitForwardStateRoundTrip:
@@ -362,3 +372,185 @@ class TestWorkerManagement:
         sources = g.filter_sources_dict()
         assert "d1" in sources
         assert "d2" in sources
+
+
+class TestMultipleWorkers:
+    """Multiple workers on the same machine."""
+
+    def test_two_workers_same_graph(self):
+        """Register two workers, verify both are listed."""
+        port2 = find_free_port()
+        t2 = threading.Thread(
+            target=lambda: Worker(port=port2, worker_id="e2e-worker-2", tags=["test2"]).serve(),
+            daemon=True,
+        )
+        t2.start()
+
+        import urllib.request
+        for _ in range(30):
+            try:
+                if urllib.request.urlopen(f"http://127.0.0.1:{port2}/health", timeout=1).read() == b"ok":
+                    break
+            except Exception:
+                time.sleep(0.1)
+
+        g = Graph()
+        g.add_worker(f"ws://127.0.0.1:{WORKER_PORT}", token=WORKER_TOKEN, tags=["test"])
+        g.add_worker(f"ws://127.0.0.1:{port2}", tags=["test2"])
+        workers = g.workers()
+        assert len(workers) == 2
+
+    def test_dispatch_to_specific_worker(self):
+        """Filters route to the correct worker by tag."""
+        g = make_graph()
+        g.node("doubler", DoubleFilter())
+        g.fit([1.0])
+        result = g.forward([7.0])
+        assert result == [14.0]
+
+
+class TestStateRoundTripAdvanced:
+    """Advanced state scenarios."""
+
+    def test_state_with_nested_dict(self):
+        """State with nested structure survives round-trip."""
+
+        class NestedStateFilter(Filter):
+            _kind = "trainable"
+
+            def fit(self, x, y=None):
+                return {
+                    "weights": [1.0, 2.0, 3.0],
+                    "config": {"lr": 0.001, "layers": [64, 32]},
+                    "bias": 0.5,
+                }
+
+            def forward(self, x, state):
+                if isinstance(state, dict) and "weights" in state:
+                    w = state["weights"]
+                    b = state.get("bias", 0)
+                    return [sum(xi * wi for xi, wi in zip(x, w)) + b]
+                return x
+
+        g = make_graph()
+        g.node("nested", NestedStateFilter())
+        g.fit([1.0, 2.0, 3.0])
+        result = g.forward([1.0, 2.0, 3.0])
+        assert isinstance(result, list)
+        # 1*1 + 2*2 + 3*3 + 0.5 = 14.5
+        assert abs(result[0] - 14.5) < 0.01
+
+    def test_refit_updates_state(self):
+        """Fitting twice with different data updates the state."""
+        g = make_graph()
+        g.node("scaler", ScaleFilter(factor=1.0))
+
+        g.fit([10.0, 20.0, 30.0])  # mean = 20
+        result1 = g.forward([25.0])
+        # (25 - 20) * 1 = 5
+        assert abs(result1[0] - 5.0) < 0.01
+
+        g.fit([100.0, 200.0, 300.0])  # mean = 200
+        result2 = g.forward([250.0])
+        # (250 - 200) * 1 = 50
+        assert abs(result2[0] - 50.0) < 0.01
+
+    def test_stateless_ignores_state(self):
+        """Stateless filters work even when state is provided."""
+        g = make_graph()
+        g.node("d", DoubleFilter())
+        g.fit([99.0])
+        r1 = g.forward([5.0])
+        r2 = g.forward([5.0])
+        assert r1 == r2 == [10.0]
+
+
+class TestDataStoreAdvanced:
+    """DataStore with real data flow."""
+
+    def test_data_store_fit_and_forward(self):
+        """Full cycle: fit via store, forward via store."""
+        store_path = os.path.join(WORKER_TEMP, "ds_full")
+        g = make_graph()
+        g.set_data_store("local", path=store_path)
+        g.node("scaler", ScaleFilter(factor=5.0))
+        g.fit([1.0, 3.0, 5.0])  # mean = 3
+        result = g.forward([10.0])
+        # (10 - 3) * 5 = 35
+        assert isinstance(result, list)
+        assert abs(result[0] - 35.0) < 0.01
+
+    def test_data_store_persists_between_graphs(self):
+        """Data uploaded to store can be reused."""
+        store_path = os.path.join(WORKER_TEMP, "ds_persist")
+        os.makedirs(store_path, exist_ok=True)
+
+        # First graph writes
+        g1 = make_graph()
+        g1.set_data_store("local", path=store_path)
+        g1.node("d", DoubleFilter())
+        g1.fit([1.0])
+        g1.forward([5.0])
+
+        # Verify store has files
+        assert len(os.listdir(store_path)) > 0
+
+
+class TestEdgeCasesAdvanced:
+    """More edge cases."""
+
+    def test_large_chain(self):
+        """Chain of 5 filters works remotely."""
+        g = make_graph()
+        prev = None
+        for i in range(5):
+            name = f"d{i}"
+            g.node(name, DoubleFilter())
+            if prev:
+                g.edge(prev, name)
+            prev = name
+        g.fit([1.0])
+        result = g.forward([1.0])
+        # 1 * 2^5 = 32
+        assert result == [32.0]
+
+    def test_negative_values(self):
+        g = make_graph()
+        g.node("d", DoubleFilter())
+        g.fit([1.0])
+        result = g.forward([-5.0, -10.0])
+        assert result == [-10.0, -20.0]
+
+    def test_very_small_values(self):
+        g = make_graph()
+        g.node("d", DoubleFilter())
+        g.fit([1.0])
+        result = g.forward([1e-10, 1e-20])
+        assert abs(result[0] - 2e-10) < 1e-15
+        assert abs(result[1] - 2e-20) < 1e-25
+
+    def test_2d_tensor_input(self):
+        """2D list (matrix) works through worker."""
+        g = make_graph()
+        g.node("identity", IdentityFilter())
+        g.fit([1.0])
+        result = g.forward([[1.0, 2.0], [3.0, 4.0]])
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_repeated_forward_calls(self):
+        """Multiple forward calls on same fitted graph."""
+        g = make_graph()
+        g.node("d", DoubleFilter())
+        g.fit([1.0])
+        for val in [1.0, 2.0, 3.0, 100.0, 0.0]:
+            result = g.forward([val])
+            assert result == [val * 2]
+
+    def test_graph_repr(self):
+        """Graph __repr__ works with worker connected."""
+        g = make_graph()
+        g.node("d", DoubleFilter())
+        r = repr(g)
+        assert "1 nodes" in r
+        assert "fitted=false" in r

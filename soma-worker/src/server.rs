@@ -229,10 +229,10 @@ async fn download_data(
         .get(&data_ref)
         .map_err(|_| StatusCode::NOT_FOUND)?;
 
-    let bytes = rmp_serde::to_vec(&value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let bytes = serde_json::to_vec(&value).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((
-        [(axum::http::header::CONTENT_TYPE, "application/msgpack")],
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
         bytes,
     ))
 }
