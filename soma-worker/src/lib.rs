@@ -13,7 +13,6 @@ pub mod protocol;
 pub mod py_filter;
 pub mod remote_executor;
 pub mod server;
-pub mod strategy_executor;
 pub mod worker;
 pub mod ws_transport;
 

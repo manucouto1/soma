@@ -1,20 +1,20 @@
-//! WebSocket-based RemoteExecutor — sends plans to workers and collects results.
+//! WebSocket-based RemoteExecutor — routes nodes to workers and delegates via WsTransport.
 
 use somatize_core::error::{Result, SomaError};
 use somatize_core::filter::RemoteTarget;
 use somatize_core::value::Value;
 use somatize_runtime::executor::RemoteExecutor;
+use somatize_runtime::runner::Transport;
 
-use crate::protocol::*;
+use crate::ws_transport::WsTransport;
 use std::sync::RwLock;
 
-/// A remote executor that dispatches work to workers via WebSocket.
+/// Routes remote execution requests to the appropriate worker via WebSocket.
 ///
-/// Workers are registered by address + optional token.
-/// When `execute_remote` is called, it finds a matching worker,
-/// connects via WS, sends the plan, and waits for the result.
+/// Workers are registered by address + optional token + tags.
+/// When `execute_remote` is called, it finds a matching worker by target,
+/// creates a WsTransport, and delegates the execution.
 pub struct WsRemoteExecutor {
-    /// Registered workers: (address, token, tags)
     workers: RwLock<Vec<WorkerEntry>>,
 }
 
@@ -32,147 +32,20 @@ impl WsRemoteExecutor {
         }
     }
 
-    /// Register a worker endpoint.
     pub fn add_worker(&self, address: impl Into<String>, token: Option<String>, tags: Vec<String>) {
-        let mut workers = self.workers.write().unwrap();
-        workers.push(WorkerEntry {
+        self.workers.write().unwrap().push(WorkerEntry {
             address: address.into(),
             token,
             tags,
         });
     }
 
-    /// Find a worker matching the given target.
     fn find_worker(&self, target: &RemoteTarget) -> Option<WorkerEntry> {
         let workers = self.workers.read().unwrap();
         match target {
             RemoteTarget::WorkerId(id) => workers.iter().find(|w| w.address.contains(id)).cloned(),
             RemoteTarget::Tag(tag) => workers.iter().find(|w| w.tags.contains(tag)).cloned(),
         }
-    }
-
-    /// Send a plan to a worker via WebSocket and wait for the result.
-    fn execute_on_worker(
-        &self,
-        worker: &WorkerEntry,
-        node_id: &str,
-        input: Option<&Value>,
-    ) -> Result<Value> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| SomaError::Other(format!("tokio runtime: {e}")))?;
-
-        rt.block_on(async {
-            let url = if let Some(token) = &worker.token {
-                format!("{}/ws?token={}", worker.address, token)
-            } else {
-                format!("{}/ws", worker.address)
-            };
-
-            // No size limits — workers handle arbitrary payloads (datasets, model weights, etc.)
-            let mut ws_config =
-                tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
-            ws_config.max_message_size = None;
-            ws_config.max_frame_size = None;
-            let (mut ws, _) =
-                tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false)
-                    .await
-                    .map_err(|e| {
-                        SomaError::Other(format!("WS connect to {}: {e}", worker.address))
-                    })?;
-
-            use futures_util::{SinkExt, StreamExt};
-            use tokio_tungstenite::tungstenite::Message;
-
-            // Build a simple plan: execute this one node
-            let plan = SerializedPlan {
-                plan_id: format!("remote_{node_id}"),
-                plan: somatize_compiler::ExecutionPlan::Execute {
-                    node_id: node_id.to_string(),
-                },
-                input: input.map(|v| InputSource::Inline { value: v.clone() }),
-                filters: vec![],
-                mode: ExecutionMode::default(),
-                metadata: serde_json::json!({}),
-            };
-
-            let msg = CoordinatorToWorker::AssignPlan { plan };
-            let json = serde_json::to_string(&msg)
-                .map_err(|e| SomaError::Other(format!("serialize: {e}")))?;
-
-            ws.send(Message::Text(json.into()))
-                .await
-                .map_err(|e| SomaError::Other(format!("WS send: {e}")))?;
-
-            // Wait for result
-            while let Some(Ok(Message::Text(response))) = ws.next().await {
-                if let Ok(result) = serde_json::from_str::<WorkerToCoordinator>(&response) {
-                    match result {
-                        WorkerToCoordinator::PlanResult { result, .. } => match result {
-                            PlanResult::Success { output, .. } => {
-                                let _ = ws.close(None).await;
-                                let value = match output {
-                                    OutputDelivery::Inline { value } => value,
-                                    OutputDelivery::Reference { data_ref } => {
-                                        // Download from worker via HTTP
-                                        let http_addr = worker
-                                            .address
-                                            .replace("ws://", "http://")
-                                            .replace("wss://", "https://");
-                                        let url = format!("{http_addr}/download");
-                                        let ref_json =
-                                            serde_json::to_string(&data_ref).map_err(|e| {
-                                                SomaError::Other(format!("serialize data_ref: {e}"))
-                                            })?;
-                                        let client = reqwest::blocking::Client::new();
-                                        let mut req = client.get(&url).query(&[("ref", &ref_json)]);
-                                        if let Some(token) = &worker.token {
-                                            req = req.query(&[("token", token)]);
-                                        }
-                                        let resp = req.send().map_err(|e| {
-                                            SomaError::Other(format!("HTTP download: {e}"))
-                                        })?;
-                                        if !resp.status().is_success() {
-                                            return Err(SomaError::Other(format!(
-                                                "download failed: {}",
-                                                resp.status()
-                                            )));
-                                        }
-                                        let bytes = resp.bytes().map_err(|e| {
-                                            SomaError::Other(format!("read response: {e}"))
-                                        })?;
-                                        rmp_serde::from_slice(&bytes).or_else(|_| {
-                                            serde_json::from_slice(&bytes).map_err(|e| {
-                                                SomaError::Other(format!(
-                                                    "deserialize download: {e}"
-                                                ))
-                                            })
-                                        })?
-                                    }
-                                };
-                                return Ok(value);
-                            }
-                            PlanResult::Failed { error, .. } => {
-                                let _ = ws.close(None).await;
-                                return Err(SomaError::Execution {
-                                    node_id: node_id.to_string(),
-                                    message: error,
-                                });
-                            }
-                        },
-                        // Skip progress/event messages
-                        _ => continue,
-                    }
-                }
-            }
-
-            let _ = ws.close(None).await;
-            Err(SomaError::Other(format!(
-                "worker {} closed without result",
-                worker.address
-            )))
-        })
     }
 
     pub fn has_workers(&self) -> bool {
@@ -202,6 +75,16 @@ impl RemoteExecutor for WsRemoteExecutor {
             worker.address
         );
 
-        self.execute_on_worker(&worker, node_id, input)
+        // Create a WsTransport for this worker and delegate
+        let transport = WsTransport::new(&worker.address, worker.token.clone());
+        let plan = somatize_compiler::ExecutionPlan::Execute {
+            node_id: node_id.to_string(),
+        };
+        let empty_filters = somatize_runtime::FilterLibrary::new();
+        let input_val = input.cloned().unwrap_or(Value::Empty);
+
+        let (output, _states) =
+            transport.execute(&plan, &empty_filters, &input_val, None, false)?;
+        Ok(output)
     }
 }
