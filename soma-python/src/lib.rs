@@ -20,7 +20,7 @@ use somatize_core::search::{Scale, SearchDimension, SearchSpace};
 use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
 use somatize_core::value::Value;
 use somatize_runtime::EventBus;
-use somatize_runtime::cache::MemoryCache;
+use somatize_runtime::cache::{LocalCache, MemoryCache, TieredCache};
 use somatize_runtime::executor::{self, Context, GraphInfo};
 use somatize_runtime::executors::study::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use somatize_runtime::filter_library::FilterLibrary;
@@ -1191,12 +1191,59 @@ impl PyGraph {
 
 #[pymethods]
 impl PyGraph {
+    /// Create a new Graph.
+    ///
+    /// Optional keyword arguments:
+    ///
+    /// * `cache` — cache backend: `"memory"` (default), `"local"`, or `"tiered"`.
+    /// * `cache_path` — directory for `"local"` / `"tiered"` cache (required for those).
+    /// * `cache_max_bytes` — max bytes for the in-memory LRU (default 1 GB).
     #[new]
-    fn new() -> Self {
-        Self {
+    #[pyo3(signature = (*, cache=None, cache_path=None, cache_max_bytes=None))]
+    fn new(
+        cache: Option<&str>,
+        cache_path: Option<String>,
+        cache_max_bytes: Option<usize>,
+    ) -> PyResult<Self> {
+        let max_bytes = cache_max_bytes.unwrap_or(1024 * 1024 * 1024);
+        let cache_store: Arc<dyn somatize_core::cache::CacheStore> = match cache.unwrap_or("memory")
+        {
+            "memory" => Arc::new(MemoryCache::new(max_bytes)),
+            "local" => {
+                let path = cache_path.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "cache_path is required for cache=\"local\"",
+                    )
+                })?;
+                Arc::new(
+                    LocalCache::new(path)
+                        .map_err(|e| PyRuntimeError::new_err(format!("cache init: {e}")))?,
+                )
+            }
+            "tiered" => {
+                let path = cache_path.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "cache_path is required for cache=\"tiered\"",
+                    )
+                })?;
+                let local = LocalCache::new(path)
+                    .map_err(|e| PyRuntimeError::new_err(format!("cache init: {e}")))?;
+                Arc::new(TieredCache::memory_and_local(
+                    Box::new(MemoryCache::new(max_bytes)),
+                    Box::new(local),
+                ))
+            }
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "unknown cache type: {other:?} (expected \"memory\", \"local\", or \"tiered\")"
+                )));
+            }
+        };
+
+        Ok(Self {
             graph: Graph::new(),
             library: FilterLibrary::new(),
-            cache: Arc::new(MemoryCache::default()),
+            cache: cache_store,
             event_bus: Arc::new(EventBus::new(256)),
             fitted: false,
             workers: Vec::new(),
@@ -1205,7 +1252,7 @@ impl PyGraph {
             filter_sources: std::collections::HashMap::new(),
             data_store: None,
             filter_trainable: std::collections::HashMap::new(),
-        }
+        })
     }
 
     /// Add a filter node. Returns the node id.
