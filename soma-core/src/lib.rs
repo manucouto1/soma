@@ -16,6 +16,7 @@ pub mod filter;
 pub mod graph;
 pub mod schema;
 pub mod search;
+pub mod state;
 pub mod store;
 pub mod strategy;
 pub mod study;
@@ -31,6 +32,7 @@ pub use filter::{Distribution, Filter, FilterKind, FilterMeta, RemoteTarget, Str
 pub use graph::{Edge, EdgeKind, Graph, Node, NodeId};
 pub use schema::{DataType, Dimension, Schema};
 pub use search::{Scale, SearchDimension, SearchSpace, Searchable};
+pub use state::{MemoryStateStore, StateStore};
 #[cfg(feature = "s3")]
 pub use store::S3DataStore;
 #[cfg(feature = "zarr")]

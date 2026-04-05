@@ -83,7 +83,7 @@ impl Worker {
     pub fn get_filter_state(&self, node_id: &str) -> Value {
         self.filters
             .get_state(node_id)
-            .cloned()
+            .map(|arc| (*arc).clone())
             .unwrap_or(Value::Empty)
     }
 
@@ -375,7 +375,11 @@ impl Worker {
             .iter()
             .filter_map(|id| {
                 let filter = self.filters.get(id)?;
-                let state = self.filters.get_state(id).cloned().unwrap_or(Value::Empty);
+                let state = self
+                    .filters
+                    .get_state(id)
+                    .map(|arc| (*arc).clone())
+                    .unwrap_or(Value::Empty);
                 Some(FittedFilter {
                     name: id.clone(),
                     filter,

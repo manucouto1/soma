@@ -234,7 +234,7 @@ impl GraphSession {
         let mut states_map = serde_json::Map::new();
         for node_id in &sorted {
             if let Some(state) = self.library.get_state(node_id) {
-                let json = serde_json::to_value(state)
+                let json = serde_json::to_value(&*state)
                     .map_err(|e| SomaError::Other(format!("state serialize: {e}")))?;
                 states_map.insert(node_id.to_string(), json);
             }

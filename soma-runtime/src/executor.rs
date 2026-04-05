@@ -398,14 +398,15 @@ fn execute_node(
     let _span = tracing::info_span!("execute_node", %node_id).entered();
 
     let input = resolve_input(node_id, ctx);
-    // Borrow state directly — cloning here would deep-copy potentially
-    // huge tensors (encoder outputs, model weights) on every forward call.
-    let empty_state = Value::Empty;
-    let state = filters.get_state(node_id).unwrap_or(&empty_state);
+    // Borrow state via Arc — cloning the inner Value here would deep-copy
+    // potentially huge tensors (encoder outputs, model weights) on every
+    // forward call. Arc::clone is a cheap atomic increment.
+    let state = filters.get_state(node_id);
+    let state_ref: &Value = state.as_deref().unwrap_or(&Value::Empty);
 
     // catch_unwind: a panic in a user filter must not crash the process
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        filter.forward(&input, state)
+        filter.forward(&input, state_ref)
     }));
 
     let result = match result {

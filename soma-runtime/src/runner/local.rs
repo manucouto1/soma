@@ -146,8 +146,14 @@ impl Runner for LocalRunner {
             let start = std::time::Instant::now();
 
             // Fit trainable filters. Use Cow so the non-trainable branch
-            // can borrow the existing state without cloning potentially
-            // huge tensors on every forward call.
+            // can borrow the existing state (via the StateStore Arc)
+            // without cloning potentially huge tensors on every forward
+            // call.
+            let library_state: Option<Arc<Value>> = if meta.kind == FilterKind::Trainable {
+                None
+            } else {
+                filters.get_state(node_id)
+            };
             let empty_state = Value::Empty;
             let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
                 let data_hash =
@@ -177,7 +183,10 @@ impl Runner for LocalRunner {
                 trained_states.insert(node_id.clone(), s.clone());
                 Cow::Owned(s)
             } else {
-                Cow::Borrowed(filters.get_state(node_id).unwrap_or(&empty_state))
+                match library_state.as_deref() {
+                    Some(v) => Cow::Borrowed(v),
+                    None => Cow::Borrowed(&empty_state),
+                }
             };
 
             // Forward with state (catch panics)

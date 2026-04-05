@@ -3,10 +3,15 @@
 //! [`FilterLibrary`] is the single registry for the entire pipeline:
 //! the compiler reads metadata via [`FilterRegistry`], and the executor
 //! reads filters and states directly. No intermediate conversion needed.
+//!
+//! States live in a pluggable [`StateStore`] — by default
+//! [`MemoryStateStore`], but users can inject a disk- or S3-backed store
+//! for pipelines whose trained states don't fit comfortably in RAM.
 
 use somatize_compiler::FilterRegistry;
 use somatize_core::cache::CacheKey;
 use somatize_core::filter::{Filter, FilterMeta};
+use somatize_core::state::{MemoryStateStore, StateStore};
 use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,14 +31,23 @@ use std::sync::Arc;
 /// ```
 pub struct FilterLibrary {
     filters: HashMap<String, Arc<dyn Filter>>,
-    states: HashMap<String, Value>,
+    states: Arc<dyn StateStore>,
 }
 
 impl FilterLibrary {
+    /// Create a new library with an in-memory state store.
     pub fn new() -> Self {
         Self {
             filters: HashMap::new(),
-            states: HashMap::new(),
+            states: Arc::new(MemoryStateStore::new()),
+        }
+    }
+
+    /// Create a library with a custom [`StateStore`] backend.
+    pub fn with_state_store(states: Arc<dyn StateStore>) -> Self {
+        Self {
+            filters: HashMap::new(),
+            states,
         }
     }
 
@@ -58,13 +72,35 @@ impl FilterLibrary {
     }
 
     /// Store a trained state for a node.
-    pub fn set_state(&mut self, node_id: impl Into<String>, state: Value) {
-        self.states.insert(node_id.into(), state);
+    ///
+    /// Errors bubble up from the underlying [`StateStore`] (e.g. I/O on
+    /// a disk-backed backend). The in-memory default never fails.
+    pub fn set_state(&self, node_id: impl Into<String>, state: Value) {
+        let id = node_id.into();
+        if let Err(e) = self.states.set(&id, state) {
+            // A failing state store is a programming/infra error; keep
+            // the panic local to this call site rather than letting an
+            // Err propagate through every caller.
+            panic!("StateStore::set failed for node {id}: {e}");
+        }
     }
 
-    /// Retrieve the trained state for a node.
-    pub fn get_state(&self, node_id: &str) -> Option<&Value> {
-        self.states.get(node_id)
+    /// Retrieve the trained state for a node. The returned `Arc<Value>`
+    /// can be dereferenced (`&*arc`) for the forward hot path without
+    /// cloning the underlying value.
+    pub fn get_state(&self, node_id: &str) -> Option<Arc<Value>> {
+        self.states.get(node_id).ok().flatten()
+    }
+
+    /// Drop all stored states (but keep filters).
+    pub fn clear_states(&self) {
+        let _ = self.states.clear();
+    }
+
+    /// Access the underlying [`StateStore`] (e.g. to share it across
+    /// sessions or inspect its contents).
+    pub fn state_store(&self) -> &Arc<dyn StateStore> {
+        &self.states
     }
 }
 
@@ -165,5 +201,17 @@ mod tests {
         lib.set_state("a", Value::json(serde_json::json!({"mean": 5.0})));
         let state = lib.get_state("a").unwrap();
         assert_eq!(state.as_json().unwrap()["mean"], 5.0);
+    }
+
+    #[test]
+    fn clear_states_keeps_filters() {
+        let mut lib = FilterLibrary::new();
+        lib.register("a", Box::new(DummyFilter { name: "A".into() }));
+        lib.set_state("a", Value::Empty);
+
+        assert!(lib.get_state("a").is_some());
+        lib.clear_states();
+        assert!(lib.get_state("a").is_none());
+        assert!(lib.get("a").is_some());
     }
 }

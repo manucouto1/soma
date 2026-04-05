@@ -940,7 +940,7 @@ impl PyGraph {
             .iter()
             .filter_map(|node| {
                 let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
-                let state = self.library.get_state(&node.id).cloned();
+                let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
                 let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
@@ -1048,7 +1048,7 @@ impl PyGraph {
             .iter()
             .filter_map(|node| {
                 let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
-                let state = self.library.get_state(&node.id).cloned();
+                let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
                 let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
