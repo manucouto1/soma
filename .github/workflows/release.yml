@@ -46,6 +46,13 @@ jobs:
     name: Build Linux wheels
     runs-on: self-hosted
     steps:
+      - name: Reclaim workspace ownership (pre-checkout)
+        run: |
+          if [ -d "${{ github.workspace }}" ]; then
+            docker run --rm -v "${{ github.workspace }}:/io" alpine \
+              sh -c "chown -R $(id -u):$(id -g) /io 2>/dev/null || true"
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Build manylinux wheels via Docker
