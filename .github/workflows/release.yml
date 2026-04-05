@@ -41,28 +41,6 @@ jobs:
           sleep 30
           cargo publish -p somatize --allow-dirty || true
 
-  # Build macOS ARM wheel natively
-  build-macos:
-    name: Build macOS ARM wheel
-    runs-on: self-hosted
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build wheel
-        working-directory: soma-python
-        run: |
-          pip install maturin
-          maturin build --release --out dist --interpreter python${{ matrix.python-version }}
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheel-macos-py${{ matrix.python-version }}
-          path: soma-python/dist/*.whl
-
   # Build Linux wheels via Docker
   build-linux:
     name: Build Linux wheels
@@ -107,7 +85,7 @@ jobs:
   # Upload to PyPI
   upload-pypi:
     name: Upload to PyPI
-    needs: [build-macos, build-linux, build-sdist]
+    needs: [build-linux, build-sdist]
     runs-on: self-hosted
     steps:
       - name: Download all artifacts
