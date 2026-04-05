@@ -63,6 +63,12 @@ jobs:
           name: wheels-linux
           path: dist/*.whl
 
+      - name: Reclaim ownership (fallback if Docker wrote as root)
+        if: always()
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/io" alpine \
+            chown -R "$(id -u):$(id -g)" /io || true
+
   # Build sdist
   build-sdist:
     name: Build sdist
