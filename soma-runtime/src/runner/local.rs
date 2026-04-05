@@ -15,6 +15,7 @@ use somatize_core::event::Event;
 use somatize_core::filter::FilterKind;
 use somatize_core::util::timestamp_id;
 use somatize_core::value::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -144,8 +145,11 @@ impl Runner for LocalRunner {
 
             let start = std::time::Instant::now();
 
-            // Fit trainable filters
-            let state = if meta.kind == FilterKind::Trainable {
+            // Fit trainable filters. Use Cow so the non-trainable branch
+            // can borrow the existing state without cloning potentially
+            // huge tensors on every forward call.
+            let empty_state = Value::Empty;
+            let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
                 let data_hash =
                     CacheKey::hash_data(&serde_json::to_vec(&node_input).unwrap_or_default());
                 let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
@@ -171,9 +175,9 @@ impl Runner for LocalRunner {
                     fitted
                 };
                 trained_states.insert(node_id.clone(), s.clone());
-                s
+                Cow::Owned(s)
             } else {
-                filters.get_state(node_id).cloned().unwrap_or(Value::Empty)
+                Cow::Borrowed(filters.get_state(node_id).unwrap_or(&empty_state))
             };
 
             // Forward with state (catch panics)

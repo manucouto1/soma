@@ -398,11 +398,14 @@ fn execute_node(
     let _span = tracing::info_span!("execute_node", %node_id).entered();
 
     let input = resolve_input(node_id, ctx);
-    let state = filters.get_state(node_id).cloned().unwrap_or(Value::Empty);
+    // Borrow state directly — cloning here would deep-copy potentially
+    // huge tensors (encoder outputs, model weights) on every forward call.
+    let empty_state = Value::Empty;
+    let state = filters.get_state(node_id).unwrap_or(&empty_state);
 
     // catch_unwind: a panic in a user filter must not crash the process
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        filter.forward(&input, &state)
+        filter.forward(&input, state)
     }));
 
     let result = match result {
