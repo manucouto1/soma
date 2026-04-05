@@ -147,7 +147,43 @@ impl PyFilterBridge {
         // register them for by-value serialization (transitive).
         py.run(
             c"
-import sys, types, cloudpickle as _cp
+import sys, types, sysconfig, os, cloudpickle as _cp
+
+# Python 3.10+ exposes the canonical stdlib module name set. Fall back to
+# empty frozenset on older versions (combined with other heuristics below).
+_STDLIB = getattr(sys, 'stdlib_module_names', frozenset())
+_BUILTINS = frozenset(sys.builtin_module_names)
+# Never pickle-by-value modules the worker already has installed.
+_NEVER = {'soma', 'cloudpickle', 'numpy', 'pandas', 'torch', 'sklearn', 'scipy'}
+# Site-packages directories (platform/installer independent: works on
+# Debian, RHEL/Fedora with lib64, Windows, conda, virtualenvs).
+_SITE_PREFIXES = tuple(
+    os.path.realpath(p) + os.sep
+    for p in {sysconfig.get_paths().get('purelib'), sysconfig.get_paths().get('platlib')}
+    if p
+)
+
+def _is_stdlib_or_installed(mod):
+    name = getattr(mod, '__name__', '') or ''
+    top = name.split('.')[0]
+    if top in _STDLIB or top in _BUILTINS or top in _NEVER:
+        return True
+    f = getattr(mod, '__file__', None)
+    if f is None:
+        # C extension or frozen without __file__: treat as stdlib/builtin.
+        return True
+    # Python 3.11+ frozen stdlib modules: __file__ == '<frozen io>' etc.
+    if f.startswith('<'):
+        return True
+    # Authoritative site-packages check via sysconfig (handles lib64,
+    # virtualenvs, conda). Fall back to substring match for pathological
+    # cases where realpath resolution differs.
+    rf = os.path.realpath(f)
+    if _SITE_PREFIXES and rf.startswith(_SITE_PREFIXES):
+        return True
+    if 'site-packages' in f or 'dist-packages' in f:
+        return True
+    return False
 
 def _register_transitive(mod, visited=None):
     if visited is None:
@@ -156,12 +192,7 @@ def _register_transitive(mod, visited=None):
     if not name or name in visited or name == '__main__':
         return
     visited.add(name)
-    # Skip stdlib and installed packages (only register project-local modules)
-    f = getattr(mod, '__file__', None)
-    if f is None:
-        return
-    # Heuristic: stdlib/site-packages have these in their paths
-    if 'site-packages' in f or 'lib/python' in f:
+    if _is_stdlib_or_installed(mod):
         return
     _cp.register_pickle_by_value(mod)
     # Walk globals for imported modules
