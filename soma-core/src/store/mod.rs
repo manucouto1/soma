@@ -49,7 +49,7 @@ impl StoreMeta {
                 shape_tail: vec![],
                 dtype: "json".into(),
             },
-            Value::Bytes(b) => Self {
+            Value::Bytes(b) | Value::Object(b) => Self {
                 total_rows: b.len(),
                 shape_tail: vec![],
                 dtype: "bytes".into(),

@@ -6,7 +6,7 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyDict, PyList};
+use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -50,11 +50,9 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 
     if obj.is_instance_of::<PyDict>() {
-        let json_mod = py.import("json")?;
-        let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
-        let val: serde_json::Value =
-            serde_json::from_str(&json_str).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        return Ok(Value::json(val));
+        let pickle = py.import("pickle")?;
+        let data: Vec<u8> = pickle.call_method1("dumps", (obj, 5i32))?.extract()?;
+        return Ok(Value::object(data));
     }
 
     if let Ok(s) = obj.extract::<String>()
@@ -88,6 +86,12 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
             let json_str = v.to_string();
             let json_mod = py.import("json")?;
             let obj = json_mod.call_method1("loads", (json_str,))?;
+            Ok(obj.unbind())
+        }
+        Value::Object(data) => {
+            let pickle = py.import("pickle")?;
+            let py_bytes = PyBytes::new(py, data.as_slice());
+            let obj = pickle.call_method1("loads", (py_bytes,))?;
             Ok(obj.unbind())
         }
         Value::Bytes(b) => Ok(b.as_slice().into_pyobject(py)?.into_any().unbind()),

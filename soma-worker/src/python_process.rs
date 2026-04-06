@@ -49,6 +49,8 @@ def _decode(obj):
                 return {}
             if t == "Bytes":
                 return bytes(d)
+            if t == "Object":
+                return pickle.loads(bytes(d))
         return {k: _decode(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_decode(v) for v in obj]

@@ -178,7 +178,7 @@ impl VirtualValue {
                 ),
             },
             Value::Json(_) => Schema::json(),
-            Value::Bytes(_) => Schema::bytes(),
+            Value::Bytes(_) | Value::Object(_) => Schema::bytes(),
             Value::Empty => Schema::dynamic(crate::schema::DataType::Float64),
         }
     }

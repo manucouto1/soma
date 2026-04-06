@@ -25,6 +25,12 @@ pub enum Value {
     /// Raw bytes (Arc-wrapped for cheap cloning).
     Bytes(Arc<Vec<u8>>),
 
+    /// Opaque serialized object (e.g. Python pickle).
+    /// Soma passes it through without interpreting the contents.
+    /// Used for efficient inter-filter data transfer when the producing
+    /// and consuming runtimes share a serialization format.
+    Object(Arc<Vec<u8>>),
+
     /// Empty / void value
     Empty,
 }
@@ -43,6 +49,10 @@ impl Value {
 
     pub fn bytes(data: Vec<u8>) -> Self {
         Self::Bytes(Arc::new(data))
+    }
+
+    pub fn object(data: Vec<u8>) -> Self {
+        Self::Object(Arc::new(data))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -70,7 +80,7 @@ impl Value {
         match self {
             Self::Tensor { values, .. } => values.len(),
             Self::Json(v) => v.to_string().len(),
-            Self::Bytes(b) => b.len(),
+            Self::Bytes(b) | Self::Object(b) => b.len(),
             Self::Empty => 0,
         }
     }
@@ -84,6 +94,7 @@ impl fmt::Display for Value {
             }
             Self::Json(v) => write!(f, "Json({v})"),
             Self::Bytes(b) => write!(f, "Bytes(len={})", b.len()),
+            Self::Object(b) => write!(f, "Object(len={})", b.len()),
             Self::Empty => write!(f, "Empty"),
         }
     }

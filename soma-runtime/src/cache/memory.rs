@@ -196,7 +196,7 @@ fn estimate_size(value: &Value) -> usize {
             values.len() * std::mem::size_of::<f64>() + shape.len() * std::mem::size_of::<usize>()
         }
         Value::Json(v) => v.to_string().len(),
-        Value::Bytes(b) => b.len(),
+        Value::Bytes(b) | Value::Object(b) => b.len(),
         Value::Empty => 0,
         _ => 0,
     }
