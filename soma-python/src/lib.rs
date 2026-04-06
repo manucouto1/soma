@@ -54,13 +54,13 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        return Ok(Value::Json(val));
+        return Ok(Value::json(val));
     }
 
     if let Ok(s) = obj.extract::<String>()
         && let Ok(val) = serde_json::from_str(&s)
     {
-        return Ok(Value::Json(val));
+        return Ok(Value::json(val));
     }
 
     Err(PyRuntimeError::new_err(
@@ -81,7 +81,7 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
                 }
                 Ok(result.into_any().unbind())
             } else {
-                Ok(values.into_pyobject(py)?.into_any().unbind())
+                Ok(values.as_slice().into_pyobject(py)?.into_any().unbind())
             }
         }
         Value::Json(v) => {
@@ -90,7 +90,7 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
             let obj = json_mod.call_method1("loads", (json_str,))?;
             Ok(obj.unbind())
         }
-        Value::Bytes(b) => Ok(b.into_pyobject(py)?.into_any().unbind()),
+        Value::Bytes(b) => Ok(b.as_slice().into_pyobject(py)?.into_any().unbind()),
         Value::Empty => Ok(py.None()),
         _ => Ok(py.None()),
     }
@@ -673,7 +673,8 @@ impl PyGraph {
                 }
                 batches
             }
-            Value::Json(serde_json::Value::Object(map)) => {
+            Value::Json(json_val) if json_val.is_object() => {
+                let map = json_val.as_object().unwrap();
                 let total = map
                     .values()
                     .find_map(|v| v.as_array().map(|a| a.len()))
@@ -693,7 +694,7 @@ impl PyGraph {
                             batch_map.insert(k.clone(), v.clone());
                         }
                     }
-                    batches.push(Value::Json(serde_json::Value::Object(batch_map)));
+                    batches.push(Value::json(serde_json::Value::Object(batch_map)));
                 }
                 batches
             }
@@ -1460,7 +1461,7 @@ impl PyGraph {
                             merged.insert(pred_id.clone(), json_val);
                         }
                     }
-                    Value::Json(serde_json::Value::Object(merged))
+                    Value::json(serde_json::Value::Object(merged))
                 }
             };
 

@@ -120,7 +120,7 @@ impl ForwardStrategy for Batched<'_> {
                 if result_shape.is_none() {
                     result_shape = Some(shape.clone());
                 }
-                all_values.extend_from_slice(values);
+                all_values.extend_from_slice(values.as_slice());
             } else {
                 return Ok(output);
             }

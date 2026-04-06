@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub struct FittedFilter {
     pub name: String,
     pub filter: Arc<dyn Filter>,
-    pub state: Value,
+    pub state: Arc<Value>,
 }
 
 /// Per-filter streaming state — one per filter in the pipeline.
@@ -148,7 +148,8 @@ fn process_by_mode(
             Ok(ChunkResult::Output(result))
         }
         StreamMode::Evolving { checkpoint_every } => {
-            let filter_state = state.evolving_state.as_ref().unwrap_or(&fitted.state);
+            let default_state: &Value = &fitted.state;
+            let filter_state = state.evolving_state.as_ref().unwrap_or(default_state);
             let result = fitted.filter.forward(input, filter_state)?;
             state.evolving_state = Some(result.clone());
 
@@ -228,7 +229,7 @@ pub fn materialize_buffer(buffer: &[Value]) -> Result<Value> {
     for chunk in buffer {
         match chunk {
             Value::Tensor { values, shape } => {
-                all_data.extend(values);
+                all_data.extend(values.iter());
                 if shape.len() == 1 {
                     total_rows += shape[0];
                     cols = 1;
@@ -366,7 +367,7 @@ mod tests {
         FittedFilter {
             name,
             filter: Arc::new(filter),
-            state,
+            state: Arc::new(state),
         }
     }
 

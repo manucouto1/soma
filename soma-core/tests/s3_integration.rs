@@ -63,7 +63,7 @@ fn roundtrip_json() {
     let Some(store) = store() else { return };
 
     let key = CacheKey::hash_data(b"integration_test_json");
-    let value = Value::Json(serde_json::json!({
+    let value = Value::json(serde_json::json!({
         "experiment": "test_001",
         "metrics": {"accuracy": 0.95, "loss": 0.05},
         "tags": ["integration", "ci"]

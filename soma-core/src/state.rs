@@ -93,7 +93,7 @@ mod tests {
         assert!(store.get("a").unwrap().is_none());
 
         store
-            .set("a", Value::Json(serde_json::json!({"mean": 5.0})))
+            .set("a", Value::json(serde_json::json!({"mean": 5.0})))
             .unwrap();
         let state = store.get("a").unwrap().unwrap();
         assert_eq!(state.as_json().unwrap()["mean"], 5.0);
@@ -123,10 +123,10 @@ mod tests {
     fn memory_store_overwrites() {
         let store = MemoryStateStore::new();
         store
-            .set("a", Value::Json(serde_json::json!({"v": 1})))
+            .set("a", Value::json(serde_json::json!({"v": 1})))
             .unwrap();
         store
-            .set("a", Value::Json(serde_json::json!({"v": 2})))
+            .set("a", Value::json(serde_json::json!({"v": 2})))
             .unwrap();
         let state = store.get("a").unwrap().unwrap();
         assert_eq!(state.as_json().unwrap()["v"], 2);

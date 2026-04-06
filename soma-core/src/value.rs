@@ -5,20 +5,25 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 
 /// Typed values flowing between filters in a pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data")]
 #[non_exhaustive]
 pub enum Value {
-    /// Numeric tensor data (shape + flat data)
-    Tensor { values: Vec<f64>, shape: Vec<usize> },
+    /// Numeric tensor data (shape + flat data).
+    /// `values` is wrapped in [`Arc`] so that cloning a `Value` is O(1).
+    Tensor {
+        values: Arc<Vec<f64>>,
+        shape: Vec<usize>,
+    },
 
-    /// Structured JSON data
-    Json(serde_json::Value),
+    /// Structured JSON data (Arc-wrapped for cheap cloning).
+    Json(Arc<serde_json::Value>),
 
-    /// Raw bytes
-    Bytes(Vec<u8>),
+    /// Raw bytes (Arc-wrapped for cheap cloning).
+    Bytes(Arc<Vec<u8>>),
 
     /// Empty / void value
     Empty,
@@ -26,15 +31,18 @@ pub enum Value {
 
 impl Value {
     pub fn tensor(values: Vec<f64>, shape: Vec<usize>) -> Self {
-        Self::Tensor { values, shape }
+        Self::Tensor {
+            values: Arc::new(values),
+            shape,
+        }
     }
 
     pub fn json(val: serde_json::Value) -> Self {
-        Self::Json(val)
+        Self::Json(Arc::new(val))
     }
 
     pub fn bytes(data: Vec<u8>) -> Self {
-        Self::Bytes(data)
+        Self::Bytes(Arc::new(data))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -85,7 +93,7 @@ impl From<Vec<f64>> for Value {
     fn from(values: Vec<f64>) -> Self {
         let len = values.len();
         Self::Tensor {
-            values,
+            values: Arc::new(values),
             shape: vec![len],
         }
     }
@@ -93,7 +101,7 @@ impl From<Vec<f64>> for Value {
 
 impl From<serde_json::Value> for Value {
     fn from(v: serde_json::Value) -> Self {
-        Self::Json(v)
+        Self::Json(Arc::new(v))
     }
 }
 

@@ -500,7 +500,7 @@ impl PythonProcess {
                 }
             }
         }
-        Ok(Value::Json(v.clone()))
+        Ok(Value::json(v.clone()))
     }
 
     /// Encode a Value to JSON for the Python process.
@@ -557,7 +557,7 @@ impl PythonProcess {
                     let bytes = STANDARD
                         .decode(s)
                         .map_err(|e| SomaError::Other(format!("decode state: {e}")))?;
-                    states.insert(id.clone(), Value::Bytes(bytes));
+                    states.insert(id.clone(), Value::bytes(bytes));
                 }
             }
         }
@@ -611,7 +611,7 @@ impl PythonProcess {
             let bytes = STANDARD
                 .decode(b64)
                 .map_err(|e| SomaError::Other(format!("decode state: {e}")))?;
-            Ok(Value::Bytes(bytes))
+            Ok(Value::bytes(bytes))
         } else {
             Self::response_to_value(&resp)
         }
@@ -619,7 +619,7 @@ impl PythonProcess {
 
     pub fn set_state(&mut self, node_id: &str, state: &Value) -> Result<()> {
         let b64 = match state {
-            Value::Bytes(b) => STANDARD.encode(b),
+            Value::Bytes(b) => STANDARD.encode(b.as_slice()),
             _ => return Err(SomaError::Other("set_state expects Value::Bytes".into())),
         };
         let resp = self
@@ -637,7 +637,7 @@ impl PythonProcess {
             let bytes = STANDARD
                 .decode(b64)
                 .map_err(|e| SomaError::Other(format!("decode gradients: {e}")))?;
-            Ok(Value::Bytes(bytes))
+            Ok(Value::bytes(bytes))
         } else {
             Ok(Value::Empty)
         }
@@ -645,7 +645,7 @@ impl PythonProcess {
 
     pub fn apply_gradients(&mut self, node_id: &str, gradients: &Value) -> Result<()> {
         let b64 = match gradients {
-            Value::Bytes(b) => STANDARD.encode(b),
+            Value::Bytes(b) => STANDARD.encode(b.as_slice()),
             _ => {
                 return Err(SomaError::Other(
                     "apply_gradients expects Value::Bytes".into(),

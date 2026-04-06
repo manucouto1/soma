@@ -196,7 +196,7 @@ impl GraphSession {
             }
         }
 
-        let states_value = Value::Json(serde_json::Value::Object(states_map));
+        let states_value = Value::json(serde_json::Value::Object(states_map));
         let key = CacheKey::from_parts(&[b"graph_states", self.graph_config_hash().as_bytes()]);
         store.put(&key, &states_value)
     }
@@ -343,7 +343,7 @@ pub fn graph_fit(
                         merged.insert(pred_id.clone(), json_val);
                     }
                 }
-                Value::Json(serde_json::Value::Object(merged))
+                Value::json(serde_json::Value::Object(merged))
             }
         };
 

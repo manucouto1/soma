@@ -547,7 +547,7 @@ pub fn resolve_input(node_id: &str, ctx: &Context) -> Value {
                     merged.insert(pred_id.clone(), json_val);
                 }
             }
-            Value::Json(serde_json::Value::Object(merged))
+            Value::json(serde_json::Value::Object(merged))
         }
     }
 }
@@ -560,7 +560,7 @@ fn execute_stream(
     filters: &FilterLibrary,
     cache: &dyn CacheStore,
 ) -> Result<()> {
-    use crate::executors::{FittedFilter, StreamExecutor, materialize_buffer};
+    use crate::executors::{FittedFilter, StreamExecutor};
 
     let start = Instant::now();
 
@@ -573,8 +573,7 @@ fn execute_stream(
                 .ok_or_else(|| SomaError::NodeNotFound(nid.clone()))?;
             let state = filters
                 .get_state(nid)
-                .map(|arc| (*arc).clone())
-                .unwrap_or(Value::Empty);
+                .unwrap_or_else(|| Arc::new(Value::Empty));
             Ok(FittedFilter {
                 name: nid.clone(),
                 filter,
@@ -600,7 +599,29 @@ fn execute_stream(
 
     let last_id = node_ids.last().unwrap();
 
-    let mut outputs: Vec<Value> = Vec::new();
+    // Incrementally concatenate tensor outputs to avoid holding all chunks
+    // in memory simultaneously. Each chunk is dropped after its data is
+    // extracted, keeping peak memory proportional to the final output size
+    // rather than O(n_chunks × chunk_size).
+    let mut all_data: Vec<f64> = Vec::new();
+    let mut result_shape: Option<Vec<usize>> = None;
+    let mut non_tensor_output: Option<Value> = None;
+
+    let mut append_output = |output: Value| {
+        match &output {
+            Value::Tensor { values, shape } => {
+                if result_shape.is_none() {
+                    result_shape = Some(shape.clone());
+                }
+                all_data.extend_from_slice(values.as_slice());
+                // `output` is dropped here, freeing the chunk's allocation
+            }
+            _ => {
+                non_tensor_output = Some(output);
+            }
+        }
+    };
+
     for (i, chunk) in chunks.into_iter().enumerate() {
         ctx.event_bus.emit(Event::NodeStarted {
             run_id: ctx.run_id.clone(),
@@ -608,22 +629,23 @@ fn execute_stream(
             kind: somatize_core::filter::FilterKind::Stateless,
         });
         if let Some(output) = executor.process_chunk(chunk)? {
-            outputs.push(output);
+            append_output(output);
         }
     }
 
     // Flush barrier filters.
     if let Some(flushed) = executor.flush()? {
-        outputs.push(flushed);
+        append_output(flushed);
     }
 
-    // Concatenate results into a single value.
-    let result = if outputs.len() == 1 {
-        outputs.into_iter().next().unwrap()
-    } else if outputs.is_empty() {
-        Value::Empty
+    // Build the final result.
+    let result = if let Some(mut shape) = result_shape {
+        // Tensor output: fix the first dimension to reflect total rows.
+        let row_size: usize = shape.iter().skip(1).product::<usize>().max(1);
+        shape[0] = all_data.len() / row_size;
+        Value::tensor(all_data, shape)
     } else {
-        materialize_buffer(&outputs)?
+        non_tensor_output.unwrap_or(Value::Empty)
     };
 
     let duration = start.elapsed();

@@ -80,11 +80,10 @@ impl Worker {
     }
 
     /// Get trained state for a filter.
-    pub fn get_filter_state(&self, node_id: &str) -> Value {
+    pub fn get_filter_state(&self, node_id: &str) -> Arc<Value> {
         self.filters
             .get_state(node_id)
-            .map(|arc| (*arc).clone())
-            .unwrap_or(Value::Empty)
+            .unwrap_or_else(|| Arc::new(Value::Empty))
     }
 
     /// Set trained state for a filter.
@@ -378,8 +377,7 @@ impl Worker {
                 let state = self
                     .filters
                     .get_state(id)
-                    .map(|arc| (*arc).clone())
-                    .unwrap_or(Value::Empty);
+                    .unwrap_or_else(|| Arc::new(Value::Empty));
                 Some(FittedFilter {
                     name: id.clone(),
                     filter,

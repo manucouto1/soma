@@ -159,7 +159,7 @@ fn json_fallback() {
     let Some(store) = store() else { return };
 
     let key = CacheKey::hash_data(b"zarr_test_json");
-    let value = Value::Json(serde_json::json!({"model": "svm", "accuracy": 0.95}));
+    let value = Value::json(serde_json::json!({"model": "svm", "accuracy": 0.95}));
 
     let data_ref = store.put(&key, &value).unwrap();
     // JSON goes through plain S3, not Zarr

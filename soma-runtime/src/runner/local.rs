@@ -139,7 +139,7 @@ impl Runner for LocalRunner {
                             merged.insert(pred_id.clone(), json_val);
                         }
                     }
-                    Value::Json(serde_json::Value::Object(merged))
+                    Value::json(serde_json::Value::Object(merged))
                 }
             };
 
