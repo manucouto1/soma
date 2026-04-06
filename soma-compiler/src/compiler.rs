@@ -591,6 +591,38 @@ pub fn compile(
     Compiler::new(graph, registry, mode).compile(cache)
 }
 
+/// Compile a graph for streaming execution.
+///
+/// Produces an `ExecutionPlan::Stream` wrapping the topologically sorted
+/// node chain. The runtime will chunk input and process through a
+/// `StreamExecutor` that respects each filter's `StreamMode`.
+pub fn compile_stream(
+    graph: &Graph,
+    _registry: &dyn FilterRegistry,
+    chunk_size: usize,
+) -> Result<CompileResult> {
+    graph.validate()?;
+    let sorted = graph.topological_sort()?;
+
+    if sorted.is_empty() {
+        return Ok(CompileResult {
+            plan: ExecutionPlan::Empty,
+            diagnostics: Vec::new(),
+        });
+    }
+
+    let node_ids: Vec<NodeId> = sorted.into_iter().map(|s| s.to_string()).collect();
+    let plan = ExecutionPlan::Stream {
+        node_ids,
+        chunk_size,
+    };
+
+    Ok(CompileResult {
+        plan,
+        diagnostics: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

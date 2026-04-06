@@ -13,6 +13,7 @@ pub mod event_bus;
 pub mod executor;
 pub mod executors;
 pub mod filter_library;
+pub mod forward;
 pub mod graph_session;
 pub mod pruner;
 pub mod runner;
@@ -26,6 +27,7 @@ pub use executors::{
     PopulationMember, StreamExecutor, StudyRunner, TrialExecutor, TrialOutcome,
 };
 pub use filter_library::FilterLibrary;
+pub use forward::{Batched, ForwardStrategy, Standard, Stream};
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};

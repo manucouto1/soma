@@ -1,6 +1,6 @@
 //! Execution plan — the compiled representation of a pipeline.
 //!
-//! Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote, Empty.
+//! Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote, Stream, Empty.
 //! Plans are data-free (no filter implementations) and serializable.
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,14 @@ pub enum ExecutionPlan {
     /// preserving PyTorch autograd for gradient flow.
     Composite { node_ids: Vec<NodeId> },
 
+    /// Streaming execution: process input in chunks through a filter chain.
+    /// Each filter's StreamMode (FixedState/Evolving/Barrier) defines its
+    /// per-chunk contract. Results flow progressively — no full materialization.
+    Stream {
+        node_ids: Vec<NodeId>,
+        chunk_size: usize,
+    },
+
     /// No-op: nothing to execute (e.g. empty graph).
     Empty,
 }
@@ -63,7 +71,7 @@ impl ExecutionPlan {
     pub fn node_count(&self) -> usize {
         match self {
             Self::Execute { .. } | Self::Cached { .. } => 1,
-            Self::Composite { node_ids } => node_ids.len(),
+            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => node_ids.len(),
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().map(|s| s.node_count()).sum()
             }
@@ -80,7 +88,7 @@ impl ExecutionPlan {
     pub fn cached_count(&self) -> usize {
         match self {
             Self::Cached { .. } => 1,
-            Self::Execute { .. } | Self::Composite { .. } => 0,
+            Self::Execute { .. } | Self::Composite { .. } | Self::Stream { .. } => 0,
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().map(|s| s.cached_count()).sum()
             }
@@ -96,7 +104,14 @@ impl ExecutionPlan {
         match self {
             Self::Parallel(branches) => branches.len(),
             Self::Sequence(steps) => steps.iter().map(|s| s.parallel_branch_count()).sum(),
-            _ => 0,
+            Self::Execute { .. }
+            | Self::Cached { .. }
+            | Self::Loop { .. }
+            | Self::Branch { .. }
+            | Self::Remote { .. }
+            | Self::Composite { .. }
+            | Self::Stream { .. }
+            | Self::Empty => 0,
         }
     }
 
@@ -124,7 +139,9 @@ impl ExecutionPlan {
                 ids.extend(plan.node_ids());
                 ids
             }
-            Self::Composite { node_ids } => node_ids.iter().map(|s| s.as_str()).collect(),
+            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => {
+                node_ids.iter().map(|s| s.as_str()).collect()
+            }
             Self::Empty => vec![],
         }
     }
@@ -244,11 +261,16 @@ impl ExecutionPlan {
                 }
                 plan.mermaid_nodes(out, counter, Some(node_id));
             }
-            Self::Composite { node_ids } => {
+            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => {
                 use std::fmt::Write;
+                let stream_label = matches!(self, Self::Stream { .. });
                 let mut prev: Option<&str> = None;
                 for nid in node_ids {
-                    let _ = writeln!(out, "    {nid}[{nid}]");
+                    if stream_label {
+                        let _ = writeln!(out, "    {nid}([{nid} stream])");
+                    } else {
+                        let _ = writeln!(out, "    {nid}[{nid}]");
+                    }
                     if let Some(p) = prev.or(parent) {
                         let _ = writeln!(out, "    {p} --> {nid}");
                     }
@@ -267,7 +289,9 @@ impl ExecutionPlan {
             Self::Loop { node_id, .. }
             | Self::Branch { node_id, .. }
             | Self::Remote { node_id, .. } => Some(node_id),
-            Self::Composite { node_ids } => node_ids.first().map(|s| s.as_str()),
+            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => {
+                node_ids.first().map(|s| s.as_str())
+            }
             Self::Empty => None,
         }
     }
@@ -330,6 +354,17 @@ impl ExecutionPlan {
                     .collect::<Vec<_>>()
                     .join(" \u{2192} ");
                 writeln!(f, "{pad}Composite[{ids}]")
+            }
+            Self::Stream {
+                node_ids,
+                chunk_size,
+            } => {
+                let ids = node_ids
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" \u{2192} ");
+                writeln!(f, "{pad}Stream[{ids}](chunk_size={chunk_size})")
             }
             Self::Empty => writeln!(f, "{pad}Empty"),
         }

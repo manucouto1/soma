@@ -309,6 +309,31 @@ fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_wor
             drop(worker_id);
         }
 
+        ExecutionPlan::Stream { node_ids, .. } => {
+            // Stream: all filters on the same worker for stateful chunk processing.
+            let worker = forced_worker
+                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
+                .unwrap_or_else(|| least_loaded(&state.workers));
+
+            state.phases.push(PlanPhase {
+                phase_index: state.phase_index,
+                phase_type: Phase::Sequential,
+                node_ids: node_ids.clone(),
+                worker_ids: vec![worker.id.clone()],
+            });
+            state.phase_index += 1;
+
+            for nid in node_ids {
+                state.assignments.push(Assignment {
+                    node_id: nid.clone(),
+                    worker_id: worker.id.clone(),
+                    worker_name: worker.name.clone(),
+                    phase: Phase::Sequential,
+                    reason: "stream block — same worker for stateful chunk processing".into(),
+                });
+            }
+        }
+
         ExecutionPlan::Empty => {}
     }
 }

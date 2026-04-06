@@ -138,7 +138,7 @@ def test_sysconfig_site_packages_detection(user_filter_pkg):
     Guards against regressions on conda / virtualenvs / Windows where the
     substring 'site-packages' might still appear but sysconfig is authoritative.
     """
-    import sysconfig
+    import sysconfig, site
     # Pick any installed package (numpy is a dev-dep; fall back to cloudpickle)
     for pkg_name in ("numpy", "cloudpickle"):
         try:
@@ -151,13 +151,18 @@ def test_sysconfig_site_packages_detection(user_filter_pkg):
 
     installed_file = getattr(installed, "__file__", None)
     assert installed_file is not None
-    purelib = sysconfig.get_paths().get("purelib", "")
-    platlib = sysconfig.get_paths().get("platlib", "")
+    site_dirs = {sysconfig.get_paths().get("purelib", ""),
+                 sysconfig.get_paths().get("platlib", "")}
+    user_site = getattr(site, "getusersitepackages", lambda: None)()
+    if user_site:
+        site_dirs.add(user_site)
+    site_prefixes = tuple(
+        os.path.realpath(p) + os.sep for p in site_dirs if p
+    )
     real = os.path.realpath(installed_file)
-    assert real.startswith(os.path.realpath(purelib) + os.sep) or \
-           real.startswith(os.path.realpath(platlib) + os.sep), (
-        f"sysconfig did not resolve {pkg_name} under purelib/platlib. "
-        f"purelib={purelib} platlib={platlib} file={real}"
+    assert real.startswith(site_prefixes), (
+        f"sysconfig/site did not resolve {pkg_name} under any site-packages dir. "
+        f"dirs={site_dirs} file={real}"
     )
 
     # And after a Graph.node() the installed package must NOT be registered by-value

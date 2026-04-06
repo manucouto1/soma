@@ -148,74 +148,30 @@ impl GraphSession {
         Ok(all_outputs)
     }
 
-    /// Forward pass through the fitted graph (inference).
+    /// Forward pass using the given strategy.
     ///
-    /// Compiles in Inference mode and executes. Trainable filters
-    /// use states cached during `fit()`.
-    /// Forward pass through the fitted graph (inference).
-    /// Delegates to LocalRunner — same execution path as remote workers.
-    pub fn forward(&self, x: &Value) -> Result<Value> {
-        let CompileResult { plan, .. } = compile(
+    /// Strategies define HOW data flows through the compiled graph:
+    /// - [`Standard`] — full input at once with inference caching (default)
+    /// - [`Stream`] — chunked input through StreamExecutor
+    /// - [`Batched`] — rows from DataStore, batch by batch
+    pub fn forward_with(
+        &self,
+        x: &Value,
+        strategy: &dyn crate::forward::ForwardStrategy,
+    ) -> Result<Value> {
+        strategy.forward(
             &self.graph,
-            &self.library,
-            CompileMode::Inference,
-            Some(self.cache.as_ref()),
-        )?;
-
-        let runner = crate::runner::LocalRunner;
-        runner.forward(
-            &plan,
             &self.library,
             self.cache.as_ref(),
             &self.event_bus,
+            self.data_store.as_ref(),
             x,
         )
     }
 
-    /// Forward pass in batches from a DataStore reference.
-    pub fn forward_batched(&self, data_ref: &DataRef, batch_size: usize) -> Result<Value> {
-        let store = self
-            .data_store
-            .as_ref()
-            .ok_or_else(|| SomaError::Execution {
-                node_id: "session".into(),
-                message: "forward_batched requires a data store (use with_data_store)".into(),
-            })?;
-
-        let meta = store.meta(data_ref)?;
-        let total_rows = meta.total_rows;
-        if total_rows == 0 {
-            return Ok(Value::Empty);
-        }
-
-        let mut all_values: Vec<f64> = Vec::new();
-        let mut result_shape: Option<Vec<usize>> = None;
-        let mut rows_processed = 0;
-
-        while rows_processed < total_rows {
-            let batch_len = batch_size.min(total_rows - rows_processed);
-            let batch = store.get_rows(data_ref, rows_processed, batch_len)?;
-            let output = self.forward(&batch)?;
-
-            if let Value::Tensor { values, shape } = &output {
-                if result_shape.is_none() {
-                    result_shape = Some(shape.clone());
-                }
-                all_values.extend_from_slice(values);
-            } else {
-                return Ok(output);
-            }
-
-            rows_processed += batch_len;
-        }
-
-        match result_shape {
-            Some(mut shape) => {
-                shape[0] = total_rows;
-                Ok(Value::tensor(all_values, shape))
-            }
-            None => Ok(Value::Empty),
-        }
+    /// Standard forward pass (shortcut for `forward_with(x, &Standard)`).
+    pub fn forward(&self, x: &Value) -> Result<Value> {
+        self.forward_with(x, &crate::forward::Standard)
     }
 
     // ── State persistence ──

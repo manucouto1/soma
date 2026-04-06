@@ -358,6 +358,11 @@ impl Executable for ExecutionPlan {
                 Ok(())
             }
 
+            ExecutionPlan::Stream {
+                node_ids,
+                chunk_size,
+            } => execute_stream(node_ids, *chunk_size, ctx, filters, cache),
+
             _ => {
                 tracing::warn!("Unhandled ExecutionPlan variant");
                 Ok(())
@@ -545,6 +550,132 @@ pub fn resolve_input(node_id: &str, ctx: &Context) -> Value {
             Value::Json(serde_json::Value::Object(merged))
         }
     }
+}
+
+/// Execute a stream plan: chunk input, process through StreamExecutor, concatenate.
+fn execute_stream(
+    node_ids: &[String],
+    chunk_size: usize,
+    ctx: &mut Context,
+    filters: &FilterLibrary,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    use crate::executors::{FittedFilter, StreamExecutor, materialize_buffer};
+
+    let start = Instant::now();
+
+    // Build FittedFilter list from the library in plan order.
+    let fitted: Vec<FittedFilter> = node_ids
+        .iter()
+        .map(|nid| {
+            let filter = filters
+                .get(nid)
+                .ok_or_else(|| SomaError::NodeNotFound(nid.clone()))?;
+            let state = filters
+                .get_state(nid)
+                .map(|arc| (*arc).clone())
+                .unwrap_or(Value::Empty);
+            Ok(FittedFilter {
+                name: nid.clone(),
+                filter,
+                state,
+            })
+        })
+        .collect::<Result<_>>()?;
+
+    // Resolve input from the first node's predecessors.
+    let first_id = node_ids
+        .first()
+        .ok_or_else(|| SomaError::Other("stream plan has no nodes".into()))?;
+    let input = resolve_input(first_id, ctx);
+
+    // Chunk the input along the first tensor dimension.
+    let chunks = chunk_value(&input, chunk_size);
+
+    // Process chunks through the stream executor.
+    let mut executor = StreamExecutor::new(fitted);
+    if let Some(c) = cache_as_arc(cache) {
+        executor = executor.with_cache(c);
+    }
+
+    let last_id = node_ids.last().unwrap();
+
+    let mut outputs: Vec<Value> = Vec::new();
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        ctx.event_bus.emit(Event::NodeStarted {
+            run_id: ctx.run_id.clone(),
+            node_id: format!("{last_id}#chunk_{i}"),
+            kind: somatize_core::filter::FilterKind::Stateless,
+        });
+        if let Some(output) = executor.process_chunk(chunk)? {
+            outputs.push(output);
+        }
+    }
+
+    // Flush barrier filters.
+    if let Some(flushed) = executor.flush()? {
+        outputs.push(flushed);
+    }
+
+    // Concatenate results into a single value.
+    let result = if outputs.len() == 1 {
+        outputs.into_iter().next().unwrap()
+    } else if outputs.is_empty() {
+        Value::Empty
+    } else {
+        materialize_buffer(&outputs)?
+    };
+
+    let duration = start.elapsed();
+    ctx.set(last_id.clone(), result);
+    ctx.event_bus.emit(Event::NodeCompleted {
+        run_id: ctx.run_id.clone(),
+        node_id: last_id.clone(),
+        duration,
+        output_summary: format!(
+            "stream: {} chunks through {} filters",
+            executor.chunks_processed(),
+            node_ids.len()
+        ),
+    });
+
+    Ok(())
+}
+
+/// Split a Value::Tensor along the first dimension into chunks.
+fn chunk_value(x: &Value, chunk_size: usize) -> Vec<Value> {
+    match x {
+        Value::Tensor { values, shape } if !values.is_empty() && chunk_size > 0 => {
+            let row_size = if shape.len() > 1 {
+                shape[1..].iter().product()
+            } else {
+                1
+            };
+            let n_rows = shape[0];
+            let mut chunks = Vec::new();
+            for start in (0..n_rows).step_by(chunk_size) {
+                let end = (start + chunk_size).min(n_rows);
+                let flat_start = start * row_size;
+                let flat_end = end * row_size;
+                let chunk_vals = values[flat_start..flat_end].to_vec();
+                let mut chunk_shape = shape.clone();
+                chunk_shape[0] = end - start;
+                chunks.push(Value::tensor(chunk_vals, chunk_shape));
+            }
+            chunks
+        }
+        _ => vec![x.clone()],
+    }
+}
+
+/// Try to wrap the cache reference as an Arc for StreamExecutor.
+/// This is safe because the cache outlives the executor within execute().
+fn cache_as_arc(_cache: &dyn CacheStore) -> Option<Arc<dyn CacheStore>> {
+    // StreamExecutor requires Arc, but we only have a reference.
+    // For local execution we skip the cache in streaming mode — the per-chunk
+    // cache is an optimization, not a correctness requirement.
+    // TODO: pass cache as Option<&dyn CacheStore> to StreamExecutor.
+    None
 }
 
 #[cfg(test)]
@@ -917,5 +1048,88 @@ mod tests {
         assert!(info.predecessors("a").is_empty());
         assert_eq!(info.predecessors("b"), &["a"]);
         assert_eq!(info.predecessors("c"), &["b"]);
+    }
+
+    #[test]
+    fn execute_stream_chunks_input() {
+        let (bus, cache) = setup();
+        let mut ctx = Context::new(bus, "run_stream");
+        // 6-element input, chunk_size=2 → 3 chunks
+        ctx.set(
+            "__input__",
+            Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![6]),
+        );
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+
+        let mut filters = FilterLibrary::new();
+        filters.register("double", Box::new(DoublerFilter));
+
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into()],
+            chunk_size: 2,
+        };
+
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        let result = ctx.get("double").unwrap();
+        let (data, shape) = result.as_tensor().unwrap();
+        assert_eq!(data, &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
+        assert_eq!(shape, &[6]);
+    }
+
+    #[test]
+    fn execute_stream_chain() {
+        let (bus, cache) = setup();
+        let mut ctx = Context::new(bus, "run_stream_chain");
+        ctx.set(
+            "__input__",
+            Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4]),
+        );
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+        ctx.graph_info
+            .set_predecessors("add", vec!["double".into()]);
+
+        let mut filters = FilterLibrary::new();
+        filters.register("double", Box::new(DoublerFilter));
+        filters.register("add", Box::new(AdderFilter { amount: 10.0 }));
+
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into(), "add".into()],
+            chunk_size: 2,
+        };
+
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        // double → add: [1,2,3,4] → [2,4,6,8] → [12,14,16,18]
+        let result = ctx.get("add").unwrap();
+        let (data, shape) = result.as_tensor().unwrap();
+        assert_eq!(data, &[12.0, 14.0, 16.0, 18.0]);
+        assert_eq!(shape, &[4]);
+    }
+
+    #[test]
+    fn execute_stream_single_chunk() {
+        let (bus, cache) = setup();
+        let mut ctx = Context::new(bus, "run_stream_single");
+        ctx.set("__input__", Value::tensor(vec![5.0, 10.0], vec![2]));
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+
+        let mut filters = FilterLibrary::new();
+        filters.register("double", Box::new(DoublerFilter));
+
+        // chunk_size larger than input → single chunk
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into()],
+            chunk_size: 1000,
+        };
+
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        let result = ctx.get("double").unwrap();
+        let (data, _) = result.as_tensor().unwrap();
+        assert_eq!(data, &[10.0, 20.0]);
     }
 }

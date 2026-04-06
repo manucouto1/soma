@@ -300,10 +300,35 @@ class TestDataStore:
 
 
 class TestStreaming:
-    """WS Binary streaming for chunked data."""
+    """Streaming forward: chunked execution through StreamExecutor."""
 
-    @pytest.mark.skip(reason="WS Binary streaming requires async StreamExecutor integration — Phase 3 transport layer")
-    def test_stream_forward(self):
+    def test_stream_forward_local(self):
+        """Local streaming (no workers): chunks processed by StreamExecutor."""
+        g = Graph()
+        g.node("doubler", DoubleFilter())
+        g.fit([1.0])
+        result = g.forward(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            stream=True,
+            chunk_size=3,
+        )
+        assert result is not None
+        assert isinstance(result, list)
+        assert len(result) == 8
+        assert result == [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+
+    def test_stream_forward_single_chunk(self):
+        """Input smaller than chunk_size: single chunk, same result as normal forward."""
+        g = Graph()
+        g.node("doubler", DoubleFilter())
+        g.fit([1.0])
+        normal = g.forward([1.0, 2.0, 3.0])
+        streamed = g.forward([1.0, 2.0, 3.0], stream=True, chunk_size=1024)
+        assert normal == streamed
+
+    @pytest.mark.skip(reason="Remote streaming requires PythonProcess to support Value::Tensor round-trip in SubprocessFilter — tracked for next iteration")
+    def test_stream_forward_remote(self):
+        """Remote streaming via WS Binary."""
         g = make_graph()
         g.node("doubler", DoubleFilter())
         g.fit([1.0])
@@ -313,6 +338,8 @@ class TestStreaming:
             chunk_size=3,
         )
         assert result is not None
+        assert isinstance(result, list)
+        assert len(result) == 8
 
 
 class TestEdgeCases:

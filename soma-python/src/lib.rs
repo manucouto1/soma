@@ -147,7 +147,7 @@ impl PyFilterBridge {
         // register them for by-value serialization (transitive).
         py.run(
             c"
-import sys, types, sysconfig, os, cloudpickle as _cp
+import sys, types, sysconfig, site, os, cloudpickle as _cp
 
 # Python 3.10+ exposes the canonical stdlib module name set. Fall back to
 # empty frozenset on older versions (combined with other heuristics below).
@@ -156,10 +156,12 @@ _BUILTINS = frozenset(sys.builtin_module_names)
 # Never pickle-by-value modules the worker already has installed.
 _NEVER = {'soma', 'cloudpickle', 'numpy', 'pandas', 'torch', 'sklearn', 'scipy'}
 # Site-packages directories (platform/installer independent: works on
-# Debian, RHEL/Fedora with lib64, Windows, conda, virtualenvs).
+# Debian, RHEL/Fedora with lib64, Windows, conda, virtualenvs, --user installs).
+_site_dirs = {sysconfig.get_paths().get('purelib'), sysconfig.get_paths().get('platlib')}
+_site_dirs.add(getattr(site, 'getusersitepackages', lambda: None)())
 _SITE_PREFIXES = tuple(
     os.path.realpath(p) + os.sep
-    for p in {sysconfig.get_paths().get('purelib'), sysconfig.get_paths().get('platlib')}
+    for p in _site_dirs
     if p
 )
 
@@ -1106,7 +1108,9 @@ impl PyGraph {
                 .await
                 .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
 
-            // 2. Send chunks
+            // 2. Send chunks, collect ChunkResults as they arrive
+            let mut chunk_results: Vec<Value> = Vec::new();
+
             for (i, chunk) in chunks.into_iter().enumerate() {
                 let chunk_msg = StreamMessage::ChunkData {
                     stream_id: stream_id.clone(),
@@ -1119,12 +1123,15 @@ impl PyGraph {
                     .await
                     .map_err(|e| PyRuntimeError::new_err(format!("WS send chunk: {e}")))?;
 
-                // Drain any ChunkResults that came back
+                // Drain ChunkResults that arrived so far
                 while let Ok(Some(Ok(Message::Binary(resp)))) =
                     tokio::time::timeout(std::time::Duration::from_millis(1), ws.next()).await
                 {
-                    // ChunkResults are collected but not blocking
-                    let _ = rmp_serde::from_slice::<StreamMessage>(&resp);
+                    if let Ok(StreamMessage::ChunkResult { value, .. }) =
+                        rmp_serde::from_slice(&resp)
+                    {
+                        chunk_results.push(value);
+                    }
                 }
             }
 
@@ -1138,25 +1145,45 @@ impl PyGraph {
                 .await
                 .map_err(|e| PyRuntimeError::new_err(format!("WS send end: {e}")))?;
 
-            // 4. Wait for StreamComplete
+            // 4. Drain remaining ChunkResults + wait for StreamComplete
+            let mut flush_value: Option<Value> = None;
             while let Some(Ok(msg)) = ws.next().await {
-                if let Message::Binary(resp) = msg
-                    && let Ok(StreamMessage::StreamComplete { result, .. }) =
-                        rmp_serde::from_slice(&resp)
-                {
-                    match result {
-                        PlanResult::Success { output, .. } => {
-                            let value = Self::resolve_output(output, &addr, &token)?;
-                            return Ok(value);
+                if let Message::Binary(resp) = msg {
+                    match rmp_serde::from_slice::<StreamMessage>(&resp) {
+                        Ok(StreamMessage::ChunkResult { value, .. }) => {
+                            chunk_results.push(value);
                         }
-                        PlanResult::Failed { error, .. } => {
-                            return Err(PyRuntimeError::new_err(format!("stream error: {error}")));
-                        }
+                        Ok(StreamMessage::StreamComplete { result, .. }) => match result {
+                            PlanResult::Success { output, .. } => {
+                                let v = Self::resolve_output(output, &addr, &token)?;
+                                if !v.is_empty() {
+                                    flush_value = Some(v);
+                                }
+                                break;
+                            }
+                            PlanResult::Failed { error, .. } => {
+                                return Err(PyRuntimeError::new_err(format!(
+                                    "stream error: {error}"
+                                )));
+                            }
+                        },
+                        _ => {}
                     }
                 }
             }
 
-            Err(PyRuntimeError::new_err("stream closed without result"))
+            // 5. Combine: chunk results (progressive) + flush result (barrier)
+            if let Some(flushed) = flush_value {
+                chunk_results.push(flushed);
+            }
+            if chunk_results.is_empty() {
+                return Ok(Value::Empty);
+            }
+            if chunk_results.len() == 1 {
+                return Ok(chunk_results.into_iter().next().unwrap());
+            }
+            // Concatenate tensors along first dimension
+            somatize_runtime::executors::materialize_buffer(&chunk_results).map_err(soma_err_to_py)
         })
     }
 
@@ -1501,10 +1528,54 @@ impl PyGraph {
         }
         let x_val = py_to_value(py, x)?;
 
-        // Streaming mode: send chunks via WS Binary
-        // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
-        if stream && !self.workers.is_empty() {
-            let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
+        // Streaming mode: remote via WS Binary, local via StreamExecutor
+        if stream {
+            if !self.workers.is_empty() {
+                // Release GIL during WS dispatch so worker thread can acquire
+                // it for Python execution.
+                let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
+                return value_to_py(py, &output);
+            }
+            // Local streaming: compile as Stream plan, execute via StreamExecutor
+            let compile_result =
+                somatize_compiler::compile_stream(&self.graph, &self.library, chunk_size)
+                    .map_err(soma_err_to_py)?;
+
+            let graph_info = GraphInfo::from_graph(&self.graph);
+            let mut ctx = Context::new(
+                self.event_bus.clone(),
+                somatize_core::util::timestamp_id("stream_forward"),
+            )
+            .with_graph_info(graph_info);
+
+            let roots = self.graph.roots();
+            if roots.len() == 1 {
+                ctx.set(format!("__input_{}", roots[0]), x_val.clone());
+            }
+            ctx.set("__input__", x_val);
+
+            executor::execute(
+                &compile_result.plan,
+                &mut ctx,
+                &self.library,
+                self.cache.as_ref(),
+            )
+            .map_err(soma_err_to_py)?;
+
+            let leaves = self.graph.leaves();
+            let output = if let Some(leaf_id) = leaves.first() {
+                ctx.store
+                    .remove(*leaf_id)
+                    .and_then(|vv| vv.as_value().cloned())
+                    .unwrap_or(Value::Empty)
+            } else {
+                ctx.execution_order
+                    .last()
+                    .and_then(|id| ctx.store.remove(id))
+                    .and_then(|vv| vv.as_value().cloned())
+                    .unwrap_or(Value::Empty)
+            };
+
             return value_to_py(py, &output);
         }
 

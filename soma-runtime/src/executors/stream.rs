@@ -217,7 +217,7 @@ fn forward_cached(
 }
 
 /// Concatenate tensor chunks along first dimension.
-fn materialize_buffer(buffer: &[Value]) -> Result<Value> {
+pub fn materialize_buffer(buffer: &[Value]) -> Result<Value> {
     if buffer.is_empty() {
         return Ok(Value::Empty);
     }

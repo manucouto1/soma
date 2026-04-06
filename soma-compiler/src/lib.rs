@@ -13,7 +13,7 @@ pub mod scheduler;
 
 pub use compiler::{
     CompileMode, CompileResult, Compiler, Diagnostic, DiagnosticLevel, FilterRegistry,
-    SimpleFilterRegistry, compile,
+    SimpleFilterRegistry, compile, compile_stream,
 };
 pub use plan::ExecutionPlan;
 pub use scheduler::{

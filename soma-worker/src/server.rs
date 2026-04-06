@@ -32,8 +32,9 @@ struct ServerState {
     temp_store: Arc<LocalDataStore>,
     /// Track upload times for automatic cleanup.
     temp_uploads: Mutex<HashMap<CacheKey, Instant>>,
-    /// Active streaming sessions: stream_id → StreamExecutor.
-    active_streams: Mutex<HashMap<String, somatize_runtime::executors::stream::StreamExecutor>>,
+    /// Active streaming sessions: stream_id → (executor, start_time).
+    active_streams:
+        Mutex<HashMap<String, (somatize_runtime::executors::stream::StreamExecutor, Instant)>>,
 }
 
 /// Build a worker server router (no authentication).
@@ -406,7 +407,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 .active_streams
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(stream_id, executor);
+                .insert(stream_id, (executor, Instant::now()));
 
             None // No reply for StreamBegin
         }
@@ -419,7 +420,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 .active_streams
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some(executor) = streams.get_mut(&stream_id) {
+            if let Some((executor, _)) = streams.get_mut(&stream_id) {
                 match executor.process_chunk(value) {
                     Ok(Some(result)) => Some(StreamMessage::ChunkResult {
                         stream_id,
@@ -450,8 +451,9 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 .active_streams
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some(mut executor) = streams.remove(&stream_id) {
-                // Flush barrier filters
+            if let Some((mut executor, start)) = streams.remove(&stream_id) {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                // Flush barrier filters — only Barrier mode accumulates data.
                 let output = executor
                     .flush()
                     .unwrap_or(None)
@@ -460,7 +462,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                     stream_id,
                     result: PlanResult::Success {
                         output: OutputDelivery::Inline { value: output },
-                        duration_ms: 0,
+                        duration_ms,
                         states: std::collections::HashMap::new(),
                     },
                 })
