@@ -12,12 +12,25 @@ use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
-use somatize_core::filter::FilterKind;
+use somatize_core::filter::{Filter, FilterKind};
 use somatize_core::util::timestamp_id;
 use somatize_core::value::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Resolve every node_id in ``node_ids`` to its filter instance.
+/// Returns ``None`` if any id is missing from the library — in that case
+/// the runner falls back to sequential execution with a NodeNotFound error.
+fn collect_peers(
+    filters: &FilterLibrary,
+    node_ids: &[String],
+) -> Option<Vec<(String, Arc<dyn Filter>)>> {
+    node_ids
+        .iter()
+        .map(|id| filters.get(id).map(|f| (id.clone(), f)))
+        .collect()
+}
 
 /// Executes plans locally — same logic for local and remote execution.
 pub struct LocalRunner;
@@ -38,8 +51,9 @@ impl LocalRunner {
 
         for step in steps {
             let handled = if let ExecutionPlan::Composite { node_ids } = step
+                && let Some(peers) = collect_peers(filters, node_ids)
                 && let Some(filter) = filters.get(&node_ids[0])
-                && let Some(result) = filter.composite_fit(node_ids, &current_input, y)
+                && let Some(result) = filter.composite_fit(&peers, &current_input, y)
             {
                 let (output, states) = result?;
                 for (id, state) in &states {
@@ -85,8 +99,9 @@ impl Runner for LocalRunner {
     ) -> Result<(Value, HashMap<String, Value>)> {
         // Handle Composite plan: delegate to composite_fit on the first filter
         if let ExecutionPlan::Composite { node_ids } = plan
+            && let Some(peers) = collect_peers(filters, node_ids)
             && let Some(filter) = filters.get(&node_ids[0])
-            && let Some(result) = filter.composite_fit(node_ids, input, y)
+            && let Some(result) = filter.composite_fit(&peers, input, y)
         {
             return result;
             // Fallback: treat as sequential if composite_fit not supported

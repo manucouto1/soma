@@ -10,7 +10,7 @@ use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use somatize_compiler::CompileMode;
+use somatize_compiler::{CompileMode, compile};
 use somatize_core::cache::CacheKey;
 use somatize_core::error::{Result as SomaResult, SomaError};
 use somatize_core::event::MetricRecord;
@@ -24,6 +24,7 @@ use somatize_runtime::cache::{LocalCache, MemoryCache, TieredCache};
 use somatize_runtime::executor::{self, Context, GraphInfo};
 use somatize_runtime::executors::study::{FnTrialExecutor, StudyRunner, TrialOutcome};
 use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::runner::{LocalRunner, Runner};
 use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
@@ -370,6 +371,111 @@ impl Filter for PyFilterBridge {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn composite_fit(
+        &self,
+        peers: &[(String, std::sync::Arc<dyn Filter>)],
+        x: &Value,
+        y: Option<&Value>,
+    ) -> Option<SomaResult<(Value, std::collections::HashMap<String, Value>)>> {
+        Python::with_gil(|py| {
+            let obj = self.py_obj.bind(py);
+
+            // Only trigger when the user has overridden composite_fit.
+            // The base Filter class does not declare the method, so
+            // ``hasattr`` is the simplest "is it overridden?" probe.
+            match obj.hasattr("composite_fit") {
+                Ok(true) => {}
+                _ => return None,
+            }
+
+            // Build a Python dict {node_id: filter_py_obj} for the whole block.
+            // If any peer isn't a PyFilterBridge (non-Python filter) we bail
+            // out so the runner falls back to sequential execution.
+            let peers_dict = PyDict::new(py);
+            for (node_id, filter) in peers {
+                let bridge = filter.as_any().downcast_ref::<PyFilterBridge>()?;
+                if let Err(e) = peers_dict.set_item(node_id, bridge.py_obj.clone_ref(py)) {
+                    return Some(Err(SomaError::Other(format!(
+                        "composite_fit: building peers dict: {e}"
+                    ))));
+                }
+            }
+
+            // Convert x and y for the Python call.
+            let py_x = match value_to_py(py, x) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(py_err_to_soma(e))),
+            };
+            let py_y = match y {
+                Some(v) => match value_to_py(py, v) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(py_err_to_soma(e))),
+                },
+                None => py.None(),
+            };
+
+            let result = match obj.call_method1("composite_fit", (peers_dict, py_x, py_y)) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Some(Err(SomaError::Other(format!(
+                        "Python composite_fit() error: {e}"
+                    ))));
+                }
+            };
+
+            // Expected return: (output, {node_id: state}).
+            let tuple = match result.downcast::<pyo3::types::PyTuple>() {
+                Ok(t) => t.clone(),
+                Err(_) => {
+                    return Some(Err(SomaError::Other(
+                        "composite_fit must return (output, states_dict)".into(),
+                    )));
+                }
+            };
+            if tuple.len() != 2 {
+                return Some(Err(SomaError::Other(format!(
+                    "composite_fit must return a 2-tuple, got length {}",
+                    tuple.len()
+                ))));
+            }
+            let output_py = tuple.get_item(0).ok()?;
+            let states_py = tuple.get_item(1).ok()?;
+
+            let output = match py_to_value(py, &output_py) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(py_err_to_soma(e))),
+            };
+
+            let states_dict = match states_py.downcast::<PyDict>() {
+                Ok(d) => d.clone(),
+                Err(_) => {
+                    return Some(Err(SomaError::Other(
+                        "composite_fit states must be a dict[node_id, state]".into(),
+                    )));
+                }
+            };
+            let mut states_map: std::collections::HashMap<String, Value> =
+                std::collections::HashMap::new();
+            for (k, v) in states_dict.iter() {
+                let key: String = match k.extract() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Some(Err(SomaError::Other(format!(
+                            "composite_fit state key: {e}"
+                        ))));
+                    }
+                };
+                let val = match py_to_value(py, &v) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(py_err_to_soma(e))),
+                };
+                states_map.insert(key, val);
+            }
+
+            Some(Ok((output, states_map)))
+        })
     }
 }
 
@@ -1378,19 +1484,66 @@ impl PyGraph {
     ///
     /// If workers are registered and no node forces local, training is
     /// dispatched to a remote worker.
-    #[pyo3(signature = (x, y=None, batch_size=None))]
+    #[pyo3(signature = (x, y=None, batch_size=None, mode="inference"))]
     fn fit(
         &mut self,
         py: Python<'_>,
         x: &Bound<'_, pyo3::types::PyAny>,
         y: Option<&Bound<'_, pyo3::types::PyAny>>,
         batch_size: Option<usize>,
+        mode: &str,
     ) -> PyResult<()> {
         let x_val = py_to_value(py, x)?;
         let y_val = match y {
             Some(v) => Some(py_to_value(py, v)?),
             None => None,
         };
+
+        // Differentiable mode: compile with CompileMode::Differentiable (which
+        // collapses consecutive differentiable filters into a Composite block)
+        // and execute via LocalRunner, which delegates the block to the first
+        // filter's ``composite_fit``. Gradients flow end-to-end inside the
+        // user-provided composite_fit implementation.
+        if mode == "differentiable" {
+            if !self.workers.is_empty() {
+                return Err(PyRuntimeError::new_err(
+                    "mode='differentiable' is only supported for local execution \
+                     (no workers). Remote differentiable training is not yet implemented.",
+                ));
+            }
+            self.graph.validate().map_err(soma_err_to_py)?;
+            let compile_result = compile(
+                &self.graph,
+                &self.library,
+                CompileMode::Differentiable,
+                Some(self.cache.as_ref()),
+            )
+            .map_err(soma_err_to_py)?;
+            let runner = LocalRunner;
+            let (_output, states) = runner
+                .fit(
+                    &compile_result.plan,
+                    &self.library,
+                    self.cache.as_ref(),
+                    &self.event_bus,
+                    &x_val,
+                    y_val.as_ref(),
+                )
+                .map_err(soma_err_to_py)?;
+            // LocalRunner tags composite-produced states with "__state_{id}".
+            // Regular sequential states appear under the bare node_id.
+            for (key, state) in states {
+                let node_id = key.strip_prefix("__state_").unwrap_or(&key).to_string();
+                self.library.set_state(node_id, state);
+            }
+            self.fitted = true;
+            return Ok(());
+        }
+        if mode != "inference" {
+            return Err(PyRuntimeError::new_err(format!(
+                "Unknown mode={mode:?}. Use 'inference' or 'differentiable'."
+            )));
+        }
 
         // Dispatch fit to worker if possible.
         // Release GIL during WS dispatch so worker thread can acquire it for Python execution.

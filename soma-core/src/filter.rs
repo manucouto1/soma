@@ -120,10 +120,18 @@ pub trait Filter: Send + Sync {
 
     /// Execute a composite fit across multiple filters that share an execution context.
     /// Used for differentiable filter chains where autograd must flow between them.
-    /// Returns None if this filter doesn't support composite execution (default).
+    ///
+    /// ``peers`` is the ordered list of ``(node_id, filter)`` pairs in this
+    /// composite block, including ``self`` (typically as the first entry).
+    /// The implementor can use the peers to build a shared trainable module
+    /// and run a single backward pass covering all of them.
+    ///
+    /// Returns ``None`` if this filter doesn't support composite execution
+    /// (the default), in which case the runner falls back to executing the
+    /// block sequentially with no gradient flow between filters.
     fn composite_fit(
         &self,
-        _node_ids: &[String],
+        _peers: &[(String, std::sync::Arc<dyn Filter>)],
         _x: &Value,
         _y: Option<&Value>,
     ) -> Option<Result<(Value, std::collections::HashMap<String, Value>)>> {

@@ -739,16 +739,20 @@ impl Filter for SubprocessFilter {
 
     fn composite_fit(
         &self,
-        node_ids: &[String],
+        peers: &[(String, std::sync::Arc<dyn somatize_core::filter::Filter>)],
         x: &Value,
         y: Option<&Value>,
     ) -> Option<Result<(Value, HashMap<String, Value>)>> {
+        // Subprocess transport serialises the node_ids only — other filters
+        // aren't shipped; the worker already has them deserialised from the
+        // preceding prepare step.
+        let node_ids: Vec<String> = peers.iter().map(|(id, _)| id.clone()).collect();
         tracing::info!(nodes = ?node_ids, "Composite fit via subprocess");
         Some(
             self.process
                 .lock()
                 .map_err(|e| SomaError::Other(format!("process mutex poisoned: {e}")))
-                .and_then(|mut proc| proc.composite_fit(node_ids, x, y)),
+                .and_then(|mut proc| proc.composite_fit(&node_ids, x, y)),
         )
     }
 }

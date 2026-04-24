@@ -7,6 +7,11 @@ from soma.lab import Lab
 from soma.chain import Chain, Fork
 from soma.builder import somatize as _somatize
 
+try:
+    from soma._composite import DifferentiableFilter
+except ImportError:  # torch not installed — DifferentiableFilter is opt-in
+    DifferentiableFilter = None   # type: ignore[assignment]
+
 # Add Graph.somatize() classmethod — bridges the fluent builder API
 # with the Rust Graph runtime.
 #
@@ -18,6 +23,7 @@ __all__ = [
     "Study",
     "Worker",
     "Filter",
+    "DifferentiableFilter",
     "Lab",
     "Chain",
     "Fork",
