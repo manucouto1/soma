@@ -2295,6 +2295,6 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
     m.add_class::<PyStudy>()?;
     m.add_class::<PyWorker>()?;
-    m.add("__version__", "0.2.5")?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
