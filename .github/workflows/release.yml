@@ -17,7 +17,7 @@ jobs:
   # Publish Rust crates to crates.io
   publish-crates:
     name: Publish to crates.io
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +44,7 @@ jobs:
   # Build Linux wheels via Docker
   build-linux:
     name: Build Linux wheels
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Reclaim workspace ownership (pre-checkout)
         run: |
@@ -79,7 +79,7 @@ jobs:
   # Build sdist
   build-sdist:
     name: Build sdist
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -99,7 +99,7 @@ jobs:
   upload-pypi:
     name: Upload to PyPI
     needs: [build-linux, build-sdist]
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -123,7 +123,7 @@ jobs:
   github-release:
     name: GitHub Release
     needs: [publish-crates, upload-pypi]
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
