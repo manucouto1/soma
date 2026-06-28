@@ -41,18 +41,12 @@ jobs:
           sleep 30
           cargo publish -p somatize --allow-dirty || true
 
-  # Build Linux wheels via Docker
-  build-linux:
-    name: Build Linux wheels
+  # Build wheels + sdist AND publish to PyPI in a single job, so nothing is
+  # passed through GitHub artifact storage (avoids the artifact storage quota).
+  publish-pypi:
+    name: Build and publish to PyPI
     runs-on: ubuntu-latest
     steps:
-      - name: Reclaim workspace ownership (pre-checkout)
-        run: |
-          if [ -d "${{ github.workspace }}" ]; then
-            docker run --rm -v "${{ github.workspace }}:/io" alpine \
-              sh -c "chown -R $(id -u):$(id -g) /io 2>/dev/null || true"
-          fi
-
       - uses: actions/checkout@v4
 
       - name: Build manylinux wheels via Docker
@@ -64,65 +58,31 @@ jobs:
             ghcr.io/pyo3/maturin:latest \
             build --release --out /io/dist --interpreter python3.12 python3.13
 
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-linux
-          path: dist/*.whl
-
-      - name: Reclaim ownership (fallback if Docker wrote as root)
-        if: always()
+      - name: Reclaim ownership (Docker writes as root)
         run: |
           docker run --rm -v "${{ github.workspace }}:/io" alpine \
             chown -R "$(id -u):$(id -g)" /io || true
 
-  # Build sdist
-  build-sdist:
-    name: Build sdist
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
       - name: Build sdist
-        working-directory: soma-python
         run: |
           pip install maturin
-          maturin sdist --out dist
-
-      - name: Upload sdist
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: soma-python/dist/*.tar.gz
-
-  # Upload to PyPI
-  upload-pypi:
-    name: Upload to PyPI
-    needs: [build-linux, build-sdist]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-          path: dist
+          maturin sdist -m soma-python/Cargo.toml --out dist
 
       - name: List dist contents
         run: ls -la dist/
-
-      - name: Install twine
-        run: pip install twine
 
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+        run: |
+          pip install twine
+          twine upload --skip-existing dist/*
 
   # Create GitHub Release
   github-release:
     name: GitHub Release
-    needs: [publish-crates, upload-pypi]
+    needs: [publish-crates, publish-pypi]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
