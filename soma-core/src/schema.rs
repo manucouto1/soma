@@ -52,7 +52,7 @@ pub struct Schema {
     /// The primitive data type.
     pub dtype: DataType,
 
-    /// Shape dimensions. Empty for scalars, [n] for vectors, [r,c] for matrices, etc.
+    /// Shape dimensions. Empty for scalars, `[n]` for vectors, `[r,c]` for matrices, etc.
     /// `None` means shape is dynamic/unknown.
     pub shape: Option<Vec<Dimension>>,
 }

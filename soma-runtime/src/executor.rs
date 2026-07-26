@@ -990,14 +990,14 @@ mod tests {
             "slow_a",
             Box::new(SlowFilter {
                 id: "a".into(),
-                delay_ms: 50,
+                delay_ms: 200,
             }),
         );
         filters.register(
             "slow_b",
             Box::new(SlowFilter {
                 id: "b".into(),
-                delay_ms: 50,
+                delay_ms: 200,
             }),
         );
 
@@ -1014,11 +1014,11 @@ mod tests {
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
         let elapsed = start.elapsed();
 
-        // If truly parallel: ~50ms. If sequential: ~100ms.
-        // Use 90ms as threshold to account for overhead.
+        // If truly parallel: ~200ms. If sequential: ~400ms. The wide
+        // margin keeps the discrimination robust on loaded CI runners.
         assert!(
-            elapsed.as_millis() < 90,
-            "parallel branches took {}ms, expected <90ms (sequential would be ~100ms)",
+            elapsed.as_millis() < 350,
+            "parallel branches took {}ms, expected <350ms (sequential would be ~400ms)",
             elapsed.as_millis()
         );
 

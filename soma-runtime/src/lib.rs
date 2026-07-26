@@ -2,7 +2,7 @@
 //!
 //! Provides the runtime components that execute compiled plans:
 //! - [`runner`] — trait-based execution: LocalRunner, StreamExecutor, StudyRunner, PbtRunner
-//! - [`executor`] — walks [`ExecutionPlan`] trees (sequence, parallel, cached, remote)
+//! - [`executor`] — walks `ExecutionPlan` trees (sequence, parallel, cached, remote)
 //! - [`GraphSession`] — the primary orchestrator: Graph + filters → compile → execute
 //! - [`cache`] — LRU memory cache, local disk cache, tiered cache
 //! - [`sampler`] — hyperparameter samplers (Grid, Random, Bayesian/TPE)

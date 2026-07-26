@@ -1,7 +1,7 @@
 //! Typed values flowing between filters in a pipeline.
 //!
 //! [`Value`] variants: Tensor (f64 array with shape), JSON, Bytes, Empty.
-//! Values are serializable and content-addressable via [`CacheKey`].
+//! Values are serializable and content-addressable via [`crate::cache::CacheKey`].
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

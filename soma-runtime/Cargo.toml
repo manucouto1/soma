@@ -20,3 +20,6 @@ chrono = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = "3"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }

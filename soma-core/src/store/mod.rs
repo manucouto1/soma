@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// Metadata about a stored value, queryable without loading data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreMeta {
-    /// Total number of rows (shape[0] for tensors, 1 for scalar types).
+    /// Total number of rows (`shape[0]` for tensors, 1 for scalar types).
     pub total_rows: usize,
     /// Remaining shape dimensions after the row axis (shape[1..] for tensors).
     pub shape_tail: Vec<usize>,

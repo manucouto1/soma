@@ -1,7 +1,7 @@
 //! Runtime lifecycle events — emitted during plan execution.
 //!
 //! Events track run/node/study/trial state transitions and are
-//! broadcast via the [`EventBus`] for observability and debugging.
+//! broadcast via the runtime's `EventBus` for observability and debugging.
 
 use crate::cache::{CacheKey, CacheTier};
 use crate::filter::FilterKind;

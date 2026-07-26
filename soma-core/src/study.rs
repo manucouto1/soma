@@ -1,7 +1,7 @@
 //! Study — defines an optimization experiment with objectives and strategy.
 //!
 //! A [`Study`] holds the search space, strategy (Grid/Random/Bayesian),
-//! objectives, and tracks trials. The [`StudyRunner`] in soma-runtime
+//! objectives, and tracks trials. The `StudyRunner` in soma-runtime
 //! orchestrates execution.
 
 use crate::error::{Result, SomaError};

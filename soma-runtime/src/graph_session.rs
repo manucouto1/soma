@@ -151,9 +151,9 @@ impl GraphSession {
     /// Forward pass using the given strategy.
     ///
     /// Strategies define HOW data flows through the compiled graph:
-    /// - [`Standard`] — full input at once with inference caching (default)
-    /// - [`Stream`] — chunked input through StreamExecutor
-    /// - [`Batched`] — rows from DataStore, batch by batch
+    /// - [`crate::forward::Standard`] — full input at once with inference caching (default)
+    /// - [`crate::forward::Stream`] — chunked input through StreamExecutor
+    /// - [`crate::forward::Batched`] — rows from DataStore, batch by batch
     pub fn forward_with(
         &self,
         x: &Value,

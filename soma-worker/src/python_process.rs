@@ -680,7 +680,7 @@ impl Drop for PythonProcess {
 // ── SubprocessFilter: implements Filter trait via PythonProcess ──
 
 /// A filter that delegates to a shared PythonProcess via stdin/stdout.
-/// Multiple SubprocessFilters can share the same process (Arc<Mutex>).
+/// Multiple SubprocessFilters can share the same process (`Arc<Mutex>`).
 pub struct SubprocessFilter {
     pub(crate) process: Arc<Mutex<PythonProcess>>,
     node_id: String,

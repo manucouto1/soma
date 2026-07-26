@@ -1,11 +1,11 @@
 //! Graph compiler for Soma pipelines.
 //!
-//! Transforms a [`Graph`] of filter nodes into an [`ExecutionPlan`]:
+//! Transforms a `Graph` of filter nodes into an [`ExecutionPlan`]:
 //! - Topological ordering and parallelism detection
 //! - Cache resolution (content-addressable, cascade invalidation)
 //! - Schema validation between connected filters
 //! - Distribution wrapping for remote execution
-//! - [`Scheduler`] assigns plan nodes to workers
+//! - the `Scheduler` assigns plan nodes to workers
 
 pub mod compiler;
 pub mod plan;

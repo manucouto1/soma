@@ -106,7 +106,7 @@ pub struct SerializedFilter {
     pub trainable: bool,
 }
 
-/// Serde helper: Vec<u8> ↔ base64 string for JSON-safe binary transport.
+/// Serde helper: `Vec<u8>` ↔ base64 string for JSON-safe binary transport.
 mod base64_bytes {
     use base64::engine::{Engine, general_purpose::STANDARD};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

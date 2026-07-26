@@ -1,8 +1,8 @@
-//! Forward execution strategies for [`GraphSession`].
+//! Forward execution strategies for [`crate::GraphSession`].
 //!
 //! Each strategy defines HOW input data flows through a compiled graph:
 //! - [`Standard`] — full input at once, with inference caching
-//! - [`Stream`] — chunked input through [`StreamExecutor`], respecting StreamMode
+//! - [`Stream`] — chunked input through [`crate::StreamExecutor`], respecting StreamMode
 //! - [`Batched`] — rows from a [`DataStore`], batch by batch (memory-bounded)
 
 use crate::event_bus::EventBus;
