@@ -815,11 +815,14 @@ impl PyStudy {
             }
         };
 
-        let parse_dir = |d: &str| {
-            if d == "minimize" {
-                Direction::Minimize
-            } else {
-                Direction::Maximize
+        // Strict: a typo like "minimise" must not silently maximize.
+        let parse_dir = |d: &str| -> PyResult<Direction> {
+            match d {
+                "minimize" => Ok(Direction::Minimize),
+                "maximize" => Ok(Direction::Maximize),
+                other => Err(PyRuntimeError::new_err(format!(
+                    "unknown direction '{other}'; use 'maximize' or 'minimize'"
+                ))),
             }
         };
 
@@ -828,15 +831,17 @@ impl PyStudy {
         let objs: Vec<Objective> = match (&objective, objectives) {
             (Some(_), _) => vec![Objective {
                 metric: "score".into(),
-                direction: parse_dir(&direction),
+                direction: parse_dir(&direction)?,
             }],
             (None, Some(list)) => list
                 .into_iter()
-                .map(|(metric, dir)| Objective {
-                    metric,
-                    direction: parse_dir(&dir),
+                .map(|(metric, dir)| {
+                    Ok(Objective {
+                        metric,
+                        direction: parse_dir(&dir)?,
+                    })
                 })
-                .collect(),
+                .collect::<PyResult<Vec<_>>>()?,
             (None, None) => vec![],
         };
 
@@ -861,8 +866,13 @@ impl PyStudy {
     ///
     ///     study = soma.Study.load(".soma/runs/study_.../")
     ///     study.run(train, resume=True)
+    ///
+    /// A composite `objective=` callable cannot be persisted — re-pass
+    /// it here when resuming a study that was created with one, or the
+    /// new trials won't produce the "score" metric.
     #[staticmethod]
-    fn load(run_dir: String) -> PyResult<Self> {
+    #[pyo3(signature = (run_dir, objective=None))]
+    fn load(run_dir: String, objective: Option<PyObject>) -> PyResult<Self> {
         let dir = std::path::PathBuf::from(run_dir);
         let study = Study::load(dir.join("study.json")).map_err(soma_err_to_py)?;
         // <root>/runs/<run_id> → root
@@ -873,7 +883,7 @@ impl PyStudy {
             .unwrap_or_else(|| std::path::PathBuf::from(".soma"));
         Ok(Self {
             study,
-            objective_cb: None,
+            objective_cb: objective,
             tracking: true,
             root,
             run_dir: Some(dir),
@@ -909,11 +919,48 @@ impl PyStudy {
         on_event: Option<PyObject>,
         resume: bool,
     ) -> PyResult<()> {
+        // A study created with objective= scores through the "score"
+        // metric; resuming it without re-passing the callable would
+        // silently stop producing that metric. Only prior trials that
+        // actually carry "score" are evidence a callable existed.
+        if self.objective_cb.is_none()
+            && self
+                .study
+                .objectives
+                .first()
+                .is_some_and(|o| o.metric == "score")
+            && self
+                .study
+                .trials
+                .iter()
+                .any(|t| t.metrics.iter().any(|m| m.name == "score"))
+        {
+            let warnings = py.import("warnings")?;
+            warnings.call_method1(
+                "warn",
+                (
+                    "this study scores on the 'score' metric but no objective= callable \
+                     is set — pass it to Study.load(run_dir, objective=...) when resuming, \
+                     or return a {'score': ...} dict from the executor",
+                ),
+            )?;
+        }
+
         let tracker: Option<Arc<LocalTracker>> = if self.tracking {
             let t = match (&self.run_dir, resume) {
                 (Some(dir), true) => LocalTracker::open(dir).map_err(soma_err_to_py)?,
-                _ => LocalTracker::create(&self.root, RunKind::Study, &self.study.name)
-                    .map_err(soma_err_to_py)?,
+                _ => {
+                    let t = LocalTracker::create(&self.root, RunKind::Study, &self.study.name)
+                        .map_err(soma_err_to_py)?;
+                    // Enrich the manifest exactly like begin_run does.
+                    if let Ok(mut manifest) = load_manifest(t.run_dir()) {
+                        manifest.tags = self.study.tags.clone();
+                        manifest.python_version =
+                            Some(py.version().split_whitespace().next().unwrap_or("").into());
+                        let _ = t.save_manifest(&manifest);
+                    }
+                    t
+                }
             };
             self.run_dir = Some(t.run_dir().to_path_buf());
             Some(Arc::new(t))
@@ -2907,6 +2954,37 @@ impl PyRun {
             run_id: self.tracker.run_id().to_string(),
             epoch,
             total_epochs: total,
+        });
+        let _ = self.tracker.heartbeat();
+    }
+
+    /// Mark the end of an epoch with its summary metrics.
+    #[pyo3(signature = (epoch, metrics=None))]
+    fn log_epoch_completed(
+        &self,
+        epoch: usize,
+        metrics: Option<std::collections::HashMap<String, f64>>,
+    ) {
+        let now = chrono::Utc::now();
+        let records: Vec<MetricRecord> = metrics
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, value)| {
+                if let Ok(mut summary) = self.summary.lock() {
+                    summary.insert(name.clone(), value);
+                }
+                MetricRecord {
+                    name,
+                    value,
+                    step: epoch,
+                    timestamp: now,
+                }
+            })
+            .collect();
+        self.bus.emit(somatize_core::event::Event::EpochCompleted {
+            run_id: self.tracker.run_id().to_string(),
+            epoch,
+            metrics: records,
         });
         let _ = self.tracker.heartbeat();
     }

@@ -77,3 +77,73 @@ def test_failed_run_records_nothing(tmp_path):
         (next((tmp_path / "runs").iterdir()) / "status.json").read_text()
     )
     assert status["state"] == "failed"
+
+
+def test_study_record_content_is_complete(tmp_path):
+    study = Study(
+        "content",
+        search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
+        strategy="grid",
+        n_trials=3,
+        objectives=[("f1", "maximize")],
+        root=str(tmp_path),
+    )
+    study.run(lambda trial: {"f1": trial["x"]})
+
+    rec = experiments(str(tmp_path))[0]
+    assert rec["id"].startswith("study_")
+    assert rec["pipeline_summary"] == "study over 3 trials"
+    # Params are the BEST trial's params (grid max of f1=x is x=1.0).
+    assert rec["params"]["x"] == 1.0
+    assert rec["metrics"]["f1"] == 1.0
+    assert "duration" in rec
+
+
+def test_all_failed_study_records_nothing(tmp_path):
+    study = Study(
+        "all-fail",
+        search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
+        strategy="random",
+        n_trials=2,
+        objectives=[("f1", "maximize")],
+        seed=1,
+        root=str(tmp_path),
+    )
+    study.run(lambda trial: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert experiments(str(tmp_path)) == []
+
+
+def test_journal_preserves_append_order(tmp_path):
+    g = Graph()
+    for name in ["first", "second", "third"]:
+        run = g.begin_run(name, root=str(tmp_path))
+        run.log("f1", 0.5)
+        run.finish()
+    names = [r["name"] for r in experiments(str(tmp_path))]
+    assert names == ["first", "second", "third"]
+
+
+def test_corruption_in_the_middle_is_loud(tmp_path):
+    g = Graph()
+    run = g.begin_run("r", root=str(tmp_path))
+    run.log("f1", 0.5)
+    run.finish()
+
+    path = tmp_path / "experiments.jsonl"
+    content = path.read_text()
+    path.write_text("corrupt line\n" + content)
+    import pytest
+
+    with pytest.raises(ValueError):
+        experiments(str(tmp_path))
+
+
+def test_blank_lines_are_tolerated(tmp_path):
+    g = Graph()
+    run = g.begin_run("r", root=str(tmp_path))
+    run.log("f1", 0.5)
+    run.finish()
+
+    path = tmp_path / "experiments.jsonl"
+    path.write_text("\n" + path.read_text() + "\n\n")
+    assert len(experiments(str(tmp_path))) == 1
