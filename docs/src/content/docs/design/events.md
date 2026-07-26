@@ -88,7 +88,8 @@ pub enum Event {
     /// A new trial has started
     TrialStarted {
         study_id: StudyId,
-        trial: Trial,
+        trial_id: TrialId,
+        params: serde_json::Value,
     },
 
     /// A trial reports an intermediate metric (for pruning and live curves)
@@ -109,7 +110,8 @@ pub enum Event {
     /// A trial completed successfully
     TrialCompleted {
         study_id: StudyId,
-        trial: Trial,
+        trial_id: TrialId,
+        final_metrics: Vec<MetricRecord>,
     },
 
     /// A trial failed
@@ -125,7 +127,9 @@ pub enum Event {
 
     /// An optimization study has started
     StudyStarted {
-        study: StudySummary,
+        study_id: StudyId,
+        name: String,
+        total_trials: usize,
     },
 
     /// Study progress update
@@ -139,62 +143,117 @@ pub enum Event {
     /// The best trial has been updated
     BestUpdated {
         study_id: StudyId,
-        trial: Trial,
+        trial_id: TrialId,
+        value: f64,
+        params: serde_json::Value,
     },
 
     /// The Pareto front has changed (multi-objective)
     ParetoUpdated {
         study_id: StudyId,
-        front: Vec<Trial>,
+        front_size: usize,
     },
 
     /// The study completed
     StudyCompleted {
         study_id: StudyId,
-        best_trials: Vec<Trial>,
+        best_trial_id: TrialId,
+        best_value: f64,
+    },
+
+    // ══════════════════════════════════════════
+    // Level 4: Population-Based Training
+    // ══════════════════════════════════════════
+    // GenerationStarted / GenerationCompleted / MemberExploited —
+    // emitted by PbtRunner.
+
+    // ══════════════════════════════════════════
+    // Level 5: Training telemetry (native training loop)
+    // ══════════════════════════════════════════
+
+    /// A training epoch started / completed
+    EpochStarted { run_id: RunId, epoch: usize, total_epochs: Option<usize> },
+    EpochCompleted { run_id: RunId, epoch: usize, metrics: Vec<MetricRecord> },
+
+    /// One optimizer step completed (coarse liveness marker)
+    StepCompleted { run_id: RunId, step: usize, epoch: Option<usize> },
+
+    /// A metric reported outside a trial (training loops, evaluation)
+    MetricReported {
+        run_id: RunId,
+        metric: MetricRecord,
+        node_id: Option<NodeId>,
+        trial_id: Option<TrialId>,
+    },
+
+    /// A training-health diagnostic fired for a node
+    /// (e.g. DEAD_CHANNELS, IGNORED_CHANNELS, LEAKAGE, NONFINITE)
+    HealthFlag {
+        run_id: RunId,
+        node_id: NodeId,
+        step: usize,
+        flag: String,
+        detail: String,
     },
 }
 ```
 
 ## Event Bus
 
-The runtime broadcasts events via an async channel. Multiple subscribers can listen concurrently:
+The bus offers two delivery paths with different guarantees:
+
+- **Sinks** (`add_sink`) are invoked synchronously on the emitting
+  thread *before* the broadcast — lossless and strictly ordered. This
+  is how trackers persist events: a lagging disk never drops a line.
+- **Subscribers** (`subscribe`) receive via a tokio broadcast channel —
+  live but lossy under lag. Suitable for display and relays only.
 
 ```rust
 pub struct EventBus {
     sender: broadcast::Sender<Event>,
+    sinks: RwLock<Vec<Arc<dyn EventSink>>>,
 }
 
 impl EventBus {
     pub fn new(capacity: usize) -> Self { .. }
 
-    /// Emit an event to all subscribers
-    pub fn emit(&self, event: Event) { .. }
+    /// Register a lossless sink, called synchronously on every emit
+    pub fn add_sink(&self, sink: Arc<dyn EventSink>) { .. }
 
-    /// Subscribe to receive events
+    /// Emit: sinks first (lossless), then all subscribers
+    pub fn emit(&self, event: Event) -> usize { .. }
+
+    /// Subscribe to receive events (lossy under lag)
     pub fn subscribe(&self) -> broadcast::Receiver<Event> { .. }
+}
+
+/// soma-core::tracking — implemented by any tracking backend
+pub trait EventSink: Send + Sync {
+    fn record(&self, event: &Event);
+    fn flush(&self) {}
 }
 ```
 
-### Built-in Subscribers
+### Built-in Sink: JSONL Run Logs
+
+`JsonlEventSink` (soma-runtime) appends every event as one JSON line to
+`events.jsonl`, wrapped in an envelope `{seq, ts, ...event}` with a
+monotonic sequence number, and tees metric-bearing events
+(`TrialMetric`, `MetricReported`) into a flat `metrics.jsonl`.
+`LocalTracker` owns a run directory (`.soma/runs/<run_id>/`) holding
+those logs plus `manifest.json` (write-once) and `status.json`
+(heartbeat). See the tracking design page for the full layout.
 
 ```rust
-// Console logger
-let logger = ConsoleEventLogger::new(bus.subscribe());
-tokio::spawn(logger.run());
-
-// JSON file logger
-let file_logger = JsonFileLogger::new(bus.subscribe(), "events.jsonl");
-tokio::spawn(file_logger.run());
-
-// WebSocket relay (for UI)
-let ws = WebSocketRelay::new(bus.subscribe(), ws_sender);
-tokio::spawn(ws.run());
-
-// Agent subscriber (for autonomous decision-making)
-let agent_inbox = AgentEventCollector::new(bus.subscribe());
-tokio::spawn(agent_inbox.run());
+let tracker = LocalTracker::create(".soma", RunKind::Fit, "my-run")?;
+bus.add_sink(tracker.sink());
+// ... run ...
+tracker.finalize(RunState::Completed)?;
 ```
+
+A WebSocket relay for a live UI would be a broadcast subscriber, not a
+sink — dropping frames under lag is acceptable there because the run
+directory remains the source of truth.
 
 ## Events for Visualization
 
@@ -244,55 +303,22 @@ UI components:
   - Progress bar (completed / total trials)
 ```
 
-## Context: How Filters Emit Events
+## Who Emits What
 
-Filters don't emit events directly. They interact with the `Context` object:
+Filters never emit events directly; emission happens at the
+orchestration layer:
 
-```rust
-pub struct Context {
-    store: ContextStore,
-    event_bus: EventBus,
-    run_id: RunId,
-    node_id: NodeId,
-}
-
-impl Context {
-    /// Report a metric (emits TrialMetric event)
-    pub fn report_metric(&self, name: &str, value: f64, step: usize) -> Result<()> {
-        self.event_bus.emit(Event::TrialMetric {
-            study_id: self.study_id,
-            trial_id: self.trial_id,
-            metric: MetricRecord {
-                name: name.to_string(),
-                value,
-                step,
-                timestamp: Utc::now(),
-            },
-        });
-
-        // Check if pruner wants to stop this trial
-        if self.pruner.should_prune(name, value, step) {
-            return Err(SomaError::Pruned { step, reason: "below median".into() });
-        }
-        Ok(())
-    }
-
-    /// Report progress (emits NodeProgress event)
-    pub fn report_progress(&self, progress: f32) {
-        self.event_bus.emit(Event::NodeProgress {
-            run_id: self.run_id,
-            node_id: self.node_id,
-            progress,
-        });
-    }
-
-    /// Get input data from predecessor nodes
-    pub fn input<T: FromValue>(&self) -> Result<T> { .. }
-
-    /// Access the cache store
-    pub fn cache(&self) -> &dyn CacheStore { .. }
-}
-```
+- **Node/run events (level 1)** — emitted by the executor and
+  `LocalRunner` during `GraphSession::fit`/`run`. `NodeProgress` is
+  reserved but currently has no emitter.
+- **Trial/study events (levels 2–3)** — emitted by `StudyRunner`.
+  Intermediate metrics flow through the trial handle
+  (`TrialContext::report(name, value, step)`), which emits
+  `TrialMetric` and consults the pruner.
+- **PBT events (level 4)** — emitted by `PbtRunner`.
+- **Training telemetry (level 5)** — emitted from the Python native
+  training loop via the `Graph.emit_event` binding (epoch/step markers,
+  `MetricReported`, `HealthFlag` from the gradient audit).
 
 ## Event Serialization
 
@@ -303,9 +329,12 @@ All events are serializable to JSON (via serde), enabling:
 - **Message queue publishing**: Integration with external monitoring systems
 - **Agent consumption**: Structured input for autonomous decision-making
 
+In a run directory each line carries the tracker envelope (`seq`, `ts`)
+with the event's `event_type` tag flattened alongside its fields:
+
 ```json
-{"type":"NodeStarted","run_id":"run_001","node_id":"scaler","kind":"Trainable"}
-{"type":"NodeCacheHit","run_id":"run_001","node_id":"scaler","key":"abc123","tier":"Memory","load_time_ms":0.2}
-{"type":"TrialMetric","study_id":"study_001","trial_id":"trial_042","metric":{"name":"f1","value":0.847,"step":15}}
-{"type":"BestUpdated","study_id":"study_001","trial":{"id":"trial_042","params":{"lr":0.003,"C":1.5}}}
+{"seq":0,"ts":"2026-07-26T10:15:02Z","event_type":"NodeStarted","run_id":"run_001","node_id":"scaler","kind":"Trainable"}
+{"seq":1,"ts":"2026-07-26T10:15:02Z","event_type":"NodeCacheHit","run_id":"run_001","node_id":"scaler","key":"abc123","tier":"Memory","load_time":0}
+{"seq":2,"ts":"2026-07-26T10:15:03Z","event_type":"TrialMetric","study_id":"study_001","trial_id":"trial_042","metric":{"name":"f1","value":0.847,"step":15,"timestamp":"2026-07-26T10:15:03Z"}}
+{"seq":3,"ts":"2026-07-26T10:15:03Z","event_type":"BestUpdated","study_id":"study_001","trial_id":"trial_042","value":0.847,"params":{"lr":0.003,"C":1.5}}
 ```

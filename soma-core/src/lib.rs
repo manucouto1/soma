@@ -20,6 +20,7 @@ pub mod state;
 pub mod store;
 pub mod strategy;
 pub mod study;
+pub mod tracking;
 pub mod util;
 pub mod value;
 pub mod virtual_value;
@@ -46,6 +47,10 @@ pub use strategy::{
     GradientAggregation, Partition, TrainingStrategy,
 };
 pub use study::{Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState};
+pub use tracking::{
+    EventEnvelope, EventSink, GitInfo, GraphSummaryInfo, RUN_SCHEMA_VERSION, RunKind, RunManifest,
+    RunState, RunStatus, Tracker,
+};
 pub use value::Value;
 pub use virtual_value::{ValueStatus, VirtualValue};
 

@@ -195,6 +195,46 @@ pub enum Event {
         replaced_id: String,
         donor_id: String,
     },
+
+    // ── Level 5: Training telemetry (native training loop) ──
+    /// A training epoch started.
+    EpochStarted {
+        run_id: RunId,
+        epoch: usize,
+        total_epochs: Option<usize>,
+    },
+
+    /// A training epoch completed with its summary metrics.
+    EpochCompleted {
+        run_id: RunId,
+        epoch: usize,
+        metrics: Vec<MetricRecord>,
+    },
+
+    /// One optimizer step completed (coarse liveness marker).
+    StepCompleted {
+        run_id: RunId,
+        step: usize,
+        epoch: Option<usize>,
+    },
+
+    /// A user- or node-scoped metric reported outside a trial.
+    MetricReported {
+        run_id: RunId,
+        metric: MetricRecord,
+        node_id: Option<NodeId>,
+        trial_id: Option<TrialId>,
+    },
+
+    /// A training-health diagnostic fired for a node (e.g.
+    /// `DEAD_CHANNELS`, `IGNORED_CHANNELS`, `LEAKAGE`, `NONFINITE`).
+    HealthFlag {
+        run_id: RunId,
+        node_id: NodeId,
+        step: usize,
+        flag: String,
+        detail: String,
+    },
 }
 
 /// Serde helper: Duration as milliseconds (u64).

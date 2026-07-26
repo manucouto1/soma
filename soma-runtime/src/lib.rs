@@ -7,6 +7,7 @@
 //! - [`cache`] — LRU memory cache, local disk cache, tiered cache
 //! - [`sampler`] — hyperparameter samplers (Grid, Random, Bayesian/TPE)
 //! - [`pruner`] — early stopping strategies (Median, Percentile)
+//! - [`tracking`] — local run directories: JSONL event sink, LocalTracker
 
 pub mod cache;
 pub mod event_bus;
@@ -18,6 +19,7 @@ pub mod graph_session;
 pub mod pruner;
 pub mod runner;
 pub mod sampler;
+pub mod tracking;
 
 pub use cache::{LocalCache, MemoryCache, TieredCache};
 pub use event_bus::EventBus;
@@ -32,3 +34,4 @@ pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
+pub use tracking::{JsonlEventSink, LocalTracker, collect_git_info, load_manifest, load_status};
