@@ -35,12 +35,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Test
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
@@ -48,6 +49,16 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # PyO3 0.24 supports up to Python 3.13; runner defaults (e.g.
+      # macos-latest) may already ship 3.14.
+      - name: Setup Python for PyO3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Point PyO3 at the pinned interpreter
+        run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -124,6 +135,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+
+      - name: Setup Python for PyO3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Point PyO3 at the pinned interpreter
+        run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

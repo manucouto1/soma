@@ -293,7 +293,7 @@ mod tests {
             tpe.record_result(&params, 1.0 - (lr - 0.01).abs() * 10.0);
         }
 
-        let mut median_dist = |s: &mut BayesianSampler| -> f64 {
+        let median_dist = |s: &mut BayesianSampler| -> f64 {
             let mut dists: Vec<f64> = (100..120)
                 .map(|i| {
                     let p = s.sample(&space, i).unwrap().unwrap();
