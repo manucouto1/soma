@@ -26,7 +26,7 @@ pub use event_bus::EventBus;
 pub use executor::{Context, GraphInfo, execute, resolve_input};
 pub use executors::{
     FittedFilter, FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner,
-    PopulationMember, StreamExecutor, StudyRunner, TrialExecutor, TrialOutcome,
+    PopulationMember, StreamExecutor, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
 };
 pub use filter_library::FilterLibrary;
 pub use forward::{Batched, ForwardStrategy, Standard, Stream};

@@ -46,7 +46,10 @@ pub use strategy::{
     ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy, FederatedAggregation,
     GradientAggregation, Partition, TrainingStrategy,
 };
-pub use study::{Direction, Objective, PruningStrategy, SearchStrategy, Study, Trial, TrialState};
+pub use study::{
+    CompositeObjective, Direction, Objective, PruningStrategy, Scalarizer, SearchStrategy, Study,
+    Trial, TrialState,
+};
 pub use tracking::{
     EventEnvelope, EventSink, GitInfo, GraphSummaryInfo, RUN_SCHEMA_VERSION, RunKind, RunManifest,
     RunState, RunStatus, Tracker,

@@ -632,7 +632,9 @@ impl PyStudy {
         let executor_obj = executor.clone().unbind();
 
         let trial_executor = FnTrialExecutor(
-            move |params: &HashMap<String, serde_json::Value>| -> SomaResult<TrialOutcome> {
+            move |params: &HashMap<String, serde_json::Value>,
+                  _ctx: &mut somatize_runtime::TrialContext<'_>|
+                  -> SomaResult<TrialOutcome> {
                 Python::with_gil(|py| {
                     let py_params = PyDict::new(py);
                     for (k, v) in params {

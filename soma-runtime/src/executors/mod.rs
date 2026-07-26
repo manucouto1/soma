@@ -15,4 +15,4 @@ pub mod study;
 pub use pbt::{FnPbtExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember};
 pub use simple::SimpleExecutor;
 pub use stream::{FittedFilter, StreamExecutor, materialize_buffer};
-pub use study::{FnTrialExecutor, StudyRunner, TrialExecutor, TrialOutcome};
+pub use study::{FnTrialExecutor, StudyRunner, TrialContext, TrialExecutor, TrialOutcome};

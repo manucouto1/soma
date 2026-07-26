@@ -181,6 +181,12 @@ impl Sampler for BayesianSampler {
     fn n_trials(&self) -> Option<usize> {
         Some(self.n_trials)
     }
+
+    /// Completed-trial feedback — this is what makes TPE model-based
+    /// instead of degenerating to random search.
+    fn record_result(&mut self, params: &HashMap<String, serde_json::Value>, value: f64) {
+        self.record(params.clone(), value);
+    }
 }
 
 #[cfg(test)]
