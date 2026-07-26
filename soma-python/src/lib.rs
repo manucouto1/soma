@@ -312,6 +312,22 @@ impl Filter for PyFilterBridge {
                 .call_method1(py, "forward", (py_x, py_state))
                 .map_err(|e| SomaError::Other(format!("Python forward() error: {e}")))?;
             let bound = result.bind(py);
+            // Filter forward may return either ``out`` directly (legacy)
+            // or ``(out, aux_dict)`` (new DifferentiableFilter contract).
+            // Auxiliary signals are runtime-only — drop them at the
+            // serialization boundary so cached/remote callers see the
+            // same shape as before.
+            if let Ok(tuple) = bound.downcast::<pyo3::types::PyTuple>()
+                && tuple.len() == 2
+                && tuple
+                    .get_item(1)
+                    .is_ok_and(|v| v.is_instance_of::<PyDict>())
+            {
+                let out = tuple
+                    .get_item(0)
+                    .map_err(|e| SomaError::Other(format!("forward tuple unpack: {e}")))?;
+                return py_to_value(py, &out).map_err(py_err_to_soma);
+            }
             py_to_value(py, bound).map_err(py_err_to_soma)
         })
     }
@@ -760,6 +776,19 @@ struct PyGraph {
     data_store: Option<Arc<dyn somatize_core::store::DataStore>>,
     /// Whether each filter is trainable (node_id → bool).
     filter_trainable: std::collections::HashMap<String, bool>,
+    /// Live Python filter instances retained by node id. Used by the
+    /// in-process training path (graph.train/forward/freeze) so that a
+    /// filter's persistent state (e.g. an nn.Module attached to self)
+    /// survives across forward calls instead of being deserialised each
+    /// time. Distinct from `pickled_filters`, which exists only for
+    /// remote-worker dispatch.
+    live_filters: std::collections::HashMap<String, Py<PyAny>>,
+    /// Generic Python-side scratch dict for orchestration state that
+    /// doesn't belong on the Rust struct (e.g. the registered optimiser).
+    /// Lazily initialised on first access. PyGraph deliberately doesn't
+    /// expose `__dict__`, so this dict is the supported way to attach
+    /// per-graph Python state.
+    py_state: Option<Py<PyDict>>,
 }
 
 impl PyGraph {
@@ -1390,6 +1419,8 @@ impl PyGraph {
             filter_sources: std::collections::HashMap::new(),
             data_store: None,
             filter_trainable: std::collections::HashMap::new(),
+            live_filters: std::collections::HashMap::new(),
+            py_state: None,
         })
     }
 
@@ -1460,6 +1491,14 @@ impl PyGraph {
             .insert(actual_id.clone(), bridge.source.clone());
         self.filter_trainable
             .insert(actual_id.clone(), bridge.trainable);
+        // Retain the live Python instance so it can be retrieved by
+        // graph.filter(node_id) for the in-process training path. The
+        // FilterLibrary owns a Box<dyn Filter> wrapping the bridge; we
+        // keep an independent strong reference to the original PyObject
+        // here so callers can mutate it (e.g. set self.training=True or
+        // attach an nn.Module).
+        self.live_filters
+            .insert(actual_id.clone(), filter_obj.clone().unbind());
         self.library.register(actual_id.clone(), Box::new(bridge));
 
         Ok(actual_id)
@@ -2100,6 +2139,119 @@ impl PyGraph {
             dict.set_item(node_id, source)?;
         }
         Ok(dict.into_any().unbind())
+    }
+
+    /// Retrieve the live Python filter instance registered under `node_id`.
+    ///
+    /// Returns ``None`` if the node doesn't exist or wasn't added through
+    /// the Python `node()` API (e.g. nodes materialised from a serialised
+    /// graph have only pickled bytes, not a live instance).
+    ///
+    /// Used by the in-process training path so callers can manipulate the
+    /// filter directly — e.g. toggle `self.training`, read `_module`, or
+    /// extract `state_dict()` — without round-tripping through a pickle.
+    fn filter(&self, py: Python<'_>, node_id: String) -> Option<PyObject> {
+        self.live_filters.get(&node_id).map(|o| o.clone_ref(py))
+    }
+
+    /// List node ids with live Python filter instances, in topological order.
+    ///
+    /// Falls back to insertion order if topological sort fails (e.g. the
+    /// graph hasn't been validated yet — possible during construction).
+    /// Callers that drive training need the topo order so output of one
+    /// filter feeds the next.
+    fn filter_ids(&self) -> Vec<String> {
+        match self.graph.topological_sort() {
+            Ok(sorted) => sorted
+                .into_iter()
+                .filter(|id| self.live_filters.contains_key(*id))
+                .map(|id| id.to_string())
+                .collect(),
+            Err(_) => self.live_filters.keys().cloned().collect(),
+        }
+    }
+
+    /// Return live Python filter instances as an ordered list of
+    /// ``(node_id, filter)`` tuples in topological order.
+    ///
+    /// Returning a list (vs. a dict) preserves the order — callers
+    /// iterating to chain forwards get inputs threaded correctly.
+    fn filters(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty(py);
+        for node_id in self.filter_ids() {
+            if let Some(obj) = self.live_filters.get(&node_id) {
+                let tuple = (node_id, obj.clone_ref(py));
+                list.append(tuple)?;
+            }
+        }
+        Ok(list.into_any().unbind())
+    }
+
+    /// Store a Python state value for a filter node.
+    ///
+    /// Used by ``Graph.freeze()`` (Python side) to push each live
+    /// ``DifferentiableFilter`` module's serialised ``state_dict`` into
+    /// the runtime's filter-state library, so subsequent eval calls go
+    /// through the Rust forward path with state pre-populated.
+    fn set_node_state(
+        &mut self,
+        py: Python<'_>,
+        node_id: String,
+        state: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let value = py_to_value(py, &state)?;
+        self.library.set_state(node_id, value);
+        Ok(())
+    }
+
+    /// List data edges as ``[(source, target), ...]`` in insertion order.
+    ///
+    /// Used by :meth:`Graph.save` to record topology in the manifest so
+    /// :meth:`Graph.load` can reconstruct non-linear graphs (forks,
+    /// joins) instead of falling back to a linear chain.
+    fn edges(&self) -> Vec<(String, String)> {
+        self.graph
+            .edges
+            .iter()
+            .map(|e| (e.source.clone(), e.target.clone()))
+            .collect()
+    }
+
+    /// Retrieve the stored state value for a filter node, or ``None``.
+    ///
+    /// Mirror of :meth:`set_node_state`. Used by ``Graph.state()`` to
+    /// snapshot every node's state for checkpointing.
+    fn get_node_state(&self, py: Python<'_>, node_id: String) -> PyResult<Option<PyObject>> {
+        match self.library.get_state(&node_id) {
+            Some(arc) => Ok(Some(value_to_py(py, arc.as_ref())?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Mark the graph as fitted without running ``fit()``.
+    ///
+    /// The Rust ``forward`` path refuses to run on an un-fitted graph.
+    /// When the user trains via the Python autograd loop (``train()`` /
+    /// ``forward(x)`` / ``backward`` / ``step``) and then calls
+    /// ``freeze()``, no Rust ``fit()`` ran — but state has been pushed
+    /// via ``set_node_state``. ``freeze()`` calls this so the
+    /// subsequent eval ``forward`` is allowed.
+    fn mark_fitted(&mut self) {
+        self.fitted = true;
+    }
+
+    /// Per-graph scratch dict for Python-side orchestration state.
+    ///
+    /// PyGraph doesn't expose ``__dict__``, so callers (e.g. the
+    /// _orchestrator module) use this dict to attach things like the
+    /// registered optimiser without monkey-patching the class.
+    /// Lazily created on first access.
+    #[getter]
+    fn py_state(&mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        if self.py_state.is_none() {
+            self.py_state = Some(PyDict::new(py).unbind());
+        }
+        Ok(self.py_state.as_ref().unwrap().clone_ref(py))
     }
 
     /// Number of nodes in the graph.

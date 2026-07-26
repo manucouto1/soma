@@ -18,6 +18,30 @@ except ImportError:  # torch not installed — DifferentiableFilter is opt-in
 # "You think it. Soma somatizes it."
 Graph.somatize = classmethod(lambda cls, topology: _somatize(topology))
 
+# Install train/eval/forward/materialize/parameters on Graph for
+# native gradient flow. Import for side-effects.
+from soma import _orchestrator  # noqa: E402, F401
+
+# Install state/load_state/save/load on Graph (depends on
+# _orchestrator's freeze/py_state). Import for side-effects.
+from soma import _checkpoint  # noqa: E402, F401
+
+# Install gradient_audit on Graph (depends on _orchestrator). Import
+# for side-effects. Re-export the user-facing types.
+try:
+    from soma._audit import (
+        Audit,
+        AuditReport,
+        FilterReport,
+        GradientHealthError,
+        Thresholds,
+        audit_modules,
+    )
+except ImportError:  # torch not installed
+    Audit = AuditReport = FilterReport = None        # type: ignore[assignment]
+    GradientHealthError = Thresholds = None          # type: ignore[assignment]
+    audit_modules = None                             # type: ignore[assignment]
+
 __all__ = [
     "Graph",
     "Study",
@@ -29,4 +53,10 @@ __all__ = [
     "Fork",
     "search",
     "__version__",
+    "Audit",
+    "AuditReport",
+    "FilterReport",
+    "GradientHealthError",
+    "Thresholds",
+    "audit_modules",
 ]

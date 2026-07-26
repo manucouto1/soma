@@ -37,9 +37,15 @@ class MyScaler(Filter):
 |--------|-----------|-------------|
 | `fit` | `(x, y=None) -> dict` | Learn internal state from training data |
 | `forward` | `(x, state) -> list` | Transform data using learned state |
+| `kwargs` | `() -> dict` | Constructor kwargs (used by `Graph.save`/`Graph.load`) |
+| `class_path` | `() -> str` | Class method. Fully-qualified import path (`"module.Class"`) |
 | `to` | `(other) -> Chain` | Chain this filter to another (fluent builder) |
 | `>>` | `filter >> other` | Chain operator (same as `.to()`) |
 | `\|` | `filter \| other` | Fork operator (parallel branches) |
+
+Class attribute `class_version: int = 1` — bump in subclasses when
+constructor kwargs or saved-state layout change. `Graph.load` reads it
+from the manifest and warns on mismatch.
 
 #### Search Descriptors
 
@@ -124,6 +130,25 @@ g = Graph.somatize(
 | `to_text` | `() -> str` | Render graph as ASCII tree |
 | `on_event` | `(callback)` | Register event callback (background thread) |
 | `set_strategy` | `(strategy)` | Set training strategy (from soma-core) |
+| `materialize` | `(sample_input)` | Build every `DifferentiableFilter._module` once, threading shapes |
+| `train` / `eval` | `()` | Flip `training` on every live filter and its `_module` |
+| `to` | `(device, *, dtype=None) -> Graph` | Move every materialised filter `_module` to `device`/`dtype`; target persists so lazy-built modules inherit it |
+| `parameters` | `() -> Iterator[Parameter]` | Topological iterator over all materialised filter parameters |
+| `make_optimizer` | `(cls=Adam, **kw)` | Build + register an optimiser over `g.parameters()` |
+| `set_optimizer` | `(opt)` | Register an externally-built optimiser |
+| `context` | `() -> ctx` | Autograd context (no-op locally; `dist.autograd.context()` under RPC) |
+| `backward` | `(ctx, loss)` | Local `loss.backward()`; RPC `dist.autograd.backward(ctx, [loss])` |
+| `step` | `(ctx=None)` | Local `opt.step()`; RPC `DistributedOptimizer.step(ctx)` |
+| `zero_grad` | `(set_to_none=True)` | Wrapper over registered optimiser; silent no-op before `make_optimizer` |
+| `freeze` | `()` | Snapshot every live `_module.state_dict()` into runtime state, switch to eval |
+| `state` | `() -> dict[node_id, state]` | Snapshot per-node runtime state |
+| `load_state` | `(sd, strict=True)` | Apply a state dict; `strict=False` warns on missing/unknown keys |
+| `save` | `(path, include_optimizer=False)` | Persist full graph (manifest + safetensors + JSON) to a zip bundle |
+| `load` | `(path, strict=True)` | Class method. Rebuild topology + restore state from a checkpoint |
+| `restore_optimizer` | `() -> bool` | Apply a pending optimiser snapshot bundled by `save(include_optimizer=True)` |
+| `edges` | `() -> list[(src, tgt)]` | Data edges in insertion order (used by `save`) |
+| `get_node_state` / `set_node_state` | `(node_id [, state])` | Low-level state accessor used by `state` / `load_state` |
+| `gradient_audit` | `(thresholds=None) -> ctx[Audit]` | Install per-filter forward/backward hooks for the duration of a training pass |
 | `add_worker` | `(address, token?, tags?)` | Add a remote worker |
 | `set_coordinator` | `(url, token?)` | Set coordinator for auto-discovery |
 | `workers` | `() -> list[dict]` | List known workers |
@@ -162,6 +187,57 @@ g.set_coordinator("http://coord:9090", token="sk-xxx")
 for w in g.workers():
     print(w["address"], w["tags"])
 ```
+
+### DifferentiableFilter
+
+Filter base class for trainable `nn.Module` wrappers. Available when
+`torch` is installed; `None` otherwise.
+
+```python
+from soma import Graph, DifferentiableFilter
+import torch, torch.nn as nn
+
+class Dense(DifferentiableFilter):
+    def __init__(self, out_dim, lr=1e-3):
+        super().__init__(out_dim=out_dim, lr=lr)
+    def build_module(self, input_shape):
+        return nn.Linear(input_shape[-1], self.out_dim)
+    def output_shape(self, input_shape):
+        return (self.out_dim,)
+
+g = Graph.somatize(Dense(8) >> Dense(2))
+g.materialize(sample_x)
+g.train()
+g.make_optimizer(torch.optim.Adam, lr=1e-3)
+for x, y in batches:
+    with g.context() as ctx:
+        g.zero_grad()
+        out, aux = g.forward(x)
+        loss = nn.functional.mse_loss(out, y)
+        g.backward(ctx, loss)
+    g.step(ctx)
+g.freeze(); g.eval()
+preds = g.forward(x_test)
+```
+
+#### Subclass hooks
+
+| Hook | Signature | Purpose |
+|---|---|---|
+| `build_module` | `(input_shape) -> nn.Module` | Construct the trainable module (called once) |
+| `output_shape` | `(input_shape) -> tuple` | Forward shape so cascade-materialise can size successors |
+| `forward` | `(x, state=None) -> (out, aux_dict)` | Provided by base; override to surface aux signals (gates etc.) |
+| `compute_loss` | `(output, y, aux=None) -> tensor` | Default MSE; override for BCE/CE/custom |
+| `make_optimizer` | `(modules) -> Optimizer` | Default `Adam(lr=self.lr)`; override for per-filter LRs |
+
+`forward(x, state=None)` is **polymorphic on `self.training`**: when
+training, the `state` argument is ignored and the filter runs the live
+`_module` with autograd; when not training, it loads
+`state["weights_b64"]` if present, runs `no_grad`, and returns lists.
+Always returns `(out, aux_dict)`.
+
+See the [gradients design doc](/design/gradients/#native-training-loop-python)
+for the full training-loop pattern and RPC-ready notes.
 
 ### Study
 

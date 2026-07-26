@@ -242,3 +242,136 @@ loss.backward()  # gradients flow from NeuralNet through Scaler
 |---|---|---|---|
 | `predict()` | No | Full caching | Inference, evaluation, production |
 | `forward()` | Yes | State-only caching | Training, fine-tuning, gradient analysis |
+
+## Native Training Loop (Python)
+
+The conceptual model above describes the runtime; the Python orchestrator
+exposes it as a small, RPC-ready surface on `Graph`. Filters that subclass
+`DifferentiableFilter` keep a persistent `nn.Module` on the instance,
+so a user-driven training loop can run batches through the graph with
+gradients flowing **natively** between filters — no per-batch
+serialization of weights or activations.
+
+### Anatomy of `DifferentiableFilter`
+
+A subclass implements two hooks plus an optional `forward` override:
+
+```python
+from soma import DifferentiableFilter
+import torch.nn as nn
+
+class Dense(DifferentiableFilter):
+    def __init__(self, out_dim, lr=1e-3):
+        super().__init__(out_dim=out_dim, lr=lr)
+
+    def build_module(self, input_shape):       # built once
+        return nn.Linear(input_shape[-1], self.out_dim)
+
+    def output_shape(self, input_shape):       # for cascade materialise
+        return (self.out_dim,)
+```
+
+`forward(x, state=None)` is provided by the base. It is **polymorphic on
+`self.training`**:
+
+- `training=True` → returns `(out_tensor, aux_dict)` with autograd live.
+  The `state` argument is ignored — parameters live on `self._module`.
+- `training=False` → optionally loads `state["weights_b64"]`, runs
+  `no_grad`, returns `(out_list, aux_dict)`. This is the path the Rust
+  runtime uses for cached/distributable inference after `freeze()`.
+
+The contract is **always `(out, aux)`**; `aux` is an empty dict unless
+the filter override surfaces auxiliary signals (gates, routing weights,
+auxiliary losses).
+
+### Graph orchestration API
+
+| Method | Description |
+|---|---|
+| `g.materialize(sample_input)` | Walk topology, build every `_module` once, threading shapes through `output_shape`. |
+| `g.train()` / `g.eval()` | Toggle `training` on every live filter (and its `_module`). |
+| `g.parameters()` | Iterate `nn.Parameter`s of every materialised filter, in topological order, deduplicated. |
+| `g.forward(x)` | Polymorphic. If any filter is in training, walks live filters with autograd live and returns `(out, aux_by_node)`. Otherwise delegates to the Rust inference path. |
+| `g.make_optimizer(cls=Adam, **kw)` | Build and register an optimiser over `g.parameters()`. |
+| `g.set_optimizer(opt)` | Register an externally-built optimiser. |
+| `g.context()` | Autograd context manager. Local: no-op. RPC: `dist.autograd.context()`. |
+| `g.backward(ctx, loss)` | Local: `loss.backward()`. RPC: `dist.autograd.backward(ctx, [loss])`. |
+| `g.step(ctx)` | Local: `opt.step()`. RPC: `DistributedOptimizer.step(ctx)`. |
+| `g.zero_grad()` | Wrapper around the registered optimiser; silent no-op before `make_optimizer`. |
+| `g.freeze()` | Snapshot every live `_module.state_dict()` into the runtime's filter-state library and switch to eval. After `freeze()`, the Rust forward path is ready. |
+
+### Canonical training loop
+
+```python
+from soma import Graph, DifferentiableFilter
+import torch, torch.nn as nn
+
+g = Graph.somatize(Dense(8) >> Dense(2))
+g.materialize(sample_x)
+g.train()
+g.make_optimizer(torch.optim.Adam, lr=1e-3)
+
+for epoch in range(epochs):
+    for x, y in batches:
+        with g.context() as ctx:
+            g.zero_grad()
+            out, aux = g.forward(x)
+            loss = nn.functional.mse_loss(out, y)
+            g.backward(ctx, loss)
+        g.step(ctx)
+
+g.freeze()                 # weights → state library, switch to eval
+g.eval()
+preds = g.forward(x_test)  # Rust inference path
+```
+
+### Auxiliary signals
+
+When a filter override returns `(out, {"gate": gate_tensor})`, the
+graph's training-mode `forward` collects per-node aux into
+`aux_by_node = {node_id: aux_dict}`. The user combines them with the
+main loss explicitly:
+
+```python
+out, aux = g.forward(x)
+main = nn.functional.cross_entropy(out, y)
+gate_l1 = aux["classifier"]["gate"].abs().mean()
+total = main + 0.1 * gate_l1
+g.backward(ctx, total)
+```
+
+`aux` tensors keep autograd live, so gradients from the auxiliary term
+reach the same parameters as the main loss.
+
+### Gradient health audit
+
+Pair the training loop with `graph.gradient_audit()` to record per-filter
+activation and gradient statistics and flag vanishing / exploding /
+NaN / dead / saturated nodes with no manual hooks:
+
+```python
+with g.gradient_audit() as audit:
+    for x, y in batches:
+        with g.context() as ctx:
+            g.zero_grad()
+            out, aux = g.forward(x)
+            loss = my_loss(out, y, aux)
+            g.backward(ctx, loss)
+        g.step(ctx)
+
+print(audit.report().pretty())
+audit.assert_healthy()
+```
+
+See the [Gradient Health Audit guide](../../guides/gradient-audit/) for
+metrics, flags, and threshold tuning.
+
+### RPC-ready by design
+
+The `context() / backward(ctx, loss) / step(ctx)` triplet is intentionally
+shaped after `torch.distributed.autograd`. Locally each call reduces to
+the obvious single-process action; once filters live on remote workers
+backed by `torch.distributed.rpc`, the same call sites swap in the
+distributed equivalents (`dist.autograd.context()`,
+`dist.autograd.backward(ctx, [loss])`,
+`DistributedOptimizer.step(ctx)`) without touching user code.

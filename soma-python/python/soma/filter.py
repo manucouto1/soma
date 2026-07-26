@@ -72,7 +72,19 @@ class Filter(metaclass=FilterMeta):
         _stream_mode = "fixed"   # "fixed" (default), "evolving", or "barrier"
     """
 
+    #: Schema version of this filter class. Bump in subclasses when
+    #: constructor kwargs or saved-state layout changes; ``Graph.load``
+    #: reads it from the manifest and warns on mismatch so users can
+    #: plug a migration hook.
+    class_version: int = 1
+
     def __init__(self, **kwargs):
+        # Remember the constructor kwargs verbatim so checkpoints can
+        # rebuild the filter via ``cls(**self.kwargs())``. Stored as a
+        # plain dict on the instance — subclasses that need to keep a
+        # different surface should override :meth:`kwargs`.
+        self._init_kwargs: dict = dict(kwargs)
+
         # Set all kwargs as attributes (parameters)
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -83,6 +95,28 @@ class Filter(metaclass=FilterMeta):
             if not hasattr(self, name) or isinstance(getattr(self.__class__, name, None), SearchDescriptor):
                 if name not in kwargs and "default" in dim:
                     setattr(self, name, dim["default"])
+
+    # ── Introspection (used by Graph.save / Graph.load) ──
+
+    def kwargs(self) -> dict:
+        """Return the constructor kwargs needed to rebuild this filter.
+
+        Default: the dict captured by ``__init__``. Subclasses with
+        non-serialisable runtime objects should override and return only
+        the JSON-serialisable subset (everything else must be
+        reconstructed inside the new instance, e.g. in ``build_module``).
+        """
+        return dict(getattr(self, "_init_kwargs", {}))
+
+    @classmethod
+    def class_path(cls) -> str:
+        """Fully-qualified import path: ``"module.submodule.Class"``.
+
+        ``Graph.load`` uses it to rebuild filter instances without the
+        original Python objects in scope. The class must therefore be
+        importable by name from a stable module path.
+        """
+        return f"{cls.__module__}.{cls.__qualname__}"
 
     def fit(self, x, y=None):
         """Learn state from training data.
