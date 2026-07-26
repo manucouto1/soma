@@ -33,7 +33,9 @@ pub enum RunKind {
     Study,
     /// A single trial within a study.
     Trial,
-    /// Anything else.
+    /// Anything else — also the fallback when deserializing a kind
+    /// written by a newer soma, so old readers never fail on new kinds.
+    #[serde(other)]
     Other,
 }
 
@@ -288,5 +290,133 @@ mod tests {
         let back: RunStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back.state, RunState::Running);
         assert!(back.finished_at.is_none());
+    }
+
+    #[test]
+    fn run_status_terminal_states_roundtrip() {
+        for state in [RunState::Completed, RunState::Failed] {
+            let now = Utc::now();
+            let s = RunStatus {
+                state,
+                updated_at: now,
+                heartbeat_at: Some(now),
+                finished_at: Some(now),
+            };
+            let back: RunStatus =
+                serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(back.state, state);
+            assert_eq!(back.finished_at, Some(now));
+        }
+        // Back-compat: a status without the optional timestamps loads.
+        let minimal = serde_json::json!({
+            "state": "completed",
+            "updated_at": "2026-07-26T10:00:00Z",
+        });
+        let back: RunStatus = serde_json::from_value(minimal).unwrap();
+        assert_eq!(back.state, RunState::Completed);
+        assert!(back.heartbeat_at.is_none());
+        assert!(back.finished_at.is_none());
+    }
+
+    #[test]
+    fn unknown_run_kind_falls_back_to_other() {
+        // A manifest written by a future soma with a new kind must not
+        // break `LocalTracker::open` on this version.
+        let manifest = serde_json::json!({
+            "schema_version": 2,
+            "run_id": "r",
+            "kind": "evaluation",
+            "name": "n",
+            "created_at": "2026-07-26T10:00:00Z",
+            "some_future_field": {"nested": true},
+        });
+        let back: RunManifest = serde_json::from_value(manifest).unwrap();
+        assert_eq!(back.kind, RunKind::Other);
+        // A reader can detect the newer schema explicitly.
+        assert!(back.schema_version > RUN_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn envelope_roundtrips_one_event_per_level() {
+        let now = Utc::now();
+        let metric = MetricRecord {
+            name: "f1".into(),
+            value: 0.5,
+            step: 1,
+            timestamp: now,
+        };
+        let events = vec![
+            Event::RunFailed {
+                run_id: "r".into(),
+                error: "boom".into(),
+            },
+            Event::TrialMetric {
+                study_id: "s".into(),
+                trial_id: "t".into(),
+                metric: metric.clone(),
+            },
+            Event::StudyProgress {
+                study_id: "s".into(),
+                completed: 1,
+                total: 4,
+                best_value: 0.5,
+            },
+            Event::MemberExploited {
+                study_id: "s".into(),
+                generation: 1,
+                replaced_id: "a".into(),
+                donor_id: "b".into(),
+            },
+            Event::HealthFlag {
+                run_id: "r".into(),
+                node_id: "n".into(),
+                step: 3,
+                flag: "LEAKAGE".into(),
+                detail: "cka=0.99".into(),
+            },
+        ];
+        for (i, event) in events.into_iter().enumerate() {
+            let env = EventEnvelope {
+                seq: i as u64,
+                ts: now,
+                event,
+            };
+            let json = serde_json::to_value(&env).unwrap();
+            // The envelope's own fields never collide with payloads.
+            assert_eq!(json["seq"], i as u64);
+            assert!(json["event_type"].is_string());
+            let back: EventEnvelope = serde_json::from_value(json).unwrap();
+            assert_eq!(back.seq, i as u64);
+            assert_eq!(back.ts, now);
+        }
+    }
+
+    #[test]
+    fn git_info_and_graph_summary_serde() {
+        let git = GitInfo {
+            sha: Some("abc123".into()),
+            branch: Some("main".into()),
+            dirty: Some(true),
+        };
+        let back: GitInfo = serde_json::from_str(&serde_json::to_string(&git).unwrap()).unwrap();
+        assert_eq!(back, git);
+        assert_eq!(GitInfo::default(), GitInfo::default());
+        assert!(GitInfo::default().sha.is_none());
+
+        let summary = GraphSummaryInfo {
+            n_nodes: 2,
+            node_ids: vec!["a".into(), "b".into()],
+            graph_path: Some("graph.json".into()),
+            mermaid_path: None,
+        };
+        let back: GraphSummaryInfo =
+            serde_json::from_str(&serde_json::to_string(&summary).unwrap()).unwrap();
+        assert_eq!(back, summary);
+        // Back-compat: path fields are optional.
+        let minimal: GraphSummaryInfo =
+            serde_json::from_value(serde_json::json!({"n_nodes": 1, "node_ids": ["x"]})).unwrap();
+        assert_eq!(minimal.n_nodes, 1);
+        assert!(minimal.graph_path.is_none());
+        assert_eq!(GraphSummaryInfo::default().n_nodes, 0);
     }
 }

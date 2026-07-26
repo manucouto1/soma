@@ -691,12 +691,363 @@ mod tests {
         assert!(study.composite.is_none());
         assert!(study.created_at.is_none());
         assert!(study.trials[0].started_at.is_none());
+        assert!(study.planned_trials.is_none());
     }
 
     #[test]
     fn direction_normalize() {
         assert_eq!(Direction::Maximize.normalize(0.5), 0.5);
         assert_eq!(Direction::Minimize.normalize(0.5), -0.5);
+    }
+
+    fn rising_falling_trial(id: &str, name: &str, values: &[f64]) -> Trial {
+        let mut t = Trial::new(id, HashMap::new());
+        t.state = TrialState::Completed;
+        for (step, v) in values.iter().enumerate() {
+            t.metrics.push(MetricRecord {
+                name: name.into(),
+                value: *v,
+                step,
+                timestamp: Utc::now(),
+            });
+        }
+        t
+    }
+
+    #[test]
+    fn last_metric_is_last_not_best() {
+        let t = rising_falling_trial("t", "f1", &[0.5, 0.9, 0.4]);
+        assert_eq!(t.last_metric("f1"), Some(0.4));
+        assert_eq!(t.best_metric("f1", Direction::Maximize), Some(0.9));
+        assert_eq!(t.best_metric("f1", Direction::Minimize), Some(0.4));
+        assert_eq!(t.last_metric("missing"), None);
+    }
+
+    /// CONTRACT: `objective_value` scores single-objective studies on
+    /// the BEST value across steps, but composite studies on the LAST
+    /// (final) value of each term. The same rising-then-falling curve
+    /// therefore scores differently depending on which mode is active.
+    #[test]
+    fn objective_value_best_vs_last_divergence_is_pinned() {
+        let t = rising_falling_trial("t", "f1", &[0.5, 0.9, 0.4]);
+
+        let single = Study::new(
+            "single",
+            SearchSpace::new(),
+            SearchStrategy::Random {
+                n_trials: 1,
+                seed: None,
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        assert_eq!(single.objective_value(&t), Some(0.9)); // best
+
+        let composite = Study::new(
+            "composite",
+            SearchSpace::new(),
+            SearchStrategy::Random {
+                n_trials: 1,
+                seed: None,
+            },
+            vec![],
+        )
+        .with_composite(CompositeObjective {
+            terms: vec![("f1".into(), 1.0)],
+            direction: Direction::Maximize,
+            scalarizer: Scalarizer::WeightedSum,
+        });
+        assert_eq!(composite.objective_value(&t), Some(0.4)); // last
+    }
+
+    #[test]
+    fn objective_value_none_for_non_completed_trials() {
+        let study = Study::new(
+            "s",
+            SearchSpace::new(),
+            SearchStrategy::Random {
+                n_trials: 1,
+                seed: None,
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        for state in [
+            TrialState::Pending,
+            TrialState::Running,
+            TrialState::Pruned {
+                step: 1,
+                reason: "bad".into(),
+            },
+            TrialState::Failed {
+                error: "boom".into(),
+            },
+        ] {
+            let mut t = make_trial("t", 0.9);
+            t.state = state;
+            assert!(study.objective_value(&t).is_none());
+        }
+    }
+
+    #[test]
+    fn composite_empty_terms_is_none() {
+        for scalarizer in [
+            Scalarizer::WeightedSum,
+            Scalarizer::AugmentedTchebycheff { rho: 0.1 },
+        ] {
+            let composite = CompositeObjective {
+                terms: vec![],
+                direction: Direction::Maximize,
+                scalarizer,
+            };
+            assert!(composite.evaluate(&make_trial("t", 0.9)).is_none());
+        }
+    }
+
+    #[test]
+    fn composite_tchebycheff_minimize_penalizes_worst_loss() {
+        // On a minimize scale the WORST term is the largest one.
+        let composite = CompositeObjective {
+            terms: vec![("loss_a".into(), 1.0), ("loss_b".into(), 1.0)],
+            direction: Direction::Minimize,
+            scalarizer: Scalarizer::AugmentedTchebycheff { rho: 0.1 },
+        };
+        let balanced = {
+            let mut t = rising_falling_trial("b", "loss_a", &[0.5]);
+            t.metrics.push(MetricRecord {
+                name: "loss_b".into(),
+                value: 0.5,
+                step: 0,
+                timestamp: Utc::now(),
+            });
+            t
+        };
+        let lopsided = {
+            let mut t = rising_falling_trial("l", "loss_a", &[0.1]);
+            t.metrics.push(MetricRecord {
+                name: "loss_b".into(),
+                value: 0.9,
+                step: 0,
+                timestamp: Utc::now(),
+            });
+            t
+        };
+        // balanced: max=0.5 + 0.1*1.0 = 0.6; lopsided: max=0.9 + 0.1*1.0 = 1.0.
+        // Lower is better under Minimize → balanced wins.
+        let b = composite.evaluate(&balanced).unwrap();
+        let l = composite.evaluate(&lopsided).unwrap();
+        assert!(
+            b < l,
+            "balanced {b} must beat lopsided {l} on a minimize scale"
+        );
+    }
+
+    #[test]
+    fn composite_tchebycheff_rho_zero_is_pure_worst_case() {
+        let composite = CompositeObjective {
+            terms: vec![("a".into(), 1.0), ("b".into(), 1.0)],
+            direction: Direction::Maximize,
+            scalarizer: Scalarizer::AugmentedTchebycheff { rho: 0.0 },
+        };
+        let t = multi_metric_trial("t", 0.9, 0.2); // f1=0.9, gap=0.2 — wrong names
+        let mut t2 = Trial::new("t2", HashMap::new());
+        t2.state = TrialState::Completed;
+        for (name, v) in [("a", 0.9), ("b", 0.2)] {
+            t2.metrics.push(MetricRecord {
+                name: name.into(),
+                value: v,
+                step: 0,
+                timestamp: Utc::now(),
+            });
+        }
+        let _ = t;
+        assert_eq!(composite.evaluate(&t2), Some(0.2)); // min of the terms
+    }
+
+    #[test]
+    fn scalarizer_serde_roundtrip_and_default() {
+        let study = Study::new(
+            "s",
+            SearchSpace::new(),
+            SearchStrategy::Random {
+                n_trials: 1,
+                seed: None,
+            },
+            vec![],
+        )
+        .with_composite(CompositeObjective {
+            terms: vec![("f1".into(), 0.7)],
+            direction: Direction::Maximize,
+            scalarizer: Scalarizer::AugmentedTchebycheff { rho: 0.25 },
+        });
+        let json = serde_json::to_string(&study).unwrap();
+        let back: Study = serde_json::from_str(&json).unwrap();
+        match back.composite.unwrap().scalarizer {
+            Scalarizer::AugmentedTchebycheff { rho } => assert_eq!(rho, 0.25),
+            other => panic!("wrong scalarizer: {other:?}"),
+        }
+
+        // Explicit WeightedSum tag and a missing scalarizer field both
+        // resolve to the default.
+        let explicit: Scalarizer =
+            serde_json::from_value(serde_json::json!({"scalarizer_type": "WeightedSum"})).unwrap();
+        assert_eq!(explicit, Scalarizer::WeightedSum);
+        let composite: CompositeObjective = serde_json::from_value(serde_json::json!({
+            "terms": [["f1", 1.0]],
+            "direction": "Maximize",
+        }))
+        .unwrap();
+        assert_eq!(composite.scalarizer, Scalarizer::default());
+    }
+
+    #[test]
+    fn primary_direction_composite_wins_over_objectives() {
+        let study = Study::new(
+            "s",
+            SearchSpace::new(),
+            SearchStrategy::Random {
+                n_trials: 1,
+                seed: None,
+            },
+            vec![Objective {
+                metric: "loss".into(),
+                direction: Direction::Minimize,
+            }],
+        )
+        .with_composite(CompositeObjective {
+            terms: vec![("f1".into(), 1.0)],
+            direction: Direction::Maximize,
+            scalarizer: Scalarizer::WeightedSum,
+        });
+        assert_eq!(study.primary_direction(), Some(Direction::Maximize));
+    }
+
+    #[test]
+    fn best_value_matches_best_trial_and_handles_empty() {
+        let mut study = Study::new(
+            "s",
+            sample_search_space(),
+            SearchStrategy::Random {
+                n_trials: 2,
+                seed: None,
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        assert!(study.best_value().is_none());
+        study.trials.push(make_trial("t1", 0.7));
+        study.trials.push(make_trial("t2", 0.9));
+        assert_eq!(study.best_value(), Some(0.9));
+
+        // All-failed study: no best.
+        let mut failed = make_trial("t3", 1.0);
+        failed.state = TrialState::Failed { error: "x".into() };
+        let mut all_failed = study.clone();
+        all_failed.trials = vec![failed];
+        assert!(all_failed.best_trial().is_none());
+        assert!(all_failed.best_value().is_none());
+    }
+
+    #[test]
+    fn best_trial_tie_keeps_first() {
+        let mut study = Study::new(
+            "s",
+            sample_search_space(),
+            SearchStrategy::Random {
+                n_trials: 2,
+                seed: None,
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        study.trials.push(make_trial("first", 0.8));
+        study.trials.push(make_trial("second", 0.8));
+        assert_eq!(study.best_trial().unwrap().id, "first");
+    }
+
+    #[test]
+    fn planned_trials_governs_total_and_progress() {
+        let mut study = Study::new(
+            "grid",
+            sample_search_space(),
+            SearchStrategy::Grid { points_per_dim: 3 },
+            vec![],
+        );
+        // Grid size is unknown until a sampler resolves it.
+        assert_eq!(study.total_trials(), None);
+        assert_eq!(study.progress(), 0.0);
+
+        study.planned_trials = Some(6);
+        study.trials.push(make_trial("t1", 0.5));
+        study.trials.push(make_trial("t2", 0.5));
+        study.trials.push(make_trial("t3", 0.5));
+        assert_eq!(study.total_trials(), Some(6));
+        assert!((study.progress() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn save_load_fully_populated_study() {
+        let dir = std::env::temp_dir().join(format!("soma_study_full_{}", uuid_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("study.json");
+
+        let mut study = Study::new(
+            "full",
+            sample_search_space(),
+            SearchStrategy::Grid { points_per_dim: 3 },
+            vec![],
+        )
+        .with_composite(CompositeObjective {
+            terms: vec![("f1".into(), 0.7), ("gap".into(), -0.3)],
+            direction: Direction::Maximize,
+            scalarizer: Scalarizer::AugmentedTchebycheff { rho: 0.05 },
+        })
+        .with_pruning(PruningStrategy::Percentile {
+            percentile: 25.0,
+            n_warmup_steps: 2,
+        });
+        study.tags = vec!["mos".into(), "π-study".into()];
+        study.planned_trials = Some(6);
+        study.git_sha = Some("abc123".into());
+        let mut trial = multi_metric_trial("t1", 0.8, 0.1);
+        trial.started_at = Some(Utc::now());
+        trial.finished_at = Some(Utc::now());
+        study.trials.push(trial);
+        study.save(&path).unwrap();
+
+        let back = Study::load(&path).unwrap();
+        assert_eq!(back.tags, study.tags);
+        assert_eq!(back.planned_trials, Some(6));
+        assert_eq!(back.git_sha.as_deref(), Some("abc123"));
+        assert!(back.trials[0].started_at.is_some());
+        assert!(matches!(back.pruning, PruningStrategy::Percentile { .. }));
+        assert_eq!(back.best_value(), study.best_value());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_errors_are_typed() {
+        let missing = Study::load("/nonexistent/dir/study.json");
+        assert!(matches!(missing, Err(crate::error::SomaError::Io(_))));
+
+        let dir = std::env::temp_dir().join(format!("soma_study_corrupt_{}", uuid_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("study.json");
+        std::fs::write(&path, "{not json").unwrap();
+        let corrupt = Study::load(&path);
+        assert!(matches!(
+            corrupt,
+            Err(crate::error::SomaError::Serialization(_))
+        ));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

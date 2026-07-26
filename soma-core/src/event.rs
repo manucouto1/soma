@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn all_three_event_levels_serialize() {
+    fn all_event_levels_serialize() {
         let events: Vec<Event> = vec![
             // Level 1
             Event::RunStarted {
@@ -390,11 +390,97 @@ mod tests {
                 value: 0.95,
                 params: serde_json::json!({"C": 1.0}),
             },
+            // Level 4
+            Event::GenerationCompleted {
+                study_id: "s".into(),
+                generation: 2,
+                best_fitness: 0.9,
+                mean_fitness: 0.7,
+            },
+            // Level 5
+            Event::EpochStarted {
+                run_id: "r".into(),
+                epoch: 0,
+                total_epochs: Some(30),
+            },
+            Event::EpochStarted {
+                run_id: "r".into(),
+                epoch: 1,
+                total_epochs: None,
+            },
+            Event::EpochCompleted {
+                run_id: "r".into(),
+                epoch: 0,
+                metrics: vec![MetricRecord {
+                    name: "loss".into(),
+                    value: 0.4,
+                    step: 12,
+                    timestamp: chrono::Utc::now(),
+                }],
+            },
+            Event::StepCompleted {
+                run_id: "r".into(),
+                step: 7,
+                epoch: Some(1),
+            },
+            Event::StepCompleted {
+                run_id: "r".into(),
+                step: 8,
+                epoch: None,
+            },
+            Event::MetricReported {
+                run_id: "r".into(),
+                metric: MetricRecord {
+                    name: "val_f1".into(),
+                    value: 0.8,
+                    step: 3,
+                    timestamp: chrono::Utc::now(),
+                },
+                node_id: Some("encoder".into()),
+                trial_id: Some("trial_0001".into()),
+            },
+            Event::HealthFlag {
+                run_id: "r".into(),
+                node_id: "encoder".into(),
+                step: 50,
+                flag: "DEAD_CHANNELS(3)".into(),
+                detail: "zero_frac=0.98".into(),
+            },
         ];
 
         for event in events {
             let json = serde_json::to_string(&event).unwrap();
-            let _: Event = serde_json::from_str(&json).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            // Typed roundtrip must preserve the variant and its Options.
+            assert_eq!(
+                serde_json::to_value(&back).unwrap(),
+                serde_json::from_str::<serde_json::Value>(&json).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn documented_health_flags_roundtrip() {
+        for flag in [
+            "DEAD_CHANNELS(2)",
+            "IGNORED_CHANNELS(1)",
+            "LEAKAGE",
+            "NONFINITE",
+        ] {
+            let event = Event::HealthFlag {
+                run_id: "r".into(),
+                node_id: "n".into(),
+                step: 0,
+                flag: flag.into(),
+                detail: String::new(),
+            };
+            let json = serde_json::to_string(&event).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            if let Event::HealthFlag { flag: f, .. } = back {
+                assert_eq!(f, flag);
+            } else {
+                panic!("wrong variant");
+            }
         }
     }
 }
