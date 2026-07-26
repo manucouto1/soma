@@ -17,15 +17,19 @@ use somatize_core::event::MetricRecord;
 use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
 use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::study::{Direction, Objective, PruningStrategy, SearchStrategy, Study};
+use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
 use somatize_core::value::Value;
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::{LocalCache, MemoryCache, TieredCache};
 use somatize_runtime::executor::{self, Context, GraphInfo};
-use somatize_runtime::executors::study::{FnTrialExecutor, StudyRunner, TrialOutcome};
+use somatize_runtime::executors::study::{
+    FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
+};
 use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::runner::{LocalRunner, Runner};
 use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
+use somatize_runtime::tracking::{LocalTracker, load_manifest};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -33,6 +37,35 @@ fn soma_err_to_py(e: SomaError) -> PyErr {
 
 fn py_err_to_soma(e: PyErr) -> SomaError {
     SomaError::Other(e.to_string())
+}
+
+/// Convert a JSON value into the closest Python object.
+fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyObject {
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_pyobject(py).unwrap().into_any().unbind()
+            } else if let Some(f) = n.as_f64() {
+                f.into_pyobject(py).unwrap().into_any().unbind()
+            } else {
+                py.None()
+            }
+        }
+        serde_json::Value::String(s) => s.into_pyobject(py).unwrap().into_any().unbind(),
+        serde_json::Value::Bool(b) => (*b)
+            .into_pyobject(py)
+            .unwrap()
+            .to_owned()
+            .into_any()
+            .unbind(),
+        serde_json::Value::Null => py.None(),
+        other => other
+            .to_string()
+            .into_pyobject(py)
+            .unwrap()
+            .into_any()
+            .unbind(),
+    }
 }
 
 // ── Value conversion ──
@@ -566,30 +599,169 @@ fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<Sea
     }
 }
 
+// ── PyTrial ──
+
+/// Handle passed to a study's objective function.
+///
+/// Behaves like a read-only params mapping (`trial["Encoder.lr"]`,
+/// `trial.get("x", 0.5)`) so legacy `fn(params) -> dict` executors keep
+/// working, and adds `report(name, value, step)` / `should_prune()`
+/// for pruning-aware training loops.
+#[pyclass(name = "Trial")]
+struct PyTrial {
+    ctx: TrialContext,
+    params: HashMap<String, serde_json::Value>,
+}
+
+#[pymethods]
+impl PyTrial {
+    /// Sampled parameters as a dict.
+    #[getter]
+    fn params(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let dict = PyDict::new(py);
+        for (k, v) in &self.params {
+            dict.set_item(k, json_to_py(py, v))?;
+        }
+        Ok(dict.unbind())
+    }
+
+    /// Trial id (`trial_0003`).
+    #[getter]
+    fn id(&self) -> String {
+        self.ctx.trial_id().to_string()
+    }
+
+    /// Report an intermediate metric. Returns True when the trial
+    /// should stop (the pruner decided against it).
+    fn report(&self, name: &str, value: f64, step: usize) -> bool {
+        self.ctx.report(name, value, step)
+    }
+
+    /// Whether the pruner has decided to stop this trial.
+    fn should_prune(&self) -> bool {
+        self.ctx.should_prune()
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
+        self.params
+            .get(key)
+            .map(|v| json_to_py(py, v))
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))
+    }
+
+    fn __contains__(&self, key: &str) -> bool {
+        self.params.contains_key(key)
+    }
+
+    #[pyo3(signature = (key, default=None))]
+    fn get(&self, py: Python<'_>, key: &str, default: Option<PyObject>) -> PyObject {
+        match self.params.get(key) {
+            Some(v) => json_to_py(py, v),
+            None => default.unwrap_or_else(|| py.None()),
+        }
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.params.keys().cloned().collect()
+    }
+}
+
 // ── PyStudy ──
 
 #[pyclass(name = "Study")]
 struct PyStudy {
     study: Study,
+    /// Python callable metrics-dict -> float; recorded as metric "score".
+    objective_cb: Option<PyObject>,
+    tracking: bool,
+    root: std::path::PathBuf,
+    run_dir: Option<std::path::PathBuf>,
+}
+
+fn parse_pruning(pruning: &Bound<'_, PyAny>) -> PyResult<PruningStrategy> {
+    if let Ok(s) = pruning.extract::<String>() {
+        return match s.as_str() {
+            "median" => Ok(PruningStrategy::Median { n_warmup_steps: 0 }),
+            other => Err(PyRuntimeError::new_err(format!(
+                "unknown pruning '{other}'; use 'median', ('median', warmup) or ('percentile', pct, warmup)"
+            ))),
+        };
+    }
+    let tuple = pruning.downcast::<pyo3::types::PyTuple>().map_err(|_| {
+        PyRuntimeError::new_err(
+            "pruning must be 'median', ('median', warmup) or ('percentile', pct, warmup)",
+        )
+    })?;
+    let kind: String = tuple.get_item(0)?.extract()?;
+    match kind.as_str() {
+        "median" => Ok(PruningStrategy::Median {
+            n_warmup_steps: tuple.get_item(1)?.extract()?,
+        }),
+        "percentile" => Ok(PruningStrategy::Percentile {
+            percentile: tuple.get_item(1)?.extract()?,
+            n_warmup_steps: tuple.get_item(2)?.extract()?,
+        }),
+        other => Err(PyRuntimeError::new_err(format!(
+            "unknown pruning '{other}'"
+        ))),
+    }
+}
+
+fn trial_to_py(py: Python<'_>, trial: &somatize_core::study::Trial) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("id", &trial.id)?;
+    let params_dict = PyDict::new(py);
+    for (k, v) in &trial.params {
+        params_dict.set_item(k, json_to_py(py, v))?;
+    }
+    dict.set_item("params", params_dict)?;
+    dict.set_item(
+        "state",
+        match &trial.state {
+            somatize_core::study::TrialState::Pending => "pending".to_string(),
+            somatize_core::study::TrialState::Running => "running".to_string(),
+            somatize_core::study::TrialState::Completed => "completed".to_string(),
+            somatize_core::study::TrialState::Pruned { .. } => "pruned".to_string(),
+            somatize_core::study::TrialState::Failed { .. } => "failed".to_string(),
+        },
+    )?;
+    let metrics_dict = PyDict::new(py);
+    for m in &trial.metrics {
+        metrics_dict.set_item(&m.name, m.value)?;
+    }
+    dict.set_item("metrics", metrics_dict)?;
+    dict.set_item("duration_ms", trial.duration_ms)?;
+    Ok(dict.unbind())
 }
 
 #[pymethods]
 impl PyStudy {
     #[new]
-    #[pyo3(signature = (name, search_space, strategy, n_trials, objectives, seed=None))]
+    #[pyo3(signature = (name, search_space=None, strategy="grid".to_string(), n_trials=10,
+                        objectives=None, seed=None, objective=None, direction="maximize".to_string(),
+                        pruning=None, tracking=true, root=".soma".to_string(), tags=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         _py: Python<'_>,
         name: String,
-        search_space: &Bound<'_, PyList>,
+        search_space: Option<&Bound<'_, PyList>>,
         strategy: String,
         n_trials: usize,
-        objectives: Vec<(String, String)>,
+        objectives: Option<Vec<(String, String)>>,
         seed: Option<u64>,
+        objective: Option<PyObject>,
+        direction: String,
+        pruning: Option<&Bound<'_, PyAny>>,
+        tracking: bool,
+        root: String,
+        tags: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let mut space = SearchSpace::new();
-        for item in search_space.iter() {
-            let dim = parse_py_search_dim(item.py(), &item)?;
-            space.add(dim);
+        if let Some(dims) = search_space {
+            for item in dims.iter() {
+                let dim = parse_py_search_dim(item.py(), &item)?;
+                space.add(dim);
+            }
         }
 
         let strat = match strategy.as_str() {
@@ -609,72 +781,207 @@ impl PyStudy {
             }
         };
 
-        let objs: Vec<Objective> = objectives
-            .into_iter()
-            .map(|(metric, dir)| Objective {
-                metric,
-                direction: if dir == "minimize" {
-                    Direction::Minimize
-                } else {
-                    Direction::Maximize
-                },
-            })
-            .collect();
+        let parse_dir = |d: &str| {
+            if d == "minimize" {
+                Direction::Minimize
+            } else {
+                Direction::Maximize
+            }
+        };
+
+        // With a Python objective callable, the composite score is
+        // recorded as metric "score" — that becomes the objective.
+        let objs: Vec<Objective> = match (&objective, objectives) {
+            (Some(_), _) => vec![Objective {
+                metric: "score".into(),
+                direction: parse_dir(&direction),
+            }],
+            (None, Some(list)) => list
+                .into_iter()
+                .map(|(metric, dir)| Objective {
+                    metric,
+                    direction: parse_dir(&dir),
+                })
+                .collect(),
+            (None, None) => vec![],
+        };
+
+        let mut study = Study::new(name, space, strat, objs);
+        if let Some(p) = pruning {
+            study.pruning = parse_pruning(p)?;
+        }
+        study.tags = tags.unwrap_or_default();
 
         Ok(Self {
-            study: Study::new(name, space, strat, objs),
+            study,
+            objective_cb: objective,
+            tracking,
+            root: std::path::PathBuf::from(root),
+            run_dir: None,
         })
     }
 
-    fn run(&mut self, _py: Python<'_>, executor: &Bound<'_, PyAny>) -> PyResult<()> {
-        let bus = Arc::new(EventBus::new(256));
-        let runner = StudyRunner::new(bus);
+    /// Load a study from a run directory (its `study.json`).
+    ///
+    /// Continue it from anywhere::
+    ///
+    ///     study = soma.Study.load(".soma/runs/study_.../")
+    ///     study.run(train, resume=True)
+    #[staticmethod]
+    fn load(run_dir: String) -> PyResult<Self> {
+        let dir = std::path::PathBuf::from(run_dir);
+        let study = Study::load(dir.join("study.json")).map_err(soma_err_to_py)?;
+        // <root>/runs/<run_id> → root
+        let root = dir
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from(".soma"));
+        Ok(Self {
+            study,
+            objective_cb: None,
+            tracking: true,
+            root,
+            run_dir: Some(dir),
+        })
+    }
+
+    /// Save the study as JSON (defaults to `<run_dir>/study.json`).
+    #[pyo3(signature = (path=None))]
+    fn save(&self, path: Option<String>) -> PyResult<()> {
+        let path = match (path, &self.run_dir) {
+            (Some(p), _) => std::path::PathBuf::from(p),
+            (None, Some(dir)) => dir.join("study.json"),
+            (None, None) => {
+                return Err(PyRuntimeError::new_err(
+                    "no path given and the study has no run directory yet",
+                ));
+            }
+        };
+        self.study.save(path).map_err(soma_err_to_py)
+    }
+
+    /// Run the study.
+    ///
+    /// `fn` receives a `Trial` handle: read params via `trial.params`,
+    /// `trial["name"]` or `trial.get(...)`; report intermediate metrics
+    /// with `trial.report(name, value, step)` (returns True → stop);
+    /// return a dict of final metrics (or None / a bare float).
+    #[pyo3(signature = (executor, on_event=None, resume=false))]
+    fn run(
+        &mut self,
+        py: Python<'_>,
+        executor: &Bound<'_, PyAny>,
+        on_event: Option<PyObject>,
+        resume: bool,
+    ) -> PyResult<()> {
+        let tracker: Option<Arc<LocalTracker>> = if self.tracking {
+            let t = match (&self.run_dir, resume) {
+                (Some(dir), true) => LocalTracker::open(dir).map_err(soma_err_to_py)?,
+                _ => LocalTracker::create(&self.root, RunKind::Study, &self.study.name)
+                    .map_err(soma_err_to_py)?,
+            };
+            self.run_dir = Some(t.run_dir().to_path_buf());
+            Some(Arc::new(t))
+        } else {
+            None
+        };
+
+        let bus = Arc::new(EventBus::new(1024));
+        if let Some(t) = &tracker {
+            bus.add_sink(t.sink());
+        }
+        if let Some(callback) = on_event {
+            let mut rx = bus.subscribe();
+            std::thread::spawn(move || {
+                while let Ok(event) = rx.blocking_recv() {
+                    if let Ok(json_str) = serde_json::to_string(&event) {
+                        Python::with_gil(|py| {
+                            let json_mod = py.import("json").unwrap();
+                            if let Ok(dict) = json_mod.call_method1("loads", (json_str,)) {
+                                let _ = callback.call1(py, (dict,));
+                            }
+                        });
+                    }
+                }
+            });
+        }
+
+        let mut runner = StudyRunner::new(bus.clone());
+        if let Some(t) = &tracker {
+            runner = runner.with_tracker(t.clone() as Arc<dyn Tracker>);
+        }
+
         let executor_obj = executor.clone().unbind();
+        let objective_cb = self
+            .objective_cb
+            .as_ref()
+            .map(|cb| Python::with_gil(|py| cb.clone_ref(py)));
 
         let trial_executor = FnTrialExecutor(
             move |params: &HashMap<String, serde_json::Value>,
-                  _ctx: &mut somatize_runtime::TrialContext<'_>|
+                  ctx: &TrialContext|
                   -> SomaResult<TrialOutcome> {
                 Python::with_gil(|py| {
-                    let py_params = PyDict::new(py);
-                    for (k, v) in params {
-                        let py_val: PyObject = match v {
-                            serde_json::Value::Number(n) => {
-                                if let Some(f) = n.as_f64() {
-                                    f.into_pyobject(py).unwrap().into_any().unbind()
-                                } else {
-                                    py.None()
-                                }
-                            }
-                            serde_json::Value::String(s) => {
-                                s.into_pyobject(py).unwrap().into_any().unbind()
-                            }
-                            serde_json::Value::Bool(b) => (*b)
-                                .into_pyobject(py)
-                                .unwrap()
-                                .to_owned()
-                                .into_any()
-                                .unbind(),
-                            _ => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-                        };
-                        py_params.set_item(k, py_val).map_err(py_err_to_soma)?;
-                    }
-
+                    let trial = PyTrial {
+                        ctx: ctx.clone(),
+                        params: params.clone(),
+                    };
                     let result = executor_obj
-                        .call1(py, (py_params,))
+                        .call1(py, (trial,))
                         .map_err(|e| SomaError::Other(format!("Python executor error: {e}")))?;
                     let bound = result.bind(py);
-                    let dict = bound
-                        .downcast::<PyDict>()
-                        .map_err(|_| SomaError::Other("executor must return a dict".into()))?;
 
-                    let mut metrics = Vec::new();
-                    for (k, v) in dict.iter() {
-                        let name: String = k.extract().map_err(py_err_to_soma)?;
-                        let value: f64 = v.extract().map_err(py_err_to_soma)?;
+                    // Accepted returns: None, a bare number, or a dict
+                    // of final metrics.
+                    let mut metrics: Vec<MetricRecord> = Vec::new();
+                    if bound.is_none() {
+                        // metrics were reported via trial.report()
+                    } else if let Ok(v) = bound.extract::<f64>() {
                         metrics.push(MetricRecord {
-                            name,
-                            value,
+                            name: "score".into(),
+                            value: v,
+                            step: 0,
+                            timestamp: chrono::Utc::now(),
+                        });
+                    } else if let Ok(dict) = bound.downcast::<PyDict>() {
+                        for (k, v) in dict.iter() {
+                            let name: String = k.extract().map_err(py_err_to_soma)?;
+                            let value: f64 = v.extract().map_err(py_err_to_soma)?;
+                            metrics.push(MetricRecord {
+                                name,
+                                value,
+                                step: 0,
+                                timestamp: chrono::Utc::now(),
+                            });
+                        }
+                    } else {
+                        return Err(SomaError::Other(
+                            "executor must return None, a number, or a dict of metrics".into(),
+                        ));
+                    }
+
+                    // Composite objective callable → recorded as "score".
+                    if let Some(cb) = &objective_cb
+                        && !metrics.iter().any(|m| m.name == "score")
+                    {
+                        let merged = PyDict::new(py);
+                        for m in ctx.metrics() {
+                            merged.set_item(&m.name, m.value).map_err(py_err_to_soma)?;
+                        }
+                        for m in &metrics {
+                            merged.set_item(&m.name, m.value).map_err(py_err_to_soma)?;
+                        }
+                        let score: f64 = cb
+                            .call1(py, (merged,))
+                            .map_err(|e| SomaError::Other(format!("objective error: {e}")))?
+                            .extract(py)
+                            .map_err(|_| {
+                                SomaError::Other("objective must return a number".into())
+                            })?;
+                        metrics.push(MetricRecord {
+                            name: "score".into(),
+                            value: score,
                             step: 0,
                             timestamp: chrono::Utc::now(),
                         });
@@ -698,50 +1005,38 @@ impl PyStudy {
             _ => return Err(PyRuntimeError::new_err("Unsupported strategy")),
         };
 
-        runner
-            .run(&mut self.study, sampler.as_mut(), &trial_executor)
-            .map_err(soma_err_to_py)
+        // Release the GIL for the whole study: the executor re-acquires
+        // it per trial, and on_event callbacks can run between trials.
+        let study = &mut self.study;
+        let result = py.allow_threads(move || runner.run(study, sampler.as_mut(), &trial_executor));
+
+        if let Some(t) = &tracker {
+            let state = if result.is_ok() {
+                RunState::Completed
+            } else {
+                RunState::Failed
+            };
+            let _ = t.finalize(state);
+        }
+        result.map_err(soma_err_to_py)
     }
 
     #[getter]
-    fn best_trial(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn best_trial(&self, py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
         match self.study.best_trial() {
-            Some(trial) => {
-                let dict = PyDict::new(py);
-                dict.set_item("id", &trial.id)?;
-                let params_dict = PyDict::new(py);
-                for (k, v) in &trial.params {
-                    let py_val: PyObject = match v {
-                        serde_json::Value::Number(n) => {
-                            if let Some(f) = n.as_f64() {
-                                f.into_pyobject(py).unwrap().into_any().unbind()
-                            } else {
-                                py.None()
-                            }
-                        }
-                        serde_json::Value::String(s) => {
-                            s.into_pyobject(py).unwrap().into_any().unbind()
-                        }
-                        serde_json::Value::Bool(b) => (*b)
-                            .into_pyobject(py)
-                            .unwrap()
-                            .to_owned()
-                            .into_any()
-                            .unbind(),
-                        _ => v.to_string().into_pyobject(py).unwrap().into_any().unbind(),
-                    };
-                    params_dict.set_item(k, py_val)?;
-                }
-                dict.set_item("params", params_dict)?;
-                let metrics_dict = PyDict::new(py);
-                for m in &trial.metrics {
-                    metrics_dict.set_item(&m.name, m.value)?;
-                }
-                dict.set_item("metrics", metrics_dict)?;
-                Ok(Some(dict.into_any().unbind()))
-            }
+            Some(trial) => Ok(Some(trial_to_py(py, trial)?)),
             None => Ok(None),
         }
+    }
+
+    /// All recorded trials as dicts.
+    #[getter]
+    fn trials(&self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
+        self.study
+            .trials
+            .iter()
+            .map(|t| trial_to_py(py, t))
+            .collect()
     }
 
     #[getter]
@@ -752,6 +1047,13 @@ impl PyStudy {
     #[getter]
     fn progress(&self) -> f64 {
         self.study.progress()
+    }
+
+    /// Run directory holding study.json/events.jsonl (None if tracking
+    /// is disabled and the study never ran).
+    #[getter]
+    fn run_dir(&self) -> Option<String> {
+        self.run_dir.as_ref().map(|p| p.display().to_string())
     }
 }
 
@@ -1963,6 +2265,74 @@ impl PyGraph {
         Ok(())
     }
 
+    /// Emit an event onto the graph's bus from Python.
+    ///
+    /// The dict must carry an `event_type` matching a Soma event
+    /// variant (e.g. `StepCompleted`, `MetricReported`, `HealthFlag`)
+    /// plus that variant's fields. Used by the native training loop and
+    /// the gradient audit to make Python-side progress visible to
+    /// trackers and subscribers.
+    fn emit_event(&self, py: Python<'_>, event: &Bound<'_, PyDict>) -> PyResult<()> {
+        let json_mod = py.import("json")?;
+        let json_str: String = json_mod.call_method1("dumps", (event,))?.extract()?;
+        let value: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| PyRuntimeError::new_err(format!("invalid event JSON: {e}")))?;
+        let event: somatize_core::event::Event = serde_json::from_value(value)
+            .map_err(|e| PyRuntimeError::new_err(format!("unknown or malformed event: {e}")))?;
+        self.event_bus.emit(event);
+        Ok(())
+    }
+
+    /// Serialized graph topology (nodes/edges) as JSON — written into
+    /// run directories so a front-end can draw the architecture.
+    fn graph_json(&self) -> PyResult<String> {
+        serde_json::to_string_pretty(&self.graph)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Start a tracked run: creates `.soma/runs/<run_id>/` and attaches
+    /// its lossless sink to this graph's event bus. Prefer the
+    /// `graph.track_run(...)` context manager from Python.
+    #[pyo3(signature = (name, root=".soma".to_string(), kind="train".to_string(), tags=None))]
+    fn begin_run(
+        &self,
+        py: Python<'_>,
+        name: String,
+        root: String,
+        kind: String,
+        tags: Option<Vec<String>>,
+    ) -> PyResult<PyRun> {
+        let kind = match kind.as_str() {
+            "fit" => RunKind::Fit,
+            "train" => RunKind::Train,
+            "study" => RunKind::Study,
+            "trial" => RunKind::Trial,
+            _ => RunKind::Other,
+        };
+        let tracker = LocalTracker::create(&root, kind, &name).map_err(soma_err_to_py)?;
+
+        // Enrich the manifest with Python-side context.
+        let mut manifest = load_manifest(tracker.run_dir()).map_err(soma_err_to_py)?;
+        manifest.tags = tags.unwrap_or_default();
+        manifest.python_version = Some(py.version().split_whitespace().next().unwrap_or("").into());
+        manifest.graph = Some(GraphSummaryInfo {
+            n_nodes: self.graph.nodes.len(),
+            node_ids: self.graph.nodes.iter().map(|n| n.id.clone()).collect(),
+            graph_path: Some("graph.json".into()),
+            mermaid_path: Some("graph.mmd".into()),
+        });
+        tracker.save_manifest(&manifest).map_err(soma_err_to_py)?;
+
+        let sink = tracker.sink();
+        self.event_bus.add_sink(sink.clone());
+        Ok(PyRun {
+            tracker: Arc::new(tracker),
+            bus: self.event_bus.clone(),
+            sink,
+            finished: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
     // ── Workers ──
 
     /// Register a remote worker for direct connection (mode B).
@@ -2442,12 +2812,103 @@ impl PyWorker {
     }
 }
 
+// ── PyRun ──
+
+/// A tracked run bound to a graph's event bus.
+///
+/// Created by `Graph.begin_run` (or the `graph.track_run(...)` context
+/// manager). Metrics logged here become `MetricReported` events, which
+/// the run's sink persists to `metrics.jsonl`/`events.jsonl`.
+#[pyclass(name = "Run")]
+struct PyRun {
+    tracker: Arc<LocalTracker>,
+    bus: Arc<EventBus>,
+    sink: Arc<dyn somatize_core::tracking::EventSink>,
+    finished: std::sync::atomic::AtomicBool,
+}
+
+#[pymethods]
+impl PyRun {
+    #[getter]
+    fn id(&self) -> String {
+        self.tracker.run_id().to_string()
+    }
+
+    /// Absolute path of the run directory.
+    #[getter]
+    fn dir(&self) -> String {
+        self.tracker.run_dir().display().to_string()
+    }
+
+    /// Log a scalar metric (optionally scoped to a node).
+    #[pyo3(signature = (name, value, step=None, node=None))]
+    fn log(&self, name: String, value: f64, step: Option<usize>, node: Option<String>) {
+        self.bus.emit(somatize_core::event::Event::MetricReported {
+            run_id: self.tracker.run_id().to_string(),
+            metric: MetricRecord {
+                name,
+                value,
+                step: step.unwrap_or(0),
+                timestamp: chrono::Utc::now(),
+            },
+            node_id: node,
+            trial_id: None,
+        });
+    }
+
+    /// Mark the start of an epoch.
+    #[pyo3(signature = (epoch, total=None))]
+    fn log_epoch(&self, epoch: usize, total: Option<usize>) {
+        self.bus.emit(somatize_core::event::Event::EpochStarted {
+            run_id: self.tracker.run_id().to_string(),
+            epoch,
+            total_epochs: total,
+        });
+        let _ = self.tracker.heartbeat();
+    }
+
+    /// Mark one optimizer step (used by the native training loop).
+    #[pyo3(signature = (step, epoch=None))]
+    fn step_completed(&self, step: usize, epoch: Option<usize>) {
+        self.bus.emit(somatize_core::event::Event::StepCompleted {
+            run_id: self.tracker.run_id().to_string(),
+            step,
+            epoch,
+        });
+    }
+
+    /// Refresh the run's heartbeat (liveness for external readers).
+    fn heartbeat(&self) -> PyResult<()> {
+        self.tracker.heartbeat().map_err(soma_err_to_py)
+    }
+
+    /// Finalize the run: flush logs, set terminal status, detach the
+    /// sink from the graph's bus. Idempotent.
+    #[pyo3(signature = (status="completed".to_string()))]
+    fn finish(&self, status: String) -> PyResult<()> {
+        if self
+            .finished
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        self.bus.remove_sink(&self.sink);
+        let state = match status.as_str() {
+            "failed" => RunState::Failed,
+            _ => RunState::Completed,
+        };
+        self.tracker.finalize(state).map_err(soma_err_to_py)
+    }
+}
+
 // ── Module ──
 
 #[pymodule]
 fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
     m.add_class::<PyStudy>()?;
+    m.add_class::<PyTrial>()?;
+    m.add_class::<PyRun>()?;
     m.add_class::<PyWorker>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

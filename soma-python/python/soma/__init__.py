@@ -1,6 +1,6 @@
 """Soma: A computational graph runtime for research pipelines."""
 
-from soma._soma import Graph, Study, Worker, __version__
+from soma._soma import Graph, Run, Study, Trial, Worker, __version__
 from soma.filter import Filter
 from soma.search import search
 from soma.lab import Lab
@@ -26,6 +26,10 @@ from soma import _orchestrator  # noqa: E402, F401
 # _orchestrator's freeze/py_state). Import for side-effects.
 from soma import _checkpoint  # noqa: E402, F401
 
+# Install search_space/apply_params/study on Graph. Import for
+# side-effects.
+from soma import _study  # noqa: E402, F401
+
 # Install gradient_audit on Graph (depends on _orchestrator). Import
 # for side-effects. Re-export the user-facing types.
 try:
@@ -44,7 +48,9 @@ except ImportError:  # torch not installed
 
 __all__ = [
     "Graph",
+    "Run",
     "Study",
+    "Trial",
     "Worker",
     "Filter",
     "DifferentiableFilter",

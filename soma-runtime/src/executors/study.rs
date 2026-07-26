@@ -16,7 +16,7 @@ use somatize_core::event::{Event, MetricRecord};
 use somatize_core::study::{Direction, PruningStrategy, Study, Trial, TrialState};
 use somatize_core::tracking::Tracker;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Result of executing a trial. Separates control flow (pruning) from errors.
@@ -36,46 +36,58 @@ pub enum TrialOutcome {
 /// — when the metric is the study's objective — consults the pruner
 /// against the completed trials' histories. Values are compared on a
 /// maximize scale (the runner pre-normalizes for `Minimize`).
-pub struct TrialContext<'a> {
+///
+/// The handle is cheaply cloneable (`Arc`-backed shared state) so it
+/// can outlive the borrow stack — e.g. cross into a Python callback.
+#[derive(Clone)]
+pub struct TrialContext {
     study_id: String,
     trial_id: String,
     /// Objective metric name + direction used for pruning decisions.
     objective: Option<(String, Direction)>,
-    pruner: Option<&'a dyn Pruner>,
+    pruner: Option<Arc<dyn Pruner>>,
     /// Completed trials' metric histories, direction-normalized.
-    history: &'a [TrialMetricHistory],
-    event_bus: &'a EventBus,
+    history: Arc<Vec<TrialMetricHistory>>,
+    event_bus: Arc<EventBus>,
+    shared: Arc<Mutex<TrialShared>>,
+}
+
+#[derive(Default)]
+struct TrialShared {
     metrics: Vec<MetricRecord>,
     pruned: Option<(usize, String)>,
 }
 
-impl TrialContext<'_> {
+impl TrialContext {
     /// Record an intermediate metric at `step`. Returns `true` when the
     /// trial should stop (pruned) — the executor should then return
     /// early; the runner marks the trial pruned regardless.
-    pub fn report(&mut self, name: &str, value: f64, step: usize) -> bool {
+    pub fn report(&self, name: &str, value: f64, step: usize) -> bool {
         let record = MetricRecord {
             name: name.to_string(),
             value,
             step,
             timestamp: Utc::now(),
         };
-        self.metrics.push(record.clone());
+        {
+            let mut shared = self.lock_shared();
+            shared.metrics.push(record.clone());
+        }
         self.event_bus.emit(Event::TrialMetric {
             study_id: self.study_id.clone(),
             trial_id: self.trial_id.clone(),
             metric: record,
         });
 
-        if self.pruned.is_some() {
+        if self.should_prune() {
             return true;
         }
-        if let (Some(pruner), Some((obj_name, direction))) = (self.pruner, &self.objective)
+        if let (Some(pruner), Some((obj_name, direction))) = (&self.pruner, &self.objective)
             && name == obj_name
             && let Some(reason) =
-                pruner.should_prune(obj_name, direction.normalize(value), step, self.history)
+                pruner.should_prune(obj_name, direction.normalize(value), step, &self.history)
         {
-            self.pruned = Some((step, reason));
+            self.lock_shared().pruned = Some((step, reason));
             return true;
         }
         false
@@ -83,12 +95,29 @@ impl TrialContext<'_> {
 
     /// Whether the pruner has decided to stop this trial.
     pub fn should_prune(&self) -> bool {
-        self.pruned.is_some()
+        self.lock_shared().pruned.is_some()
     }
 
     /// Metrics reported so far.
-    pub fn metrics(&self) -> &[MetricRecord] {
-        &self.metrics
+    pub fn metrics(&self) -> Vec<MetricRecord> {
+        self.lock_shared().metrics.clone()
+    }
+
+    /// Id of the trial this handle belongs to.
+    pub fn trial_id(&self) -> &str {
+        &self.trial_id
+    }
+
+    fn lock_shared(&self) -> std::sync::MutexGuard<'_, TrialShared> {
+        match self.shared.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn take_results(&self) -> (Vec<MetricRecord>, Option<(usize, String)>) {
+        let mut shared = self.lock_shared();
+        (std::mem::take(&mut shared.metrics), shared.pruned.take())
     }
 }
 
@@ -100,7 +129,7 @@ pub trait TrialExecutor: Send + Sync {
     fn execute_trial(
         &self,
         params: &HashMap<String, serde_json::Value>,
-        ctx: &mut TrialContext<'_>,
+        ctx: &TrialContext,
     ) -> Result<TrialOutcome>;
 }
 
@@ -109,14 +138,12 @@ pub struct FnTrialExecutor<F>(pub F);
 
 impl<F> TrialExecutor for FnTrialExecutor<F>
 where
-    F: Fn(&HashMap<String, serde_json::Value>, &mut TrialContext<'_>) -> Result<TrialOutcome>
-        + Send
-        + Sync,
+    F: Fn(&HashMap<String, serde_json::Value>, &TrialContext) -> Result<TrialOutcome> + Send + Sync,
 {
     fn execute_trial(
         &self,
         params: &HashMap<String, serde_json::Value>,
-        ctx: &mut TrialContext<'_>,
+        ctx: &TrialContext,
     ) -> Result<TrialOutcome> {
         (self.0)(params, ctx)
     }
@@ -196,25 +223,19 @@ impl StudyRunner {
             });
 
             // Histories the pruner compares against, on a maximize scale.
-            let history = normalized_histories(study, direction);
-            let mut ctx = TrialContext {
+            let ctx = TrialContext {
                 study_id: study.id.clone(),
                 trial_id: trial_id.clone(),
                 objective: objective_metric(study).map(|name| (name, direction)),
-                pruner: pruner.as_deref(),
-                history: &history,
-                event_bus: &self.event_bus,
-                metrics: Vec::new(),
-                pruned: None,
+                pruner: pruner.clone(),
+                history: Arc::new(normalized_histories(study, direction)),
+                event_bus: self.event_bus.clone(),
+                shared: Arc::new(Mutex::new(TrialShared::default())),
             };
 
             let start = Instant::now();
-            let outcome = executor.execute_trial(&params, &mut ctx);
-            let TrialContext {
-                metrics: reported,
-                pruned,
-                ..
-            } = ctx;
+            let outcome = executor.execute_trial(&params, &ctx);
+            let (reported, pruned) = ctx.take_results();
             trial.duration_ms = Some(start.elapsed().as_millis() as u64);
             trial.finished_at = Some(Utc::now());
             trial.metrics = reported;
@@ -339,16 +360,16 @@ fn objective_metric(study: &Study) -> Option<String> {
         })
 }
 
-fn build_pruner(strategy: &PruningStrategy) -> Option<Box<dyn Pruner>> {
+fn build_pruner(strategy: &PruningStrategy) -> Option<Arc<dyn Pruner>> {
     match strategy {
         PruningStrategy::None | PruningStrategy::Hyperband => None,
         PruningStrategy::Median { n_warmup_steps } => {
-            Some(Box::new(MedianPruner::new(*n_warmup_steps)))
+            Some(Arc::new(MedianPruner::new(*n_warmup_steps)))
         }
         PruningStrategy::Percentile {
             percentile,
             n_warmup_steps,
-        } => Some(Box::new(PercentilePruner::new(
+        } => Some(Arc::new(PercentilePruner::new(
             *percentile,
             *n_warmup_steps,
         ))),
@@ -405,10 +426,10 @@ mod tests {
 
     /// Simple executor: f1 = 1.0 - |lr - 0.01| * 10
     fn make_executor() -> FnTrialExecutor<
-        impl Fn(&HashMap<String, serde_json::Value>, &mut TrialContext<'_>) -> Result<TrialOutcome>,
+        impl Fn(&HashMap<String, serde_json::Value>, &TrialContext) -> Result<TrialOutcome>,
     > {
         FnTrialExecutor(
-            |params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 let lr = params["lr"].as_f64().unwrap();
                 let f1 = (1.0 - (lr - 0.01).abs() * 10.0).max(0.0);
                 Ok(TrialOutcome::Completed(vec![MetricRecord {
@@ -544,7 +565,7 @@ mod tests {
 
         // Executor that fails on even trials
         let executor = FnTrialExecutor(
-            |params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 let x = params["x"].as_f64().unwrap();
                 if x > 0.5 {
                     Err(SomaError::Other("too high".into()))
@@ -601,7 +622,7 @@ mod tests {
 
         // Executor that prunes every trial
         let executor = FnTrialExecutor(
-            |_params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |_params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 Ok(TrialOutcome::Pruned {
                     step: 5,
                     reason: "below median".into(),
@@ -702,7 +723,7 @@ mod tests {
             }],
         );
         let executor = FnTrialExecutor(
-            |params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 Ok(TrialOutcome::Completed(vec![MetricRecord {
                     name: "loss".into(),
                     value: params["x"].as_f64().unwrap(),
@@ -758,7 +779,7 @@ mod tests {
         let counter = AtomicUsize::new(0);
 
         let executor = FnTrialExecutor(
-            move |_params: &HashMap<String, serde_json::Value>, ctx: &mut TrialContext<'_>| {
+            move |_params: &HashMap<String, serde_json::Value>, ctx: &TrialContext| {
                 let good = counter.fetch_add(1, Ordering::SeqCst) == 0;
                 let metric = match direction {
                     Direction::Maximize => "f1",
@@ -884,7 +905,7 @@ mod tests {
             .insert("batch_size".into(), serde_json::json!(64));
 
         let executor = FnTrialExecutor(
-            |params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 assert_eq!(params["batch_size"], serde_json::json!(64));
                 Ok(TrialOutcome::Completed(vec![MetricRecord {
                     name: "f1".into(),
@@ -923,7 +944,7 @@ mod tests {
         });
 
         let executor = FnTrialExecutor(
-            |params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 let x = params["x"].as_f64().unwrap();
                 let now = Utc::now();
                 Ok(TrialOutcome::Completed(vec![
@@ -993,10 +1014,10 @@ mod tests {
     }
 
     fn make_simple_executor() -> FnTrialExecutor<
-        impl Fn(&HashMap<String, serde_json::Value>, &mut TrialContext<'_>) -> Result<TrialOutcome>,
+        impl Fn(&HashMap<String, serde_json::Value>, &TrialContext) -> Result<TrialOutcome>,
     > {
         FnTrialExecutor(
-            |params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 Ok(TrialOutcome::Completed(vec![MetricRecord {
                     name: "f1".into(),
                     value: params["x"].as_f64().unwrap_or(0.5),
@@ -1036,7 +1057,7 @@ mod tests {
         );
 
         let executor = FnTrialExecutor(
-            |_params: &HashMap<String, serde_json::Value>, _ctx: &mut TrialContext<'_>| {
+            |_params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
                 Ok(TrialOutcome::Completed(vec![MetricRecord {
                     name: "f1".into(),
                     value: 0.5,

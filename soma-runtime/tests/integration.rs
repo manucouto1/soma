@@ -322,7 +322,7 @@ fn study_with_graph_integration() {
 
     let executor = FnTrialExecutor(
         |params: &std::collections::HashMap<String, serde_json::Value>,
-         _ctx: &mut somatize_runtime::TrialContext<'_>| {
+         _ctx: &somatize_runtime::TrialContext| {
             let lr = params["lr"].as_f64().unwrap();
 
             let graph = make_linear_graph(&["normalizer", "model"]);
@@ -412,7 +412,7 @@ fn study_continues_after_failed_trials() {
 
     let executor = FnTrialExecutor(
         |params: &std::collections::HashMap<String, serde_json::Value>,
-         _ctx: &mut somatize_runtime::TrialContext<'_>| {
+         _ctx: &somatize_runtime::TrialContext| {
             let x = params["x"].as_f64().unwrap();
             if x < 0.0 {
                 return Err(SomaError::Other("negative x".into()));

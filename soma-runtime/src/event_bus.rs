@@ -42,6 +42,17 @@ impl EventBus {
         }
     }
 
+    /// Unregister a previously added sink (matched by identity). The
+    /// sink is flushed before removal.
+    pub fn remove_sink(&self, sink: &Arc<dyn EventSink>) {
+        sink.flush();
+        let mut sinks = match self.sinks.write() {
+            Ok(s) => s,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        sinks.retain(|s| !Arc::ptr_eq(s, sink));
+    }
+
     /// Emit an event: sinks first (lossless), then all subscribers.
     /// Returns the number of broadcast receivers that received the event.
     /// If there are no subscribers, the broadcast is silently dropped.
