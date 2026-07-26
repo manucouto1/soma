@@ -33,6 +33,18 @@ unsafe impl GlobalAlloc for TrackingAllocator {
 #[global_allocator]
 static GLOBAL: TrackingAllocator = TrackingAllocator;
 
+/// The counting allocator is process-global, so tests measuring
+/// allocation deltas must never run concurrently — a sibling test's
+/// allocations would land inside this test's window. Every test takes
+/// this lock first.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn current_allocated() -> usize {
     ALLOCATED.load(Ordering::Relaxed)
 }
@@ -186,6 +198,7 @@ fn make_pipeline_session() -> GraphSession {
     ignore = "allocation counts are meaningless under coverage instrumentation"
 )]
 fn stream_memory_does_not_grow_with_chunks() {
+    let _serial = serial_guard();
     use somatize_runtime::forward::Stream;
 
     let session = make_doubler_session();
@@ -254,6 +267,7 @@ fn stream_memory_does_not_grow_with_chunks() {
     ignore = "allocation counts are meaningless under coverage instrumentation"
 )]
 fn repeated_forward_memory_does_not_grow() {
+    let _serial = serial_guard();
     let session = make_doubler_session();
 
     let batch_size = 1000;
@@ -309,6 +323,7 @@ fn repeated_forward_memory_does_not_grow() {
     ignore = "allocation counts are meaningless under coverage instrumentation"
 )]
 fn stream_peak_memory_bounded() {
+    let _serial = serial_guard();
     use somatize_runtime::forward::Stream;
 
     let session = make_doubler_session();
@@ -366,6 +381,7 @@ fn stream_peak_memory_bounded() {
     ignore = "allocation counts are meaningless under coverage instrumentation"
 )]
 fn pipeline_fit_then_repeated_forward_stable() {
+    let _serial = serial_guard();
     let mut session = make_pipeline_session();
 
     let train_data = Value::tensor((0..5000).map(|i| i as f64).collect(), vec![5000]);
@@ -417,6 +433,7 @@ fn pipeline_fit_then_repeated_forward_stable() {
     ignore = "allocation counts are meaningless under coverage instrumentation"
 )]
 fn value_clone_is_cheap() {
+    let _serial = serial_guard();
     // Create a large tensor
     let big = Value::tensor(vec![42.0; 100_000], vec![100_000]);
 
