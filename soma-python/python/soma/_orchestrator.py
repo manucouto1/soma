@@ -306,6 +306,13 @@ def _backward(self: _RustGraph, ctx: Any, loss: Any) -> None:
     audit = self.py_state.get("active_audit")
     if audit is not None:
         audit._snapshot_after_backward()
+    # Inside graph.track_run(...): emit a coarse liveness marker so
+    # trackers and live subscribers see training progress.
+    run = self.py_state.get("active_run")
+    if run is not None:
+        step = self.py_state.get("train_step", 0)
+        run.step_completed(step)
+        self.py_state["train_step"] = step + 1
 
 
 def _step(self: _RustGraph, ctx: Any = None) -> None:

@@ -30,19 +30,25 @@ from soma import _checkpoint  # noqa: E402, F401
 # side-effects.
 from soma import _study  # noqa: E402, F401
 
+# Install track_run on Graph. Import for side-effects.
+from soma import _tracking  # noqa: E402, F401
+
 # Install gradient_audit on Graph (depends on _orchestrator). Import
 # for side-effects. Re-export the user-facing types.
 try:
     from soma._audit import (
         Audit,
         AuditReport,
+        ChannelConfig,
         FilterReport,
         GradientHealthError,
+        StepRecord,
         Thresholds,
         audit_modules,
     )
 except ImportError:  # torch not installed
     Audit = AuditReport = FilterReport = None        # type: ignore[assignment]
+    ChannelConfig = StepRecord = None                # type: ignore[assignment]
     GradientHealthError = Thresholds = None          # type: ignore[assignment]
     audit_modules = None                             # type: ignore[assignment]
 
@@ -61,8 +67,10 @@ __all__ = [
     "__version__",
     "Audit",
     "AuditReport",
+    "ChannelConfig",
     "FilterReport",
     "GradientHealthError",
+    "StepRecord",
     "Thresholds",
     "audit_modules",
 ]
