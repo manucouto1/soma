@@ -181,4 +181,128 @@ mod tests {
         kb.record(record("e1", 0.5)).unwrap();
         assert!(path.exists());
     }
+
+    #[test]
+    fn empty_file_yields_empty_kb() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        fs::write(&path, "").unwrap();
+        let kb = FileKnowledgeBase::open(&path).unwrap();
+        assert!(kb.is_empty());
+        assert_eq!(kb.path(), path.as_path());
+    }
+
+    #[test]
+    fn blank_lines_between_records_are_tolerated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        {
+            let mut kb = FileKnowledgeBase::open(&path).unwrap();
+            kb.record(record("e1", 0.8)).unwrap();
+            kb.record(record("e2", 0.9)).unwrap();
+        }
+        let content = fs::read_to_string(&path).unwrap();
+        let padded = content.replace('\n', "\n\n");
+        fs::write(&path, format!("\n{padded}")).unwrap();
+
+        let kb = FileKnowledgeBase::open(&path).unwrap();
+        assert_eq!(kb.len(), 2);
+    }
+
+    /// CONTRACT (pinned): a file whose ONLY line is corrupt is
+    /// classified as a torn tail — it opens as an empty KB with a
+    /// warning rather than erroring. Loud failure requires at least
+    /// one valid record before the corruption.
+    #[test]
+    fn single_fully_corrupt_line_opens_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        fs::write(&path, "{definitely not json\n").unwrap();
+        let kb = FileKnowledgeBase::open(&path).unwrap();
+        assert!(kb.is_empty());
+    }
+
+    #[test]
+    fn unicode_content_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        {
+            let mut kb = FileKnowledgeBase::open(&path).unwrap();
+            let rec = ExperimentRecord::new("π-experimento", "atención emoción 🧠")
+                .with_research_line("línea-ñ")
+                .with_notes("multi\nline\nnotes stay one JSONL line");
+            kb.record(rec).unwrap();
+        }
+        let kb = FileKnowledgeBase::open(&path).unwrap();
+        assert_eq!(kb.len(), 1);
+        let rec = kb.get("π-experimento").unwrap().unwrap();
+        assert_eq!(rec.name, "atención emoción 🧠");
+        assert_eq!(rec.research_line.as_deref(), Some("línea-ñ"));
+        // Embedded newlines are JSON-escaped: still one record per line.
+        let lines = fs::read_to_string(&path).unwrap().lines().count();
+        assert_eq!(lines, 1);
+    }
+
+    #[test]
+    fn two_handles_share_the_append_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        let mut a = FileKnowledgeBase::open(&path).unwrap();
+        let mut b = FileKnowledgeBase::open(&path).unwrap();
+
+        a.record(record("from_a", 0.1)).unwrap();
+        b.record(record("from_b", 0.2)).unwrap();
+
+        // In-memory views don't see each other's writes…
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
+        // …but the log has both, and a fresh open sees both.
+        let c = FileKnowledgeBase::open(&path).unwrap();
+        assert_eq!(c.len(), 2);
+        assert!(c.get("from_a").unwrap().is_some());
+        assert!(c.get("from_b").unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn record_io_failure_leaves_memory_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        let mut kb = FileKnowledgeBase::open(&path).unwrap();
+        kb.record(record("e1", 0.5)).unwrap();
+
+        // Make the file unwritable: the append fails BEFORE the
+        // in-memory mutation, so the KB stays consistent with disk.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(kb.record(record("e2", 0.9)).is_err());
+        assert_eq!(kb.len(), 1);
+        assert!(kb.get("e2").unwrap().is_none());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn queries_delegate_over_rehydrated_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        {
+            let mut kb = FileKnowledgeBase::open(&path).unwrap();
+            kb.record(record("e1", 0.6).with_parent("e0")).unwrap();
+            kb.record(record("e0", 0.5)).unwrap();
+            kb.record(record("e2", 0.8).with_parent("e0")).unwrap();
+        }
+        // Everything below runs over records loaded from disk.
+        let kb = FileKnowledgeBase::open(&path).unwrap();
+        assert_eq!(kb.experiments_in_line("mos").unwrap().len(), 3);
+        assert_eq!(kb.children("e0").unwrap().len(), 2);
+        assert!(!kb.search("experiment", 10).unwrap().is_empty());
+        let lines = kb.research_lines().unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].name, "mos");
+        let trajectory = kb.trajectory("mos", "f1").unwrap();
+        assert_eq!(trajectory.len(), 3);
+        assert!(kb.promising_lines("f1").is_ok());
+        assert!(kb.change_points("mos", "f1", 0.5).is_ok());
+    }
 }

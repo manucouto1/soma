@@ -21,8 +21,19 @@ impl SomaContext {
     /// Falls back to the in-memory KB otherwise (records are lost on
     /// server exit).
     pub fn new(project_dir: impl Into<PathBuf>) -> Self {
+        Self::with_env_override(project_dir, std::env::var("SOMA_KB_PATH").ok())
+    }
+
+    /// Deterministic constructor: `env_override` plays the role of the
+    /// `SOMA_KB_PATH` environment variable. Used by `new()` and by
+    /// tests, which must never depend on (or leak through) the real
+    /// process environment.
+    pub fn with_env_override(
+        project_dir: impl Into<PathBuf>,
+        env_override: Option<String>,
+    ) -> Self {
         let project_dir = project_dir.into();
-        let kb: Box<dyn KnowledgeBase> = match Self::kb_path(&project_dir) {
+        let kb: Box<dyn KnowledgeBase> = match Self::kb_path(&project_dir, env_override) {
             Some(path) => match FileKnowledgeBase::open(&path) {
                 Ok(kb) => Box::new(kb),
                 Err(e) => {
@@ -38,8 +49,11 @@ impl SomaContext {
         Self { project_dir, kb }
     }
 
-    fn kb_path(project_dir: &Path) -> Option<PathBuf> {
-        if let Ok(path) = std::env::var("SOMA_KB_PATH") {
+    /// Where the persistent KB lives, if anywhere: the explicit
+    /// override wins; otherwise a `.soma/` DIRECTORY in the project
+    /// enables `.soma/experiments.jsonl`.
+    fn kb_path(project_dir: &Path, env_override: Option<String>) -> Option<PathBuf> {
+        if let Some(path) = env_override.filter(|p| !p.is_empty()) {
             return Some(PathBuf::from(path));
         }
         let soma_dir = project_dir.join(".soma");
