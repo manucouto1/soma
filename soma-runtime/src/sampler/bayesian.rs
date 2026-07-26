@@ -250,6 +250,70 @@ mod tests {
     }
 
     #[test]
+    fn record_result_trait_method_feeds_the_model() {
+        // Through &mut dyn Sampler — the exact call path StudyRunner
+        // uses. A sampler whose history grew must sample differently
+        // from an identical one with no history at the same index.
+        use crate::sampler::Sampler as _;
+
+        let space = sample_space();
+        let mut fed = BayesianSampler::new(40, 3, Some(42));
+        let mut unfed = BayesianSampler::new(40, 3, Some(42));
+
+        {
+            let as_dyn: &mut dyn crate::sampler::Sampler = &mut fed;
+            for i in 0..10 {
+                let params = as_dyn.sample(&space, i).unwrap().unwrap();
+                let lr = params["lr"].as_f64().unwrap();
+                as_dyn.record_result(&params, 1.0 - (lr - 0.01).abs() * 10.0);
+            }
+        }
+        let with_history = fed.sample(&space, 15).unwrap().unwrap();
+        let without_history = unfed.sample(&space, 15).unwrap().unwrap();
+        assert_ne!(
+            with_history["lr"], without_history["lr"],
+            "history received via the trait method must change sampling"
+        );
+    }
+
+    #[test]
+    fn tpe_actually_biases_towards_good_regions() {
+        // Feed 20 observations peaked at lr = 0.01, then draw 20 TPE
+        // samples and compare against a no-history control: the median
+        // distance to the optimum must shrink. Deterministic (seeded).
+        use crate::sampler::Sampler as _;
+
+        let space = sample_space();
+        let mut tpe = BayesianSampler::new(200, 3, Some(7));
+        let mut control = BayesianSampler::new(200, 3, Some(7));
+
+        for i in 0..20 {
+            let params = tpe.sample(&space, i).unwrap().unwrap();
+            let lr = params["lr"].as_f64().unwrap();
+            tpe.record_result(&params, 1.0 - (lr - 0.01).abs() * 10.0);
+        }
+
+        let mut median_dist = |s: &mut BayesianSampler| -> f64 {
+            let mut dists: Vec<f64> = (100..120)
+                .map(|i| {
+                    let p = s.sample(&space, i).unwrap().unwrap();
+                    (p["lr"].as_f64().unwrap() - 0.01).abs()
+                })
+                .collect();
+            dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            dists[dists.len() / 2]
+        };
+
+        let tpe_median = median_dist(&mut tpe);
+        // Control has an empty history → falls back to random sampling.
+        let control_median = median_dist(&mut control);
+        assert!(
+            tpe_median < control_median,
+            "TPE median distance {tpe_median:.4} must beat random {control_median:.4}"
+        );
+    }
+
+    #[test]
     fn respects_n_trials_limit() {
         let mut sampler = BayesianSampler::new(10, 3, Some(42));
         let space = sample_space();

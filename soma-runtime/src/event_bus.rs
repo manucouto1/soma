@@ -161,6 +161,123 @@ mod tests {
         assert!(matches!(e2, Event::RunCompleted { .. }));
     }
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Spy sink counting records and flushes.
+    #[derive(Default)]
+    struct CountingSink {
+        records: AtomicUsize,
+        flushes: AtomicUsize,
+    }
+
+    impl somatize_core::tracking::EventSink for CountingSink {
+        fn record(&self, _event: &Event) {
+            self.records.fetch_add(1, Ordering::SeqCst);
+        }
+        fn flush(&self) {
+            self.flushes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn run_completed(id: &str) -> Event {
+        Event::RunCompleted {
+            run_id: id.into(),
+            duration: Duration::from_millis(1),
+        }
+    }
+
+    #[test]
+    fn sinks_observe_events_synchronously_before_emit_returns() {
+        let bus = EventBus::new(16);
+        let sink = Arc::new(CountingSink::default());
+        bus.add_sink(sink.clone());
+
+        bus.emit(run_completed("r1"));
+        // No polling, no await: the sink path is synchronous.
+        assert_eq!(sink.records.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn remove_sink_flushes_detaches_and_respects_identity() {
+        let bus = EventBus::new(16);
+        let sink = Arc::new(CountingSink::default());
+        let as_dyn: Arc<dyn somatize_core::tracking::EventSink> = sink.clone();
+        bus.add_sink(as_dyn.clone());
+
+        bus.emit(run_completed("r1"));
+        assert_eq!(sink.flushes.load(Ordering::SeqCst), 0);
+
+        // A DIFFERENT Arc wrapping an equal-valued sink is not removed.
+        let other: Arc<dyn somatize_core::tracking::EventSink> = Arc::new(CountingSink::default());
+        bus.remove_sink(&other);
+        bus.emit(run_completed("r2"));
+        assert_eq!(sink.records.load(Ordering::SeqCst), 2, "still attached");
+
+        // Removing by identity flushes first, then detaches.
+        bus.remove_sink(&as_dyn);
+        assert_eq!(sink.flushes.load(Ordering::SeqCst), 1, "flushed on removal");
+        bus.emit(run_completed("r3"));
+        assert_eq!(
+            sink.records.load(Ordering::SeqCst),
+            2,
+            "no events after removal"
+        );
+
+        // Removing a never-added sink is a harmless no-op.
+        bus.remove_sink(&as_dyn);
+    }
+
+    #[test]
+    fn remove_sink_drops_every_clone_of_a_doubly_registered_arc() {
+        // CONTRACT: registering the same Arc twice means two deliveries
+        // per event, and remove_sink detaches BOTH registrations.
+        let bus = EventBus::new(16);
+        let sink = Arc::new(CountingSink::default());
+        let as_dyn: Arc<dyn somatize_core::tracking::EventSink> = sink.clone();
+        bus.add_sink(as_dyn.clone());
+        bus.add_sink(as_dyn.clone());
+
+        bus.emit(run_completed("r1"));
+        assert_eq!(sink.records.load(Ordering::SeqCst), 2);
+
+        bus.remove_sink(&as_dyn);
+        bus.emit(run_completed("r2"));
+        assert_eq!(sink.records.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn flush_sinks_flushes_all_registered_sinks() {
+        let bus = EventBus::new(16);
+        let a = Arc::new(CountingSink::default());
+        let b = Arc::new(CountingSink::default());
+        bus.add_sink(a.clone());
+        bus.add_sink(b.clone());
+        bus.flush_sinks();
+        assert_eq!(a.flushes.load(Ordering::SeqCst), 1);
+        assert_eq!(b.flushes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn sinks_stay_lossless_while_subscribers_lag() {
+        // The documented contrast between the two delivery paths: a
+        // lagging broadcast subscriber drops events; sinks never do.
+        let bus = EventBus::new(4); // tiny broadcast capacity
+        let sink = Arc::new(CountingSink::default());
+        bus.add_sink(sink.clone());
+        let mut rx = bus.subscribe();
+
+        for i in 0..100 {
+            bus.emit(run_completed(&format!("r{i}")));
+        }
+        assert_eq!(sink.records.load(Ordering::SeqCst), 100, "sink is lossless");
+        match rx.recv().await {
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                assert!(n > 0, "subscriber lost {n} events");
+            }
+            other => panic!("expected Lagged, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn subscriber_after_emit_misses_earlier_events() {
         let bus = EventBus::new(16);

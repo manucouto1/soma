@@ -402,6 +402,35 @@ mod tests {
     }
 
     #[test]
+    fn grid_prepare_resolves_total_before_first_sample() {
+        // The whole point of Sampler::prepare — without it, grid
+        // studies reported total_trials = 0 in StudyStarted.
+        let mut sampler = GridSampler::new(3);
+        assert_eq!(sampler.n_trials(), None, "unknown before prepare");
+        sampler.prepare(&sample_space());
+        assert_eq!(sampler.n_trials(), Some(9), "3 lr points × 3 kernels");
+    }
+
+    #[test]
+    fn record_result_is_a_noop_for_stateless_samplers() {
+        let space = sample_space();
+        let mut with_feedback = RandomSampler::new(5, Some(42));
+        let mut without = RandomSampler::new(5, Some(42));
+
+        for i in 0..3 {
+            let params = with_feedback.sample(&space, i).unwrap().unwrap();
+            with_feedback.record_result(&params, 0.9);
+        }
+        // Same sequence regardless of feedback.
+        for i in 3..5 {
+            assert_eq!(
+                with_feedback.sample(&space, i).unwrap(),
+                without.sample(&space, i).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn grid_empty_space() {
         let mut sampler = GridSampler::new(3);
         let space = SearchSpace::new();

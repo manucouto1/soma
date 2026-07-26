@@ -8,7 +8,6 @@ use somatize_core::tracking::{
     EventSink, GitInfo, RunKind, RunManifest, RunState, RunStatus, Tracker,
 };
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -72,7 +71,7 @@ impl LocalTracker {
     pub fn open(run_dir: impl AsRef<Path>) -> Result<Self> {
         let dir = run_dir.as_ref().to_path_buf();
         let manifest = load_manifest(&dir)?;
-        let start_seq = count_lines(&dir.join(EVENTS_FILE));
+        let start_seq = repair_and_count_lines(&dir.join(EVENTS_FILE))?;
         let sink = JsonlEventSink::append(
             &dir.join(EVENTS_FILE),
             Some(&dir.join(METRICS_FILE)),
@@ -221,9 +220,26 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> 
     Ok(())
 }
 
-fn count_lines(path: &Path) -> u64 {
-    let Ok(file) = fs::File::open(path) else {
-        return 0;
+/// Prepare the events log for appending: a crash mid-write leaves a
+/// torn trailing line with no `\n`; appending after it would concatenate
+/// the next event onto garbage. Truncate the torn tail (that event was
+/// never durably recorded) and return the number of complete lines —
+/// the next sequence number.
+fn repair_and_count_lines(path: &Path) -> Result<u64> {
+    let content = match fs::read(path) {
+        Ok(c) => c,
+        Err(_) => return Ok(0), // no events yet — fresh log
     };
-    BufReader::new(file).lines().count() as u64
+    let newlines = content.iter().filter(|b| **b == b'\n').count() as u64;
+    if content.is_empty() || content.last() == Some(&b'\n') {
+        return Ok(newlines);
+    }
+    let keep = content
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let file = fs::OpenOptions::new().write(true).open(path)?;
+    file.set_len(keep as u64)?;
+    Ok(newlines)
 }

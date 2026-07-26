@@ -405,7 +405,7 @@ fn normalized_histories(study: &Study, direction: Direction) -> Vec<TrialMetricH
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sampler::{GridSampler, RandomSampler};
+    use crate::sampler::{BayesianSampler, GridSampler, RandomSampler};
     use chrono::Utc;
     use somatize_core::error::SomaError;
     use somatize_core::search::{Scale, SearchDimension, SearchSpace};
@@ -1029,6 +1029,787 @@ mod tests {
                 }]))
             },
         )
+    }
+
+    // ── TrialContext unit tests (direct construction) ──
+
+    use crate::pruner::TrialMetricHistory as History;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Spy pruner: counts consultations, prunes everything after warmup.
+    struct SpyPruner {
+        calls: AtomicUsize,
+        prune_from_step: usize,
+    }
+
+    impl Pruner for SpyPruner {
+        fn should_prune(
+            &self,
+            _metric: &str,
+            _value: f64,
+            step: usize,
+            _history: &[History],
+        ) -> Option<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            (step >= self.prune_from_step).then(|| "spy".to_string())
+        }
+    }
+
+    fn make_ctx(pruner: Option<Arc<SpyPruner>>) -> (TrialContext, Arc<EventBus>) {
+        let bus = Arc::new(EventBus::new(64));
+        let ctx = TrialContext {
+            study_id: "s".into(),
+            trial_id: "trial_0000".into(),
+            objective: Some(("f1".to_string(), Direction::Maximize)),
+            pruner: pruner.map(|p| p as Arc<dyn Pruner>),
+            history: Arc::new(Vec::new()),
+            event_bus: bus.clone(),
+            shared: Arc::new(Mutex::new(TrialShared::default())),
+        };
+        (ctx, bus)
+    }
+
+    #[test]
+    fn report_after_prune_is_sticky_and_skips_the_pruner() {
+        let pruner = Arc::new(SpyPruner {
+            calls: AtomicUsize::new(0),
+            prune_from_step: 0,
+        });
+        let (ctx, _bus) = make_ctx(Some(pruner.clone()));
+
+        assert!(!ctx.should_prune());
+        assert!(ctx.report("f1", 0.1, 0), "pruned immediately");
+        assert!(ctx.should_prune());
+        let calls_after_prune = pruner.calls.load(Ordering::SeqCst);
+
+        // Later reports return true WITHOUT consulting the pruner…
+        assert!(ctx.report("f1", 0.9, 1));
+        assert!(ctx.report("f1", 0.9, 2));
+        assert_eq!(pruner.calls.load(Ordering::SeqCst), calls_after_prune);
+        // …but the metrics are still recorded (pinned: push happens
+        // before the prune check).
+        assert_eq!(ctx.metrics().len(), 3);
+    }
+
+    #[test]
+    fn non_objective_metric_never_consults_the_pruner() {
+        let pruner = Arc::new(SpyPruner {
+            calls: AtomicUsize::new(0),
+            prune_from_step: 0,
+        });
+        let (ctx, _bus) = make_ctx(Some(pruner.clone()));
+
+        assert!(!ctx.report("train_loss", 99.0, 0));
+        assert!(!ctx.report("lr", 0.001, 0));
+        assert_eq!(pruner.calls.load(Ordering::SeqCst), 0);
+        assert!(ctx.report("f1", 0.0, 0), "objective metric does consult");
+        assert_eq!(pruner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn report_emits_trial_metric_events() {
+        let (ctx, bus) = make_ctx(None);
+        let mut rx = bus.subscribe();
+        ctx.report("f1", 0.5, 3);
+        ctx.report("aux", 1.5, 3);
+
+        let mut got = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            if let Event::TrialMetric {
+                study_id,
+                trial_id,
+                metric,
+            } = e
+            {
+                assert_eq!(study_id, "s");
+                assert_eq!(trial_id, "trial_0000");
+                got.push((metric.name, metric.value, metric.step));
+            }
+        }
+        assert_eq!(
+            got,
+            vec![("f1".to_string(), 0.5, 3), ("aux".to_string(), 1.5, 3)]
+        );
+    }
+
+    #[test]
+    fn trial_context_accessors_and_cross_thread_clone() {
+        let (ctx, _bus) = make_ctx(None);
+        assert_eq!(ctx.trial_id(), "trial_0000");
+
+        // The documented property: the handle can cross threads (e.g.
+        // into a Python callback) and all reports land on the trial.
+        let clone = ctx.clone();
+        let handle = std::thread::spawn(move || {
+            clone.report("from_thread", 1.0, 0);
+        });
+        ctx.report("from_main", 2.0, 0);
+        handle.join().unwrap();
+
+        let names: Vec<String> = ctx.metrics().into_iter().map(|m| m.name).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"from_thread".to_string()));
+        assert!(names.contains(&"from_main".to_string()));
+    }
+
+    // ── Runner behavior ──
+
+    #[test]
+    fn percentile_pruning_works_through_the_runner() {
+        // Same shape as the median cases but exercising the Percentile
+        // arm of build_pruner (dead code until now).
+        use std::sync::atomic::AtomicUsize;
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "percentile",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 4,
+                seed: Some(7),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        )
+        .with_pruning(PruningStrategy::Percentile {
+            percentile: 50.0,
+            n_warmup_steps: 2,
+        });
+        let counter = AtomicUsize::new(0);
+        let executor = FnTrialExecutor(
+            move |_p: &HashMap<String, serde_json::Value>, ctx: &TrialContext| {
+                let good = counter.fetch_add(1, Ordering::SeqCst) == 0;
+                for step in 0..10 {
+                    let value = if good { 0.5 + step as f64 * 0.05 } else { 0.01 };
+                    if ctx.report("f1", value, step) {
+                        return Ok(TrialOutcome::Pruned {
+                            step,
+                            reason: "stopped".into(),
+                        });
+                    }
+                }
+                Ok(TrialOutcome::Completed(vec![]))
+            },
+        );
+        let mut sampler = RandomSampler::new(4, Some(7));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+        assert_bad_trials_pruned(&study);
+    }
+
+    #[test]
+    fn pruner_verdict_wins_over_completed_outcome() {
+        // An executor that IGNORES report()'s stop signal and returns
+        // Completed anyway: the runner must mark the trial pruned with
+        // the pruner's step/reason and drop the returned metrics.
+        use std::sync::atomic::AtomicUsize;
+        let bus = Arc::new(EventBus::new(256));
+        let mut rx = bus.subscribe();
+        let runner = StudyRunner::new(bus);
+        let mut study = pruning_study(Direction::Maximize);
+
+        let counter = AtomicUsize::new(0);
+        let executor = FnTrialExecutor(
+            move |_p: &HashMap<String, serde_json::Value>, ctx: &TrialContext| {
+                let good = counter.fetch_add(1, Ordering::SeqCst) == 0;
+                for step in 0..10 {
+                    let value = if good { 0.5 + step as f64 * 0.05 } else { 0.01 };
+                    ctx.report("f1", value, step); // return value ignored!
+                }
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "sneaky".into(),
+                    value: 1.0,
+                    step: 0,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        );
+        let mut sampler = RandomSampler::new(4, Some(7));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+
+        let pruned: Vec<_> = study
+            .trials
+            .iter()
+            .filter(|t| matches!(t.state, TrialState::Pruned { .. }))
+            .collect();
+        assert_eq!(pruned.len(), 3);
+        for t in &pruned {
+            if let TrialState::Pruned { step, reason } = &t.state {
+                assert_eq!(*step, 2, "pruner's step, not the executor's");
+                assert!(reason.contains("median"), "pruner's reason: {reason}");
+            }
+            assert!(
+                !t.metrics.iter().any(|m| m.name == "sneaky"),
+                "final metrics of an overridden Completed are dropped"
+            );
+        }
+        // TrialPruned events emitted, and no TrialCompleted for them.
+        let mut completed = 0;
+        let mut pruned_events = 0;
+        while let Ok(e) = rx.try_recv() {
+            match e {
+                Event::TrialCompleted { .. } => completed += 1,
+                Event::TrialPruned { .. } => pruned_events += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(completed, 1);
+        assert_eq!(pruned_events, 3);
+    }
+
+    /// Spy tracker recording every save_study call.
+    #[derive(Default)]
+    struct SpyTracker {
+        saves: Mutex<Vec<usize>>, // trials.len() at each save
+        fail: bool,
+    }
+
+    impl somatize_core::tracking::Tracker for SpyTracker {
+        fn run_id(&self) -> &str {
+            "spy"
+        }
+        fn run_dir(&self) -> &std::path::Path {
+            std::path::Path::new("/nonexistent")
+        }
+        fn sink(&self) -> Arc<dyn somatize_core::tracking::EventSink> {
+            struct Null;
+            impl somatize_core::tracking::EventSink for Null {
+                fn record(&self, _event: &Event) {}
+            }
+            Arc::new(Null)
+        }
+        fn save_manifest(&self, _m: &somatize_core::tracking::RunManifest) -> Result<()> {
+            Ok(())
+        }
+        fn save_artifact(&self, _p: &str, _b: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn save_study(&self, study: &Study) -> Result<()> {
+            if self.fail {
+                return Err(somatize_core::SomaError::Other("disk gone".into()));
+            }
+            self.saves.lock().unwrap().push(study.trials.len());
+            Ok(())
+        }
+        fn heartbeat(&self) -> Result<()> {
+            Ok(())
+        }
+        fn finalize(&self, _s: somatize_core::tracking::RunState) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn study_is_saved_after_every_trial_with_monotonic_growth() {
+        let bus = Arc::new(EventBus::new(256));
+        let tracker = Arc::new(SpyTracker::default());
+        let runner = StudyRunner::new(bus).with_tracker(tracker.clone());
+
+        let mut study = Study::new(
+            "persist",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 3,
+                seed: Some(3),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        let mut sampler = RandomSampler::new(3, Some(3));
+        runner
+            .run(&mut study, &mut sampler, &make_simple_executor())
+            .unwrap();
+
+        // One save per trial plus the final save: a runner that saved
+        // only once at the end would fail this.
+        let saves = tracker.saves.lock().unwrap().clone();
+        assert_eq!(saves, vec![1, 2, 3, 3]);
+    }
+
+    #[test]
+    fn failing_tracker_never_fails_the_study() {
+        let bus = Arc::new(EventBus::new(256));
+        let tracker = Arc::new(SpyTracker {
+            fail: true,
+            ..Default::default()
+        });
+        let runner = StudyRunner::new(bus).with_tracker(tracker);
+
+        let mut study = Study::new(
+            "resilient",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 3,
+                seed: Some(3),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        let mut sampler = RandomSampler::new(3, Some(3));
+        runner
+            .run(&mut study, &mut sampler, &make_simple_executor())
+            .unwrap();
+        assert_eq!(study.trials.len(), 3);
+    }
+
+    /// Sampler spy recording the ORDER of record_result vs sample calls.
+    struct OrderSpySampler {
+        inner: GridSampler,
+        log: Vec<String>,
+    }
+
+    impl Sampler for OrderSpySampler {
+        fn prepare(&mut self, space: &SearchSpace) {
+            self.inner.prepare(space);
+        }
+        fn sample(
+            &mut self,
+            space: &SearchSpace,
+            trial_index: usize,
+        ) -> Result<Option<HashMap<String, serde_json::Value>>> {
+            self.log.push(format!("sample:{trial_index}"));
+            self.inner.sample(space, trial_index)
+        }
+        fn n_trials(&self) -> Option<usize> {
+            self.inner.n_trials()
+        }
+        fn record_result(&mut self, _params: &HashMap<String, serde_json::Value>, value: f64) {
+            self.log.push(format!("record:{value:.2}"));
+        }
+    }
+
+    #[test]
+    fn resume_replays_history_into_the_sampler_before_sampling() {
+        let executor = make_executor();
+
+        // Reference run to harvest 3 completed trials.
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "replay",
+            sample_space(),
+            SearchStrategy::Grid { points_per_dim: 3 },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        runner
+            .run(&mut study, &mut GridSampler::new(3), &executor)
+            .unwrap();
+        study.trials.truncate(3);
+
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+        let mut spy = OrderSpySampler {
+            inner: GridSampler::new(3),
+            log: Vec::new(),
+        };
+        runner.run(&mut study, &mut spy, &executor).unwrap();
+
+        // The first 3 log entries are replayed history; sampling only
+        // starts afterwards, at the resume index.
+        assert_eq!(
+            spy.log.iter().filter(|e| e.starts_with("record:")).count(),
+            3 + 3
+        );
+        assert!(
+            spy.log[..3].iter().all(|e| e.starts_with("record:")),
+            "history replay must precede sampling: {:?}",
+            &spy.log[..4]
+        );
+        assert_eq!(spy.log[3], "sample:3", "sampling resumes at the next index");
+    }
+
+    #[test]
+    fn frozen_param_overrides_a_sampled_dimension() {
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+
+        // "x" is IN the search space and also frozen: frozen wins.
+        let mut study = Study::new(
+            "frozen-collision",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 3,
+                seed: Some(2),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        study.frozen.insert("x".into(), serde_json::json!(0.75));
+
+        let executor = FnTrialExecutor(
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
+                assert_eq!(params["x"], serde_json::json!(0.75));
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "f1".into(),
+                    value: 0.5,
+                    step: 0,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        );
+        let mut sampler = RandomSampler::new(3, Some(2));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+
+        for t in &study.trials {
+            assert_eq!(t.params["x"], serde_json::json!(0.75));
+        }
+    }
+
+    #[test]
+    fn pruning_watches_first_composite_term_when_no_objectives() {
+        use somatize_core::study::{CompositeObjective, Scalarizer};
+        use std::sync::atomic::AtomicUsize;
+
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "composite-pruning",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 4,
+                seed: Some(7),
+            },
+            vec![], // no objectives — pruning falls back to terms[0]
+        )
+        .with_composite(CompositeObjective {
+            terms: vec![("f1".into(), 1.0), ("aux".into(), 0.1)],
+            direction: Direction::Maximize,
+            scalarizer: Scalarizer::WeightedSum,
+        })
+        .with_pruning(PruningStrategy::Median { n_warmup_steps: 2 });
+
+        let counter = AtomicUsize::new(0);
+        let executor = FnTrialExecutor(
+            move |_p: &HashMap<String, serde_json::Value>, ctx: &TrialContext| {
+                let good = counter.fetch_add(1, Ordering::SeqCst) == 0;
+                for step in 0..10 {
+                    let value = if good { 0.5 + step as f64 * 0.05 } else { 0.01 };
+                    if ctx.report("f1", value, step) {
+                        return Ok(TrialOutcome::Pruned {
+                            step,
+                            reason: "stopped".into(),
+                        });
+                    }
+                }
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "aux".into(),
+                    value: 0.0,
+                    step: 0,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        );
+        let mut sampler = RandomSampler::new(4, Some(7));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+        assert_bad_trials_pruned(&study);
+    }
+
+    #[test]
+    fn planned_trials_is_stamped_and_progress_completes() {
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "stamped",
+            sample_space(),
+            SearchStrategy::Grid { points_per_dim: 3 },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        assert_eq!(study.total_trials(), None);
+        runner
+            .run(&mut study, &mut GridSampler::new(3), &make_executor())
+            .unwrap();
+        assert_eq!(study.planned_trials, Some(6));
+        assert_eq!(study.total_trials(), Some(6));
+        assert!((study.progress() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn all_failed_study_completes_with_nan_best() {
+        let bus = Arc::new(EventBus::new(256));
+        let mut rx = bus.subscribe();
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "doomed",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 3,
+                seed: Some(1),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        let executor = FnTrialExecutor(
+            |_p: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
+                Err(SomaError::Other("cuda out of memory".into()))
+            },
+        );
+        let mut sampler = RandomSampler::new(3, Some(1));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+
+        // Error strings preserved, ids contiguous, best is empty/NaN.
+        for (i, t) in study.trials.iter().enumerate() {
+            assert_eq!(t.id, format!("trial_{i:04}"));
+            match &t.state {
+                TrialState::Failed { error } => assert!(error.contains("cuda out of memory")),
+                other => panic!("expected Failed, got {other:?}"),
+            }
+        }
+        assert!(study.best_trial().is_none());
+
+        let mut failed_events = 0;
+        let mut completed_nan = false;
+        while let Ok(e) = rx.try_recv() {
+            match e {
+                Event::TrialFailed { error, .. } => {
+                    assert!(error.contains("cuda out of memory"));
+                    failed_events += 1;
+                }
+                Event::StudyCompleted {
+                    best_trial_id,
+                    best_value,
+                    ..
+                } => {
+                    assert!(best_trial_id.is_empty());
+                    assert!(best_value.is_nan());
+                    completed_nan = true;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(failed_events, 3);
+        assert!(completed_nan);
+    }
+
+    #[test]
+    fn best_updated_fires_once_when_trials_worsen() {
+        use std::sync::atomic::AtomicUsize;
+        let bus = Arc::new(EventBus::new(256));
+        let mut rx = bus.subscribe();
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "worsening",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 3,
+                seed: Some(1),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        let counter = AtomicUsize::new(0);
+        let executor = FnTrialExecutor(
+            move |_p: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
+                let i = counter.fetch_add(1, Ordering::SeqCst);
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "f1".into(),
+                    value: 0.9 - i as f64 * 0.2, // 0.9, 0.7, 0.5
+                    step: 0,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        );
+        let mut sampler = RandomSampler::new(3, Some(1));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+
+        let mut best_events = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            if let Event::BestUpdated { value, .. } = e {
+                best_events.push(value);
+            }
+        }
+        assert_eq!(best_events, vec![0.9], "only the first trial is ever best");
+    }
+
+    /// CONTRACT (pinned): metrics reported via ctx AND returned in
+    /// Completed(final_metrics) are BOTH kept — the same name appears
+    /// twice and the TrialMetric event fires twice. De-dup is the
+    /// executor's responsibility.
+    #[test]
+    fn reported_and_final_metrics_are_concatenated_not_deduped() {
+        let bus = Arc::new(EventBus::new(256));
+        let mut rx = bus.subscribe();
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "dup",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 1,
+                seed: Some(1),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        let executor = FnTrialExecutor(
+            |_p: &HashMap<String, serde_json::Value>, ctx: &TrialContext| {
+                ctx.report("f1", 0.4, 0);
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "f1".into(),
+                    value: 0.6,
+                    step: 1,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        );
+        let mut sampler = RandomSampler::new(1, Some(1));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+
+        let f1_records: Vec<f64> = study.trials[0]
+            .metrics
+            .iter()
+            .filter(|m| m.name == "f1")
+            .map(|m| m.value)
+            .collect();
+        assert_eq!(f1_records, vec![0.4, 0.6]);
+
+        let mut metric_events = 0;
+        while let Ok(e) = rx.try_recv() {
+            if matches!(e, Event::TrialMetric { .. }) {
+                metric_events += 1;
+            }
+        }
+        assert_eq!(metric_events, 2);
+    }
+
+    #[test]
+    fn sampler_feedback_values_are_exact_and_skip_non_completed() {
+        let bus = Arc::new(EventBus::new(256));
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "feedback-exact",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 3,
+                seed: Some(1),
+            },
+            vec![Objective {
+                metric: "loss".into(),
+                direction: Direction::Minimize,
+            }],
+        );
+        use std::sync::atomic::AtomicUsize;
+        let counter = AtomicUsize::new(0);
+        let executor = FnTrialExecutor(
+            move |_p: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| match counter
+                .fetch_add(1, Ordering::SeqCst)
+            {
+                0 => Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "loss".into(),
+                    value: 0.25,
+                    step: 0,
+                    timestamp: Utc::now(),
+                }])),
+                1 => Ok(TrialOutcome::Pruned {
+                    step: 1,
+                    reason: "bad".into(),
+                }),
+                _ => Err(SomaError::Other("boom".into())),
+            },
+        );
+        let mut spy = SpySampler {
+            inner: RandomSampler::new(3, Some(1)),
+            recorded: Vec::new(),
+        };
+        runner.run(&mut study, &mut spy, &executor).unwrap();
+
+        // Only the completed trial fed back, negated for Minimize.
+        assert_eq!(spy.recorded, vec![-0.25]);
+    }
+
+    #[test]
+    fn timestamps_backfilled_and_monotonic() {
+        let bus = Arc::new(EventBus::new(256));
+        let tracker = Arc::new(SpyTracker::default());
+        let runner = StudyRunner::new(bus).with_tracker(tracker);
+        let mut study = Study::new(
+            "ts",
+            one_dim_space(),
+            SearchStrategy::Random {
+                n_trials: 2,
+                seed: Some(1),
+            },
+            vec![Objective {
+                metric: "f1".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        study.created_at = None; // e.g. loaded from a pre-timestamp JSON
+        let mut sampler = RandomSampler::new(2, Some(1));
+        runner
+            .run(&mut study, &mut sampler, &make_simple_executor())
+            .unwrap();
+
+        assert!(study.created_at.is_some(), "backfilled");
+        assert!(study.updated_at.is_some());
+        for t in &study.trials {
+            assert!(t.started_at.is_some());
+            assert!(t.finished_at.unwrap() >= t.started_at.unwrap());
+        }
+    }
+
+    #[test]
+    fn bayesian_through_runner_improves_over_time() {
+        // End-to-end proof that the ask/tell wiring feeds TPE: on a
+        // unimodal objective the later trials must beat the early ones.
+        // Deterministic (fixed seed) — not statistical.
+        let bus = Arc::new(EventBus::new(1024));
+        let runner = StudyRunner::new(bus);
+        let mut study = Study::new(
+            "tpe",
+            one_dim_space(),
+            SearchStrategy::Bayesian {
+                n_trials: 30,
+                n_startup: 8,
+                seed: Some(42),
+            },
+            vec![Objective {
+                metric: "score".into(),
+                direction: Direction::Maximize,
+            }],
+        );
+        let executor = FnTrialExecutor(
+            |params: &HashMap<String, serde_json::Value>, _ctx: &TrialContext| {
+                let x = params["x"].as_f64().unwrap();
+                Ok(TrialOutcome::Completed(vec![MetricRecord {
+                    name: "score".into(),
+                    value: 1.0 - (x - 0.7).abs(), // peak at x = 0.7
+                    step: 0,
+                    timestamp: Utc::now(),
+                }]))
+            },
+        );
+        let mut sampler = BayesianSampler::new(30, 8, Some(42));
+        runner.run(&mut study, &mut sampler, &executor).unwrap();
+
+        let scores: Vec<f64> = study
+            .trials
+            .iter()
+            .map(|t| t.last_metric("score").unwrap())
+            .collect();
+        let head: f64 = scores[..8].iter().sum::<f64>() / 8.0; // startup = random
+        let tail: f64 = scores[20..].iter().sum::<f64>() / 10.0;
+        assert!(
+            tail > head,
+            "TPE with feedback must beat its random startup: head={head:.3} tail={tail:.3}"
+        );
     }
 
     #[test]

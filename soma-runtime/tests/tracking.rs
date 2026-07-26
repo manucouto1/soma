@@ -116,6 +116,128 @@ fn sink_tees_metrics() {
 }
 
 #[test]
+fn sink_flush_cadence_makes_lines_durable_without_manual_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let events_path = dir.path().join("events.jsonl");
+    let sink = JsonlEventSink::create(&events_path, None, 5).unwrap();
+
+    // Exactly flush_every events: the cadence flush must have fired.
+    for i in 0..5 {
+        sink.record(&step_event("r", i));
+    }
+    // No manual flush, sink still alive.
+    assert_eq!(read_lines(&events_path).len(), 5);
+
+    // flush_every=0 is clamped to 1: every record is durable.
+    let path2 = dir.path().join("events2.jsonl");
+    let sink2 = JsonlEventSink::create(&path2, None, 0).unwrap();
+    sink2.record(&step_event("r", 0));
+    assert_eq!(read_lines(&path2).len(), 1);
+    drop((sink, sink2));
+}
+
+#[test]
+fn sink_flushes_on_drop() {
+    let dir = tempfile::tempdir().unwrap();
+    let events_path = dir.path().join("events.jsonl");
+    {
+        let sink = JsonlEventSink::create(&events_path, None, 100).unwrap();
+        for i in 0..3 {
+            sink.record(&step_event("r", i));
+        }
+        // 3 < flush_every: nothing guaranteed on disk yet.
+    } // drop flushes
+    assert_eq!(read_lines(&events_path).len(), 3);
+}
+
+#[test]
+fn sink_append_continues_without_truncating_and_create_truncates() {
+    let dir = tempfile::tempdir().unwrap();
+    let events_path = dir.path().join("events.jsonl");
+
+    let sink = JsonlEventSink::create(&events_path, None, 1).unwrap();
+    sink.record(&step_event("r", 0));
+    drop(sink);
+
+    let appended = JsonlEventSink::append(&events_path, None, 1, 5).unwrap();
+    assert_eq!(appended.next_seq(), 5);
+    appended.record(&step_event("r", 1));
+    drop(appended);
+    let lines = read_lines(&events_path);
+    assert_eq!(lines.len(), 2, "append must not truncate");
+    assert_eq!(lines[1]["seq"], 5);
+
+    let fresh = JsonlEventSink::create(&events_path, None, 1).unwrap();
+    assert_eq!(fresh.next_seq(), 0);
+    drop(fresh);
+    assert_eq!(read_lines(&events_path).len(), 0, "create truncates");
+}
+
+#[test]
+fn sink_metric_tee_lines_are_typed_and_complete() {
+    #[derive(serde::Deserialize)]
+    struct MetricLine {
+        ts: chrono::DateTime<chrono::Utc>,
+        name: String,
+        value: f64,
+        step: usize,
+        trial_id: Option<String>,
+        node_id: Option<String>,
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let events_path = dir.path().join("events.jsonl");
+    let metrics_path = dir.path().join("metrics.jsonl");
+    let sink = JsonlEventSink::create(&events_path, Some(&metrics_path), 1).unwrap();
+
+    sink.record(&Event::MetricReported {
+        run_id: "r".into(),
+        metric: metric("val_f1", 0.9, 4),
+        node_id: Some("encoder".into()),
+        trial_id: Some("trial_0002".into()),
+    });
+    sink.record(&Event::TrialMetric {
+        study_id: "s".into(),
+        trial_id: "trial_0003".into(),
+        metric: metric("loss", 0.1, 9),
+    });
+    sink.flush();
+
+    let raw = std::fs::read_to_string(&metrics_path).unwrap();
+    let lines: Vec<MetricLine> = raw
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("typed metric line"))
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].name, "val_f1");
+    assert_eq!(lines[0].trial_id.as_deref(), Some("trial_0002"));
+    assert_eq!(lines[0].node_id.as_deref(), Some("encoder"));
+    assert_eq!(lines[1].trial_id.as_deref(), Some("trial_0003"));
+    assert!(lines[1].node_id.is_none(), "TrialMetric has null node_id");
+    assert_eq!(lines[1].step, 9);
+    assert!(lines[0].ts.timestamp() > 0);
+    assert!(lines[1].value < 1.0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sink_swallows_io_errors_without_panicking() {
+    // /dev/full accepts opens but fails every write with ENOSPC — the
+    // sink's headline contract is that tracking I/O failures must
+    // never take down the training run.
+    let sink = JsonlEventSink::append(std::path::Path::new("/dev/full"), None, 1, 0).unwrap();
+    for i in 0..10 {
+        sink.record(&step_event("r", i)); // must not panic
+    }
+    sink.flush(); // must not panic
+    assert_eq!(
+        sink.next_seq(),
+        10,
+        "sequence advances even when writes fail"
+    );
+}
+
+#[test]
 fn local_tracker_creates_valid_run_dir() {
     let root = tempfile::tempdir().unwrap();
     let tracker = LocalTracker::create(root.path(), RunKind::Train, "baseline").unwrap();
@@ -289,6 +411,157 @@ fn graph_fit_events_reach_the_run_dir() {
 }
 
 #[test]
+fn open_repairs_torn_trailing_line() {
+    // A crash mid-write leaves a torn last line in events.jsonl. On
+    // reopen the tracker must not concatenate the next event onto it:
+    // every line must parse and seq must stay contiguous.
+    let root = tempfile::tempdir().unwrap();
+    let run_dir = {
+        let tracker = LocalTracker::create(root.path(), RunKind::Train, "torn").unwrap();
+        for i in 0..3 {
+            tracker.sink().record(&step_event(tracker.run_id(), i));
+        }
+        tracker.sink().flush();
+        tracker.run_dir().to_path_buf()
+    };
+    // Simulate the crash: append half a line with no newline.
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(run_dir.join("events.jsonl"))
+        .unwrap();
+    write!(f, "{{\"seq\":3,\"ts\":\"2026-").unwrap();
+    drop(f);
+
+    let tracker = LocalTracker::open(&run_dir).unwrap();
+    tracker.sink().record(&step_event(tracker.run_id(), 99));
+    tracker.sink().flush();
+
+    let lines = read_lines(&run_dir.join("events.jsonl"));
+    let seqs: Vec<u64> = lines.iter().map(|l| l["seq"].as_u64().unwrap()).collect();
+    assert_eq!(seqs, vec![0, 1, 2, 3], "torn tail dropped, seq contiguous");
+}
+
+#[test]
+fn open_without_events_file_starts_at_zero() {
+    let root = tempfile::tempdir().unwrap();
+    let run_dir = {
+        let tracker = LocalTracker::create(root.path(), RunKind::Train, "bare").unwrap();
+        tracker.run_dir().to_path_buf()
+    };
+    std::fs::remove_file(run_dir.join("events.jsonl")).unwrap();
+
+    let tracker = LocalTracker::open(&run_dir).unwrap();
+    tracker.sink().record(&step_event(tracker.run_id(), 0));
+    tracker.sink().flush();
+    let lines = read_lines(&run_dir.join("events.jsonl"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["seq"], 0);
+}
+
+#[test]
+fn open_with_corrupt_manifest_errors_without_side_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let run_dir = {
+        let tracker = LocalTracker::create(root.path(), RunKind::Train, "c").unwrap();
+        tracker.finalize(RunState::Completed).unwrap();
+        tracker.run_dir().to_path_buf()
+    };
+    std::fs::write(run_dir.join("manifest.json"), "{broken").unwrap();
+
+    assert!(LocalTracker::open(&run_dir).is_err());
+    // The failed open must not have flipped the status back to running.
+    assert_eq!(load_status(&run_dir).unwrap().state, RunState::Completed);
+}
+
+#[test]
+fn save_manifest_roundtrips_updates() {
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Train, "m").unwrap();
+    let mut manifest = load_manifest(tracker.run_dir()).unwrap();
+    manifest.tags = vec!["updated".into()];
+    manifest.python_version = Some("3.13.0".into());
+    tracker.save_manifest(&manifest).unwrap();
+
+    let back = load_manifest(tracker.run_dir()).unwrap();
+    assert_eq!(back.tags, vec!["updated"]);
+    assert_eq!(back.python_version.as_deref(), Some("3.13.0"));
+    assert!(!tracker.run_dir().join("manifest.json.tmp").exists());
+}
+
+#[test]
+fn run_id_prefixes_and_study_path_by_kind() {
+    let root = tempfile::tempdir().unwrap();
+    let trial = LocalTracker::create(root.path(), RunKind::Trial, "t").unwrap();
+    assert!(trial.run_id().starts_with("trial_"));
+
+    let train = LocalTracker::create(root.path(), RunKind::Train, "t").unwrap();
+    assert!(train.run_id().starts_with("run_"));
+    assert!(load_manifest(train.run_dir()).unwrap().study_path.is_none());
+
+    let study = LocalTracker::create(root.path(), RunKind::Study, "s").unwrap();
+    assert_eq!(
+        load_manifest(study.run_dir())
+            .unwrap()
+            .study_path
+            .as_deref(),
+        Some("study.json")
+    );
+
+    // Ids from consecutive calls in the same second still differ.
+    let a = LocalTracker::create(root.path(), RunKind::Train, "a").unwrap();
+    let b = LocalTracker::create(root.path(), RunKind::Train, "b").unwrap();
+    assert_ne!(a.run_id(), b.run_id());
+}
+
+#[test]
+fn save_artifact_overwrites_and_roundtrips_binary() {
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Train, "a").unwrap();
+    let bytes: Vec<u8> = (0u8..=255).collect();
+    tracker.save_artifact("blob.bin", &bytes).unwrap();
+    tracker.save_artifact("blob.bin", &bytes[..16]).unwrap(); // overwrite
+    assert_eq!(
+        std::fs::read(tracker.run_dir().join("blob.bin")).unwrap(),
+        &bytes[..16]
+    );
+}
+
+#[test]
+fn collect_git_info_inside_and_outside_a_repo() {
+    use somatize_runtime::collect_git_info;
+
+    // This test file lives inside the soma-git repository.
+    let inside = collect_git_info(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+    let sha = inside.sha.expect("sha inside a repo");
+    assert_eq!(sha.len(), 40);
+    assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(inside.branch.is_some());
+    assert!(inside.dirty.is_some());
+
+    // A tempdir is outside any repository: everything is None.
+    let dir = tempfile::tempdir().unwrap();
+    let outside = collect_git_info(dir.path());
+    assert!(outside.sha.is_none());
+    assert!(outside.branch.is_none());
+    assert!(outside.dirty.is_none());
+}
+
+#[test]
+fn heartbeat_on_finalized_run_keeps_terminal_state() {
+    // CONTRACT: heartbeat only refreshes timestamps; it never
+    // resurrects a finished run.
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Train, "h").unwrap();
+    tracker.finalize(RunState::Completed).unwrap();
+    tracker.heartbeat().unwrap();
+    assert_eq!(
+        load_status(tracker.run_dir()).unwrap().state,
+        RunState::Completed
+    );
+}
+
+#[test]
 fn heartbeat_updates_status() {
     let root = tempfile::tempdir().unwrap();
     let tracker = LocalTracker::create(root.path(), RunKind::Train, "hb").unwrap();
@@ -297,5 +570,6 @@ fn heartbeat_updates_status() {
     tracker.heartbeat().unwrap();
     let after = load_status(tracker.run_dir()).unwrap();
     assert!(after.heartbeat_at.unwrap() > before.heartbeat_at.unwrap());
+    assert!(after.updated_at > before.updated_at);
     assert_eq!(after.state, RunState::Running);
 }
