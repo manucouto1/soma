@@ -23,7 +23,7 @@ dependencies = ["numpy>=1.20", "cloudpickle>=3.0"]
 somatize-worker = "soma.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "numpy>=1.20"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "numpy>=1.20"]
 
 [project.urls]
 Repository = "https://github.com/manucouto1/soma"
@@ -33,3 +33,14 @@ Documentation = "https://manucouto1.github.io/soma/"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "soma._soma"
+
+[tool.pytest.ini_options]
+# Slow tests (subprocess crash-sim, statistical TPE validation) are
+# opt-in: run them with `pytest -m slow`.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: expensive robustness tests (crash-sim subprocess, statistical TPE)",
+]
+
+[tool.coverage.run]
+source = ["python/soma"]
