@@ -15,6 +15,7 @@ somatize-core = { workspace = true, features = ["s3"] }
 somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
 somatize-worker = { workspace = true }
+somatize-memory = { workspace = true }
 pyo3 = { workspace = true, features = ["extension-module"] }
 tokio = { workspace = true }
 hostname = "0.4"

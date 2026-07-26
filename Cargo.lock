@@ -2706,6 +2706,7 @@ dependencies = [
  "serde_json",
  "somatize-compiler",
  "somatize-core",
+ "somatize-memory",
  "somatize-runtime",
  "somatize-worker",
  "tokio",
@@ -2821,7 +2822,9 @@ dependencies = [
  "serde",
  "serde_json",
  "somatize-core",
+ "tempfile",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

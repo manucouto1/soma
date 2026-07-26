@@ -33,6 +33,8 @@ from soma import _study  # noqa: E402, F401
 # Install track_run on Graph. Import for side-effects.
 from soma import _tracking  # noqa: E402, F401
 
+from soma._experiments import experiments  # noqa: E402
+
 # Install gradient_audit on Graph (depends on _orchestrator). Import
 # for side-effects. Re-export the user-facing types.
 try:
@@ -64,6 +66,7 @@ __all__ = [
     "Chain",
     "Fork",
     "search",
+    "experiments",
     "__version__",
     "Audit",
     "AuditReport",

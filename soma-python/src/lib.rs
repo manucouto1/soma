@@ -707,6 +707,40 @@ fn parse_pruning(pruning: &Bound<'_, PyAny>) -> PyResult<PruningStrategy> {
     }
 }
 
+/// Append a completed study's summary as an ExperimentRecord to
+/// `<root>/experiments.jsonl`. Best-effort: tracking must never fail
+/// the training path.
+fn record_study_experiment(root: &std::path::Path, study: &Study, run_id: &str) {
+    use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase};
+
+    let Some(best) = study.best_trial() else {
+        return;
+    };
+    let mut metrics: HashMap<String, f64> = HashMap::new();
+    for m in &best.metrics {
+        metrics.insert(m.name.clone(), m.value);
+    }
+    let total_ms: u64 = study.trials.iter().filter_map(|t| t.duration_ms).sum();
+    let mut tags = study.tags.clone();
+    tags.push(format!("run:{run_id}"));
+
+    let record = ExperimentRecord::new(study.id.clone(), study.name.clone())
+        .with_pipeline(format!("study over {} trials", study.trials.len()))
+        .with_params(best.params.clone())
+        .with_metrics(metrics)
+        .with_duration(std::time::Duration::from_millis(total_ms))
+        .with_tags(tags);
+
+    match FileKnowledgeBase::open(root.join("experiments.jsonl")) {
+        Ok(mut kb) => {
+            if let Err(e) = kb.record(record) {
+                eprintln!("soma: failed to record experiment: {e}");
+            }
+        }
+        Err(e) => eprintln!("soma: failed to open experiments.jsonl: {e}"),
+    }
+}
+
 fn trial_to_py(py: Python<'_>, trial: &somatize_core::study::Trial) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("id", &trial.id)?;
@@ -1017,6 +1051,9 @@ impl PyStudy {
                 RunState::Failed
             };
             let _ = t.finalize(state);
+            if result.is_ok() {
+                record_study_experiment(&self.root, &self.study, t.run_id());
+            }
         }
         result.map_err(soma_err_to_py)
     }
@@ -2330,6 +2367,7 @@ impl PyGraph {
             bus: self.event_bus.clone(),
             sink,
             finished: std::sync::atomic::AtomicBool::new(false),
+            summary: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -2825,6 +2863,9 @@ struct PyRun {
     bus: Arc<EventBus>,
     sink: Arc<dyn somatize_core::tracking::EventSink>,
     finished: std::sync::atomic::AtomicBool,
+    /// W&B-style summary: last logged value per metric name, written
+    /// into the experiments journal on finish.
+    summary: std::sync::Mutex<HashMap<String, f64>>,
 }
 
 #[pymethods]
@@ -2843,6 +2884,9 @@ impl PyRun {
     /// Log a scalar metric (optionally scoped to a node).
     #[pyo3(signature = (name, value, step=None, node=None))]
     fn log(&self, name: String, value: f64, step: Option<usize>, node: Option<String>) {
+        if let Ok(mut summary) = self.summary.lock() {
+            summary.insert(name.clone(), value);
+        }
         self.bus.emit(somatize_core::event::Event::MetricReported {
             run_id: self.tracker.run_id().to_string(),
             metric: MetricRecord {
@@ -2883,7 +2927,8 @@ impl PyRun {
     }
 
     /// Finalize the run: flush logs, set terminal status, detach the
-    /// sink from the graph's bus. Idempotent.
+    /// sink from the graph's bus, and append the run's summary to the
+    /// experiments journal. Idempotent.
     #[pyo3(signature = (status="completed".to_string()))]
     fn finish(&self, status: String) -> PyResult<()> {
         if self
@@ -2897,7 +2942,43 @@ impl PyRun {
             "failed" => RunState::Failed,
             _ => RunState::Completed,
         };
-        self.tracker.finalize(state).map_err(soma_err_to_py)
+        self.tracker.finalize(state).map_err(soma_err_to_py)?;
+        if matches!(state, RunState::Completed) {
+            self.record_experiment();
+        }
+        Ok(())
+    }
+}
+
+impl PyRun {
+    /// Append this run's summary to `<root>/experiments.jsonl`.
+    /// Best-effort — never fails the training path.
+    fn record_experiment(&self) {
+        use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase};
+
+        let run_dir = self.tracker.run_dir();
+        let Some(root) = run_dir.parent().and_then(|p| p.parent()) else {
+            return;
+        };
+        let (name, mut tags) = match load_manifest(run_dir) {
+            Ok(m) => (m.name, m.tags),
+            Err(_) => (self.tracker.run_id().to_string(), Vec::new()),
+        };
+        tags.push(format!("run:{}", self.tracker.run_id()));
+        let metrics = self.summary.lock().map(|s| s.clone()).unwrap_or_default();
+
+        let record = ExperimentRecord::new(self.tracker.run_id().to_string(), name)
+            .with_pipeline("tracked run")
+            .with_metrics(metrics)
+            .with_tags(tags);
+        match FileKnowledgeBase::open(root.join("experiments.jsonl")) {
+            Ok(mut kb) => {
+                if let Err(e) = kb.record(record) {
+                    eprintln!("soma: failed to record experiment: {e}");
+                }
+            }
+            Err(e) => eprintln!("soma: failed to open experiments.jsonl: {e}"),
+        }
     }
 }
 

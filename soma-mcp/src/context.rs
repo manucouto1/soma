@@ -2,7 +2,7 @@
 
 use crate::protocol::ToolCallResult;
 use serde_json::json;
-use somatize_memory::{ExperimentRecord, KnowledgeBase, MemoryKnowledgeBase};
+use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase, MemoryKnowledgeBase};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -15,11 +15,37 @@ pub struct SomaContext {
 }
 
 impl SomaContext {
+    /// Create a context with a persistent knowledge base when one is
+    /// available: `SOMA_KB_PATH` if set, else the project's
+    /// `.soma/experiments.jsonl` when a `.soma/` directory exists.
+    /// Falls back to the in-memory KB otherwise (records are lost on
+    /// server exit).
     pub fn new(project_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            project_dir: project_dir.into(),
-            kb: Box::new(MemoryKnowledgeBase::new()),
+        let project_dir = project_dir.into();
+        let kb: Box<dyn KnowledgeBase> = match Self::kb_path(&project_dir) {
+            Some(path) => match FileKnowledgeBase::open(&path) {
+                Ok(kb) => Box::new(kb),
+                Err(e) => {
+                    eprintln!(
+                        "soma-mcp: failed to open knowledge base at {} ({e}); using in-memory",
+                        path.display()
+                    );
+                    Box::new(MemoryKnowledgeBase::new())
+                }
+            },
+            None => Box::new(MemoryKnowledgeBase::new()),
+        };
+        Self { project_dir, kb }
+    }
+
+    fn kb_path(project_dir: &Path) -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("SOMA_KB_PATH") {
+            return Some(PathBuf::from(path));
         }
+        let soma_dir = project_dir.join(".soma");
+        soma_dir
+            .is_dir()
+            .then(|| soma_dir.join("experiments.jsonl"))
     }
 
     // ═══════════════════════════════════════
