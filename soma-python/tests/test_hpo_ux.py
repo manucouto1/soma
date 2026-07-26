@@ -233,6 +233,7 @@ def test_load_and_resume_without_duplicates(tmp_path):
 
     resumed = Study.load(str(run_dir))
     assert resumed.n_trials == 3
+    assert resumed.progress == 0.5  # planned_trials survives save/load (grid)
     resumed.run(lambda trial: {"f1": trial["x"]}, resume=True)
 
     assert resumed.n_trials == 6

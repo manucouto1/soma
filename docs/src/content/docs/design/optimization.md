@@ -146,31 +146,32 @@ pub trait Searchable {
 
 ## Graph Search Space Aggregation
 
-The graph automatically collects all search spaces:
+Aggregation happens **Python-side**, not in `soma-core`: a Rust `Node`
+stores only the filter *name* (`NodeKind::Filter { filter_name }`) —
+live filter instances exist in Python (`graph.filters()`) or in the
+runtime's `FilterLibrary`, so the core graph cannot reach their search
+spaces. `graph.search_space()` (installed by `soma/_study.py`) collects
+every filter's `search()` descriptors and prefixes dimension names with
+the node id to avoid collisions; `graph.apply_params()` writes a
+sampled configuration back onto the live instances:
 
-```rust
-impl Graph {
-    pub fn search_space(&self) -> SearchSpace {
-        let mut combined = SearchSpace::new();
-        for node in &self.nodes {
-            let space = node.filter.search_space();
-            // Prefix with filter label to avoid collisions:
-            // "MyScaler.scale" vs "MyClassifier.scale"
-            combined.merge_with_prefix(&node.label, space);
-        }
-        combined
-    }
-}
+```python
+g = Graph.somatize(MyScaler(scale=2.0) >> MySVM(kernel="rbf", C=1.0))
+
+g.search_space()
+#  scaler.scale: Float[0.1, 10.0] log
+#  svm.kernel:   Categorical[linear, rbf, poly]
+#  svm.C:        Float[0.001, 100.0] log
+
+g.apply_params({"svm.C": 3.2, "scaler.scale": 0.7})
+
+study = g.study("tune", strategy="grid", n_trials=4,
+                objectives=[("f1", "maximize")])
 ```
 
-```
-Graph.somatize(MyScaler(scale=2.0) >> MySVM(kernel=Rbf, C=1.0))
-
-search_space():
-  MyScaler.scale:  Float[0.1, 10.0] log
-  MySVM.kernel:    Categorical[Linear, Rbf, Polynomial]
-  MySVM.C:         Float[0.001, 100.0] log
-```
+(Rust-side, `SearchSpace::merge_with_prefix` exists for the same
+purpose once `FilterLibrary`-level aggregation lands; the `Searchable`
+trait below is derived today but not yet invoked by any runner.)
 
 ## Search Strategies
 

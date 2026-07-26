@@ -258,18 +258,64 @@ study = Study(
     seed=42,
 )
 
-def executor(params):
-    """Execute one trial. Returns dict of metric_name -> value."""
-    g = Graph.somatize(Scaler() >> Model(lr=params["lr"]))
+def train(trial):
+    """One trial. `trial` behaves like a params mapping and adds
+    report()/should_prune() for pruning-aware loops."""
+    g = Graph.somatize(Scaler() >> Model(lr=trial["lr"]))
     g.fit(train_data)
-    outputs = g.forward(test_data)
-    return {"f1": compute_f1(outputs)}
+    for epoch in range(20):
+        f1 = evaluate(g)
+        if trial.report("f1", f1, step=epoch):
+            return None                    # pruned by the median rule
+    return {"f1": f1}
 
-study.run(executor)
+study.run(train, on_event=lambda e: print(e["event_type"]))
 print(study.best_trial)     # {"id": "...", "params": {...}, "metrics": {...}}
-print(study.n_trials)       # 50
-print(study.progress)       # 1.0
+print(study.trials)         # every trial as a dict
+print(study.run_dir)        # .soma/runs/study_.../  (tracking=True default)
 ```
+
+Additional constructor keywords: `objective=` (a Python callable over
+the final metrics dict, recorded as metric `"score"`), `direction=`,
+`pruning=("median", warmup)` or `("percentile", pct, warmup)`,
+`tracking=`, `root=".soma"`, `tags=[...]`. Legacy `fn(params) -> dict`
+executors keep working (the trial handle supports `params.get(...)` /
+`params["x"]`), and a bare-float return becomes the `"score"` metric.
+
+Studies persist to their run directory after every trial and can be
+followed or continued from anywhere:
+
+```python
+study = soma.Study.load(".soma/runs/study_20260726T101502_a3f1")
+print(study.progress, len(study.trials))
+study.run(train, resume=True)   # continues at trial N, no repeats
+```
+
+Graph-level search spaces come from `search()` descriptors on filters:
+
+```python
+space = g.search_space()        # dims named "<node_id>.<param>"
+g.apply_params(trial.params)    # write a sampled config onto filters
+study = g.study("tune", strategy="grid", n_trials=4,
+                objectives=[("f1", "maximize")])
+```
+
+### Tracked runs
+
+```python
+with g.track_run("baseline", tags=["mos"]) as run:
+    with g.gradient_audit(channels=True) as audit:
+        ...  # native training loop
+        run.log("val_f1", 0.85, step=epoch)
+print(soma.experiments())       # journal of completed runs/studies
+```
+
+`track_run` writes `.soma/runs/<run_id>/` — manifest, heartbeat status,
+graph topology, lossless `events.jsonl`/`metrics.jsonl`, and (with the
+audit) `diagnostics/` including per-channel safetensors snapshots. See
+the [Experiment Tracking](/design/tracking/) design page for the full
+layout, and `ChannelConfig` for dead/ignored-channel and leakage
+detection knobs.
 
 ### Lab
 

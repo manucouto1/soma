@@ -183,6 +183,9 @@ impl StudyRunner {
     ) -> Result<()> {
         sampler.prepare(&study.search_space);
         let total = sampler.n_trials().unwrap_or(0);
+        if total > 0 {
+            study.planned_trials = Some(total);
+        }
         let direction = study.primary_direction().unwrap_or(Direction::Maximize);
         if study.created_at.is_none() {
             study.created_at = Some(Utc::now());

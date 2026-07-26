@@ -254,6 +254,10 @@ pub struct Study {
     pub tags: Vec<String>,
     #[serde(default)]
     pub git_sha: Option<String>,
+    /// Total trials resolved by the sampler at run start (grid sizes
+    /// are unknown until the search space is prepared).
+    #[serde(default)]
+    pub planned_trials: Option<usize>,
 }
 
 impl Study {
@@ -277,6 +281,7 @@ impl Study {
             updated_at: None,
             tags: Vec::new(),
             git_sha: None,
+            planned_trials: None,
         }
     }
 
@@ -339,9 +344,10 @@ impl Study {
         self.best_trial().and_then(|t| self.objective_value(t))
     }
 
-    /// Number of total planned trials (if known).
+    /// Number of total planned trials (if known). Prefers the count
+    /// the sampler resolved at run start (covers grid strategies).
     pub fn total_trials(&self) -> Option<usize> {
-        self.strategy.n_trials()
+        self.planned_trials.or_else(|| self.strategy.n_trials())
     }
 
     /// Fraction of trials completed.
