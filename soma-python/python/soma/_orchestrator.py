@@ -170,12 +170,16 @@ def _forward(self: _RustGraph, x: Any, *args, **kwargs):
     The training branch ignores the ``state`` argument for diff filters
     because each holds its own params on ``self._module``.
     """
-    # Walk Python-side whenever we have live filter instances (the common
-    # case for graphs built via g.node()). Only pure-Rust graphs — e.g.
-    # ones loaded entirely from pickled blobs with no live instance —
-    # fall through to the Rust forward path.
+    # Walk Python-side only for mixed/training graphs: any live filter
+    # that is differentiable (``build_module``) or already materialized
+    # (``_module``). Pure-legacy graphs — including worker-distributed
+    # ones — must fall through to the Rust forward path, which owns the
+    # fitted check and remote dispatch.
     pairs = list(self.filters())
-    if not pairs:
+    if not pairs or not any(
+        getattr(f, "_module", None) is not None or hasattr(f, "build_module")
+        for _, f in pairs
+    ):
         return _RUST_FORWARD(self, x, *args, **kwargs)
 
     target_device = self.py_state.get("device")
