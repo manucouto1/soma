@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "feature/**"]
   pull_request:
     branches: [main, develop]
 
@@ -62,7 +62,7 @@ jobs:
         run: cargo test --workspace
 
       - name: cargo test (with chronos feature)
-        run: cargo test -p soma-memory --features chronos
+        run: cargo test -p somatize-memory --features chronos
 
   test-python:
     name: Python Tests
@@ -82,17 +82,23 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin pytest numpy
+          pip install maturin pytest pytest-cov numpy cloudpickle safetensors pandas
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Build and install soma
         run: |
           source .venv/bin/activate
           cd soma-python && maturin develop
 
-      - name: Run Python tests
+      - name: Run Python tests (with coverage)
         run: |
           source .venv/bin/activate
-          cd soma-python && pytest tests/ -v
+          cd soma-python && pytest tests/ -v --cov=soma --cov-report=term
+
+      - name: Run slow robustness tests
+        run: |
+          source .venv/bin/activate
+          cd soma-python && pytest tests/ -v -m slow
 
   doc:
     name: Documentation
@@ -107,3 +113,29 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+  coverage-rust:
+    name: Rust Coverage (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --workspace --no-fail-fast --summary-only

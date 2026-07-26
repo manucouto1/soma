@@ -55,10 +55,15 @@ docs/           → 24 Starlight pages
 ## Tests
 
 ```bash
-# 340+ total: 342 Rust + 17 Python
+# 750+ total: 522 Rust + 231 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
-cd soma-python && maturin develop && pytest tests/  # 17 Python tests
-cargo test -p soma-memory --features chronos        # +8 ChronosVector tests
+cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
+cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
+cargo test -p somatize-memory --features chronos    # +ChronosVector tests
+
+# Coverage (informational, no gate)
+cd soma-python && pytest tests/ --cov=soma --cov-report=term-missing
+cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 ```
 
 ## Conventions
