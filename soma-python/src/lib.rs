@@ -3689,6 +3689,24 @@ fn run_to_mermaid(dir: String, overlay: bool) -> PyResult<String> {
     }
 }
 
+/// Render a serialized soma-core Graph (the `graph.json` schema) to
+/// mermaid, with an optional overlay dict (the `RunView.overlay()`
+/// shape). Backs inner-architecture rendering (`diagnostics/modules/`).
+#[pyfunction]
+#[pyo3(signature = (graph_json, overlay=None))]
+fn graph_json_to_mermaid(
+    py: Python<'_>,
+    graph_json: &str,
+    overlay: Option<&Bound<'_, PyDict>>,
+) -> PyResult<String> {
+    let graph: somatize_core::graph::Graph = serde_json::from_str(graph_json)
+        .map_err(|e| PyRuntimeError::new_err(format!("invalid graph JSON: {e}")))?;
+    match overlay {
+        None => Ok(graph.to_mermaid()),
+        Some(ov) => Ok(graph.to_mermaid_with(&py_overlay(py, ov)?)),
+    }
+}
+
 /// Graphviz DOT of the run's graph, annotated with its overlay.
 #[pyfunction]
 #[pyo3(signature = (dir, overlay=true))]
@@ -3731,6 +3749,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_overlay_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_graphviz, m)?)?;
+    m.add_function(wrap_pyfunction!(graph_json_to_mermaid, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

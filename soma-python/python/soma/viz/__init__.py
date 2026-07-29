@@ -35,11 +35,13 @@ from soma.viz._health import (
     plot_channel_evolution,
     plot_channels,
     plot_health,
+    plot_module_flow,
 )
 
 __all__ = [
     "plot_health",
     "plot_audit",
+    "plot_module_flow",
     "plot_channels",
     "plot_channel_evolution",
     "plot_optimization_history",
@@ -80,6 +82,7 @@ def _install() -> None:
     RunView.metrics_dataframe = metrics_dataframe
     RunView.plot_health = plot_health
     RunView.plot_audit = plot_audit
+    RunView.plot_module_flow = plot_module_flow
     RunView.plot_channels = plot_channels
     RunView.plot_channel_evolution = plot_channel_evolution
     RunView.to_html = to_html

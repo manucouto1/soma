@@ -119,11 +119,22 @@ def plot_health(run_view):
     return fig
 
 
-def plot_audit(run_view, metric: str = "out_grad.norm", filters: list[str] | None = None):
+def plot_audit(
+    run_view,
+    metric: str = "out_grad.norm",
+    filters: list[str] | None = None,
+    node: str | None = None,
+):
     """One line per filter of an audit scalar over steps, from
     ``diagnostics/audit_steps.jsonl``. `metric` is dotted, e.g.
     ``"act.zero_frac"``, ``"out_grad.norm"``, ``"param.grad_param_ratio"``.
-    Norm/ratio metrics get a log y-axis."""
+    Norm/ratio metrics get a log y-axis.
+
+    By default only node-level (root) series are drawn; submodule
+    series recorded by ``gradient_audit(inside=...)`` appear when you
+    select them — ``node="encoder"`` draws that node plus its
+    submodules in execution order, ``filters=[...]`` picks ids
+    explicitly."""
     go = _figures._go()
     steps = _audit_steps(run_view)
     if not steps:
@@ -139,9 +150,39 @@ def plot_audit(run_view, metric: str = "out_grad.norm", filters: list[str] | Non
     if not by_filter:
         raise ValueError(f"metric {metric!r} not present in audit steps")
 
-    selected = filters or sorted(by_filter)
+    trees = {t["node"]: t for t in run_view._module_trees()}
+    if filters is not None:
+        selected = filters
+    elif node is not None:
+        tree = trees.get(node)
+        if tree is None and node not in by_filter:
+            raise ValueError(
+                f"no audit series for node {node!r} "
+                f"(scoped nodes: {sorted(trees)}; roots: {sorted(by_filter)})"
+            )
+        selected = [node] if node in by_filter else []
+        if tree is not None:
+            selected += [
+                tree["ids"][path]
+                for path in tree["order"]
+                if tree["ids"][path] in by_filter
+            ]
+    else:
+        child_ids = {cid for t in trees.values() for cid in t["ids"].values()}
+        selected = sorted(fid for fid in by_filter if fid not in child_ids)
+
+    if len(selected) > 8:
+        import warnings
+
+        warnings.warn(
+            f"plot_audit: showing first 8 of {len(selected)} series; "
+            f"dropped {selected[8:]} — pass filters=[...] or node=... to choose",
+            stacklevel=2,
+        )
+        selected = selected[:8]
+
     fig = go.Figure()
-    for i, fid in enumerate(selected[:8]):
+    for i, fid in enumerate(selected):
         series = by_filter.get(fid, [])
         fig.add_trace(
             go.Scatter(
@@ -160,6 +201,103 @@ def plot_audit(run_view, metric: str = "out_grad.norm", filters: list[str] | Non
         xaxis_title="step",
         yaxis={"title": metric, "type": "log" if log_y else "linear"},
         showlegend=len(selected) > 1,
+    )
+    return fig
+
+
+def plot_module_flow(
+    run_view, node_id: str | None = None, metric: str = "out_grad.norm"
+):
+    """Gradient flow *through* one node's inner architecture: x =
+    submodules in real execution order, y = the audit metric (log scale
+    for norms). Vanishing gradients read as a staircase falling toward
+    the input; exploding, rising. Traces: mean across steps with a
+    min–max band, plus the final recorded step dashed.
+
+    Needs a run audited with ``gradient_audit(inside=...)``."""
+    go = _figures._go()
+    trees = {t["node"]: t for t in run_view._module_trees()}
+    if not trees:
+        raise ValueError(
+            f"run {run_view.id} has no inner-architecture snapshots — "
+            f"audit with gradient_audit(inside=...) under track_run"
+        )
+    if node_id is None:
+        if len(trees) > 1:
+            raise ValueError(
+                f"multiple scoped nodes {sorted(trees)} — pass node_id=..."
+            )
+        node_id = next(iter(trees))
+    tree = trees.get(node_id)
+    if tree is None:
+        raise ValueError(
+            f"no inner-architecture snapshot for {node_id!r} "
+            f"(scoped nodes: {sorted(trees)})"
+        )
+
+    group, _, field = metric.partition(".")
+    series: dict[str, dict[int, float]] = {}
+    for line in _audit_steps(run_view):
+        value = line.get(group, {}).get(field) if field else line.get(group)
+        if value is None or isinstance(value, bool):
+            continue
+        series.setdefault(line["filter"], {})[line["step"]] = value
+
+    order = [p for p in tree["order"] if tree["ids"][p] in series]
+    if not order:
+        raise ValueError(
+            f"metric {metric!r} not recorded for any submodule of {node_id!r}"
+        )
+    per_module = [series[tree["ids"][p]] for p in order]
+    means = [sum(v.values()) / len(v) for v in per_module]
+    lows = [min(v.values()) for v in per_module]
+    highs = [max(v.values()) for v in per_module]
+    last_step = max(s for v in per_module for s in v)
+    finals = [v.get(last_step) for v in per_module]
+
+    fig = go.Figure()
+    # min–max band across steps.
+    fig.add_trace(
+        go.Scatter(
+            x=order + order[::-1],
+            y=highs + lows[::-1],
+            fill="toself",
+            fillcolor="rgba(42, 120, 214, 0.12)",
+            line={"width": 0},
+            name="min–max",
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=order,
+            y=means,
+            mode="lines+markers",
+            name="mean over steps",
+            line={"width": 2, "color": _theme.CATEGORICAL[0]},
+            marker={"size": 8},
+            hovertemplate="%{x}<br>mean " + metric + " = %{y:.3e}<extra></extra>",
+        )
+    )
+    if any(v is not None for v in finals):
+        fig.add_trace(
+            go.Scatter(
+                x=order,
+                y=finals,
+                mode="lines",
+                name=f"step {last_step}",
+                line={"width": 1, "color": _theme.SEQUENTIAL[5], "dash": "dash"},
+                hovertemplate="%{x}<br>step "
+                + str(last_step)
+                + " = %{y:.3e}<extra></extra>",
+            )
+        )
+    log_y = field in ("norm", "grad_norm", "grad_max", "max", "grad_param_ratio")
+    fig.update_layout(
+        template="soma",
+        title=f"Gradient flow through {node_id} — {run_view.name}",
+        xaxis={"title": "submodule (execution order)", "type": "category"},
+        yaxis={"title": metric, "type": "log" if log_y else "linear"},
     )
     return fig
 

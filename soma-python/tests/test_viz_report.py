@@ -172,3 +172,28 @@ def test_cli_soma_report(tmp_path, capsys, monkeypatch):
     assert _external_refs(out.read_text()) == []
 
     assert cli_main(["report", "missing-run", "--root", str(tmp_path)]) == 1
+
+
+def test_report_module_flow_section(tmp_path):
+    from test_viz_health import _audit_line, _run_with_diagnostics, _write_tree
+
+    order = ["net.0", "net.2"]
+    view = _run_with_diagnostics(
+        tmp_path,
+        audit_steps=[
+            _audit_line(f"enc/{p}", s, norm=0.1) for p in order for s in range(2)
+        ],
+    )
+    _write_tree(view, "enc", order)
+
+    doc = view.to_html()
+    assert "<h2>Module flow — enc</h2>" in doc
+    assert 'id="soma-fig-module-flow-enc"' in doc
+    trees = _blob(doc, "soma-data-module-trees")
+    assert trees[0]["node"] == "enc"
+    assert "n_net_0" in doc, "inner mermaid rendered"
+
+    # Runs without scoped audits gain no section and an empty blob.
+    plain = _tracked_fit(tmp_path).to_html()
+    assert "Module flow" not in plain
+    assert _blob(plain, "soma-data-module-trees") == []

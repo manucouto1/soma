@@ -177,3 +177,155 @@ def test_plot_channel_evolution(tmp_path):
     assert list(rank.y) == [2.0, 1.2], "collapse trajectory visible"
     cka = next(t for t in fig.data if "CKA" in t.name)
     assert list(cka.y) == [0.2, 0.9]
+
+
+# ── plot_audit scoping guards (inside= submodule series) ────────────
+
+
+def _write_tree(view, node, order, prefix=None):
+    import numpy as np  # noqa: F401  (parity with audit deps)
+
+    prefix = prefix or node
+    tree_dir = pathlib.Path(view.dir) / "diagnostics" / "modules"
+    tree_dir.mkdir(parents=True, exist_ok=True)
+    mermaid_ids = {p: "n_" + p.replace(".", "_") for p in order}
+    tree = {
+        "node": node,
+        "graph": {
+            "nodes": [
+                {
+                    "id": mermaid_ids[p],
+                    "label": p,
+                    "kind": {"type": "Filter", "filter_name": "Linear"},
+                }
+                for p in order
+            ],
+            "edges": [
+                {
+                    "id": f"e_{i}",
+                    "source": mermaid_ids[a],
+                    "target": mermaid_ids[b],
+                    "kind": "Data",
+                    "label": None,
+                }
+                for i, (a, b) in enumerate(zip(order, order[1:]))
+            ],
+        },
+        "order": order,
+        "params": {p: 10 for p in order},
+        "ids": {p: f"{prefix}/{p}" for p in order},
+        "mermaid_ids": mermaid_ids,
+    }
+    (tree_dir / f"{node}.json").write_text(json.dumps(tree))
+    return tree
+
+
+def _scoped_audit_run(tmp_path, n_children=3):
+    order = [f"net.{i}" for i in range(n_children)]
+    view = _run_with_diagnostics(
+        tmp_path,
+        audit_steps=[_audit_line("enc", s, norm=1.0) for s in range(2)]
+        + [
+            _audit_line(f"enc/{p}", s, norm=10.0 ** -(i + 1))
+            for i, p in enumerate(order)
+            for s in range(2)
+        ]
+        + [_audit_line("head", s, norm=0.5) for s in range(2)],
+    )
+    _write_tree(view, "enc", order)
+    return view, order
+
+
+def test_plot_audit_defaults_to_roots_only(tmp_path):
+    view, order = _scoped_audit_run(tmp_path)
+    fig = view.plot_audit()
+    assert {t.name for t in fig.data} == {"enc", "head"}, "children hidden by default"
+
+
+def test_plot_audit_node_selects_children_in_order(tmp_path):
+    view, order = _scoped_audit_run(tmp_path)
+    fig = view.plot_audit(node="enc")
+    assert [t.name for t in fig.data] == ["enc"] + [f"enc/{p}" for p in order]
+
+    with pytest.raises(ValueError, match="no audit series for node"):
+        view.plot_audit(node="ghost")
+
+
+def test_plot_audit_warns_and_truncates_past_eight(tmp_path):
+    view, order = _scoped_audit_run(tmp_path, n_children=10)
+    with pytest.warns(UserWarning, match="first 8 of 11"):
+        fig = view.plot_audit(node="enc")
+    assert len(fig.data) == 8
+
+
+def test_module_trees_reader(tmp_path):
+    view = _run_with_diagnostics(tmp_path)
+    assert view._module_trees() == []
+    tree = _write_tree(view, "enc", ["net.0"])
+    assert view._module_trees() == [tree]
+
+
+# ── plot_module_flow + inner mermaid ────────────────────────────────
+
+
+def _flow_run(tmp_path):
+    """3-layer stack with decaying gradient norms and a flagged layer."""
+    order = ["net.0", "net.2", "net.4"]
+    view = _run_with_diagnostics(
+        tmp_path,
+        flags=[
+            {"node_id": "enc/net.0", "step": 2, "flag": "VANISHING", "detail": "x"},
+        ],
+        audit_steps=[
+            _audit_line(f"enc/{p}", s, norm=10.0 ** -(3 - i))
+            for i, p in enumerate(order)
+            for s in range(3)
+        ]
+        + [_audit_line("enc", s, norm=1.0) for s in range(3)],
+    )
+    _write_tree(view, "enc", order)
+    return view, order
+
+
+def test_plot_module_flow(tmp_path):
+    view, order = _flow_run(tmp_path)
+    fig = view.plot_module_flow()  # auto-picks the single scoped node
+    assert fig.layout.yaxis.type == "log"
+    assert fig.layout.xaxis.type == "category"
+    mean = next(t for t in fig.data if t.name == "mean over steps")
+    assert list(mean.x) == order, "execution order on x"
+    ys = list(mean.y)
+    assert ys == sorted(ys), "decaying stack rises along depth"
+    assert any(t.name == "min–max" for t in fig.data)
+    assert any(t.name.startswith("step ") for t in fig.data)
+
+    with pytest.raises(ValueError, match="scoped nodes"):
+        view.plot_module_flow("ghost")
+
+
+def test_plot_module_flow_requires_trees(tmp_path):
+    view = _run_with_diagnostics(
+        tmp_path, audit_steps=[_audit_line("enc", 0, norm=1.0)]
+    )
+    with pytest.raises(ValueError, match="no inner-architecture"):
+        view.plot_module_flow()
+
+
+def test_inner_mermaid_rendering(tmp_path):
+    view, order = _flow_run(tmp_path)
+    mermaid = view.to_mermaid(node="enc")
+    assert mermaid.startswith("graph LR")
+    # Sanitized ids, raw labels.
+    assert 'n_net_0["net.0' in mermaid
+    assert "n_net_0 --> n_net_2" in mermaid
+    # Param sublabel from the tree; flagged submodule styled.
+    assert "10 θ" in mermaid
+    assert "⚠ VANISHING" in mermaid
+    assert "class n_net_0 soma_flagged" in mermaid
+
+    plain = view.to_mermaid(node="enc", overlay=False)
+    assert "classDef" not in plain
+    assert 'n_net_0[net.0]' in plain
+
+    with pytest.raises(ValueError, match="no inner-architecture snapshot"):
+        view.to_mermaid(node="ghost")

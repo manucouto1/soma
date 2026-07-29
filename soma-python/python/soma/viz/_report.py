@@ -23,6 +23,7 @@ import datetime
 import html
 import json
 import pathlib
+import re
 
 PLOTLY_CDN = "https://cdn.plot.ly/plotly-3.0.1.min.js"
 MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
@@ -304,6 +305,32 @@ def build_report(run_view, inline: bool = False) -> str:
     evolution = _try_fig(_health.plot_channel_evolution, run_view)
     if evolution:
         sections.append(_fig_block("channels", evolution))
+
+    # ── inner architectures (gradient_audit inside=) ──
+    module_trees = run_view._module_trees()
+    blobs.append(_data_blob("module-trees", module_trees))
+    for tree in module_trees:
+        node = tree["node"]
+        sections.append(f"<h2>Module flow — {_esc(node)}</h2>")
+        try:
+            inner_mermaid = run_view.to_mermaid(node=node)
+        except (RuntimeError, ValueError):
+            inner_mermaid = None
+        if inner_mermaid:
+            if inline:
+                sections.append(
+                    f'<div class="card"><pre class="mermaid-src">'
+                    f"{_esc(inner_mermaid)}</pre></div>"
+                )
+            else:
+                sections.append(
+                    f'<div class="card"><pre class="mermaid">'
+                    f"{_esc(inner_mermaid)}</pre></div>"
+                )
+        flow = _try_fig(_health.plot_module_flow, run_view, node_id=node)
+        if flow:
+            slug = re.sub(r"[^0-9A-Za-z_-]", "_", node)
+            sections.append(_fig_block(f"module-flow-{slug}", flow))
 
     generated = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     need_mermaid = bool(mermaid_src) and not inline
