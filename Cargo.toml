@@ -28,6 +28,10 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 
 # Hashing
 sha2 = "0.10"
+blake3 = "1"
+
+# Canonical binary serialization (deterministic cache keys)
+ciborium = "0.2"
 
 # Async
 tokio = { version = "1", features = ["full"] }

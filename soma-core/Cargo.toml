@@ -11,6 +11,8 @@ description = "Core types and traits for the Soma computational graph runtime"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { workspace = true }
+ciborium = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 somatize-macros = { workspace = true }

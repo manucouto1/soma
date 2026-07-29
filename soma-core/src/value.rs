@@ -75,6 +75,37 @@ impl Value {
         }
     }
 
+    /// Natural JSON form for user-facing fan-in: tensors become
+    /// (nested) number arrays, Json unwraps, Empty is null. This is what
+    /// a multi-predecessor node receives per upstream branch — never the
+    /// internal serde-tagged encoding.
+    pub fn to_plain_json(&self) -> serde_json::Value {
+        fn nest(values: &[f64], shape: &[usize]) -> serde_json::Value {
+            if shape.len() <= 1 {
+                return serde_json::Value::Array(
+                    values.iter().map(|v| serde_json::json!(v)).collect(),
+                );
+            }
+            let rows = shape[0];
+            let row_len: usize = shape[1..].iter().product::<usize>().max(1);
+            serde_json::Value::Array(
+                (0..rows)
+                    .map(|r| {
+                        let start = r * row_len;
+                        let end = (start + row_len).min(values.len());
+                        nest(&values[start..end.max(start)], &shape[1..])
+                    })
+                    .collect(),
+            )
+        }
+        match self {
+            Self::Tensor { values, shape } => nest(values, shape),
+            Self::Json(v) => (**v).clone(),
+            Self::Empty => serde_json::Value::Null,
+            other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
+        }
+    }
+
     /// Number of elements (for tensors) or bytes.
     pub fn size(&self) -> usize {
         match self {

@@ -242,6 +242,11 @@ pub struct Study {
     pub objectives: Vec<Objective>,
     pub trials: Vec<Trial>,
     pub frozen: HashMap<String, serde_json::Value>,
+    /// Experiment seeds: when non-empty, every sampled configuration is
+    /// evaluated once per seed (trial params carry `"seed"`), giving
+    /// each seed an independent cache line and resumable trial.
+    #[serde(default)]
+    pub seeds: Vec<i64>,
     /// Scalar objective composed from several metrics; takes precedence
     /// over `objectives` when set.
     #[serde(default)]
@@ -276,6 +281,7 @@ impl Study {
             objectives,
             trials: Vec::new(),
             frozen: HashMap::new(),
+            seeds: Vec::new(),
             composite: None,
             created_at: Some(Utc::now()),
             updated_at: None,

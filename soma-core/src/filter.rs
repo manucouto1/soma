@@ -76,6 +76,14 @@ pub struct FilterMeta {
     /// Whether `forward()` maintains a differentiable computational graph.
     pub differentiable: bool,
 
+    /// Whether the same config + state + input always produces the same
+    /// output. Nondeterministic filters (unseeded sampling, GPU-order
+    /// dependent reductions the user cares about) are excluded from
+    /// output caching unless the run pins a seed — reusing a recorded
+    /// result would silently freeze what the user expects to vary.
+    #[serde(default = "default_deterministic")]
+    pub deterministic: bool,
+
     /// Behavior in streaming mode.
     pub stream_mode: StreamMode,
 
@@ -87,6 +95,10 @@ pub struct FilterMeta {
 
     /// Output schema (None = dynamic/unknown).
     pub output_schema: Option<Schema>,
+}
+
+fn default_deterministic() -> bool {
+    true
 }
 
 /// The fundamental computation unit in Soma.
@@ -182,6 +194,7 @@ mod tests {
                 kind: FilterKind::Trainable,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
                 input_schema: None,
@@ -265,6 +278,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
                 input_schema: None,

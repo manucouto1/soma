@@ -47,12 +47,19 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
         let field_ty = &field.ty;
         let field_attrs = parse_field_attrs(&field.attrs);
 
-        // config_hash: include unless skip_hash
+        // config_hash: include unless skip_hash. Canonical CBOR, never
+        // raw serializer output (HashMap iteration order is random) and
+        // never a silent empty fallback (two unserializable configs
+        // would collide).
         if !field_attrs.skip_hash {
             hash_parts.push(quote! {
                 {
-                    let serialized = serde_json::to_vec(&self.#field_name)
-                        .unwrap_or_default();
+                    let serialized = somatize_core::canon::canonical_bytes(&self.#field_name)
+                        .unwrap_or_else(|e| panic!(
+                            "field `{}` of `{}` is not canonically hashable ({}); \
+                             annotate it with #[soma(skip_hash)]",
+                            #field_name_str, #name_str, e
+                        ));
                     parts.push(serialized);
                 }
             });
@@ -90,6 +97,15 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
 
     let cacheable = struct_attrs.cacheable;
     let differentiable = struct_attrs.differentiable;
+    let deterministic = struct_attrs.deterministic;
+
+    // Explicit version bump: folded into the hash so users can force
+    // invalidation when code changes the macro cannot see (helper fns,
+    // external resources).
+    let cache_version_part = match &struct_attrs.cache_version {
+        Some(v) => quote! { parts.push(#v.as_bytes().to_vec()); },
+        None => quote! {},
+    };
 
     let stream_mode = match struct_attrs.stream.as_deref() {
         Some("Barrier") => quote! { somatize_core::filter::StreamMode::Barrier },
@@ -106,6 +122,7 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
                 let mut parts: Vec<Vec<u8>> = Vec::new();
                 // Include type name
                 parts.push(#name_str.as_bytes().to_vec());
+                #cache_version_part
                 // Include each non-skipped field
                 #(#hash_parts)*
                 let refs: Vec<&[u8]> = parts.iter().map(|p| p.as_slice()).collect();
@@ -119,6 +136,7 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
                     kind: #kind,
                     cacheable: #cacheable,
                     differentiable: #differentiable,
+                    deterministic: #deterministic,
                     stream_mode: #stream_mode,
                     distribution: somatize_core::filter::Distribution::Local,
                     input_schema: None,
@@ -160,6 +178,8 @@ struct StructAttrs {
     cacheable: bool,
     differentiable: bool,
     stream: Option<String>,
+    cache_version: Option<String>,
+    deterministic: bool,
 }
 
 struct FieldAttrs {
@@ -181,6 +201,8 @@ fn parse_struct_attrs(attrs: &[syn::Attribute]) -> StructAttrs {
         cacheable: true,
         differentiable: true,
         stream: None,
+        cache_version: None,
+        deterministic: true,
     };
 
     for attr in attrs {
@@ -214,6 +236,20 @@ fn parse_struct_attrs(attrs: &[syn::Attribute]) -> StructAttrs {
                 let lit: Lit = value.parse()?;
                 if let Lit::Str(s) = lit {
                     result.stream = Some(s.value());
+                }
+            } else if meta.path.is_ident("cache_version") {
+                let value = meta.value()?;
+                let lit: Lit = value.parse()?;
+                if let Lit::Str(s) = lit {
+                    result.cache_version = Some(s.value());
+                }
+            } else if meta.path.is_ident("deterministic")
+                && let Ok(value) = meta.value()
+            {
+                // bare #[soma(deterministic)] (no value) means true
+                let lit: Lit = value.parse()?;
+                if let Lit::Bool(b) = lit {
+                    result.deterministic = b.value;
                 }
             }
             Ok(())

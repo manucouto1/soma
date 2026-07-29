@@ -72,6 +72,14 @@ pub enum Event {
         load_time: Duration,
     },
 
+    /// A cacheable node's key was computed but not found — the filter
+    /// executes and (on success) fills this key.
+    NodeCacheMiss {
+        run_id: RunId,
+        node_id: NodeId,
+        key: CacheKey,
+    },
+
     /// A filter node completed successfully.
     NodeCompleted {
         run_id: RunId,

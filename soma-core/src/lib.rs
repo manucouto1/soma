@@ -9,7 +9,10 @@
 //! - [`Schema`] — dtype + shape for compile-time validation
 //! - [`Event`] — runtime lifecycle events
 
+pub mod action;
 pub mod cache;
+pub mod canon;
+pub mod codec;
 pub mod error;
 pub mod event;
 pub mod filter;
@@ -24,6 +27,7 @@ pub mod tracking;
 pub mod util;
 pub mod value;
 pub mod virtual_value;
+pub mod viz;
 
 // Re-export core types for convenience.
 pub use cache::{CacheKey, CacheStore, CacheTier, EntryMeta, Origin};
@@ -56,6 +60,7 @@ pub use tracking::{
 };
 pub use value::Value;
 pub use virtual_value::{ValueStatus, VirtualValue};
+pub use viz::{GraphOverlay, NodeOverlay, NodeStatus};
 
 // Re-export derive macro
 pub use somatize_macros::SomaFilter;

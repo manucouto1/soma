@@ -406,20 +406,42 @@ impl Graph {
     ///     scaler --> model
     /// ```
     pub fn to_mermaid(&self) -> String {
+        self.to_mermaid_with(&crate::viz::GraphOverlay::default())
+    }
+
+    /// Render as a Mermaid diagram with per-node execution annotations.
+    ///
+    /// Each annotated node gets a second label line (duration, cache
+    /// tier, health flags — see [`crate::viz::NodeOverlay::sublabel_text`])
+    /// and a status `classDef` for coloring. An empty overlay produces
+    /// exactly [`Graph::to_mermaid`]'s output.
+    pub fn to_mermaid_with(&self, overlay: &crate::viz::GraphOverlay) -> String {
         use std::fmt::Write;
         let mut out = String::from("graph LR\n");
         for node in &self.nodes {
+            let ov = overlay.nodes.get(&node.id);
+            // A sublabel needs a quoted label to allow `<br/>`.
+            let label_with = |base: &str| match ov.and_then(|o| o.sublabel_text()) {
+                Some(sub) => format!("\"{base}<br/>{sub}\""),
+                None => base.to_string(),
+            };
             let shape = match &node.kind {
-                NodeKind::Filter { .. } => format!("    {}[{}]", node.id, node.label),
-                NodeKind::SubGraph { .. } => format!("    {}[[{}]]", node.id, node.label),
+                NodeKind::Filter { .. } => {
+                    format!("    {}[{}]", node.id, label_with(&node.label))
+                }
+                NodeKind::SubGraph { .. } => {
+                    format!("    {}[[{}]]", node.id, label_with(&node.label))
+                }
                 NodeKind::Loop { max_iterations } => {
                     let label = match max_iterations {
                         Some(n) => format!("{} (max {})", node.label, n),
                         None => node.label.clone(),
                     };
-                    format!("    {}(({}))", node.id, label)
+                    format!("    {}(({}))", node.id, label_with(&label))
                 }
-                NodeKind::Branch => format!("    {}{{{{{}}}}}", node.id, node.label),
+                NodeKind::Branch => {
+                    format!("    {}{{{{{}}}}}", node.id, label_with(&node.label))
+                }
             };
             let _ = writeln!(out, "{shape}");
         }
@@ -438,11 +460,44 @@ impl Graph {
                 let _ = writeln!(out, "    {} {} {}", edge.source, arrow, edge.target);
             }
         }
+        let assignments: Vec<(&str, &'static str)> = self
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                overlay
+                    .nodes
+                    .get(&n.id)
+                    .and_then(|o| o.style_class())
+                    .map(|class| (n.id.as_str(), class))
+            })
+            .collect();
+        if !assignments.is_empty() {
+            let mut used: Vec<&'static str> = assignments.iter().map(|(_, c)| *c).collect();
+            used.sort_unstable();
+            used.dedup();
+            for class in used {
+                let _ = writeln!(
+                    out,
+                    "    classDef {class} {}",
+                    crate::viz::mermaid_class_style(class)
+                );
+            }
+            for (id, class) in assignments {
+                let _ = writeln!(out, "    class {id} {class}");
+            }
+        }
         out
     }
 
     /// Render as Graphviz DOT format.
     pub fn to_graphviz(&self) -> String {
+        self.to_graphviz_with(&crate::viz::GraphOverlay::default())
+    }
+
+    /// Render as Graphviz DOT with per-node execution annotations:
+    /// a second label line plus fill/border status colors. An empty
+    /// overlay produces exactly [`Graph::to_graphviz`]'s output.
+    pub fn to_graphviz_with(&self, overlay: &crate::viz::GraphOverlay) -> String {
         use std::fmt::Write;
         let mut out = String::from("digraph G {\n    rankdir=LR;\n");
         for node in &self.nodes {
@@ -452,10 +507,19 @@ impl Graph {
                 NodeKind::Loop { .. } => "ellipse",
                 NodeKind::Branch => "diamond",
             };
+            let ov = overlay.nodes.get(&node.id);
+            let label = match ov.and_then(|o| o.sublabel_text()) {
+                Some(sub) => format!("{}\\n{}", node.label, sub),
+                None => node.label.clone(),
+            };
+            let style = ov
+                .and_then(|o| o.style_class())
+                .map(crate::viz::dot_class_style)
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
-                "    \"{}\" [label=\"{}\" shape={}];",
-                node.id, node.label, shape
+                "    \"{}\" [label=\"{}\" shape={}{}];",
+                node.id, label, shape, style
             );
         }
         for edge in &self.edges {
@@ -792,6 +856,111 @@ mod tests {
         assert!(dot.contains("\"a\" [label=\"Scaler\" shape=box]"));
         assert!(dot.contains("\"a\" -> \"b\""));
         assert!(dot.ends_with("}\n"));
+    }
+
+    #[test]
+    fn overlay_empty_is_identical_to_plain_rendering() {
+        use crate::viz::GraphOverlay;
+        let g = sample_linear_graph();
+        assert_eq!(g.to_mermaid(), g.to_mermaid_with(&GraphOverlay::default()));
+        assert_eq!(
+            g.to_graphviz(),
+            g.to_graphviz_with(&GraphOverlay::default())
+        );
+        // No classDef/style leaks into the plain rendering.
+        assert!(!g.to_mermaid().contains("classDef"));
+        assert!(!g.to_graphviz().contains("fillcolor"));
+    }
+
+    #[test]
+    fn to_mermaid_with_overlay_annotates_and_styles() {
+        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
+        let g = sample_linear_graph();
+        let mut ov = GraphOverlay::default();
+        ov.nodes.insert(
+            "a".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Completed),
+                duration_ms: Some(1_200),
+                ..Default::default()
+            },
+        );
+        ov.nodes.insert(
+            "b".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Cached),
+                duration_ms: Some(3),
+                cache_tier: Some("memory".into()),
+                ..Default::default()
+            },
+        );
+        ov.nodes.insert(
+            "c".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Completed),
+                flags: vec!["LEAKAGE".into()],
+                ..Default::default()
+            },
+        );
+
+        let m = g.to_mermaid_with(&ov);
+        assert!(m.contains("a[\"Scaler<br/>1.2s\"]"), "{m}");
+        assert!(m.contains("b[\"PCA<br/>3ms · mem hit\"]"), "{m}");
+        assert!(m.contains("c[\"SVM<br/>⚠ LEAKAGE\"]"), "{m}");
+        assert!(m.contains("classDef soma_completed"));
+        assert!(m.contains("classDef soma_cached"));
+        assert!(m.contains("classDef soma_flagged"));
+        assert!(m.contains("class a soma_completed"));
+        assert!(m.contains("class b soma_cached"));
+        assert!(m.contains("class c soma_flagged"), "flags win over status");
+        // Edges unchanged.
+        assert!(m.contains("a --> b"));
+    }
+
+    #[test]
+    fn to_mermaid_with_overlay_ignores_unknown_nodes() {
+        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
+        let g = sample_linear_graph();
+        let mut ov = GraphOverlay::default();
+        ov.nodes.insert(
+            "ghost".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Failed),
+                ..Default::default()
+            },
+        );
+        let m = g.to_mermaid_with(&ov);
+        assert_eq!(m, g.to_mermaid(), "unknown node ids change nothing");
+    }
+
+    #[test]
+    fn to_graphviz_with_overlay_annotates_and_styles() {
+        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
+        let g = sample_linear_graph();
+        let mut ov = GraphOverlay::default();
+        ov.nodes.insert(
+            "a".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Failed),
+                ..Default::default()
+            },
+        );
+        ov.nodes.insert(
+            "b".into(),
+            NodeOverlay {
+                flags: vec!["DEAD_CHANNELS".into()],
+                ..Default::default()
+            },
+        );
+        let dot = g.to_graphviz_with(&ov);
+        assert!(
+            dot.contains("\"a\" [label=\"Scaler\\nfailed\" shape=box"),
+            "{dot}"
+        );
+        assert!(dot.contains("fillcolor=\"#ffebee\""), "failed fill: {dot}");
+        assert!(dot.contains("penwidth=3"), "flagged border: {dot}");
+        // Unannotated node keeps the plain attribute set.
+        assert!(dot.contains("\"c\" [label=\"SVM\" shape=box];"));
     }
 
     #[test]
