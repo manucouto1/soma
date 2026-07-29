@@ -29,6 +29,7 @@ impl Filter for DummyFilter {
             kind: FilterKind::Trainable,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,

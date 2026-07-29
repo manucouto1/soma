@@ -1,10 +1,9 @@
 //! Execution plan — the compiled representation of a pipeline.
 //!
-//! Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote, Stream, Empty.
+//! Variants: Sequence, Parallel, Execute, Loop, Branch, Remote, Stream, Empty.
 //! Plans are data-free (no filter implementations) and serializable.
 
 use serde::{Deserialize, Serialize};
-use somatize_core::cache::CacheKey;
 use somatize_core::filter::RemoteTarget;
 use somatize_core::graph::NodeId;
 use std::fmt;
@@ -25,9 +24,6 @@ pub enum ExecutionPlan {
 
     /// Execute a single filter node.
     Execute { node_id: NodeId },
-
-    /// Load result from cache (resolved at compile time).
-    Cached { node_id: NodeId, key: CacheKey },
 
     /// Iterate: execute body for each item in a collection.
     Loop {
@@ -67,10 +63,10 @@ pub enum ExecutionPlan {
 }
 
 impl ExecutionPlan {
-    /// Count total nodes in the plan (Execute + Cached).
+    /// Count total nodes in the plan.
     pub fn node_count(&self) -> usize {
         match self {
-            Self::Execute { .. } | Self::Cached { .. } => 1,
+            Self::Execute { .. } => 1,
             Self::Composite { node_ids } | Self::Stream { node_ids, .. } => node_ids.len(),
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().map(|s| s.node_count()).sum()
@@ -84,28 +80,12 @@ impl ExecutionPlan {
         }
     }
 
-    /// Count cached nodes in the plan.
-    pub fn cached_count(&self) -> usize {
-        match self {
-            Self::Cached { .. } => 1,
-            Self::Execute { .. } | Self::Composite { .. } | Self::Stream { .. } => 0,
-            Self::Sequence(steps) | Self::Parallel(steps) => {
-                steps.iter().map(|s| s.cached_count()).sum()
-            }
-            Self::Loop { body, .. } => body.cached_count(),
-            Self::Branch { arms, .. } => arms.iter().map(|(_, p)| p.cached_count()).sum(),
-            Self::Remote { plan, .. } => plan.cached_count(),
-            Self::Empty => 0,
-        }
-    }
-
     /// Count parallel branches at the top level of the plan.
     pub fn parallel_branch_count(&self) -> usize {
         match self {
             Self::Parallel(branches) => branches.len(),
             Self::Sequence(steps) => steps.iter().map(|s| s.parallel_branch_count()).sum(),
             Self::Execute { .. }
-            | Self::Cached { .. }
             | Self::Loop { .. }
             | Self::Branch { .. }
             | Self::Remote { .. }
@@ -118,7 +98,7 @@ impl ExecutionPlan {
     /// Collect all node IDs referenced in the plan.
     pub fn node_ids(&self) -> Vec<&str> {
         match self {
-            Self::Execute { node_id } | Self::Cached { node_id, .. } => vec![node_id.as_str()],
+            Self::Execute { node_id } => vec![node_id.as_str()],
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().flat_map(|s| s.node_ids()).collect()
             }
@@ -150,7 +130,8 @@ impl ExecutionPlan {
     pub fn summary(&self) -> somatize_core::event::PlanSummary {
         somatize_core::event::PlanSummary {
             total_nodes: self.node_count(),
-            cached_nodes: self.cached_count(),
+            // Cache resolution moved to runtime; plans carry no cached nodes.
+            cached_nodes: 0,
             parallel_branches: self.parallel_branch_count(),
         }
     }
@@ -195,12 +176,6 @@ impl ExecutionPlan {
         match self {
             Self::Execute { node_id } => {
                 let _ = writeln!(out, "    {node_id}[{node_id}]");
-                if let Some(p) = parent {
-                    let _ = writeln!(out, "    {p} --> {node_id}");
-                }
-            }
-            Self::Cached { node_id, .. } => {
-                let _ = writeln!(out, "    {node_id}[/{node_id} cached/]");
                 if let Some(p) = parent {
                     let _ = writeln!(out, "    {p} --> {node_id}");
                 }
@@ -283,7 +258,7 @@ impl ExecutionPlan {
 
     fn first_node_id(&self) -> Option<&str> {
         match self {
-            Self::Execute { node_id } | Self::Cached { node_id, .. } => Some(node_id),
+            Self::Execute { node_id } => Some(node_id),
             Self::Sequence(steps) => steps.first().and_then(|s| s.first_node_id()),
             Self::Parallel(_) => None,
             Self::Loop { node_id, .. }
@@ -322,7 +297,6 @@ impl ExecutionPlan {
                 Ok(())
             }
             Self::Execute { node_id } => writeln!(f, "{pad}Execute({node_id})"),
-            Self::Cached { node_id, key } => writeln!(f, "{pad}Cached({node_id}, {key})"),
             Self::Loop {
                 node_id,
                 body,
@@ -389,26 +363,6 @@ mod tests {
             },
         ]);
         assert_eq!(plan.node_count(), 3);
-        assert_eq!(plan.cached_count(), 0);
-    }
-
-    #[test]
-    fn cached_count() {
-        let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Cached {
-                node_id: "a".into(),
-                key: CacheKey::hash_data(b"a"),
-            },
-            ExecutionPlan::Execute {
-                node_id: "b".into(),
-            },
-            ExecutionPlan::Cached {
-                node_id: "c".into(),
-                key: CacheKey::hash_data(b"c"),
-            },
-        ]);
-        assert_eq!(plan.node_count(), 3);
-        assert_eq!(plan.cached_count(), 2);
     }
 
     #[test]
@@ -439,9 +393,8 @@ mod tests {
     #[test]
     fn node_ids_collected() {
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Cached {
+            ExecutionPlan::Execute {
                 node_id: "a".into(),
-                key: CacheKey::hash_data(b"a"),
             },
             ExecutionPlan::Execute {
                 node_id: "b".into(),
@@ -515,9 +468,8 @@ mod tests {
     #[test]
     fn summary_values() {
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Cached {
+            ExecutionPlan::Execute {
                 node_id: "a".into(),
-                key: CacheKey::hash_data(b"a"),
             },
             ExecutionPlan::Parallel(vec![
                 ExecutionPlan::Execute {
@@ -533,16 +485,15 @@ mod tests {
         ]);
         let summary = plan.summary();
         assert_eq!(summary.total_nodes, 4);
-        assert_eq!(summary.cached_nodes, 1);
+        assert_eq!(summary.cached_nodes, 0);
         assert_eq!(summary.parallel_branches, 2);
     }
 
     #[test]
     fn serde_roundtrip() {
         let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Cached {
+            ExecutionPlan::Execute {
                 node_id: "a".into(),
-                key: CacheKey::hash_data(b"test"),
             },
             ExecutionPlan::Execute {
                 node_id: "b".into(),
@@ -557,7 +508,6 @@ mod tests {
     fn empty_plan() {
         let plan = ExecutionPlan::Empty;
         assert_eq!(plan.node_count(), 0);
-        assert_eq!(plan.cached_count(), 0);
         assert!(plan.node_ids().is_empty());
     }
 
@@ -592,15 +542,5 @@ mod tests {
         assert!(m.contains("fork_0{"));
         assert!(m.contains("fork_0 --> a"));
         assert!(m.contains("fork_0 --> b"));
-    }
-
-    #[test]
-    fn to_mermaid_cached() {
-        let plan = ExecutionPlan::Cached {
-            node_id: "x".into(),
-            key: CacheKey::hash_data(b"x"),
-        };
-        let m = plan.to_mermaid();
-        assert!(m.contains("x[/x cached/]"));
     }
 }

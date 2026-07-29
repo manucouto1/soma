@@ -8,7 +8,7 @@ use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::Result;
 use somatize_core::filter::{Filter, FilterMeta};
 use somatize_core::graph::{Graph, NodeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Compilation mode affects caching behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,103 +286,33 @@ impl<'a> Compiler<'a> {
         levels
     }
 
-    /// Resolve caching: replace Execute nodes with Cached when possible.
-    /// Implements cascade invalidation.
+    /// Cache resolution happens at RUNTIME, not here.
+    ///
+    /// The compiler never sees the dataset, so any key it could derive
+    /// (formerly `H(config ‖ predecessor keys)`) is independent of the
+    /// input data — the same graph on two different datasets would
+    /// collide. The executor computes the real key
+    /// `hash(config + state + input)` per node with the materialized
+    /// input in hand, and skips execution on a hit.
     fn resolve_cache(
-        &self,
+        &mut self,
         plan: ExecutionPlan,
-        cache: &dyn CacheStore,
+        _cache: &dyn CacheStore,
         sorted: &[&str],
     ) -> Result<ExecutionPlan> {
-        if self.mode == CompileMode::NoCache {
-            return Ok(plan);
+        if self.mode != CompileMode::NoCache
+            && let Some(&first) = sorted.first()
+        {
+            self.diagnostics.push(Diagnostic {
+                node_id: first.to_string(),
+                level: DiagnosticLevel::Info,
+                message: "cache lookups are resolved at runtime per node \
+                          (key = hash(config + state + input)); the compiled plan \
+                          contains no Cached nodes"
+                    .to_string(),
+            });
         }
-
-        // Compute cache keys for all nodes in topological order.
-        // A node's key depends on its config + its predecessors' keys.
-        let mut node_keys: HashMap<String, CacheKey> = HashMap::new();
-        let mut cached_nodes: HashSet<String> = HashSet::new();
-
-        for &node_id in sorted {
-            let config_hash = match self.registry.config_hash(node_id) {
-                Some(h) => h,
-                None => continue, // no filter registered, can't cache
-            };
-
-            let meta = self.registry.meta(node_id);
-            let cacheable = meta.as_ref().is_some_and(|m| m.cacheable);
-
-            // In differentiable mode, only cache states (not forward outputs)
-            // For simplicity at this stage, we skip caching in differentiable mode
-            let can_cache = cacheable && self.mode == CompileMode::Inference;
-
-            // Build the cache key from config + predecessor output keys
-            let pred_ids = self.graph.predecessors(node_id);
-            let mut key_parts: Vec<Vec<u8>> = vec![config_hash.0.to_vec()];
-            for pred in &pred_ids {
-                if let Some(pred_key) = node_keys.get(*pred) {
-                    key_parts.push(pred_key.0.to_vec());
-                } else {
-                    // Predecessor should always be processed first in topological order.
-                    // If missing, the cache key will be incomplete but won't panic.
-                    debug_assert!(
-                        false,
-                        "predecessor `{pred}` of `{node_id}` not in node_keys - \
-                         topological order may be broken"
-                    );
-                }
-            }
-            let parts_refs: Vec<&[u8]> = key_parts.iter().map(|p| p.as_slice()).collect();
-            let key = CacheKey::from_parts(&parts_refs);
-            node_keys.insert(node_id.to_string(), key.clone());
-
-            // Check if this node's output exists in cache
-            if can_cache {
-                // Only use cache if ALL predecessors are also cached (or roots).
-                // This ensures cascade invalidation: if any upstream re-executed,
-                // the key is already different (since it includes predecessor keys).
-                if cache.exists(&key)? {
-                    cached_nodes.insert(node_id.to_string());
-                }
-            }
-        }
-
-        // Replace Execute nodes with Cached where applicable
-        Ok(self.apply_cache_to_plan(plan, &cached_nodes, &node_keys))
-    }
-
-    fn apply_cache_to_plan(
-        &self,
-        plan: ExecutionPlan,
-        cached: &HashSet<String>,
-        keys: &HashMap<String, CacheKey>,
-    ) -> ExecutionPlan {
-        match plan {
-            ExecutionPlan::Execute { ref node_id } => {
-                if cached.contains(node_id)
-                    && let Some(key) = keys.get(node_id)
-                {
-                    return ExecutionPlan::Cached {
-                        node_id: node_id.clone(),
-                        key: key.clone(),
-                    };
-                }
-                plan
-            }
-            ExecutionPlan::Sequence(steps) => ExecutionPlan::Sequence(
-                steps
-                    .into_iter()
-                    .map(|s| self.apply_cache_to_plan(s, cached, keys))
-                    .collect(),
-            ),
-            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches
-                    .into_iter()
-                    .map(|b| self.apply_cache_to_plan(b, cached, keys))
-                    .collect(),
-            ),
-            other => other,
-        }
+        Ok(plan)
     }
 
     /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
@@ -631,6 +561,7 @@ mod tests {
     use somatize_core::filter::{FilterKind, StreamMode};
     use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
     use somatize_core::value::Value;
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     // ── Mock cache store ──
@@ -677,6 +608,7 @@ mod tests {
             kind,
             cacheable: true,
             differentiable,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -793,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_resolution_replaces_cached_nodes() {
+    fn cache_resolution_is_deferred_to_runtime() {
         let graph = linear_pipeline(vec![
             Node::new("a", "Scaler", "F"),
             Node::new("b", "PCA", "F"),
@@ -807,74 +739,30 @@ mod tests {
             make_meta(FilterKind::Trainable, true),
         );
 
-        // Pre-compute the cache key for node "a" (same logic as compiler)
+        // Even with a populated cache, the compiler must never emit
+        // Cached nodes: its keys cannot include the input data, so a
+        // compile-time hit could serve results from a different dataset.
+        // The executor resolves cache hits per node at runtime.
         let a_config = registry.config_hash("a").unwrap();
         let a_cache_key = CacheKey::from_parts(&[&a_config.0]);
-
         let cache = MockCacheStore::new();
         cache.insert(a_cache_key);
 
         let result = compile(&graph, &registry, CompileMode::Inference, Some(&cache)).unwrap();
 
-        // "a" is cached, "b"+"c" are differentiable → Composite
-        if let ExecutionPlan::Sequence(steps) = &result.plan {
-            assert!(
-                matches!(&steps[0], ExecutionPlan::Cached { node_id, .. } if node_id == "a"),
-                "first node should be cached, got: {:?}",
-                steps[0]
-            );
-            assert!(
-                matches!(&steps[1], ExecutionPlan::Composite { node_ids } if node_ids == &["b", "c"]),
-                "b+c should be Composite, got: {:?}",
-                steps[1]
-            );
-        } else {
-            panic!("expected Sequence, got: {:?}", result.plan);
-        }
-    }
-
-    #[test]
-    fn cascade_invalidation_different_config_changes_keys() {
-        // Register with config hash "v1"
-        let mut reg1 = SimpleFilterRegistry::new();
-        reg1.register_meta(
-            "a",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"scaler_v1"),
+        assert!(
+            !format!("{:?}", result.plan).contains("Cached"),
+            "compiler must not emit Cached nodes, got: {:?}",
+            result.plan
         );
-        reg1.register_meta(
-            "b",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"pca_v1"),
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.level == DiagnosticLevel::Info
+                    && d.message.contains("resolved at runtime")),
+            "expected an informational diagnostic about runtime cache resolution"
         );
-
-        // Register with config hash "v2" for node "a"
-        let mut reg2 = SimpleFilterRegistry::new();
-        reg2.register_meta(
-            "a",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"scaler_v2"), // changed!
-        );
-        reg2.register_meta(
-            "b",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"pca_v1"), // same
-        );
-
-        // Compute keys for both configurations
-        // The plans have same structure but when cache keys are computed,
-        // changing "a" config changes "b"'s key too (cascade).
-        // We verify this by computing keys manually:
-        let a_key_v1 = CacheKey::from_parts(&[&CacheKey::hash_data(b"scaler_v1").0]);
-        let b_key_v1 = CacheKey::from_parts(&[&CacheKey::hash_data(b"pca_v1").0, &a_key_v1.0]);
-
-        let a_key_v2 = CacheKey::from_parts(&[&CacheKey::hash_data(b"scaler_v2").0]);
-        let b_key_v2 = CacheKey::from_parts(&[&CacheKey::hash_data(b"pca_v1").0, &a_key_v2.0]);
-
-        // a changed → a's key changed
-        assert_ne!(a_key_v1, a_key_v2);
-        // b's config didn't change but a's key is in b's key → b's key also changed
-        assert_ne!(b_key_v1, b_key_v2);
     }
 
     #[test]
@@ -897,7 +785,7 @@ mod tests {
         let result = compile(&graph, &registry, CompileMode::NoCache, Some(&cache)).unwrap();
 
         // Nothing should be cached
-        assert_eq!(result.plan.cached_count(), 0);
+        assert!(!format!("{:?}", result.plan).contains("Cached"));
     }
 
     #[test]
@@ -919,7 +807,7 @@ mod tests {
         let result = compile(&graph, &registry, CompileMode::Differentiable, Some(&cache)).unwrap();
 
         // Differentiable mode should not cache forward outputs
-        assert_eq!(result.plan.cached_count(), 0);
+        assert!(!format!("{:?}", result.plan).contains("Cached"));
     }
 
     #[test]

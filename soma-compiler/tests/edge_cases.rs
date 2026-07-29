@@ -14,6 +14,7 @@ fn make_meta(kind: FilterKind, differentiable: bool) -> FilterMeta {
         kind,
         cacheable: true,
         differentiable,
+        deterministic: true,
         stream_mode: StreamMode::FixedState,
         distribution: somatize_core::filter::Distribution::Local,
         input_schema: None,
@@ -177,31 +178,27 @@ fn cache_diamond_cascade() {
         CacheKey::hash_data(b"merge"),
     );
 
-    // Cache root's output
+    // Even with a fully-populated cache (old compile-time key scheme),
+    // the compiler must emit no Cached nodes: its keys cannot include the
+    // input data, so cache resolution happens at runtime per node.
     let cache = MockCache::new();
     let root_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"root").0]);
     cache.insert(root_key.clone());
-
-    // Cache b1 (depends on root)
     let b1_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"b1").0, &root_key.0]);
     cache.insert(b1_key.clone());
-
-    // Cache b2 (depends on root)
     let b2_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"b2").0, &root_key.0]);
     cache.insert(b2_key.clone());
-
-    // Cache merge (depends on b1 AND b2)
     let merge_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"merge").0, &b1_key.0, &b2_key.0]);
     cache.insert(merge_key);
 
     let result = compile(&graph, &reg, CompileMode::Inference, Some(&cache)).unwrap();
 
-    // Everything should be cached
-    assert_eq!(
-        result.plan.cached_count(),
-        4,
-        "all 4 nodes should be cached"
+    assert!(
+        !format!("{:?}", result.plan).contains("Cached"),
+        "cache resolution is deferred to runtime; the plan must contain no Cached nodes"
     );
+    // The full diamond still executes.
+    assert_eq!(result.plan.node_count(), 4);
 }
 
 // ── Unregistered node handling ──
@@ -267,17 +264,15 @@ fn all_compile_modes() {
     let a_key = CacheKey::from_parts(&[&CacheKey::hash_data(b"a").0]);
     cache.insert(a_key);
 
-    // Inference: should cache "a"
-    let r1 = compile(&graph, &reg, CompileMode::Inference, Some(&cache)).unwrap();
-    assert_eq!(r1.plan.cached_count(), 1);
-
-    // Differentiable: no caching
-    let r2 = compile(&graph, &reg, CompileMode::Differentiable, Some(&cache)).unwrap();
-    assert_eq!(r2.plan.cached_count(), 0);
-
-    // NoCache: no caching
-    let r3 = compile(&graph, &reg, CompileMode::NoCache, Some(&cache)).unwrap();
-    assert_eq!(r3.plan.cached_count(), 0);
+    // No mode emits compile-time Cached nodes — resolution is at runtime.
+    for mode in [
+        CompileMode::Inference,
+        CompileMode::Differentiable,
+        CompileMode::NoCache,
+    ] {
+        let r = compile(&graph, &reg, mode, Some(&cache)).unwrap();
+        assert!(!format!("{:?}", r.plan).contains("Cached"));
+    }
 }
 
 // ── Schema validation ──
@@ -288,6 +283,7 @@ fn meta_with_schemas(output: Option<Schema>, input: Option<Schema>) -> FilterMet
         kind: FilterKind::Trainable,
         cacheable: true,
         differentiable: true,
+        deterministic: true,
         stream_mode: StreamMode::FixedState,
         distribution: somatize_core::filter::Distribution::Local,
         input_schema: input,

@@ -234,19 +234,6 @@ fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_wor
             state.phase_index += 1;
         }
 
-        ExecutionPlan::Cached { node_id, .. } => {
-            let worker = forced_worker
-                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
-                .unwrap_or_else(|| least_loaded(&state.workers));
-            state.assignments.push(Assignment {
-                node_id: node_id.clone(),
-                worker_id: worker.id.clone(),
-                worker_name: worker.name.clone(),
-                phase: Phase::Sequential,
-                reason: "cached — will skip execution".into(),
-            });
-        }
-
         ExecutionPlan::Remote { plan, .. } => {
             schedule_plan(plan, state, None);
         }
