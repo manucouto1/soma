@@ -154,6 +154,9 @@ skipped); a module invoked twice in one forward records its **last**
 invocation; a submodule reachable under two names is audited under the
 first `named_modules()` name.
 
+`notebooks/08_auditing_inside_nodes.ipynb` walks all of this end to
+end on a real vanishing-gradient stack.
+
 ## Standalone (no `Graph`)
 
 For users who haven't migrated to the `Graph` orchestrator yet,

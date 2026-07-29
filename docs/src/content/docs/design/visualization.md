@@ -168,6 +168,12 @@ through the `ids` map, never parsed. The report embeds all trees as the
 tree (inner diagram + per-layer gradient staircase,
 `run.plot_module_flow`).
 
+## Try it
+
+`notebooks/07_visualization_and_reports.ipynb` exercises the whole
+stack (runs, overlays, figures, report) and
+`notebooks/08_auditing_inside_nodes.ipynb` the intra-node audit views.
+
 ## Timing semantics
 
 Start events carry no timestamp by design: sinks are synchronous, so
