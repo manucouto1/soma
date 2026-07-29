@@ -374,11 +374,18 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 ));
 
                 for sf in &plan.filters {
+                    let config_hash = sf.config_hash.clone().unwrap_or_else(|| {
+                        crate::python_process::SubprocessFilter::fallback_config_hash(
+                            &sf.node_id,
+                            &sf.pickled_filter,
+                        )
+                    });
                     let filter: Box<dyn somatize_core::filter::Filter> =
                         Box::new(crate::python_process::SubprocessFilter::new(
                             process.clone(),
                             sf.node_id.clone(),
                             sf.trainable,
+                            config_hash,
                         ));
                     worker.register_filter(&sf.node_id, filter);
                     if let Some(s) = &sf.state {

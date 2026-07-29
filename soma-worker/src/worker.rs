@@ -221,10 +221,17 @@ impl Worker {
             let process = Arc::new(std::sync::Mutex::new(proc));
 
             for sf in &plan.filters {
+                let config_hash = sf.config_hash.clone().unwrap_or_else(|| {
+                    crate::python_process::SubprocessFilter::fallback_config_hash(
+                        &sf.node_id,
+                        &sf.pickled_filter,
+                    )
+                });
                 let filter = Box::new(crate::python_process::SubprocessFilter::new(
                     process.clone(),
                     sf.node_id.clone(),
                     sf.trainable,
+                    config_hash,
                 ));
                 self.filters.register(&sf.node_id, filter);
                 if let Some(state) = &sf.state {
@@ -306,6 +313,7 @@ impl Worker {
                             &self.filters,
                             self.cache.as_ref(),
                             &self.event_bus,
+                            &format!("worker_fit_{}", plan.plan_id),
                             &x,
                             y.as_ref(),
                         )
@@ -494,6 +502,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,

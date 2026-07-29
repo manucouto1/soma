@@ -685,21 +685,39 @@ pub struct SubprocessFilter {
     pub(crate) process: Arc<Mutex<PythonProcess>>,
     node_id: String,
     trainable: bool,
+    /// Real config hash — must reflect the filter's configuration, never
+    /// just the node id (two configs under the same node id must not
+    /// share cache entries).
+    config_hash: CacheKey,
 }
 
 impl SubprocessFilter {
-    pub fn new(process: Arc<Mutex<PythonProcess>>, node_id: String, trainable: bool) -> Self {
+    pub fn new(
+        process: Arc<Mutex<PythonProcess>>,
+        node_id: String,
+        trainable: bool,
+        config_hash: CacheKey,
+    ) -> Self {
         Self {
             process,
             node_id,
             trainable,
+            config_hash,
         }
+    }
+
+    /// Fallback identity for payloads that carry no explicit config hash:
+    /// hash the pickled filter bytes — any config change changes the
+    /// pickle, so stale cache hits are still impossible (the pickle is
+    /// merely less stable across environments than a real config hash).
+    pub fn fallback_config_hash(node_id: &str, pickled_filter: &[u8]) -> CacheKey {
+        CacheKey::from_parts(&[b"subprocess-filter", node_id.as_bytes(), pickled_filter])
     }
 }
 
 impl Filter for SubprocessFilter {
     fn config_hash(&self) -> CacheKey {
-        CacheKey::from_parts(&[self.node_id.as_bytes()])
+        self.config_hash.clone()
     }
 
     fn fit(&self, x: &Value, y: Option<&Value>) -> Result<Value> {
@@ -726,6 +744,7 @@ impl Filter for SubprocessFilter {
             },
             cacheable: true,
             differentiable: self.trainable,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,

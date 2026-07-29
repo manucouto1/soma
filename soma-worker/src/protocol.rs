@@ -104,6 +104,12 @@ pub struct SerializedFilter {
     /// Whether the filter is trainable (has meaningful fit()) or stateless.
     #[serde(default)]
     pub trainable: bool,
+    /// The filter's real config hash from the coordinator, so cache keys
+    /// computed on the worker match those computed locally. `None` for
+    /// payloads from older coordinators — the worker then falls back to
+    /// hashing the pickled filter bytes (config changes still invalidate).
+    #[serde(default)]
+    pub config_hash: Option<somatize_core::cache::CacheKey>,
 }
 
 /// Serde helper: `Vec<u8>` ↔ base64 string for JSON-safe binary transport.
