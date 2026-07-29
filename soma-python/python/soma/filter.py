@@ -89,12 +89,18 @@ class Filter(metaclass=FilterMeta):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-        # Set defaults from search descriptors (if not already set via kwargs)
-        for dim in self.__class__._soma_search_space:
-            name = dim["name"]
-            if not hasattr(self, name) or isinstance(getattr(self.__class__, name, None), SearchDescriptor):
-                if name not in kwargs and "default" in dim:
-                    setattr(self, name, dim["default"])
+        # Materialize search-descriptor defaults into __dict__ so they
+        # behave like explicitly-passed kwargs everywhere — including in
+        # the cache identity (an unset searchable param still shapes
+        # behavior through its default).
+        for klass in type(self).__mro__:
+            for name, attr in vars(klass).items():
+                if (
+                    isinstance(attr, SearchDescriptor)
+                    and name not in self.__dict__
+                    and attr.default is not None
+                ):
+                    self.__dict__[name] = attr.default
 
     # ── Introspection (used by Graph.save / Graph.load) ──
 

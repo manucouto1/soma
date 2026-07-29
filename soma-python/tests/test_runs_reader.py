@@ -1,0 +1,322 @@
+"""Read-side API: soma.runs(), RunView aggregations, the local
+RunStarted/RunCompleted bracket, and un-flattened trial series."""
+
+from __future__ import annotations
+
+import json
+import pathlib
+
+import pytest
+
+import soma
+from soma import Filter, Graph, Study
+from soma._cache_cli import main as cli_main
+
+
+class _Plain(Filter):
+    def fit(self, x, y=None):
+        return {}
+
+    def forward(self, x, state):
+        return x
+
+
+class _Boom(Filter):
+    def fit(self, x, y=None):
+        raise ValueError("boom")
+
+    def forward(self, x, state):
+        return x
+
+
+def _graph():
+    g = Graph()
+    g.node("a", _Plain())
+    g.node("b", _Plain())
+    g.connect("a", "b")
+    return g
+
+
+def _tracked_fit(tmp_path, name="fit-run"):
+    g = _graph()
+    with g.track_run(name, root=str(tmp_path), kind="fit") as run:
+        g.fit([1.0, 2.0, 3.0])
+        run.log("val_f1", 0.9, step=1)
+        run.log("val_f1", 0.95, step=2)
+    return run
+
+
+# ── run bracket ─────────────────────────────────────────────────────
+
+
+def test_local_fit_emits_run_bracket_with_matching_ids(tmp_path):
+    run = _tracked_fit(tmp_path)
+    events = soma.RunView(run.dir).events()
+    types = [e["event_type"] for e in events]
+    assert "RunStarted" in types
+    assert "RunCompleted" in types
+
+    started = next(e for e in events if e["event_type"] == "RunStarted")
+    completed = next(e for e in events if e["event_type"] == "RunCompleted")
+    node_events = [e for e in events if e["event_type"] == "NodeStarted"]
+    assert started["run_id"] == completed["run_id"]
+    assert len(node_events) == 2
+    assert all(e["run_id"] == started["run_id"] for e in node_events)
+    assert started["plan_summary"]["total_nodes"] == 2
+    assert types.index("RunStarted") < types.index("NodeStarted")
+
+
+def test_failed_fit_emits_run_failed(tmp_path):
+    g = Graph()
+    g.node("bad", _Boom())
+    with pytest.raises(Exception):
+        with g.track_run("failing", root=str(tmp_path), kind="fit"):
+            g.fit([1.0])
+
+    run_dir = next((tmp_path / "runs").iterdir())
+    events = soma.RunView(str(run_dir)).events()
+    types = [e["event_type"] for e in events]
+    assert "RunStarted" in types
+    assert "RunFailed" in types
+    assert "RunCompleted" not in types
+    failed = next(e for e in events if e["event_type"] == "RunFailed")
+    assert "boom" in failed["error"]
+
+
+# ── soma.runs() / RunView ───────────────────────────────────────────
+
+
+def test_runs_lists_tracked_runs_newest_first(tmp_path):
+    _tracked_fit(tmp_path, "first")
+    _tracked_fit(tmp_path, "second")
+
+    runs = soma.runs(str(tmp_path))
+    assert len(runs) == 2
+    assert {r.name for r in runs} == {"first", "second"}
+    assert all(r.state == "completed" for r in runs)
+    assert all(r.kind == "fit" for r in runs)
+    created = [r.info["created_at"] for r in runs]
+    assert created == sorted(created, reverse=True), "newest first"
+
+
+def test_runs_empty_root(tmp_path):
+    assert soma.runs(str(tmp_path)) == []
+
+
+def test_runview_aggregations(tmp_path):
+    run = _tracked_fit(tmp_path)
+    view = soma.RunView(run.dir)
+
+    # identity
+    assert view.id == run.id
+    assert view.state == "completed"
+    assert view.dir == run.dir
+    assert "RunView(" in repr(view)
+
+    # manifest passthrough
+    assert view.manifest()["graph"]["n_nodes"] == 2
+
+    # envelopes carry seq + ts (wall clock lives in the envelope)
+    events = view.events()
+    assert events[0]["seq"] == 0
+    assert all("ts" in e for e in events)
+
+    # metric series (from metrics.jsonl)
+    series = view.metric_series("val_f1")
+    assert [p["value"] for p in series] == [0.9, 0.95]
+    assert [p["step"] for p in series] == [1, 2]
+    assert view.metric_series("nope") == []
+    assert len(view.metric_series()) == 2
+
+    # node timings: one completed span per node with wall timestamps
+    spans = view.node_timings()
+    assert [s["node_id"] for s in spans] == ["a", "b"]
+    assert all(s["outcome"] == "completed" for s in spans)
+    assert all(s["started_ts"] is not None for s in spans)
+    assert all(s["duration_ms"] is not None for s in spans)
+
+    # no cache events in this run
+    activity = view.cache_activity()
+    assert activity["hits"] == 0 and activity["misses"] == 0
+
+    # no health flags, no trials
+    assert view.health_flags() == []
+    assert view.trial_timeline() == []
+
+
+def test_runview_health_flags(tmp_path):
+    g = _graph()
+    with g.track_run("flagged", root=str(tmp_path)) as run:
+        g.emit_event(
+            {
+                "event_type": "HealthFlag",
+                "run_id": run.id,
+                "node_id": "a",
+                "step": 4,
+                "flag": "DEAD_CHANNELS",
+                "detail": "3/64 dead",
+            }
+        )
+    flags = soma.RunView(run.dir).health_flags()
+    assert len(flags) == 1
+    assert flags[0]["flag"] == "DEAD_CHANNELS"
+    assert flags[0]["node_id"] == "a"
+    assert flags[0]["step"] == 4
+    assert flags[0]["ts"]
+
+
+def test_runview_rejects_non_run_dir(tmp_path):
+    with pytest.raises(RuntimeError, match="open run dir"):
+        soma.RunView(str(tmp_path))
+
+
+# ── study runs: trial timeline + un-flattened series ────────────────
+
+
+def _study(tmp_path, n_trials=3):
+    def objective(trial):
+        for step in range(3):
+            trial.report("score", 0.5 + 0.1 * step, step)
+        return None
+
+    study = Study(
+        "reader-hpo",
+        search_space=[
+            {"type": "float", "name": "lr", "low": 0.001, "high": 0.1, "scale": "log"},
+        ],
+        strategy="random",
+        n_trials=n_trials,
+        objectives=[("score", "maximize")],
+        root=str(tmp_path),
+        seed=7,
+    )
+    study.run(objective)
+    return study
+
+
+def test_trials_expose_series_and_timestamps(tmp_path):
+    study = _study(tmp_path)
+    trial = study.trials[0]
+
+    # Back-compat: flattened last-value dict still present.
+    assert isinstance(trial["metrics"], dict)
+
+    # New: full series with step + timestamp per record.
+    series = [m for m in trial["series"] if m["name"] == "score"]
+    assert len(series) >= 3
+    assert [m["step"] for m in series[:3]] == [0, 1, 2]
+    assert all("timestamp" in m for m in series)
+    values = [m["value"] for m in series[:3]]
+    assert values == sorted(values), "reported curve is increasing"
+    assert values[0] == pytest.approx(0.5)
+
+    # New: trial wall-clock bounds.
+    assert trial["started_at"] is not None
+    assert trial["finished_at"] is not None
+    assert trial["started_at"] <= trial["finished_at"]
+
+
+def test_study_run_dir_has_trial_timeline(tmp_path):
+    study = _study(tmp_path)
+    view = soma.RunView(study.run_dir)
+    timeline = view.trial_timeline()
+    assert len(timeline) == 3
+    assert all(t["state"] == "completed" for t in timeline)
+    assert all(t["started_at"] is not None for t in timeline)
+    assert all(t["duration_ms"] is not None for t in timeline)
+
+    listed = soma.runs(str(tmp_path))
+    assert listed and listed[0].kind == "study"
+
+
+# ── CLI ─────────────────────────────────────────────────────────────
+
+
+def test_cli_soma_runs_table_and_json(tmp_path, capsys):
+    _tracked_fit(tmp_path, "cli-run")
+
+    assert cli_main(["runs", "--root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "cli-run" in out
+    assert "completed" in out
+    assert "RUN ID" in out
+
+    assert cli_main(["runs", "--root", str(tmp_path), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data[0]["name"] == "cli-run"
+
+
+def test_cli_soma_runs_empty(tmp_path, capsys):
+    assert cli_main(["runs", "--root", str(tmp_path)]) == 0
+    assert "no runs" in capsys.readouterr().out
+
+
+# ── overlays (architecture + efficiency rendering) ──────────────────
+
+
+def test_graph_to_mermaid_accepts_overlay_kwarg(tmp_path):
+    g = _graph()
+    plain = g.to_mermaid()
+    assert "classDef" not in plain
+
+    annotated = g.to_mermaid(
+        overlay={
+            "nodes": {
+                "a": {"status": "completed", "duration_ms": 1200},
+                "b": {"status": "cached", "cache_tier": "memory", "duration_ms": 3},
+            }
+        }
+    )
+    assert 'a["a<br/>1.2s"]' in annotated
+    assert 'b["b<br/>3ms · mem hit"]' in annotated
+    assert "class a soma_completed" in annotated
+    assert "class b soma_cached" in annotated
+
+    dot = g.to_graphviz(overlay={"nodes": {"a": {"status": "failed"}}})
+    assert "fillcolor" in dot
+
+    with pytest.raises(RuntimeError, match="invalid overlay"):
+        g.to_mermaid(overlay={"nodes": {"a": {"status": "not-a-status"}}})
+
+
+def test_runview_overlay_and_annotated_rendering(tmp_path):
+    run = _tracked_fit(tmp_path)
+    view = soma.RunView(run.dir)
+
+    overlay = view.overlay()
+    assert set(overlay["nodes"]) == {"a", "b"}
+    assert overlay["nodes"]["a"]["status"] == "completed"
+    assert overlay["nodes"]["a"]["duration_ms"] is not None
+
+    mermaid = view.to_mermaid()
+    assert "class a soma_completed" in mermaid
+    assert "class b soma_completed" in mermaid
+
+    plain = view.to_mermaid(overlay=False)
+    assert "classDef" not in plain
+    assert plain == _graph().to_mermaid()
+
+    dot = view.to_graphviz()
+    assert "fillcolor" in dot
+
+    # The overlay dict round-trips through the Graph kwarg path too.
+    assert "class a soma_completed" in _graph().to_mermaid(overlay=overlay)
+
+
+def test_cli_soma_graph(tmp_path, capsys):
+    run = _tracked_fit(tmp_path, "graph-cli")
+    run_id = run.id
+
+    assert cli_main(["graph", run_id, "--root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("graph LR")
+    assert "class a soma_completed" in out
+
+    assert cli_main(["graph", run.dir, "--format", "dot"]) == 0
+    assert capsys.readouterr().out.startswith("digraph G {")
+
+    assert cli_main(["graph", run_id, "--root", str(tmp_path), "--no-overlay"]) == 0
+    assert "classDef" not in capsys.readouterr().out
+
+    assert cli_main(["graph", "nope", "--root", str(tmp_path)]) == 1
+    assert "no run" in capsys.readouterr().err

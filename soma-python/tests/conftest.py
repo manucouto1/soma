@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
 import time
 import urllib.request
 import warnings
 
 import pytest
+
+# Isolate the persistent cache per test session: without this, every
+# `Graph()` in the suite would share the developer's real
+# `~/.soma/cache`, letting entries from previous runs mask fit/forward
+# behavior and creating order-dependent tests. Tests that need a
+# specific cache dir override SOMA_CACHE_DIR themselves (subprocesses
+# inherit their own env copies).
+os.environ.setdefault("SOMA_CACHE_DIR", tempfile.mkdtemp(prefix="soma-test-cache-"))
 
 
 def start_worker_and_wait(worker_factory, port, timeout=30.0):

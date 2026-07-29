@@ -21,7 +21,7 @@ use somatize_core::study::{Direction, Objective, PruningStrategy, SearchStrategy
 use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
 use somatize_core::value::Value;
 use somatize_runtime::EventBus;
-use somatize_runtime::cache::{LocalCache, MemoryCache, TieredCache};
+use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};
 use somatize_runtime::executor::{self, Context, GraphInfo};
 use somatize_runtime::executors::study::{
     FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
@@ -39,7 +39,75 @@ fn py_err_to_soma(e: PyErr) -> SomaError {
     SomaError::Other(e.to_string())
 }
 
+/// The shared persistent cache root: `$SOMA_CACHE_DIR`, else `~/.soma/cache`.
+/// Shared across processes and projects so a re-run (or another
+/// investigation over the same data) reuses previous compute.
+fn default_cache_dir() -> Option<std::path::PathBuf> {
+    if let Ok(dir) = std::env::var("SOMA_CACHE_DIR")
+        && !dir.is_empty()
+    {
+        return Some(std::path::PathBuf::from(dir));
+    }
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| std::path::PathBuf::from(home).join(".soma").join("cache"))
+}
+
+/// Forward with output memoization: key = hash(config + state + input).
+/// An unhashable state or input means "uncacheable", not an error.
+#[allow(clippy::too_many_arguments)]
+fn forward_with_cache(
+    cache: &dyn somatize_core::cache::CacheStore,
+    filter: &dyn somatize_core::filter::Filter,
+    meta: &somatize_core::filter::FilterMeta,
+    input: &Value,
+    input_hash: Option<&somatize_core::cache::CacheKey>,
+    state: &Value,
+    origin: &somatize_core::cache::Origin,
+    seed: Option<i64>,
+) -> somatize_core::error::Result<Value> {
+    // Nondeterministic forwards are excluded: serving a recorded result
+    // would freeze what the user expects to vary. A seeded run may cache
+    // them: the seed is in the key, so results vary across seeds but are
+    // stable within one.
+    let out_key = if meta.cacheable && (meta.deterministic || seed.is_some()) {
+        match (somatize_core::cache::CacheKey::for_value(state), input_hash) {
+            (Ok(state_hash), Some(input_hash)) => Some(somatize_runtime::executor::salt_with_seed(
+                somatize_core::cache::CacheKey::for_output(
+                    &filter.config_hash(),
+                    &state_hash,
+                    input_hash,
+                ),
+                seed,
+            )),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(key) = &out_key
+        && let Ok(Some(cached)) = cache.get(key)
+    {
+        return Ok(cached);
+    }
+    let start = std::time::Instant::now();
+    let output = filter.forward(input, state)?;
+    if let Some(key) = &out_key {
+        let _ = cache.put_computed(key, &output, origin, start.elapsed(), meta.deterministic);
+    }
+    Ok(output)
+}
+
 /// Convert a JSON value into the closest Python object.
+/// Convert a Python object to a JSON value via the json module.
+fn py_any_to_json(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    let py = obj.py();
+    let json_mod = py.import("json")?;
+    let text: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
+    serde_json::from_str(&text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not JSON-serializable: {e}")))
+}
+
 fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyObject {
     match v {
         serde_json::Value::Number(n) => {
@@ -154,25 +222,16 @@ impl PyFilterBridge {
     fn new(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let name: String = obj.get_type().name()?.to_string();
 
-        // Build config hash from public attributes only.
-        let dict = obj.getattr("__dict__")?;
-        let dict_ref = dict.downcast::<pyo3::types::PyDict>()?;
-        let params = pyo3::types::PyDict::new(py);
-        for (key, value) in dict_ref.iter() {
-            let k: String = key.extract()?;
-            if !k.starts_with('_') {
-                params.set_item(key, value)?;
-            }
-        }
-
-        let json_mod = py.import("json")?;
-        let dict_sorted = json_mod.call_method(
-            "dumps",
-            (params,),
-            Some(&[("sort_keys", true)].into_py_dict(py)?),
-        )?;
-        let params_json: String = dict_sorted.extract()?;
-        let config_hash = CacheKey::from_parts(&[name.as_bytes(), params_json.as_bytes()]);
+        // Deterministic identity: qualified class name + canonical
+        // config (search defaults merged, sorted keys, typed
+        // CacheConfigError on unhashable attrs) + code fingerprint
+        // (_cache_version → source hash → cloudpickle ladder).
+        // See python/soma/_identity.py.
+        let identity_mod = py.import("soma._identity")?;
+        let identity = identity_mod.call_method1("filter_identity", (obj,))?;
+        let qualname: String = identity.get_item("qualname")?.extract()?;
+        let config_json: String = identity.get_item("config_json")?.extract()?;
+        let code_fp: String = identity.get_item("code_fp")?.extract()?;
 
         // Serialize with cloudpickle (like Spark/Dask/Ray).
         // Register the filter's module AND all its transitive local dependencies
@@ -303,6 +362,17 @@ _reqs = sorted(_reqs)
             .map(|s| s != "stateless")
             .unwrap_or(true); // default to trainable if not specified
 
+        // The environment is part of the identity: the same code under
+        // different dependency sets can produce different results.
+        let env = requirements.join(",");
+        let config_hash = CacheKey::from_parts(&[
+            b"soma-id-v2",
+            qualname.as_bytes(),
+            config_json.as_bytes(),
+            code_fp.as_bytes(),
+            env.as_bytes(),
+        ]);
+
         Ok(Self {
             py_obj: obj.clone().unbind(),
             name,
@@ -368,49 +438,57 @@ impl Filter for PyFilterBridge {
     fn meta(&self) -> FilterMeta {
         // Read optional meta attributes from the Python class.
         // Users can set: _cacheable = False, _differentiable = False,
-        //                _kind = "stateless", _stream_mode = "evolving"
-        let (kind, cacheable, differentiable, stream_mode) = Python::with_gil(|py| {
-            let obj = self.py_obj.bind(py);
+        //                _deterministic = False, _kind = "stateless",
+        //                _stream_mode = "evolving"
+        let (kind, cacheable, differentiable, deterministic, stream_mode) =
+            Python::with_gil(|py| {
+                let obj = self.py_obj.bind(py);
 
-            let cacheable = obj
-                .getattr("_cacheable")
-                .and_then(|v| v.extract::<bool>())
-                .unwrap_or(true);
+                let cacheable = obj
+                    .getattr("_cacheable")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(true);
 
-            let differentiable = obj
-                .getattr("_differentiable")
-                .and_then(|v| v.extract::<bool>())
-                .unwrap_or(false);
+                let differentiable = obj
+                    .getattr("_differentiable")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(false);
 
-            let kind = obj
-                .getattr("_kind")
-                .and_then(|v| v.extract::<String>())
-                .map(|s| match s.as_str() {
-                    "stateless" => FilterKind::Stateless,
-                    _ => FilterKind::Trainable,
-                })
-                .unwrap_or(FilterKind::Trainable);
+                let deterministic = obj
+                    .getattr("_deterministic")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(true);
 
-            let stream_mode = obj
-                .getattr("_stream_mode")
-                .and_then(|v| v.extract::<String>())
-                .map(|s| match s.as_str() {
-                    "evolving" => StreamMode::Evolving {
-                        checkpoint_every: 100,
-                    },
-                    "barrier" => StreamMode::Barrier,
-                    _ => StreamMode::FixedState,
-                })
-                .unwrap_or(StreamMode::FixedState);
+                let kind = obj
+                    .getattr("_kind")
+                    .and_then(|v| v.extract::<String>())
+                    .map(|s| match s.as_str() {
+                        "stateless" => FilterKind::Stateless,
+                        _ => FilterKind::Trainable,
+                    })
+                    .unwrap_or(FilterKind::Trainable);
 
-            (kind, cacheable, differentiable, stream_mode)
-        });
+                let stream_mode = obj
+                    .getattr("_stream_mode")
+                    .and_then(|v| v.extract::<String>())
+                    .map(|s| match s.as_str() {
+                        "evolving" => StreamMode::Evolving {
+                            checkpoint_every: 100,
+                        },
+                        "barrier" => StreamMode::Barrier,
+                        _ => StreamMode::FixedState,
+                    })
+                    .unwrap_or(StreamMode::FixedState);
+
+                (kind, cacheable, differentiable, deterministic, stream_mode)
+            });
 
         FilterMeta {
             name: self.name.clone(),
             kind,
             cacheable,
             differentiable,
+            deterministic,
             stream_mode,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -764,6 +842,20 @@ fn trial_to_py(py: Python<'_>, trial: &somatize_core::study::Trial) -> PyResult<
         metrics_dict.set_item(&m.name, m.value)?;
     }
     dict.set_item("metrics", metrics_dict)?;
+    // Full metric series (one record per report), for learning curves —
+    // "metrics" above keeps only the last value per name.
+    let series = pyo3::types::PyList::empty(py);
+    for m in &trial.metrics {
+        let rec = PyDict::new(py);
+        rec.set_item("name", &m.name)?;
+        rec.set_item("value", m.value)?;
+        rec.set_item("step", m.step)?;
+        rec.set_item("timestamp", m.timestamp.to_rfc3339())?;
+        series.append(rec)?;
+    }
+    dict.set_item("series", series)?;
+    dict.set_item("started_at", trial.started_at.map(|t| t.to_rfc3339()))?;
+    dict.set_item("finished_at", trial.finished_at.map(|t| t.to_rfc3339()))?;
     dict.set_item("duration_ms", trial.duration_ms)?;
     Ok(dict.unbind())
 }
@@ -773,7 +865,8 @@ impl PyStudy {
     #[new]
     #[pyo3(signature = (name, search_space=None, strategy="grid".to_string(), n_trials=10,
                         objectives=None, seed=None, objective=None, direction="maximize".to_string(),
-                        pruning=None, tracking=true, root=".soma".to_string(), tags=None))]
+                        pruning=None, tracking=true, root=".soma".to_string(), tags=None,
+                        seeds=None, frozen=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         _py: Python<'_>,
@@ -789,6 +882,8 @@ impl PyStudy {
         tracking: bool,
         root: String,
         tags: Option<Vec<String>>,
+        seeds: Option<Vec<i64>>,
+        frozen: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         let mut space = SearchSpace::new();
         if let Some(dims) = search_space {
@@ -850,6 +945,17 @@ impl PyStudy {
             study.pruning = parse_pruning(p)?;
         }
         study.tags = tags.unwrap_or_default();
+        // Experiment seeds: every sampled config runs once per seed;
+        // trial params carry "seed" (wire torch.manual_seed(trial["seed"])
+        // in the trial callable — the cache keys per seed automatically).
+        study.seeds = seeds.unwrap_or_default();
+        if let Some(f) = frozen {
+            for (k, v) in f.iter() {
+                let key: String = k.extract()?;
+                let value: serde_json::Value = py_any_to_json(&v)?;
+                study.frozen.insert(key, value);
+            }
+        }
 
         Ok(Self {
             study,
@@ -957,6 +1063,23 @@ impl PyStudy {
                         manifest.tags = self.study.tags.clone();
                         manifest.python_version =
                             Some(py.version().split_whitespace().next().unwrap_or("").into());
+                        // Record experiment seeds (and the sampler seed)
+                        // so a reader can see what this run covers.
+                        for (i, s) in self.study.seeds.iter().enumerate() {
+                            manifest.seeds.insert(format!("seed_{i}"), *s);
+                        }
+                        match &self.study.strategy {
+                            somatize_core::study::SearchStrategy::Random {
+                                seed: Some(s), ..
+                            }
+                            | somatize_core::study::SearchStrategy::Bayesian {
+                                seed: Some(s),
+                                ..
+                            } => {
+                                manifest.seeds.insert("sampler".into(), *s as i64);
+                            }
+                            _ => {}
+                        }
                         let _ = t.save_manifest(&manifest);
                     }
                     t
@@ -1131,6 +1254,33 @@ impl PyStudy {
     #[getter]
     fn progress(&self) -> f64 {
         self.study.progress()
+    }
+
+    /// Declared objectives as `(metric, direction)` pairs, e.g.
+    /// `[("f1", "maximize")]`. A composite objective reports as
+    /// `("score", direction)`.
+    #[getter]
+    fn objectives(&self) -> Vec<(String, String)> {
+        let dir_str = |d: &somatize_core::study::Direction| match d {
+            somatize_core::study::Direction::Maximize => "maximize".to_string(),
+            somatize_core::study::Direction::Minimize => "minimize".to_string(),
+        };
+        if self.study.objectives.is_empty()
+            && let Some(composite) = &self.study.composite
+        {
+            return vec![("score".to_string(), dir_str(&composite.direction))];
+        }
+        self.study
+            .objectives
+            .iter()
+            .map(|o| (o.metric.clone(), dir_str(&o.direction)))
+            .collect()
+    }
+
+    /// The study's display name.
+    #[getter]
+    fn name(&self) -> String {
+        self.study.name.clone()
     }
 
     /// Run directory holding study.json/events.jsonl (None if tracking
@@ -1472,12 +1622,14 @@ impl PyGraph {
                 let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
                 let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
+                let config_hash = self.library.get(&node.id).map(|f| f.config_hash());
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
                     pickled_filter: pickled.clone(),
                     state,
                     requirements: reqs.clone(),
                     trainable,
+                    config_hash,
                 })
             })
             .collect();
@@ -1580,12 +1732,14 @@ impl PyGraph {
                 let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
                 let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
                 let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
+                let config_hash = self.library.get(&node.id).map(|f| f.config_hash());
                 Some(SerializedFilter {
                     node_id: node.id.clone(),
                     pickled_filter: pickled.clone(),
                     state,
                     requirements: reqs.clone(),
                     trainable,
+                    config_hash,
                 })
             })
             .collect();
@@ -1750,7 +1904,11 @@ impl PyGraph {
     ///
     /// Optional keyword arguments:
     ///
-    /// * `cache` — cache backend: `"memory"` (default), `"local"`, or `"tiered"`.
+    /// * `cache` — cache backend: `"memory"`, `"local"`, or `"tiered"`.
+    ///   Default: a persistent tiered cache (memory LRU over a shared
+    ///   on-disk store at `$SOMA_CACHE_DIR` or `~/.soma/cache`), so fit
+    ///   states and forward outputs survive crashes and are shared
+    ///   across processes and projects. Pass `cache="memory"` to opt out.
     /// * `cache_path` — directory for `"local"` / `"tiered"` cache (required for those).
     /// * `cache_max_bytes` — max bytes for the in-memory LRU (default 1 GB).
     #[new]
@@ -1761,34 +1919,42 @@ impl PyGraph {
         cache_max_bytes: Option<usize>,
     ) -> PyResult<Self> {
         let max_bytes = cache_max_bytes.unwrap_or(1024 * 1024 * 1024);
-        let cache_store: Arc<dyn somatize_core::cache::CacheStore> = match cache.unwrap_or("memory")
-        {
-            "memory" => Arc::new(MemoryCache::new(max_bytes)),
-            "local" => {
+        let cache_store: Arc<dyn somatize_core::cache::CacheStore> = match cache {
+            None => match default_cache_dir().and_then(|dir| FsActionStore::new(dir).ok()) {
+                Some(local) => Arc::new(TieredCache::memory_and_local(
+                    Box::new(MemoryCache::new(max_bytes)),
+                    Box::new(local),
+                )),
+                // No writable cache dir (sandbox, read-only home):
+                // degrade to memory-only rather than failing.
+                None => Arc::new(MemoryCache::new(max_bytes)),
+            },
+            Some("memory") => Arc::new(MemoryCache::new(max_bytes)),
+            Some("local") => {
                 let path = cache_path.ok_or_else(|| {
                     pyo3::exceptions::PyValueError::new_err(
                         "cache_path is required for cache=\"local\"",
                     )
                 })?;
                 Arc::new(
-                    LocalCache::new(path)
+                    FsActionStore::new(path)
                         .map_err(|e| PyRuntimeError::new_err(format!("cache init: {e}")))?,
                 )
             }
-            "tiered" => {
+            Some("tiered") => {
                 let path = cache_path.ok_or_else(|| {
                     pyo3::exceptions::PyValueError::new_err(
                         "cache_path is required for cache=\"tiered\"",
                     )
                 })?;
-                let local = LocalCache::new(path)
+                let local = FsActionStore::new(path)
                     .map_err(|e| PyRuntimeError::new_err(format!("cache init: {e}")))?;
                 Arc::new(TieredCache::memory_and_local(
                     Box::new(MemoryCache::new(max_bytes)),
                     Box::new(local),
                 ))
             }
-            other => {
+            Some(other) => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "unknown cache type: {other:?} (expected \"memory\", \"local\", or \"tiered\")"
                 )));
@@ -1911,7 +2077,7 @@ impl PyGraph {
     ///
     /// If workers are registered and no node forces local, training is
     /// dispatched to a remote worker.
-    #[pyo3(signature = (x, y=None, batch_size=None, mode="inference"))]
+    #[pyo3(signature = (x, y=None, batch_size=None, mode="inference", seed=None))]
     fn fit(
         &mut self,
         py: Python<'_>,
@@ -1919,6 +2085,7 @@ impl PyGraph {
         y: Option<&Bound<'_, pyo3::types::PyAny>>,
         batch_size: Option<usize>,
         mode: &str,
+        seed: Option<i64>,
     ) -> PyResult<()> {
         let x_val = py_to_value(py, x)?;
         let y_val = match y {
@@ -1947,16 +2114,39 @@ impl PyGraph {
             )
             .map_err(soma_err_to_py)?;
             let runner = LocalRunner;
-            let (_output, states) = runner
-                .fit(
-                    &compile_result.plan,
-                    &self.library,
-                    self.cache.as_ref(),
-                    &self.event_bus,
-                    &x_val,
-                    y_val.as_ref(),
-                )
-                .map_err(soma_err_to_py)?;
+            let run_id = somatize_core::util::timestamp_id("fit");
+            self.event_bus
+                .emit(somatize_core::event::Event::RunStarted {
+                    run_id: run_id.clone(),
+                    plan_summary: compile_result.plan.summary(),
+                });
+            let run_start = std::time::Instant::now();
+            let result = runner.fit(
+                &compile_result.plan,
+                &self.library,
+                self.cache.as_ref(),
+                &self.event_bus,
+                &run_id,
+                &x_val,
+                y_val.as_ref(),
+            );
+            let (_output, states) = match result {
+                Ok(out) => {
+                    self.event_bus
+                        .emit(somatize_core::event::Event::RunCompleted {
+                            run_id,
+                            duration: run_start.elapsed(),
+                        });
+                    out
+                }
+                Err(e) => {
+                    self.event_bus.emit(somatize_core::event::Event::RunFailed {
+                        run_id,
+                        error: e.to_string(),
+                    });
+                    return Err(soma_err_to_py(e));
+                }
+            };
             // LocalRunner tags composite-produced states with "__state_{id}".
             // Regular sequential states appear under the bare node_id.
             for (key, state) in states {
@@ -2016,76 +2206,151 @@ impl PyGraph {
             outputs.insert(format!("__input_{root_id}"), x_val.clone());
         }
 
-        for node_id in &sorted {
-            let filter = self
-                .library
-                .get(node_id)
-                .ok_or_else(|| PyRuntimeError::new_err(format!("filter not found: {node_id}")))?;
+        self.event_bus
+            .emit(somatize_core::event::Event::RunStarted {
+                run_id: run_id.clone(),
+                plan_summary: somatize_core::event::PlanSummary {
+                    total_nodes: sorted.len(),
+                    cached_nodes: 0,
+                    parallel_branches: 0,
+                },
+            });
+        let run_start = std::time::Instant::now();
+        let bus = self.event_bus.clone();
 
-            self.event_bus
-                .emit(somatize_core::event::Event::NodeStarted {
-                    run_id: run_id.clone(),
-                    node_id: node_id.to_string(),
-                    kind: filter.meta().kind,
-                });
+        let fit_result: PyResult<()> = (|| {
+            for node_id in &sorted {
+                let filter = self.library.get(node_id).ok_or_else(|| {
+                    PyRuntimeError::new_err(format!("filter not found: {node_id}"))
+                })?;
 
-            let preds = graph_info.predecessors(node_id);
-            let input = match preds.len() {
-                0 => x_val.clone(),
-                1 => outputs
-                    .get(&preds[0])
-                    .cloned()
-                    .unwrap_or_else(|| x_val.clone()),
-                _ => {
-                    let mut merged = serde_json::Map::new();
-                    for pred_id in preds {
-                        if let Some(val) = outputs.get(pred_id.as_str()) {
-                            let json_val =
-                                serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
-                            merged.insert(pred_id.clone(), json_val);
+                self.event_bus
+                    .emit(somatize_core::event::Event::NodeStarted {
+                        run_id: run_id.clone(),
+                        node_id: node_id.to_string(),
+                        kind: filter.meta().kind,
+                    });
+
+                let preds = graph_info.predecessors(node_id);
+                let input = match preds.len() {
+                    0 => x_val.clone(),
+                    1 => outputs
+                        .get(&preds[0])
+                        .cloned()
+                        .unwrap_or_else(|| x_val.clone()),
+                    _ => {
+                        let mut merged = serde_json::Map::new();
+                        for pred_id in preds {
+                            if let Some(val) = outputs.get(pred_id.as_str()) {
+                                let json_val = val.to_plain_json();
+                                merged.insert(pred_id.clone(), json_val);
+                            }
                         }
+                        Value::json(serde_json::Value::Object(merged))
                     }
-                    Value::json(serde_json::Value::Object(merged))
-                }
-            };
-
-            let meta = filter.meta();
-            let start = std::time::Instant::now();
-
-            let output = if meta.kind == somatize_core::filter::FilterKind::Trainable {
-                let data_hash = somatize_core::cache::CacheKey::hash_data(
-                    &serde_json::to_vec(&input).unwrap_or_default(),
-                );
-                let state_key =
-                    somatize_core::cache::CacheKey::for_state(&filter.config_hash(), &data_hash);
-
-                let state = if let Ok(Some(cached)) = self.cache.get(&state_key) {
-                    cached
-                } else {
-                    let s = filter.fit(&input, y_val.as_ref()).map_err(soma_err_to_py)?;
-                    let _ = self.cache.put(&state_key, &s);
-                    s
                 };
 
-                let out = filter.forward(&input, &state).map_err(soma_err_to_py)?;
-                self.library.set_state(node_id.to_string(), state);
-                out
-            } else {
-                filter
-                    .forward(&input, &Value::Empty)
-                    .map_err(soma_err_to_py)?
-            };
+                let meta = filter.meta();
+                let start = std::time::Instant::now();
 
-            self.event_bus
-                .emit(somatize_core::event::Event::NodeCompleted {
-                    run_id: run_id.clone(),
+                let origin = somatize_core::cache::Origin::Computed {
                     node_id: node_id.to_string(),
-                    duration: start.elapsed(),
-                    output_summary: format!("{output}"),
-                });
+                    run_id: run_id.clone(),
+                };
+                let input_hash = somatize_core::cache::CacheKey::for_value(&input).ok();
 
-            outputs.insert(node_id.to_string(), output);
-        }
+                let output = if meta.kind == somatize_core::filter::FilterKind::Trainable {
+                    // Unhashable x/y ⇒ skip caching, never a degenerate key.
+                    // Labels are part of the state key.
+                    let y_hash = match y_val.as_ref() {
+                        Some(y) => somatize_core::cache::CacheKey::for_value(y).ok().map(Some),
+                        None => Some(None),
+                    };
+                    let state_key = match (&input_hash, y_hash) {
+                        (Some(x_hash), Some(y_hash)) => {
+                            Some(somatize_runtime::executor::salt_with_seed(
+                                somatize_core::cache::CacheKey::for_state(
+                                    &filter.config_hash(),
+                                    x_hash,
+                                    y_hash.as_ref(),
+                                ),
+                                seed,
+                            ))
+                        }
+                        _ => None,
+                    };
+
+                    let cached_state = state_key
+                        .as_ref()
+                        .and_then(|key| self.cache.get(key).ok().flatten());
+                    let state = if let Some(cached) = cached_state {
+                        cached
+                    } else {
+                        let fit_start = std::time::Instant::now();
+                        let s = filter.fit(&input, y_val.as_ref()).map_err(soma_err_to_py)?;
+                        if let Some(key) = &state_key {
+                            let _ = self.cache.put_computed(
+                                key,
+                                &s,
+                                &origin,
+                                fit_start.elapsed(),
+                                true,
+                            );
+                        }
+                        s
+                    };
+
+                    let out = forward_with_cache(
+                        self.cache.as_ref(),
+                        filter.as_ref(),
+                        &meta,
+                        &input,
+                        input_hash.as_ref(),
+                        &state,
+                        &origin,
+                        seed,
+                    )
+                    .map_err(soma_err_to_py)?;
+                    self.library.set_state(node_id.to_string(), state);
+                    out
+                } else {
+                    forward_with_cache(
+                        self.cache.as_ref(),
+                        filter.as_ref(),
+                        &meta,
+                        &input,
+                        input_hash.as_ref(),
+                        &Value::Empty,
+                        &origin,
+                        seed,
+                    )
+                    .map_err(soma_err_to_py)?
+                };
+
+                self.event_bus
+                    .emit(somatize_core::event::Event::NodeCompleted {
+                        run_id: run_id.clone(),
+                        node_id: node_id.to_string(),
+                        duration: start.elapsed(),
+                        output_summary: format!("{output}"),
+                    });
+
+                outputs.insert(node_id.to_string(), output);
+            }
+            Ok(())
+        })();
+
+        match &fit_result {
+            Ok(()) => bus.emit(somatize_core::event::Event::RunCompleted {
+                run_id,
+                duration: run_start.elapsed(),
+            }),
+            Err(e) => bus.emit(somatize_core::event::Event::RunFailed {
+                run_id,
+                error: e.to_string(),
+            }),
+        };
+        fit_result?;
 
         self.fitted = true;
         Ok(())
@@ -2098,13 +2363,14 @@ impl PyGraph {
     /// - No workers → local execution
     /// - Workers + all nodes non-local → entire plan dispatched to worker
     /// - Workers + mixed (some local) → local execution with remote fallback
-    #[pyo3(signature = (x, stream=false, chunk_size=1024))]
+    #[pyo3(signature = (x, stream=false, chunk_size=1024, seed=None))]
     fn forward(
         &self,
         py: Python<'_>,
         x: &Bound<'_, pyo3::types::PyAny>,
         stream: bool,
         chunk_size: usize,
+        seed: Option<i64>,
     ) -> PyResult<PyObject> {
         if !self.fitted {
             return Err(PyRuntimeError::new_err(
@@ -2131,7 +2397,9 @@ impl PyGraph {
                 self.event_bus.clone(),
                 somatize_core::util::timestamp_id("stream_forward"),
             )
-            .with_graph_info(graph_info);
+            .with_graph_info(graph_info)
+            .with_seed(seed)
+            .with_cache_arc(self.cache.clone());
 
             let roots = self.graph.roots();
             if roots.len() == 1 {
@@ -2139,12 +2407,14 @@ impl PyGraph {
             }
             ctx.set("__input__", x_val);
 
-            executor::execute(
-                &compile_result.plan,
-                &mut ctx,
-                &self.library,
-                self.cache.as_ref(),
-            )
+            py.allow_threads(|| {
+                executor::execute(
+                    &compile_result.plan,
+                    &mut ctx,
+                    &self.library,
+                    self.cache.as_ref(),
+                )
+            })
             .map_err(soma_err_to_py)?;
 
             let leaves = self.graph.leaves();
@@ -2186,7 +2456,8 @@ impl PyGraph {
             self.event_bus.clone(),
             somatize_core::util::timestamp_id("graph_forward"),
         )
-        .with_graph_info(graph_info);
+        .with_graph_info(graph_info)
+        .with_seed(seed);
 
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
@@ -2198,12 +2469,17 @@ impl PyGraph {
         }
         ctx.set("__input__", x_val);
 
-        executor::execute(
-            &compile_result.plan,
-            &mut ctx,
-            &self.library,
-            self.cache.as_ref(),
-        )
+        // Release the GIL: Parallel plans run branches on scoped threads
+        // whose Python filters must acquire it — holding it here would
+        // deadlock the join.
+        py.allow_threads(|| {
+            executor::execute(
+                &compile_result.plan,
+                &mut ctx,
+                &self.library,
+                self.cache.as_ref(),
+            )
+        })
         .map_err(soma_err_to_py)?;
 
         let leaves = self.graph.leaves();
@@ -2234,23 +2510,45 @@ impl PyGraph {
         .map_err(soma_err_to_py)?;
 
         let graph_info = GraphInfo::from_graph(&self.graph);
-        let mut ctx = Context::new(
-            self.event_bus.clone(),
-            somatize_core::util::timestamp_id("graph_run"),
-        )
-        .with_graph_info(graph_info);
+        let run_id = somatize_core::util::timestamp_id("graph_run");
+        let mut ctx =
+            Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
 
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
         }
 
-        executor::execute(
-            &compile_result.plan,
-            &mut ctx,
-            &self.library,
-            self.cache.as_ref(),
-        )
-        .map_err(soma_err_to_py)?;
+        self.event_bus
+            .emit(somatize_core::event::Event::RunStarted {
+                run_id: run_id.clone(),
+                plan_summary: compile_result.plan.summary(),
+            });
+        let run_start = std::time::Instant::now();
+
+        // Release the GIL: Parallel plans run branches on scoped threads
+        // whose Python filters must acquire it — holding it here would
+        // deadlock the join.
+        let result = py.allow_threads(|| {
+            executor::execute(
+                &compile_result.plan,
+                &mut ctx,
+                &self.library,
+                self.cache.as_ref(),
+            )
+        });
+        match &result {
+            Ok(()) => self
+                .event_bus
+                .emit(somatize_core::event::Event::RunCompleted {
+                    run_id,
+                    duration: run_start.elapsed(),
+                }),
+            Err(e) => self.event_bus.emit(somatize_core::event::Event::RunFailed {
+                run_id,
+                error: e.to_string(),
+            }),
+        };
+        result.map_err(soma_err_to_py)?;
 
         let dict = PyDict::new(py);
         for (k, vv) in &ctx.store {
@@ -2303,13 +2601,26 @@ impl PyGraph {
     // ── Visualization ──
 
     /// Render the graph as a Mermaid diagram string.
-    fn to_mermaid(&self) -> String {
-        self.graph.to_mermaid()
+    ///
+    /// `overlay` is an optional dict of per-node execution annotations
+    /// (the shape `RunView.overlay()` returns): status coloring plus a
+    /// duration/cache/flags label line per node.
+    #[pyo3(signature = (overlay=None))]
+    fn to_mermaid(&self, py: Python<'_>, overlay: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+        match overlay {
+            None => Ok(self.graph.to_mermaid()),
+            Some(ov) => Ok(self.graph.to_mermaid_with(&py_overlay(py, ov)?)),
+        }
     }
 
-    /// Render the graph as a Graphviz DOT string.
-    fn to_graphviz(&self) -> String {
-        self.graph.to_graphviz()
+    /// Render the graph as a Graphviz DOT string (same optional
+    /// `overlay` as `to_mermaid`).
+    #[pyo3(signature = (overlay=None))]
+    fn to_graphviz(&self, py: Python<'_>, overlay: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+        match overlay {
+            None => Ok(self.graph.to_graphviz()),
+            Some(ov) => Ok(self.graph.to_graphviz_with(&py_overlay(py, ov)?)),
+        }
     }
 
     /// Render the graph as an ASCII text tree.
@@ -3060,7 +3371,341 @@ impl PyRun {
     }
 }
 
+// ── Cache management (backs the `soma cache` CLI) ──
+
+fn resolve_cache_root(path: Option<String>) -> PyResult<std::path::PathBuf> {
+    match path {
+        Some(p) => Ok(p.into()),
+        None => default_cache_dir().ok_or_else(|| {
+            PyRuntimeError::new_err("no cache directory: set SOMA_CACHE_DIR or HOME")
+        }),
+    }
+}
+
+fn open_store(path: Option<String>) -> PyResult<FsActionStore> {
+    let root = resolve_cache_root(path)?;
+    FsActionStore::new(root).map_err(|e| PyRuntimeError::new_err(format!("cache open: {e}")))
+}
+
+/// Stats about the shared persistent cache.
+#[pyfunction]
+#[pyo3(signature = (path=None))]
+fn cache_stats(py: Python<'_>, path: Option<String>) -> PyResult<PyObject> {
+    let store = open_store(path)?;
+    let actions = store
+        .actions()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let cas_bytes = store
+        .cas_bytes()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let pinned = store
+        .pinned()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    let total_compute_ms: u64 = actions.iter().map(|a| a.compute_ms).sum();
+    let mut blob_hashes = std::collections::HashSet::new();
+    let mut available = 0usize;
+    for record in &actions {
+        for hash in record.outputs.values() {
+            if blob_hashes.insert(*hash)
+                && somatize_core::action::BlobStore::contains(&store, hash).unwrap_or(false)
+            {
+                available += 1;
+            }
+        }
+    }
+
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("root", store.root().display().to_string())?;
+    dict.set_item("actions", actions.len())?;
+    dict.set_item("unique_outputs", blob_hashes.len())?;
+    dict.set_item("blobs_available", available)?;
+    dict.set_item("blobs_evicted", blob_hashes.len() - available)?;
+    dict.set_item("cas_bytes", cas_bytes)?;
+    dict.set_item("pinned", pinned.len())?;
+    dict.set_item("saved_compute_ms", total_compute_ms)?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Cost-aware GC: evict blobs (records retained) down to `max_bytes`.
+#[pyfunction]
+#[pyo3(signature = (max_bytes, min_age_secs=3600, path=None))]
+fn cache_gc(
+    py: Python<'_>,
+    max_bytes: u64,
+    min_age_secs: u64,
+    path: Option<String>,
+) -> PyResult<PyObject> {
+    let store = open_store(path)?;
+    let policy = somatize_runtime::cache::gc::GcPolicy {
+        max_bytes,
+        min_age: std::time::Duration::from_secs(min_age_secs),
+    };
+    let report = somatize_runtime::cache::gc::collect(&store, &policy)
+        .map_err(|e| PyRuntimeError::new_err(format!("gc: {e}")))?;
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("bytes_before", report.bytes_before)?;
+    dict.set_item("bytes_after", report.bytes_after)?;
+    dict.set_item("blobs_evicted", report.blobs_evicted)?;
+    dict.set_item("blobs_kept", report.blobs_kept)?;
+    dict.set_item("pinned_blobs", report.pinned_blobs)?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Pin an action as a GC root under a human-readable name.
+#[pyfunction]
+#[pyo3(signature = (name, key_hex, path=None))]
+fn cache_pin(name: &str, key_hex: &str, path: Option<String>) -> PyResult<()> {
+    if key_hex.len() != 64 || !key_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "key must be a 64-char hex action key",
+        ));
+    }
+    let mut digest = [0u8; 32];
+    for (i, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&key_hex[i * 2..i * 2 + 2], 16)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    }
+    let store = open_store(path)?;
+    store
+        .pin(name, &somatize_core::cache::CacheKey(digest))
+        .map_err(|e| PyRuntimeError::new_err(format!("pin: {e}")))
+}
+
+/// Verify every referenced blob against its content hash.
+#[pyfunction]
+#[pyo3(signature = (path=None))]
+fn cache_verify(py: Python<'_>, path: Option<String>) -> PyResult<PyObject> {
+    use somatize_core::action::BlobStore;
+    let store = open_store(path)?;
+    let actions = store
+        .actions()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let (mut ok, mut missing, mut corrupt) = (0usize, 0usize, 0usize);
+    let mut seen = std::collections::HashSet::new();
+    for record in &actions {
+        for hash in record.outputs.values() {
+            if !seen.insert(*hash) {
+                continue;
+            }
+            // get_bytes verifies content and maps corrupt blobs to None,
+            // so distinguish via raw existence.
+            match (
+                store.contains(hash).unwrap_or(false),
+                store.get_bytes(hash).ok().flatten(),
+            ) {
+                (true, Some(_)) => ok += 1,
+                (true, None) => corrupt += 1,
+                (false, _) => missing += 1,
+            }
+        }
+    }
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("ok", ok)?;
+    dict.set_item("missing", missing)?;
+    dict.set_item("corrupt", corrupt)?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Remove legacy Phase-1 (v1) cache entries: `<hh>/<hh>/<hex>.json`
+/// shard trees at the store root. The v2 key namespace makes them
+/// unreachable — they are pure dead weight.
+#[pyfunction]
+#[pyo3(signature = (path=None))]
+fn cache_purge_v1(py: Python<'_>, path: Option<String>) -> PyResult<PyObject> {
+    let root = resolve_cache_root(path)?;
+    let mut removed_files = 0u64;
+    let mut removed_bytes = 0u64;
+    if root.exists() {
+        for entry in std::fs::read_dir(&root).map_err(|e| PyRuntimeError::new_err(e.to_string()))? {
+            let entry = entry.map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            // v1 shard dirs are exactly two lowercase hex chars.
+            let is_v1_shard = name.len() == 2
+                && name.chars().all(|c| c.is_ascii_hexdigit())
+                && entry.path().is_dir();
+            if is_v1_shard {
+                fn walk(dir: &std::path::Path, files: &mut u64, bytes: &mut u64) {
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for e in entries.filter_map(|e| e.ok()) {
+                            let p = e.path();
+                            if p.is_dir() {
+                                walk(&p, files, bytes);
+                            } else {
+                                *files += 1;
+                                *bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
+                            }
+                        }
+                    }
+                }
+                walk(&entry.path(), &mut removed_files, &mut removed_bytes);
+                std::fs::remove_dir_all(entry.path())
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            }
+        }
+    }
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("removed_files", removed_files)?;
+    dict.set_item("removed_bytes", removed_bytes)?;
+    Ok(dict.into_any().unbind())
+}
+
 // ── Module ──
+
+// ── Run-directory readers (back `soma.runs()` / `soma.RunView`) ──
+//
+// Each function returns a JSON string (the serde shape of the
+// soma-runtime reader structs); the Python wrapper in `soma/_runs.py`
+// parses it. Same pattern as `Graph.graph_json`.
+
+/// Convert an overlay dict (the `RunView.overlay()` shape) into the
+/// core overlay struct, via JSON like `Graph.emit_event`.
+fn py_overlay(
+    py: Python<'_>,
+    overlay: &Bound<'_, PyDict>,
+) -> PyResult<somatize_core::viz::GraphOverlay> {
+    let json_mod = py.import("json")?;
+    let json_str: String = json_mod.call_method1("dumps", (overlay,))?.extract()?;
+    serde_json::from_str(&json_str)
+        .map_err(|e| PyRuntimeError::new_err(format!("invalid overlay: {e}")))
+}
+
+fn open_run_reader(dir: &str) -> PyResult<somatize_runtime::tracking::RunReader> {
+    somatize_runtime::tracking::RunReader::open(dir)
+        .map_err(|e| PyRuntimeError::new_err(format!("open run dir {dir}: {e}")))
+}
+
+fn to_json_py<T: serde::Serialize>(value: &T) -> PyResult<String> {
+    serde_json::to_string(value).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// All runs under `<root>/runs/`, newest first (JSON array of RunInfo).
+#[pyfunction]
+#[pyo3(signature = (root=".soma".to_string()))]
+fn list_runs_json(root: String) -> PyResult<String> {
+    let infos = somatize_runtime::tracking::list_runs(&root)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&infos)
+}
+
+/// Listing entry (manifest identity + derived state) for one run dir.
+#[pyfunction]
+fn run_info_json(dir: String) -> PyResult<String> {
+    let info = open_run_reader(&dir)?
+        .info()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&info)
+}
+
+/// The run's manifest.json contents.
+#[pyfunction]
+fn run_manifest_json(dir: String) -> PyResult<String> {
+    let manifest = open_run_reader(&dir)?
+        .manifest()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&manifest)
+}
+
+/// All parseable event envelopes from events.jsonl, in log order.
+#[pyfunction]
+fn run_events_json(dir: String) -> PyResult<String> {
+    let events = open_run_reader(&dir)?
+        .events()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&events)
+}
+
+/// Metric time series (optionally filtered by name).
+#[pyfunction]
+#[pyo3(signature = (dir, name=None))]
+fn run_metric_series_json(dir: String, name: Option<String>) -> PyResult<String> {
+    let points = open_run_reader(&dir)?
+        .metric_series(name.as_deref())
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&points)
+}
+
+/// Per-node execution spans (gantt/overlay substrate).
+#[pyfunction]
+fn run_node_timings_json(dir: String) -> PyResult<String> {
+    let spans = open_run_reader(&dir)?
+        .node_timings()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&spans)
+}
+
+/// Cache hit/miss counts, total and per node.
+#[pyfunction]
+fn run_cache_activity_json(dir: String) -> PyResult<String> {
+    let activity = open_run_reader(&dir)?
+        .cache_activity()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&activity)
+}
+
+/// HealthFlag events with wall time.
+#[pyfunction]
+fn run_health_flags_json(dir: String) -> PyResult<String> {
+    let flags = open_run_reader(&dir)?
+        .health_flags()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&flags)
+}
+
+/// Trial lifetimes from study.json (empty for non-study runs).
+#[pyfunction]
+fn run_trial_timeline_json(dir: String) -> PyResult<String> {
+    let spans = open_run_reader(&dir)?
+        .trial_timeline()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&spans)
+}
+
+/// Rendering overlay aggregated from this run's events (JSON
+/// GraphOverlay: per-node status, duration, cache tier, flags).
+#[pyfunction]
+fn run_overlay_json(dir: String) -> PyResult<String> {
+    let overlay = open_run_reader(&dir)?
+        .overlay()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&overlay)
+}
+
+/// Mermaid diagram of the run's graph, annotated with its overlay.
+#[pyfunction]
+#[pyo3(signature = (dir, overlay=true))]
+fn run_to_mermaid(dir: String, overlay: bool) -> PyResult<String> {
+    let reader = open_run_reader(&dir)?;
+    if overlay {
+        reader
+            .to_mermaid()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    } else {
+        let graph = reader
+            .graph()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+            .ok_or_else(|| PyRuntimeError::new_err(format!("run dir {dir} has no graph.json")))?;
+        Ok(graph.to_mermaid())
+    }
+}
+
+/// Graphviz DOT of the run's graph, annotated with its overlay.
+#[pyfunction]
+#[pyo3(signature = (dir, overlay=true))]
+fn run_to_graphviz(dir: String, overlay: bool) -> PyResult<String> {
+    let reader = open_run_reader(&dir)?;
+    if overlay {
+        reader
+            .to_graphviz()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    } else {
+        let graph = reader
+            .graph()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+            .ok_or_else(|| PyRuntimeError::new_err(format!("run dir {dir} has no graph.json")))?;
+        Ok(graph.to_graphviz())
+    }
+}
 
 #[pymodule]
 fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -3069,6 +3714,23 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTrial>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorker>()?;
+    m.add_function(wrap_pyfunction!(cache_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(cache_gc, m)?)?;
+    m.add_function(wrap_pyfunction!(cache_pin, m)?)?;
+    m.add_function(wrap_pyfunction!(cache_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(cache_purge_v1, m)?)?;
+    m.add_function(wrap_pyfunction!(list_runs_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_info_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_manifest_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_events_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_metric_series_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_node_timings_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_cache_activity_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_health_flags_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_trial_timeline_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_overlay_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_to_mermaid, m)?)?;
+    m.add_function(wrap_pyfunction!(run_to_graphviz, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

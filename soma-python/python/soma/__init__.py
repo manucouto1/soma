@@ -2,6 +2,7 @@
 
 from soma._soma import Graph, Run, Study, Trial, Worker, __version__
 from soma.filter import Filter
+from soma._identity import CacheConfigError
 from soma.search import search
 from soma.lab import Lab
 from soma.chain import Chain, Fork
@@ -34,6 +35,15 @@ from soma import _study  # noqa: E402, F401
 from soma import _tracking  # noqa: E402, F401
 
 from soma._experiments import experiments  # noqa: E402
+from soma._runs import RunView, runs  # noqa: E402
+
+# Install plot_*/dataframe methods on Study and RunView. The methods are
+# always present; calling them without the `somatize[viz]` extra raises
+# a helpful error.
+from soma import viz as _viz  # noqa: E402
+
+_viz._install()
+from soma.viz import experiments_dataframe  # noqa: E402
 
 # Install gradient_audit on Graph (depends on _orchestrator). Import
 # for side-effects. Re-export the user-facing types.
@@ -67,6 +77,9 @@ __all__ = [
     "Fork",
     "search",
     "experiments",
+    "runs",
+    "RunView",
+    "experiments_dataframe",
     "__version__",
     "Audit",
     "AuditReport",
