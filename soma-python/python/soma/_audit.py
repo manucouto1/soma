@@ -86,6 +86,39 @@ class Thresholds:
 _DEFAULT_THRESHOLDS = Thresholds()
 
 
+@dataclasses.dataclass(frozen=True)
+class AuditScope:
+    """Which submodules to audit *inside* one node's model.
+
+    Passed per node via ``gradient_audit(inside={...})`` or declared on
+    the filter class as ``_audit_scope``. Most callers never build one
+    directly — the duck-typed sugar covers the common cases::
+
+        g.gradient_audit(inside=True)                  # auto everywhere
+        g.gradient_audit(inside={"encoder": 2})        # int → depth
+        g.gradient_audit(inside={"head": ["attn.*"]})  # list → patterns
+
+        class Encoder(DifferentiableFilter):
+            _audit_scope = ["backbone.*.attn"]         # set where the model lives
+
+    With both ``depth`` and ``patterns`` unset, the auto heuristic
+    applies: direct children that own parameters, descending one extra
+    level through a single-child wrapper (the ``nn.Sequential`` case).
+    """
+
+    # Submodules whose dotted path has ≤ depth components (and own
+    # parameters). None = not depth-selected.
+    depth: int | None = None
+    # fnmatch patterns over ``named_modules()`` names. None = not
+    # pattern-selected. Parameterless matches are kept (their param
+    # fields stay NaN, which flagging already ignores).
+    patterns: tuple[str, ...] | None = None
+    # Record scoped submodules every Nth step (roots stay every-step).
+    sample_every: int = 1
+    # Hard cap of hooked submodules per node; truncation warns.
+    max_modules: int = 32
+
+
 # ── Records ─────────────────────────────────────────────────
 
 
@@ -331,12 +364,25 @@ class Audit:
         modules: list[tuple[str, "nn.Module"]],
         thresholds: Thresholds = _DEFAULT_THRESHOLDS,
         channels: "ChannelConfig | None" = None,
+        *,
+        sample_every: "dict[str, int] | None" = None,
+        children: "dict[str, tuple[str, str]] | None" = None,
     ):
         if torch is None:
             raise RuntimeError("gradient_audit needs torch")
         self.modules = modules
         self.thresholds = thresholds
         self.channels = channels
+        # Scoped-submodule bookkeeping (gradient_audit inside=). The
+        # `children` map — child fid → (parent fid, module path) — is
+        # the source of truth for hierarchy; ids are never parsed.
+        self._sample_every: dict[str, int] = sample_every or {}
+        self._children: dict[str, tuple[str, str]] = children or {}
+        # Execution order of scoped submodules per parent, captured by
+        # the forward hooks on their first observed step.
+        self._fwd_order: dict[str, list[str]] = defaultdict(list)
+        self._order_seen: set[str] = set()
+        self._trees_written: set[str] = set()
         self._records: dict[str, list[StepRecord]] = defaultdict(list)
         self._handles: list[Any] = []
         # Per-step transient buffer: filter_id → in-progress record. The
@@ -385,10 +431,23 @@ class Audit:
 
     # ── Hook closures ──
 
+    def _due(self, fid: str) -> bool:
+        """Whether `fid` records on the current step (sample_every)."""
+        n = self._sample_every.get(fid, 1)
+        return n <= 1 or self._step % n == 0
+
     def _make_fwd_hook(self, fid: str):
         thr = self.thresholds
 
         def hook(module, inputs, output):
+            # Execution order (scoped submodules only): first observed
+            # call wins — a module invoked twice appears once.
+            if fid in self._children and fid not in self._order_seen:
+                parent, path = self._children[fid]
+                self._fwd_order[parent].append(path)
+                self._order_seen.add(fid)
+            if not self._due(fid):
+                return
             t = output if isinstance(output, torch.Tensor) else None
             if t is None and isinstance(output, (tuple, list)) and output:
                 cand = output[0]
@@ -479,6 +538,8 @@ class Audit:
         called by ``Graph.backward`` once ``loss.backward()`` returns.
         """
         def hook(module, grad_input, grad_output):
+            if not self._due(fid):
+                return
             rec = self._pending.get(fid)
             if rec is None:
                 rec = StepRecord()
@@ -514,6 +575,10 @@ class Audit:
             self.channels is not None and self._step % self.channels.snapshot_every == 0
         )
         for fid, mod in self.modules:
+            if not self._due(fid):
+                # Sampled out this step: no NaN record, no jsonl row.
+                self._pending.pop(fid, None)
+                continue
             rec = self._pending.pop(fid, None) or StepRecord()
             rec.step = self._step
             rec.ts = now
@@ -545,6 +610,7 @@ class Audit:
             if snapshot_step:
                 self._channel_snapshot(fid)
             self._persist_step(fid, rec)
+        self._persist_module_trees()
         self._step += 1
 
     # ── Channel snapshots (correlation / CKA / effective rank) ──
@@ -616,6 +682,94 @@ class Audit:
             self._steps_file = (diag / "audit_steps.jsonl").open("a")
         line = {"filter": fid, **rec.to_dict()}
         self._steps_file.write(json.dumps(_json_safe(line)) + "\n")
+
+    def _persist_module_trees(self) -> None:
+        """Write ``diagnostics/modules/<node>.json`` once per scoped
+        parent: the inner architecture (soma-core Graph schema, edges =
+        execution-order chain), parameter counts, and the id maps the
+        viz layer renders from. Lazy — fires on the first committed
+        step with a tracked run active, so ``track_run`` may start
+        after audit entry."""
+        if not self._children:
+            return
+        run = self._active_run()
+        if run is None:
+            return
+        import json
+        import pathlib
+        import re
+
+        by_child_id = dict(self.modules)
+        parents: dict[str, dict[str, str]] = {}
+        for child_id, (parent, path) in self._children.items():
+            parents.setdefault(parent, {})[path] = child_id
+        for parent, path_to_id in parents.items():
+            if parent in self._trees_written:
+                continue
+            order = self._fwd_order.get(parent)
+            if not order:
+                continue  # no scoped hook fired yet
+            # Selected-but-never-called modules go after the observed
+            # execution order, in selection order.
+            tail = [p for p in path_to_id if p not in order]
+            full_order = list(order) + tail
+
+            used: set[str] = set()
+            mermaid_ids: dict[str, str] = {}
+            for path in full_order:
+                mid = re.sub(r"[^0-9A-Za-z_]", "_", path)
+                if not mid or mid[0].isdigit():
+                    mid = f"n_{mid}"
+                base, i = mid, 2
+                while mid in used:
+                    mid = f"{base}_{i}"
+                    i += 1
+                used.add(mid)
+                mermaid_ids[path] = mid
+
+            nodes = []
+            params: dict[str, int] = {}
+            for path in full_order:
+                mod = by_child_id[path_to_id[path]]
+                params[path] = sum(p.numel() for p in mod.parameters())
+                nodes.append(
+                    {
+                        "id": mermaid_ids[path],
+                        "label": path,
+                        "kind": {
+                            "type": "Filter",
+                            "filter_name": type(mod).__name__,
+                        },
+                    }
+                )
+            edges = [
+                {
+                    "id": f"e_{i}",
+                    "source": mermaid_ids[a],
+                    "target": mermaid_ids[b],
+                    "kind": "Data",
+                    "label": None,
+                }
+                for i, (a, b) in enumerate(zip(full_order, full_order[1:]))
+            ]
+
+            out_dir = pathlib.Path(run.dir) / "diagnostics" / "modules"
+            out_path = out_dir / f"{parent}.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps(
+                    {
+                        "node": parent,
+                        "graph": {"nodes": nodes, "edges": edges},
+                        "order": full_order,
+                        "params": params,
+                        "ids": {p: path_to_id[p] for p in full_order},
+                        "mermaid_ids": mermaid_ids,
+                    },
+                    indent=2,
+                )
+            )
+            self._trees_written.add(parent)
 
     def _persist_snapshot(self, fid: str, snap: dict, pend: dict) -> None:
         run = self._active_run()
@@ -854,27 +1008,200 @@ def _resolve_channels(channels: "ChannelConfig | bool | None") -> "ChannelConfig
     return channels
 
 
-def _emit_health_flags(graph: _RustGraph, run, report: AuditReport) -> None:
-    """Publish each flagged filter as a HealthFlag event on the bus."""
+def _coerce_scope(value: Any, *, where: str) -> "AuditScope | None":
+    """Duck-type one ``inside=`` value / ``_audit_scope`` declaration."""
+    if value is None or value is False:
+        return None
+    if value is True or value == "auto":
+        return AuditScope()
+    if isinstance(value, AuditScope):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return AuditScope(depth=value)
+    if isinstance(value, (list, tuple)) and all(isinstance(p, str) for p in value):
+        return AuditScope(patterns=tuple(value))
+    raise TypeError(
+        f"{where}: expected True/'auto', an int depth, a list of name "
+        f"patterns, or an AuditScope — got {value!r}"
+    )
+
+
+def _iter_scoped_modules(
+    root: "nn.Module", scope: AuditScope, *, node_id: str
+) -> "list[tuple[str, nn.Module]]":
+    """``[(module_path, module)]`` selected by `scope`, in
+    ``named_modules()`` order. The root itself is never included — it is
+    always audited under the plain node id."""
+    import fnmatch
+
+    named = [(name, m) for name, m in root.named_modules() if name]
+
+    def has_params(m: "nn.Module") -> bool:
+        return any(True for _ in m.parameters(recurse=True))
+
+    if scope.patterns is not None:
+        selected = []
+        for pattern in scope.patterns:
+            matched = [
+                (n, m)
+                for n, m in named
+                if fnmatch.fnmatchcase(n, pattern) and (n, m) not in selected
+            ]
+            if not matched:
+                import warnings
+
+                warnings.warn(
+                    f"gradient_audit inside: pattern {pattern!r} matched no "
+                    f"submodule of node {node_id!r} "
+                    f"(available: {[n for n, _ in named][:20]})",
+                    stacklevel=3,
+                )
+            selected.extend(matched)
+        selected.sort(key=lambda pair: [n for n, _ in named].index(pair[0]))
+    elif scope.depth is not None:
+        selected = [
+            (n, m)
+            for n, m in named
+            if n.count(".") + 1 <= scope.depth and has_params(m)
+        ]
+    else:
+        # Auto: direct children with parameters; descend one extra
+        # level through a single-child wrapper (Sequential case).
+        children = [(n, m) for n, m in root.named_children() if has_params(m)]
+        if len(children) == 1:
+            only_name, only_mod = children[0]
+            inner = [
+                (f"{only_name}.{n}", m)
+                for n, m in only_mod.named_children()
+                if has_params(m)
+            ]
+            if inner:
+                children = inner
+        selected = children
+
+    if len(selected) > scope.max_modules:
+        import warnings
+
+        dropped = [n for n, _ in selected[scope.max_modules :]]
+        warnings.warn(
+            f"gradient_audit inside: node {node_id!r} selected "
+            f"{len(selected)} submodules; hooking the first "
+            f"{scope.max_modules} and dropping {dropped} — raise "
+            f"AuditScope(max_modules=...) or narrow the selection",
+            stacklevel=3,
+        )
+        selected = selected[: scope.max_modules]
+    return selected
+
+
+def _resolve_inside(
+    filters: "list[tuple[str, Any]]", inside: "bool | dict | None"
+) -> "dict[str, AuditScope]":
+    """Per-node scopes with precedence: call-site ``inside=`` value >
+    class ``_audit_scope`` > auto (when ``inside=True``). Falsy
+    ``inside`` disables everything — today's behavior exactly."""
+    if inside is None or inside is False:
+        return {}
+    import warnings
+
+    by_id = dict(filters)
+    explicit: dict[str, Any] = {}
+    if isinstance(inside, dict):
+        unknown = sorted(set(inside) - set(by_id))
+        if unknown:
+            raise ValueError(
+                f"gradient_audit inside: unknown node id(s) {unknown}; "
+                f"graph nodes are {sorted(by_id)}"
+            )
+        explicit = inside
+    elif inside is not True:
+        raise TypeError(
+            f"gradient_audit inside: expected True, a dict of per-node "
+            f"scopes, or None — got {inside!r}"
+        )
+
+    scopes: dict[str, AuditScope] = {}
+    for fid, f in filters:
+        if fid in explicit:
+            scope = _coerce_scope(explicit[fid], where=f"inside[{fid!r}]")
+            if scope is None:
+                continue
+            if not hasattr(f, "_module"):
+                raise ValueError(
+                    f"gradient_audit inside: node {fid!r} is not a "
+                    f"differentiable filter (it has no _module)"
+                )
+            if f._module is None:
+                warnings.warn(
+                    f"gradient_audit inside: node {fid!r} is not "
+                    f"materialized yet — call g.materialize(sample) "
+                    f"first; skipping its inner scope",
+                    stacklevel=3,
+                )
+                continue
+            scopes[fid] = scope
+            continue
+        # Class-level declaration, then True → auto. Both apply only to
+        # live differentiable modules (same silent-skip as roots).
+        if getattr(f, "_module", None) is None:
+            continue
+        declared = _coerce_scope(
+            getattr(type(f), "_audit_scope", None),
+            where=f"{type(f).__name__}._audit_scope",
+        )
+        if declared is not None:
+            scopes[fid] = declared
+        elif inside is True:
+            scopes[fid] = AuditScope()
+    return scopes
+
+
+def _emit_health_flags(
+    graph: _RustGraph,
+    run,
+    report: AuditReport,
+    children: "dict[str, tuple[str, str]] | None" = None,
+) -> None:
+    """Publish each flagged filter as a HealthFlag event on the bus.
+
+    Scoped submodules (hierarchical ids) additionally roll up to their
+    parent node: exactly one event per ``(parent, flag family)`` whose
+    detail names the flagged submodules — so the outer DAG overlay
+    marks the parent without any id parsing downstream."""
+
+    def _emit(node_id: str, flag: str, detail: str) -> None:
+        try:
+            graph.emit_event(
+                {
+                    "event_type": "HealthFlag",
+                    "run_id": run.id,
+                    "node_id": node_id,
+                    "step": report.n_steps,
+                    "flag": flag,
+                    "detail": detail[:500],
+                }
+            )
+        except Exception:
+            pass
+
+    rollup: dict[tuple[str, str], list[str]] = {}
     for f in report.filters:
         for flag in f.flags:
             if flag == "NO_DATA":
                 continue
-            try:
-                graph.emit_event(
-                    {
-                        "event_type": "HealthFlag",
-                        "run_id": run.id,
-                        "node_id": f.filter_id,
-                        "step": report.n_steps,
-                        "flag": flag,
-                        "detail": ",".join(
-                            f"{k}={v:.3e}" for k, v in sorted(f.metrics.items())
-                        )[:500],
-                    }
-                )
-            except Exception:
-                pass
+            _emit(
+                f.filter_id,
+                flag,
+                ",".join(f"{k}={v:.3e}" for k, v in sorted(f.metrics.items())),
+            )
+            if children and f.filter_id in children:
+                parent, path = children[f.filter_id]
+                family = flag.split("(")[0]
+                paths = rollup.setdefault((parent, family), [])
+                if path not in paths:
+                    paths.append(path)
+    for (parent, family), paths in sorted(rollup.items()):
+        _emit(parent, family, f"in: {', '.join(paths)}")
 
 
 @contextlib.contextmanager
@@ -882,8 +1209,18 @@ def _gradient_audit(
     self: _RustGraph,
     thresholds: Thresholds | None = None,
     channels: "ChannelConfig | bool | None" = None,
+    inside: "bool | dict | None" = None,
 ) -> Iterator[Audit]:
     """Install hooks on every live ``DifferentiableFilter._module``.
+
+    ``inside=`` additionally audits submodules *within* each node's
+    model, under hierarchical ids ``"<node>/<module.path>"`` (the root
+    stays audited under the plain node id). Accepts ``True`` (auto
+    selection everywhere) or a per-node dict whose values are an int
+    depth, a list of fnmatch patterns, ``True``/``"auto"``, or an
+    :class:`AuditScope`; filter classes can pre-declare a scope via a
+    ``_audit_scope`` class attribute. Precedence per node:
+    ``inside[...]`` > ``_audit_scope`` > auto.
 
     Yields an :class:`Audit`. On exit (including exceptions) hooks are
     removed and the audit is unregistered from ``graph.py_state``.
@@ -906,12 +1243,58 @@ def _gradient_audit(
     to snapshot ``p.grad`` reliably (param grad accumulation finishes
     after the per-module backward hook fires).
     """
+    filters = list(self.filters())
+    scopes = _resolve_inside(filters, inside)
+    resolved_channels = _resolve_channels(channels)
+
     pairs: list[tuple[str, "nn.Module"]] = []
-    for fid, f in self.filters():
+    sample_every: dict[str, int] = {}
+    children: dict[str, tuple[str, str]] = {}
+    for fid, f in filters:
         mod = getattr(f, "_module", None)
-        if mod is not None:
-            pairs.append((fid, mod))
-    audit = Audit(pairs, thresholds or _DEFAULT_THRESHOLDS, _resolve_channels(channels))
+        if mod is None:
+            continue
+        pairs.append((fid, mod))
+        scope = scopes.get(fid)
+        if scope is None:
+            continue
+        if (
+            resolved_channels is not None
+            and scope.sample_every > 1
+            and resolved_channels.snapshot_every % scope.sample_every != 0
+        ):
+            import warnings
+
+            warnings.warn(
+                f"gradient_audit: node {fid!r} samples every "
+                f"{scope.sample_every} steps but channels snapshot every "
+                f"{resolved_channels.snapshot_every} — snapshots landing "
+                f"on unsampled steps are skipped",
+                stacklevel=3,
+            )
+        for path, sub in _iter_scoped_modules(mod, scope, node_id=fid):
+            child_id = f"{fid}/{path}"
+            pairs.append((child_id, sub))
+            children[child_id] = (fid, path)
+            if scope.sample_every > 1:
+                sample_every[child_id] = scope.sample_every
+
+    ids = [pid for pid, _ in pairs]
+    duplicates = sorted({pid for pid in ids if ids.count(pid) > 1})
+    if duplicates:
+        raise ValueError(
+            f"gradient_audit inside: id collision(s) {duplicates} — a "
+            f"node id containing '/' clashes with a scoped submodule id; "
+            f"rename the node"
+        )
+
+    audit = Audit(
+        pairs,
+        thresholds or _DEFAULT_THRESHOLDS,
+        resolved_channels,
+        sample_every=sample_every,
+        children=children,
+    )
     audit._graph = self
     audit._install()
     self.py_state["active_audit"] = audit
@@ -949,7 +1332,7 @@ def _gradient_audit(
                     indent=2,
                 )
             )
-            _emit_health_flags(self, run, report)
+            _emit_health_flags(self, run, report, audit._children)
 
 
 # ── Install on Graph ─────────────────────────────────────────

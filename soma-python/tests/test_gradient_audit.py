@@ -248,3 +248,291 @@ def test_audit_modules_standalone():
     rep = audit.report()
     assert rep.is_healthy()
     assert all(f.n_steps == 3 for f in rep.filters)
+
+
+# ── inside= (scoped submodule auditing) ─────────────────────────────
+
+from soma import AuditScope  # noqa: E402
+from soma._audit import _coerce_scope, _iter_scoped_modules  # noqa: E402
+
+
+class Deep(DifferentiableFilter):
+    """12 small tanh layers — a textbook vanishing-gradient stack."""
+
+    def __init__(self, width=4, layers=12):
+        super().__init__(width=width, layers=layers)
+
+    def build_module(self, input_shape):
+        mods = []
+        for _ in range(self.layers):
+            lin = nn.Linear(input_shape[-1], input_shape[-1])
+            with torch.no_grad():
+                lin.weight.mul_(0.3)
+            mods.append(lin)
+            mods.append(nn.Tanh())
+        return nn.Sequential(*mods)
+
+    def output_shape(self, input_shape):
+        return input_shape
+
+
+def _deep_graph(layers=12):
+    torch.manual_seed(0)
+    g = Graph()
+    g.node("deep", Deep(layers=layers))
+    x = torch.randn(32, 4)
+    y = torch.randn(32, 4)
+    g.materialize(x)
+    g.train()
+    g.make_optimizer(torch.optim.Adam, lr=1e-2)
+    return g, x, y
+
+
+def test_coerce_scope_duck_typing():
+    assert _coerce_scope(None, where="w") is None
+    assert _coerce_scope(False, where="w") is None
+    assert _coerce_scope(True, where="w") == AuditScope()
+    assert _coerce_scope("auto", where="w") == AuditScope()
+    assert _coerce_scope(3, where="w") == AuditScope(depth=3)
+    assert _coerce_scope(["a.*", "b"], where="w") == AuditScope(patterns=("a.*", "b"))
+    scope = AuditScope(depth=2, sample_every=5)
+    assert _coerce_scope(scope, where="w") is scope
+    with pytest.raises(TypeError, match=r"inside\['enc'\]"):
+        _coerce_scope(3.5, where="inside['enc']")
+
+
+def test_iter_scoped_modules_selection():
+    root = nn.Sequential(
+        nn.Linear(4, 4),
+        nn.Tanh(),
+        nn.Sequential(nn.Linear(4, 4), nn.ReLU(), nn.Linear(4, 2)),
+    )
+
+    # depth=1: top-level entries with params ("0" and "2"), not tanh.
+    names = [n for n, _ in _iter_scoped_modules(root, AuditScope(depth=1), node_id="x")]
+    assert names == ["0", "2"]
+
+    # depth=2 adds the inner linears.
+    names = [n for n, _ in _iter_scoped_modules(root, AuditScope(depth=2), node_id="x")]
+    assert names == ["0", "2", "2.0", "2.2"]
+
+    # patterns: parameterless modules ARE included when named.
+    names = [
+        n
+        for n, _ in _iter_scoped_modules(
+            root, AuditScope(patterns=("1", "2.*")), node_id="x"
+        )
+    ]
+    assert names == ["1", "2.0", "2.1", "2.2"]
+
+    with pytest.warns(UserWarning, match="matched no submodule"):
+        _iter_scoped_modules(root, AuditScope(patterns=("nope.*",)), node_id="x")
+
+    # auto: direct children with params.
+    names = [n for n, _ in _iter_scoped_modules(root, AuditScope(), node_id="x")]
+    assert names == ["0", "2"]
+
+    # auto descends a single wrapper child one level.
+    wrapped = nn.Sequential(nn.Sequential(nn.Linear(4, 4), nn.Linear(4, 2)))
+    names = [n for n, _ in _iter_scoped_modules(wrapped, AuditScope(), node_id="x")]
+    assert names == ["0.0", "0.1"]
+
+    # cap warns and truncates.
+    with pytest.warns(UserWarning, match="dropping"):
+        names = [
+            n
+            for n, _ in _iter_scoped_modules(
+                root, AuditScope(depth=2, max_modules=2), node_id="x"
+            )
+        ]
+    assert names == ["0", "2"]
+
+
+def test_inside_true_hierarchical_ids_and_backcompat():
+    g, x, y = _deep_graph(layers=3)
+
+    # Default: byte-identical to today — root ids only.
+    with g.gradient_audit() as audit:
+        _train_step(g, x, y)
+    assert list(audit.records()) == ["deep"]
+
+    with g.gradient_audit(inside=True) as audit:
+        _train_step(g, x, y)
+    ids = list(audit.records())
+    assert ids[0] == "deep", "root always audited, grouped first"
+    assert ids[1:] == ["deep/0", "deep/2", "deep/4"]
+    # Every child recorded a real gradient.
+    for cid in ids[1:]:
+        rec = audit.records()[cid][0]
+        assert rec.out_grad_norm == rec.out_grad_norm, f"{cid} has NaN grad"
+    # Execution order captured (ascending through the Sequential).
+    assert audit._fwd_order["deep"] == ["0", "2", "4"]
+
+
+def test_inside_precedence_class_vs_callsite():
+    class Declared(Deep):
+        _audit_scope = ["0"]  # only the first linear
+
+    torch.manual_seed(0)
+    g = Graph()
+    g.node("deep", Declared(layers=3))
+    x, y = torch.randn(8, 4), torch.randn(8, 4)
+    g.materialize(x)
+    g.train()
+    g.make_optimizer(torch.optim.Adam, lr=1e-2)
+
+    # inside=True → class declaration wins over auto.
+    with g.gradient_audit(inside=True) as audit:
+        _train_step(g, x, y)
+    assert list(audit.records()) == ["deep", "deep/0"]
+
+    # Call-site overrides the class declaration.
+    with g.gradient_audit(inside={"deep": ["4"]}) as audit:
+        _train_step(g, x, y)
+    assert list(audit.records()) == ["deep", "deep/4"]
+
+    # Default (inside not passed): declaration is inert.
+    with g.gradient_audit() as audit:
+        _train_step(g, x, y)
+    assert list(audit.records()) == ["deep"]
+
+
+def test_inside_sample_every(tmp_path):
+    g, x, y = _deep_graph(layers=2)
+    with g.track_run("sampled", root=str(tmp_path)):
+        with g.gradient_audit(
+            inside={"deep": AuditScope(depth=1, sample_every=2)}
+        ) as audit:
+            for _ in range(3):
+                _train_step(g, x, y)
+
+    recs = audit.records()
+    assert len(recs["deep"]) == 3, "root records every step"
+    assert [r.step for r in recs["deep/0"]] == [0, 2], "children sampled"
+
+    import json
+    import pathlib
+
+    run_dir = next((tmp_path / "runs").iterdir())
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "diagnostics" / "audit_steps.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    by_fid = {}
+    for row in rows:
+        by_fid.setdefault(row["filter"], []).append(row["step"])
+    assert by_fid["deep"] == [0, 1, 2]
+    assert by_fid["deep/0"] == [0, 2], "no jsonl rows on sampled-out steps"
+
+
+def test_inside_errors():
+    g, x, y = _deep_graph(layers=2)
+
+    with pytest.raises(ValueError, match="unknown node id"):
+        with g.gradient_audit(inside={"nope": True}):
+            pass
+
+    class Plain:  # not differentiable: no _module at all
+        def fit(self, x, y=None):
+            return {}
+
+        def forward(self, x, state):
+            return x
+
+    g2 = Graph()
+    g2.node("plain", Plain())
+    with pytest.raises(ValueError, match="not a differentiable filter"):
+        with g2.gradient_audit(inside={"plain": True}):
+            pass
+
+    # Explicitly named but unmaterialized → warn + skip.
+    g3 = Graph()
+    g3.node("late", Deep(layers=2))
+    with pytest.warns(UserWarning, match="not materialized"):
+        with g3.gradient_audit(inside={"late": True}) as audit:
+            pass
+    assert audit.modules == []
+
+    # A node id containing "/" colliding with a scoped child id.
+    torch.manual_seed(0)
+    g4 = Graph()
+    g4.node("a", Deep(layers=1))
+    g4.node("a/0", Dense(out_dim=4))
+    g4.connect("a", "a/0")
+    g4.materialize(torch.randn(4, 4))
+    with pytest.raises(ValueError, match="collision"):
+        with g4.gradient_audit(inside={"a": ["0"]}):
+            pass
+
+
+def test_inside_vanishing_deep_mlp():
+    g, x, y = _deep_graph(layers=12)
+    with g.gradient_audit(inside=True) as audit:
+        for _ in range(2):
+            _train_step(g, x, y)
+
+    order = audit._fwd_order["deep"]
+    assert len(order) == 12
+
+    def mean_grad(path):
+        recs = audit.records()[f"deep/{path}"]
+        vals = [r.out_grad_norm for r in recs if r.out_grad_norm == r.out_grad_norm]
+        return sum(vals) / len(vals)
+
+    grads = [mean_grad(p) for p in order]
+    # Backprop through 12 contractive tanh layers: early layers see far
+    # smaller output-gradients than late ones — the staircase
+    # plot_module_flow draws.
+    assert grads[0] < grads[-1] / 10, f"expected decay toward input: {grads}"
+    increasing = sum(1 for a, b in zip(grads, grads[1:]) if b > a)
+    assert increasing >= 8, f"trend should rise along depth: {grads}"
+
+
+def test_module_tree_persisted_and_flags_rolled_up(tmp_path):
+    import json
+    import pathlib
+
+    g, x, y = _deep_graph(layers=3)
+    # Aggressive threshold: every layer flags VANISHING.
+    with g.track_run("tree", root=str(tmp_path)):
+        with g.gradient_audit(
+            thresholds=Thresholds(grad_lo=1e9, grad_hi=1e12), inside=True
+        ):
+            _train_step(g, x, y)
+
+    run_dir = next((tmp_path / "runs").iterdir())
+    tree_path = run_dir / "diagnostics" / "modules" / "deep.json"
+    assert tree_path.exists()
+    tree = json.loads(tree_path.read_text())
+    assert tree["node"] == "deep"
+    assert tree["order"] == ["0", "2", "4"], "execution order of the Sequential"
+    assert tree["ids"] == {p: f"deep/{p}" for p in ("0", "2", "4")}
+    # mermaid ids sanitized (digit-leading), labels raw.
+    assert tree["mermaid_ids"]["0"] == "n_0"
+    node0 = next(n for n in tree["graph"]["nodes"] if n["label"] == "0")
+    assert node0["id"] == "n_0"
+    assert node0["kind"] == {"type": "Filter", "filter_name": "Linear"}
+    assert all(tree["params"][p] > 0 for p in tree["order"])
+    # Edges chain the execution order.
+    edges = [(e["source"], e["target"]) for e in tree["graph"]["edges"]]
+    assert edges == [("n_0", "n_2"), ("n_2", "n_4")]
+
+    # HealthFlags: one per flagged child + exactly one rolled-up parent
+    # flag per family, whose detail names the submodules.
+    events = [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text().splitlines()
+    ]
+    flags = [e for e in events if e["event_type"] == "HealthFlag"]
+    child_vanishing = [
+        f for f in flags if f["flag"] == "VANISHING" and f["node_id"].startswith("deep/")
+    ]
+    assert len(child_vanishing) == 3
+    parent_vanishing = [
+        f for f in flags if f["flag"] == "VANISHING" and f["node_id"] == "deep"
+    ]
+    rolled = [f for f in parent_vanishing if f["detail"].startswith("in: ")]
+    assert len(rolled) == 1, f"exactly one rollup: {parent_vanishing}"
+    assert rolled[0]["detail"] == "in: 0, 2, 4"

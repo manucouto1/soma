@@ -51,6 +51,7 @@ try:
     from soma._audit import (
         Audit,
         AuditReport,
+        AuditScope,
         ChannelConfig,
         FilterReport,
         GradientHealthError,
@@ -59,7 +60,7 @@ try:
         audit_modules,
     )
 except ImportError:  # torch not installed
-    Audit = AuditReport = FilterReport = None        # type: ignore[assignment]
+    Audit = AuditReport = AuditScope = FilterReport = None  # type: ignore[assignment]
     ChannelConfig = StepRecord = None                # type: ignore[assignment]
     GradientHealthError = Thresholds = None          # type: ignore[assignment]
     audit_modules = None                             # type: ignore[assignment]
@@ -82,6 +83,7 @@ __all__ = [
     "experiments_dataframe",
     "__version__",
     "Audit",
+    "AuditScope",
     "AuditReport",
     "ChannelConfig",
     "FilterReport",
