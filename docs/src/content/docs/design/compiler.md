@@ -33,12 +33,6 @@ pub enum ExecutionPlan {
         filter: Arc<dyn Filter>,
     },
 
-    /// Load result from cache (resolved at compile time)
-    Cached {
-        id: NodeId,
-        key: CacheKey,
-    },
-
     /// Iterate over a collection or repeat until condition
     Loop {
         id: NodeId,
@@ -85,14 +79,6 @@ pub enum ExecutionPlan {
 │  - Fork-join points      │
 │  - Loop bodies           │
 │  - Conditional arms      │
-└──────────┬──────────────┘
-           │
-           ▼
-┌─── resolve_cache() ────┐
-│  - Compute cache keys    │
-│  - Check existence       │
-│  - Replace with Cached   │
-│  - Cascade invalidation  │
 └──────────┬──────────────┘
            │
            ▼
@@ -192,9 +178,19 @@ Loop {
 }
 ```
 
+## Cache resolution happens at runtime, not here
+
+The compiler never sees the dataset, so it cannot decide cache hits: any
+compile-time key would be independent of the input data, and the same
+graph run on two datasets would collide. Instead the **executor**
+computes `hash(config + state + input)` per node with the materialized
+input in hand and skips execution on a hit (see the
+[caching design](/design/caching/)). The compiled plan contains only
+`Execute` nodes.
+
 ## Compile Modes
 
-The compiler accepts a mode that affects cache resolution:
+The compiler accepts a mode that affects runtime caching behavior:
 
 ```rust
 pub enum CompileMode {
@@ -219,12 +215,6 @@ The compiler can estimate execution cost without running anything:
 impl Compiler {
     pub fn estimate_cost(&self, plan: &ExecutionPlan, cache: &dyn CacheStore) -> Cost {
         match plan {
-            ExecutionPlan::Cached { key, .. } => {
-                // Cost = cache load time (from metadata)
-                cache.metadata(key)
-                    .map(|m| Cost::from_latency(m.tier.latency()))
-                    .unwrap_or(Cost::unknown())
-            }
             ExecutionPlan::Execute { filter, .. } => {
                 // Cost = estimated compute time (from filter metadata)
                 filter.meta().estimated_cost()

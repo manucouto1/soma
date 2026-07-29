@@ -154,16 +154,11 @@ Caching works normally. Each filter's output is cached and reused. No gradients 
 
 ### During `forward()` (differentiable)
 
-Cached outputs **cannot** be used for gradient flow because the cached tensor has no computational graph attached. The compiler handles this:
-
-```rust
-ExecutionPlan::Cached { id, key }
-// ↑ Used in predict() mode
-
-ExecutionPlan::Execute { id, filter }
-// ↑ Used in forward() mode, even if cache exists,
-//   because we need the live computational graph
-```
+Cached outputs **cannot** be used for gradient flow because the cached
+tensor has no computational graph attached. `CompileMode::Differentiable`
+therefore disables output caching at runtime — every forward re-executes
+so the live computational graph exists end to end (fit states still
+cache).
 
 The compiler takes a `mode` parameter:
 
@@ -203,17 +198,17 @@ forward() results → cacheable only in inference mode
 ### End-to-End Differentiable Pipeline
 
 ```python
-pipeline = Pipeline([
-    MyScaler(with_mean=True),
-    LinearLayer(hidden=128),
-    ReLU(),
-    LinearLayer(hidden=10),
-])
+g = Graph.somatize(
+    MyScaler(with_mean=True)
+    >> LinearLayer(hidden=128)
+    >> ReLU()
+    >> LinearLayer(hidden=10)
+)
 
-pipeline.fit(x_train, y_train)
+g.fit(x_train, y_train)
 
 # Differentiable forward
-output = pipeline.forward(x_test)
+output = g.forward(x_test)
 loss = cross_entropy(output, y_test)
 loss.backward()  # gradients flow through entire pipeline
 
@@ -224,15 +219,15 @@ x_test.grad  # gradient with respect to input
 ### Mixed Pipeline (partial gradients)
 
 ```python
-pipeline = Pipeline([
-    SQLQuery("SELECT * FROM features"),  # Opaque
-    MyScaler(),                           # Differentiable
-    NeuralNet(layers=3),                  # Differentiable
-])
+g = Graph.somatize(
+    SQLQuery("SELECT * FROM features")   # Opaque
+    >> MyScaler()                        # Differentiable
+    >> NeuralNet(layers=3)               # Differentiable
+)
 
 # Compiler warns: gradient flow interrupted at SQLQuery
 # But Scaler → NeuralNet gradient flow works fine
-output = pipeline.forward(x)
+output = g.forward(x)
 loss.backward()  # gradients flow from NeuralNet through Scaler
 ```
 

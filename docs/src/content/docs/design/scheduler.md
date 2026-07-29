@@ -12,7 +12,7 @@ The Scheduler analyzes an ExecutionPlan's topology and distributes nodes across 
 1. **Sequential phases** → single worker (avoids data transfer)
 2. **Parallel branches** → round-robin across workers by capability
 3. **Differentiable connected nodes** → same worker (gradient flow must be preserved)
-4. **Cached nodes** → assigned but skip execution
+4. **Cache hits** → resolved at runtime on the assigned worker (the plan itself carries no cached nodes)
 5. **Loop/Branch bodies** → same worker as controller
 
 ## DistributionPlan

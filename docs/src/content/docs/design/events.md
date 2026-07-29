@@ -257,7 +257,13 @@ directory remains the source of truth.
 
 ## Events for Visualization
 
-The three levels of events map directly to UI components:
+The three levels of events map directly to UI components. This mapping
+is implemented today by the read-side stack (see
+[Visualization](/design/visualization/)): `RunReader` aggregates the
+event log into node timings/cache activity/metric series,
+`RunReader::overlay()` feeds `Graph::to_mermaid_with` for the annotated
+DAG, and `soma.viz` renders the trial/study charts; `soma report`
+packages all of it into one HTML file.
 
 ### Graph Level → DAG Visualization
 
@@ -308,9 +314,12 @@ UI components:
 Filters never emit events directly; emission happens at the
 orchestration layer:
 
-- **Node/run events (level 1)** — emitted by the executor and
-  `LocalRunner` during `GraphSession::fit`/`run`. `NodeProgress` is
-  reserved but currently has no emitter.
+- **Node/run events (level 1)** — node events are emitted by the
+  executor and `LocalRunner`; the `RunStarted`/`RunCompleted`/
+  `RunFailed` bracket is emitted by every entry point
+  (`GraphSession::fit`/`run`, the Python `Graph.fit`/`run`, and the
+  worker), sharing one `run_id` with the node events inside it.
+  `NodeProgress` is reserved but currently has no emitter.
 - **Trial/study events (levels 2–3)** — emitted by `StudyRunner`.
   Intermediate metrics flow through the trial handle
   (`TrialContext::report(name, value, step)`), which emits

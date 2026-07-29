@@ -86,6 +86,17 @@ g.node(Model())
 g.connect("scaler", "model")
 ```
 
+By default every `Graph()` shares a **persistent cache** at
+`$SOMA_CACHE_DIR` (or `~/.soma/cache`): fit states and forward outputs
+survive crashes and are reused across processes and projects. Options:
+
+```python
+g = Graph()                                   # persistent tiered cache (default)
+g = Graph(cache="memory")                     # process-local, nothing persists
+g = Graph(cache="local", cache_path="/data")  # explicit store directory
+g = Graph(cache_max_bytes=2 * 2**30)          # in-memory LRU tier budget
+```
+
 #### Fluent Operators
 
 ```python
@@ -121,8 +132,8 @@ g = Graph.somatize(
 | `somatize` | `(topology) -> Graph` | Class method. Materialize a Chain/Fork into a graph |
 | `node` | `(filter) -> str` | Add a filter node, returns node ID |
 | `edge` / `connect` | `(source, target)` | Connect two nodes with a data edge |
-| `fit` | `(x, y=None)` | Fit all trainable filters in topological order |
-| `forward` | `(x) -> list` | Forward data through fitted graph |
+| `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
+| `forward` | `(x, stream=False, chunk_size=1024, seed=None) -> list` | Forward data through fitted graph (`stream=True` processes in chunks) |
 | `run` | `() -> dict` | Compile and execute, return all outputs |
 | `compile` | `(mode="inference") -> dict` | Compile and return diagnostics |
 | `to_mermaid` | `() -> str` | Render graph as Mermaid diagram |
@@ -160,6 +171,8 @@ info = g.compile("inference")       # Full caching
 info = g.compile("differentiable")  # Cache states, re-execute forwards
 info = g.compile("no_cache")        # Force re-execution
 # Returns: {total_nodes, cached_nodes, parallel_branches, diagnostics, plan_text, plan_mermaid}
+# cached_nodes is always 0: cache hits are resolved at RUNTIME per node
+# (key = hash(config + state + input)), not baked into the plan.
 ```
 
 #### Events
@@ -170,7 +183,7 @@ def on_event(event):
 
 g.on_event(on_event)
 g.fit(data)
-# Events: NodeStarted, NodeCompleted, NodeCacheHit, NodeFailed, ...
+# Events: NodeStarted, NodeCompleted, NodeCacheHit, NodeCacheMiss, NodeFailed, ...
 ```
 
 #### Workers
@@ -278,7 +291,12 @@ print(study.run_dir)        # .soma/runs/study_.../  (tracking=True default)
 Additional constructor keywords: `objective=` (a Python callable over
 the final metrics dict, recorded as metric `"score"`), `direction=`,
 `pruning=("median", warmup)` or `("percentile", pct, warmup)`,
-`tracking=`, `root=".soma"`, `tags=[...]`. Legacy `fn(params) -> dict`
+`tracking=`, `root=".soma"`, `tags=[...]`, `frozen={...}` (fixed params
+injected into every trial), and `seeds=[...]` — **experiment seeds**:
+every sampled config runs once per seed, `trial["seed"]` carries it
+(wire it into your framework: `torch.manual_seed(trial["seed"])`), the
+manifest records them, and each (config, seed) pair is an independent,
+resumable trial with its own cache line. Legacy `fn(params) -> dict`
 executors keep working (the trial handle supports `params.get(...)` /
 `params["x"]`), and a bare-float return becomes the `"score"` metric.
 
@@ -299,6 +317,30 @@ g.apply_params(trial.params)    # write a sampled config onto filters
 study = g.study("tune", strategy="grid", n_trials=4,
                 objectives=[("f1", "maximize")])
 ```
+
+### Cache management
+
+```python
+from soma import _soma
+_soma.cache_stats()                    # dict: records, blobs, bytes, compute banked
+_soma.cache_gc(max_bytes=20 * 2**30)   # evict low-value blobs (records retained)
+```
+
+Or from the shell:
+
+```console
+$ soma cache stats
+$ soma cache gc --max-size 20G
+$ soma cache pin best-run <action-key-hex>
+$ soma cache verify
+$ soma cache purge-v1
+```
+
+`CacheConfigError` (importable from `soma`) is raised when a filter
+attribute cannot enter the cache key — prefix it with `_` or define
+`__soma_config__()`. Set `_cache_version = "..."` on a filter class to
+pin its code identity explicitly; `_deterministic = False` marks a
+stochastic forward (never cached unless the run pins a `seed`).
 
 ### Tracked runs
 

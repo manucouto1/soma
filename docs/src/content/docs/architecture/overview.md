@@ -152,7 +152,6 @@ enum ExecutionPlan {
     Sequence(Vec<ExecutionPlan>),
     Parallel(Vec<ExecutionPlan>),
     Execute { id: NodeId, process: Arc<dyn Filter> },
-    Cached { id: NodeId, key: CacheKey },
     Loop { .. },
     Branch { .. },
     Remote { target: RemoteTarget, plan: Box<ExecutionPlan> },

@@ -55,7 +55,7 @@ docs/           → 24 Starlight pages
 ## Tests
 
 ```bash
-# 750+ total: 522 Rust + 231 Python (incl. property tests and 4 robustness tests)
+# 875+ total: 577 Rust + 298 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
@@ -78,7 +78,9 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 ## Key Design Decisions
 
 - **Filter trait**: `fit()` learns state, `forward()` transforms. Both independently cacheable.
-- **CacheKey**: SHA-256 content-addressable. `hash(config + input_hash)` with cascade invalidation.
+- **CacheKey**: SHA-256, resolved at RUNTIME per node: state = `hash(config + x + y)`, output = `hash(config + state + input)`, seed salted in when set. Downstream keys use input *content* hashes → early cutoff.
+- **Persistent cache**: `Graph()` defaults to tiered(memory LRU → `FsActionStore` at `$SOMA_CACHE_DIR` || `~/.soma/cache`). Two-table store: action records (kept forever) + BLAKE3 CAS blobs (evictable). `soma cache stats|gc|pin|verify|purge-v1`.
+- **Filter identity**: Rust = canonical CBOR of fields (+`#[soma(cache_version)]`); Python = qualname + canonical config + source-hash ladder (`_cache_version` → `inspect.getsource` → cloudpickle+warning). Unhashable ⇒ `CacheConfigError`, never a silent key.
 - **GraphSession**: Primary orchestrator — binds Graph + FilterLibrary + cache + events. Methods: fit, forward, compile, run.
 - **FilterLibrary**: Unified registry — implements FilterRegistry (compiler) + holds filters + states (executor). Replaces old FilterStore.
 - **ExecutionPlan**: Compiled from Graph. Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote.
@@ -97,6 +99,16 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **Partition**: Maps arbitrary node subsets to RemoteTargets for model parallelism.
 - **PbtRunner**: Population-Based Training — cyclic train→evaluate→exploit/explore per generation.
 - **Graph visualization**: `to_mermaid()`, `to_graphviz()`, `to_text()` — pure data→string, no runtime deps.
+  `to_mermaid_with(&GraphOverlay)` / `to_graphviz_with` fold per-node status/duration/cache/health-flag
+  annotations in (soma-core/src/viz.rs); empty overlay ⇒ byte-identical plain output.
+- **Visualization (3 layers, GUI reuse at the DATA layer)**: `RunReader` (soma-runtime/src/tracking/reader.rs)
+  aggregates run dirs into chart-ready serde structs (node_timings, cache_activity, metric_series,
+  health_flags, trial_timeline, overlay); Python `soma.runs()`/`RunView`; `soma.viz` = optional
+  `somatize[viz]` extra (plotly+pandas) with Optuna-named `study.plot_*`, `run.plot_*` and dataframes;
+  `soma runs|graph|report` CLI. `soma report` emits one self-contained HTML whose
+  `<script type="application/json" id="soma-data-*">` blobs are the future GUI's contract
+  (see docs design/visualization.md). Local fit/run paths emit RunStarted/Completed/Failed brackets
+  sharing the node events' run_id. `soma ui` live server: deliberately deferred.
 - **EnvManager**: Isolated Python environments per pipeline with incremental dependency updates.
   Hashes requirements to detect changes, only installs/upgrades/removes what changed.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.

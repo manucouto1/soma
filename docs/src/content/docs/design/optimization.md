@@ -339,8 +339,13 @@ print(study.best_trial)
 print(study.best_trial.params)
 # {'MyScaler.scale': 1.23, 'MySVM.kernel': 'rbf', 'MySVM.C': 12.5}
 
-# Visualization (events-driven)
-study.plot()  # parallel coordinates, learning curves, importance
+# Visualization (see design/visualization.md; needs `somatize[viz]`)
+study.plot_optimization_history()
+study.plot_parallel_coordinate()
+study.plot_param_importances()
+study.plot_intermediate_values()   # learning curves, pruned dashed
+study.plot_timeline()              # trial gantt
+study.trials_dataframe()           # pandas projection
 ```
 
 ## Events Produced

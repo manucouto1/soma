@@ -105,10 +105,10 @@ Examples:
 │     "Z-norm may outperform min-max on short series"      │
 │                                                          │
 │  4. Build pipeline                                       │
-│     Pipeline([ZNorm(), TSClassifier(model="rocket")])    │
+│     Graph.somatize(ZNorm() >> TSClassifier("rocket"))    │
 │                                                          │
 │  5. Execute (local or remote)                            │
-│     study = Study(pipeline, Bayesian(n=50))              │
+│     study = Study("exp", strategy="bayesian", ...)       │
 │     lab.run(study, data)                                 │
 │                                                          │
 │  6. Analyze results                                      │

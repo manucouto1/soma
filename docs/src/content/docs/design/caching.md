@@ -1,199 +1,85 @@
 ---
 title: Caching System
-description: Content-addressable caching with cascade invalidation, resolved at compile time.
+description: Persistent content-addressable caching — crash-resilient, deterministic, resolved at runtime.
 ---
 
 ## Overview
 
-Soma uses **content-addressable caching** inspired by LabChain. Every computation is identified by a deterministic hash of its configuration and inputs. If the same computation has been done before, the result is reused automatically.
+Soma memoizes computation with a **persistent, content-addressable cache**. Every `fit()` and `forward()` is an *action* identified by a deterministic key; completed actions are recorded on disk, so a crashed run — or a different investigation over the same data — reuses previous compute instead of redoing it.
 
-What makes Soma's caching unique is that it is **resolved at compile time**. The compiler checks cache availability and produces an execution plan that already knows what to skip.
+By default every `Graph()` shares one cache at `$SOMA_CACHE_DIR` (or `~/.soma/cache`), tiered behind an in-memory LRU. Resume after a crash is not a separate mechanism: re-running simply recomputes keys and hits.
 
-## Cache Keys
-
-A cache key is a SHA-256 hash that uniquely identifies a computation:
-
-```rust
-pub struct CacheKey(pub [u8; 32]);
-
-impl CacheKey {
-    /// Hash for a filter's trained state
-    pub fn for_state(filter: &dyn Filter, train_data_hash: &DataHash) -> CacheKey {
-        sha256(&[filter.config_hash(), train_data_hash])
-    }
-
-    /// Hash for a filter's output
-    pub fn for_output(
-        filter: &dyn Filter,
-        state_hash: &CacheKey,
-        input_data_hash: &DataHash,
-    ) -> CacheKey {
-        sha256(&[filter.config_hash(), state_hash, input_data_hash])
-    }
-}
+```python
+g = Graph()                  # persistent tiered cache (default)
+g = Graph(cache="memory")    # opt out: nothing persists
 ```
 
-### What Contributes to the Hash
+## Cache keys
 
-| Component | Contributes to State Key | Contributes to Output Key |
-|---|---|---|
-| Filter class name | Yes | Yes |
-| Public constructor params | Yes | Yes |
-| `#[soma(skip_hash)]` fields | No | No |
-| Training data content | Yes | No |
-| Learned state | No (it IS the state) | Yes |
-| Input data content | No | Yes |
+Keys are computed **at runtime**, with the materialized data in hand (the compiler never sees the dataset, so it cannot resolve caching — a compile-time key could serve results from a different dataset):
 
-## Two Independent Caches
+- **State key** (fit results): `hash(config + x + y)` — labels are part of the key.
+- **Output key** (forward results): `hash(config + state + input)`.
+- With an experiment seed set, the seed is hashed into every key.
 
-Each filter has two cacheable outputs, stored independently:
+Downstream keys derive from the *content hashes of materialized inputs*, not from upstream provenance. This gives **early cutoff**: if an upstream filter's config changes but its output bytes are identical, everything downstream still hits.
 
-### State Cache
+## Filter identity
 
-Stores the result of `fit()` -- the learned parameters, weights, or statistics.
+A filter's config hash must be stable across processes and machines, and change when behavior changes:
 
-```
-Key   = hash(filter_config + training_data_hash)
-Value = serialized State (e.g., ScalerState { mean, std })
-```
+- **Rust filters** (`#[derive(SomaFilter)]`): type name + canonical-CBOR encoding of each non-`skip_hash` field (RFC 8949 deterministic encoding — sorted map keys, canonical NaN, no `-0.0`). `#[soma(cache_version = "…")]` folds an explicit version into the hash; `#[soma(deterministic = false)]` excludes forward outputs from caching.
+- **Python filters**: qualified class name + canonical config (public attrs merged over `search()` defaults) + a code fingerprint resolved through a ladder:
+  1. `_cache_version = "…"` class attribute (soundest — survives refactors),
+  2. hash of `inspect.getsource(cls)` (default — editing the class invalidates; helper-module edits do **not**, declare those with `_cache_version`),
+  3. cloudpickle hash with a loud `UserWarning` (last resort).
 
-**When to use**: When you change test data but keep the same filter and training data. The model doesn't need to be retrained.
+  Unhashable attributes raise `soma.CacheConfigError` — prefix them with `_` or define `__soma_config__()`. "Uncacheable" is always explicit, never a silent random key.
 
-### Output Cache
+## Two-table store
 
-Stores the result of `forward()` -- the transformed data.
+The persistent store (`FsActionStore`) follows the Bazel action-cache/CAS split:
 
-```
-Key   = hash(filter_config + state_hash + input_data_hash)
-Value = serialized Tensor (the output)
-```
-
-**When to use**: When you run the same filter with the same state on the same input data. No computation needed at all.
-
-## Cascade Invalidation
-
-When a filter's configuration changes, everything downstream is automatically invalidated because the cache keys change:
-
-```
-Graph: [A] → [B] → [C]
-
-Scenario: Change B's configuration
-
-A.state_key  = hash(A.config + train_data)     → unchanged → HIT
-A.output_key = hash(A.config + A.state + data)  → unchanged → HIT
-B.state_key  = hash(B'.config + A.output)        → CHANGED   → MISS
-B.output_key = hash(B'.config + B'.state + data) → CHANGED   → MISS
-C.state_key  = hash(C.config + B'.output)        → CHANGED   → MISS (input changed)
-C.output_key = hash(C.config + C.state + data)   → CHANGED   → MISS
-
-Compiled plan: Cached(A) → Execute(B') → Execute(C)
+```text
+$SOMA_CACHE_DIR/
+  format.json                    {"version": 2}
+  actions/<aa>/<key>.json        action records: output content hashes,
+                                 compute cost, size, provenance, timestamps
+  cas/b3/<aa>/<hash>.bin         SOMA1-encoded blobs, BLAKE3-addressed,
+                                 deduplicated across actions
+  pins/<name>                    GC roots
 ```
 
-This happens automatically because keys are computed recursively. No manual invalidation needed.
+- **Commit protocol**: blobs first (idempotent temp+fsync+rename), action record renamed last — the record is the commit point, so a crash mid-write never leaves a record pointing at required-but-missing data. Multi-process safe on local filesystems.
+- **Payloads** use the `SOMA1` binary codec (tensors as raw little-endian f64, ~1× raw size vs ~3× as JSON), hashed with BLAKE3 while encoding. Corrupt blobs are detected on read and treated as misses.
 
-## Compile-Time Resolution
+## Eviction (GC)
 
-The compiler resolves caching **before any filter executes**:
+`soma cache gc --max-size 20G` evicts **blobs only, by value density** (`compute_ms × recency ÷ size`): a 100-byte state that took two days outlives a 10 GB intermediate that took two minutes. Action records are always retained, so an evicted entry is *regenerable* — the next run recomputes it and re-fills the same content address. Eviction degrades warm-ness, never correctness. `soma cache pin NAME KEY` marks GC roots.
 
-```rust
-impl Compiler {
-    fn resolve_cache(&self, plan: &ExecutionPlan, cache: &dyn CacheStore) -> ExecutionPlan {
-        match plan {
-            ExecutionPlan::Sequence(steps) => {
-                let mut resolved = vec![];
-                let mut upstream_changed = false;
-
-                for step in steps {
-                    if let ExecutionPlan::Execute { id, filter } = step {
-                        let key = filter.cache_key(&self.input_hashes[id]);
-
-                        if !upstream_changed && cache.exists(&key) {
-                            resolved.push(ExecutionPlan::Cached { id, key });
-                        } else {
-                            upstream_changed = true; // everything downstream must re-execute
-                            resolved.push(step.clone());
-                        }
-                    }
-                }
-                ExecutionPlan::Sequence(resolved)
-            }
-            ExecutionPlan::Parallel(branches) => {
-                // Each branch resolved independently
-                ExecutionPlan::Parallel(
-                    branches.iter().map(|b| self.resolve_cache(b, cache)).collect()
-                )
-            }
-            _ => plan.clone(),
-        }
-    }
-}
+```console
+$ soma cache stats      # size, records, compute banked
+$ soma cache verify     # blob integrity vs content hashes
+$ soma cache purge-v1   # drop unreachable Phase-1 entries
 ```
 
-## Tiered Storage
+## Seeds
 
-The cache store is a K/V interface with multiple tiers:
+Seeds are ordinary hashed inputs — each seed owns an independent cache line:
 
-```rust
-pub struct TieredCache {
-    memory: MemoryCache,         // HashMap, <1ms
-    local: RocksDbCache,         // on-disk, ~1ms
-    remote: Option<S3Cache>,     // shared across workers, ~50ms
-    policy: EvictionPolicy,
-}
+```python
+g.fit(x, seed=42)                    # per-seed keys on a single graph
+
+study = Study("exp", ..., seeds=[1, 2, 3, 4, 5])
+def train(trial):
+    torch.manual_seed(trial["seed"])  # wire it into your framework
+    ...
 ```
 
-### Promotion and Eviction
+`Study(seeds=[...])` runs every sampled config once per seed (trial params carry `"seed"`, recorded in `manifest.json`). A crash after 3 of 5 seeds resumes with 3 exact hits: the remaining seeds are independent, resumable trials.
 
-```
-GET flow:
-  Memory HIT  → return immediately
-  Memory MISS → check Local
-    Local HIT  → promote to Memory, return
-    Local MISS → check Remote
-      Remote HIT  → promote to Local + Memory, return
-      Remote MISS → cache miss, must compute
+Nondeterministic filters (`_deterministic = False` / `#[soma(deterministic = false)]`) are excluded from forward-output caching **unless** a seed is set — with a seed in the key, results vary across seeds but stay stable within one.
 
-PUT flow:
-  Always write to Memory + Local
-  Optionally write to Remote (for sharing with workers)
+## Events
 
-EVICTION:
-  Memory full → evict LRU entries (still in Local)
-  Local full  → evict LRU entries (still in Remote if shared)
-  Remote      → TTL-based or size-based policies
-```
-
-### Configuration
-
-```rust
-pub struct CacheConfig {
-    pub memory_max_bytes: usize,       // default: 1GB
-    pub local_path: PathBuf,           // default: ~/.soma/cache
-    pub local_max_bytes: usize,        // default: 50GB
-    pub remote: Option<RemoteConfig>,  // S3 bucket config
-    pub default_ttl: Option<Duration>, // default: None (forever)
-}
-
-pub enum EvictionPolicy {
-    LRU,
-    LFU,
-    SizeBased { max_entry_bytes: usize },
-    TTL { default: Duration },
-}
-```
-
-## Cache-Aware Events
-
-The event system reports cache activity:
-
-```rust
-Event::NodeCacheHit {
-    run_id: RunId,
-    node_id: NodeId,
-    key: CacheKey,
-    tier: CacheTier,      // Memory, Local, or Remote
-    load_time: Duration,  // how long it took to load
-}
-```
-
-This enables monitoring dashboards to show cache hit rates, tier distribution, and load times.
+The executor emits `NodeCacheHit` / `NodeCacheMiss` (with the key) on the graph's event bus; tracking sinks persist them to `events.jsonl`, so a run directory shows exactly what was reused.

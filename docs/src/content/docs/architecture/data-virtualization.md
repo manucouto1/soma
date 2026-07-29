@@ -157,17 +157,19 @@ pub enum Origin {
 
 ## How the Compiler Uses Virtualization
 
-When the compiler builds an execution plan, it treats every node's output as a VirtualValue and checks its status:
+At execution time each node's output is a VirtualValue, and the
+**executor** resolves reuse per node with the materialized input in hand:
 
 ```
 Pipeline: [A] → [B] → [C]
 
-Compiler resolves:
-  A.output → VirtualValue::Cached { key: abc }     → plan: Cached(A)
-  B.output → VirtualValue::Deferred { key: def }   → plan: Execute(B)
-  C.output → VirtualValue::Deferred { key: ghi }   → plan: Execute(C)
+Executor resolves (runtime):
+  A: key = hash(config_A + state + input)   → cache HIT  → skip, load
+  B: key = hash(config_B + state + A.out)   → miss       → execute
+  C: key = hash(config_C + state + B.out)   → miss       → execute
 
-Only B and C actually run. A's result is loaded from cache.
+Only B and C actually run. A's result is loaded from the persistent cache.
 ```
 
-This means the compiler can inspect the entire graph, determine what's already available, estimate costs, and produce a minimal execution plan -- all before any filter runs.
+Keys derive from input *content*, so an upstream re-run that produces
+identical bytes leaves downstream keys unchanged (early cutoff).

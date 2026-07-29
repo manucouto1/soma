@@ -106,6 +106,32 @@ for exp in soma.experiments():
     print(exp["name"], exp["metrics"], exp["tags"])
 ```
 
+## Reading runs back
+
+The read side mirrors the writer: `RunReader` in `soma-runtime`
+aggregates one run directory into chart-ready shapes, exposed in
+Python as `soma.runs()` / `soma.RunView` and on the CLI as
+`soma runs` / `soma graph` / `soma report`:
+
+```python
+for run in soma.runs():                 # newest first; stale heartbeat ⇒ "crashed"
+    print(run.id, run.state, run.name)
+
+view = soma.RunView(".soma/runs/train_20260728T093011_9c2e")
+view.events()          # enveloped {seq, ts, event_type, ...}, torn lines skipped
+view.metric_series()   # metrics.jsonl (event-log fallback)
+view.node_timings()    # per-node spans: wall times, durations, outcomes
+view.cache_activity()  # hits/misses, per node
+view.to_mermaid()      # graph.json + overlay: status colors, durations, flags
+```
+
+Readers never write. Wall-clock comes from the envelope `ts` (sinks
+are synchronous, so it is the emission time); the live `on_event`
+callback carries no envelope, which is why every timeline view reads
+files. The visualization stack — overlays, `soma.viz` figures, the
+HTML report and its embedded JSON data blobs (the future front-end's
+contract) — is specified in [Visualization](/design/visualization/).
+
 ## Diagnostics captured
 
 The gradient audit records, per node: activation stats, output-gradient
