@@ -96,6 +96,64 @@ df = audit.report().dataframe()
 df.to_csv("audit.csv", index=False)
 ```
 
+## Looking inside a node
+
+A node-level record is one line per filter — a 30-layer model inside a
+node is still opaque. `inside=` opens it up: submodules get their own
+hooks under hierarchical ids (`encoder/backbone.0.attn`), flowing
+through the same records, flags, persistence, and figures. Progressive
+disclosure — pick the layer that fits:
+
+```python
+# 0-config: auto-select submodules of every differentiable node
+# (direct children with parameters; single wrappers are descended).
+with g.gradient_audit(inside=True) as audit:
+    ...
+
+# Per-node duck-typed values: int = depth, list = fnmatch patterns.
+with g.gradient_audit(inside={"encoder": 2, "head": ["attn.*", "mlp"]}):
+    ...
+
+# Or declare it once, where the model lives (like _differentiable):
+class Encoder(DifferentiableFilter):
+    _audit_scope = ["backbone.*.attn", "backbone.*.mlp"]
+
+with g.gradient_audit(inside=True):   # honors each class's declaration
+    ...
+
+# Full control, including sampling for big models:
+from soma import AuditScope
+with g.gradient_audit(inside={"encoder": AuditScope(depth=3, sample_every=10)}):
+    ...
+```
+
+Precedence per node: the `inside={...}` value > the class
+`_audit_scope` > auto (with `inside=True`). Without `inside=`, class
+declarations are inert and behavior is exactly node-level.
+
+Under a tracked run this also snapshots each scoped node's inner
+architecture to `diagnostics/modules/<node>.json` (execution order,
+parameter counts), which powers:
+
+```python
+run = soma.runs()[0]
+run.plot_module_flow("encoder")       # per-layer |out∂| staircase —
+                                      # vanishing falls toward the input
+run.to_mermaid(node="encoder")        # inner diagram: params, |∂|, flags
+run.plot_audit(node="encoder")        # root + submodule time series
+```
+
+Submodule flags roll up: each flagged layer emits its own `HealthFlag`
+*and* the parent node gets one aggregated flag per family
+(`detail="in: backbone.0, backbone.3"`), so the outer DAG overlay
+marks the node while the inner views name the layer.
+
+Limitations worth knowing: scopes resolve at context entry (materialize
+first — an unmaterialized node named in `inside=` warns and is
+skipped); a module invoked twice in one forward records its **last**
+invocation; a submodule reachable under two names is audited under the
+first `named_modules()` name.
+
 ## Standalone (no `Graph`)
 
 For users who haven't migrated to the `Graph` orchestrator yet,

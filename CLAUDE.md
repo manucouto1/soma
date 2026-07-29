@@ -109,6 +109,15 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   `<script type="application/json" id="soma-data-*">` blobs are the future GUI's contract
   (see docs design/visualization.md). Local fit/run paths emit RunStarted/Completed/Failed brackets
   sharing the node events' run_id. `soma ui` live server: deliberately deferred.
+- **Intra-node audit (`gradient_audit(inside=...)`)**: submodule hooks under hierarchical ids
+  `"<node>/<module.path>"` (opaque strings end-to-end; hierarchy travels in Audit._children, never
+  parsed). Progressive disclosure: `inside=True` auto / dict duck-typing (int=depth, list=fnmatch) /
+  class attr `_audit_scope` / `AuditScope(depth, patterns, sample_every, max_modules)` — precedence
+  call-site > class > auto, mirroring channels=True|ChannelConfig. Persists
+  `diagnostics/modules/<node>.json` (soma-core Graph schema + execution order); child HealthFlags
+  roll up to one parent flag per family. Viz: `run.plot_module_flow`, `run.to_mermaid(node=...)`,
+  `plot_audit(node=...)` (default hides submodule series), report "Module flow" section +
+  `soma-data-module-trees` blob.
 - **EnvManager**: Isolated Python environments per pipeline with incremental dependency updates.
   Hashes requirements to detect changes, only installs/upgrades/removes what changed.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.

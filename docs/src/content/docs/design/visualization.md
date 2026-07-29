@@ -138,7 +138,35 @@ just their static packaging:
 Charts are Plotly figure JSON under `soma-fig-<name>` ids
 (`history`, `intermediate`, `parallel-coords`, `importances`,
 `timeline`, `pareto`, `metrics`, `gantt`, `health`, `audit`,
-`channels`).
+`channels`, `module-flow-<node>`).
+
+### Inner architectures (`gradient_audit(inside=...)`)
+
+Scoped audits snapshot each node's inner architecture to
+`diagnostics/modules/<node>.json`:
+
+```json
+{
+  "node": "encoder",
+  "graph": { "nodes": [...], "edges": [...] },   // soma-core Graph schema
+  "order": ["backbone.0", "backbone.0.attn", ...], // real execution order
+  "params": {"backbone.0.attn": 12432, ...},
+  "ids": {"backbone.0.attn": "encoder/backbone.0.attn", ...},
+  "mermaid_ids": {"backbone.0.attn": "backbone_0_attn", ...}
+}
+```
+
+The file is identified by its `node` field, never its filename. `graph`
+reuses the exact soma-core `Graph` serde schema so the standard
+renderers apply (`_soma.graph_json_to_mermaid` + overlay); mermaid node
+ids are sanitized (`[^0-9A-Za-z_] → _`, `n_` prefix when digit-leading,
+numeric suffix on collision) while raw module paths stay in the labels.
+Audit series for submodules use hierarchical ids
+`"<node>/<module.path>"` in `audit_steps.jsonl` — opaque strings, keyed
+through the `ids` map, never parsed. The report embeds all trees as the
+`soma-data-module-trees` blob and renders a "Module flow" section per
+tree (inner diagram + per-layer gradient staircase,
+`run.plot_module_flow`).
 
 ## Timing semantics
 
