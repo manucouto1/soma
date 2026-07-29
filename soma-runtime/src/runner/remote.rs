@@ -77,6 +77,7 @@ impl Runner for RemoteRunner {
         filters: &FilterLibrary,
         _cache: &dyn CacheStore,
         _event_bus: &Arc<EventBus>,
+        _run_id: &str,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {

@@ -47,6 +47,18 @@ impl CacheStore for TieredCache {
         Ok(())
     }
 
+    fn put_with_origin(
+        &self,
+        key: &CacheKey,
+        value: &Value,
+        origin: &somatize_core::cache::Origin,
+    ) -> Result<()> {
+        for (_, store) in &self.tiers {
+            store.put_with_origin(key, value, origin)?;
+        }
+        Ok(())
+    }
+
     fn exists(&self, key: &CacheKey) -> Result<bool> {
         for (_, store) in &self.tiers {
             if store.exists(key)? {

@@ -84,6 +84,10 @@ impl GraphSession {
     }
 
     /// Compile and execute the graph, returning all node outputs.
+    ///
+    /// Emits a `RunStarted`/`RunCompleted` (or `RunFailed`) bracket
+    /// around the node events so readers can compute total duration
+    /// and group the run.
     pub fn run(&mut self, mode: CompileMode) -> Result<HashMap<String, Value>> {
         let CompileResult { plan, diagnostics } =
             compile(&self.graph, &self.library, mode, Some(self.cache.as_ref()))?;
@@ -93,8 +97,9 @@ impl GraphSession {
         }
 
         let graph_info = GraphInfo::from_graph(&self.graph);
-        let mut ctx = Context::new(self.event_bus.clone(), timestamp_id("graph_run"))
-            .with_graph_info(graph_info);
+        let run_id = timestamp_id("graph_run");
+        let mut ctx =
+            Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
 
         if let Some(store) = &self.data_store {
             ctx = ctx.with_data_store(store.clone());
@@ -103,7 +108,22 @@ impl GraphSession {
             ctx = ctx.with_transport(transport.clone());
         }
 
-        executor::execute(&plan, &mut ctx, &self.library, self.cache.as_ref())?;
+        self.event_bus.emit(Event::RunStarted {
+            run_id: run_id.clone(),
+            plan_summary: plan.summary(),
+        });
+        let start = std::time::Instant::now();
+        if let Err(e) = executor::execute(&plan, &mut ctx, &self.library, self.cache.as_ref()) {
+            self.event_bus.emit(Event::RunFailed {
+                run_id,
+                error: e.to_string(),
+            });
+            return Err(e);
+        }
+        self.event_bus.emit(Event::RunCompleted {
+            run_id,
+            duration: start.elapsed(),
+        });
 
         Ok(ctx
             .store
@@ -114,6 +134,9 @@ impl GraphSession {
 
     /// Fit all trainable filters in topological order.
     /// Delegates to LocalRunner — same execution path as remote workers.
+    ///
+    /// Emits a `RunStarted`/`RunCompleted` (or `RunFailed`) bracket
+    /// tagged with the same run id as the node events inside it.
     pub fn fit(&mut self, x: &Value, y: Option<&Value>) -> Result<HashMap<String, Value>> {
         self.graph.validate()?;
 
@@ -124,15 +147,39 @@ impl GraphSession {
             Some(self.cache.as_ref()),
         )?;
 
+        let run_id = timestamp_id("fit");
+        self.event_bus.emit(Event::RunStarted {
+            run_id: run_id.clone(),
+            plan_summary: plan.summary(),
+        });
+        let start = std::time::Instant::now();
+
         let runner = crate::runner::LocalRunner;
-        let (_last_output, mut all_outputs) = runner.fit(
+        let result = runner.fit(
             &plan,
             &self.library,
             self.cache.as_ref(),
             &self.event_bus,
+            &run_id,
             x,
             y,
-        )?;
+        );
+        let (_last_output, mut all_outputs) = match result {
+            Ok(out) => {
+                self.event_bus.emit(Event::RunCompleted {
+                    run_id,
+                    duration: start.elapsed(),
+                });
+                out
+            }
+            Err(e) => {
+                self.event_bus.emit(Event::RunFailed {
+                    run_id,
+                    error: e.to_string(),
+                });
+                return Err(e);
+            }
+        };
 
         // Store trained states from __state_ keys into FilterLibrary
         for (key, value) in &all_outputs {
@@ -339,7 +386,7 @@ pub fn graph_fit(
                 let mut merged = serde_json::Map::new();
                 for pred_id in preds {
                     if let Some(val) = outputs.get(pred_id.as_str()) {
-                        let json_val = serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
+                        let json_val = val.to_plain_json();
                         merged.insert(pred_id.clone(), json_val);
                     }
                 }
@@ -351,14 +398,35 @@ pub fn graph_fit(
         let start = std::time::Instant::now();
 
         let (state, output) = if meta.kind == FilterKind::Trainable {
-            let data_hash = CacheKey::hash_data(&serde_json::to_vec(&input).unwrap_or_default());
-            let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
+            // Unhashable x/y ⇒ skip caching, never a degenerate key.
+            // Labels are part of the key.
+            let state_key = match (
+                CacheKey::for_value(&input),
+                y.map(CacheKey::for_value).transpose(),
+            ) {
+                (Ok(x_hash), Ok(y_hash)) => Some(CacheKey::for_state(
+                    &filter.config_hash(),
+                    &x_hash,
+                    y_hash.as_ref(),
+                )),
+                _ => None,
+            };
 
-            let state = if let Some(cached) = cache.get(&state_key)? {
+            let cached_state = match &state_key {
+                Some(key) => cache.get(key)?,
+                None => None,
+            };
+            let state = if let Some(cached) = cached_state {
                 cached
             } else {
                 let s = filter.fit(&input, y)?;
-                cache.put(&state_key, &s)?;
+                if let Some(key) = &state_key {
+                    let origin = somatize_core::cache::Origin::Computed {
+                        node_id: node_id.to_string(),
+                        run_id: run_id.clone(),
+                    };
+                    cache.put_computed(key, &s, &origin, start.elapsed(), true)?;
+                }
                 s
             };
 
@@ -455,6 +523,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -490,6 +559,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -533,6 +603,7 @@ mod tests {
                 kind: FilterKind::Trainable,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -680,6 +751,7 @@ mod tests {
                     kind: FilterKind::Stateless,
                     cacheable: true,
                     differentiable: false,
+                    deterministic: true,
                     stream_mode: StreamMode::FixedState,
                     distribution: somatize_core::filter::Distribution::Local,
                     input_schema: None,

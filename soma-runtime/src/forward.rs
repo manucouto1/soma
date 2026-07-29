@@ -171,6 +171,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: false,
                 differentiable: false,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
                 input_schema: None,

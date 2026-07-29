@@ -34,7 +34,8 @@ impl SimpleExecutor {
         graph.validate()?;
 
         let plan = compile(graph, filters, CompileMode::NoCache, Some(cache))?.plan;
-        runner.fit(&plan, filters, cache, event_bus, x, y)
+        let run_id = somatize_core::util::timestamp_id("fit");
+        runner.fit(&plan, filters, cache, event_bus, &run_id, x, y)
     }
 
     /// Forward only (inference on fitted model).

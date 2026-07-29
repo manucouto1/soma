@@ -37,12 +37,14 @@ pub struct LocalRunner;
 
 impl LocalRunner {
     /// Fit a Sequence plan, handling Composite steps as blocks.
+    #[allow(clippy::too_many_arguments)]
     fn fit_sequence(
         &self,
         steps: &[ExecutionPlan],
         filters: &FilterLibrary,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
+        run_id: &str,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
@@ -75,6 +77,7 @@ impl LocalRunner {
                     filters,
                     cache,
                     event_bus,
+                    run_id,
                     &current_input,
                     y,
                 )?;
@@ -94,6 +97,7 @@ impl Runner for LocalRunner {
         filters: &FilterLibrary,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
+        run_id: &str,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
@@ -109,14 +113,13 @@ impl Runner for LocalRunner {
 
         // Handle Sequence that may contain Composite steps
         if let ExecutionPlan::Sequence(steps) = plan {
-            return self.fit_sequence(steps, filters, cache, event_bus, input, y);
+            return self.fit_sequence(steps, filters, cache, event_bus, run_id, input, y);
         }
 
         // Single node or other plan types: sequential fit
         let node_id_refs = plan.node_ids();
         let node_ids: Vec<String> = node_id_refs.iter().map(|s| s.to_string()).collect();
         let graph_info = GraphInfo::for_linear(&node_id_refs);
-        let run_id = timestamp_id("fit");
         let mut outputs: HashMap<String, Value> = HashMap::new();
         let mut trained_states: HashMap<String, Value> = HashMap::new();
 
@@ -132,7 +135,7 @@ impl Runner for LocalRunner {
             let meta = filter.meta();
 
             event_bus.emit(Event::NodeStarted {
-                run_id: run_id.clone(),
+                run_id: run_id.to_string(),
                 node_id: node_id.to_string(),
                 kind: meta.kind,
             });
@@ -149,8 +152,7 @@ impl Runner for LocalRunner {
                     let mut merged = serde_json::Map::new();
                     for pred_id in preds {
                         if let Some(val) = outputs.get(pred_id.as_str()) {
-                            let json_val =
-                                serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
+                            let json_val = val.to_plain_json();
                             merged.insert(pred_id.clone(), json_val);
                         }
                     }
@@ -171,11 +173,26 @@ impl Runner for LocalRunner {
             };
             let empty_state = Value::Empty;
             let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
-                let data_hash =
-                    CacheKey::hash_data(&serde_json::to_vec(&node_input).unwrap_or_default());
-                let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
+                // Unhashable x/y ⇒ skip caching for this node, never a
+                // degenerate key. Labels are part of the key: same features
+                // + different labels must not collide.
+                let state_key = match (
+                    CacheKey::for_value(&node_input),
+                    y.map(CacheKey::for_value).transpose(),
+                ) {
+                    (Ok(x_hash), Ok(y_hash)) => Some(CacheKey::for_state(
+                        &filter.config_hash(),
+                        &x_hash,
+                        y_hash.as_ref(),
+                    )),
+                    _ => None,
+                };
 
-                let s = if let Some(cached) = cache.get(&state_key)? {
+                let cached_state = match &state_key {
+                    Some(key) => cache.get(key)?,
+                    None => None,
+                };
+                let s = if let Some(cached) = cached_state {
                     cached
                 } else {
                     let fitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -192,7 +209,13 @@ impl Runner for LocalRunner {
                             message: format!("fit panicked: {msg}"),
                         }
                     })??;
-                    let _ = cache.put(&state_key, &fitted);
+                    if let Some(key) = &state_key {
+                        let origin = somatize_core::cache::Origin::Computed {
+                            node_id: node_id.clone(),
+                            run_id: run_id.to_string(),
+                        };
+                        let _ = cache.put_computed(key, &fitted, &origin, start.elapsed(), true);
+                    }
                     fitted
                 };
                 trained_states.insert(node_id.clone(), s.clone());
@@ -221,7 +244,7 @@ impl Runner for LocalRunner {
             })??;
 
             event_bus.emit(Event::NodeCompleted {
-                run_id: run_id.clone(),
+                run_id: run_id.to_string(),
                 node_id: node_id.to_string(),
                 duration: start.elapsed(),
                 output_summary: format!("{output}"),
@@ -268,5 +291,91 @@ impl Runner for LocalRunner {
             .and_then(|id| ctx.store.remove(id))
             .and_then(|vv| vv.as_value().cloned())
             .ok_or_else(|| SomaError::Other("no output produced".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::MemoryCache;
+    use somatize_core::filter::{FilterMeta, StreamMode};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Counts fit() invocations — probe for state-cache key tests.
+    struct CountingFitFilter {
+        fits: Arc<AtomicUsize>,
+    }
+
+    impl Filter for CountingFitFilter {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"CountingFit"])
+        }
+        fn fit(&self, _x: &Value, y: Option<&Value>) -> Result<Value> {
+            self.fits.fetch_add(1, Ordering::SeqCst);
+            Ok(y.cloned().unwrap_or(Value::Empty))
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "CountingFit".into(),
+                kind: FilterKind::Trainable,
+                cacheable: true,
+                differentiable: false,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn state_cache_key_is_sensitive_to_labels() {
+        let fits = Arc::new(AtomicUsize::new(0));
+        let mut filters = FilterLibrary::new();
+        filters.register("clf", Box::new(CountingFitFilter { fits: fits.clone() }));
+
+        let cache = MemoryCache::default();
+        let bus = Arc::new(EventBus::new(64));
+        let plan = ExecutionPlan::Execute {
+            node_id: "clf".into(),
+        };
+        let runner = LocalRunner;
+        let x = Value::tensor(vec![1.0, 2.0], vec![2]);
+        let y_a = Value::tensor(vec![0.0, 1.0], vec![2]);
+        let y_b = Value::tensor(vec![1.0, 0.0], vec![2]);
+
+        runner
+            .fit(&plan, &filters, &cache, &bus, "test_run", &x, Some(&y_a))
+            .unwrap();
+        assert_eq!(fits.load(Ordering::SeqCst), 1);
+
+        // Same features, same labels → cached state, no refit.
+        runner
+            .fit(&plan, &filters, &cache, &bus, "test_run", &x, Some(&y_a))
+            .unwrap();
+        assert_eq!(fits.load(Ordering::SeqCst), 1);
+
+        // Same features, DIFFERENT labels → must refit.
+        runner
+            .fit(&plan, &filters, &cache, &bus, "test_run", &x, Some(&y_b))
+            .unwrap();
+        assert_eq!(
+            fits.load(Ordering::SeqCst),
+            2,
+            "different labels must not reuse the cached state"
+        );
+
+        // Unsupervised (no labels) → distinct from both supervised keys.
+        runner
+            .fit(&plan, &filters, &cache, &bus, "test_run", &x, None)
+            .unwrap();
+        assert_eq!(fits.load(Ordering::SeqCst), 3);
     }
 }

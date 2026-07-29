@@ -22,12 +22,18 @@ use std::sync::Arc;
 pub trait Runner: Send + Sync {
     /// Train: fit each filter, forward to propagate outputs.
     /// Returns (last output, all node outputs).
+    ///
+    /// `run_id` tags every node event of this fit — callers that emit a
+    /// `RunStarted`/`RunCompleted` bracket pass the same id so readers
+    /// can group a run's events.
+    #[allow(clippy::too_many_arguments)]
     fn fit(
         &self,
         plan: &ExecutionPlan,
         filters: &FilterLibrary,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
+        run_id: &str,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)>;

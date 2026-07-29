@@ -148,6 +148,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: false,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,

@@ -34,4 +34,7 @@ pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
-pub use tracking::{JsonlEventSink, LocalTracker, collect_git_info, load_manifest, load_status};
+pub use tracking::{
+    JsonlEventSink, LocalTracker, RunInfo, RunReader, collect_git_info, list_runs, load_manifest,
+    load_status,
+};

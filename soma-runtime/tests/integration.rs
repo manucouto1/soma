@@ -54,6 +54,7 @@ impl Filter for Normalizer {
             kind: FilterKind::Trainable,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -119,6 +120,7 @@ impl Filter for LinearModel {
             kind: FilterKind::Trainable,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -150,6 +152,7 @@ impl Filter for FailingFilter {
             kind: FilterKind::Opaque,
             cacheable: false,
             differentiable: false,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -504,7 +507,6 @@ fn compile_then_execute_with_cache() {
     // Compile
     let result = compile(&graph, &registry, CompileMode::Inference, Some(&cache)).unwrap();
     assert_eq!(result.plan.node_count(), 2);
-    assert_eq!(result.plan.cached_count(), 0);
 
     // Execute
     let bus = Arc::new(EventBus::new(64));

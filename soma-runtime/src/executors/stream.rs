@@ -283,6 +283,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: false,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
                 input_schema: None,
@@ -312,6 +313,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: false,
                 differentiable: false,
+                deterministic: true,
                 stream_mode: StreamMode::Barrier,
                 distribution: Distribution::Local,
                 input_schema: None,
@@ -349,6 +351,7 @@ mod tests {
                 kind: FilterKind::Trainable,
                 cacheable: false,
                 differentiable: false,
+                deterministic: true,
                 stream_mode: StreamMode::Evolving {
                     checkpoint_every: 2,
                 },

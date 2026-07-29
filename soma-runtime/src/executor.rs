@@ -96,6 +96,17 @@ pub struct Context {
     /// Minimum value size (bytes) to spill to DataStore instead of keeping in memory.
     /// Default: 0 (disabled — all values stay in memory).
     pub spill_threshold: usize,
+    /// Memoized content hashes of node outputs, keyed by node id.
+    /// Invalidated whenever a node's output is (re)stored, so Loop
+    /// iterations that overwrite an output never reuse a stale hash.
+    output_hashes: HashMap<String, somatize_core::cache::CacheKey>,
+    /// Experiment seed for this run. Hashed into every cache key so
+    /// each seed owns an independent cache line (a 5-seed study is 5
+    /// resumable computations, not one).
+    pub seed: Option<i64>,
+    /// Owned handle to the same cache passed to `execute()` — needed by
+    /// the stream executor, which holds the cache across chunks.
+    pub cache_arc: Option<Arc<dyn CacheStore>>,
 }
 
 impl Context {
@@ -109,11 +120,27 @@ impl Context {
             transport: None,
             data_store: None,
             spill_threshold: 0,
+            output_hashes: HashMap::new(),
+            seed: None,
+            cache_arc: None,
         }
     }
 
     pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
         self.graph_info = info;
+        self
+    }
+
+    /// Set the experiment seed (hashed into every cache key).
+    pub fn with_seed(mut self, seed: Option<i64>) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Provide an owned cache handle (enables chunk-level caching in
+    /// streaming plans; pass the same store given to `execute()`).
+    pub fn with_cache_arc(mut self, cache: Arc<dyn CacheStore>) -> Self {
+        self.cache_arc = Some(cache);
         self
     }
 
@@ -172,6 +199,7 @@ impl Context {
     pub fn set(&mut self, node_id: impl Into<String>, value: Value) {
         let id = node_id.into();
         self.execution_order.push(id.clone());
+        self.output_hashes.remove(&id);
         self.store.insert(id, VirtualValue::materialized(value));
     }
 
@@ -179,7 +207,38 @@ impl Context {
     pub fn set_virtual(&mut self, node_id: impl Into<String>, vv: VirtualValue) {
         let id = node_id.into();
         self.execution_order.push(id.clone());
+        self.output_hashes.remove(&id);
         self.store.insert(id, vv);
+    }
+
+    /// Content hash of a node's resolved input, memoized through the
+    /// single-predecessor fast path: the input of a 1-pred node IS that
+    /// predecessor's output, so sibling consumers (diamonds) reuse the
+    /// hash instead of re-serializing a potentially large value.
+    fn input_hash(
+        &mut self,
+        node_id: &str,
+        input: &Value,
+    ) -> somatize_core::error::Result<somatize_core::cache::CacheKey> {
+        let preds = self.graph_info.predecessors(node_id);
+        let single_pred = match preds {
+            [only] => Some(only.clone()),
+            _ => None,
+        };
+        if let Some(pred) = single_pred {
+            if let Some(h) = self.output_hashes.get(&pred) {
+                return Ok(h.clone());
+            }
+            // Only trust the memo association when the pred's output is
+            // actually what resolve_input handed us (it may have fallen
+            // back to Value::Empty if the pred produced nothing).
+            if self.store.contains_key(&pred) {
+                let h = somatize_core::cache::CacheKey::for_value(input)?;
+                self.output_hashes.insert(pred, h.clone());
+                return Ok(h);
+            }
+        }
+        somatize_core::cache::CacheKey::for_value(input)
     }
 
     fn snapshot(&self) -> Self {
@@ -192,6 +251,9 @@ impl Context {
             transport: self.transport.clone(),
             data_store: self.data_store.clone(),
             spill_threshold: self.spill_threshold,
+            output_hashes: self.output_hashes.clone(),
+            seed: self.seed,
+            cache_arc: self.cache_arc.clone(),
         }
     }
 }
@@ -219,24 +281,6 @@ impl Executable for ExecutionPlan {
             ExecutionPlan::Empty => Ok(()),
 
             ExecutionPlan::Execute { node_id } => execute_node(node_id, ctx, filters, cache),
-
-            ExecutionPlan::Cached { node_id, key } => {
-                let start = Instant::now();
-                let value = cache.get(key)?.ok_or_else(|| {
-                    SomaError::Cache(format!(
-                        "expected cached value for node `{node_id}` not found"
-                    ))
-                })?;
-                ctx.set(node_id.clone(), value);
-                ctx.event_bus.emit(Event::NodeCacheHit {
-                    run_id: ctx.run_id.clone(),
-                    node_id: node_id.clone(),
-                    key: key.clone(),
-                    tier: somatize_core::cache::CacheTier::Memory,
-                    load_time: start.elapsed(),
-                });
-                Ok(())
-            }
 
             ExecutionPlan::Sequence(steps) => {
                 for step in steps {
@@ -371,6 +415,18 @@ impl Executable for ExecutionPlan {
     }
 }
 
+/// Salt a cache key with the run's experiment seed, when set.
+/// `None` leaves the key untouched (and distinct from any seeded key).
+pub fn salt_with_seed(
+    key: somatize_core::cache::CacheKey,
+    seed: Option<i64>,
+) -> somatize_core::cache::CacheKey {
+    match seed {
+        Some(s) => somatize_core::cache::CacheKey::from_parts(&[b"seed", &s.to_le_bytes(), &key.0]),
+        None => key,
+    }
+}
+
 /// Execute a plan (convenience function, delegates to `Executable` trait).
 pub fn execute(
     plan: &ExecutionPlan,
@@ -382,23 +438,23 @@ pub fn execute(
 }
 
 /// Execute a single filter node.
+///
+/// Cacheable nodes are memoized: the output key is
+/// `hash(config + state + input)` — if a previous run (possibly in
+/// another process, via a persistent cache) already computed this exact
+/// forward, the stored output is used and the filter never runs.
 fn execute_node(
     node_id: &str,
     ctx: &mut Context,
     filters: &FilterLibrary,
-    _cache: &dyn CacheStore,
+    cache: &dyn CacheStore,
 ) -> Result<()> {
     let start = Instant::now();
 
     let filter = filters
         .get(node_id)
         .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
-
-    ctx.event_bus.emit(Event::NodeStarted {
-        run_id: ctx.run_id.clone(),
-        node_id: node_id.to_string(),
-        kind: filter.meta().kind,
-    });
+    let meta = filter.meta();
 
     let _span = tracing::info_span!("execute_node", %node_id).entered();
 
@@ -408,6 +464,59 @@ fn execute_node(
     // forward call. Arc::clone is a cheap atomic increment.
     let state = filters.get_state(node_id);
     let state_ref: &Value = state.as_deref().unwrap_or(&Value::Empty);
+
+    // An unhashable state/input means "uncacheable", not an error:
+    // execution proceeds, only memoization is skipped. Nondeterministic
+    // forwards (declared via `deterministic = false`) are also excluded:
+    // serving a recorded result would silently freeze what the user
+    // expects to vary. (Their fit STATES still cache — any recorded
+    // training result is acceptable, constructive-trace semantics.)
+    let out_key = if meta.cacheable && meta.deterministic {
+        match (
+            somatize_core::cache::CacheKey::for_value(state_ref),
+            ctx.input_hash(node_id, &input),
+        ) {
+            (Ok(state_hash), Ok(input_hash)) => {
+                let key = somatize_core::cache::CacheKey::for_output(
+                    &filter.config_hash(),
+                    &state_hash,
+                    &input_hash,
+                );
+                Some(salt_with_seed(key, ctx.seed))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    if let Some(key) = &out_key
+        && let Ok(Some(cached)) = cache.get(key)
+    {
+        ctx.set(node_id.to_string(), cached);
+        ctx.event_bus.emit(Event::NodeCacheHit {
+            run_id: ctx.run_id.clone(),
+            node_id: node_id.to_string(),
+            key: key.clone(),
+            tier: somatize_core::cache::CacheTier::Memory,
+            load_time: start.elapsed(),
+        });
+        return Ok(());
+    }
+
+    if let Some(key) = &out_key {
+        ctx.event_bus.emit(Event::NodeCacheMiss {
+            run_id: ctx.run_id.clone(),
+            node_id: node_id.to_string(),
+            key: key.clone(),
+        });
+    }
+
+    ctx.event_bus.emit(Event::NodeStarted {
+        run_id: ctx.run_id.clone(),
+        node_id: node_id.to_string(),
+        kind: meta.kind,
+    });
 
     // catch_unwind: a panic in a user filter must not crash the process
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -434,6 +543,18 @@ fn execute_node(
         Ok(output) => {
             let duration = start.elapsed();
             let summary = format!("{output}");
+            if let Some(key) = &out_key {
+                // Best-effort: a full cache disk must never fail the run.
+                let origin = somatize_core::cache::Origin::Computed {
+                    node_id: node_id.to_string(),
+                    run_id: ctx.run_id.clone(),
+                };
+                if let Err(e) =
+                    cache.put_computed(key, &output, &origin, duration, meta.deterministic)
+                {
+                    tracing::warn!(node_id, error = %e, "failed to cache node output");
+                }
+            }
             let vv = ctx.maybe_spill(node_id, output);
             ctx.set_virtual(node_id, vv);
             ctx.event_bus.emit(Event::NodeCompleted {
@@ -543,7 +664,7 @@ pub fn resolve_input(node_id: &str, ctx: &Context) -> Value {
             let mut merged = serde_json::Map::new();
             for pred_id in preds {
                 if let Some(val) = resolve_node(pred_id) {
-                    let json_val = serde_json::to_value(&val).unwrap_or(serde_json::Value::Null);
+                    let json_val = val.to_plain_json();
                     merged.insert(pred_id.clone(), json_val);
                 }
             }
@@ -558,7 +679,7 @@ fn execute_stream(
     chunk_size: usize,
     ctx: &mut Context,
     filters: &FilterLibrary,
-    cache: &dyn CacheStore,
+    _cache: &dyn CacheStore,
 ) -> Result<()> {
     use crate::executors::{FittedFilter, StreamExecutor};
 
@@ -591,9 +712,11 @@ fn execute_stream(
     // Chunk the input along the first tensor dimension.
     let chunks = chunk_value(&input, chunk_size);
 
-    // Process chunks through the stream executor.
+    // Process chunks through the stream executor. Chunk-level caching
+    // needs an owned handle (the executor keeps it across chunks) —
+    // provided via `Context::with_cache_arc`.
     let mut executor = StreamExecutor::new(fitted);
-    if let Some(c) = cache_as_arc(cache) {
+    if let Some(c) = ctx.cache_arc.clone() {
         executor = executor.with_cache(c);
     }
 
@@ -690,16 +813,6 @@ fn chunk_value(x: &Value, chunk_size: usize) -> Vec<Value> {
     }
 }
 
-/// Try to wrap the cache reference as an Arc for StreamExecutor.
-/// This is safe because the cache outlives the executor within execute().
-fn cache_as_arc(_cache: &dyn CacheStore) -> Option<Arc<dyn CacheStore>> {
-    // StreamExecutor requires Arc, but we only have a reference.
-    // For local execution we skip the cache in streaming mode — the per-chunk
-    // cache is an optimization, not a correctness requirement.
-    // TODO: pass cache as Option<&dyn CacheStore> to StreamExecutor.
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +844,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -769,6 +883,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -804,6 +919,7 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: false,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -872,25 +988,6 @@ mod tests {
     }
 
     #[test]
-    fn execute_cached_node() {
-        let (bus, cache) = setup();
-        let key = CacheKey::hash_data(b"cached_result");
-        let cached_value = Value::tensor(vec![99.0], vec![1]);
-        cache.put(&key, &cached_value).unwrap();
-
-        let mut ctx = Context::new(bus, "run_1");
-        let filters = FilterLibrary::new();
-
-        let plan = ExecutionPlan::Cached {
-            node_id: "cached_node".into(),
-            key,
-        };
-
-        execute(&plan, &mut ctx, &filters, &cache).unwrap();
-        assert_eq!(*ctx.get("cached_node").unwrap(), cached_value);
-    }
-
-    #[test]
     fn execute_emits_events() {
         let bus = Arc::new(EventBus::new(64));
         let cache = MemoryCache::default();
@@ -914,10 +1011,13 @@ mod tests {
         )
         .unwrap();
 
+        // Cacheable node, cold cache: miss → started → completed.
         let e1 = rx.try_recv().unwrap();
-        assert!(matches!(e1, Event::NodeStarted { .. }));
+        assert!(matches!(e1, Event::NodeCacheMiss { .. }), "got {e1:?}");
         let e2 = rx.try_recv().unwrap();
-        assert!(matches!(e2, Event::NodeCompleted { .. }));
+        assert!(matches!(e2, Event::NodeStarted { .. }), "got {e2:?}");
+        let e3 = rx.try_recv().unwrap();
+        assert!(matches!(e3, Event::NodeCompleted { .. }), "got {e3:?}");
     }
 
     #[test]
@@ -1129,6 +1229,422 @@ mod tests {
         let (data, shape) = result.as_tensor().unwrap();
         assert_eq!(data, &[12.0, 14.0, 16.0, 18.0]);
         assert_eq!(shape, &[4]);
+    }
+
+    /// Counts forward() invocations — the probe for cache-hit tests.
+    struct CountingFilter {
+        forwards: Arc<std::sync::atomic::AtomicUsize>,
+        cacheable: bool,
+        config: f64,
+    }
+
+    impl Filter for CountingFilter {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Counting", &self.config.to_le_bytes()])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            self.forwards
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match x {
+                Value::Tensor { values, shape } => {
+                    let out: Vec<f64> = values.iter().map(|v| v + self.config).collect();
+                    Ok(Value::tensor(out, shape.clone()))
+                }
+                _ => Ok(x.clone()),
+            }
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "Counting".into(),
+                kind: FilterKind::Stateless,
+                cacheable: self.cacheable,
+                differentiable: true,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn counting_setup(
+        cacheable: bool,
+    ) -> (
+        FilterLibrary,
+        Arc<std::sync::atomic::AtomicUsize>,
+        GraphInfo,
+    ) {
+        let forwards = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut filters = FilterLibrary::new();
+        filters.register(
+            "a",
+            Box::new(CountingFilter {
+                forwards: forwards.clone(),
+                cacheable,
+                config: 1.0,
+            }),
+        );
+        filters.register(
+            "b",
+            Box::new(CountingFilter {
+                forwards: forwards.clone(),
+                cacheable,
+                config: 2.0,
+            }),
+        );
+        let info = GraphInfo::for_linear(&["input", "a", "b"]);
+        (filters, forwards, info)
+    }
+
+    fn run_chain(cache: &dyn CacheStore, filters: &FilterLibrary, info: &GraphInfo) -> Value {
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "run").with_graph_info(info.clone());
+        ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "b".into(),
+            },
+        ]);
+        execute(&plan, &mut ctx, filters, cache).unwrap();
+        ctx.get("b").unwrap().clone()
+    }
+
+    #[test]
+    fn second_run_hits_cache_and_skips_execution() {
+        let (filters, forwards, info) = counting_setup(true);
+        let cache = MemoryCache::default();
+
+        let first = run_chain(&cache, &filters, &info);
+        assert_eq!(forwards.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        let second = run_chain(&cache, &filters, &info);
+        assert_eq!(
+            forwards.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "second run must not execute any filter"
+        );
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn uncacheable_filter_always_executes() {
+        let (filters, forwards, info) = counting_setup(false);
+        let cache = MemoryCache::default();
+
+        run_chain(&cache, &filters, &info);
+        run_chain(&cache, &filters, &info);
+        assert_eq!(forwards.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn cache_survives_process_restart() {
+        use crate::cache::LocalCache;
+        let dir = std::env::temp_dir().join(format!(
+            "soma_exec_restart_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (filters, forwards, info) = counting_setup(true);
+
+        {
+            let cache = LocalCache::new(&dir).unwrap();
+            run_chain(&cache, &filters, &info);
+        }
+        assert_eq!(forwards.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // "Restart": a fresh cache instance over the same directory.
+        {
+            let cache = LocalCache::new(&dir).unwrap();
+            run_chain(&cache, &filters, &info);
+        }
+        assert_eq!(
+            forwards.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "after restart the persisted cache must serve both nodes"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn different_input_misses_cache() {
+        let (filters, forwards, info) = counting_setup(true);
+        let cache = MemoryCache::default();
+
+        run_chain(&cache, &filters, &info);
+
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "run2").with_graph_info(info.clone());
+        ctx.set("input", Value::tensor(vec![9.0, 9.0], vec![2]));
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "b".into(),
+            },
+        ]);
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+        assert_eq!(
+            forwards.load(std::sync::atomic::Ordering::SeqCst),
+            4,
+            "different input data must not hit the cache"
+        );
+    }
+
+    #[test]
+    fn cache_hit_emits_cache_hit_event() {
+        let (filters, _forwards, info) = counting_setup(true);
+        let cache = MemoryCache::default();
+        run_chain(&cache, &filters, &info);
+
+        let bus = Arc::new(EventBus::new(64));
+        let mut rx = bus.subscribe();
+        let mut ctx = Context::new(bus, "run2").with_graph_info(info.clone());
+        ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
+        execute(
+            &ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+            &mut ctx,
+            &filters,
+            &cache,
+        )
+        .unwrap();
+
+        let event = rx.try_recv().unwrap();
+        assert!(
+            matches!(event, Event::NodeCacheHit { ref node_id, .. } if node_id == "a"),
+            "expected NodeCacheHit for `a`, got: {event:?}"
+        );
+    }
+
+    #[test]
+    fn spill_roundtrip_through_datastore() {
+        use somatize_core::store::LocalDataStore;
+        let dir = std::env::temp_dir().join(format!(
+            "soma_spill_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(&dir));
+
+        let (filters, _forwards, info) = counting_setup(true);
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "run_spill")
+            .with_graph_info(info.clone())
+            .with_data_store(store)
+            .with_spill_threshold(1); // spill everything
+        ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
+
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "b".into(),
+            },
+        ]);
+        execute(&plan, &mut ctx, &filters, &cache_for_spill())
+            .expect("spilled intermediate must be readable downstream");
+
+        // `a`'s output was spilled; `b` must still have received it:
+        // input + 1.0 + 2.0 = [4.0, 5.0]
+        let out = resolve_value(ctx.get_virtual("b").unwrap(), &ctx.data_store).unwrap();
+        let (data, _) = out.as_tensor().unwrap();
+        assert_eq!(data, &[4.0, 5.0]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn cache_for_spill() -> MemoryCache {
+        MemoryCache::default()
+    }
+
+    /// Config carries a salt that does NOT affect the output — models a
+    /// cosmetic/irrelevant config change upstream.
+    struct SaltedFilter {
+        salt: f64,
+        forwards: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Filter for SaltedFilter {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Salted", &self.salt.to_le_bytes()])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            self.forwards
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match x {
+                Value::Tensor { values, shape } => Ok(Value::tensor(
+                    values.iter().map(|v| v + 1.0).collect(),
+                    shape.clone(),
+                )),
+                _ => Ok(x.clone()),
+            }
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "Salted".into(),
+                kind: FilterKind::Stateless,
+                cacheable: true,
+                differentiable: true,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn early_cutoff_downstream_hits_when_upstream_output_unchanged() {
+        // Downstream keys derive from input CONTENT hashes, not from
+        // upstream provenance — so a config change in A that produces
+        // identical bytes must not invalidate B (rustc/salsa-style
+        // early cutoff; impossible under the old deep-provenance keys).
+        let a_forwards = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let b_forwards = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cache = MemoryCache::default();
+        let info = GraphInfo::for_linear(&["input", "a", "b"]);
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "b".into(),
+            },
+        ]);
+
+        let run = |salt: f64| {
+            let mut filters = FilterLibrary::new();
+            filters.register(
+                "a",
+                Box::new(SaltedFilter {
+                    salt,
+                    forwards: a_forwards.clone(),
+                }),
+            );
+            filters.register(
+                "b",
+                Box::new(CountingFilter {
+                    forwards: b_forwards.clone(),
+                    cacheable: true,
+                    config: 2.0,
+                }),
+            );
+            let bus = Arc::new(EventBus::new(64));
+            let mut ctx = Context::new(bus, "run").with_graph_info(info.clone());
+            ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
+            execute(&plan, &mut ctx, &filters, &cache).unwrap();
+        };
+
+        run(1.0);
+        assert_eq!(a_forwards.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(b_forwards.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A's config changed (new salt) → A re-executes. Its output is
+        // byte-identical, so B must hit.
+        run(2.0);
+        assert_eq!(
+            a_forwards.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "A's config changed, it must re-execute"
+        );
+        assert_eq!(
+            b_forwards.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "B's input content is unchanged — early cutoff must serve it from cache"
+        );
+    }
+
+    #[test]
+    fn nondeterministic_filter_is_never_cached() {
+        struct RandomishFilter {
+            forwards: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl Filter for RandomishFilter {
+            fn config_hash(&self) -> CacheKey {
+                CacheKey::from_parts(&[b"Randomish"])
+            }
+            fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+                Ok(Value::Empty)
+            }
+            fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+                self.forwards
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(x.clone())
+            }
+            fn meta(&self) -> FilterMeta {
+                FilterMeta {
+                    name: "Randomish".into(),
+                    kind: FilterKind::Stateless,
+                    cacheable: true,
+                    differentiable: false,
+                    deterministic: false, // declared nondeterministic
+                    stream_mode: StreamMode::FixedState,
+                    distribution: somatize_core::filter::Distribution::Local,
+                    input_schema: None,
+                    output_schema: None,
+                }
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        let forwards = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut filters = FilterLibrary::new();
+        filters.register(
+            "rng",
+            Box::new(RandomishFilter {
+                forwards: forwards.clone(),
+            }),
+        );
+        let cache = MemoryCache::default();
+        let info = GraphInfo::for_linear(&["input", "rng"]);
+        for _ in 0..2 {
+            let bus = Arc::new(EventBus::new(64));
+            let mut ctx = Context::new(bus, "run").with_graph_info(info.clone());
+            ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+            execute(
+                &ExecutionPlan::Execute {
+                    node_id: "rng".into(),
+                },
+                &mut ctx,
+                &filters,
+                &cache,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            forwards.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "a filter declared nondeterministic must run every time"
+        );
     }
 
     #[test]

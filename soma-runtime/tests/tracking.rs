@@ -363,6 +363,7 @@ fn graph_fit_events_reach_the_run_dir() {
                 kind: FilterKind::Trainable,
                 cacheable: false,
                 differentiable: false,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
@@ -572,4 +573,378 @@ fn heartbeat_updates_status() {
     assert!(after.heartbeat_at.unwrap() > before.heartbeat_at.unwrap());
     assert!(after.updated_at > before.updated_at);
     assert_eq!(after.state, RunState::Running);
+}
+
+// ── RunReader (read-side) ──
+
+#[test]
+fn run_reader_aggregates_a_tracked_run() {
+    use somatize_core::cache::{CacheKey, CacheTier};
+    use somatize_runtime::tracking::RunReader;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Train, "agg").unwrap();
+    let sink = tracker.sink();
+    let rid = tracker.run_id().to_string();
+
+    sink.record(&Event::RunStarted {
+        run_id: rid.clone(),
+        plan_summary: somatize_core::event::PlanSummary {
+            total_nodes: 2,
+            cached_nodes: 0,
+            parallel_branches: 0,
+        },
+    });
+    sink.record(&Event::NodeStarted {
+        run_id: rid.clone(),
+        node_id: "scaler".into(),
+        kind: somatize_core::filter::FilterKind::Trainable,
+    });
+    sink.record(&Event::NodeCompleted {
+        run_id: rid.clone(),
+        node_id: "scaler".into(),
+        duration: std::time::Duration::from_millis(120),
+        output_summary: "tensor".into(),
+    });
+    sink.record(&Event::NodeCacheHit {
+        run_id: rid.clone(),
+        node_id: "model".into(),
+        key: CacheKey::from_parts(&[b"k"]),
+        tier: CacheTier::Memory,
+        load_time: std::time::Duration::from_millis(3),
+    });
+    sink.record(&Event::NodeCacheMiss {
+        run_id: rid.clone(),
+        node_id: "scaler".into(),
+        key: CacheKey::from_parts(&[b"k2"]),
+    });
+    sink.record(&Event::MetricReported {
+        run_id: rid.clone(),
+        metric: metric("val_f1", 0.91, 3),
+        node_id: None,
+        trial_id: None,
+    });
+    sink.record(&Event::HealthFlag {
+        run_id: rid.clone(),
+        node_id: "model".into(),
+        step: 7,
+        flag: "LEAKAGE".into(),
+        detail: "cka=0.99".into(),
+    });
+    sink.record(&Event::RunCompleted {
+        run_id: rid.clone(),
+        duration: std::time::Duration::from_millis(500),
+    });
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let reader = RunReader::open(tracker.run_dir()).unwrap();
+
+    let events = reader.events().unwrap();
+    assert_eq!(events.len(), 8);
+    assert_eq!(events[0].seq, 0);
+
+    let spans = reader.node_timings().unwrap();
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].node_id, "scaler");
+    assert_eq!(spans[0].outcome, "completed");
+    assert_eq!(spans[0].duration_ms, Some(120));
+    assert!(spans[0].started_ts.is_some());
+    assert!(spans[0].finished_ts.is_some());
+    assert_eq!(spans[1].node_id, "model");
+    assert_eq!(spans[1].outcome, "cache_hit");
+    assert_eq!(spans[1].cache_tier.as_deref(), Some("memory"));
+
+    let cache = reader.cache_activity().unwrap();
+    assert_eq!(cache.hits, 1);
+    assert_eq!(cache.misses, 1);
+    assert_eq!(cache.by_node["model"].hits, 1);
+    assert_eq!(cache.by_node["scaler"].misses, 1);
+
+    let series = reader.metric_series(Some("val_f1")).unwrap();
+    assert_eq!(series.len(), 1);
+    assert_eq!(series[0].value, 0.91);
+    assert_eq!(series[0].step, 3);
+    assert!(reader.metric_series(Some("missing")).unwrap().is_empty());
+
+    let flags = reader.health_flags().unwrap();
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].flag, "LEAKAGE");
+    assert_eq!(flags[0].node_id, "model");
+
+    let info = reader.info().unwrap();
+    assert_eq!(info.state, "completed");
+    assert_eq!(info.kind, "train");
+    assert!(info.duration_ms.is_some());
+
+    // Non-study run: empty trial timeline, no study.
+    assert!(reader.trial_timeline().unwrap().is_empty());
+    assert!(reader.study().unwrap().is_none());
+}
+
+#[test]
+fn run_reader_skips_torn_and_unknown_lines() {
+    use somatize_runtime::tracking::RunReader;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Train, "torn-read").unwrap();
+    for i in 0..3 {
+        tracker.sink().record(&step_event(tracker.run_id(), i));
+    }
+    tracker.sink().flush();
+
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(tracker.run_dir().join("events.jsonl"))
+        .unwrap();
+    // An event kind from a future soma, then a torn tail.
+    writeln!(
+        f,
+        "{{\"seq\":3,\"ts\":\"2026-07-29T10:00:00Z\",\"event_type\":\"FutureThing\",\"x\":1}}"
+    )
+    .unwrap();
+    write!(f, "{{\"seq\":4,\"ts\":\"2026-").unwrap();
+    drop(f);
+
+    let reader = RunReader::open(tracker.run_dir()).unwrap();
+    let events = reader.events().unwrap();
+    assert_eq!(events.len(), 3, "torn + unknown lines are skipped");
+    let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, vec![0, 1, 2]);
+}
+
+#[test]
+fn list_runs_orders_and_detects_crashes() {
+    use somatize_runtime::tracking::{RunReader, list_runs};
+
+    let root = tempfile::tempdir().unwrap();
+
+    let t1 = LocalTracker::create(root.path(), RunKind::Train, "first").unwrap();
+    t1.finalize(RunState::Completed).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100)); // run ids have 1s resolution
+    let t2 = LocalTracker::create(root.path(), RunKind::Fit, "second").unwrap();
+    // Simulate a crash: running status whose heartbeat went stale.
+    let stale = serde_json::json!({
+        "state": "running",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "heartbeat_at": "2026-01-01T00:00:00Z",
+    });
+    std::fs::write(
+        t2.run_dir().join("status.json"),
+        serde_json::to_vec_pretty(&stale).unwrap(),
+    )
+    .unwrap();
+
+    // A stray non-run directory is skipped.
+    std::fs::create_dir_all(root.path().join("runs/not-a-run")).unwrap();
+
+    let runs = list_runs(root.path()).unwrap();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].name, "second", "newest first");
+    assert_eq!(runs[0].state, "crashed");
+    assert_eq!(runs[1].name, "first");
+    assert_eq!(runs[1].state, "completed");
+
+    let info = RunReader::open(&runs[0].dir).unwrap().info().unwrap();
+    assert_eq!(info.state, "crashed");
+}
+
+#[test]
+fn session_fit_and_run_emit_matching_run_bracket() {
+    use somatize_core::cache::CacheKey;
+    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::graph::{Edge, Graph, Node};
+    use somatize_core::value::Value;
+    use somatize_runtime::tracking::RunReader;
+    use somatize_runtime::{FilterLibrary, GraphSession};
+
+    struct Doubler;
+    impl Filter for Doubler {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Doubler"])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> somatize_core::Result<Value> {
+            Ok(Value::json(serde_json::json!({})))
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> somatize_core::Result<Value> {
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "Doubler".into(),
+                kind: FilterKind::Trainable,
+                cacheable: false,
+                differentiable: false,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Fit, "bracket").unwrap();
+
+    let mut graph = Graph::new();
+    graph.nodes.push(Node::new("a", "a", "a"));
+    graph.nodes.push(Node::new("b", "b", "b"));
+    graph.edges.push(Edge::data("e0", "a", "b"));
+    let mut lib = FilterLibrary::new();
+    lib.register("a", Box::new(Doubler));
+    lib.register("b", Box::new(Doubler));
+
+    let bus = Arc::new(EventBus::new(64));
+    bus.add_sink(tracker.sink());
+    let mut session = GraphSession::new(graph, lib).with_event_bus(bus);
+    session
+        .fit(&Value::tensor(vec![1.0, 2.0], vec![2]), None)
+        .unwrap();
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let reader = RunReader::open(tracker.run_dir()).unwrap();
+    let events = reader.events().unwrap();
+
+    let started: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::RunStarted { run_id, .. } => Some(run_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let completed: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::RunCompleted { run_id, .. } => Some(run_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let node_run_ids: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::NodeStarted { run_id, .. } => Some(run_id.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(started.len(), 1, "exactly one RunStarted");
+    assert_eq!(completed.len(), 1, "exactly one RunCompleted");
+    assert_eq!(started[0], completed[0], "bracket shares one run id");
+    assert_eq!(node_run_ids.len(), 2);
+    assert!(
+        node_run_ids.iter().all(|id| *id == started[0]),
+        "node events tagged with the bracket's run id: {node_run_ids:?} vs {}",
+        started[0]
+    );
+
+    // The reader can now compute a total-run duration for a local fit.
+    matches!(
+        events.first().map(|e| &e.event),
+        Some(Event::RunStarted { .. })
+    );
+}
+
+#[test]
+fn run_reader_overlay_and_annotated_mermaid() {
+    use somatize_core::cache::{CacheKey, CacheTier};
+    use somatize_core::graph::{Edge, Graph, Node};
+    use somatize_core::viz::NodeStatus;
+    use somatize_runtime::tracking::RunReader;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Fit, "overlay").unwrap();
+    let sink = tracker.sink();
+    let rid = tracker.run_id().to_string();
+
+    // Snapshot the graph the way `track_run` does.
+    let mut graph = Graph::new();
+    graph.nodes.push(Node::new("scaler", "scaler", "scaler"));
+    graph.nodes.push(Node::new("model", "model", "model"));
+    graph.edges.push(Edge::data("e0", "scaler", "model"));
+    tracker
+        .save_artifact(
+            "graph.json",
+            serde_json::to_string(&graph).unwrap().as_bytes(),
+        )
+        .unwrap();
+
+    // scaler runs twice (e.g. two epochs); model is a cache hit and flagged.
+    for _ in 0..2 {
+        sink.record(&Event::NodeStarted {
+            run_id: rid.clone(),
+            node_id: "scaler".into(),
+            kind: somatize_core::filter::FilterKind::Trainable,
+        });
+        sink.record(&Event::NodeCompleted {
+            run_id: rid.clone(),
+            node_id: "scaler".into(),
+            duration: std::time::Duration::from_millis(600),
+            output_summary: String::new(),
+        });
+    }
+    sink.record(&Event::NodeCacheHit {
+        run_id: rid.clone(),
+        node_id: "model".into(),
+        key: CacheKey::from_parts(&[b"k"]),
+        tier: CacheTier::Memory,
+        load_time: std::time::Duration::from_millis(2),
+    });
+    sink.record(&Event::HealthFlag {
+        run_id: rid.clone(),
+        node_id: "model".into(),
+        step: 1,
+        flag: "LEAKAGE".into(),
+        detail: String::new(),
+    });
+    sink.record(&Event::HealthFlag {
+        run_id: rid.clone(),
+        node_id: "model".into(),
+        step: 2,
+        flag: "LEAKAGE".into(), // duplicate — must dedupe
+        detail: String::new(),
+    });
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let reader = RunReader::open(tracker.run_dir()).unwrap();
+    let overlay = reader.overlay().unwrap();
+
+    let scaler = &overlay.nodes["scaler"];
+    assert_eq!(scaler.status, Some(NodeStatus::Completed));
+    assert_eq!(scaler.duration_ms, Some(1200), "durations accumulate");
+    assert_eq!(scaler.sublabel.as_deref(), Some("×2"));
+
+    let model = &overlay.nodes["model"];
+    assert_eq!(model.status, Some(NodeStatus::Cached));
+    assert_eq!(model.cache_tier.as_deref(), Some("memory"));
+    assert_eq!(model.flags, vec!["LEAKAGE".to_string()], "flags deduped");
+
+    let mermaid = reader.to_mermaid().unwrap();
+    assert!(
+        mermaid.contains("scaler[\"scaler<br/>1.2s · ×2\"]"),
+        "{mermaid}"
+    );
+    assert!(mermaid.contains("class scaler soma_completed"), "{mermaid}");
+    assert!(mermaid.contains("class model soma_flagged"), "{mermaid}");
+
+    let dot = reader.to_graphviz().unwrap();
+    assert!(dot.contains("fillcolor"), "{dot}");
+}
+
+#[test]
+fn run_reader_to_mermaid_without_graph_snapshot_errors() {
+    use somatize_runtime::tracking::RunReader;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Train, "no-graph").unwrap();
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let reader = RunReader::open(tracker.run_dir()).unwrap();
+    assert!(reader.graph().unwrap().is_none());
+    assert!(reader.overlay().unwrap().nodes.is_empty());
+    let err = reader.to_mermaid().unwrap_err();
+    assert!(err.to_string().contains("graph.json"), "{err}");
 }

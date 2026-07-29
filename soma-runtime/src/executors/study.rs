@@ -182,7 +182,8 @@ impl StudyRunner {
         executor: &dyn TrialExecutor,
     ) -> Result<()> {
         sampler.prepare(&study.search_space);
-        let total = sampler.n_trials().unwrap_or(0);
+        // With experiment seeds, every sampled config runs once per seed.
+        let total = sampler.n_trials().unwrap_or(0) * study.seeds.len().max(1);
         if total > 0 {
             study.planned_trials = Some(total);
         }
@@ -207,7 +208,38 @@ impl StudyRunner {
         let pruner = build_pruner(&study.pruning);
         let mut trial_index = study.trials.len();
 
-        while let Some(mut params) = sampler.sample(&study.search_space, trial_index)? {
+        // Experiment seeds: each sampled configuration runs once per
+        // seed (params carry "seed"), so every seed is an independent,
+        // resumable trial with its own cache line. trial_index enumerates
+        // config-major: config 0 × all seeds, config 1 × all seeds, …
+        let seeds = study.seeds.clone();
+        let n_seeds = seeds.len().max(1);
+        let mut current_config: Option<HashMap<String, serde_json::Value>> = None;
+
+        loop {
+            let config_index = trial_index / n_seeds;
+            let seed_slot = trial_index % n_seeds;
+
+            let base = if seed_slot == 0 || current_config.is_none() {
+                if seed_slot > 0 {
+                    // Resuming mid-seed-block: recover the block's config
+                    // from the previous (persisted) trial.
+                    let mut prev = study.trials[trial_index - 1].params.clone();
+                    prev.remove("seed");
+                    Some(prev)
+                } else {
+                    sampler.sample(&study.search_space, config_index)?
+                }
+            } else {
+                current_config.clone()
+            };
+            let Some(base) = base else { break };
+            current_config = Some(base.clone());
+
+            let mut params = base;
+            if !seeds.is_empty() {
+                params.insert("seed".to_string(), serde_json::json!(seeds[seed_slot]));
+            }
             // Frozen parameters are fixed values excluded from the
             // search space — inject them into every configuration.
             for (name, value) in &study.frozen {
