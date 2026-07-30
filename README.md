@@ -123,6 +123,10 @@ view.node_timings()         # per-node wall times, durations, cache hits
 print(view.to_mermaid())    # architecture annotated with timing/cache/health
 ```
 
+In a notebook, evaluating `g` draws the architecture as an inline SVG
+diagram (a materialized differentiable filter draws its inner layers,
+parameter counts included) — no JavaScript, renders anywhere.
+
 ```text
 graph LR
     scaler["scaler<br/>26ms"]

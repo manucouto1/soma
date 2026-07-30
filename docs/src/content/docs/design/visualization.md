@@ -29,7 +29,7 @@ serve PyO3, the CLI, and any future front-end:
 | `health_flags()` | `HealthFlag` events with wall time |
 | `trial_timeline()` | trial lifetimes from `study.json` |
 | `overlay()` | a `GraphOverlay` folding all of the above per node |
-| `to_mermaid()` / `to_graphviz()` | the run's graph annotated with its overlay |
+| `to_mermaid()` / `to_graphviz()` / `to_svg()` | the run's graph annotated with its overlay |
 
 `list_runs(root)` scans `<root>/runs/*/` manifests; a `running` status
 with a stale heartbeat (> 300 s) reports as `crashed`.
@@ -49,6 +49,20 @@ status `classDef` per node. An empty overlay reproduces the plain
 output byte-for-byte, and rendering stays a dependency-free
 data→string transform (the overlay is computed elsewhere and passed
 in).
+
+`Graph::to_svg` / `to_svg_with` (`soma-core/src/svg.rs`) render the
+same graph + overlay as a **self-contained SVG** — no JavaScript, no
+external tools — because notebook front-ends sanitize `<script>` out of
+outputs, so mermaid cannot render inline there. Layout is longest-path
+layering (left→right) with the same status palette. This layer backs:
+
+- **Notebook reprs**: evaluating a `Graph` shows its architecture
+  diagram (`_repr_html_`; `print(g)` keeps the text tree), and a
+  materialized `DifferentiableFilter` shows its inner submodule chain
+  with per-layer parameter counts.
+- `RunView.to_svg(node=...)` — run overlays and inner architectures.
+- The `--inline` HTML report, whose DAG and module-flow diagrams are
+  now real SVG instead of mermaid source blocks.
 
 ```bash
 soma graph <run_id> [--format mermaid|dot] [--no-overlay]
