@@ -57,7 +57,12 @@ def metrics_dataframe(run_view, name: str | None = None):
 
 def experiments_dataframe(root: str = ".soma"):
     """The experiments journal as one row per record, with ``metric_*``
-    and ``param_*`` columns flattened."""
+    and ``param_*`` columns flattened.
+
+    ``parent``, ``derivation`` and ``conclusion`` are flattened to their
+    one-line forms: a campaign reads as a table only if the edge between
+    two runs is a column, not a nested dict.
+    """
     from soma._experiments import experiments
 
     pd = _pandas()
@@ -65,8 +70,12 @@ def experiments_dataframe(root: str = ".soma"):
     for rec in experiments(root):
         row = {
             k: rec.get(k)
-            for k in ("id", "name", "research_line", "hypothesis", "timestamp", "tags")
+            for k in ("id", "name", "parent", "research_line", "hypothesis",
+                      "timestamp", "tags")
         }
+        row["derivation"] = (rec.get("derivation") or {}).get("summary")
+        row["conclusion"] = (rec.get("conclusion") or {}).get("headline")
+        row["notes"] = rec.get("notes")
         for k, v in (rec.get("metrics") or {}).items():
             row[f"metric_{k}"] = v
         for k, v in (rec.get("params") or {}).items():

@@ -1,6 +1,6 @@
 ---
 title: Tutorials
-description: Nine runnable notebooks, from your first filter to auditing gradient health inside a multimodal model.
+description: Twelve runnable notebooks, from your first filter to a research campaign that uses its own recorded history.
 ---
 
 The notebooks in [`notebooks/`](https://github.com/manucouto1/soma/tree/main/notebooks)
@@ -31,8 +31,28 @@ plus a PNG fallback so they also render on GitHub.
 | 08 | [Auditing inside nodes](https://github.com/manucouto1/soma/blob/main/notebooks/08_auditing_inside_nodes.ipynb) | `gradient_audit(inside=...)`, hierarchical ids, the per-layer gradient-flow staircase, the annotated inner architecture, and flag rollup |
 | 09 | [Complex architectures and health](https://github.com/manucouto1/soma/blob/main/notebooks/09_complex_architectures_and_health.ipynb) | A multimodal fork/fan-in pipeline, and a branched model with four injected pathologies — dead channels, CKA leakage, a gradient-starved branch, a vanishing trunk — all caught at default thresholds |
 
-Notebooks 06–09 need PyTorch (`pip install torch`); 01–05 run on the
-core install alone.
+### One campaign, in three parts
+
+Notebooks 10–12 are a single story about a single model, and are best
+read in order. A 1-D sensor stream with three regimes; two feature views
+that are each blind to one of them; an encoder with a copy-paste wiring
+bug and a trunk that will not pass a gradient.
+
+| # | Notebook | What you learn |
+|---|---|---|
+| 10 | [Building an architecture you can read](https://github.com/manucouto1/soma/blob/main/notebooks/10_building_an_architecture.ipynb) | Fork/fan-in filters, what `compile()` can prove before you run, why preprocessing and the trainable region belong in separate graphs, and the annotated diagram of what actually happened |
+| 11 | [Auditing before tuning](https://github.com/manucouto1/soma/blob/main/notebooks/11_auditing_before_tuning.ipynb) | Four pathologies caught in six training steps — leakage, dead channels, a gradient-starved branch, a vanishing trunk — then a grid sweep over the version that deserves one |
+| 12 | [The research campaign](https://github.com/manucouto1/soma/blob/main/notebooks/12_research_campaign.ipynb) | Four variants and one lineage: `checkout` to branch, the move recorded on every edge, `diff` between siblings, and `find_similar` returning the conclusion you wrote three cells earlier |
+
+The result notebook 12 arrives at is worth spoiling, because it is the
+argument for keeping a lineage at all: two plausible fixes each buy
+nothing on their own (+0.008 and −0.016), and together they are worth
++0.305. One-variable-at-a-time would have reported that neither helps.
+
+Notebooks 06–12 need PyTorch (`pip install torch`); 01–05 run on the
+core install alone. Notebooks 10–12 share `notebooks/campaign.py`, which
+holds the data generator and the model — a module rather than a cell,
+because `Graph.load` resolves filters by import path.
 
 ## Suggested routes
 
@@ -40,6 +60,16 @@ core install alone.
 - **"I want to tune hyperparameters"** → 01 → 03 → 07
 - **"My model trains badly and I don't know why"** → 06 → 08 → 09
 - **"I want to show results to someone"** → 07 (report + figures)
+- **"I want to run a research campaign"** → 10 → 11 → 12
+
+Notebooks 01–05 and 10–12 are in English; 06–09 are in Spanish, and
+translating them is outstanding.
+
+Re-execute them with `python notebooks/execute.py` (all of them) or
+`python notebooks/execute.py 10 11 12` (a subset). Each runs in a fresh
+temporary directory with an empty cache — the cache-miss demonstrations
+are only honest against one — and a notebook whose output contains a
+warning is refused rather than written back.
 
 Each notebook ends with a *What's next* pointer. For the reference
 material behind them, see the [Python API](/soma/api/python/); for the

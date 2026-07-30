@@ -282,6 +282,16 @@ which the append-only log makes safe.
 conclusion, a lineage, an architecture — because a pool that looks full
 but has no edges cannot answer the questions the other tools promise.
 
+## Seeing it work
+
+[Notebook 12](https://github.com/manucouto1/soma/blob/main/notebooks/12_research_campaign.ipynb)
+runs the whole loop against real runs: a baseline, three variants
+branched with `checkout`, the move recorded on every edge, a `diff`
+between two siblings that have no edge between them, a conclusion
+retained, and `find_similar` handing it back. It ends on a result that
+is the argument for the whole design — two fixes worth +0.008 and −0.016
+alone are worth +0.305 together.
+
 ## Not built yet
 
 Deliberately deferred, with the seam left in place:
