@@ -1,4 +1,9 @@
-# Soma
+<p align="center">
+  <img src="docs/src/assets/logo-light.svg#gh-light-mode-only" alt="Soma" width="180">
+  <img src="docs/src/assets/logo-dark.svg#gh-dark-mode-only" alt="Soma" width="180">
+</p>
+
+<h1 align="center">Soma</h1>
 
 **Soma** (σῶμα — *body*) is a computational graph runtime for research pipelines, agent orchestration, and data virtualization. Written in Rust with Python bindings.
 

@@ -17,6 +17,21 @@ export default defineConfig({
 		starlight({
 			title: 'Soma',
 			description: 'A computational graph runtime for research pipelines, agent orchestration, and data virtualization.',
+			// Two files rather than one with a `prefers-color-scheme`
+			// block: Starlight renders the logo as an <img>, so a media
+			// query inside the SVG would follow the OS and ignore the
+			// site's own theme toggle. Starlight swaps these with CSS.
+			logo: {
+				light: './src/assets/logo-light.svg',
+				dark: './src/assets/logo-dark.svg',
+			},
+			favicon: '/favicon.svg',
+			head: [
+				// Rasterized: X and several others refuse SVG previews.
+				{ tag: 'meta', attrs: { property: 'og:image', content: `${SITE}${BASE}/og-card.png` } },
+				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: `${SITE}${BASE}/og-card.png` } },
+			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/manucouto1/soma' }],
 			defaultLocale: 'en',
 			sidebar: [

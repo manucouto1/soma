@@ -1,49 +1,56 @@
-# Starlight Starter Kit: Basics
+# Soma documentation
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+The site at [manucouto1.github.io/soma](https://manucouto1.github.io/soma/),
+built with [Starlight](https://starlight.astro.build).
 
-```
-npm create astro@latest -- --template starlight
-```
-
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
-
-## 🚀 Project Structure
-
-Inside of your Astro + Starlight project, you'll see the following folders and files:
-
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+```bash
+npm install
+npm run dev     # http://localhost:4321/soma/
+npm run check   # guards + production build — run this before pushing
+npm run build   # production build only
 ```
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+## Layout
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+| Path | What it is |
+|---|---|
+| `src/content/docs/` | Every page. The directory structure is the URL structure. |
+| `astro.config.mjs` | Site config **and the sidebar** — a new page must be added here |
+| `scripts/check-sidebar.mjs` | The guards `npm run check` runs before building |
+| `src/assets/logo-{light,dark}.svg` | The header mark (two files so the theme toggle works) |
+| `public/favicon.svg` | Tab icon — the mark reduced to one period |
+| `public/og-card.{svg,png}` | Social preview. The PNG is what `og:image` points at; regenerate it from the SVG with `sharp` after any edit. |
 
-Static assets, like favicons, can be placed in the `public/` directory.
+## Two things the guards enforce
 
-## 🧞 Commands
+Both exist because both failed silently once.
 
-All commands are run from the root of the project, from a terminal:
+**Every page must be in the sidebar.** An orphaned page builds fine and is
+reachable by URL, so nothing else notices. Three feature pages once stayed
+invisible that way.
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
+**Every internal link must carry the `/soma` base.** This is a project site,
+so `](/design/caching/)` resolves to the wrong host root in production — but
+`astro dev` serves under the base too, which means a base-less link looks
+perfectly fine locally and only 404s once deployed.
 
-## 👀 Want to learn more?
+```markdown
+[Caching](/soma/design/caching/)     ✅
+[Caching](/design/caching/)          ❌ builds, then 404s in production
+```
 
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+## Writing
+
+Pages are Markdown with Starlight frontmatter (`title`, `description`).
+Use `:::caution` for anything that describes intent rather than shipped
+code — several pages carry one, and the reason is that documenting an API
+nobody wrote is worse than not documenting it.
+
+The Rust API docs under `/soma/api/` are `cargo doc` output, copied into
+`dist/` by the deploy workflow rather than built here.
+
+## Regenerating the OG card
+
+```bash
+node -e "require('sharp')('public/og-card.svg',{density:144}).resize(1200,630).png().toFile('public/og-card.png')"
+```

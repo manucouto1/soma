@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" role="img" aria-label="Soma">
+  <!-- A double helix seen edge-on. Centre y=50, amplitude 18, period 80
+       across x 20..180 (two turns).
+
+       Three things make this read as a helix rather than a row of eyes.
+
+       1. Aspect. Amplitude must stay well under a third of the
+          half-period or each lobe closes into a lens — hence a 2:1 box
+          (18 against a 40-wide half-period) rather than a square one.
+
+       2. Depth. The back strand BREAKS at every crossing. Without that
+          the two strands merge into closed lobes and the mark goes flat.
+          The break is done with `pathLength="100"`: all four half-periods
+          are congruent, so the crossings sit at exactly 25/50/75% of arc
+          length, and a dasharray in those normalized units puts a 7-unit
+          gap on each one — comfortably wider than the stroke, and with
+          butt caps so the caps do not fill the gap back in. (It needs an even number of entries: SVG
+          silently duplicates an odd-length pattern.) No background colour is involved, so the mark
+          works on any surface.
+
+       3. Rhythm. Rungs are spaced at a FIFTH of a period, not a quarter.
+          At a quarter every rung lands on |sin| = 0.707 and they come out
+          identical; at a fifth they alternate long-short-short-long
+          (|sin| = 0.951, 0.588), which is what a twist looks like.
+          Rungs at the crossings are omitted — they have zero length.
+
+       Each half-period is one cubic with control points at W/3 and 2W/3
+       offset by 4A/3 = 24, which puts the curve's midpoint on the peak. -->
+  <g fill="none" stroke="#1c1b19" stroke-linecap="round">
+    <g stroke-width="4" opacity=".45">
+      <path d="M36 32.9v34.2M52 39.4v21.2M68 39.4v21.2M84 32.9v34.2"/>
+      <path d="M116 32.9v34.2M132 39.4v21.2M148 39.4v21.2M164 32.9v34.2"/>
+    </g>
+    <!-- Back strand, broken at each crossing. The gaps are real
+         geometry (each half-period cubic subdivided by de Casteljau and
+         trimmed by 7 x-units at any end that is a crossing) rather than
+         a dasharray: `pathLength` normalization is not reliably
+         supported by every SVG rasterizer, and a dash pattern that
+         silently slides is worse than no depth cue at all. -->
+    <path stroke-width="6" stroke-linecap="butt"
+          d="M20 50C31 69.8 42 73.3 53 60.4M67 39.6C75.7 29.5 84.3 29.5 93 39.6M107 60.4C115.7 70.5 124.3 70.5 133 60.4M147 39.6C158 26.7 169 30.2 180 50"/>
+    <!-- front strand, continuous -->
+    <path stroke-width="6"
+          d="M20 50C33.3 26 46.7 26 60 50C73.3 74 86.7 74 100 50C113.3 26 126.7 26 140 50C153.3 74 166.7 74 180 50"/>
+  </g>
+  <!-- Nodes on the widest rungs: the helix is also a graph. -->
+  <g fill="#1c1b19">
+    <circle cx="36" cy="32.9" r="3.4"/><circle cx="36" cy="67.1" r="3.4"/>
+    <circle cx="84" cy="32.9" r="3.4"/><circle cx="84" cy="67.1" r="3.4"/>
+    <circle cx="116" cy="32.9" r="3.4"/><circle cx="116" cy="67.1" r="3.4"/>
+    <circle cx="164" cy="32.9" r="3.4"/><circle cx="164" cy="67.1" r="3.4"/>
+  </g>
+</svg>

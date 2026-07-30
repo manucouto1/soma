@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <!-- Social preview. Regenerate og-card.png from this file after any
+       edit — see docs/README.md; X and several others refuse SVG.
+
+       Layout: the mark's drawn content spans x 20..180, y 26..74 of its
+       own 200x100 box, so at scale 2.6 it is 416x125. Centring that on
+       x=600 puts the translate at 340, and the text sits below it. -->
+  <rect width="1200" height="630" fill="#16151a"/>
+  <g transform="translate(340 96) scale(2.6)" fill="none" stroke="#f5f4f2" stroke-linecap="round">
+    <path d="M36 32.9v34.2M52 39.4v21.2M68 39.4v21.2M84 32.9v34.2" stroke-width="4" opacity=".4"/>
+    <path d="M116 32.9v34.2M132 39.4v21.2M148 39.4v21.2M164 32.9v34.2" stroke-width="4" opacity=".4"/>
+    <path stroke-width="6" stroke-linecap="butt"
+          d="M20 50C31 69.8 42 73.3 53 60.4M67 39.6C75.7 29.5 84.3 29.5 93 39.6M107 60.4C115.7 70.5 124.3 70.5 133 60.4M147 39.6C158 26.7 169 30.2 180 50"/>
+    <path stroke-width="6"
+          d="M20 50C33.3 26 46.7 26 60 50C73.3 74 86.7 74 100 50C113.3 26 126.7 26 140 50C153.3 74 166.7 74 180 50"/>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" text-anchor="middle">
+    <text x="600" y="420" font-size="118" font-weight="700" fill="#f5f4f2" letter-spacing="-3">Soma</text>
+    <text x="600" y="484" font-size="32" fill="#a8a5a0">A computational graph runtime for research pipelines</text>
+    <text x="600" y="534" font-size="28" fill="#6f6c67">If an agent decides what to do, Soma defines how it&#39;s done.</text>
+  </g>
+</svg>
