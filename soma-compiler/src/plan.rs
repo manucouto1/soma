@@ -270,6 +270,123 @@ impl ExecutionPlan {
             Self::Empty => None,
         }
     }
+
+    /// Synthesize a displayable [`Graph`](somatize_core::graph::Graph)
+    /// from this plan — the same node synthesis as [`Self::to_mermaid`]
+    /// (fork nodes for `Parallel`, arm nodes for `Branch`, pills for
+    /// streams) — so every Graph renderer applies: `to_svg()`,
+    /// `to_mermaid()`, `to_graphviz()`.
+    pub fn to_graph(&self) -> somatize_core::graph::Graph {
+        let mut g = somatize_core::graph::Graph::new();
+        let mut counter = 0usize;
+        self.graph_nodes(&mut g, &mut counter, None, None);
+        g
+    }
+
+    fn add_edge(
+        g: &mut somatize_core::graph::Graph,
+        source: &str,
+        target: &str,
+        label: Option<&str>,
+    ) {
+        let mut edge =
+            somatize_core::graph::Edge::data(format!("e{}", g.edges.len()), source, target);
+        edge.label = label.map(str::to_string);
+        g.add_edge(edge);
+    }
+
+    fn graph_nodes(
+        &self,
+        g: &mut somatize_core::graph::Graph,
+        counter: &mut usize,
+        parent: Option<&str>,
+        edge_label: Option<&str>,
+    ) {
+        use somatize_core::graph::Node;
+        match self {
+            Self::Execute { node_id } => {
+                g.add_node(Node::new(node_id, node_id, node_id));
+                if let Some(p) = parent {
+                    Self::add_edge(g, p, node_id, edge_label);
+                }
+            }
+            Self::Sequence(steps) => {
+                let mut prev = parent.map(String::from);
+                let mut label = edge_label;
+                for step in steps {
+                    step.graph_nodes(g, counter, prev.as_deref(), label);
+                    label = None; // only the first hop carries the arm label
+                    prev = step.first_node_id().map(String::from);
+                }
+            }
+            Self::Parallel(branches) => {
+                let fork_id = format!("fork_{counter}");
+                *counter += 1;
+                let mut fork = Node::branch(fork_id.clone());
+                fork.label = "fork".to_string();
+                g.add_node(fork);
+                if let Some(p) = parent {
+                    Self::add_edge(g, p, &fork_id, edge_label);
+                }
+                for branch in branches {
+                    branch.graph_nodes(g, counter, Some(&fork_id), None);
+                }
+            }
+            Self::Loop {
+                node_id,
+                body,
+                max_iterations,
+            } => {
+                g.add_node(Node::loop_node(node_id.clone(), *max_iterations));
+                if let Some(p) = parent {
+                    Self::add_edge(g, p, node_id, edge_label);
+                }
+                body.graph_nodes(g, counter, Some(node_id), None);
+            }
+            Self::Branch { node_id, arms } => {
+                g.add_node(Node::branch(node_id.clone()));
+                if let Some(p) = parent {
+                    Self::add_edge(g, p, node_id, edge_label);
+                }
+                for (label, plan) in arms {
+                    plan.graph_nodes(g, counter, Some(node_id), Some(label));
+                }
+            }
+            Self::Remote {
+                node_id,
+                target,
+                plan,
+            } => {
+                let mut node = Node::subgraph(node_id.clone(), somatize_core::graph::Graph::new());
+                node.label = format!("{node_id} (remote {target:?})");
+                g.add_node(node);
+                if let Some(p) = parent {
+                    Self::add_edge(g, p, node_id, edge_label);
+                }
+                plan.graph_nodes(g, counter, Some(node_id), None);
+            }
+            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => {
+                let stream = matches!(self, Self::Stream { .. });
+                let mut prev: Option<&str> = None;
+                let mut label = edge_label;
+                for nid in node_ids {
+                    if stream {
+                        let mut node = Node::loop_node(nid.clone(), None);
+                        node.label = format!("{nid} stream");
+                        g.add_node(node);
+                    } else {
+                        g.add_node(Node::new(nid, nid, nid));
+                    }
+                    if let Some(p) = prev.or(parent) {
+                        Self::add_edge(g, p, nid, label);
+                    }
+                    label = None;
+                    prev = Some(nid);
+                }
+            }
+            Self::Empty => {}
+        }
+    }
 }
 
 impl fmt::Display for ExecutionPlan {
@@ -542,5 +659,68 @@ mod tests {
         assert!(m.contains("fork_0{"));
         assert!(m.contains("fork_0 --> a"));
         assert!(m.contains("fork_0 --> b"));
+    }
+}
+
+#[cfg(test)]
+mod to_graph_tests {
+    use super::*;
+
+    #[test]
+    fn plan_to_graph_mirrors_mermaid_synthesis() {
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "load".into(),
+            },
+            ExecutionPlan::Parallel(vec![
+                ExecutionPlan::Execute {
+                    node_id: "a".into(),
+                },
+                ExecutionPlan::Execute {
+                    node_id: "b".into(),
+                },
+            ]),
+        ]);
+        let g = plan.to_graph();
+        let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["load", "fork_0", "a", "b"]);
+        assert_eq!(g.nodes[1].label, "fork");
+        let edges: Vec<(&str, &str)> = g
+            .edges
+            .iter()
+            .map(|e| (e.source.as_str(), e.target.as_str()))
+            .collect();
+        assert_eq!(
+            edges,
+            vec![("load", "fork_0"), ("fork_0", "a"), ("fork_0", "b")]
+        );
+        // Every Graph renderer now applies to the plan.
+        let svg = g.to_svg();
+        assert!(svg.starts_with("<svg"));
+        assert!(svg.contains(">fork</text>"));
+    }
+
+    #[test]
+    fn plan_to_graph_branch_arms_carry_edge_labels() {
+        let plan = ExecutionPlan::Branch {
+            node_id: "check".into(),
+            arms: vec![
+                (
+                    "converged".into(),
+                    ExecutionPlan::Execute {
+                        node_id: "stop".into(),
+                    },
+                ),
+                (
+                    "continue".into(),
+                    ExecutionPlan::Execute {
+                        node_id: "train".into(),
+                    },
+                ),
+            ],
+        };
+        let g = plan.to_graph();
+        let labels: Vec<Option<&str>> = g.edges.iter().map(|e| e.label.as_deref()).collect();
+        assert_eq!(labels, vec![Some("converged"), Some("continue")]);
     }
 }

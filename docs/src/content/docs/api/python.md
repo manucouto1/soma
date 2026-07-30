@@ -135,7 +135,7 @@ g = Graph.somatize(
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
 | `forward` | `(x, stream=False, chunk_size=1024, seed=None) -> list` | Forward data through fitted graph (`stream=True` processes in chunks) |
 | `run` | `() -> dict` | Compile and execute, return all outputs |
-| `compile` | `(mode="inference") -> dict` | Compile and return diagnostics |
+| `compile` | `(mode="inference") -> CompileInfo` | Compile and return diagnostics (a dict that renders as tiles + callouts + plan diagram in notebooks) |
 | `to_mermaid` | `() -> str` | Render graph as Mermaid diagram |
 | `to_graphviz` | `() -> str` | Render graph as Graphviz DOT |
 | `to_text` | `() -> str` | Render graph as ASCII tree |
@@ -170,7 +170,8 @@ g = Graph.somatize(
 info = g.compile("inference")       # Full caching
 info = g.compile("differentiable")  # Cache states, re-execute forwards
 info = g.compile("no_cache")        # Force re-execution
-# Returns: {total_nodes, cached_nodes, parallel_branches, diagnostics, plan_text, plan_mermaid}
+# Returns CompileInfo (a dict): {total_nodes, cached_nodes, parallel_branches,
+#   diagnostics: [{node, level, message}], plan_text, plan_mermaid, plan_svg}
 # cached_nodes is always 0: cache hits are resolved at RUNTIME per node
 # (key = hash(config + state + input)), not baked into the plan.
 ```

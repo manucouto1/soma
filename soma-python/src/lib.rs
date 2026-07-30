@@ -2587,13 +2587,26 @@ impl PyGraph {
         dict.set_item("cached_nodes", summary.cached_nodes)?;
         dict.set_item("parallel_branches", summary.parallel_branches)?;
 
+        // Structured diagnostics: {node, level, message} dicts, not
+        // Debug strings — readable and machine-consumable.
         let diags = PyList::empty(py);
         for d in &result.diagnostics {
-            diags.append(format!("{d:?}"))?;
+            let entry = PyDict::new(py);
+            entry.set_item("node", &d.node_id)?;
+            entry.set_item(
+                "level",
+                match d.level {
+                    somatize_compiler::DiagnosticLevel::Warning => "warning",
+                    somatize_compiler::DiagnosticLevel::Info => "info",
+                },
+            )?;
+            entry.set_item("message", &d.message)?;
+            diags.append(entry)?;
         }
         dict.set_item("diagnostics", diags)?;
         dict.set_item("plan_text", format!("{}", result.plan))?;
         dict.set_item("plan_mermaid", result.plan.to_mermaid())?;
+        dict.set_item("plan_svg", result.plan.to_graph().to_svg())?;
 
         Ok(dict.into_any().unbind())
     }

@@ -96,3 +96,53 @@ class TestGraphExecution:
         info = g.compile("no_cache")
         assert isinstance(info, dict)
         assert info["total_nodes"] == 2
+
+
+class TestCompileInfo:
+    """g.compile() → CompileInfo: structured diagnostics + visual repr."""
+
+    def _info(self):
+        g = Graph()
+        g.node(Doubler())
+        g.node(Adder())
+        g.connect("doubler", "adder")
+        return g.compile()
+
+    def test_diagnostics_are_structured(self):
+        info = self._info()
+        assert isinstance(info, dict), "CompileInfo keeps the dict contract"
+        for diag in info["diagnostics"]:
+            assert set(diag) == {"node", "level", "message"}
+            assert diag["level"] in ("warning", "info")
+
+    def test_plan_svg_present(self):
+        info = self._info()
+        assert info["plan_svg"].startswith("<svg")
+        assert ">doubler</text>" in info["plan_svg"]
+
+    def test_repr_html(self):
+        from soma._compile import CompileInfo
+
+        info = self._info()
+        assert isinstance(info, CompileInfo)
+        html = info._repr_html_()
+        assert "nodes" in html and "parallel branches" in html
+        assert "<svg" in html, "plan diagram embedded"
+        assert "plan como texto" in html
+        for diag in info["diagnostics"]:
+            assert diag["node"] in html
+
+        # Hostile diagnostic content cannot inject HTML.
+        evil = CompileInfo(
+            {
+                "total_nodes": 1,
+                "diagnostics": [
+                    {"node": "<script>x</script>", "level": "warning", "message": "<b>"}
+                ],
+                "plan_text": "",
+                "plan_svg": "",
+            }
+        )
+        rendered = evil._repr_html_()
+        assert "<script>" not in rendered
+        assert "&lt;script&gt;" in rendered

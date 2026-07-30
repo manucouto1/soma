@@ -34,6 +34,10 @@ from soma import _study  # noqa: E402, F401
 # Install track_run on Graph. Import for side-effects.
 from soma import _tracking  # noqa: E402, F401
 
+# Wrap Graph.compile in CompileInfo (dict + notebook repr). Import for
+# side-effects.
+from soma import _compile  # noqa: E402, F401
+
 from soma._experiments import experiments  # noqa: E402
 from soma._runs import RunView, runs  # noqa: E402
 
