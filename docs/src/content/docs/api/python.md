@@ -556,12 +556,14 @@ lab.info()          # Worker capabilities dict
 
 The full Rust API documentation is auto-generated from source code:
 
-**[View Rust API Docs](/soma/api/soma_core/)**
+**[View Rust API Docs](/soma/api/somatize_core/)**
 
 Key crates:
-- [`soma_core`](/soma/api/soma_core/) — Types, traits, enums
-- [`soma_compiler`](/soma/api/soma_compiler/) — Graph compilation
-- [`soma_runtime`](/soma/api/soma_runtime/) — Execution engine
-- [`soma_worker`](/soma/api/soma_worker/) — Worker daemon + coordinator
-- [`soma_memory`](/soma/api/soma_memory/) — Knowledge base
-- [`soma_agent`](/soma/api/soma_agent/) — Research agent
+- [`somatize_core`](/soma/api/somatize_core/) — Types, traits, enums
+- [`somatize_compiler`](/soma/api/somatize_compiler/) — Graph compilation
+- [`somatize_runtime`](/soma/api/somatize_runtime/) — Execution engine
+- [`somatize_worker`](/soma/api/somatize_worker/) — Worker daemon + coordinator
+- [`somatize_memory`](/soma/api/somatize_memory/) — Knowledge base
+- [`somatize_agent`](/soma/api/somatize_agent/) — Research agent
+- [`somatize_coordinator`](/soma/api/somatize_coordinator/) — Worker registry & routing
+- [`somatize_mcp`](/soma/api/somatize_mcp/) — MCP server

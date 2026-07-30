@@ -80,7 +80,7 @@ export default defineConfig({
 							// deploy workflow — a raw link, so it carries the
 							// base explicitly (slug: entries get it for free).
 							label: 'Rust API (cargo doc)',
-							link: `${BASE}/api/soma_core/`,
+							link: `${BASE}/api/somatize_core/`,
 							attrs: { target: '_blank' },
 						},
 						{ label: 'Python API', slug: 'api/python' },
