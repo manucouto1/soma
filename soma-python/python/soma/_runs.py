@@ -218,6 +218,25 @@ class RunView:
         per-node timing/cache/health."""
         return _soma.run_to_graphviz(self._dir, overlay=overlay)
 
+    def to_svg(self, overlay: bool = True, node: str | None = None) -> str:
+        """Self-contained SVG diagram (no JavaScript — displays inline
+        anywhere). Same semantics as ``to_mermaid``: the run's graph
+        with its overlay, or one node's inner architecture with
+        ``node="encoder"``."""
+        if node is None:
+            return _soma.run_to_svg(self._dir, overlay=overlay)
+        tree = next((t for t in self._module_trees() if t["node"] == node), None)
+        if tree is None:
+            available = sorted(t["node"] for t in self._module_trees())
+            raise ValueError(
+                f"run {self.id} has no inner-architecture snapshot for "
+                f"{node!r} (scoped nodes: {available})"
+            )
+        graph_json = json.dumps(tree["graph"])
+        if not overlay:
+            return _soma.graph_json_to_svg(graph_json)
+        return _soma.graph_json_to_svg(graph_json, overlay=self._inner_overlay(tree))
+
     def __repr__(self) -> str:
         return f"RunView({self.id!r}, state={self.state!r}, name={self.name!r})"
 

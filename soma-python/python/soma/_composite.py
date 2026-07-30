@@ -154,6 +154,80 @@ class DifferentiableFilter(Filter):
             self._module = self.build_module(tuple(input_shape))
         return self._module
 
+    # ── Notebook display ─────────────────────────────────────────
+
+    def _repr_html_(self) -> str:
+        """Architecture diagram of the built model, inline in the
+        notebook: submodules with parameters, chained in definition
+        order, parameter counts as sublabels. Before ``materialize``
+        there is nothing to draw yet."""
+        name = type(self).__name__
+        if self._module is None:
+            return (
+                f"<div style='font-family:system-ui;font-size:13px'>"
+                f"<b>{name}</b> <span style='color:#898781'>(sin "
+                f"materializar — llama a g.materialize(x) o haz un "
+                f"forward para construir el módulo)</span></div>"
+            )
+
+        import json as _json
+        import re as _re
+
+        from soma import _soma
+
+        children = [
+            (path, mod)
+            for path, mod in self._module.named_modules()
+            if path and any(True for _ in mod.parameters(recurse=True))
+            and "." not in path  # direct children only
+        ]
+        if not children:
+            children = [("module", self._module)]
+
+        def _params(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1e6:.1f}M θ"
+            if n >= 1_000:
+                return f"{n / 1e3:.1f}k θ"
+            return f"{n} θ"
+
+        nodes, edges, overlay = [], [], {}
+        prev = None
+        for path, mod in children:
+            nid = "m_" + _re.sub(r"[^0-9A-Za-z_]", "_", path)
+            nodes.append(
+                {
+                    "id": nid,
+                    "label": f"{path}: {type(mod).__name__}",
+                    "kind": {"type": "Filter", "filter_name": type(mod).__name__},
+                }
+            )
+            overlay[nid] = {
+                "sublabel": _params(sum(p.numel() for p in mod.parameters()))
+            }
+            if prev is not None:
+                edges.append(
+                    {
+                        "id": f"e_{len(edges)}",
+                        "source": prev,
+                        "target": nid,
+                        "kind": "Data",
+                        "label": None,
+                    }
+                )
+            prev = nid
+        svg = _soma.graph_json_to_svg(
+            _json.dumps({"nodes": nodes, "edges": edges}),
+            overlay={"nodes": overlay},
+        )
+        total = sum(p.numel() for p in self._module.parameters())
+        return (
+            f"<div style='font-family:system-ui;font-size:13px'>"
+            f"<b>{name}</b> <span style='color:#898781'>"
+            f"({_params(total)} en {len(children)} submódulos)</span>"
+            f"<div style='margin-top:6px'>{svg}</div></div>"
+        )
+
     # ── Forward ──────────────────────────────────────────────────
 
     def forward(self, x, state=None):

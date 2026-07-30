@@ -98,8 +98,8 @@ def test_report_inline_needs_no_network(tmp_path):
     doc = view.to_html(inline=True)
     assert _external_refs(doc) == [], "no external scripts in --inline mode"
     assert "Plotly" in doc, "plotly.js embedded"
-    # DAG falls back to source form offline.
-    assert 'class="mermaid-src"' in doc
+    # Offline the DAG renders through soma's own SVG layer (no JS).
+    assert "<svg xmlns=" in doc
     assert '<pre class="mermaid">' not in doc
 
     # The CDN variant, by contrast, references plotly (and mermaid).

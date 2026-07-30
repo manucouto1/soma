@@ -243,11 +243,8 @@ def build_report(run_view, inline: bool = False) -> str:
     if mermaid_src:
         sections.append("<h2>Architecture</h2>")
         if inline:
-            sections.append(
-                f'<div class="card"><pre class="mermaid-src">{_esc(mermaid_src)}</pre>'
-                '<div class="note">Offline report: paste this into mermaid.live to '
-                "render, or regenerate without --inline.</div></div>"
-            )
+            # Offline: soma's own SVG rendering — no JS, no CDN.
+            sections.append(f'<div class="card">{run_view.to_svg()}</div>')
         else:
             sections.append(
                 f'<div class="card"><pre class="mermaid">{_esc(mermaid_src)}</pre></div>'
@@ -313,20 +310,18 @@ def build_report(run_view, inline: bool = False) -> str:
         node = tree["node"]
         sections.append(f"<h2>Module flow — {_esc(node)}</h2>")
         try:
-            inner_mermaid = run_view.to_mermaid(node=node)
-        except (RuntimeError, ValueError):
-            inner_mermaid = None
-        if inner_mermaid:
             if inline:
                 sections.append(
-                    f'<div class="card"><pre class="mermaid-src">'
-                    f"{_esc(inner_mermaid)}</pre></div>"
+                    f'<div class="card">{run_view.to_svg(node=node)}</div>'
                 )
             else:
+                inner_mermaid = run_view.to_mermaid(node=node)
                 sections.append(
                     f'<div class="card"><pre class="mermaid">'
                     f"{_esc(inner_mermaid)}</pre></div>"
                 )
+        except (RuntimeError, ValueError):
+            pass
         flow = _try_fig(_health.plot_module_flow, run_view, node_id=node)
         if flow:
             slug = re.sub(r"[^0-9A-Za-z_-]", "_", node)

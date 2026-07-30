@@ -536,3 +536,19 @@ def test_module_tree_persisted_and_flags_rolled_up(tmp_path):
     rolled = [f for f in parent_vanishing if f["detail"].startswith("in: ")]
     assert len(rolled) == 1, f"exactly one rollup: {parent_vanishing}"
     assert rolled[0]["detail"] == "in: 0, 2, 4"
+
+
+def test_differentiable_filter_repr_html_shows_architecture():
+    enc = Deep(layers=3)
+    # Before materialize: an informative note, no diagram.
+    note = enc._repr_html_()
+    assert "Deep" in note
+    assert "sin materializar" in note
+    assert "<svg" not in note
+
+    enc.materialize((4,))
+    html = enc._repr_html_()
+    assert "<svg xmlns=" in html
+    assert "Linear" in html, "submodule class names in the diagram"
+    assert "θ" in html, "parameter counts as sublabels"
+    assert html.count("marker-end") == 2, "3 children chained by 2 edges"

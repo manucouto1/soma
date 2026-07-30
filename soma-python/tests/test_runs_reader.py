@@ -384,3 +384,38 @@ def test_study_run_progress_bar(tmp_path):
     assert study.n_trials == 4
     assert study.best_trial is not None
     assert any(e["event_type"] == "TrialCompleted" for e in seen_events)
+
+
+# ── inline SVG diagrams (notebook reprs, offline reports) ───────────
+
+
+def test_graph_to_svg_and_repr_html(tmp_path):
+    g = _graph()
+    svg = g.to_svg()
+    assert svg.startswith("<svg xmlns=")
+    assert ">a</text>" in svg and ">b</text>" in svg
+    assert svg.count("marker-end") == 1, "one edge a→b"
+
+    # Evaluating a Graph in a notebook shows the diagram.
+    assert g.to_svg() == g._repr_html_()
+    assert "empty graph" in Graph()._repr_html_()
+
+    annotated = g.to_svg(
+        overlay={"nodes": {"a": {"status": "completed", "duration_ms": 1200}}}
+    )
+    assert "#e8f5e9" in annotated and ">1.2s</text>" in annotated
+
+
+def test_runview_to_svg(tmp_path):
+    run = _tracked_fit(tmp_path)
+    view = soma.RunView(run.dir)
+
+    svg = view.to_svg()
+    assert svg.startswith("<svg xmlns=")
+    assert "#e8f5e9" in svg, "completed nodes colored"
+
+    plain = view.to_svg(overlay=False)
+    assert "#e8f5e9" not in plain
+
+    with pytest.raises(ValueError, match="no inner-architecture"):
+        view.to_svg(node="ghost")

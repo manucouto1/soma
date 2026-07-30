@@ -2613,6 +2613,35 @@ impl PyGraph {
         }
     }
 
+    /// Render the graph as a self-contained SVG diagram (same optional
+    /// `overlay` as `to_mermaid`). No JavaScript — displays inline in
+    /// any notebook viewer.
+    #[pyo3(signature = (overlay=None))]
+    fn to_svg(&self, py: Python<'_>, overlay: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+        match overlay {
+            None => Ok(self.graph.to_svg()),
+            Some(ov) => Ok(self.graph.to_svg_with(&py_overlay(py, ov)?)),
+        }
+    }
+
+    /// Notebook display: the architecture as an inline SVG diagram
+    /// (falls back to the text tree for very large graphs).
+    fn _repr_html_(&self) -> String {
+        if self.graph.nodes.is_empty() {
+            return "<i>empty graph — add nodes with g.node(...)</i>".to_string();
+        }
+        if self.graph.nodes.len() > 80 {
+            return format!(
+                "<pre style='font-family:ui-monospace,monospace'>{}</pre>",
+                self.graph
+                    .to_text()
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+            );
+        }
+        self.graph.to_svg()
+    }
+
     /// Render the graph as a Graphviz DOT string (same optional
     /// `overlay` as `to_mermaid`).
     #[pyo3(signature = (overlay=None))]
@@ -3707,6 +3736,41 @@ fn graph_json_to_mermaid(
     }
 }
 
+/// Render a serialized soma-core Graph to a self-contained SVG diagram
+/// (no JavaScript), with an optional overlay dict.
+#[pyfunction]
+#[pyo3(signature = (graph_json, overlay=None))]
+fn graph_json_to_svg(
+    py: Python<'_>,
+    graph_json: &str,
+    overlay: Option<&Bound<'_, PyDict>>,
+) -> PyResult<String> {
+    let graph: somatize_core::graph::Graph = serde_json::from_str(graph_json)
+        .map_err(|e| PyRuntimeError::new_err(format!("invalid graph JSON: {e}")))?;
+    match overlay {
+        None => Ok(graph.to_svg()),
+        Some(ov) => Ok(graph.to_svg_with(&py_overlay(py, ov)?)),
+    }
+}
+
+/// Self-contained SVG of the run's graph, annotated with its overlay.
+#[pyfunction]
+#[pyo3(signature = (dir, overlay=true))]
+fn run_to_svg(dir: String, overlay: bool) -> PyResult<String> {
+    let reader = open_run_reader(&dir)?;
+    if overlay {
+        reader
+            .to_svg()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    } else {
+        let graph = reader
+            .graph()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+            .ok_or_else(|| PyRuntimeError::new_err(format!("run dir {dir} has no graph.json")))?;
+        Ok(graph.to_svg())
+    }
+}
+
 /// Graphviz DOT of the run's graph, annotated with its overlay.
 #[pyfunction]
 #[pyo3(signature = (dir, overlay=true))]
@@ -3750,6 +3814,8 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_graphviz, m)?)?;
     m.add_function(wrap_pyfunction!(graph_json_to_mermaid, m)?)?;
+    m.add_function(wrap_pyfunction!(graph_json_to_svg, m)?)?;
+    m.add_function(wrap_pyfunction!(run_to_svg, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

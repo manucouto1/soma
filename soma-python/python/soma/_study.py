@@ -99,12 +99,19 @@ def _study_run(self, executor, on_event=None, resume=False, progress=False):
         return _rust_study_run(self, executor, on_event=on_event, resume=resume)
 
     try:
+        # tqdm.auto warns when a notebook kernel lacks ipywidgets; fall
+        # back to the text bar silently in that case.
+        import ipywidgets  # noqa: F401
+
         from tqdm.auto import tqdm
-    except ImportError as e:
-        raise RuntimeError(
-            "Study.run(progress=True) needs tqdm — "
-            "install it with: pip install 'somatize[viz]'"
-        ) from e
+    except ImportError:
+        try:
+            from tqdm import tqdm
+        except ImportError as e:
+            raise RuntimeError(
+                "Study.run(progress=True) needs tqdm — "
+                "install it with: pip install 'somatize[viz]'"
+            ) from e
 
     state: dict[str, Any] = {"bar": None}
 
