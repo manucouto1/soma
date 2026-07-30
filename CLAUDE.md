@@ -52,13 +52,14 @@ soma-coordinator→ worker registry, routing, heartbeat monitoring
 soma-python     → PyO3 bindings: Graph (primary API), Filter, Study, Run, RunView, soma.viz
 soma/           → facade crate (`somatize`) re-exporting the workspace
 docs/           → 34 Starlight pages (sidebar guard: `cd docs && npm run check`)
-notebooks/      → 9 executed tutorial notebooks
+notebooks/      → 12 executed tutorial notebooks (10-12 are one campaign, sharing
+                  campaign.py); re-run with `python notebooks/execute.py`
 ```
 
 ## Tests
 
 ```bash
-# 1035 total: 698 Rust + 337 Python (incl. property tests and 4 robustness tests)
+# 1043 total: 698 Rust + 345 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
