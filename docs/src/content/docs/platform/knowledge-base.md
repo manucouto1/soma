@@ -56,7 +56,9 @@ Recording is best-effort throughout: it never fails a training run that
 already produced its results.
 
 To record work Soma did not execute, use the `record_experiment` MCP
-tool or build an `ExperimentRecord` directly.
+tool or build an `ExperimentRecord` directly. To add a finding to a run
+that already happened, use `soma.record_conclusion` — it appends an
+amendment rather than rewriting the original line.
 
 ## Querying from Python
 
@@ -69,6 +71,11 @@ soma.head()                      # what the next run will descend from
 soma.checkout(run_id)            # branch from an earlier run
 soma.detach()                    # start a new line
 soma.reindex()                   # rebuild the journal from .soma/runs/
+
+soma.find_similar("dropout collapse", limit=3)   # ranked retrieval
+soma.lineage(run_id)                             # ancestors + descendants
+soma.diff(run_a, run_b)                          # works on siblings too
+soma.record_conclusion(run_id, "what you learned")
 ```
 
 From the CLI:

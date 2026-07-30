@@ -142,7 +142,7 @@ impl ExperimentRecord {
         Self {
             id: summary.run_id.clone(),
             name: summary.name.clone(),
-            hypothesis: None,
+            hypothesis: summary.hypothesis.clone(),
             pipeline_summary: summary.pipeline_summary.clone(),
             params: summary
                 .seeds
@@ -372,6 +372,7 @@ mod tests {
             git: GitInfo::default(),
             seeds: BTreeMap::from([("torch".to_string(), 42)]),
             params: BTreeMap::from([("lr".to_string(), serde_json::json!(0.01))]),
+            hypothesis: Some("two branches beat one".into()),
             parent_run_id: None,
             architecture: None,
             pipeline_summary: "a(Scaler) → b(SVM)".into(),
@@ -471,6 +472,11 @@ mod tests {
         assert_eq!(record.metrics["val_f1"], 0.9);
         assert_eq!(record.params["seed.torch"], serde_json::json!(42));
         assert_eq!(record.params["lr"], serde_json::json!(0.01));
+        assert_eq!(
+            record.hypothesis.as_deref(),
+            Some("two branches beat one"),
+            "a hypothesis declared at run start reaches the journal"
+        );
         assert_eq!(record.duration, Duration::from_millis(2_000));
         assert_eq!(record.headline(), "completed in 2.0s");
         // A rootless run opens its own research line, named after itself.

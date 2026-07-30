@@ -288,6 +288,9 @@ pub struct RunSummary {
     /// Hyperparameters declared at run start (`manifest.params`).
     #[serde(default)]
     pub params: BTreeMap<String, serde_json::Value>,
+    /// What the run was expected to show, declared before it ran.
+    #[serde(default)]
+    pub hypothesis: Option<String>,
     #[serde(default)]
     pub parent_run_id: Option<String>,
     /// From `fingerprint.json`, absent for runs started before it
@@ -478,6 +481,7 @@ mod tests {
             git: GitInfo::default(),
             seeds: BTreeMap::from([("torch".into(), 42)]),
             params: BTreeMap::from([("lr".into(), serde_json::json!(0.01))]),
+            hypothesis: Some("wider is better".into()),
             parent_run_id: Some("r0".into()),
             architecture: None,
             pipeline_summary: "a → b".into(),
@@ -489,6 +493,7 @@ mod tests {
         assert_eq!(back.run_id, "r1");
         assert_eq!(back.seeds["torch"], 42);
         assert_eq!(back.params["lr"], serde_json::json!(0.01));
+        assert_eq!(back.hypothesis.as_deref(), Some("wider is better"));
 
         let minimal = serde_json::json!({
             "run_id": "r", "run_dir": "/tmp/r", "name": "n", "kind": "fit",

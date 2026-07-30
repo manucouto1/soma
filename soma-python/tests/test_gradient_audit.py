@@ -543,7 +543,7 @@ def test_differentiable_filter_repr_html_shows_architecture():
     # Before materialize: an informative note, no diagram.
     note = enc._repr_html_()
     assert "Deep" in note
-    assert "sin materializar" in note
+    assert "not materialized" in note
     assert "<svg" not in note
 
     enc.materialize((4,))

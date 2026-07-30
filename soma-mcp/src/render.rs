@@ -300,6 +300,9 @@ pub fn summarize_run(summary: &RunSummary) -> String {
     if let Some(parent) = &summary.parent_run_id {
         let _ = writeln!(out, "parent: {parent}");
     }
+    if let Some(hypothesis) = &summary.hypothesis {
+        let _ = writeln!(out, "hypothesis: {hypothesis}");
+    }
 
     if !summary.metrics.is_empty() {
         out.push_str("\n## Metrics\n\n");
@@ -757,6 +760,7 @@ mod tests {
             git: Default::default(),
             seeds: BTreeMap::new(),
             params: BTreeMap::new(),
+            hypothesis: None,
             parent_run_id: None,
             architecture: None,
             pipeline_summary: String::new(),

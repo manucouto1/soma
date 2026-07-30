@@ -109,6 +109,11 @@ pub struct RunManifest {
     /// a `ParamChanged` derivation possible at all.
     #[serde(default)]
     pub params: HashMap<String, serde_json::Value>,
+    /// What the person starting this run expected, and why. Recorded at
+    /// the start rather than the end on purpose: a hypothesis written
+    /// after seeing the result is a conclusion.
+    #[serde(default)]
+    pub hypothesis: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -140,6 +145,7 @@ impl RunManifest {
             cwd: None,
             seeds: HashMap::new(),
             params: HashMap::new(),
+            hypothesis: None,
             tags: Vec::new(),
             notes: None,
             parent_run_id: None,

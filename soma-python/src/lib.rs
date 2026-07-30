@@ -2771,7 +2771,7 @@ impl PyGraph {
     /// later run varies one. `parent` names the run this one descends
     /// from — omit it and soma resolves one from `$SOMA_PARENT_RUN` or
     /// `.soma/HEAD` (see `soma.checkout`).
-    #[pyo3(signature = (name, root=".soma".to_string(), kind="train".to_string(), tags=None, params=None, parent=None))]
+    #[pyo3(signature = (name, root=".soma".to_string(), kind="train".to_string(), tags=None, params=None, parent=None, hypothesis=None))]
     #[allow(clippy::too_many_arguments)]
     fn begin_run(
         &self,
@@ -2782,6 +2782,7 @@ impl PyGraph {
         tags: Option<Vec<String>>,
         params: Option<&Bound<'_, PyDict>>,
         parent: Option<String>,
+        hypothesis: Option<String>,
     ) -> PyResult<PyRun> {
         let kind = match kind.as_str() {
             "fit" => RunKind::Fit,
@@ -2805,6 +2806,7 @@ impl PyGraph {
             None => HashMap::new(),
         };
         manifest.parent_run_id = resolve_parent(&root, parent.as_deref());
+        manifest.hypothesis = hypothesis;
         manifest.graph = Some(GraphSummaryInfo {
             n_nodes: self.graph.nodes.len(),
             node_ids: self.graph.nodes.iter().map(|n| n.id.clone()).collect(),
@@ -3750,6 +3752,145 @@ fn clear_head_run(root: String) -> PyResult<()> {
     somatize_runtime::tracking::clear_head(&root).map_err(soma_err_to_py)
 }
 
+/// Open the project's experiment journal, refreshed.
+fn open_kb(root: &str) -> PyResult<somatize_memory::FileKnowledgeBase> {
+    somatize_memory::FileKnowledgeBase::open(std::path::Path::new(root).join("experiments.jsonl"))
+        .map_err(|e| PyRuntimeError::new_err(format!("cannot open the experiment pool: {e}")))
+}
+
+/// Rank past experiments against a query — the Python half of
+/// `kb_find_similar`. Returns a JSON array of scored records.
+///
+/// Text, architecture, recency and importance, added rather than
+/// multiplied; see `somatize_memory::retrieval` for the formula.
+#[pyfunction]
+#[pyo3(signature = (query="".to_string(), like_run=None, limit=5, research_line=None, tags=None, half_life_days=None, root=".soma".to_string()))]
+#[allow(clippy::too_many_arguments)]
+fn kb_find_similar_json(
+    query: String,
+    like_run: Option<String>,
+    limit: usize,
+    research_line: Option<String>,
+    tags: Option<Vec<String>>,
+    half_life_days: Option<f64>,
+    root: String,
+) -> PyResult<String> {
+    use somatize_memory::{KnowledgeBase, RetrievalQuery};
+
+    if query.trim().is_empty() && like_run.is_none() {
+        return Err(PyRuntimeError::new_err(
+            "find_similar needs a query, a like_run, or both",
+        ));
+    }
+    let kb = open_kb(&root)?;
+    let mut retrieval = RetrievalQuery::new(&query, chrono::Utc::now());
+    retrieval.limit = limit.clamp(1, 100);
+    retrieval.research_line = research_line;
+    retrieval.tags = tags.unwrap_or_default();
+    if let Some(days) = half_life_days.filter(|d| *d > 0.0) {
+        retrieval.half_life_days = days;
+    }
+    if let Some(run_id) = &like_run {
+        match kb.get(run_id).ok().flatten().and_then(|r| r.architecture) {
+            Some(architecture) => retrieval.architecture = Some(architecture),
+            None => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "no architecture recorded for '{run_id}' — it may predate fingerprinting. \
+                     Pass a query instead."
+                )));
+            }
+        }
+    }
+
+    let hits = kb
+        .retrieve(&retrieval)
+        .map_err(|e| PyRuntimeError::new_err(format!("retrieval failed: {e}")))?;
+    let payload: Vec<serde_json::Value> = hits
+        .iter()
+        .map(|hit| {
+            serde_json::json!({
+                "score": hit.score,
+                "why": hit.why(),
+                "components": hit.components,
+                "record": hit.record,
+            })
+        })
+        .collect();
+    to_json_py(&payload)
+}
+
+/// Retain a conclusion about a run, as an append-only amendment.
+///
+/// The original record is never rewritten: a note added today cannot
+/// corrupt what was recorded when the run happened. Returns the
+/// amendment's id.
+#[pyfunction]
+#[pyo3(signature = (run_id, notes, hypothesis=None, tags=None, root=".soma".to_string()))]
+fn kb_record_conclusion(
+    run_id: String,
+    notes: String,
+    hypothesis: Option<String>,
+    tags: Option<Vec<String>>,
+    root: String,
+) -> PyResult<String> {
+    use somatize_memory::{ExperimentRecord, KnowledgeBase};
+
+    let mut kb = open_kb(&root)?;
+    let Some(target) = kb.get(&run_id).ok().flatten() else {
+        return Err(PyRuntimeError::new_err(format!(
+            "no experiment '{run_id}' in {root}/experiments.jsonl"
+        )));
+    };
+    let id = somatize_core::util::timestamp_id("amend");
+    let mut amendment = ExperimentRecord::amendment(&id, &run_id, notes);
+    amendment.research_line = target.research_line.clone();
+    if let Some(hypothesis) = hypothesis {
+        amendment = amendment.with_hypothesis(hypothesis);
+    }
+    if let Some(tags) = tags {
+        amendment = amendment.with_tags(tags);
+    }
+    kb.record(amendment)
+        .map_err(|e| PyRuntimeError::new_err(format!("failed to record the conclusion: {e}")))?;
+    Ok(id)
+}
+
+/// One experiment with its ancestors and descendants, as JSON.
+#[pyfunction]
+#[pyo3(signature = (run_id, root=".soma".to_string()))]
+fn kb_lineage_json(run_id: String, root: String) -> PyResult<Option<String>> {
+    use somatize_memory::KnowledgeBase;
+
+    let kb = open_kb(&root)?;
+    match kb
+        .lineage(&run_id)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
+    {
+        Some(lineage) => to_json_py(&lineage).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// The move between any two experiments, related or not.
+///
+/// `derivation` only exists on a parent→child edge; this computes the
+/// same diff for two records that never met — which is exactly the
+/// comparison you want between sibling branches.
+#[pyfunction]
+#[pyo3(signature = (a, b, root=".soma".to_string()))]
+fn kb_diff_json(a: String, b: String, root: String) -> PyResult<String> {
+    use somatize_memory::{KnowledgeBase, derive};
+
+    let kb = open_kb(&root)?;
+    let fetch = |id: &str| {
+        kb.get(id)
+            .ok()
+            .flatten()
+            .ok_or_else(|| PyRuntimeError::new_err(format!("no experiment '{id}'")))
+    };
+    to_json_py(&derive(&fetch(&a)?, &fetch(&b)?))
+}
+
 /// Rebuild `<root>/experiments.jsonl` from `<root>/runs/*`.
 ///
 /// One operation covering three needs: migrating runs recorded before
@@ -4008,6 +4149,10 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_head_run, m)?)?;
     m.add_function(wrap_pyfunction!(clear_head_run, m)?)?;
     m.add_function(wrap_pyfunction!(kb_reindex, m)?)?;
+    m.add_function(wrap_pyfunction!(kb_find_similar_json, m)?)?;
+    m.add_function(wrap_pyfunction!(kb_record_conclusion, m)?)?;
+    m.add_function(wrap_pyfunction!(kb_lineage_json, m)?)?;
+    m.add_function(wrap_pyfunction!(kb_diff_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_info_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_manifest_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_events_json, m)?)?;

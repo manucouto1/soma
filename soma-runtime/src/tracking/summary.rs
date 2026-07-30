@@ -89,6 +89,7 @@ pub fn summarize(reader: &RunReader) -> Result<RunSummary> {
         git: manifest.git,
         seeds: manifest.seeds.into_iter().collect(),
         params: manifest.params.into_iter().collect(),
+        hypothesis: manifest.hypothesis,
         parent_run_id: manifest.parent_run_id,
         architecture,
         pipeline_summary: pipeline,

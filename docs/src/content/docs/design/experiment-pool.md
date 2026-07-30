@@ -266,6 +266,12 @@ stated rather than left blank.
 | `kb_summarize_run` | — | Summarize a run directory on demand; works on pre-pool runs. |
 | `kb_stats` | — | Size, span, research lines, and honest coverage. |
 
+The same seven capabilities are available from Python —
+`soma.find_similar`, `soma.lineage`, `soma.diff`,
+`soma.record_conclusion`, `soma.checkout`, plus `soma.experiments()` and
+`soma.reindex()` — so a notebook can drive the loop an agent drives over
+MCP.
+
 Every knowledge read refreshes the journal first. An MCP server outlives
 the training runs it is asked about; without that, it answers "no such
 experiment" for a run that finished five minutes ago in another

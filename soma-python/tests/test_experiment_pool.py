@@ -52,9 +52,11 @@ def _journal(root):
     return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
-def _run(root, name, *, params=None, depth=1, f1=0.5, parent=None):
+def _run(root, name, *, params=None, depth=1, f1=0.5, parent=None, hypothesis=None):
     g = _graph(depth=depth)
-    with g.track_run(name, root=str(root), params=params, parent=parent) as run:
+    with g.track_run(
+        name, root=str(root), params=params, parent=parent, hypothesis=hypothesis
+    ) as run:
         run.log("val_f1", f1, step=0)
     return run.id
 
@@ -325,3 +327,108 @@ def test_run_summary_works_on_a_run_recorded_before_the_pool(tmp_path):
     assert summary["architecture"] is None
     assert summary["conclusion"]["headline"]
     assert soma.reindex(root=str(tmp_path)) == 1
+
+
+# ── Retain and retrieve ─────────────────────────────────────────────
+
+
+def test_a_hypothesis_declared_at_run_start_reaches_the_journal(tmp_path):
+    run_id = _run(tmp_path, "wider", hypothesis="two branches beat one")
+    (record,) = _journal(tmp_path)
+    assert record["id"] == run_id
+    assert record["hypothesis"] == "two branches beat one"
+
+
+def test_find_similar_ranks_by_relevance(tmp_path):
+    _run(tmp_path, "dropout-sweep", f1=0.81)
+    _run(tmp_path, "batch-norm-study", f1=0.79)
+
+    hits = soma.find_similar("dropout", root=str(tmp_path))
+    assert hits, "the pool is not empty, so something must rank"
+    assert hits[0]["record"]["name"] == "dropout-sweep"
+    assert hits[0]["score"] > 0
+    assert set(hits[0]["components"]) == {
+        "lexical",
+        "structural",
+        "recency",
+        "importance",
+    }
+    assert hits[0]["why"].startswith("score ")
+
+    assert len(soma.find_similar("dropout", limit=1, root=str(tmp_path))) == 1
+
+
+def test_find_similar_needs_something_to_go_on(tmp_path):
+    _run(tmp_path, "baseline")
+    with pytest.raises(Exception, match="needs a query"):
+        soma.find_similar(root=str(tmp_path))
+
+
+def test_find_similar_can_match_on_architecture(tmp_path):
+    baseline = _run(tmp_path, "baseline", depth=1)
+    _run(tmp_path, "unrelated", depth=1)
+
+    hits = soma.find_similar(like_run=baseline, root=str(tmp_path))
+    assert hits
+    assert all(h["components"]["structural"] > 0 for h in hits), (
+        "matching on architecture must actually use the structural term"
+    )
+
+
+def test_a_conclusion_is_appended_and_becomes_retrievable(tmp_path):
+    run_id = _run(tmp_path, "deeper", f1=0.79)
+    before = _journal(tmp_path)
+
+    amendment_id = soma.record_conclusion(
+        run_id,
+        "depth past 3 vanishes; the trunk needs residuals, not layers",
+        tags=["dead-end"],
+        root=str(tmp_path),
+    )
+    assert amendment_id.startswith("amend_")
+
+    after = _journal(tmp_path)
+    assert len(after) == len(before) + 1
+    assert after[: len(before)] == before, "existing records are never rewritten"
+    assert after[-1]["kind"] == "amendment"
+    assert after[-1]["amends"] == run_id
+    assert after[-1]["tags"] == ["dead-end"]
+
+    # And the point of retaining it: it comes back.
+    hits = soma.find_similar("residuals trunk", root=str(tmp_path))
+    assert any("residuals" in (h["record"]["notes"] or "") for h in hits)
+
+
+def test_record_conclusion_rejects_an_unknown_run(tmp_path):
+    _run(tmp_path, "baseline")
+    with pytest.raises(Exception, match="no experiment 'ghost'"):
+        soma.record_conclusion("ghost", "...", root=str(tmp_path))
+
+
+def test_lineage_walks_up_and_down(tmp_path):
+    root_id = _run(tmp_path, "baseline")
+    mid = _run(tmp_path, "wider")
+    leaf = _run(tmp_path, "wider-deeper")
+
+    tree = soma.lineage(mid, root=str(tmp_path))
+    assert tree["focus"]["id"] == mid
+    assert [a["id"] for a in tree["ancestors"]] == [root_id]
+    assert [(d["record"]["id"], d["depth"]) for d in tree["descendants"]] == [(leaf, 1)]
+    assert soma.lineage("nope", root=str(tmp_path)) is None
+
+
+def test_diff_compares_two_siblings_that_never_met(tmp_path):
+    baseline = _run(tmp_path, "baseline", params={"lr": 0.01}, f1=0.81)
+    a = _run(tmp_path, "wider", params={"lr": 0.05}, f1=0.87)
+    soma.checkout(baseline, root=str(tmp_path))
+    b = _run(tmp_path, "deeper", params={"lr": 0.01, "depth": 4}, f1=0.79)
+
+    # Neither is the other's parent, so no recorded derivation links them.
+    records = {r["id"]: r for r in _journal(tmp_path)}
+    assert records[a]["parent"] == records[b]["parent"] == baseline
+
+    move = soma.diff(a, b, root=str(tmp_path))
+    assert move["from"] == a and move["to"] == b
+    changes = {c["change"] for c in move["changes"]}
+    assert "ParamChanged" in changes
+    assert move["metric_delta"]["val_f1"]["delta"] == pytest.approx(-0.08)

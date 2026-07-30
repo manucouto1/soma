@@ -10,7 +10,9 @@ exceptions.
 are what lets a later variant record a ``ParamChanged`` derivation.
 ``parent`` names the run this one descends from; omit it and soma
 resolves one from ``$SOMA_PARENT_RUN`` or ``.soma/HEAD`` (see
-:func:`soma.checkout`)::
+:func:`soma.checkout`). ``hypothesis`` records what you expected before
+you saw the result — written afterwards it would be a conclusion, and
+:func:`soma.record_conclusion` is where those go::
 
     with g.track_run("mos-baseline", tags=["mos"], params={"lr": 0.01}) as run:
         with g.gradient_audit(channels=True) as audit:
@@ -40,6 +42,7 @@ def _track_run(
     tags: tuple[str, ...] | list[str] = (),
     params: dict | None = None,
     parent: str | None = None,
+    hypothesis: str | None = None,
 ) -> Iterator:
     run = self.begin_run(
         name,
@@ -48,6 +51,7 @@ def _track_run(
         tags=list(tags),
         params=params,
         parent=parent,
+        hypothesis=hypothesis,
     )
     self.py_state["active_run"] = run
     self.py_state["train_step"] = 0

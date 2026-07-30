@@ -39,7 +39,16 @@ from soma import _tracking  # noqa: E402, F401
 from soma import _compile  # noqa: E402, F401
 
 from soma._experiments import experiments  # noqa: E402
-from soma._lineage import checkout, detach, head, reindex  # noqa: E402
+from soma._lineage import (  # noqa: E402
+    checkout,
+    detach,
+    diff,
+    find_similar,
+    head,
+    lineage,
+    record_conclusion,
+    reindex,
+)
 from soma._runs import RunView, runs  # noqa: E402
 
 # Install plot_*/dataframe methods on Study and RunView. The methods are
@@ -87,6 +96,10 @@ __all__ = [
     "head",
     "detach",
     "reindex",
+    "find_similar",
+    "record_conclusion",
+    "lineage",
+    "diff",
     "runs",
     "RunView",
     "experiments_dataframe",

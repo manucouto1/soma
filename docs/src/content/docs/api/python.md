@@ -187,7 +187,7 @@ g = Graph.somatize(
 | `add_worker` | `(address, token?, tags?)` | Add a remote worker |
 | `set_coordinator` | `(url, token?)` | Set coordinator for auto-discovery |
 | `workers` | `() -> list[dict]` | List known workers |
-| `track_run` | `(name, *, root=".soma", kind="train", tags=(), params=None, parent=None) -> ctx[Run]` | Context manager: create a run directory, snapshot the graph into it, finalize on exit (even on exception). `params` are the hyperparameters that live outside the graph; `parent` overrides the run this one descends from |
+| `track_run` | `(name, *, root=".soma", kind="train", tags=(), params=None, parent=None, hypothesis=None) -> ctx[Run]` | Context manager: create a run directory, snapshot the graph into it, finalize on exit (even on exception). `params` are the hyperparameters that live outside the graph; `parent` overrides the run this one descends from; `hypothesis` records what you expected *before* seeing the result |
 | `begin_run` | `(name, root=".soma", kind="train", tags=None) -> Run` | Lower-level: start a run without the context manager (you call `run.finish()`) |
 | `emit_event` | `(dict)` | Emit a custom event onto the bus (must match an `Event` variant) |
 | `search_space` | `() -> list[dict]` | Aggregate every filter's `search()` descriptors, prefixed with the node id (`"encoder.lr"`) |
@@ -503,6 +503,22 @@ Runs descend from one another. The parent is resolved as `parent=` →
 | `soma.checkout` | `(run_id, *, root=".soma")` | Point HEAD at an existing run so the next one branches from it |
 | `soma.detach` | `(*, root=".soma")` | Clear HEAD; the next run starts its own research line |
 | `soma.reindex` | `(*, root=".soma") -> int` | Rebuild `experiments.jsonl` from `<root>/runs/` |
+| `soma.find_similar` | `(query="", *, like_run=None, limit=5, research_line=None, tags=None, half_life_days=None, root=".soma") -> list[dict]` | Rank past experiments: `0.40·text + 0.25·architecture + 0.15·recency + 0.20·importance`. Each hit has `score`, `why`, `components`, `record` |
+| `soma.record_conclusion` | `(run_id, notes, *, hypothesis=None, tags=None, root=".soma") -> str` | Retain what you learned, as an append-only amendment. Returns its id |
+| `soma.lineage` | `(run_id, *, root=".soma") -> dict \| None` | `focus` + `ancestors` + `descendants` (pre-order, with depth) |
+| `soma.diff` | `(a, b, *, root=".soma") -> dict` | The move between any two experiments — including siblings, which have no recorded edge |
+
+```python
+soma.find_similar("dropout collapse", limit=3)
+# [{'score': 0.81, 'why': 'score 0.81 (text 0.94, structure 0.00, …)', ...}]
+
+soma.record_conclusion(run_id, "depth past 3 vanishes; needs residuals")
+```
+
+Failures rank: `importance` is floored for any run that failed, crashed
+or regressed **and** carries a conclusion. Not repeating a dead end
+saves as much as repeating a win — which is also why
+`record_conclusion` is worth calling on the runs that did not work.
 
 ### Command line
 
