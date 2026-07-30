@@ -15,6 +15,7 @@ use somatize_core::cache::CacheKey;
 use somatize_core::error::{Result as SomaResult, SomaError};
 use somatize_core::event::MetricRecord;
 use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::fingerprint::ArchitectureFingerprint;
 use somatize_core::graph::{Edge, Graph, Node};
 use somatize_core::search::{Scale, SearchDimension, SearchSpace};
 use somatize_core::study::{Direction, Objective, PruningStrategy, SearchStrategy, Study};
@@ -1330,6 +1331,43 @@ struct PyGraph {
 }
 
 impl PyGraph {
+    /// Write the run's topology snapshot: `graph.json` (the machine
+    /// contract), `graph.mmd` (the human one) and `fingerprint.json`
+    /// (structural identity, with each node's filter config hash).
+    ///
+    /// Called from `begin_run` — the single writer. The fingerprint is
+    /// best-effort: a graph whose canonical form will not serialize
+    /// must not stop a run from starting.
+    fn snapshot_topology(&self, tracker: &LocalTracker) -> PyResult<()> {
+        let graph_json = serde_json::to_string_pretty(&self.graph)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        tracker
+            .save_artifact("graph.json", graph_json.as_bytes())
+            .map_err(soma_err_to_py)?;
+        tracker
+            .save_artifact("graph.mmd", self.graph.to_mermaid().as_bytes())
+            .map_err(soma_err_to_py)?;
+
+        if let Ok(fingerprint) = ArchitectureFingerprint::of(&self.graph) {
+            let node_config: std::collections::BTreeMap<String, String> = self
+                .graph
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let hash = self.library.get(&node.id)?.config_hash();
+                    Some((node.id.clone(), hash.to_hex()))
+                })
+                .collect();
+            let fingerprint = fingerprint.with_node_config(node_config);
+            if let Ok(json) = serde_json::to_string_pretty(&fingerprint) {
+                tracker
+                    .save_artifact("fingerprint.json", json.as_bytes())
+                    .map_err(soma_err_to_py)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Split a Value into batches along the first axis.
     /// For Tensor: splits rows. For Json dict with lists: splits list values.
     #[allow(dead_code)]
@@ -2727,9 +2765,16 @@ impl PyGraph {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Start a tracked run: creates `.soma/runs/<run_id>/` and attaches
-    /// its lossless sink to this graph's event bus. Prefer the
-    /// `graph.track_run(...)` context manager from Python.
+    /// Start a tracked run: creates `.soma/runs/<run_id>/`, snapshots
+    /// the graph topology into it (`graph.json`, `graph.mmd`,
+    /// `fingerprint.json`) and attaches its lossless sink to this
+    /// graph's event bus. Prefer the `graph.track_run(...)` context
+    /// manager from Python.
+    ///
+    /// This is the only writer of those three files: it is the one place
+    /// where the `Graph` and the `FilterLibrary` are both in scope, so
+    /// it is the only place that can stamp per-node config hashes into
+    /// the fingerprint.
     #[pyo3(signature = (name, root=".soma".to_string(), kind="train".to_string(), tags=None))]
     fn begin_run(
         &self,
@@ -2747,6 +2792,7 @@ impl PyGraph {
             _ => RunKind::Other,
         };
         let tracker = LocalTracker::create(&root, kind, &name).map_err(soma_err_to_py)?;
+        self.snapshot_topology(&tracker)?;
 
         // Enrich the manifest with Python-side context.
         let mut manifest = load_manifest(tracker.run_dir()).map_err(soma_err_to_py)?;

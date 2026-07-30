@@ -8,10 +8,15 @@
 mod jsonl_sink;
 mod local_tracker;
 mod reader;
+mod summary;
 
 pub use jsonl_sink::JsonlEventSink;
 pub use local_tracker::{LocalTracker, collect_git_info, load_manifest, load_status};
 pub use reader::{
     CacheActivity, HealthFlagRecord, MetricPoint, NodeCacheCounts, NodeSpan, RunInfo, RunReader,
     STALE_HEARTBEAT_SECS, TrialSpan, list_runs,
+};
+pub use summary::{
+    FlagCount, NodeCost, RunConclusion, RunOutcome, RunSummary, TrialSummary, human_duration,
+    summarize,
 };
