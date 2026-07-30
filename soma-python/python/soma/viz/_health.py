@@ -298,6 +298,7 @@ def plot_module_flow(
         title=f"Gradient flow through {node_id} — {run_view.name}",
         xaxis={"title": "submodule (execution order)", "type": "category"},
         yaxis={"title": metric, "type": "log" if log_y else "linear"},
+        hovermode="x unified",
     )
     return fig
 

@@ -74,7 +74,11 @@ def plot_optimization_history(study, metric: str | None = None):
             customdata=ids,
             mode="markers",
             name=metric,
-            marker={"size": 8, "color": _theme.CATEGORICAL[0]},
+            marker={
+                "size": 9,
+                "color": _theme.CATEGORICAL[0],
+                "line": {"width": 1.5, "color": "#ffffff"},
+            },
             hovertemplate="%{customdata}<br>" + metric + " = %{y:.5g}<extra></extra>",
         )
     )
@@ -84,7 +88,7 @@ def plot_optimization_history(study, metric: str | None = None):
             y=best_so_far,
             mode="lines",
             name="best so far",
-            line={"width": 2, "color": _theme.SEQUENTIAL[5], "shape": "hv"},
+            line={"width": 2.5, "color": _theme.SEQUENTIAL[5], "shape": "hv"},
             hovertemplate="best = %{y:.5g}<extra></extra>",
         )
     )
@@ -93,6 +97,7 @@ def plot_optimization_history(study, metric: str | None = None):
         title=f"Optimization history — {study.name}",
         xaxis_title="completed trial #",
         yaxis_title=metric,
+        hovermode="x unified",
     )
     return fig
 
@@ -151,7 +156,9 @@ def plot_intermediate_values(study, metric: str | None = None):
 
 def plot_parallel_coordinate(study, params: list[str] | None = None):
     """One line per completed trial across parameter axes, colored by
-    objective value (sequential ramp)."""
+    objective value on a perceptually-uniform gradient (Viridis; bright
+    = better). Log-spanning numeric params get log₁₀ axes automatically,
+    and brushing an axis dims the unselected lines."""
     go = _go()
     metric, direction = _primary_objective(study)
     completed = _objective_values(study.trials, metric)
@@ -161,45 +168,76 @@ def plot_parallel_coordinate(study, params: list[str] | None = None):
     all_params = params or sorted({k for t, _ in completed for k in t["params"]})
     values = [v for _, v in completed]
 
-    dimensions = []
-    for name in all_params:
-        raw = [t["params"].get(name) for t, _ in completed]
-        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw):
-            dimensions.append({"label": name, "values": raw})
-        else:
-            # Categorical axis: map values to indices, label the ticks.
-            seen: dict = {}
-            idx = [seen.setdefault(str(v), len(seen)) for v in raw]
-            dimensions.append(
-                {
-                    "label": name,
-                    "values": idx,
-                    "tickvals": list(seen.values()),
-                    "ticktext": list(seen.keys()),
-                }
-            )
-    dimensions.append({"label": metric, "values": values})
+    dimensions = [
+        _parcoords_dim(name, [t["params"].get(name) for t, _ in completed])
+        for name in all_params
+    ]
+    dimensions.append(_parcoords_dim(metric, values))
 
-    # Dark end of the ramp = better: reverse for minimize.
-    ramp = list(_theme.SEQUENTIAL)
-    if direction == "minimize":
-        ramp.reverse()
-    colorscale = [[i / (len(ramp) - 1), c] for i, c in enumerate(ramp)]
     fig = go.Figure(
         go.Parcoords(
             line={
                 "color": values,
-                "colorscale": colorscale,
+                "colorscale": _theme.MAGNITUDE,
+                # Bright end of the gradient = better.
+                "reversescale": direction == "minimize",
                 "showscale": True,
-                "colorbar": {"title": metric},
+                "colorbar": {
+                    "title": {"text": metric, "side": "right"},
+                    "thickness": 12,
+                    "outlinewidth": 0,
+                    "len": 0.85,
+                    "tickfont": {"size": 11, "color": _theme.INK_SECONDARY},
+                },
             },
             dimensions=dimensions,
-            labelfont={"color": _theme.INK_SECONDARY, "size": 12},
-            tickfont={"color": _theme.MUTED, "size": 11},
+            labelfont={"color": _theme.INK, "size": 13},
+            tickfont={"color": _theme.INK_SECONDARY, "size": 11},
+            rangefont={"color": _theme.MUTED, "size": 9},
+            # Brushing an axis dims everything else to a faint gray —
+            # the selection pops, W&B-style.
+            unselected={"line": {"color": _theme.GRID, "opacity": 0.35}},
         )
     )
-    fig.update_layout(template="soma", title=f"Parallel coordinates — {study.name}")
+    fig.update_layout(
+        template="soma",
+        title=f"Parallel coordinates — {study.name}",
+        margin={"l": 90, "r": 90, "t": 90, "b": 40},
+    )
     return fig
+
+
+_SUPERSCRIPTS = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _parcoords_dim(name: str, raw: list) -> dict:
+    """One parallel-coordinates axis: numeric, log₁₀ (auto-detected for
+    positive values spanning ≥ ~2 decades, e.g. learning rates), or
+    categorical with labeled ticks."""
+    numeric = all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw
+    )
+    if not numeric:
+        seen: dict = {}
+        idx = [seen.setdefault(str(v), len(seen)) for v in raw]
+        return {
+            "label": name,
+            "values": idx,
+            "tickvals": list(seen.values()),
+            "ticktext": list(seen.keys()),
+        }
+    if all(v > 0 for v in raw) and max(raw) / min(raw) >= 50:
+        import math
+
+        logs = [math.log10(v) for v in raw]
+        exponents = list(range(math.floor(min(logs)), math.ceil(max(logs)) + 1))
+        return {
+            "label": name,
+            "values": logs,
+            "tickvals": exponents,
+            "ticktext": [f"10{str(e).translate(_SUPERSCRIPTS)}" for e in exponents],
+        }
+    return {"label": name, "values": raw}
 
 
 def plot_param_importances(study):
@@ -350,7 +388,11 @@ def plot_pareto_front(study):
                 customdata=[p[0] for p in rest],
                 mode="markers",
                 name="dominated",
-                marker={"size": 8, "color": _theme.BASELINE},
+                marker={
+                    "size": 8,
+                    "color": _theme.BASELINE,
+                    "line": {"width": 1.5, "color": "#ffffff"},
+                },
                 hovertemplate="%{customdata}<br>%{x:.5g}, %{y:.5g}<extra></extra>",
             )
         )
@@ -362,7 +404,11 @@ def plot_pareto_front(study):
             customdata=[p[0] for p in front],
             mode="lines+markers",
             name="pareto front",
-            marker={"size": 10, "color": _theme.CATEGORICAL[0]},
+            marker={
+                "size": 10,
+                "color": _theme.CATEGORICAL[0],
+                "line": {"width": 1.5, "color": "#ffffff"},
+            },
             line={"width": 2, "color": _theme.CATEGORICAL[0], "dash": "dot"},
             hovertemplate="%{customdata}<br>%{x:.5g}, %{y:.5g}<extra></extra>",
         )
@@ -423,6 +469,7 @@ def plot_metrics(run_view, names: list[str] | None = None):
         xaxis_title="step",
         yaxis_title="value",
         showlegend=len(selected) > 1,
+        hovermode="x unified",
     )
     return fig
 

@@ -211,3 +211,40 @@ def test_experiments_dataframe(tmp_path):
 
     empty = soma.experiments_dataframe(str(tmp_path / "nowhere"))
     assert empty.empty
+
+
+def test_parallel_coordinate_visual_upgrade(tmp_path):
+    """Viridis gradient, auto-log axes for decade-spanning params,
+    dimmed unselected lines."""
+
+    def objective(trial):
+        trial.report("f1", 0.5 + trial["x"], 0)
+        return None
+
+    study = Study(
+        "parcoords-style",
+        search_space=[
+            {"type": "float", "name": "lr", "low": 1e-4, "high": 1e-1, "scale": "log"},
+            {"type": "float", "name": "x", "low": 0.1, "high": 0.4},
+        ],
+        strategy="random",
+        n_trials=6,
+        objectives=[("f1", "maximize")],
+        seed=9,
+        root=str(tmp_path),
+    )
+    study.run(objective)
+
+    fig = study.plot_parallel_coordinate()
+    pc = fig.data[0]
+    assert pc.line.colorscale is not None
+    assert pc.unselected.line.opacity == pytest.approx(0.35)
+
+    dims = {d.label: d for d in pc.dimensions}
+    # lr spans ≥ 2 decades → log₁₀ axis with 10^e tick labels.
+    lr = dims["lr"]
+    assert all(v <= 0 for v in lr.values), "log10 of values < 1"
+    assert any(t.startswith("10") for t in lr.ticktext)
+    # x spans < 2 decades → linear, untouched.
+    assert dims["x"].ticktext is None
+    assert 0.1 <= min(dims["x"].values)

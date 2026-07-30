@@ -28,6 +28,11 @@ CATEGORICAL = [
     "#e34948",  # red
 ]
 
+# Continuous-magnitude gradient for dense encodings (parallel
+# coordinates, line-by-value): Viridis — perceptually uniform and
+# colorblind-safe (an *ordered* scale, not a hue-circle rainbow).
+MAGNITUDE = "Viridis"
+
 # Sequential ramp (blue, light→dark) for continuous magnitude.
 SEQUENTIAL = [
     "#cde2fb",
