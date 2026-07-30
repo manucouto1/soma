@@ -73,7 +73,7 @@ layer-1 aggregates, so a JS front-end can re-implement any of them
 against the same data. They need the `viz` extra:
 
 ```bash
-pip install 'somatize[viz]'   # plotly + pandas
+pip install 'somatize[viz]'   # plotly + pandas + rich + tqdm
 ```
 
 ```python
@@ -103,6 +103,14 @@ blue↔gray↔red diverging scale for correlations; and a reserved status
 set (`completed`/`cached`/`failed`/`running`/`pruned`) that matches the
 mermaid/graphviz overlay colors, so a run reads the same in every
 rendering.
+
+The terminal/notebook surfaces follow suit: `soma.runs()` returns a
+`RunList` that renders as an HTML table in notebooks (state chips in
+the same status colors), each `RunView` shows a summary card, the
+`soma runs` CLI draws a rich table when `rich` is available
+(`--plain` forces the pipe-friendly text form), and
+`study.run(objective, progress=True)` shows a tqdm bar fed by live
+`StudyProgress` events with the current best as postfix.
 
 ## The HTML report
 
@@ -188,7 +196,9 @@ emission. Consequences:
 ## Deferred
 
 Documented, intentionally not built yet: `soma ui` (a live local
-server tailing run dirs — every piece it needs now exists), fANOVA
+server tailing run dirs — every piece it needs now exists; a
+ratatui-style terminal TUI over the same readers belongs to the same
+family), fANOVA
 importances, `NodeProgress`/`ParetoUpdated` emitters, historical
 per-node cost from the persistent cache's `ActionResult.compute_ms`,
 a Python-implementable `EventSink`, parquet compaction of metrics.

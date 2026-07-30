@@ -184,7 +184,7 @@ Each worker creates isolated venv/conda environments per job with incremental de
 - `somatize-core/s3` — S3-compatible DataStore (AWS, Backblaze B2, MinIO)
 - `somatize-core/zarr` — Zarr v3 chunked tensor storage with compression
 - `somatize-memory/chronos` — ChronosVector-backed KnowledgeBase
-- `somatize[viz]` (pip) — Plotly figures, DataFrames, HTML reports
+- `somatize[viz]` (pip) — Plotly figures, DataFrames, HTML reports, rich tables, tqdm progress
 
 ## License
 

@@ -118,6 +118,13 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   roll up to one parent flag per family. Viz: `run.plot_module_flow`, `run.to_mermaid(node=...)`,
   `plot_audit(node=...)` (default hides submodule series), report "Module flow" section +
   `soma-data-module-trees` blob.
+- **Terminal/notebook UX**: `soma.runs()` → `RunList` with `_repr_html_` (status-color chips shared
+  with the report CSS); `soma runs` CLI uses a rich table when available (`--plain` for pipes);
+  `Study.run(progress=True)` = tqdm bar via lossy StudyProgress events (finalized from n_trials).
+  rich/tqdm live in the `somatize[viz]` extra, lazy imports, plain fallbacks everywhere.
+  Notebook filters MUST declare `_cache_version` (getsource unavailable under headless kernels);
+  notebooks ship executed (PNG figs via kaleido, scale 2) — re-execute with the warning-gated
+  runner in the job tmp dir (`execute_notebooks.py` pattern: temp cwd + fresh SOMA_CACHE_DIR).
 - **EnvManager**: Isolated Python environments per pipeline with incremental dependency updates.
   Hashes requirements to detect changes, only installs/upgrades/removes what changed.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.
