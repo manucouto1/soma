@@ -8,7 +8,7 @@
 //! - metadata = serialized ExperimentRecord fields
 
 use crate::knowledge_base::KnowledgeBase;
-use crate::record::{ChangePoint, ExperimentRecord, ResearchLine, Trend};
+use crate::record::ExperimentRecord;
 use chronos_vector::core::TemporalFilter;
 use chronos_vector::index::hnsw::HnswConfig;
 use chronos_vector::index::hnsw::temporal::TemporalHnsw;
@@ -114,7 +114,7 @@ impl ChronosKnowledgeBase {
         query: &str,
         k: usize,
         alpha: f32,
-    ) -> Result<Vec<&ExperimentRecord>> {
+    ) -> Result<Vec<ExperimentRecord>> {
         // Encode query as vector
         let mut query_vec = vec![0.0f32; self.dim];
         let half = self.dim / 2;
@@ -137,7 +137,7 @@ impl ChronosKnowledgeBase {
             0, // no temporal bias
         );
 
-        let experiments: Vec<&ExperimentRecord> = results
+        Ok(results
             .iter()
             .filter_map(|(node_id, _score)| {
                 let entity_id = self.index.entity_id(*node_id);
@@ -145,14 +145,20 @@ impl ChronosKnowledgeBase {
                     .iter()
                     .find(|(_, eid)| **eid == entity_id)
                     .and_then(|(id, _)| self.id_to_idx.get(id))
-                    .map(|&idx| &self.records[idx])
+                    .map(|&idx| self.records[idx].clone())
             })
-            .collect();
-
-        Ok(experiments)
+            .collect())
     }
 }
 
+/// Only the three required methods plus the two this backend can do
+/// better than the defaults.
+///
+/// Everything else — research lines, trends, trajectories, change
+/// points, lineage, ranked retrieval — comes from the trait's default
+/// implementations over `all()`. That deleted a second copy of the
+/// analytics that had already drifted from the first (its change-point
+/// descriptions were missing the delta).
 impl KnowledgeBase for ChronosKnowledgeBase {
     fn record(&mut self, experiment: ExperimentRecord) -> Result<()> {
         let entity_id = self.next_entity;
@@ -171,152 +177,25 @@ impl KnowledgeBase for ChronosKnowledgeBase {
         Ok(())
     }
 
-    fn get(&self, id: &str) -> Result<Option<&ExperimentRecord>> {
-        Ok(self.id_to_idx.get(id).map(|&idx| &self.records[idx]))
-    }
-
-    fn search(&self, query: &str, max_results: usize) -> Result<Vec<&ExperimentRecord>> {
-        // Use semantic search with pure semantic weight (alpha=1.0)
-        if self.records.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.semantic_search(query, max_results, 1.0)
-    }
-
-    fn experiments_in_line(&self, line: &str) -> Result<Vec<&ExperimentRecord>> {
-        let mut exps: Vec<&ExperimentRecord> = self
-            .records
-            .iter()
-            .filter(|e| e.research_line.as_deref() == Some(line))
-            .collect();
-        exps.sort_by_key(|e| e.timestamp);
-        Ok(exps)
-    }
-
-    fn research_lines(&self) -> Result<Vec<ResearchLine>> {
-        let mut lines: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, exp) in self.records.iter().enumerate() {
-            if let Some(ref line) = exp.research_line {
-                lines.entry(line.clone()).or_default().push(i);
-            }
-        }
-
-        let mut result = Vec::new();
-        for (name, indices) in &lines {
-            let experiments: Vec<String> = indices
-                .iter()
-                .map(|&i| self.records[i].id.clone())
-                .collect();
-
-            let mut best_value = None;
-            let mut best_name = None;
-            for &i in indices {
-                for (k, &v) in &self.records[i].metrics {
-                    if best_value.is_none() || v > best_value.unwrap() {
-                        best_value = Some(v);
-                        best_name = Some(k.clone());
-                    }
-                }
-            }
-
-            let trend = compute_trend(&self.records, indices);
-
-            result.push(ResearchLine {
-                name: name.clone(),
-                experiments,
-                trend,
-                best_metric_value: best_value,
-                best_metric_name: best_name,
-            });
-        }
-
-        result.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(result)
-    }
-
-    fn promising_lines(&self, metric: &str) -> Result<Vec<ResearchLine>> {
-        let all = self.research_lines()?;
-        Ok(all
-            .into_iter()
-            .filter(|l| {
-                l.trend == Trend::Improving || l.best_metric_name.as_deref() == Some(metric)
-            })
-            .collect())
-    }
-
-    fn trajectory(&self, line: &str, metric: &str) -> Result<Vec<(String, f64)>> {
-        let exps = self.experiments_in_line(line)?;
-        Ok(exps
-            .iter()
-            .filter_map(|e| e.metrics.get(metric).map(|&v| (e.id.clone(), v)))
-            .collect())
-    }
-
-    fn change_points(&self, line: &str, metric: &str, threshold: f64) -> Result<Vec<ChangePoint>> {
-        let traj = self.trajectory(line, metric)?;
-        let mut points = Vec::new();
-        for window in traj.windows(2) {
-            let (_, val_before) = &window[0];
-            let (ref id_after, val_after) = window[1];
-            let delta = (val_after - val_before).abs();
-            if delta >= threshold {
-                let exp = self.get(id_after)?.unwrap();
-                points.push(ChangePoint {
-                    experiment_id: id_after.clone(),
-                    timestamp: exp.timestamp,
-                    metric_name: metric.to_string(),
-                    value_before: *val_before,
-                    value_after: val_after,
-                    description: format!("{metric} changed from {val_before:.4} to {val_after:.4}"),
-                });
-            }
-        }
-        Ok(points)
-    }
-
-    fn children(&self, experiment_id: &str) -> Result<Vec<&ExperimentRecord>> {
-        Ok(self
-            .records
-            .iter()
-            .filter(|e| e.parent.as_deref() == Some(experiment_id))
-            .collect())
+    fn all(&self) -> Result<Vec<ExperimentRecord>> {
+        Ok(self.records.clone())
     }
 
     fn len(&self) -> usize {
         self.records.len()
     }
-}
 
-fn compute_trend(records: &[ExperimentRecord], indices: &[usize]) -> Trend {
-    if indices.len() < 2 {
-        return Trend::Unknown;
-    }
-    let first_metrics = &records[indices[0]].metrics;
-    let Some(first_key) = first_metrics.keys().next() else {
-        return Trend::Unknown;
-    };
-
-    let values: Vec<f64> = indices
-        .iter()
-        .filter_map(|&i| records[i].metrics.get(first_key).copied())
-        .collect();
-
-    if values.len() < 2 {
-        return Trend::Unknown;
+    /// Indexed, unlike the linear default.
+    fn get(&self, id: &str) -> Result<Option<ExperimentRecord>> {
+        Ok(self.id_to_idx.get(id).map(|&idx| self.records[idx].clone()))
     }
 
-    let n = values.len();
-    let recent = &values[n.saturating_sub(3)..];
-    let diffs: Vec<f64> = recent.windows(2).map(|w| w[1] - w[0]).collect();
-
-    if diffs.is_empty() {
-        Trend::Unknown
-    } else if diffs.iter().all(|&d| d > 0.001) {
-        Trend::Improving
-    } else if diffs.iter().all(|&d| d < -0.001) {
-        Trend::Declining
-    } else {
-        Trend::Plateaued
+    /// Vector search rather than the default substring scan.
+    fn search(&self, query: &str, max_results: usize) -> Result<Vec<ExperimentRecord>> {
+        if self.records.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.semantic_search(query, max_results, 1.0)
     }
 }
 
@@ -331,6 +210,7 @@ fn simple_hash(s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record::Trend;
     use std::collections::HashMap;
 
     fn make_exp(id: &str, line: &str, f1: f64) -> ExperimentRecord {

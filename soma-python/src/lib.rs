@@ -3498,7 +3498,7 @@ fn append_run_record(
     if let Some(parent_id) = summary.parent_run_id.clone()
         && let Ok(Some(parent)) = kb.get(&parent_id)
     {
-        record = record.descended_from(parent);
+        record = record.descended_from(&parent);
     }
     if let Err(e) = kb.record(record) {
         eprintln!("soma: failed to record experiment: {e}");

@@ -4,12 +4,19 @@
 //! records are loaded from the file (tolerating a torn trailing line
 //! from a crash mid-write); every [`record`](KnowledgeBase::record)
 //! appends one JSON line and delegates. Queries delegate unchanged.
+//!
+//! Because the log is strictly append-only, [`refresh`] can pick up
+//! another process's writes by reading from a byte offset instead of
+//! re-parsing the file: a long-lived reader (the MCP server) sees runs
+//! finishing in another terminal without reopening anything.
+//!
+//! [`refresh`]: KnowledgeBase::refresh
 
 use crate::knowledge_base::{KnowledgeBase, MemoryKnowledgeBase};
-use crate::record::{ChangePoint, ExperimentRecord, ResearchLine};
+use crate::record::ExperimentRecord;
 use somatize_core::error::{Result, SomaError};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 /// JSONL-backed [`KnowledgeBase`] (one [`ExperimentRecord`] per line).
@@ -18,6 +25,9 @@ use std::path::{Path, PathBuf};
 pub struct FileKnowledgeBase {
     inner: MemoryKnowledgeBase,
     path: PathBuf,
+    /// Bytes of the log already folded into `inner`. Only ever advanced
+    /// past a complete, newline-terminated region.
+    offset: u64,
 }
 
 impl FileKnowledgeBase {
@@ -33,35 +43,84 @@ impl FileKnowledgeBase {
             fs::create_dir_all(parent)?;
         }
 
-        let mut inner = MemoryKnowledgeBase::new();
-        if path.exists() {
-            let content = fs::read_to_string(&path)?;
-            let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-            for (i, line) in lines.iter().enumerate() {
-                match serde_json::from_str::<ExperimentRecord>(line) {
-                    Ok(record) => inner.record(record)?,
-                    Err(e) if i == lines.len() - 1 => {
-                        tracing::warn!(
-                            "knowledge base: skipping corrupt trailing line in {}: {e}",
-                            path.display()
-                        );
-                    }
-                    Err(e) => {
-                        return Err(SomaError::Serialization(format!(
-                            "corrupt experiment record at {}:{}: {e}",
-                            path.display(),
-                            i + 1
-                        )));
-                    }
-                }
-            }
-        }
-        Ok(Self { inner, path })
+        let mut kb = Self {
+            inner: MemoryKnowledgeBase::new(),
+            path,
+            offset: 0,
+        };
+        kb.load_from_offset(true)?;
+        Ok(kb)
     }
 
     /// Path of the backing JSONL file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Read everything after `self.offset` and fold it in.
+    ///
+    /// `strict` distinguishes the two callers: on `open`, a corrupt
+    /// line that is not the last one is a real error worth surfacing;
+    /// on `refresh`, the tail is expected to be racing a writer, so an
+    /// unparseable final line is simply left for next time.
+    fn load_from_offset(&mut self, strict: bool) -> Result<usize> {
+        if !self.path.exists() {
+            return Ok(0);
+        }
+        let mut file = fs::File::open(&self.path)?;
+        let size = file.metadata()?.len();
+        if size < self.offset {
+            // Truncated or replaced underneath us (a `kb reindex` in
+            // another process): start over rather than read garbage.
+            self.inner = MemoryKnowledgeBase::new();
+            self.offset = 0;
+        }
+        if size == self.offset {
+            return Ok(0);
+        }
+        file.seek(SeekFrom::Start(self.offset))?;
+        let mut chunk = String::new();
+        file.read_to_string(&mut chunk)?;
+
+        // Only consume up to the last newline: a partially written
+        // final line stays unread, and its bytes are re-read next time.
+        let complete = match chunk.rfind('\n') {
+            Some(i) => &chunk[..=i],
+            None => "",
+        };
+        let leftover = &chunk[complete.len()..];
+        if !leftover.trim().is_empty() {
+            tracing::warn!(
+                "knowledge base: {} has an unterminated trailing line; deferring it",
+                self.path.display()
+            );
+        }
+
+        let lines: Vec<&str> = complete.lines().filter(|l| !l.trim().is_empty()).collect();
+        let mut loaded = 0;
+        for (i, line) in lines.iter().enumerate() {
+            match serde_json::from_str::<ExperimentRecord>(line) {
+                Ok(record) => {
+                    self.inner.record(record)?;
+                    loaded += 1;
+                }
+                Err(e) if !strict || i == lines.len() - 1 => {
+                    tracing::warn!(
+                        "knowledge base: skipping corrupt line in {}: {e}",
+                        self.path.display()
+                    );
+                }
+                Err(e) => {
+                    return Err(SomaError::Serialization(format!(
+                        "corrupt experiment record at {}:{}: {e}",
+                        self.path.display(),
+                        i + 1
+                    )));
+                }
+            }
+        }
+        self.offset += complete.len() as u64;
+        Ok(loaded)
     }
 }
 
@@ -74,43 +133,30 @@ impl KnowledgeBase for FileKnowledgeBase {
             .append(true)
             .open(&self.path)?;
         writeln!(file, "{line}")?;
-        self.inner.record(experiment)
+        drop(file);
+        // Fold the log back in rather than pushing `experiment`
+        // straight into memory. The log is then the single source of
+        // what this handle holds: our own line and anything another
+        // process appended since we last looked both land exactly
+        // once, and the offset can never drift.
+        self.load_from_offset(false)?;
+        Ok(())
     }
 
-    fn get(&self, id: &str) -> Result<Option<&ExperimentRecord>> {
+    fn all(&self) -> Result<Vec<ExperimentRecord>> {
+        self.inner.all()
+    }
+
+    fn get(&self, id: &str) -> Result<Option<ExperimentRecord>> {
         self.inner.get(id)
-    }
-
-    fn search(&self, query: &str, max_results: usize) -> Result<Vec<&ExperimentRecord>> {
-        self.inner.search(query, max_results)
-    }
-
-    fn experiments_in_line(&self, line: &str) -> Result<Vec<&ExperimentRecord>> {
-        self.inner.experiments_in_line(line)
-    }
-
-    fn research_lines(&self) -> Result<Vec<ResearchLine>> {
-        self.inner.research_lines()
-    }
-
-    fn promising_lines(&self, metric: &str) -> Result<Vec<ResearchLine>> {
-        self.inner.promising_lines(metric)
-    }
-
-    fn trajectory(&self, line: &str, metric: &str) -> Result<Vec<(String, f64)>> {
-        self.inner.trajectory(line, metric)
-    }
-
-    fn change_points(&self, line: &str, metric: &str, threshold: f64) -> Result<Vec<ChangePoint>> {
-        self.inner.change_points(line, metric, threshold)
-    }
-
-    fn children(&self, experiment_id: &str) -> Result<Vec<&ExperimentRecord>> {
-        self.inner.children(experiment_id)
     }
 
     fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    fn refresh(&mut self) -> Result<usize> {
+        self.load_from_offset(false)
     }
 }
 
@@ -251,16 +297,85 @@ mod tests {
         let mut b = FileKnowledgeBase::open(&path).unwrap();
 
         a.record(record("from_a", 0.1)).unwrap();
-        b.record(record("from_b", 0.2)).unwrap();
-
-        // In-memory views don't see each other's writes…
+        // `a` has not looked at the log since, so it still sees one…
         assert_eq!(a.len(), 1);
-        assert_eq!(b.len(), 1);
-        // …but the log has both, and a fresh open sees both.
+
+        // …while `b` reads the log to append, so it lands with both.
+        b.record(record("from_b", 0.2)).unwrap();
+        assert_eq!(b.len(), 2);
+
+        // A stale handle catches up on demand, exactly once.
+        assert_eq!(a.refresh().unwrap(), 1);
+        assert_eq!(a.len(), 2);
+        assert_eq!(a.refresh().unwrap(), 0);
+        assert_eq!(a.len(), 2);
+
         let c = FileKnowledgeBase::open(&path).unwrap();
         assert_eq!(c.len(), 2);
         assert!(c.get("from_a").unwrap().is_some());
         assert!(c.get("from_b").unwrap().is_some());
+    }
+
+    #[test]
+    fn refresh_sees_a_line_appended_by_another_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        let mut reader = FileKnowledgeBase::open(&path).unwrap();
+        assert!(reader.is_empty());
+
+        // Another process finishes a run mid-session.
+        let mut writer = FileKnowledgeBase::open(&path).unwrap();
+        writer.record(record("appeared", 0.9)).unwrap();
+
+        assert!(reader.get("appeared").unwrap().is_none(), "not yet visible");
+        assert_eq!(reader.refresh().unwrap(), 1);
+        assert!(reader.get("appeared").unwrap().is_some());
+    }
+
+    #[test]
+    fn refresh_defers_a_half_written_line_until_it_is_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        let mut reader = FileKnowledgeBase::open(&path).unwrap();
+
+        let complete = serde_json::to_string(&record("done", 0.5)).unwrap();
+        let partial = serde_json::to_string(&record("torn", 0.6)).unwrap();
+        let torn_prefix = &partial[..partial.len() / 2];
+        fs::write(&path, format!("{complete}\n{torn_prefix}")).unwrap();
+
+        assert_eq!(reader.refresh().unwrap(), 1);
+        assert!(reader.get("done").unwrap().is_some());
+        assert!(reader.get("torn").unwrap().is_none());
+
+        // The writer finishes its line; the deferred bytes are re-read.
+        fs::write(&path, format!("{complete}\n{partial}\n")).unwrap();
+        assert_eq!(reader.refresh().unwrap(), 1);
+        assert!(reader.get("torn").unwrap().is_some());
+        assert_eq!(reader.len(), 2);
+    }
+
+    #[test]
+    fn refresh_recovers_from_the_log_being_rewritten_shorter() {
+        // `soma kb reindex` replaces the journal wholesale. A reader
+        // holding a byte offset past the new end must not read garbage.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+        let mut reader = FileKnowledgeBase::open(&path).unwrap();
+        {
+            let mut writer = FileKnowledgeBase::open(&path).unwrap();
+            for id in ["e1", "e2", "e3"] {
+                writer.record(record(id, 0.5)).unwrap();
+            }
+        }
+        reader.refresh().unwrap();
+        assert_eq!(reader.len(), 3);
+
+        let single = serde_json::to_string(&record("only", 0.1)).unwrap();
+        fs::write(&path, format!("{single}\n")).unwrap();
+        reader.refresh().unwrap();
+        assert_eq!(reader.len(), 1);
+        assert!(reader.get("only").unwrap().is_some());
+        assert!(reader.get("e1").unwrap().is_none());
     }
 
     #[cfg(unix)]
