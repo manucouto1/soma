@@ -23,6 +23,7 @@ pub mod state;
 pub mod store;
 pub mod strategy;
 pub mod study;
+pub mod svg;
 pub mod tracking;
 pub mod util;
 pub mod value;
