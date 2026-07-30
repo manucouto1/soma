@@ -259,7 +259,7 @@ directory remains the source of truth.
 
 The three levels of events map directly to UI components. This mapping
 is implemented today by the read-side stack (see
-[Visualization](/design/visualization/)): `RunReader` aggregates the
+[Visualization](/soma/design/visualization/)): `RunReader` aggregates the
 event log into node timings/cache activity/metric series,
 `RunReader::overlay()` feeds `Graph::to_mermaid_with` for the annotated
 DAG, and `soma.viz` renders the trial/study charts; `soma report`

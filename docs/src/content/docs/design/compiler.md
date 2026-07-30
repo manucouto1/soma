@@ -185,7 +185,7 @@ compile-time key would be independent of the input data, and the same
 graph run on two datasets would collide. Instead the **executor**
 computes `hash(config + state + input)` per node with the materialized
 input in hand and skips execution on a hit (see the
-[caching design](/design/caching/)). The compiled plan contains only
+[caching design](/soma/design/caching/)). The compiled plan contains only
 `Execute` nodes.
 
 ## Compile Modes

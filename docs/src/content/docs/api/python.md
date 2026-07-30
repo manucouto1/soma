@@ -6,8 +6,16 @@ description: Python API reference for the Soma package.
 ## Installation
 
 ```bash
-pip install somatize
+pip install somatize            # core
+pip install 'somatize[viz]'     # + plotly, pandas, rich, tqdm
 ```
+
+The `viz` extra powers figures, DataFrames, HTML reports, the colored
+CLI tables and `progress=` bars. The core install never requires it;
+calls that need it raise a message telling you to add it.
+
+New to Soma? Start with the [Quickstart](/soma/getting-started/quickstart/)
+or the [tutorial notebooks](/soma/getting-started/notebooks/).
 
 ## Core Classes
 
@@ -43,9 +51,24 @@ class MyScaler(Filter):
 | `>>` | `filter >> other` | Chain operator (same as `.to()`) |
 | `\|` | `filter \| other` | Fork operator (parallel branches) |
 
-Class attribute `class_version: int = 1` — bump in subclasses when
-constructor kwargs or saved-state layout change. `Graph.load` reads it
-from the manifest and warns on mismatch.
+#### Class attributes
+
+Behavior is declared with class attributes — all optional:
+
+| Attribute | Default | Effect |
+|---|---|---|
+| `_kind` | `"trainable"` | `"stateless"` skips the fit phase |
+| `_cacheable` | `True` | `False` never caches this filter's outputs |
+| `_differentiable` | `False` | `True` lets the compiler fuse it into a gradient-flowing block |
+| `_deterministic` | `True` | `False` marks a stochastic forward (not cached unless the run pins a `seed`) |
+| `_stream_mode` | `"fixed"` | `"evolving"` (checkpointed state) or `"barrier"` (needs the whole stream) |
+| `_cache_version` | unset | Pins the code identity for cache keys — **set it for filters defined in notebooks/REPLs**, where the source is unavailable |
+| `_audit_scope` | unset | Pre-selects submodules for `gradient_audit(inside=True)` (differentiable filters) |
+| `class_version` | `1` | Bump when constructor kwargs or saved-state layout change; `Graph.load` warns on mismatch |
+
+Attributes prefixed with `_` never enter the cache key. For an
+unhashable public attribute, either prefix it or define
+`__soma_config__() -> dict`.
 
 #### Search Descriptors
 
@@ -130,17 +153,18 @@ g = Graph.somatize(
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `somatize` | `(topology) -> Graph` | Class method. Materialize a Chain/Fork into a graph |
-| `node` | `(filter) -> str` | Add a filter node, returns node ID |
+| `node` | `(filter, target=None) -> str` or `(node_id, filter)` | Add a filter node, returns its id (snake_case class name, deduped with `_2`). `target="local"` pins it off remote workers |
 | `edge` / `connect` | `(source, target)` | Connect two nodes with a data edge |
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
-| `forward` | `(x, stream=False, chunk_size=1024, seed=None) -> list` | Forward data through fitted graph (`stream=True` processes in chunks) |
+| `forward` | `(x, stream=False, chunk_size=1024, seed=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns a list for pure-inference graphs; `(out, aux_by_node)` while any differentiable filter is in `train()` mode |
 | `run` | `() -> dict` | Compile and execute, return all outputs |
 | `compile` | `(mode="inference") -> CompileInfo` | Compile and return diagnostics (a dict that renders as tiles + callouts + plan diagram in notebooks) |
-| `to_mermaid` | `() -> str` | Render graph as Mermaid diagram |
-| `to_graphviz` | `() -> str` | Render graph as Graphviz DOT |
-| `to_text` | `() -> str` | Render graph as ASCII tree |
+| `to_mermaid` | `(overlay=None) -> str` | Mermaid diagram; `overlay=` annotates nodes (see [Visualization](/soma/design/visualization/)) |
+| `to_graphviz` | `(overlay=None) -> str` | Graphviz DOT, same `overlay=` |
+| `to_svg` | `(overlay=None) -> str` | Self-contained SVG — no JavaScript, renders inline anywhere |
+| `to_text` | `() -> str` | ASCII tree (what `print(g)` shows) |
+| `_repr_html_` | `() -> str` | Notebook display: evaluating `g` draws the architecture diagram |
 | `on_event` | `(callback)` | Register event callback (background thread) |
-| `set_strategy` | `(strategy)` | Set training strategy (from soma-core) |
 | `materialize` | `(sample_input)` | Build every `DifferentiableFilter._module` once, threading shapes |
 | `train` / `eval` | `()` | Flip `training` on every live filter and its `_module` |
 | `to` | `(device, *, dtype=None) -> Graph` | Move every materialised filter `_module` to `device`/`dtype`; target persists so lazy-built modules inherit it |
@@ -159,10 +183,21 @@ g = Graph.somatize(
 | `restore_optimizer` | `() -> bool` | Apply a pending optimiser snapshot bundled by `save(include_optimizer=True)` |
 | `edges` | `() -> list[(src, tgt)]` | Data edges in insertion order (used by `save`) |
 | `get_node_state` / `set_node_state` | `(node_id [, state])` | Low-level state accessor used by `state` / `load_state` |
-| `gradient_audit` | `(thresholds=None) -> ctx[Audit]` | Install per-filter forward/backward hooks for the duration of a training pass |
+| `gradient_audit` | `(thresholds=None, channels=None, inside=None) -> ctx[Audit]` | Install forward/backward hooks for a training pass. `channels=` adds per-channel diagnostics, `inside=` audits submodules *within* each node — see [the guide](/soma/guides/gradient-audit/) |
 | `add_worker` | `(address, token?, tags?)` | Add a remote worker |
 | `set_coordinator` | `(url, token?)` | Set coordinator for auto-discovery |
 | `workers` | `() -> list[dict]` | List known workers |
+| `track_run` | `(name, *, root=".soma", kind="train", tags=()) -> ctx[Run]` | Context manager: create a run directory, snapshot the graph into it, finalize on exit (even on exception) |
+| `begin_run` | `(name, root=".soma", kind="train", tags=None) -> Run` | Lower-level: start a run without the context manager (you call `run.finish()`) |
+| `emit_event` | `(dict)` | Emit a custom event onto the bus (must match an `Event` variant) |
+| `search_space` | `() -> list[dict]` | Aggregate every filter's `search()` descriptors, prefixed with the node id (`"encoder.lr"`) |
+| `apply_params` | `(params)` | Write a sampled configuration back onto the live filters |
+| `study` | `(name, **kwargs) -> Study` | A `Study` over this graph's search space |
+| `filters` | `() -> list[(node_id, filter)]` | Live filter instances in topological order |
+| `filter` / `filter_ids` | `(node_id)` / `()` | One filter instance / all node ids |
+| `graph_json` | `() -> str` | Serialized topology (what `graph.json` holds in a run directory) |
+| `optimizer` | `() -> Optimizer \| None` | The registered optimiser, if any |
+| `py_state` | property `-> dict` | Python-side scratch space (`active_run`, `active_audit`, optimiser) |
 
 #### Compile Modes
 
@@ -205,7 +240,11 @@ for w in g.workers():
 ### DifferentiableFilter
 
 Filter base class for trainable `nn.Module` wrappers. Available when
-`torch` is installed; `None` otherwise.
+`torch` is installed; `None` otherwise. A materialized instance
+displays as an architecture diagram in notebooks (submodules with
+their parameter counts), and may declare `_audit_scope` to pre-select
+which of its submodules [`gradient_audit(inside=True)`](/soma/guides/gradient-audit/)
+should watch.
 
 ```python
 from soma import Graph, DifferentiableFilter
@@ -319,6 +358,43 @@ study = g.study("tune", strategy="grid", n_trials=4,
                 objectives=[("f1", "maximize")])
 ```
 
+#### Study members
+
+| Member | Signature | Description |
+|---|---|---|
+| `run` | `(executor, on_event=None, resume=False, progress=False)` | Run the study. `progress=True` draws a tqdm bar fed by live `StudyProgress` events (needs the `viz` extra) |
+| `load` | `(run_dir, objective=None) -> Study` | Static. Reload a study from its run directory |
+| `save` | `(path=None)` | Write `study.json` (also written automatically after every trial) |
+| `best_trial` | property `-> dict \| None` | Best trial as a dict (see below) |
+| `trials` | property `-> list[dict]` | Every trial |
+| `n_trials` | property `-> int` | Trials recorded so far |
+| `progress` | property `-> float` | Completed / planned |
+| `objectives` | property `-> list[(metric, direction)]` | Declared objectives (a composite objective reports as `("score", direction)`) |
+| `name` | property `-> str` | Study name |
+| `run_dir` | property `-> str \| None` | Run directory, or `None` when `tracking=False` |
+
+Each trial dict carries `id`, `params`, `state`
+(`completed`/`pruned`/`failed`/`running`/`pending`), `metrics` (last
+value per name), `series` (**every** reported `{name, value, step,
+timestamp}` — the learning curve), `started_at`, `finished_at` and
+`duration_ms`.
+
+#### Trial handle
+
+Inside your executor, `trial` exposes `params`, `id`, `report(name,
+value, step) -> bool` (True ⇒ the pruner says stop), `should_prune()`,
+plus dict-style access: `trial["lr"]`, `trial.get("lr", default)`,
+`"lr" in trial`, `trial.keys()`.
+
+#### Figures
+
+With the `viz` extra, `Study` gains (Optuna-aligned names):
+`plot_optimization_history`, `plot_intermediate_values`,
+`plot_parallel_coordinate`, `plot_param_importances`, `plot_timeline`,
+`plot_pareto_front`, `trials_dataframe()`, and
+`to_html(path=None, inline=False)`. See
+[Visualization](/soma/design/visualization/).
+
 ### Cache management
 
 ```python
@@ -327,11 +403,12 @@ _soma.cache_stats()                    # dict: records, blobs, bytes, compute ba
 _soma.cache_gc(max_bytes=20 * 2**30)   # evict low-value blobs (records retained)
 ```
 
-Or from the shell:
+Or from the shell (every subcommand takes `--dir` to point at a cache
+other than `$SOMA_CACHE_DIR`):
 
 ```console
 $ soma cache stats
-$ soma cache gc --max-size 20G
+$ soma cache gc --max-size 20G [--min-age 3600]
 $ soma cache pin best-run <action-key-hex>
 $ soma cache verify
 $ soma cache purge-v1
@@ -356,9 +433,112 @@ print(soma.experiments())       # journal of completed runs/studies
 `track_run` writes `.soma/runs/<run_id>/` — manifest, heartbeat status,
 graph topology, lossless `events.jsonl`/`metrics.jsonl`, and (with the
 audit) `diagnostics/` including per-channel safetensors snapshots. See
-the [Experiment Tracking](/design/tracking/) design page for the full
-layout, and `ChannelConfig` for dead/ignored-channel and leakage
-detection knobs.
+the [Experiment Tracking](/soma/design/tracking/) design page for the full
+layout.
+
+#### Run
+
+The handle `track_run` (or `begin_run`) yields:
+
+| Method | Signature | Description |
+|---|---|---|
+| `log` | `(name, value, step=None, node=None)` | Record a metric; also updates the run's summary |
+| `log_epoch` | `(epoch, total=None)` | Epoch marker + heartbeat |
+| `log_epoch_completed` | `(epoch, metrics=None)` | Epoch-end metrics + heartbeat |
+| `step_completed` | `(step, epoch=None)` | Optimizer-step marker (liveness) |
+| `heartbeat` | `()` | Refresh liveness so readers don't call the run crashed |
+| `finish` | `(status="completed")` | Finalize; `track_run` calls it for you (`"failed"` on exception) |
+| `record_experiment` | `()` | Append this run's summary to `<root>/experiments.jsonl` |
+| `id` / `dir` | properties | Run id and absolute run directory |
+
+### Reading runs back
+
+Readers never write, so they work on live, finished and crashed runs
+alike. `soma.runs()` returns a list that renders as a table in
+notebooks; each entry is a `RunView`.
+
+```python
+import soma
+
+soma.runs()                       # newest first; stale heartbeat ⇒ "crashed"
+view = soma.runs()[0]
+view = soma.RunView(".soma/runs/train_20260728T093011_9c2e")   # or by path
+```
+
+| Member | Returns | Description |
+|---|---|---|
+| `id` / `name` / `kind` / `state` / `dir` | `str` | Identity; `state` is `running`/`completed`/`failed`/`crashed` |
+| `info` | `dict` | The listing entry (adds `created_at`, `duration_ms`, `tags`) |
+| `refresh()` | `RunView` | Re-read `status.json` for a live run |
+| `manifest()` | `dict` | Environment, git, seeds, graph summary |
+| `events()` | `list[dict]` | Every envelope `{seq, ts, event_type, …}`; torn/unknown lines skipped |
+| `metric_series(name=None)` | `list[dict]` | `{ts, name, value, step, trial_id, node_id}` |
+| `node_timings()` | `list[dict]` | Per-node spans: wall times, duration, outcome, cache tier |
+| `cache_activity()` | `dict` | `{hits, misses, by_node}` |
+| `health_flags()` | `list[dict]` | `HealthFlag` events with wall time |
+| `trial_timeline()` | `list[dict]` | Trial lifetimes (study runs) |
+| `overlay()` | `dict` | Per-node annotations for the renderers |
+| `to_mermaid(overlay=True, node=None)` | `str` | Annotated diagram; `node=` renders that node's inner architecture |
+| `to_graphviz(overlay=True)` | `str` | Same as DOT |
+| `to_svg(overlay=True, node=None)` | `str` | Self-contained SVG (no JavaScript) |
+
+With the `viz` extra it also gains `plot_metrics`, `plot_gantt`,
+`plot_health`, `plot_audit`, `plot_module_flow`, `plot_channels`,
+`plot_channel_evolution`, `metrics_dataframe()` and
+`to_html(path=None, inline=False)`.
+
+```python
+soma.experiments()              # the flat journal of completed runs/studies
+soma.experiments_dataframe()    # ...as a DataFrame (viz extra)
+```
+
+### Command line
+
+```console
+$ soma runs [--root .soma] [--json] [--plain]
+$ soma graph <run_id|path> [--format mermaid|dot] [--no-overlay] [--root .soma]
+$ soma report <run_id|path> [-o FILE] [--inline] [--open] [--root .soma]
+$ soma cache stats|gc|pin|verify|purge-v1 [--dir PATH]
+$ somatize-worker --port 8080 --tags gpu --token sk-xxx [--cpus N] [--memory 8G]
+                  [--gpus N] [--max-concurrent N] [--id ID] [--coordinator URL]
+```
+
+`soma runs` prints a colored table when `rich` is installed (`--plain`
+forces plain text, handy in pipes). `soma report` writes one
+self-contained HTML file per run; `--inline` embeds its assets so it
+opens with no network access.
+
+### Gradient audit types
+
+```python
+from soma import AuditScope, ChannelConfig, Thresholds
+```
+
+**`Thresholds`** — flag bounds (`grad_lo=1e-7`, `grad_hi=1e3`,
+`activation_saturation=50.0`, `saturation_frac=0.5`, `dead_eps=1e-7`,
+`dead_frac=0.95`). Flags: `NAN`, `INF`, `VANISHING`, `EXPLODING`,
+`DEAD`, `SATURATED`.
+
+**`ChannelConfig`** — per-channel diagnostics (`channel_dim=1`,
+`snapshot_every=50`, `corr_threshold=0.95`, `dead_channel_frac=0.95`,
+`dormancy_tau=0.1`, `ignored_grad_eps=1e-9`, `groups=None`). `groups`
+is keyed by *filter id*, then by group name:
+`groups={"encoder": {"audio": range(0, 64), "text": range(64, 128)}}`.
+Flags: `DEAD_CHANNELS(n)`, `IGNORED_CHANNELS(n)`, `LEAKAGE`.
+
+**`AuditScope`** — which submodules to audit inside a node
+(`depth=None`, `patterns=None`, `sample_every=1`, `max_modules=32`).
+Both `depth` and `patterns` unset ⇒ automatic selection.
+
+**`Audit`** (yielded by `gradient_audit`) — `report() -> AuditReport`,
+`records() -> dict[id, list[StepRecord]]`, `timeseries(filter_id)`,
+`assert_healthy()` (raises `GradientHealthError`).
+**`AuditReport`** — `filters: list[FilterReport]`, `n_steps`,
+`is_healthy()`, `by_id()`, `pretty()`, `dataframe()`. Each
+`FilterReport` carries `filter_id`, `n_steps`, `metrics`, `flags`.
+
+`soma.audit_modules([(name, module), ...])` is the standalone form for
+code that does not drive training through a `Graph`.
 
 ### Lab
 
@@ -376,12 +556,12 @@ lab.info()          # Worker capabilities dict
 
 The full Rust API documentation is auto-generated from source code:
 
-**[View Rust API Docs](/api/soma_core/)**
+**[View Rust API Docs](/soma/api/soma_core/)**
 
 Key crates:
-- [`soma_core`](/api/soma_core/) — Types, traits, enums
-- [`soma_compiler`](/api/soma_compiler/) — Graph compilation
-- [`soma_runtime`](/api/soma_runtime/) — Execution engine
-- [`soma_worker`](/api/soma_worker/) — Worker daemon + coordinator
-- [`soma_memory`](/api/soma_memory/) — Knowledge base
-- [`soma_agent`](/api/soma_agent/) — Research agent
+- [`soma_core`](/soma/api/soma_core/) — Types, traits, enums
+- [`soma_compiler`](/soma/api/soma_compiler/) — Graph compilation
+- [`soma_runtime`](/soma/api/soma_runtime/) — Execution engine
+- [`soma_worker`](/soma/api/soma_worker/) — Worker daemon + coordinator
+- [`soma_memory`](/soma/api/soma_memory/) — Knowledge base
+- [`soma_agent`](/soma/api/soma_agent/) — Research agent

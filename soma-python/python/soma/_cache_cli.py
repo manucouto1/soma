@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument(
         "--inline",
         action="store_true",
-        help="embed plotly.js for fully-offline viewing (bigger file, DAG as source)",
+        help="fully self-contained: embed plotly.js and render diagrams as SVG (bigger file, works offline)",
     )
     p_report.add_argument("--open", action="store_true", help="open the report in a browser")
     p_report.add_argument("--root", default=".soma", help="tracking root (default .soma)")

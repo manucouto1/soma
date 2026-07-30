@@ -8,17 +8,26 @@ description: The Rust workspace organization and crate responsibilities.
 ```
 soma/
 ├── Cargo.toml              # workspace definition
-├── soma-core/              # types, traits, serialization
+├── soma/                   # facade crate (`somatize`) re-exporting the workspace
+├── soma-core/              # types, traits, serialization, tracking schema,
+│                           #   graph rendering (mermaid/dot/SVG + overlays)
 ├── soma-macros/            # #[derive(SomaFilter)] proc macro
-├── soma-compiler/          # graph → execution plan
-├── soma-runtime/           # plan executor, events, cache, optimization
+├── soma-compiler/          # graph → execution plan, scheduler
+├── soma-runtime/           # plan executor, events, cache, optimization,
+│                           #   run directories (LocalTracker + RunReader)
+├── soma-coordinator/       # worker registry, routing, health monitoring
 ├── soma-worker/            # remote execution daemon
 ├── soma-memory/            # KnowledgeBase + ChronosVector integration
 ├── soma-agent/             # autonomous agent loop
 ├── soma-mcp/               # MCP server for agent integration
-├── soma-python/            # PyO3 bindings (pip install soma)
+├── soma-python/            # PyO3 bindings (pip install somatize)
+├── notebooks/              # nine executed tutorial notebooks
 └── docs/                   # Starlight documentation (this site)
 ```
+
+Eleven crates. Note the published names are prefixed `somatize-`
+(`somatize-core`, `somatize-runtime`, …) — the directory names drop the
+prefix.
 
 ## Dependency Graph
 
@@ -34,6 +43,9 @@ soma-python (PyO3)
     └── soma-worker
           ├── soma-runtime
           └── soma-memory
+
+soma-coordinator
+    └── soma-worker (protocol types)
 ```
 
 ## Crate Responsibilities

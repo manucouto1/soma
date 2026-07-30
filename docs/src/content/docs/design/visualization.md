@@ -4,7 +4,7 @@ description: Architecture overlays, Plotly figures, HTML reports — and the thr
 ---
 
 Soma renders what it already records: the run directory
-([tracking](/design/tracking/)) is the single source of truth, and
+([tracking](/soma/design/tracking/)) is the single source of truth, and
 every visualization — a terminal diagram, a notebook figure, an HTML
 report, or a future web GUI — is a *reader* of those files. The
 strategy has three layers, and GUI reuse is guaranteed at the **data
@@ -135,9 +135,13 @@ soma report <run_id|path> [-o report.html] [--inline] [--open]
 One self-contained file per run: manifest header, the annotated DAG,
 efficiency tiles (node compute, cache hits/misses), metric curves, the
 node gantt, the full HPO section with trial table (for studies), and
-the health section. `--inline` embeds plotly.js from the installed
-package so the file opens with no network (the DAG ships as mermaid
-source in that mode); the default uses pinned CDNs.
+the health section.
+
+`--inline` makes the file fully self-contained: plotly.js is embedded
+from the installed package and the diagrams render through Soma's own
+SVG layer, so it opens with no network access at all. The default
+(non-inline) form loads plotly.js and mermaid.js from pinned CDNs and
+renders the DAG as a mermaid block.
 
 ### Front-end data contract
 

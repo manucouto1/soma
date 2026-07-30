@@ -106,9 +106,17 @@ The runtime compiles and executes the graph in the current process. Cache is loc
 ```python
 g = Graph.somatize(Scaler() >> Model())
 g.add_worker("ws://gpu-0:8080", token="sk-xxx")
-g.set_strategy(DataParallel(num_replicas=2))
 g.fit(train_data)
 ```
+
+:::caution[TrainingStrategy is Rust-side today]
+`TrainingStrategy` (DataParallel, ModelParallel, Federated,
+PopulationBased) is a graph attribute set through the Rust API
+(`Graph::set_strategy`). It is **not exposed through the Python
+bindings yet** — from Python, distribution is configured with
+`add_worker` / `set_coordinator`, and the scheduler places the plan
+across the registered workers.
+:::
 
 The graph is compiled locally, the plan is sent to workers, executed remotely, and results returned. Cache can be shared (S3) across workers.
 

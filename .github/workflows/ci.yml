@@ -125,6 +125,22 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+      # Build the Starlight site here too: without this, a broken docs
+      # build (or a sidebar entry pointing at a deleted page) is only
+      # discovered by the deploy workflow on main.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Build docs site
+        run: |
+          cd docs
+          npm ci
+          npm run check    # sidebar reachability + astro build
+
   coverage-rust:
     name: Rust Coverage (informational)
     runs-on: ubuntu-latest

@@ -7,6 +7,11 @@ Part of the **Nous-Soma-Chronos** ecosystem:
 - **Soma** (this project): Executes, materializes — graphs, optimization, distributed workers
 - **[ChronosVector](https://github.com/manucouto1/chronos-vector)**: Remembers — temporal vector database
 
+**Docs**: [manucouto1.github.io/soma](https://manucouto1.github.io/soma/) —
+[quickstart](https://manucouto1.github.io/soma/getting-started/quickstart/),
+[tutorial notebooks](https://manucouto1.github.io/soma/getting-started/notebooks/),
+[Python API](https://manucouto1.github.io/soma/api/python/).
+
 ## Key Concepts
 
 | Concept | Description |
@@ -47,7 +52,7 @@ somatize (soma/) → facade crate re-exporting the workspace
 ## Quick Start
 
 ```bash
-# Run all tests (875+: 577 Rust + 298 Python)
+# Run all tests (900+: 582 Rust + 325 Python)
 cargo test --workspace
 cd soma-python && maturin develop && pytest tests/ -v
 
@@ -98,9 +103,9 @@ g = Graph.somatize(
     >> (HeadA() | HeadB())
 )
 
-# Distributed training
-g.set_strategy(DataParallel(num_replicas=4))
-g.set_coordinator("http://coord:9090", token="sk-xxx")
+# Distributed execution
+g.add_worker("http://gpu-box:8080", token="sk-xxx", tags=["gpu"])
+g.set_coordinator("http://coord:9090", token="sk-xxx")   # or auto-discovery
 ```
 
 ## See your experiments
@@ -165,7 +170,7 @@ soma report <run_id> --inline        # fully offline (embeds plotly.js)
 curves, the full HPO section with trial table, and the health section
 into one shareable file. A future live GUI reads the same run-directory
 files and the same embedded JSON shapes — see
-`docs design/visualization.md`.
+the [Visualization](https://manucouto1.github.io/soma/design/visualization/) page.
 
 ## Workers
 

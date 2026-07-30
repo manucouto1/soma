@@ -130,7 +130,7 @@ are synchronous, so it is the emission time); the live `on_event`
 callback carries no envelope, which is why every timeline view reads
 files. The visualization stack — overlays, `soma.viz` figures, the
 HTML report and its embedded JSON data blobs (the future front-end's
-contract) — is specified in [Visualization](/design/visualization/).
+contract) — is specified in [Visualization](/soma/design/visualization/).
 
 ## Diagnostics captured
 

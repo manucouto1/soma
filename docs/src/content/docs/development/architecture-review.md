@@ -7,15 +7,28 @@ This document captures the findings from a comprehensive architecture review per
 
 ## Current State
 
-```
-200 tests (186 Rust + 14 Python), all passing, clippy clean.
+:::caution[Historical document]
+This review was written after the initial implementation of all crates.
+Several findings below have since been addressed (notably: `Pipeline`
+was removed — `Graph` is the only user-facing API — and cache
+resolution moved from compile time to runtime). Treat it as a record of
+the reasoning, not as a description of the current tree.
+:::
 
-soma-core       (67+9+19 tests)  Foundation types
-soma-macros                      #[derive(SomaFilter)] proc macro
-soma-compiler   (26+6 tests)     Graph → ExecutionPlan compiler
-soma-runtime    (55 tests)       Executor, Pipeline, Samplers, StudyRunner
-soma-worker     (13 tests)       Worker protocol and daemon
-soma-python     (14 tests)       PyO3 bindings
+```
+907 tests (582 Rust + 325 Python), all passing, clippy clean.
+
+soma-core        Foundation types, tracking schema, graph rendering
+soma-macros      #[derive(SomaFilter)] proc macro
+soma-compiler    Graph → ExecutionPlan compiler, scheduler
+soma-runtime     Executor, caches, samplers, StudyRunner, run tracking
+soma-coordinator Worker registry, routing, heartbeat monitoring
+soma-worker      Worker protocol and daemon
+soma-memory      KnowledgeBase (+ ChronosVector)
+soma-agent       Research agent loop
+soma-mcp         MCP server
+soma-python      PyO3 bindings
+soma             Facade crate re-exporting the workspace
 ```
 
 ## Identified Issues

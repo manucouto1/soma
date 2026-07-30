@@ -2,8 +2,17 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
+// GitHub Pages project site: https://manucouto1.github.io/soma/
+// `base` must be set or every internal link resolves to the domain
+// root and 404s once deployed. `astro dev` also serves under the base,
+// so links that include it work identically in dev and in production.
+const SITE = 'https://manucouto1.github.io';
+const BASE = '/soma';
+
 // https://astro.build/config
 export default defineConfig({
+	site: SITE,
+	base: BASE,
 	integrations: [
 		starlight({
 			title: 'Soma',
@@ -15,6 +24,8 @@ export default defineConfig({
 					label: 'Getting Started',
 					items: [
 						{ label: 'Introduction', slug: 'getting-started/introduction' },
+						{ label: 'Quickstart', slug: 'getting-started/quickstart' },
+						{ label: 'Tutorials (notebooks)', slug: 'getting-started/notebooks' },
 						{ label: 'Problem & Solution', slug: 'getting-started/problem-solution' },
 						{ label: 'Philosophy', slug: 'getting-started/philosophy' },
 					],
@@ -31,6 +42,8 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Execution Modes & Data Transport', slug: 'guides/execution-modes' },
+						{ label: 'Gradient Health Audit', slug: 'guides/gradient-audit' },
+						{ label: 'Checkpoints', slug: 'guides/checkpoints' },
 					],
 				},
 				{
@@ -43,6 +56,7 @@ export default defineConfig({
 						{ label: 'Compiler & Execution Plans', slug: 'design/compiler' },
 						{ label: 'Event System', slug: 'design/events' },
 						{ label: 'Experiment Tracking', slug: 'design/tracking' },
+						{ label: 'Visualization', slug: 'design/visualization' },
 						{ label: 'Hyperparameter Optimization', slug: 'design/optimization' },
 						{ label: 'DataStore & S3', slug: 'design/data-store' },
 						{ label: 'Scheduler', slug: 'design/scheduler' },
@@ -62,8 +76,11 @@ export default defineConfig({
 					label: 'API Reference',
 					items: [
 						{
+							// cargo-doc output, copied into dist/api/ by the
+							// deploy workflow — a raw link, so it carries the
+							// base explicitly (slug: entries get it for free).
 							label: 'Rust API (cargo doc)',
-							link: '/api/soma_core/',
+							link: `${BASE}/api/soma_core/`,
 							attrs: { target: '_blank' },
 						},
 						{ label: 'Python API', slug: 'api/python' },

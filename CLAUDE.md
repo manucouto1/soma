@@ -29,10 +29,9 @@ cd docs && npm run build   # production build
 cargo doc --workspace --open  # Rust API docs
 ```
 
-## Workspace (10 crates)
+## Workspace (11 crates)
 
 ```
-soma-macros     → proc macro (#[derive(SomaFilter)])
 soma-macros     → proc macro (#[derive(SomaFilter)])
 soma-core       → types, traits, serialization ONLY (no execution logic):
                   Filter, Value, Graph, Event, Schema, VirtualValue, Search, Study,
@@ -48,14 +47,17 @@ soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
                   (isolated venv/conda per pipeline), Axum HTTP/WS server
 soma-agent      → Agent loop, Action, ResearchPlan trait
 soma-mcp        → MCP server (13 tools: code, execution, knowledge, project)
-soma-python     → PyO3 bindings: Graph (primary API), Filter, Study, Lab
-docs/           → 24 Starlight pages
+soma-coordinator→ worker registry, routing, heartbeat monitoring
+soma-python     → PyO3 bindings: Graph (primary API), Filter, Study, Run, RunView, soma.viz
+soma/           → facade crate (`somatize`) re-exporting the workspace
+docs/           → 34 Starlight pages (sidebar guard: `cd docs && npm run check`)
+notebooks/      → 9 executed tutorial notebooks
 ```
 
 ## Tests
 
 ```bash
-# 875+ total: 577 Rust + 298 Python (incl. property tests and 4 robustness tests)
+# 907 total: 582 Rust + 325 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE

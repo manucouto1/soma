@@ -13,8 +13,8 @@ packaging of that contract.
 Charts are Plotly figure JSON in ``soma-fig-…`` blobs, drawn by a small
 bootstrap script. By default plotly.js/mermaid.js load from their CDNs
 (pinned versions); ``inline=True`` embeds plotly.js from the installed
-plotly package so the file works with no network — in that mode the DAG
-ships as a mermaid source block instead of a rendered diagram.
+plotly package and renders diagrams through soma's own SVG layer, so
+the file works with no network at all.
 """
 
 from __future__ import annotations
