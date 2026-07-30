@@ -53,8 +53,15 @@ Each worker runs a `soma-worker` daemon that:
 pub struct Worker {
     pub id: WorkerId,
     pub capabilities: Capabilities,
-    pub runtime: SomaRuntime,
-    pub memory: SomaMemory,
+    event_bus: Arc<EventBus>,
+    cache: Arc<dyn CacheStore>,
+    filters: FilterLibrary,
+    /// Optional persistent DataStore (S3, Zarr, …), configured by the user.
+    data_store: Option<Arc<dyn DataStore>>,
+    /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
+    temp_store: Arc<LocalDataStore>,
+    /// Creates venvs carrying the filters' dependencies.
+    env_manager: EnvManager,
 }
 
 pub struct Capabilities {

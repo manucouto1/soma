@@ -42,11 +42,12 @@ soma-runtime    → GraphSession (primary orchestrator), parallel executor (thre
                   FilterLibrary (unified registry), stream executor,
                   LRU/local/tiered cache, Grid/Random/Bayesian samplers,
                   Median/Percentile pruners, StudyRunner, PbtRunner
-soma-memory     → KnowledgeBase trait + MemoryKB + ChronosKB (feature-gated)
+soma-memory     → Experiment pool: ExperimentRecord (experiments.jsonl), DerivationMove,
+                  BM25+structural retrieval, KnowledgeBase trait + MemoryKB/FileKB/ChronosKB
 soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
                   (isolated venv/conda per pipeline), Axum HTTP/WS server
 soma-agent      → Agent loop, Action, ResearchPlan trait
-soma-mcp        → MCP server (13 tools: code, execution, knowledge, project)
+soma-mcp        → MCP server (20 tools: code, knowledge, project, 7 experiment-pool kb_*)
 soma-coordinator→ worker registry, routing, heartbeat monitoring
 soma-python     → PyO3 bindings: Graph (primary API), Filter, Study, Run, RunView, soma.viz
 soma/           → facade crate (`somatize`) re-exporting the workspace
@@ -57,7 +58,7 @@ notebooks/      → 9 executed tutorial notebooks
 ## Tests
 
 ```bash
-# 907 total: 582 Rust + 325 Python (incl. property tests and 4 robustness tests)
+# 1035 total: 698 Rust + 337 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
@@ -133,6 +134,18 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   runner in the job tmp dir (`execute_notebooks.py` pattern: temp cwd + fresh SOMA_CACHE_DIR).
 - **EnvManager**: Isolated Python environments per pipeline with incremental dependency updates.
   Hashes requirements to detect changes, only installs/upgrades/removes what changed.
+- **Experiment pool** (`design/experiment-pool.md`): every tracked run appends an
+  `ExperimentRecord` to `.soma/experiments.jsonl` with a templated deterministic
+  `RunConclusion`, an `ArchitectureFingerprint` and the `DerivationMove` from its parent
+  (VisTrails-style: nodes are runs, edges are the changes applied to the parent).
+  `begin_run` is the SINGLE writer of graph.json/graph.mmd/fingerprint.json.
+  Parent resolution: `parent=` → `$SOMA_PARENT_RUN` → `.soma/HEAD` → none; HEAD advances
+  only on success; NEVER inferred from timestamps. `soma.checkout/head/detach/reindex`
+  and `soma kb reindex|head|checkout|detach`. Retrieval is additive
+  `0.40·BM25 + 0.25·structural + 0.15·recency + 0.20·importance`, with importance floored
+  at 0.6 for failures that carry a conclusion (dead ends must stay retrievable).
+  `soma-mcp/render.rs` holds the pure text renderers — the MCP text IS the API, every
+  result ends with a `next:` line and a `run_dir:`.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.
 
 ## MCP Server
@@ -145,10 +158,13 @@ soma-mcp /path/to/project
 SOMA_PROJECT_DIR=/path/to/project soma-mcp
 ```
 
-13 tools: list_filters, read_filter_source, write_filter_source, run_graph,
-run_study, record_experiment, query_knowledge_base, get_trajectory,
+20 tools: list_filters, read_filter_source, write_filter_source, run_pipeline*,
+run_study*, record_experiment, query_knowledge_base, get_trajectory,
 get_change_points, list_research_lines, promising_lines,
-create_research_line, generate_report.
+create_research_line, generate_report, plus the experiment pool:
+kb_find_similar, kb_lineage, kb_diff, kb_record_conclusion, kb_branch_from,
+kb_summarize_run, kb_stats.  (* declared but NOT implemented — they cannot
+load user code; their descriptions say so.)
 
 ## Feature Flags
 

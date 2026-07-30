@@ -218,6 +218,90 @@ def test_reindex_rebuilds_the_journal_from_the_run_dirs(tmp_path):
     assert after[1]["derivation"]["summary"] == before[1]["derivation"]["summary"]
 
 
+def _mcp_binary():
+    """The debug-built MCP server, if this checkout has one."""
+    here = pathlib.Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "target" / "debug" / "somatize-mcp"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@pytest.mark.skipif(
+    _mcp_binary() is None,
+    reason="needs `cargo build -p somatize-mcp` (skipped rather than built: too slow here)",
+)
+def test_runs_trained_here_are_queryable_over_mcp(tmp_path):
+    """The two halves, joined: Python writes the pool, MCP reads it.
+
+    Everything else tests one side or the other. This is the only test
+    that proves a record produced by a real ``track_run`` is one the MCP
+    tools can actually rank, follow and render.
+    """
+    import json as _json
+    import subprocess
+
+    # The realistic layout: the MCP server is pointed at a project, and
+    # finds the pool at <project>/.soma/experiments.jsonl.
+    root = pathlib.Path(tmp_path) / ".soma"
+    baseline = _run(root, "mos-baseline", params={"lr": 0.01}, f1=0.81)
+    variant = _run(root, "mos-wider", params={"lr": 0.05}, f1=0.87)
+    assert (root / "experiments.jsonl").exists()
+
+    proc = subprocess.Popen(
+        [str(_mcp_binary()), str(tmp_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    counter = iter(range(1, 100))
+
+    def rpc(method, params=None):
+        proc.stdin.write(
+            _json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": next(counter),
+                    "method": method,
+                    "params": params or {},
+                }
+            )
+            + "\n"
+        )
+        proc.stdin.flush()
+        return _json.loads(proc.stdout.readline())
+
+    def call(tool, arguments):
+        result = rpc("tools/call", {"name": tool, "arguments": arguments})["result"]
+        assert not result.get("isError"), result["content"][0]["text"]
+        return result["content"][0]["text"]
+
+    try:
+        rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}})
+        names = [t["name"] for t in rpc("tools/list")["result"]["tools"]]
+        assert "kb_find_similar" in names
+
+        text = call("kb_find_similar", {"query": "wider", "limit": 5})
+        assert "mos-wider" in text
+        assert "lr: 0.01 → 0.05" in text, text
+        assert "val_f1 +0.06" in text, text
+        assert variant in text
+        assert f"next: kb_lineage(id=\"{variant}\")" in text, text
+
+        text = call("kb_lineage", {"id": variant})
+        assert baseline in text and variant in text
+        assert "1 ancestor, 0 descendants." in text, text
+        assert "← lr: 0.01 → 0.05 ⇒ val_f1 +0.06" in text, text
+
+        text = call("kb_diff", {"a": baseline, "b": variant})
+        assert "- val_f1: 0.81 → 0.87 (+0.06)" in text, text
+    finally:
+        proc.stdin.close()
+        proc.wait(timeout=10)
+
+
 def test_run_summary_works_on_a_run_recorded_before_the_pool(tmp_path):
     # A run directory with nothing but a manifest — what a pre-pool run
     # or a hard crash leaves behind. It must still summarize.

@@ -124,6 +124,20 @@ impl ToolCallResult {
             is_error: Some(true),
         }
     }
+
+    /// The text a model would see — every content item concatenated.
+    /// The protocol carries text, so this is the whole result.
+    pub fn content_text(&self) -> String {
+        self.content
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.is_error.unwrap_or(false)
+    }
 }
 
 pub const METHOD_NOT_FOUND: i64 = -32601;

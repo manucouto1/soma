@@ -56,6 +56,7 @@ export default defineConfig({
 						{ label: 'Compiler & Execution Plans', slug: 'design/compiler' },
 						{ label: 'Event System', slug: 'design/events' },
 						{ label: 'Experiment Tracking', slug: 'design/tracking' },
+						{ label: 'Experiment Pool', slug: 'design/experiment-pool' },
 						{ label: 'Visualization', slug: 'design/visualization' },
 						{ label: 'Hyperparameter Optimization', slug: 'design/optimization' },
 						{ label: 'DataStore & S3', slug: 'design/data-store' },

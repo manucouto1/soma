@@ -134,16 +134,19 @@ A daemon process that runs on lab machines. Receives serialized plans and execut
 
 ### `soma-memory`
 
-Integration with ChronosVector for temporal experiment tracking.
+The [experiment pool](/design/experiment-pool/): what has been tried,
+what it descended from, and what came of it.
 
 **Key modules:**
 
 | Module | Purpose |
 |---|---|
-| `knowledge_base.rs` | Experiment indexing, semantic search, trajectory analysis |
-| `experiment.rs` | `ExperimentRecord` struct with embedding + metadata |
-| `semantic_cache.rs` | Approximate cache lookup via vector similarity |
-| `research_line.rs` | Trajectory tracking and promising line detection |
+| `record.rs` | `ExperimentRecord` — the `experiments.jsonl` line format, plus its back-compat contract |
+| `derivation.rs` | `DerivationMove` / `Change` — the edge between a parent run and its child |
+| `retrieval.rs` | BM25 + structural + recency + importance ranking; the `Embedder` seam |
+| `knowledge_base.rs` | The `KnowledgeBase` trait, its analytics defaults, and `MemoryKnowledgeBase` |
+| `file_kb.rs` | Append-only JSONL backend with offset-based `refresh()` |
+| `chronos_kb.rs` | ChronosVector-backed vector index (feature `chronos`) |
 
 ### `soma-agent`
 

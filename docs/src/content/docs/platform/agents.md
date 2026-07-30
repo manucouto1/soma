@@ -30,8 +30,8 @@ pub struct Agent {
     /// Tools: shell, web, file system, Soma API
     pub hands: Vec<Hand>,
 
-    /// Temporal memory (ChronosVector)
-    pub memory: SomaMemory,
+    /// The experiment pool: what has been tried, and what came of it
+    pub memory: Box<dyn KnowledgeBase>,
 
     /// LLM driver for reasoning
     pub driver: Box<dyn LlmDriver>,
@@ -126,61 +126,45 @@ Examples:
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Memory: ChronosVector Integration
+## Memory: the experiment pool
 
-The agent's memory is powered by ChronosVector, providing temporal-aware recall:
+The agent's memory is the [experiment pool](/design/experiment-pool/) —
+the same `.soma/experiments.jsonl` a human's runs write to. There is no
+separate agent memory store: an agent remembers what was run because
+running it recorded it.
+
+The interface is the `KnowledgeBase` trait
+([Knowledge Base](/platform/knowledge-base/)):
 
 ```rust
-pub struct SomaMemory {
-    vector_store: ChronosVector,
-}
+use chrono::Utc;
+use somatize_memory::{FileKnowledgeBase, KnowledgeBase, RetrievalQuery};
 
-impl SomaMemory {
-    /// Episodic recall: "What did I try recently?"
-    pub async fn recall(
-        &self,
-        context: &[f32],         // embedding of current situation
-        temporal_weight: f64,     // how much to weight recency
-    ) -> Vec<Episode> { .. }
+let mut kb = FileKnowledgeBase::open(".soma/experiments.jsonl")?;
+kb.refresh()?;   // pick up runs that finished elsewhere
 
-    /// Trajectory: "How has F1 evolved across my experiments?"
-    pub async fn trajectory(
-        &self,
-        experiment_line: &str,
-    ) -> Trajectory { .. }
+// "What have I tried that bears on this?" — ranked by text relevance,
+// architectural resemblance, recency and importance.
+let hits = kb.retrieve(&RetrievalQuery::new("z-norm on short series", Utc::now()))?;
 
-    /// Change points: "When did results change significantly?"
-    pub async fn change_points(
-        &self,
-        metric: &str,
-    ) -> Vec<ChangePoint> { .. }
+// "What came of that starting point?" — the tree, with the change
+// applied to the parent labelling every edge.
+let lineage = kb.lineage(&hits[0].record.id)?;
 
-    /// Drift: "Is my approach converging or diverging?"
-    pub async fn drift(
-        &self,
-        line: &str,
-        window: TimeRange,
-    ) -> DriftMetrics { .. }
-
-    /// Store a new experiment
-    pub async fn record_experiment(
-        &self,
-        record: ExperimentRecord,
-    ) -> Result<()> { .. }
-}
+// "How has this line moved?"
+kb.trajectory("rocket-znorm", "val_f1")?;
+kb.change_points("rocket-znorm", "val_f1", 0.05)?;
+kb.promising_lines("val_f1")?;
 ```
 
-### ChronosVector Capabilities Used
+Over MCP the same capabilities are `kb_find_similar`, `kb_lineage`,
+`kb_diff`, `kb_record_conclusion`, `kb_branch_from`, `kb_summarize_run`
+and `kb_stats`.
 
-| ChronosVector Feature | Agent Use Case |
-|---|---|
-| Snapshot kNN | "Find experiments similar to this hypothesis" |
-| Evolutionary Path | "How has this research line evolved?" |
-| Vector Velocity | "Is improvement accelerating or slowing?" |
-| Change Point Detection | "When did a breakthrough happen?" |
-| Drift Quantification | "Is this line converging?" |
-| Temporal Analogy | "What worked 2 weeks ago may apply now" |
-| Tiered Storage | Hot: current session, Warm: recent, Cold: archive |
+Dead ends are retrievable on purpose: `importance` puts a floor under
+any run that failed, crashed or regressed and carries a conclusion.
+Not repeating a failed idea saves an agent as much time as repeating a
+successful one.
 
 ## Python API
 

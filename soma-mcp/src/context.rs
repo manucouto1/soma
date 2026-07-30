@@ -12,6 +12,8 @@ pub struct SomaContext {
     pub project_dir: PathBuf,
     /// Knowledge base for experiment tracking.
     pub kb: Box<dyn KnowledgeBase>,
+    /// Where the knowledge base is persisted, when it is.
+    kb_path: Option<PathBuf>,
 }
 
 impl SomaContext {
@@ -33,9 +35,14 @@ impl SomaContext {
         env_override: Option<String>,
     ) -> Self {
         let project_dir = project_dir.into();
-        let kb: Box<dyn KnowledgeBase> = match Self::kb_path(&project_dir, env_override) {
-            Some(path) => match FileKnowledgeBase::open(&path) {
-                Ok(kb) => Box::new(kb),
+        let resolved = Self::kb_path(&project_dir, env_override);
+        let mut kb_path = None;
+        let kb: Box<dyn KnowledgeBase> = match &resolved {
+            Some(path) => match FileKnowledgeBase::open(path) {
+                Ok(kb) => {
+                    kb_path = resolved.clone();
+                    Box::new(kb)
+                }
                 Err(e) => {
                     eprintln!(
                         "soma-mcp: failed to open knowledge base at {} ({e}); using in-memory",
@@ -46,7 +53,30 @@ impl SomaContext {
             },
             None => Box::new(MemoryKnowledgeBase::new()),
         };
-        Self { project_dir, kb }
+        Self {
+            project_dir,
+            kb,
+            kb_path,
+        }
+    }
+
+    /// Pick up experiments another process appended since the last
+    /// call. An MCP server outlives many training runs; without this it
+    /// answers every question from the snapshot it loaded at startup.
+    pub fn refresh_kb(&mut self) {
+        if let Err(e) = self.kb.refresh() {
+            eprintln!("soma-mcp: could not refresh the knowledge base: {e}");
+        }
+    }
+
+    /// Human-readable location of the journal, when it has one.
+    pub fn kb_location(&self) -> Option<String> {
+        self.kb_path.as_ref().map(|p| p.display().to_string())
+    }
+
+    /// The tracking root this project's runs live under (`.soma`).
+    pub fn tracking_root(&self) -> PathBuf {
+        self.project_dir.join(".soma")
     }
 
     /// Where the persistent KB lives, if anywhere: the explicit
