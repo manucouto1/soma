@@ -5,154 +5,26 @@
 //! which files exist. [`summarize`] folds all of them — manifest,
 //! status, node timings, cache activity, health flags, metrics, study,
 //! trial timeline, graph, `fingerprint.json`, `diagnostics/report.json`
-//! — into a single [`RunSummary`] whose [`RunConclusion`] answers "what
-//! happened here?" in one templated line.
+//! — into a single [`RunSummary`].
 //!
-//! The headline is **deterministic and template-generated**: same run
-//! directory, same string, no model in the loop. That is what makes it
-//! safe to hash, snapshot-test, and index for retrieval.
+//! Only the reading lives here. The shapes it produces, and the
+//! deterministic headline template, are pure data and live in
+//! `somatize_core::summary` so consumers of the journal never have to
+//! depend on the execution engine.
 //!
 //! Every input is optional. A run that crashed before writing anything
 //! but its manifest still summarizes — it just collects warnings.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use somatize_core::error::Result;
 use somatize_core::fingerprint::{ArchitectureFingerprint, pipeline_summary};
-use somatize_core::tracking::GitInfo;
+use somatize_core::summary::{
+    FlagCount, NodeCost, RunConclusion, RunOutcome, RunSummary, TrialSummary,
+};
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::fs;
 
 use super::reader::RunReader;
-
-/// How a run ended, independent of whether its results were any good.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum RunOutcome {
-    Completed,
-    Failed,
-    /// Marked running, but the heartbeat went stale: the process died.
-    Crashed,
-    /// Still going.
-    Running,
-}
-
-impl RunOutcome {
-    fn from_state(state: &str) -> Self {
-        match state {
-            "completed" => Self::Completed,
-            "failed" => Self::Failed,
-            "crashed" => Self::Crashed,
-            _ => Self::Running,
-        }
-    }
-
-    fn verb(&self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Crashed => "crashed",
-            Self::Running => "running",
-        }
-    }
-}
-
-/// The node that dominated wall time, and by how much.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NodeCost {
-    pub node_id: String,
-    pub duration_ms: u64,
-    /// This node's share of all node compute time, in `[0, 1]`.
-    pub share: f64,
-}
-
-/// One flag family and where it fired.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FlagCount {
-    pub flag: String,
-    pub count: usize,
-    /// Node (or `node/module.path`) ids that raised it, sorted, deduped.
-    pub nodes: Vec<String>,
-}
-
-/// Trial statistics for a study run.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct TrialSummary {
-    pub total: usize,
-    pub completed: usize,
-    pub pruned: usize,
-    pub failed: usize,
-    pub best_trial_id: Option<String>,
-    pub best_value: Option<f64>,
-    /// Metric the study optimized, when it declares one.
-    pub objective: Option<String>,
-}
-
-/// What happened in a run, in fields and in one line.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RunConclusion {
-    /// Deterministic one-line rendering of everything below.
-    pub headline: String,
-    pub outcome: Option<RunOutcome>,
-    /// The slowest node, when node timings exist.
-    pub dominant_cost: Option<NodeCost>,
-    /// `hits / (hits + misses)`, `None` when the run touched no cache.
-    pub cache_hit_ratio: Option<f64>,
-    /// `HealthFlag` events, grouped by flag.
-    pub health_flags: Vec<FlagCount>,
-    /// Flags from `diagnostics/report.json`, grouped by flag. Overlaps
-    /// `health_flags` by construction (the audit both emits events and
-    /// writes the report); kept separate because the report survives a
-    /// truncated event log and carries the audited filter ids.
-    pub audit_flags: Vec<FlagCount>,
-    pub trials: Option<TrialSummary>,
-    /// What the summarizer could not read, in the summarizer's words.
-    /// Never an error — a half-written run is still worth recording.
-    pub warnings: Vec<String>,
-}
-
-impl RunConclusion {
-    /// Whether the run produced anything worth retaining.
-    pub fn is_empty(&self) -> bool {
-        self.outcome.is_none()
-            && self.dominant_cost.is_none()
-            && self.cache_hit_ratio.is_none()
-            && self.health_flags.is_empty()
-            && self.audit_flags.is_empty()
-            && self.trials.is_none()
-    }
-}
-
-/// Everything one run directory says about itself.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunSummary {
-    pub run_id: String,
-    /// Absolute path, so a consumer can go read raw artifacts.
-    pub run_dir: String,
-    pub name: String,
-    /// Manifest kind as its snake_case string (`fit`, `train`, `study`).
-    pub kind: String,
-    pub created_at: DateTime<Utc>,
-    pub finished_at: Option<DateTime<Utc>>,
-    pub duration_ms: Option<u64>,
-    pub tags: Vec<String>,
-    pub git: GitInfo,
-    pub seeds: BTreeMap<String, i64>,
-    pub parent_run_id: Option<String>,
-    /// From `fingerprint.json`, absent for runs started before it
-    /// existed or for graph-less runs (a study run has no graph).
-    pub architecture: Option<ArchitectureFingerprint>,
-    /// Human topology line, empty when the run has no `graph.json`.
-    pub pipeline_summary: String,
-    /// Last recorded value per metric name.
-    pub metrics: BTreeMap<String, f64>,
-    pub conclusion: RunConclusion,
-}
-
-/// Number of metrics named in the headline before it says "+N more".
-const HEADLINE_METRICS: usize = 3;
 
 /// Fold a run directory into a [`RunSummary`].
 ///
@@ -181,6 +53,13 @@ pub fn summarize(reader: &RunReader) -> Result<RunSummary> {
     let metrics = final_metrics(reader, &mut warnings);
     let trials = trial_summary(reader, &mut warnings);
 
+    // A study run has no graph to describe, but it is not shapeless:
+    // the sweep itself is the pipeline.
+    let pipeline = match (&trials, pipeline.is_empty()) {
+        (Some(trials), true) => format!("study over {} trials", trials.total),
+        _ => pipeline,
+    };
+
     if metrics.is_empty() && trials.is_none() && matches!(outcome, RunOutcome::Completed) {
         warnings.push("run completed without recording any metric".into());
     }
@@ -195,12 +74,8 @@ pub fn summarize(reader: &RunReader) -> Result<RunSummary> {
         trials,
         warnings,
     };
-    conclusion.headline = headline(
-        &conclusion,
-        info.duration_ms,
-        &metrics,
-        node_error.as_deref(),
-    );
+    conclusion.headline =
+        conclusion.render_headline(info.duration_ms, &metrics, node_error.as_deref());
 
     Ok(RunSummary {
         run_id: manifest.run_id,
@@ -213,93 +88,13 @@ pub fn summarize(reader: &RunReader) -> Result<RunSummary> {
         tags: manifest.tags,
         git: manifest.git,
         seeds: manifest.seeds.into_iter().collect(),
+        params: manifest.params.into_iter().collect(),
         parent_run_id: manifest.parent_run_id,
         architecture,
         pipeline_summary: pipeline,
         metrics,
         conclusion,
     })
-}
-
-/// Render the conclusion as one deterministic line.
-///
-/// Ordering is fixed — outcome, metrics, trials, cost, cache, flags —
-/// so two runs' headlines are comparable by eye and diffable in tests.
-fn headline(
-    conclusion: &RunConclusion,
-    duration_ms: Option<u64>,
-    metrics: &BTreeMap<String, f64>,
-    error: Option<&str>,
-) -> String {
-    let mut parts: Vec<String> = Vec::new();
-
-    let outcome = conclusion.outcome.unwrap_or(RunOutcome::Running);
-    let preposition = match outcome {
-        RunOutcome::Completed => "in",
-        RunOutcome::Running => "for",
-        _ => "after",
-    };
-    parts.push(match duration_ms {
-        Some(ms) => format!("{} {preposition} {}", outcome.verb(), human_duration(ms)),
-        None => outcome.verb().to_string(),
-    });
-
-    if let Some(error) = error {
-        parts.push(format!("error: {}", truncate(error, 120)));
-    }
-
-    if let Some(trials) = &conclusion.trials {
-        let mut line = format!("{} trials", trials.total);
-        if trials.pruned > 0 {
-            let _ = write!(line, " ({} pruned)", trials.pruned);
-        }
-        if let (Some(objective), Some(best)) = (&trials.objective, trials.best_value) {
-            let _ = write!(line, ", best {objective}={}", round4(best));
-        }
-        parts.push(line);
-    }
-
-    if !metrics.is_empty() {
-        let mut named: Vec<String> = metrics
-            .iter()
-            .take(HEADLINE_METRICS)
-            .map(|(name, value)| format!("{name}={}", round4(*value)))
-            .collect();
-        if metrics.len() > HEADLINE_METRICS {
-            named.push(format!("+{} more", metrics.len() - HEADLINE_METRICS));
-        }
-        parts.push(named.join(" "));
-    }
-
-    if let Some(cost) = &conclusion.dominant_cost {
-        parts.push(format!(
-            "slowest {} ({}, {}% of compute)",
-            cost.node_id,
-            human_duration(cost.duration_ms),
-            (cost.share * 100.0).round() as i64
-        ));
-    }
-
-    if let Some(ratio) = conclusion.cache_hit_ratio {
-        parts.push(format!("cache {}% hits", (ratio * 100.0).round() as i64));
-    }
-
-    let flags = merge_flags(&conclusion.health_flags, &conclusion.audit_flags);
-    if !flags.is_empty() {
-        let rendered: Vec<String> = flags
-            .iter()
-            .map(|f| {
-                if f.count > 1 {
-                    format!("{}×{}", f.flag, f.count)
-                } else {
-                    f.flag.clone()
-                }
-            })
-            .collect();
-        parts.push(format!("flags: {}", rendered.join(", ")));
-    }
-
-    parts.join(" · ")
 }
 
 fn read_fingerprint(
@@ -381,7 +176,10 @@ fn health_flags(reader: &RunReader, warnings: &mut Vec<String>) -> Vec<FlagCount
     for record in records {
         grouped.entry(record.flag).or_default().push(record.node_id);
     }
-    grouped.into_iter().map(to_flag_count).collect()
+    grouped
+        .into_iter()
+        .map(|(flag, nodes)| FlagCount::group(flag, nodes))
+        .collect()
 }
 
 /// The audit's own view, from `diagnostics/report.json`.
@@ -427,14 +225,10 @@ fn audit_flags(reader: &RunReader, warnings: &mut Vec<String>) -> Vec<FlagCount>
                 .push(filter.filter_id.clone());
         }
     }
-    grouped.into_iter().map(to_flag_count).collect()
-}
-
-fn to_flag_count((flag, mut nodes): (String, Vec<String>)) -> FlagCount {
-    let count = nodes.len();
-    nodes.sort();
-    nodes.dedup();
-    FlagCount { flag, count, nodes }
+    grouped
+        .into_iter()
+        .map(|(flag, nodes)| FlagCount::group(flag, nodes))
+        .collect()
 }
 
 /// Last value per metric name, in log order.
@@ -492,62 +286,11 @@ fn trial_summary(reader: &RunReader, warnings: &mut Vec<String>) -> Option<Trial
     Some(summary)
 }
 
-/// Union of two flag groupings, summing counts and merging node lists.
-fn merge_flags(a: &[FlagCount], b: &[FlagCount]) -> Vec<FlagCount> {
-    let mut grouped: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for flag in a.iter().chain(b) {
-        grouped
-            .entry(flag.flag.as_str())
-            .or_default()
-            .extend(flag.nodes.iter().cloned());
-    }
-    grouped
-        .into_iter()
-        .map(|(flag, nodes)| to_flag_count((flag.to_string(), nodes)))
-        .collect()
-}
-
-/// Compact wall-clock rendering: `840ms`, `2.4s`, `3m 07s`, `1h 12m`.
-pub fn human_duration(ms: u64) -> String {
-    if ms < 1_000 {
-        return format!("{ms}ms");
-    }
-    let secs = ms as f64 / 1000.0;
-    if secs < 60.0 {
-        return format!("{secs:.1}s");
-    }
-    let total = ms / 1000;
-    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
-    if h > 0 {
-        format!("{h}h {m:02}m")
-    } else {
-        format!("{m}m {s:02}s")
-    }
-}
-
-/// Four decimals, trailing zeros trimmed — stable across platforms.
-fn round4(value: f64) -> String {
-    if !value.is_finite() {
-        return format!("{value}");
-    }
-    let text = format!("{value:.4}");
-    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() { "0" } else { trimmed }.to_string()
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    let text = text.replace('\n', " ");
-    if text.chars().count() <= max {
-        return text;
-    }
-    let head: String = text.chars().take(max).collect();
-    format!("{head}…")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tracking::LocalTracker;
+    use chrono::Utc;
     use somatize_core::cache::CacheKey;
     use somatize_core::event::{Event, MetricRecord};
     use somatize_core::filter::FilterKind;
@@ -865,31 +608,12 @@ mod tests {
             summary
                 .conclusion
                 .headline
-                .contains("4 trials (1 pruned), best val_f1=0.91"),
+                .contains("4 trials (1 pruned, 1 failed), best val_f1=0.91"),
             "{}",
             summary.conclusion.headline
         );
-        // A study run has no graph, and that is not a warning.
-        assert_eq!(summary.pipeline_summary, "");
+        // A study run has no graph, but the sweep is its shape.
+        assert_eq!(summary.pipeline_summary, "study over 4 trials");
         assert!(summary.conclusion.warnings.is_empty());
-    }
-
-    #[test]
-    fn human_duration_scales() {
-        assert_eq!(human_duration(0), "0ms");
-        assert_eq!(human_duration(840), "840ms");
-        assert_eq!(human_duration(2_400), "2.4s");
-        assert_eq!(human_duration(59_900), "59.9s");
-        assert_eq!(human_duration(187_000), "3m 07s");
-        assert_eq!(human_duration(4_320_000), "1h 12m");
-    }
-
-    #[test]
-    fn round4_trims_without_losing_precision() {
-        assert_eq!(round4(1.0), "1");
-        assert_eq!(round4(0.9125), "0.9125");
-        assert_eq!(round4(0.912_549), "0.9125");
-        assert_eq!(round4(-0.5), "-0.5");
-        assert_eq!(round4(f64::NAN), "NaN");
     }
 }

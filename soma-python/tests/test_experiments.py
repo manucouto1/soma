@@ -91,15 +91,26 @@ def test_study_record_content_is_complete(tmp_path):
     study.run(lambda trial: {"f1": trial["x"]})
 
     rec = experiments(str(tmp_path))[0]
-    assert rec["id"].startswith("study_")
+    # A study is keyed by its run, like every other record — that is
+    # what lineage, HEAD and `parent` all speak in.
+    assert rec["id"] == rec["run_id"]
+    assert rec["run_dir"].endswith(rec["run_id"])
     assert rec["pipeline_summary"] == "study over 3 trials"
     # Params are the BEST trial's params (grid max of f1=x is x=1.0).
     assert rec["params"]["x"] == 1.0
     assert rec["metrics"]["f1"] == 1.0
     assert "duration" in rec
 
+    trials = rec["conclusion"]["trials"]
+    assert trials["total"] == 3
+    assert trials["completed"] == 3
+    assert trials["objective"] == "f1"
+    assert "3 trials, best f1=1" in rec["conclusion"]["headline"]
 
-def test_all_failed_study_records_nothing(tmp_path):
+
+def test_a_study_where_every_trial_failed_is_still_recorded(tmp_path):
+    # A dead end is worth as much to the pool as a success: the point
+    # of recording it is not repeating it.
     study = Study(
         "all-fail",
         search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
@@ -110,7 +121,14 @@ def test_all_failed_study_records_nothing(tmp_path):
         root=str(tmp_path),
     )
     study.run(lambda trial: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert experiments(str(tmp_path)) == []
+
+    (rec,) = experiments(str(tmp_path))
+    assert rec["metrics"] == {}
+    trials = rec["conclusion"]["trials"]
+    assert trials["total"] == 2
+    assert trials["failed"] == 2
+    assert trials["best_value"] is None
+    assert "2 trials (2 failed), no scorable trial" in rec["conclusion"]["headline"]
 
 
 def test_journal_preserves_append_order(tmp_path):

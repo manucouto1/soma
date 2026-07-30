@@ -30,7 +30,9 @@ use somatize_runtime::executors::study::{
 use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::runner::{LocalRunner, Runner};
 use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
-use somatize_runtime::tracking::{LocalTracker, load_manifest};
+use somatize_runtime::tracking::{
+    LocalTracker, RunReader, advance_head, load_manifest, resolve_parent, summarize,
+};
 
 fn soma_err_to_py(e: SomaError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -786,38 +788,24 @@ fn parse_pruning(pruning: &Bound<'_, PyAny>) -> PyResult<PruningStrategy> {
     }
 }
 
-/// Append a completed study's summary as an ExperimentRecord to
-/// `<root>/experiments.jsonl`. Best-effort: tracking must never fail
-/// the training path.
-fn record_study_experiment(root: &std::path::Path, study: &Study, run_id: &str) {
-    use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase};
-
-    let Some(best) = study.best_trial() else {
-        return;
+/// Append a completed study's summary as an ExperimentRecord.
+///
+/// Goes through the same run-directory path as every other run, so a
+/// study lands in the pool with a conclusion, a lineage and a trial
+/// breakdown instead of a hand-rolled record. The best trial's
+/// configuration and metrics are the extras only the study knows.
+fn record_study_experiment(run_dir: &std::path::Path, study: &Study) {
+    let (params, metrics) = match study.best_trial() {
+        Some(best) => (
+            best.params.clone().into_iter().collect(),
+            best.metrics
+                .iter()
+                .map(|m| (m.name.clone(), m.value))
+                .collect(),
+        ),
+        None => (HashMap::new(), HashMap::new()),
     };
-    let mut metrics: HashMap<String, f64> = HashMap::new();
-    for m in &best.metrics {
-        metrics.insert(m.name.clone(), m.value);
-    }
-    let total_ms: u64 = study.trials.iter().filter_map(|t| t.duration_ms).sum();
-    let mut tags = study.tags.clone();
-    tags.push(format!("run:{run_id}"));
-
-    let record = ExperimentRecord::new(study.id.clone(), study.name.clone())
-        .with_pipeline(format!("study over {} trials", study.trials.len()))
-        .with_params(best.params.clone())
-        .with_metrics(metrics)
-        .with_duration(std::time::Duration::from_millis(total_ms))
-        .with_tags(tags);
-
-    match FileKnowledgeBase::open(root.join("experiments.jsonl")) {
-        Ok(mut kb) => {
-            if let Err(e) = kb.record(record) {
-                eprintln!("soma: failed to record experiment: {e}");
-            }
-        }
-        Err(e) => eprintln!("soma: failed to open experiments.jsonl: {e}"),
-    }
+    append_run_record(run_dir, params, metrics);
 }
 
 fn trial_to_py(py: Python<'_>, trial: &somatize_core::study::Trial) -> PyResult<Py<PyDict>> {
@@ -1064,6 +1052,7 @@ impl PyStudy {
                         manifest.tags = self.study.tags.clone();
                         manifest.python_version =
                             Some(py.version().split_whitespace().next().unwrap_or("").into());
+                        manifest.parent_run_id = resolve_parent(&self.root, None);
                         // Record experiment seeds (and the sampler seed)
                         // so a reader can see what this run covers.
                         for (i, s) in self.study.seeds.iter().enumerate() {
@@ -1223,7 +1212,8 @@ impl PyStudy {
             };
             let _ = t.finalize(state);
             if result.is_ok() {
-                record_study_experiment(&self.root, &self.study, t.run_id());
+                record_study_experiment(t.run_dir(), &self.study);
+                advance_head(&self.root, t.run_id());
             }
         }
         result.map_err(soma_err_to_py)
@@ -2775,7 +2765,14 @@ impl PyGraph {
     /// where the `Graph` and the `FilterLibrary` are both in scope, so
     /// it is the only place that can stamp per-node config hashes into
     /// the fingerprint.
-    #[pyo3(signature = (name, root=".soma".to_string(), kind="train".to_string(), tags=None))]
+    ///
+    /// `params` are the hyperparameters that live outside the graph;
+    /// they are what makes a `ParamChanged` derivation possible when a
+    /// later run varies one. `parent` names the run this one descends
+    /// from — omit it and soma resolves one from `$SOMA_PARENT_RUN` or
+    /// `.soma/HEAD` (see `soma.checkout`).
+    #[pyo3(signature = (name, root=".soma".to_string(), kind="train".to_string(), tags=None, params=None, parent=None))]
+    #[allow(clippy::too_many_arguments)]
     fn begin_run(
         &self,
         py: Python<'_>,
@@ -2783,6 +2780,8 @@ impl PyGraph {
         root: String,
         kind: String,
         tags: Option<Vec<String>>,
+        params: Option<&Bound<'_, PyDict>>,
+        parent: Option<String>,
     ) -> PyResult<PyRun> {
         let kind = match kind.as_str() {
             "fit" => RunKind::Fit,
@@ -2798,6 +2797,14 @@ impl PyGraph {
         let mut manifest = load_manifest(tracker.run_dir()).map_err(soma_err_to_py)?;
         manifest.tags = tags.unwrap_or_default();
         manifest.python_version = Some(py.version().split_whitespace().next().unwrap_or("").into());
+        manifest.params = match params {
+            Some(dict) => match py_any_to_json(dict.as_any())? {
+                serde_json::Value::Object(map) => map.into_iter().collect(),
+                _ => HashMap::new(),
+            },
+            None => HashMap::new(),
+        };
+        manifest.parent_run_id = resolve_parent(&root, parent.as_deref());
         manifest.graph = Some(GraphSummaryInfo {
             n_nodes: self.graph.nodes.len(),
             node_ids: self.graph.nodes.iter().map(|n| n.id.clone()).collect(),
@@ -3421,41 +3428,80 @@ impl PyRun {
         };
         self.tracker.finalize(state).map_err(soma_err_to_py)?;
         if matches!(state, RunState::Completed) {
-            self.record_experiment();
+            let metrics = self.summary.lock().map(|s| s.clone()).unwrap_or_default();
+            append_run_record(self.tracker.run_dir(), HashMap::new(), metrics);
+            // HEAD advances only on success: a run that died must never
+            // become the parent of everything that follows it.
+            if let Some(root) = tracking_root(self.tracker.run_dir()) {
+                advance_head(root, self.tracker.run_id());
+            }
         }
         Ok(())
     }
 }
 
-impl PyRun {
-    /// Append this run's summary to `<root>/experiments.jsonl`.
-    /// Best-effort — never fails the training path.
-    fn record_experiment(&self) {
-        use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase};
+/// The tracking root (`.soma`) a run directory lives under.
+fn tracking_root(run_dir: &std::path::Path) -> Option<&std::path::Path> {
+    run_dir.parent().and_then(|p| p.parent())
+}
 
-        let run_dir = self.tracker.run_dir();
-        let Some(root) = run_dir.parent().and_then(|p| p.parent()) else {
+/// Append a finished run's summary to `<root>/experiments.jsonl`,
+/// linked to its parent by the derivation move between them.
+///
+/// This is the single path from "a run happened" to "the pool knows
+/// about it": `RunReader` → `summarize` → `ExperimentRecord::from_run`.
+/// `extra_params` and `extra_metrics` carry what the run directory does
+/// not know (a study's best-trial configuration, a training loop's
+/// W&B-style summary metrics).
+///
+/// Best-effort throughout: recording an experiment must never fail a
+/// training run that already produced its results.
+fn append_run_record(
+    run_dir: &std::path::Path,
+    extra_params: HashMap<String, serde_json::Value>,
+    extra_metrics: HashMap<String, f64>,
+) {
+    use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase};
+
+    let Some(root) = tracking_root(run_dir) else {
+        return;
+    };
+    let reader = match RunReader::open(run_dir) {
+        Ok(reader) => reader,
+        Err(e) => {
+            eprintln!(
+                "soma: cannot read run {} to record it: {e}",
+                run_dir.display()
+            );
             return;
-        };
-        let (name, mut tags) = match load_manifest(run_dir) {
-            Ok(m) => (m.name, m.tags),
-            Err(_) => (self.tracker.run_id().to_string(), Vec::new()),
-        };
-        tags.push(format!("run:{}", self.tracker.run_id()));
-        let metrics = self.summary.lock().map(|s| s.clone()).unwrap_or_default();
-
-        let record = ExperimentRecord::new(self.tracker.run_id().to_string(), name)
-            .with_pipeline("tracked run")
-            .with_metrics(metrics)
-            .with_tags(tags);
-        match FileKnowledgeBase::open(root.join("experiments.jsonl")) {
-            Ok(mut kb) => {
-                if let Err(e) = kb.record(record) {
-                    eprintln!("soma: failed to record experiment: {e}");
-                }
-            }
-            Err(e) => eprintln!("soma: failed to open experiments.jsonl: {e}"),
         }
+    };
+    let summary = match summarize(&reader) {
+        Ok(summary) => summary,
+        Err(e) => {
+            eprintln!("soma: cannot summarize run {}: {e}", run_dir.display());
+            return;
+        }
+    };
+
+    let mut record = ExperimentRecord::from_run(&summary)
+        .with_extra_params(extra_params)
+        .with_extra_metrics(extra_metrics);
+
+    let mut kb = match FileKnowledgeBase::open(root.join("experiments.jsonl")) {
+        Ok(kb) => kb,
+        Err(e) => {
+            eprintln!("soma: failed to open experiments.jsonl: {e}");
+            return;
+        }
+    };
+    if let Some(parent_id) = summary.parent_run_id.clone()
+        && let Ok(Some(parent)) = kb.get(&parent_id)
+    {
+        record = record.descended_from(parent);
+    }
+    if let Err(e) = kb.record(record) {
+        eprintln!("soma: failed to record experiment: {e}");
     }
 }
 
@@ -3667,6 +3713,102 @@ fn to_json_py<T: serde::Serialize>(value: &T) -> PyResult<String> {
     serde_json::to_string(value).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
+/// One run folded into a `RunSummary`: identity, cost, metrics and a
+/// templated conclusion. Works on runs recorded before the experiment
+/// pool existed — everything it cannot read becomes a warning.
+#[pyfunction]
+fn run_summary_json(dir: String) -> PyResult<String> {
+    let summary =
+        summarize(&open_run_reader(&dir)?).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&summary)
+}
+
+/// Point `.soma/HEAD` at an existing run so the next run branches from
+/// it — the handle for going back and trying something else.
+///
+/// Errors when the run is unknown to this root: attaching the next
+/// experiment to a parent that does not exist is worse than not
+/// branching at all.
+#[pyfunction]
+#[pyo3(signature = (run_id, root=".soma".to_string()))]
+fn checkout_run(run_id: String, root: String) -> PyResult<()> {
+    somatize_runtime::tracking::checkout(&root, &run_id).map_err(soma_err_to_py)
+}
+
+/// The run id in `.soma/HEAD`, or None when the next run starts a new
+/// line.
+#[pyfunction]
+#[pyo3(signature = (root=".soma".to_string()))]
+fn read_head_run(root: String) -> Option<String> {
+    somatize_runtime::tracking::read_head(&root)
+}
+
+/// Detach HEAD: the next run starts its own research line.
+#[pyfunction]
+#[pyo3(signature = (root=".soma".to_string()))]
+fn clear_head_run(root: String) -> PyResult<()> {
+    somatize_runtime::tracking::clear_head(&root).map_err(soma_err_to_py)
+}
+
+/// Rebuild `<root>/experiments.jsonl` from `<root>/runs/*`.
+///
+/// One operation covering three needs: migrating runs recorded before
+/// the pool existed, backfilling runs whose journal line was lost, and
+/// disaster recovery when the journal itself is gone. The run
+/// directories are the source of truth; the journal is an index.
+///
+/// Writes to a temp file and renames, so an interrupted reindex leaves
+/// the previous journal intact. Returns the number of records written.
+#[pyfunction]
+#[pyo3(signature = (root=".soma".to_string()))]
+fn kb_reindex(root: String) -> PyResult<usize> {
+    use somatize_memory::{ExperimentRecord, RecordKind};
+
+    let root = std::path::PathBuf::from(&root);
+    let journal = root.join("experiments.jsonl");
+
+    // Amendments have no run directory to be rebuilt from, so they are
+    // carried across verbatim rather than dropped.
+    let amendments: Vec<ExperimentRecord> = std::fs::read_to_string(&journal)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<ExperimentRecord>(line).ok())
+        .filter(|r| r.kind == RecordKind::Amendment)
+        .collect();
+
+    let infos = somatize_runtime::tracking::list_runs(&root)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    // Oldest first, so a parent is always in place before its children.
+    let mut records: Vec<ExperimentRecord> = Vec::with_capacity(infos.len());
+    for info in infos.into_iter().rev() {
+        let Ok(reader) = RunReader::open(&info.dir) else {
+            continue;
+        };
+        let Ok(summary) = summarize(&reader) else {
+            continue;
+        };
+        let mut record = ExperimentRecord::from_run(&summary);
+        if let Some(parent_id) = summary.parent_run_id.clone()
+            && let Some(parent) = records.iter().find(|r| r.id == parent_id)
+        {
+            record = record.descended_from(parent);
+        }
+        records.push(record);
+    }
+
+    let mut body = String::new();
+    for record in records.iter().chain(&amendments) {
+        let line =
+            serde_json::to_string(record).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        body.push_str(&line);
+        body.push('\n');
+    }
+    let tmp = journal.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, body).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    std::fs::rename(&tmp, &journal).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(records.len() + amendments.len())
+}
+
 /// All runs under `<root>/runs/`, newest first (JSON array of RunInfo).
 #[pyfunction]
 #[pyo3(signature = (root=".soma".to_string()))]
@@ -3861,6 +4003,11 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache_verify, m)?)?;
     m.add_function(wrap_pyfunction!(cache_purge_v1, m)?)?;
     m.add_function(wrap_pyfunction!(list_runs_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_summary_json, m)?)?;
+    m.add_function(wrap_pyfunction!(checkout_run, m)?)?;
+    m.add_function(wrap_pyfunction!(read_head_run, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_head_run, m)?)?;
+    m.add_function(wrap_pyfunction!(kb_reindex, m)?)?;
     m.add_function(wrap_pyfunction!(run_info_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_manifest_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_events_json, m)?)?;

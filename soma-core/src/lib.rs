@@ -24,6 +24,7 @@ pub mod state;
 pub mod store;
 pub mod strategy;
 pub mod study;
+pub mod summary;
 pub mod svg;
 pub mod tracking;
 pub mod util;
@@ -36,7 +37,7 @@ pub use cache::{CacheKey, CacheStore, CacheTier, EntryMeta, Origin};
 pub use error::{Result, SomaError};
 pub use event::{Event, MetricRecord, PlanSummary, RunId, StudyId, TrialId};
 pub use filter::{Distribution, Filter, FilterKind, FilterMeta, RemoteTarget, StreamMode};
-pub use fingerprint::{ArchitectureFingerprint, pipeline_summary, structural_similarity};
+pub use fingerprint::{ArchitectureFingerprint, EdgeRef, pipeline_summary, structural_similarity};
 pub use graph::{Edge, EdgeKind, Graph, Node, NodeId};
 pub use schema::{DataType, Dimension, Schema};
 pub use search::{Scale, SearchDimension, SearchSpace, Searchable};
@@ -56,6 +57,9 @@ pub use strategy::{
 pub use study::{
     CompositeObjective, Direction, Objective, PruningStrategy, Scalarizer, SearchStrategy, Study,
     Trial, TrialState,
+};
+pub use summary::{
+    FlagCount, NodeCost, RunConclusion, RunOutcome, RunSummary, TrialSummary, human_duration,
 };
 pub use tracking::{
     EventEnvelope, EventSink, GitInfo, GraphSummaryInfo, RUN_SCHEMA_VERSION, RunKind, RunManifest,

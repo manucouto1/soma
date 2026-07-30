@@ -39,6 +39,7 @@ from soma import _tracking  # noqa: E402, F401
 from soma import _compile  # noqa: E402, F401
 
 from soma._experiments import experiments  # noqa: E402
+from soma._lineage import checkout, detach, head, reindex  # noqa: E402
 from soma._runs import RunView, runs  # noqa: E402
 
 # Install plot_*/dataframe methods on Study and RunView. The methods are
@@ -82,6 +83,10 @@ __all__ = [
     "Fork",
     "search",
     "experiments",
+    "checkout",
+    "head",
+    "detach",
+    "reindex",
     "runs",
     "RunView",
     "experiments_dataframe",

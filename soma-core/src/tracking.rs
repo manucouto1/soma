@@ -103,6 +103,12 @@ pub struct RunManifest {
     /// Named seeds, e.g. `{"torch": 42}`.
     #[serde(default)]
     pub seeds: HashMap<String, i64>,
+    /// Hyperparameters the caller declared for this run — the knobs
+    /// that live outside the graph (learning rate, batch size, …) and
+    /// so cannot be recovered from a filter's config hash. What makes
+    /// a `ParamChanged` derivation possible at all.
+    #[serde(default)]
+    pub params: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -133,6 +139,7 @@ impl RunManifest {
             argv: Vec::new(),
             cwd: None,
             seeds: HashMap::new(),
+            params: HashMap::new(),
             tags: Vec::new(),
             notes: None,
             parent_run_id: None,

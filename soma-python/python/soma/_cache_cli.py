@@ -147,6 +147,21 @@ def main(argv: list[str] | None = None) -> int:
     p_graph.add_argument("--no-overlay", action="store_true", help="plain topology, no annotations")
     p_graph.add_argument("--root", default=".soma", help="tracking root (default .soma)")
 
+    p_kb = sub.add_parser("kb", help="inspect the experiment pool (experiments.jsonl)")
+    kb_sub = p_kb.add_subparsers(dest="action", required=True)
+    p_reindex = kb_sub.add_parser(
+        "reindex",
+        help="rebuild experiments.jsonl from <root>/runs/ (migration, backfill, recovery)",
+    )
+    p_head = kb_sub.add_parser("head", help="show which run the next one will descend from")
+    p_checkout = kb_sub.add_parser(
+        "checkout", help="point HEAD at an existing run so the next run branches from it"
+    )
+    p_checkout.add_argument("run", help="run id to branch from")
+    p_detach = kb_sub.add_parser("detach", help="clear HEAD; the next run starts a new line")
+    for p in (p_reindex, p_head, p_checkout, p_detach):
+        p.add_argument("--root", default=".soma", help="tracking root (default .soma)")
+
     p_report = sub.add_parser(
         "report", help="generate a self-contained HTML report for a run or study"
     )
@@ -176,6 +191,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no run '{run}' under {root}/runs/", file=sys.stderr)
             return None
         return match["dir"]
+
+    if args.command == "kb":
+        if args.action == "reindex":
+            n = _soma.kb_reindex(root=args.root)
+            print(f"reindexed {n} records into {args.root}/experiments.jsonl")
+            return 0
+        if args.action == "head":
+            head = _soma.read_head_run(root=args.root)
+            print(head if head else "HEAD is detached; the next run starts a new line")
+            return 0
+        if args.action == "checkout":
+            try:
+                _soma.checkout_run(args.run, root=args.root)
+            except Exception as exc:  # noqa: BLE001 — surface soma's own message
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(f"HEAD -> {args.run}; the next run will branch from it")
+            return 0
+        if args.action == "detach":
+            _soma.clear_head_run(root=args.root)
+            print("HEAD detached; the next run starts a new line")
+            return 0
 
     if args.command == "report":
         from soma._runs import RunView

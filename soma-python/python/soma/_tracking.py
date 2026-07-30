@@ -4,9 +4,15 @@ Installs ``graph.track_run(...)`` — a context manager around
 ``Graph.begin_run`` (which snapshots the graph topology into the run
 directory) that exposes the run to the audit/orchestrator via
 ``py_state['active_run']`` and finalizes the run status even on
-exceptions::
+exceptions.
 
-    with g.track_run("mos-baseline", tags=["mos"]) as run:
+``params`` are the hyperparameters that live outside the graph — they
+are what lets a later variant record a ``ParamChanged`` derivation.
+``parent`` names the run this one descends from; omit it and soma
+resolves one from ``$SOMA_PARENT_RUN`` or ``.soma/HEAD`` (see
+:func:`soma.checkout`)::
+
+    with g.track_run("mos-baseline", tags=["mos"], params={"lr": 0.01}) as run:
         with g.gradient_audit(channels=True) as audit:
             for epoch in range(30):
                 run.log_epoch(epoch, total=30)
@@ -32,8 +38,17 @@ def _track_run(
     root: str = ".soma",
     kind: str = "train",
     tags: tuple[str, ...] | list[str] = (),
+    params: dict | None = None,
+    parent: str | None = None,
 ) -> Iterator:
-    run = self.begin_run(name, root=root, kind=kind, tags=list(tags))
+    run = self.begin_run(
+        name,
+        root=root,
+        kind=kind,
+        tags=list(tags),
+        params=params,
+        parent=parent,
+    )
     self.py_state["active_run"] = run
     self.py_state["train_step"] = 0
     try:
