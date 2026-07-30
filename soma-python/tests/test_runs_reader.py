@@ -320,3 +320,67 @@ def test_cli_soma_graph(tmp_path, capsys):
 
     assert cli_main(["graph", "nope", "--root", str(tmp_path)]) == 1
     assert "no run" in capsys.readouterr().err
+
+
+# ── notebook/terminal UX: HTML reprs, rich table, progress bar ──────
+
+
+def test_runs_returns_runlist_with_html_repr(tmp_path):
+    from soma._runs import RunList
+
+    _tracked_fit(tmp_path, "pretty-run")
+    listed = soma.runs(str(tmp_path))
+    assert isinstance(listed, RunList)
+
+    table = listed._repr_html_()
+    assert "<table" in table
+    assert "pretty-run" in table
+    assert "completed" in table
+    assert listed[0].id in table
+
+    card = listed[0]._repr_html_()
+    assert listed[0].id in card
+    assert "completed" in card
+
+    assert soma.runs(str(tmp_path / "empty"))._repr_html_() == "<i>no runs</i>"
+
+
+def test_cli_runs_rich_and_plain(tmp_path, capsys):
+    pytest.importorskip("rich")
+    run = _tracked_fit(tmp_path, "rich-run")
+
+    assert cli_main(["runs", "--root", str(tmp_path)]) == 0
+    rich_out = capsys.readouterr().out
+    assert "rich-run" in rich_out
+    assert run.id in rich_out
+
+    assert cli_main(["runs", "--root", str(tmp_path), "--plain"]) == 0
+    plain_out = capsys.readouterr().out
+    assert plain_out.startswith("RUN ID")
+    assert run.id in plain_out
+
+
+def test_study_run_progress_bar(tmp_path):
+    pytest.importorskip("tqdm")
+    seen_events = []
+
+    def objective(trial):
+        trial.report("score", trial["lr"], 0)
+        return None
+
+    study = Study(
+        "progress-hpo",
+        search_space=[
+            {"type": "float", "name": "lr", "low": 0.001, "high": 0.1},
+        ],
+        strategy="random",
+        n_trials=4,
+        objectives=[("score", "maximize")],
+        root=str(tmp_path),
+        seed=3,
+    )
+    # progress=True draws the bar AND still chains the user callback.
+    study.run(objective, on_event=seen_events.append, progress=True)
+    assert study.n_trials == 4
+    assert study.best_trial is not None
+    assert any(e["event_type"] == "TrialCompleted" for e in seen_events)

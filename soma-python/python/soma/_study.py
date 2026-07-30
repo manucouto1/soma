@@ -80,3 +80,59 @@ def _graph_study(self: _RustGraph, name: str, **kwargs: Any) -> _Study:
 _RustGraph.search_space = _graph_search_space
 _RustGraph.apply_params = _apply_params
 _RustGraph.study = _graph_study
+
+
+# ── Study.run with an optional progress bar ──────────────────
+
+
+_rust_study_run = _Study.run
+
+
+def _study_run(self, executor, on_event=None, resume=False, progress=False):
+    """Run the study; ``progress=True`` draws a tqdm bar (part of the
+    ``somatize[viz]`` extra) fed by live ``StudyProgress`` events, with
+    the current best as postfix. Chains with a user ``on_event``.
+
+    Events reach the bar through the lossy broadcast subscriber, so the
+    bar is finalized from ``study.n_trials`` once the run returns."""
+    if not progress:
+        return _rust_study_run(self, executor, on_event=on_event, resume=resume)
+
+    try:
+        from tqdm.auto import tqdm
+    except ImportError as e:
+        raise RuntimeError(
+            "Study.run(progress=True) needs tqdm — "
+            "install it with: pip install 'somatize[viz]'"
+        ) from e
+
+    state: dict[str, Any] = {"bar": None}
+
+    def _on_event(event: dict) -> None:
+        if event.get("event_type") == "StudyProgress":
+            bar = state["bar"]
+            if bar is None:
+                bar = state["bar"] = tqdm(
+                    total=event["total"], desc=self.name, unit="trial"
+                )
+            bar.n = event["completed"]
+            bar.set_postfix_str(f"best={event['best_value']:.4g}", refresh=False)
+            bar.refresh()
+        if on_event is not None:
+            on_event(event)
+
+    try:
+        return _rust_study_run(self, executor, on_event=_on_event, resume=resume)
+    finally:
+        import time
+
+        time.sleep(0.2)  # drain the async subscriber's last events
+        bar = state["bar"]
+        if bar is None:
+            bar = tqdm(total=self.n_trials, desc=self.name, unit="trial")
+        bar.n = self.n_trials
+        bar.refresh()
+        bar.close()
+
+
+_Study.run = _study_run

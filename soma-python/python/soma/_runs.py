@@ -221,9 +221,85 @@ class RunView:
     def __repr__(self) -> str:
         return f"RunView({self.id!r}, state={self.state!r}, name={self.name!r})"
 
+    def _repr_html_(self) -> str:
+        """Card shown when a RunView is the cell result in a notebook."""
+        info = self._info
+        rows = "".join(
+            f"<tr><td style='color:#898781;padding:1px 12px 1px 0'>{k}</td>"
+            f"<td style='font-variant-numeric:tabular-nums'>{v}</td></tr>"
+            for k, v in (
+                ("state", _state_chip(info["state"])),
+                ("kind", info["kind"]),
+                ("created", (info.get("created_at") or "")[:19].replace("T", " ")),
+                ("duration", _fmt_ms_html(info.get("duration_ms"))),
+                ("tags", ", ".join(info.get("tags") or []) or "—"),
+                ("dir", f"<code>{self._dir}</code>"),
+            )
+        )
+        return (
+            f"<div style='font-family:system-ui;font-size:13px;line-height:1.5'>"
+            f"<b>{info['name']}</b> "
+            f"<span style='color:#898781'>({info['run_id']})</span>"
+            f"<table style='border-collapse:collapse;margin-top:4px'>{rows}</table></div>"
+        )
 
-def runs(root: str = ".soma") -> list[RunView]:
-    """All runs under ``<root>/runs/``, newest first. Directories
-    without a readable manifest are skipped."""
+
+_STATE_COLORS = {
+    "completed": "#0ca30c",
+    "failed": "#d03b3b",
+    "crashed": "#d03b3b",
+    "running": "#b07600",
+}
+
+
+def _state_chip(state: str) -> str:
+    color = _STATE_COLORS.get(state, "#898781")
+    return f"<span style='color:{color};font-weight:600'>{state}</span>"
+
+
+def _fmt_ms_html(ms) -> str:
+    if ms is None:
+        return "—"
+    seconds = ms / 1000
+    if seconds < 120:
+        return f"{seconds:.1f}s"
+    if seconds < 7200:
+        return f"{seconds / 60:.1f}m"
+    return f"{seconds / 3600:.1f}h"
+
+
+class RunList(list):
+    """``list[RunView]`` that renders as a table in notebooks."""
+
+    def _repr_html_(self) -> str:
+        if not self:
+            return "<i>no runs</i>"
+        head = "".join(
+            f"<th style='text-align:left;padding:2px 14px 2px 0;color:#898781;"
+            f"font-size:11px;text-transform:uppercase'>{h}</th>"
+            for h in ("run id", "kind", "state", "created", "duration", "name")
+        )
+        body = "".join(
+            "<tr>"
+            f"<td style='padding:2px 14px 2px 0'><code>{r.id}</code></td>"
+            f"<td style='padding:2px 14px 2px 0'>{r.kind}</td>"
+            f"<td style='padding:2px 14px 2px 0'>{_state_chip(r.state)}</td>"
+            f"<td style='padding:2px 14px 2px 0;font-variant-numeric:tabular-nums'>"
+            f"{(r.info.get('created_at') or '')[:19].replace('T', ' ')}</td>"
+            f"<td style='padding:2px 14px 2px 0'>{_fmt_ms_html(r.info.get('duration_ms'))}</td>"
+            f"<td style='padding:2px 14px 2px 0'>{r.name}</td>"
+            "</tr>"
+            for r in self
+        )
+        return (
+            "<table style='border-collapse:collapse;font-family:system-ui;"
+            f"font-size:13px'><tr>{head}</tr>{body}</table>"
+        )
+
+
+def runs(root: str = ".soma") -> "RunList":
+    """All runs under ``<root>/runs/``, newest first (renders as a
+    table in notebooks). Directories without a readable manifest are
+    skipped."""
     infos = json.loads(_soma.list_runs_json(root=root))
-    return [RunView(info["dir"], _info=info) for info in infos]
+    return RunList(RunView(info["dir"], _info=info) for info in infos)

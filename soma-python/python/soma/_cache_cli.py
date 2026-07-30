@@ -52,6 +52,58 @@ def _fmt_duration(ms: int) -> str:
     return f"{seconds / 86400:.1f}d"
 
 
+_STATE_STYLES = {  # same hues as the HTML report / notebook chips
+    "completed": "green",
+    "failed": "red",
+    "crashed": "red",
+    "running": "yellow",
+}
+
+
+def _print_runs(infos: list[dict], plain: bool = False) -> None:
+    """Runs table: rich (colored states) when available, plain text
+    otherwise or when forced (pipes)."""
+    if not plain:
+        try:
+            from rich.console import Console
+            from rich.table import Table
+
+            # Non-tty (pipes, captured output): fixed generous width so
+            # nothing truncates; rich already strips colors there.
+            width = None if sys.stdout.isatty() else 160
+            table = Table(box=None, pad_edge=False, header_style="dim")
+            table.add_column("RUN ID", style="cyan", no_wrap=True)
+            table.add_column("KIND")
+            table.add_column("STATE")
+            table.add_column("CREATED", no_wrap=True)
+            table.add_column("DURATION", justify="right")
+            table.add_column("NAME")
+            for info in infos:
+                state = info["state"]
+                style = _STATE_STYLES.get(state, "dim")
+                table.add_row(
+                    info["run_id"],
+                    info["kind"],
+                    f"[{style}]{state}[/{style}]",
+                    (info.get("created_at") or "")[:19].replace("T", " "),
+                    _fmt_duration(info["duration_ms"]) if info.get("duration_ms") else "-",
+                    info["name"],
+                )
+            Console(width=width).print(table)
+            return
+        except ImportError:
+            pass
+    header = f"{'RUN ID':<32} {'KIND':<6} {'STATE':<10} {'CREATED':<20} {'DURATION':>8}  NAME"
+    print(header)
+    for info in infos:
+        duration = _fmt_duration(info["duration_ms"]) if info.get("duration_ms") else "-"
+        created = (info.get("created_at") or "")[:19]
+        print(
+            f"{info['run_id']:<32} {info['kind']:<6} {info['state']:<10} "
+            f"{created:<20} {duration:>8}  {info['name']}"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="soma", description="Soma toolbox")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -79,6 +131,11 @@ def main(argv: list[str] | None = None) -> int:
     p_runs = sub.add_parser("runs", help="list tracked runs under <root>/runs/")
     p_runs.add_argument("--root", default=".soma", help="tracking root (default .soma)")
     p_runs.add_argument("--json", action="store_true", help="print raw JSON instead of a table")
+    p_runs.add_argument(
+        "--plain",
+        action="store_true",
+        help="force the plain-text table (no colors; good for pipes)",
+    )
 
     p_graph = sub.add_parser(
         "graph", help="render a run's graph annotated with timing/cache/health"
@@ -155,15 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         if not infos:
             print(f"no runs under {args.root}/runs/")
             return 0
-        header = f"{'RUN ID':<32} {'KIND':<6} {'STATE':<10} {'CREATED':<20} {'DURATION':>8}  NAME"
-        print(header)
-        for info in infos:
-            duration = _fmt_duration(info["duration_ms"]) if info.get("duration_ms") else "-"
-            created = (info.get("created_at") or "")[:19]
-            print(
-                f"{info['run_id']:<32} {info['kind']:<6} {info['state']:<10} "
-                f"{created:<20} {duration:>8}  {info['name']}"
-            )
+        _print_runs(infos, plain=args.plain)
         return 0
 
     if args.action == "stats":
