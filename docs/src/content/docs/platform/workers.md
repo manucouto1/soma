@@ -171,7 +171,7 @@ pub enum RemoteTarget {
 Filters declare their preferred distribution:
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(distribution = "Remote(Tag(\"gpu\"))")]
 struct GpuTrainer {
     // This filter should run on a GPU worker
@@ -196,6 +196,12 @@ Sequence([
 ```
 
 ## Lab Configuration
+
+:::caution[Partly implemented]
+`soma.connect(...)` and `lab.workers()` work. `lab.run(study, data=...)` does
+not exist — today you drive a study locally with `study.run(...)` and route
+individual nodes to workers with `target=`, as shown above.
+:::
 
 Labs configure their workers and shared resources:
 

@@ -128,13 +128,13 @@ Examples:
 
 ## Memory: the experiment pool
 
-The agent's memory is the [experiment pool](/design/experiment-pool/) —
+The agent's memory is the [experiment pool](/soma/design/experiment-pool/) —
 the same `.soma/experiments.jsonl` a human's runs write to. There is no
 separate agent memory store: an agent remembers what was run because
 running it recorded it.
 
 The interface is the `KnowledgeBase` trait
-([Knowledge Base](/platform/knowledge-base/)):
+([Knowledge Base](/soma/platform/knowledge-base/)):
 
 ```rust
 use chrono::Utc;
@@ -167,6 +167,14 @@ Not repeating a failed idea saves an agent as much time as repeating a
 successful one.
 
 ## Python API
+
+:::caution[Not implemented yet]
+There is no `soma.agent` module and no `Researcher` class. The agent loop
+lives in the `soma-agent` Rust crate; the Python surface below is the
+intended shape, not something you can import today. What *does* work now
+is the memory half above — an agent (or you) reading and writing the
+experiment pool.
+:::
 
 ```python
 from soma.agent import Researcher

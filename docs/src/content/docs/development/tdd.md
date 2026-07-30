@@ -30,7 +30,7 @@ soma-core/src/
 Unit tests cover:
 
 - **soma-core**: Value conversions, cache key computation, search space validation, graph construction, schema compatibility
-- **soma-compiler**: Topological sort, pattern detection, cache resolution, gradient flow analysis, cost estimation
+- **soma-compiler**: Topological sort, pattern detection, validation, gradient flow analysis, worker scheduling
 - **soma-runtime**: Executor correctness (sequence, parallel, loop, branch), event emission, cache tier promotion, sampler distributions, pruner decisions
 - **soma-python**: PyO3 binding correctness, Python Filter class behavior
 
@@ -96,7 +96,7 @@ A set of test filters used across the test suite:
 
 ```rust
 /// A simple passthrough filter (stateless, differentiable)
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Stateless", cacheable = true, differentiable = true)]
 pub struct Identity;
 
@@ -107,17 +107,17 @@ impl Filter for Identity {
 }
 
 /// A filter that doubles its input (stateless, differentiable)
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Stateless", cacheable = true, differentiable = true)]
 pub struct Doubler;
 
 /// A filter that always fails (for error handling tests)
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Stateless")]
 pub struct FailFilter;
 
 /// A filter that counts how many times it's called (for caching tests)
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Trainable", cacheable = true)]
 pub struct CountingFilter {
     pub call_count: Arc<AtomicUsize>,

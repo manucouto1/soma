@@ -187,7 +187,7 @@ g = Graph.somatize(
 | `add_worker` | `(address, token?, tags?)` | Add a remote worker |
 | `set_coordinator` | `(url, token?)` | Set coordinator for auto-discovery |
 | `workers` | `() -> list[dict]` | List known workers |
-| `track_run` | `(name, *, root=".soma", kind="train", tags=()) -> ctx[Run]` | Context manager: create a run directory, snapshot the graph into it, finalize on exit (even on exception) |
+| `track_run` | `(name, *, root=".soma", kind="train", tags=(), params=None, parent=None) -> ctx[Run]` | Context manager: create a run directory, snapshot the graph into it, finalize on exit (even on exception). `params` are the hyperparameters that live outside the graph; `parent` overrides the run this one descends from |
 | `begin_run` | `(name, root=".soma", kind="train", tags=None) -> Run` | Lower-level: start a run without the context manager (you call `run.finish()`) |
 | `emit_event` | `(dict)` | Emit a custom event onto the bus (must match an `Event` variant) |
 | `search_space` | `() -> list[dict]` | Aggregate every filter's `search()` descriptors, prefixed with the node id (`"encoder.lr"`) |
@@ -289,7 +289,7 @@ training, the `state` argument is ignored and the filter runs the live
 `state["weights_b64"]` if present, runs `no_grad`, and returns lists.
 Always returns `(out, aux_dict)`.
 
-See the [gradients design doc](/design/gradients/#native-training-loop-python)
+See the [gradients design doc](/soma/design/gradients/#native-training-loop-python)
 for the full training-loop pattern and RPC-ready notes.
 
 ### Study
@@ -447,8 +447,7 @@ The handle `track_run` (or `begin_run`) yields:
 | `log_epoch_completed` | `(epoch, metrics=None)` | Epoch-end metrics + heartbeat |
 | `step_completed` | `(step, epoch=None)` | Optimizer-step marker (liveness) |
 | `heartbeat` | `()` | Refresh liveness so readers don't call the run crashed |
-| `finish` | `(status="completed")` | Finalize; `track_run` calls it for you (`"failed"` on exception) |
-| `record_experiment` | `()` | Append this run's summary to `<root>/experiments.jsonl` |
+| `finish` | `(status="completed")` | Finalize; `track_run` calls it for you (`"failed"` on exception). On success it also appends the run to `<root>/experiments.jsonl` and advances `.soma/HEAD` |
 | `id` / `dir` | properties | Run id and absolute run directory |
 
 ### Reading runs back
@@ -492,6 +491,19 @@ soma.experiments()              # the flat journal of completed runs/studies
 soma.experiments_dataframe()    # ...as a DataFrame (viz extra)
 ```
 
+### Lineage and the experiment pool
+
+Runs descend from one another. The parent is resolved as `parent=` →
+`$SOMA_PARENT_RUN` → `.soma/HEAD` → none, and HEAD advances after every
+*successful* run. See [Experiment Pool](/soma/design/experiment-pool/).
+
+| Function | Signature | Description |
+|---|---|---|
+| `soma.head` | `(*, root=".soma") -> str \| None` | Which run the next one will descend from |
+| `soma.checkout` | `(run_id, *, root=".soma")` | Point HEAD at an existing run so the next one branches from it |
+| `soma.detach` | `(*, root=".soma")` | Clear HEAD; the next run starts its own research line |
+| `soma.reindex` | `(*, root=".soma") -> int` | Rebuild `experiments.jsonl` from `<root>/runs/` |
+
 ### Command line
 
 ```console
@@ -499,6 +511,8 @@ $ soma runs [--root .soma] [--json] [--plain]
 $ soma graph <run_id|path> [--format mermaid|dot] [--no-overlay] [--root .soma]
 $ soma report <run_id|path> [-o FILE] [--inline] [--open] [--root .soma]
 $ soma cache stats|gc|pin|verify|purge-v1 [--dir PATH]
+$ soma kb reindex|head|detach [--root .soma]
+$ soma kb checkout <run_id> [--root .soma]
 $ somatize-worker --port 8080 --tags gpu --token sk-xxx [--cpus N] [--memory 8G]
                   [--gpus N] [--max-concurrent N] [--id ID] [--coordinator URL]
 ```

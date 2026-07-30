@@ -3,6 +3,15 @@ title: Implementation Roadmap
 description: MVP phases, priorities, and implementation order.
 ---
 
+:::caution[Written before implementation]
+This roadmap was drafted at the start of the project. Phases 1 and 2 have
+largely shipped — the crates, the persistent cache, tracking, the
+visualization layer and the experiment pool all exist — so treat the task
+tables as a record of what was planned, not as a description of what is
+left. [Crates](/soma/architecture/crates/) describes the tree as it is.
+:::
+
+
 ## Phase Overview
 
 ```
@@ -34,7 +43,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 | `Schema` | Input/output type descriptions | P1 |
 | `VirtualValue` | Lazy references (Materialized, Cached, Deferred) | P1 |
 | `SomaError` | Error types | P0 |
-| Derive macros | `#[derive(Filter)]`, `#[derive(SomaEnum)]` | P1 |
+| Derive macros | `#[derive(SomaFilter)]` | P1 |
 
 ### 1.2 soma-compiler: Graph to Plan
 
@@ -42,7 +51,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 |---|---|---|
 | Topological sort | Kahn's algorithm, cycle detection | P0 |
 | Linear graph compilation | Sequence of Execute nodes | P0 |
-| Cache resolution | Compute keys, replace with Cached | P0 |
+| Cache resolution | Per-node, at runtime, with materialized input in hand | P0 |
 | Cascade invalidation | Upstream change invalidates downstream | P0 |
 | Parallel branch detection | Fork-join pattern recognition | P1 |
 | Gradient flow analysis | Warn on non-differentiable interruptions | P1 |
@@ -58,7 +67,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 | Sequential executor | Walk Sequence plans | P0 |
 | Event bus | Async broadcast, subscribe | P0 |
 | Memory cache | In-memory HashMap | P0 |
-| Local cache | RocksDB or sled backend | P0 |
+| Local cache | Filesystem action store + BLAKE3 CAS | P0 |
 | Tiered cache | Multi-level with promotion | P1 |
 | Parallel executor | Tokio JoinSet for Parallel plans | P1 |
 | Context | Store + event emitter + metric reporter | P0 |
@@ -217,7 +226,7 @@ Week 3-4: soma-compiler
   12. ExecutionPlan enum
   13. Linear graph compilation
   14. Cache key computation for graph
-  15. Cache resolution (Cached vs Execute)
+  15. Cache resolution (runtime, per node)
   16. Cascade invalidation
   17. Parallel branch detection
 
@@ -227,7 +236,7 @@ Week 5-6: soma-runtime
   20. Memory cache (HashMap)
   21. Sequential executor
   22. Graph (fit/forward)
-  23. Local cache (RocksDB/sled)
+  23. Local cache (FsActionStore + BLAKE3 CAS)
   24. Tiered cache
   25. Parallel executor
 
@@ -247,7 +256,7 @@ Week 9-10: soma-python
   36. search() descriptor
 
 Week 11-12: Polish & release
-  37. Derive macros (#[derive(Filter)])
+  37. Derive macros (#[derive(SomaFilter)])
   38. Documentation site
   39. Examples and tutorials
   40. CI/CD pipeline
@@ -262,7 +271,7 @@ Week 11-12: Polish & release
 | DataFrame | Polars | Fast, lazy evaluation, Rust-native |
 | Async runtime | Tokio | Industry standard, JoinSet for parallelism |
 | Serialization | serde + bincode | Fast binary serialization for plans |
-| Local cache | sled or RocksDB | Embedded K/V, proven reliability |
+| Local cache | `FsActionStore` | Bazel-style action cache + content-addressed blobs, no embedded DB to corrupt |
 | Remote cache | S3-compatible | Universal, works with MinIO locally |
 | Python bindings | PyO3 + maturin | Standard Rust-Python bridge |
 | HTTP framework | Axum | For worker daemon and coordinator |

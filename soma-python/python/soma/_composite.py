@@ -165,9 +165,9 @@ class DifferentiableFilter(Filter):
         if self._module is None:
             return (
                 f"<div style='font-family:system-ui;font-size:13px'>"
-                f"<b>{name}</b> <span style='color:#898781'>(sin "
-                f"materializar — llama a g.materialize(x) o haz un "
-                f"forward para construir el módulo)</span></div>"
+                f"<b>{name}</b> <span style='color:#898781'>(not "
+                f"materialized — call g.materialize(x), or run a "
+                f"forward, to build the module)</span></div>"
             )
 
         import json as _json

@@ -8,7 +8,7 @@ description: How Soma compiles graphs into optimized, cache-aware execution plan
 The Soma compiler is the intelligence layer between the user's graph definition and the runtime execution. It performs:
 
 1. **Validation**: Cycle detection, schema compatibility
-2. **Cache resolution**: Replace cached nodes before execution
+2. **Validation**: Reject cycles and incompatible schemas before anything runs
 3. **Gradient analysis**: Detect and warn about gradient flow interruptions
 4. **Parallelism detection**: Identify independent branches for concurrent execution
 5. **Cost estimation**: Estimate execution time from cache metadata

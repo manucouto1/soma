@@ -58,7 +58,7 @@ class CompileInfo(dict):
         diagnostics = (
             "<div style='margin-top:10px'>" + "".join(callouts) + "</div>"
             if callouts
-            else "<div style='margin-top:10px;color:#898781'>sin diagnósticos</div>"
+            else "<div style='margin-top:10px;color:#898781'>no diagnostics</div>"
         )
 
         plan_svg = self.get("plan_svg", "")

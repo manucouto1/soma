@@ -110,7 +110,7 @@ impl Graph {
 ### Stateless Filter (no training needed)
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Stateless", cacheable = true, differentiable = true)]
 struct ReLU;
 
@@ -130,7 +130,7 @@ impl Filter for ReLU {
 ### Trainable Filter
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Trainable", cacheable = true, differentiable = true)]
 struct StandardScaler {
     #[soma(search(choices = [true, false]))]
@@ -165,7 +165,7 @@ impl Filter for StandardScaler {
 ### Trainable Model with Intermediate Metrics
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Trainable", cacheable = true, differentiable = true)]
 struct LinearClassifier {
     #[soma(search(low = 1e-5, high = 1e-1, scale = "log"))]
@@ -219,7 +219,7 @@ impl Filter for LinearClassifier {
 ### Opaque Filter (non-differentiable)
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Opaque", cacheable = true)]
 struct DecisionTree {
     #[soma(search(low = 2, high = 50))]
@@ -247,7 +247,7 @@ impl Filter for DecisionTree {
 
 ## The Derive Macro
 
-`#[derive(Filter)]` generates:
+`#[derive(SomaFilter)]` generates:
 
 1. **`Searchable` impl**: Collects `#[soma(search)]` annotations into a `SearchSpace`
 2. **`Serialize`/`Deserialize`**: For remote execution
@@ -263,7 +263,7 @@ impl Filter for DecisionTree {
 - The hash is deterministic: same config always produces the same key
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MyFilter {
     scale: f64,          // ✓ included in config_hash
     method: String,      // ✓ included in config_hash

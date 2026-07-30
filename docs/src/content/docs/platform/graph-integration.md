@@ -3,6 +3,13 @@ title: Graph Integration
 description: How graphs become nodes in the platform's orchestration graphs.
 ---
 
+:::caution[Not implemented yet]
+This page describes the intended design. None of the API below exists today:
+`Lab` has only `connect`, `health`, `info` and `workers` — there is no
+`lab.publish`, `lab.get_graph` or `PublishedGraph`. Read it as a design
+sketch, not as a reference.
+:::
+
 ## The Bridge
 
 Soma graphs and the platform's orchestration graphs serve different purposes:

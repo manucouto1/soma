@@ -29,7 +29,7 @@ The scheduler produces a `DistributionPlan` containing:
 ## Example
 
 ```
-Pipeline: [Load] → [Normalize] → [Train SVM]
+Graph: [Load] → [Normalize] → [Train SVM]
                                 → [Train KNN]
 
 Scheduler with 2 workers:
@@ -42,7 +42,7 @@ Scheduler with 2 workers:
 ## Usage
 
 ```rust
-use soma_compiler::{schedule, WorkerInfo};
+use somatize_compiler::{schedule, WorkerInfo};
 
 let workers = vec![
     WorkerInfo { id: "gpu-1", gpu: true, cpu_cores: 16, ... },

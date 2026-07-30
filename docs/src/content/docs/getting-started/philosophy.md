@@ -47,7 +47,7 @@ This reduces the distance between "what a filter does" and "how it's configured"
 Soma's compiler does more than convert graphs to execution plans. It:
 
 1. **Validates** type compatibility between connected filters
-2. **Resolves caching** by computing keys and checking the store
+2. **Plans distribution** by assigning nodes to workers
 3. **Detects gradient flow** and warns about interruptions
 4. **Plans parallelism** by identifying independent branches
 5. **Schedules distribution** by matching filters to available workers

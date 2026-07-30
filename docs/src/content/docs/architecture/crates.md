@@ -78,8 +78,7 @@ The foundation. Defines all shared types, traits, and enums. Has no heavy depend
 
 | Macro | Generates |
 |---|---|
-| `#[derive(Filter)]` | `Filter` + `Searchable` impls from struct fields |
-| `#[derive(SomaEnum)]` | Categorical choices from enum variants |
+| `#[derive(SomaFilter)]` | `Filter` + `Searchable` impls from struct fields |
 
 ### `soma-compiler`
 
@@ -89,12 +88,12 @@ Converts `Graph` into `ExecutionPlan`. Pure logic, no I/O (except cache existenc
 
 | Module | Purpose |
 |---|---|
-| `compiler.rs` | Main entry: `compile(graph, cache) -> ExecutionPlan` |
+| `compiler.rs` | Main entry: `compile(graph, …) -> ExecutionPlan`; validation and gradient diagnostics |
 | `plan.rs` | `ExecutionPlan` enum definition |
-| `cache_resolver.rs` | Compute cache keys, replace cached nodes in plan |
-| `gradient_checker.rs` | Analyze gradient flow, emit diagnostics |
-| `validator.rs` | Cycle detection, schema compatibility |
-| `cost_estimator.rs` | Estimate execution cost from cache metadata |
+| `scheduler.rs` | `schedule(plan, workers) -> DistributionPlan` — assigns nodes to workers |
+
+Cache keys are **not** resolved here: they depend on materialized input, so
+resolution happens per node at runtime. See [Caching](/soma/design/caching/).
 
 ### `soma-runtime`
 
@@ -104,20 +103,29 @@ Executes plans. This is where computation happens.
 
 | Module | Purpose |
 |---|---|
-| `executor.rs` | Tree-walk plan executor (recursive async) |
-| `context.rs` | `Context` passed to filters (store + event emitter + metrics reporter) |
-| `event_bus.rs` | Async broadcast of `Event` to subscribers |
-| `cache/local.rs` | RocksDB/sled local cache |
-| `cache/memory.rs` | In-memory HashMap cache |
-| `cache/tiered.rs` | Multi-level cache with promotion/eviction |
-| `optimizer.rs` | Study runner: samples params, runs trials, tracks results |
-| `samplers/grid.rs` | Grid search sampler |
-| `samplers/random.rs` | Random search sampler |
-| `samplers/bayesian.rs` | TPE (Tree-Parzen Estimator) sampler |
-| `pruners/median.rs` | Median stopping rule |
-| `pruners/percentile.rs` | Percentile stopping rule |
-| `pruners/hyperband.rs` | Hyperband bracket-based pruning |
-| `stream.rs` | Chunked stream processing with state management |
+| `graph_session.rs` | `GraphSession` — the primary orchestrator (graph + library + cache + events) |
+| `executor.rs` | Tree-walk plan executor, and the per-node runtime cache resolution |
+| `forward.rs` | Forward-pass helpers shared by the executors |
+| `filter_library.rs` | Unified registry: filters, their states, and the compiler's `FilterRegistry` |
+| `event_bus.rs` | Async broadcast of `Event` to subscribers, plus lossless sinks |
+| `cache/fs_store.rs` | `FsActionStore` — action records + BLAKE3 content-addressed blobs |
+| `cache/gc.rs` | Value-density eviction down to a size budget (`soma cache gc`) |
+| `cache/memory.rs` | In-memory LRU with a byte budget |
+| `cache/local.rs` | Filesystem cache tier |
+| `cache/tiered.rs` | Memory → filesystem, with promotion |
+| `executors/study.rs` | `StudyRunner`: samples params, runs trials, replays completed ones |
+| `executors/pbt.rs` | `PbtRunner`: population-based train → evaluate → exploit/explore |
+| `executors/stream.rs` | Chunked stream processing with state management |
+| `executors/simple.rs` | Single-graph execution |
+| `sampler/mod.rs` | `Sampler` trait, grid and random samplers |
+| `sampler/bayesian.rs` | TPE (Tree-Parzen Estimator) sampler |
+| `pruner.rs` | `MedianPruner` and `PercentilePruner` |
+| `runner/` | `LocalRunner` and `RemoteRunner` behind the `Runner` trait |
+| `tracking/local_tracker.rs` | Writes a run directory: manifest, status, artifacts, event sink |
+| `tracking/jsonl_sink.rs` | The lossless `events.jsonl` sink |
+| `tracking/reader.rs` | `RunReader` — every aggregate a chart or report needs |
+| `tracking/summary.rs` | `summarize()` — one run directory folded into a `RunSummary` |
+| `tracking/head.rs` | `.soma/HEAD`: parent resolution, `checkout`, `advance_head` |
 
 ### `soma-worker`
 
@@ -127,14 +135,17 @@ A daemon process that runs on lab machines. Receives serialized plans and execut
 
 | Module | Purpose |
 |---|---|
-| `daemon.rs` | Main loop: register, heartbeat, accept plans |
+| `worker.rs` | The `Worker` itself: cache, filter library, data stores, env manager |
+| `server.rs` | Axum HTTP/WS server: register, heartbeat, accept plans |
 | `protocol.rs` | Message types for coordinator/worker communication |
-| `python_loader.rs` | PyO3 dynamic loading of user Python filters |
-| `capabilities.rs` | Worker self-description (GPU, RAM, Python envs) |
+| `ws_transport.rs` | WebSocket framing for plans, chunks and event streams |
+| `python_process.rs` | Runs user Python filters in an isolated interpreter process |
+| `env_manager.rs` | Per-pipeline venv/conda with incremental dependency updates |
+| `detect.rs` | Worker self-description (GPU, RAM, Python envs) |
 
 ### `soma-memory`
 
-The [experiment pool](/design/experiment-pool/): what has been tried,
+The [experiment pool](/soma/design/experiment-pool/): what has been tried,
 what it descended from, and what came of it.
 
 **Key modules:**
@@ -156,10 +167,9 @@ Autonomous agent loop for research automation.
 
 | Module | Purpose |
 |---|---|
-| `agent.rs` | Agent struct (soul, skills, hands, memory) |
-| `planner.rs` | Hypothesis-to-graph generation |
-| `analyzer.rs` | Result analysis and next-step decision |
-| `reporter.rs` | Automatic report and documentation generation |
+| `agent.rs` | Agent struct (soul, skills, hands, memory) and its loop |
+| `action.rs` | The `Action` type an agent step produces |
+| `planner.rs` | `ResearchPlan` trait: hypothesis-to-graph generation |
 
 ### `soma-python`
 
@@ -169,14 +179,33 @@ PyO3 bindings. Exposes the full API to Python.
 
 ```
 soma-python/
-├── src/lib.rs              # PyO3 module definition (PyGraph, PyStudy, PyFilterBridge)
+├── src/lib.rs              # the whole PyO3 module: PyGraph, PyStudy, PyRun, PyWorker,
+│                           #   the filter bridge, and the cache/runs/kb pyfunctions
 ├── python/soma/
-│   ├── __init__.py         # re-exports, Graph.somatize() classmethod
-│   ├── filter.py           # Filter base class with search(), >>, | operators
+│   ├── __init__.py         # re-exports; imports the modules below for their side effects
+│   ├── filter.py           # Filter base class, >> and | operators
+│   ├── search.py           # search() descriptor and FilterMeta
 │   ├── chain.py            # Chain/Fork lazy builder types
 │   ├── builder.py          # Graph materialization (_walk algorithm)
-│   ├── search.py           # search() descriptor for Python filters
-│   └── lab.py              # Remote connection
+│   ├── _orchestrator.py    # installs train/eval/forward/backward/step/materialize on Graph
+│   ├── _composite.py       # DifferentiableFilter (torch)
+│   ├── _audit.py           # gradient_audit(), AuditScope, ChannelConfig, the flags
+│   ├── _study.py           # installs search_space/apply_params/study on Graph
+│   ├── _tracking.py        # installs track_run on Graph
+│   ├── _checkpoint.py      # state/load_state/save/load, the .somack bundle
+│   ├── _compile.py         # CompileInfo (dict + notebook repr)
+│   ├── _identity.py        # cache identity: the code-fingerprint ladder
+│   ├── _runs.py            # RunView / RunList over run directories
+│   ├── _experiments.py     # reads experiments.jsonl
+│   ├── _lineage.py         # checkout/head/detach/reindex over .soma/HEAD
+│   ├── _cache_cli.py       # the `soma` CLI: cache, runs, graph, report, kb
+│   ├── cli.py              # the `somatize-worker` CLI
+│   ├── lab.py              # remote connection (connect/health/info/workers)
+│   └── viz/                # optional plotly/pandas figures — the somatize[viz] extra
 ├── pyproject.toml          # maturin build config
 └── Cargo.toml
 ```
+
+Most of the Python layer works by monkeypatching the Rust `Graph` at import
+time, which is why `soma/__init__.py` imports several modules purely for their
+side effects.

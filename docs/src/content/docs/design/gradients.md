@@ -7,14 +7,14 @@ description: How Soma pipelines support end-to-end gradient flow through differe
 
 Soma distinguishes between two kinds of graphs that serve different purposes:
 
-| | Computational Graph (Soma Pipeline) | Orchestration Graph (Platform) |
+| | Computational Graph (Soma `Graph`) | Orchestration Graph (Platform) |
 |---|---|---|
 | **Nodes** | Filters (data transformations) | LLM, Agent, Condition, Tool, IO |
 | **Purpose** | Transform data | Orchestrate reasoning |
 | **Gradients** | Yes, if filters are differentiable | No (not meaningful) |
-| **Example** | `[Scaler] → [Linear] → [Softmax]` | `[Agent: Hypothesize] → [Pipeline] → [Agent: Analyze]` |
+| **Example** | `[Scaler] → [Linear] → [Softmax]` | `[Agent: Hypothesize] → [Graph] → [Agent: Analyze]` |
 
-Soma pipelines **are** computational graphs and **should** support gradient propagation when the user implements differentiable filters.
+A Soma `Graph` **is** a computational graph, and supports gradient propagation when its filters are differentiable.
 
 ## How Gradients Flow
 
@@ -29,11 +29,11 @@ pub struct FilterMeta {
 }
 ```
 
-When all filters in a pipeline are differentiable, `pipeline.forward()` maintains the computational graph and gradients flow end-to-end:
+When all filters in a graph are differentiable, `g.forward()` maintains the autograd graph and gradients flow end-to-end:
 
 ```
-Pipeline: [Scaler] → [Linear] → [ReLU] → [Linear2]
-           diff ✓     diff ✓    diff ✓     diff ✓
+Graph: [Scaler] → [Linear] → [ReLU] → [Linear2]
+        diff ✓     diff ✓    diff ✓     diff ✓
 
 x → forward(Scaler) → forward(Linear) → forward(ReLU) → forward(Linear2) → output
                                                                                │
@@ -41,50 +41,49 @@ loss = criterion(output, target)                                               �
 loss.backward()  ← gradients flow through all forwards ◄──────────────────────┘
 ```
 
-### Pipeline Methods
+### The methods that drive it
 
-```rust
-impl Pipeline {
-    /// Differentiable forward: maintains computational graph
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut current = x.clone();
-        for (filter, state) in &self.fitted_filters {
-            current = filter.forward(&current, state)?;
-            // No detach: gradient graph accumulates
-        }
-        Ok(current)
-    }
+Gradient flow is driven from Python, where the tensors and the optimizer live.
+`soma/_orchestrator.py` installs these on `Graph`:
 
-    /// Inference: detaches after each filter (no gradients)
-    pub fn predict(&self, x: &Tensor) -> Result<Tensor> {
-        let mut current = x.clone();
-        for (filter, state) in &self.fitted_filters {
-            current = filter.forward(&current, state)?.detach();
-        }
-        Ok(current)
-    }
+| Method | What it does |
+|---|---|
+| `g.materialize(sample)` | Threads shapes through the graph and builds each filter's `nn.Module`. Must run before training or auditing. |
+| `g.train()` / `g.eval()` | Flip every differentiable filter's mode |
+| `g.parameters()` | Every parameter, in topological order, deduplicated |
+| `g.make_optimizer(cls, **kw)` | Build and attach an optimizer (default Adam) |
+| `g.context()` | Context manager scoping one training step |
+| `g.forward(x)` | Returns `(out, aux)` while training, `out` alone in eval |
+| `g.backward(ctx, loss)` | `loss.backward()`, plus the audit hook and step event |
+| `g.step(ctx)` | Optimizer step |
+| `g.freeze()` | Fold module weights into node state and switch to eval |
 
-    /// Training: fit each filter sequentially, detach between them
-    pub fn fit(&mut self, x: &Tensor, y: Option<&Tensor>) -> Result<()> {
-        let mut current = x.clone();
-        for (filter, state_slot) in &mut self.filters {
-            let state = self.resolve_or_fit(filter, &current, y)?;
-            // Detach between fits: each filter trains independently
-            current = filter.forward(&current, &state)?.detach();
-            *state_slot = Some(state);
-        }
-        Ok(())
-    }
-}
+Nothing detaches between filters while training, so the autograd graph
+accumulates across the whole topology:
+
+```python
+g.materialize(x)
+g.train()
+g.make_optimizer(torch.optim.Adam, lr=1e-2)
+
+for _ in range(epochs):
+    with g.context() as ctx:
+        g.zero_grad()
+        out, aux = g.forward(x)
+        g.backward(ctx, nn.functional.mse_loss(out, y))
+    g.step(ctx)
 ```
+
+In eval — after `freeze()`, or with `training=False` — each filter loads its
+saved state and runs under `no_grad`, so no autograd graph is built at all.
 
 ### Gradient Interruption
 
 When a non-differentiable filter appears in the pipeline, it breaks the gradient chain:
 
 ```
-Pipeline: [Scaler] → [DecisionTree] → [Linear]
-           diff ✓     diff ✗           diff ✓
+Graph: [Scaler] → [DecisionTree] → [Linear]
+        diff ✓     diff ✗           diff ✓
 
 Gradients from Linear CANNOT reach Scaler.
 Linear can still receive gradients from its own output.
@@ -148,7 +147,7 @@ warning[gradient]: Gradient flow interrupted at `DecisionTree` (FilterKind::Opaq
 
 There is an important interaction between caching and gradients:
 
-### During `predict()` (inference)
+### In eval mode (inference)
 
 Caching works normally. Each filter's output is cached and reused. No gradients needed.
 
@@ -195,7 +194,7 @@ forward() results → cacheable only in inference mode
 
 ## Use Cases
 
-### End-to-End Differentiable Pipeline
+### End-to-end differentiable graph
 
 ```python
 g = Graph.somatize(
@@ -210,13 +209,13 @@ g.fit(x_train, y_train)
 # Differentiable forward
 output = g.forward(x_test)
 loss = cross_entropy(output, y_test)
-loss.backward()  # gradients flow through entire pipeline
+loss.backward()  # gradients flow through the whole graph
 
 # Access gradients
 x_test.grad  # gradient with respect to input
 ```
 
-### Mixed Pipeline (partial gradients)
+### Mixed graph (partial gradients)
 
 ```python
 g = Graph.somatize(
@@ -231,12 +230,14 @@ output = g.forward(x)
 loss.backward()  # gradients flow from NeuralNet through Scaler
 ```
 
-### When to Use `forward()` vs `predict()`
+### Training mode vs eval mode
 
-| Method | Gradients | Caching | Use Case |
+There is one `forward()`; the mode decides what it does.
+
+| Mode | Gradients | Caching | Use case |
 |---|---|---|---|
-| `predict()` | No | Full caching | Inference, evaluation, production |
-| `forward()` | Yes | State-only caching | Training, fine-tuning, gradient analysis |
+| `g.eval()` (default) | No | Full output caching | Inference, evaluation, production |
+| `g.train()` | Yes | State-only caching | Training, fine-tuning, gradient analysis |
 
 ## Native Training Loop (Python)
 

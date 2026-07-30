@@ -8,7 +8,7 @@ description: Search spaces co-located with filters, with Bayesian, Hyperband, an
 Unlike external optimization frameworks where you define search spaces separately, Soma's search spaces are **co-located with the parameters they describe**:
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MyClassifier {
     #[soma(search(low = 0.001, high = 100.0, scale = "log"))]
     C: f64,
@@ -83,7 +83,7 @@ The derive macro infers the dimension type from the field's Rust type:
 | `i8`..`i64`, `u8`..`u64`, `usize` | `Int` | `low`, `high` (required) |
 | `bool` | `Categorical { [true, false] }` | None (automatic) |
 | `String` + `choices` | `Categorical` | `choices` (required) |
-| `enum` (with `#[derive(SomaEnum)]`) | `Categorical` | None (variants become choices) |
+| `enum` | `Categorical` | Declare the variants explicitly as choices |
 
 ### Compile-Time Validation
 
@@ -106,29 +106,29 @@ n_layers: usize,
 // compile_error!("Log scale not supported for integer fields. Use f64 or remove scale.")
 ```
 
-### Enums as Categories
+### Categorical choices
+
+List the choices explicitly. `#[soma(search)]` with no arguments auto-detects
+only `bool` (→ `Categorical[true, false]`); there is no derive that turns enum
+variants into choices.
 
 ```rust
-#[derive(Serialize, Deserialize, Clone, SomaEnum)]
-pub enum Kernel {
-    Linear,
-    Rbf,
-    Polynomial,
-}
-
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MySVM {
-    #[soma(search)]  // no args needed: enum variants become choices
-    kernel: Kernel,
+    #[soma(search(choices = ["linear", "rbf", "polynomial"]))]
+    kernel: String,
 
     #[soma(search(low = 0.001, high = 100.0, scale = "log"))]
     C: f64,
+
+    #[soma(search)]  // bool: becomes Categorical[true, false]
+    shrinking: bool,
 }
 ```
 
 ## The Searchable Trait
 
-Generated automatically by `#[derive(Filter)]`:
+Generated automatically by `#[derive(SomaFilter)]`:
 
 ```rust
 pub trait Searchable {

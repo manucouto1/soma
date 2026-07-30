@@ -5,7 +5,7 @@ description: The API over the experiment pool — what it stores, how to query i
 
 This page documents the `KnowledgeBase` API. For *why* the pool is
 shaped the way it is — fingerprints, derivation moves, the scoring
-formula — see [Experiment Pool](/design/experiment-pool/).
+formula — see [Experiment Pool](/soma/design/experiment-pool/).
 
 ## What it is
 
@@ -74,9 +74,10 @@ soma.reindex()                   # rebuild the journal from .soma/runs/
 From the CLI:
 
 ```bash
-soma kb head
-soma kb checkout run_20260730T160239_c38a
-soma kb reindex
+soma kb head                                    # what the next run descends from
+soma kb checkout run_20260730T160239_c38a       # branch from an earlier run
+soma kb detach                                  # start a new line
+soma kb reindex                                 # rebuild the journal from run dirs
 ```
 
 ## Querying from Rust
@@ -137,7 +138,7 @@ from the last three values of the line's first metric.
 ## MCP
 
 Seven tools expose the pool to a model. See
-[Experiment Pool](/design/experiment-pool/#mcp-tools) for the full
+[Experiment Pool](/soma/design/experiment-pool/#mcp-tools) for the full
 table; in short: `kb_find_similar`, `kb_lineage`, `kb_diff`,
 `kb_record_conclusion`, `kb_branch_from`, `kb_summarize_run`,
 `kb_stats`.
@@ -162,7 +163,7 @@ should not be planned around:
   BM25.
 - **There is no tiered hot/warm/cold storage.** The journal is one
   append-only file. The *computation cache* is tiered
-  ([Caching](/design/caching/)); the experiment pool is not.
+  ([Caching](/soma/design/caching/)); the experiment pool is not.
 - **There is no `velocity` or `acceleration`.** `ResearchLine` carries a
   categorical `trend` and the best metric value.
 - **There is no `kb.compare()` or `lab.knowledge_base()`.** Use

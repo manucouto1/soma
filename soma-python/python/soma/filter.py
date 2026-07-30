@@ -26,7 +26,7 @@ class Filter(metaclass=FilterMeta):
 
     1. **Parameters** (constructor args / search spaces):
        - Passed via constructor: ``KNN(n_neighbors=5)``
-       - Or defined as search spaces: ``n_neighbors = search.int(1, 15)``
+       - Or defined as search spaces: ``n_neighbors = search(1, 15)``
        - Live on ``self`` — used in both ``fit()`` and ``forward()``
        - Cached by config_hash (change params → new cache key)
 
@@ -45,8 +45,8 @@ class Filter(metaclass=FilterMeta):
 
         class KNN(Filter):
             # Search space parameters (optimizable)
-            n_neighbors = search.int(1, 15)
-            weights = search.categorical(["uniform", "distance"])
+            n_neighbors = search(1, 15)
+            weights = search(choices=["uniform", "distance"])
 
             # Fixed parameter (not in search space)
             metric: str = "euclidean"
