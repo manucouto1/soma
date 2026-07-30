@@ -155,7 +155,11 @@ invocation; a submodule reachable under two names is audited under the
 first `named_modules()` name.
 
 `notebooks/08_auditing_inside_nodes.ipynb` walks all of this end to
-end on a real vanishing-gradient stack.
+end on a real vanishing-gradient stack, and
+`notebooks/09_complex_architectures_and_health.ipynb` audits a
+branched multimodal model with four engineered pathologies — dying-ReLU
+channels, weight-collapsed branches (CKA leakage), a gradient-starved
+branch, and a vanishing trunk — all caught at default thresholds.
 
 ## Standalone (no `Graph`)
 

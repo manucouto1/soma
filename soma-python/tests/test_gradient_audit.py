@@ -552,3 +552,93 @@ def test_differentiable_filter_repr_html_shows_architecture():
     assert "Linear" in html, "submodule class names in the diagram"
     assert "θ" in html, "parameter counts as sublabels"
     assert html.count("marker-end") == 2, "3 children chained by 2 edges"
+
+
+def test_complex_multimodal_health_e2e(tmp_path):
+    """Engineered pathologies on a branched model must all fire at
+    DEFAULT thresholds: dying-ReLU channels, weight-collapsed branches
+    (CKA leakage), and a gradient-starved branch — with rollup to the
+    parent node. Mirrors notebooks/09."""
+    import soma
+    from soma import ChannelConfig
+
+    class MultiModal(DifferentiableFilter):
+        def build_module(self, input_shape):
+            branches = nn.ModuleDict(
+                {
+                    "audio": nn.Sequential(nn.Linear(16, 16), nn.ReLU()),
+                    "text": nn.Sequential(nn.Linear(16, 16), nn.ReLU()),
+                }
+            )
+            with torch.no_grad():
+                # leakage: branches collapsed to identical weights
+                branches["text"][0].weight.copy_(branches["audio"][0].weight)
+                branches["text"][0].bias.copy_(branches["audio"][0].bias)
+            post = nn.Sequential(nn.Linear(32, 32), nn.ReLU())
+            with torch.no_grad():
+                post[0].bias[-4:] = -6.0  # dying ReLU after the fusion
+            return nn.ModuleDict(
+                {
+                    "branches": branches,
+                    "mix": nn.Identity(),
+                    "post": post,
+                    "ctx": nn.Linear(32, 4),  # gated to zero in forward
+                    "head": nn.Linear(32, 4),
+                }
+            )
+
+        def output_shape(self, input_shape):
+            return (4,)
+
+        def forward(self, x, state=None):
+            x_t = x if isinstance(x, torch.Tensor) else torch.as_tensor(x)
+            self.materialize(tuple(x_t.shape[1:]))
+            m = self._module
+            a = m["branches"]["audio"](x_t[:, :16])
+            t = m["branches"]["text"](x_t[:, 16:])
+            mixed = m["mix"](torch.cat([a, t], dim=1))
+            out = m["head"](m["post"](mixed)) + 0.0 * m["ctx"](mixed)
+            return (out, {}) if self.training else (out.detach().tolist(), {})
+
+    torch.manual_seed(0)
+    g = Graph()
+    g.node("encoder", MultiModal())
+    audio = torch.randn(64, 16)
+    x = torch.cat([audio, audio * 0.97 + 0.05 * torch.randn(64, 16)], dim=1)
+    y = torch.randn(64, 4)
+    g.materialize(x)
+    g.train()
+    g.make_optimizer(torch.optim.Adam, lr=1e-3)
+
+    cfg = ChannelConfig(
+        snapshot_every=1,
+        groups={"encoder/mix": {"audio": range(0, 16), "text": range(16, 32)}},
+    )
+    with g.track_run("mm-health", root=str(tmp_path)):
+        with g.gradient_audit(
+            inside={"encoder": ["branches.audio", "branches.text", "mix", "post", "ctx"]},
+            channels=cfg,
+        ) as audit:
+            for _ in range(3):
+                _train_step(g, x, y)
+
+    by_id = {f.filter_id: f for f in audit.report().filters}
+    post_flags = by_id["encoder/post"].flags
+    assert any(f.startswith("DEAD_CHANNELS") for f in post_flags), post_flags
+    assert by_id["encoder/post"].metrics["dead_channels"] >= 4
+    assert "LEAKAGE" in by_id["encoder/mix"].flags
+    assert by_id["encoder/mix"].metrics["max_group_cka"] > 0.95
+    assert any(f.startswith("IGNORED_CHANNELS") for f in by_id["encoder/ctx"].flags)
+
+    # Rollup: the parent DAG node carries every family, naming layers.
+    view = soma.RunView(soma.runs(str(tmp_path))[0].dir)
+    parent = {
+        f["flag"]: f["detail"]
+        for f in view.health_flags()
+        if f["node_id"] == "encoder" and f["detail"].startswith("in: ")
+    }
+    assert "DEAD_CHANNELS" in parent and "post" in parent["DEAD_CHANNELS"]
+    assert "LEAKAGE" in parent and "mix" in parent["LEAKAGE"]
+    assert "IGNORED_CHANNELS" in parent
+    # And the outer SVG shows the flagged node.
+    assert "#fff3e0" in view.to_svg(), "encoder painted as flagged"
