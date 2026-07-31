@@ -3,19 +3,33 @@
 //! Deliberately small. A user should be able to write
 //!
 //! ```python
-//! g.step("researcher", soma.Agent(model="ollama/llama3.2", tools=[search]))
+//! g.node("researcher", soma.Agent(model="ollama/llama3.2", tools=[search]))
 //! ```
 //!
 //! without meeting `Effect`, `Transition` or `StepCtx` — those are the
-//! substrate, and the substrate is not the interface. The escape hatch for
-//! anyone who does need them is `PyStepBridge`, which lets a Python class
-//! implement `Step` directly.
+//! substrate, and the substrate is not the interface. `node` dispatches on
+//! what it is handed, so an agent goes in exactly where a filter would;
+//! there is no separate `step` method, and there could not be, because
+//! `Graph.step` already means the optimizer's step.
+//!
+//! The escape hatch, for anyone who does need them, is `PyStepBridge`: any
+//! Python object with a `poll(ctx)` method is a step, duck-typed the way a
+//! filter's `forward` is. It returns a `{"transition": ...}` mapping — the
+//! helpers in `soma.agentic` build them — which is what makes
+//! `Transition::Spawn`, and with it dynamic fan-out, reachable from Python
+//! at all. `poll` takes the GIL on whichever thread the driver is using, so
+//! Python steps fan out for I/O concurrency rather than CPU parallelism.
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use somatize_core::cache::CacheKey;
+use somatize_core::effect::{
+    Effect, EffectResult, JoinPolicy, LlmRequest, NodeSpec, SuspendReason,
+};
 use somatize_core::error::{Result as SomaResult, SomaError};
-use somatize_core::step::Step;
+use somatize_core::message::Message;
+use somatize_core::step::{Step, StepMeta, Transition};
 use somatize_core::tool::ToolSpec;
 use somatize_core::value::Value;
 use somatize_llm::tools::ToolOutcome;
@@ -463,6 +477,336 @@ impl PyJudge {
     }
 }
 
+// ── A Python class implementing `Step` ──
+
+/// What a step's `poll` is handed: this turn, and everything before it.
+///
+/// Read-only on purpose. A step that accumulates rebuilds what it needs
+/// from `history` rather than keeping it on `self`, because replay feeds
+/// back the identical results and a field would drift from them.
+#[pyclass(name = "StepCtx", module = "soma")]
+pub struct PyStepCtx {
+    #[pyo3(get)]
+    node_id: String,
+    #[pyo3(get)]
+    run_id: String,
+    #[pyo3(get)]
+    input: PyObject,
+    #[pyo3(get)]
+    turn: usize,
+    /// Results of the effects requested last turn, in request order.
+    #[pyo3(get)]
+    results: Py<PyList>,
+    /// Every turn's results, oldest first.
+    #[pyo3(get)]
+    history: Py<PyList>,
+}
+
+#[pymethods]
+impl PyStepCtx {
+    /// The single result of a one-effect turn, or None on turn 0.
+    fn result(&self, py: Python<'_>) -> Option<PyObject> {
+        self.results.bind(py).iter().next().map(|o| o.unbind())
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        format!(
+            "StepCtx(node_id={:?}, turn={}, results={})",
+            self.node_id,
+            self.turn,
+            self.results.bind(py).len()
+        )
+    }
+}
+
+fn effect_result_to_py(py: Python<'_>, result: &EffectResult) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    match result {
+        EffectResult::Llm(response) => {
+            dict.set_item("kind", "llm")?;
+            dict.set_item("text", response.message.text())?;
+        }
+        EffectResult::Tool { output, is_error } => {
+            dict.set_item("kind", "tool")?;
+            dict.set_item("output", crate::value_to_py(py, output)?)?;
+            dict.set_item("is_error", *is_error)?;
+        }
+        EffectResult::Graph(value) => {
+            dict.set_item("kind", "graph")?;
+            dict.set_item("output", crate::value_to_py(py, value)?)?;
+        }
+        EffectResult::Node(value) => {
+            dict.set_item("kind", "node")?;
+            dict.set_item("output", crate::value_to_py(py, value)?)?;
+        }
+        EffectResult::Slept => {
+            dict.set_item("kind", "slept")?;
+        }
+        EffectResult::Custom(value) => {
+            dict.set_item("kind", "custom")?;
+            dict.set_item("output", crate::value_to_py(py, value)?)?;
+        }
+        EffectResult::Failed { message } => {
+            dict.set_item("kind", "failed")?;
+            dict.set_item("message", message)?;
+        }
+        // `EffectResult` is `#[non_exhaustive]`: a variant added upstream
+        // must still reach Python as *something* rather than panicking.
+        other => {
+            dict.set_item("kind", "unknown")?;
+            dict.set_item("message", format!("{other:?}"))?;
+        }
+    }
+    dict.set_item("is_error", result.is_error())?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Read one `{"transition": ...}` mapping into a `Transition`.
+///
+/// The protocol is a dict rather than a class hierarchy so that the Rust
+/// side has one thing to parse and Python keeps ordinary data. The helpers
+/// in `soma.agentic` build these dicts.
+fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transition> {
+    let dict = obj.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err(format!(
+            "poll() must return one of soma.Done / Await / Spawn / Goto / Suspend \
+             (a dict with a `transition` key), got {}",
+            obj.get_type()
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_default()
+        ))
+    })?;
+
+    let kind: String = dict
+        .get_item("transition")?
+        .ok_or_else(|| {
+            PyValueError::new_err(
+                "poll() returned a dict with no `transition` key. Use soma.Done(value), \
+                 soma.Spawn(...), soma.Await(...), soma.Goto(...) or soma.Suspend(...)",
+            )
+        })?
+        .extract()?;
+
+    let get = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> { dict.get_item(name) };
+
+    match kind.as_str() {
+        "done" => {
+            let value = match get("value")? {
+                Some(v) => py_to_value(py, &v)?,
+                None => Value::Empty,
+            };
+            Ok(Transition::Done(value))
+        }
+
+        "spawn" => {
+            let specs_obj = get("specs")?.ok_or_else(|| {
+                PyValueError::new_err("soma.Spawn needs `specs`, a list of soma.Run(...)")
+            })?;
+            let mut specs = Vec::new();
+            for item in specs_obj.try_iter()? {
+                let item = item?;
+                let spec = item.downcast::<PyDict>().map_err(|_| {
+                    PyValueError::new_err("each spawn spec must be a soma.Run(...) mapping")
+                })?;
+                let runs: String = spec
+                    .get_item("runs")?
+                    .ok_or_else(|| {
+                        PyValueError::new_err(
+                            "a spawn spec needs `runs`: the id of a step registered in \
+                             this graph",
+                        )
+                    })?
+                    .extract()?;
+                let input = match spec.get_item("input")? {
+                    Some(v) => py_to_value(py, &v)?,
+                    None => Value::Empty,
+                };
+                let mut node_spec = NodeSpec::new(runs, input);
+                if let Some(label) = spec.get_item("label")?
+                    && !label.is_none()
+                {
+                    node_spec = node_spec.with_label(label.extract::<String>()?);
+                }
+                specs.push(node_spec);
+            }
+
+            let join = match get("join")? {
+                Some(j) if !j.is_none() => match j.extract::<String>()?.as_str() {
+                    "all" => JoinPolicy::All,
+                    "first" => JoinPolicy::First,
+                    "all_settled" | "settled" => JoinPolicy::AllSettled,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "unknown join policy {other:?}; expected \"all\", \"first\" or \
+                             \"all_settled\""
+                        )));
+                    }
+                },
+                _ => JoinPolicy::default(),
+            };
+            Ok(Transition::Spawn { specs, join })
+        }
+
+        "await" => {
+            let effects_obj = get("effects")?
+                .ok_or_else(|| PyValueError::new_err("soma.Await needs `effects`"))?;
+            let mut effects = Vec::new();
+            for item in effects_obj.try_iter()? {
+                effects.push(parse_effect(py, &item?)?);
+            }
+            if effects.is_empty() {
+                return Err(PyValueError::new_err(
+                    "soma.Await with no effects would poll again unchanged, forever. \
+                     Return soma.Done(...) instead",
+                ));
+            }
+            Ok(Transition::Await(effects))
+        }
+
+        "goto" => {
+            let target: String = get("target")?
+                .ok_or_else(|| PyValueError::new_err("soma.Goto needs `target`"))?
+                .extract()?;
+            let carry = match get("carry")? {
+                Some(v) => py_to_value(py, &v)?,
+                None => Value::Empty,
+            };
+            Ok(Transition::Goto { target, carry })
+        }
+
+        "suspend" => {
+            // A suspension from Python is a question for a person: that is
+            // what `soma.Suspend("...")` reads as, and `resume_with` answers.
+            let reason = match get("reason")? {
+                Some(r) if !r.is_none() => SuspendReason::Human {
+                    prompt: r.extract::<String>()?,
+                    schema: None,
+                },
+                _ => SuspendReason::Human {
+                    prompt: "waiting".into(),
+                    schema: None,
+                },
+            };
+            Ok(Transition::Suspend { reason })
+        }
+
+        other => Err(PyValueError::new_err(format!(
+            "unknown transition {other:?}; expected done, await, spawn, goto or suspend"
+        ))),
+    }
+}
+
+/// Read one `{"effect": ...}` mapping into an `Effect`.
+fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
+    let dict = obj
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("an effect must be a mapping, e.g. soma.Llm(...)"))?;
+    let kind: String = dict
+        .get_item("effect")?
+        .ok_or_else(|| PyValueError::new_err("an effect needs an `effect` key"))?
+        .extract()?;
+
+    match kind.as_str() {
+        "llm" => {
+            let model: String = dict
+                .get_item("model")?
+                .ok_or_else(|| PyValueError::new_err("soma.Llm needs `model`"))?
+                .extract()?;
+            let prompt: String = dict
+                .get_item("prompt")?
+                .ok_or_else(|| PyValueError::new_err("soma.Llm needs `prompt`"))?
+                .extract()?;
+            let mut request = LlmRequest::new(model, vec![Message::user(prompt)].into());
+            if let Some(system) = dict.get_item("system")?
+                && !system.is_none()
+            {
+                request = request.with_system(system.extract::<String>()?);
+            }
+            Ok(Effect::Llm(request))
+        }
+        "tool" => {
+            let name: String = dict
+                .get_item("name")?
+                .ok_or_else(|| PyValueError::new_err("soma.ToolCall needs `name`"))?
+                .extract()?;
+            let args = match dict.get_item("args")? {
+                Some(a) => py_to_value(py, &a)?,
+                None => Value::Empty,
+            };
+            Ok(Effect::Tool { name, args })
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unknown effect {other:?}; expected llm or tool"
+        ))),
+    }
+}
+
+/// A Python class acting as a `Step`.
+///
+/// The mirror of `PyFilterBridge`, and the reason `Transition::Spawn` is
+/// reachable from Python at all: dynamic fan-out needs a step that decides
+/// the width at runtime, and until now every step was Rust.
+///
+/// `poll` is called on whichever thread the driver is using — spawned
+/// children run concurrently — so each call takes the GIL. Python steps
+/// therefore fan out for I/O concurrency, not for CPU parallelism.
+struct PyStepBridge {
+    py_obj: PyObject,
+    name: String,
+    config_hash_val: CacheKey,
+    max_turns: usize,
+}
+
+impl Step for PyStepBridge {
+    fn config_hash(&self) -> CacheKey {
+        self.config_hash_val.clone()
+    }
+
+    fn meta(&self) -> StepMeta {
+        StepMeta::new(&self.name).with_max_turns(self.max_turns)
+    }
+
+    fn poll(&self, ctx: &somatize_core::step::StepCtx<'_>) -> SomaResult<Transition> {
+        Python::with_gil(|py| {
+            // Build the context, then poll. Everything Python-side is fallible
+            // in PyErr terms, so it is assembled in one closure and converted
+            // at the boundary rather than at every `?`.
+            let build = || -> PyResult<Transition> {
+                let results = PyList::empty(py);
+                for result in ctx.results {
+                    results.append(effect_result_to_py(py, result)?)?;
+                }
+                let history = PyList::empty(py);
+                for turn in ctx.history {
+                    let entry = PyList::empty(py);
+                    for result in turn {
+                        entry.append(effect_result_to_py(py, result)?)?;
+                    }
+                    history.append(entry)?;
+                }
+
+                let py_ctx = PyStepCtx {
+                    node_id: ctx.node_id.to_string(),
+                    run_id: ctx.run_id.to_string(),
+                    input: crate::value_to_py(py, ctx.input)?,
+                    turn: ctx.turn,
+                    results: results.unbind(),
+                    history: history.unbind(),
+                };
+
+                let returned = self.py_obj.call_method1(py, "poll", (py_ctx,))?;
+                parse_transition(py, returned.bind(py))
+            };
+            build().map_err(|e| SomaError::Other(format!("Python step `{}`: {e}", self.name)))
+        })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Anything that can become a node in the graph.
 pub(crate) enum StepSpec {
     Agent {
@@ -472,19 +816,26 @@ pub(crate) enum StepSpec {
     Judge {
         step: Arc<dyn Step>,
     },
+    /// A Python class with a `poll` method.
+    Custom {
+        step: Arc<dyn Step>,
+        name: String,
+    },
 }
 
 impl StepSpec {
     pub(crate) fn step(&self) -> Arc<dyn Step> {
         match self {
-            Self::Agent { step, .. } | Self::Judge { step } => step.clone(),
+            Self::Agent { step, .. } | Self::Judge { step } | Self::Custom { step, .. } => {
+                step.clone()
+            }
         }
     }
 
     pub(crate) fn tools(&self) -> &[PyTool] {
         match self {
             Self::Agent { tools, .. } => tools,
-            Self::Judge { .. } => &[],
+            Self::Judge { .. } | Self::Custom { .. } => &[],
         }
     }
 
@@ -493,6 +844,7 @@ impl StepSpec {
         match self {
             Self::Agent { .. } => "Agent".into(),
             Self::Judge { .. } => "Judge".into(),
+            Self::Custom { name, .. } => name.clone(),
         }
     }
 }
@@ -529,9 +881,47 @@ pub(crate) fn to_step_spec(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<S
         });
     }
 
-    let _ = py;
+    // Anything with a `poll` method is a step. Duck typing rather than a
+    // required base class, for the same reason filters accept duck-typed
+    // `forward`: a user's class should not have to inherit from us.
+    if obj.hasattr("poll")? {
+        // Same identity ladder as a filter — qualname, canonical config, then
+        // the source-hash fallback — so a step's journal key is as stable as a
+        // filter's cache key, and unstable for the same reasons.
+        let identity_mod = py.import("soma._identity")?;
+        let identity = identity_mod.call_method1("filter_identity", (obj,))?;
+        let qualname: String = identity.get_item("qualname")?.extract()?;
+        let config_json: String = identity.get_item("config_json")?.extract()?;
+        let code_fp: String = identity.get_item("code_fp")?.extract()?;
+
+        let name: String = obj
+            .get_type()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|_| "Step".to_string());
+        let max_turns: usize = match obj.getattr("max_turns") {
+            Ok(v) if !v.is_none() => v.extract()?,
+            _ => StepMeta::new(&name).max_turns,
+        };
+
+        return Ok(StepSpec::Custom {
+            step: Arc::new(PyStepBridge {
+                py_obj: obj.clone().unbind(),
+                name: name.clone(),
+                config_hash_val: CacheKey::from_parts(&[
+                    b"soma-step-v1",
+                    qualname.as_bytes(),
+                    config_json.as_bytes(),
+                    code_fp.as_bytes(),
+                ]),
+                max_turns,
+            }),
+            name,
+        });
+    }
+
     Err(PyValueError::new_err(format!(
-        "step() expects a soma.Agent or soma.Judge, got {}",
+        "expected a soma.Agent, a soma.Judge, or an object with a poll() method, got {}",
         obj.get_type().name()?
     )))
 }

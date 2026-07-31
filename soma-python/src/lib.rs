@@ -23,7 +23,7 @@ use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
 use somatize_core::value::Value;
 mod agentic;
 
-use agentic::{PyAgent, PyJudge, PyTool, PyToolAdapter, to_step_spec};
+use agentic::{PyAgent, PyJudge, PyStepCtx, PyTool, PyToolAdapter, to_step_spec};
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};
 use somatize_runtime::effects::{EffectDriver, EffectJournal};
@@ -180,6 +180,16 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::tensor(arr, vec![len]));
     }
 
+    // A non-numeric list — `["summarise", "critique"]`, a plan, a list of
+    // records. Numeric lists were caught above and stay tensors, so no
+    // existing cache key moves; this only rescues what used to be a flat
+    // "cannot convert" on the most ordinary thing to hand a fan-out.
+    if obj.is_instance_of::<PyList>()
+        && let Some(json) = as_json_dict(py, obj)?
+    {
+        return Ok(Value::json(json));
+    }
+
     if obj.is_instance_of::<PyDict>() {
         // A dict that JSON can hold *becomes* JSON. An opaque pickle is
         // unreadable to everything outside this process: a loop cannot read
@@ -203,6 +213,29 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
     if obj.is_instance_of::<pyo3::types::PyBool>() {
         return Ok(Value::json(serde_json::Value::Bool(obj.extract::<bool>()?)));
+    }
+
+    // A bare number, like a bare bool, used to be an outright error — which
+    // made `Spawn([Run("worker", 3)])` fail on the most obvious thing anyone
+    // would write. JSON rather than a 1-element tensor so it comes back as a
+    // number, and so a loop or a branch can still read it.
+    //
+    // After the bool check, never before it: in Python `bool` *is* an `int`,
+    // and `True` would extract as `1`.
+    if obj.is_instance_of::<pyo3::types::PyInt>()
+        && let Ok(i) = obj.extract::<i64>()
+    {
+        return Ok(Value::json(serde_json::Value::from(i)));
+    }
+    if obj.is_instance_of::<pyo3::types::PyFloat>()
+        && let Ok(f) = obj.extract::<f64>()
+    {
+        // NaN and the infinities have no JSON spelling; they stay tensors
+        // rather than becoming null and losing the value silently.
+        return Ok(match serde_json::Number::from_f64(f) {
+            Some(n) => Value::json(serde_json::Value::Number(n)),
+            None => Value::tensor(vec![f], vec![1]),
+        });
     }
 
     if let Ok(s) = obj.extract::<String>() {
@@ -2333,6 +2366,37 @@ impl PyGraph {
         Ok(actual_id)
     }
 
+    /// Register a step that can be *spawned* but is not a node in the graph.
+    ///
+    /// `Spawn` names the work it wants by id, and that id is looked up in the
+    /// step library — which `node()` also fills. But a node with no edges is
+    /// a root, so registering a spawn target with `node()` makes it run once
+    /// on the graph's own input as well, which is wasted work and a confusing
+    /// reading of the diagram.
+    ///
+    /// ```python
+    /// g.node("fanout", Planner())        # decides the width at runtime
+    /// g.register_step("worker", Worker())  # spawnable, never a root
+    /// ```
+    ///
+    /// The returned id is the one `Spawn` should name.
+    fn register_step(
+        &mut self,
+        py: Python<'_>,
+        step_id: &str,
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<String> {
+        let spec = to_step_spec(py, obj)?;
+        for tool in spec.tools() {
+            self.tools
+                .insert(tool.tool_name().to_string(), tool.clone());
+        }
+        self.steps.register_arc(step_id, spec.step());
+        self.live_steps
+            .insert(step_id.to_string(), obj.clone().unbind());
+        Ok(step_id.to_string())
+    }
+
     /// Add a node that routes: it runs `condition`, reads the arm label out
     /// of the result, and executes only that arm.
     ///
@@ -2622,6 +2686,24 @@ impl PyGraph {
     /// Alias for edge().
     fn connect(&mut self, source: String, target: String) {
         self.edge(source, target);
+    }
+
+    /// Declare that `source` may hand control to `target`.
+    ///
+    /// This is what `soma.Goto(target)` needs: a handoff transfers control
+    /// rather than passing data, so it is a control edge and not a
+    /// `connect`. Declaring it is deliberate — a step that hands control
+    /// somewhere the graph never said it could is an error rather than a
+    /// silent jump, which is the inter-agent misalignment the multi-agent
+    /// literature keeps finding.
+    ///
+    /// ```python
+    /// g.node("triage", Triage())
+    /// g.node("billing", soma.Agent(model="ollama/qwen2.5"))
+    /// g.handoff("triage", "billing")   # now Goto("billing") is allowed
+    /// ```
+    fn handoff(&mut self, source: &str, target: &str) {
+        self.control_edge(source, target, None);
     }
 
     /// Fit all trainable filters in topological order.
@@ -4678,6 +4760,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAgent>()?;
     m.add_class::<PyJudge>()?;
     m.add_class::<PyTool>()?;
+    m.add_class::<PyStepCtx>()?;
     m.add_function(wrap_pyfunction!(agentic::tool, m)?)?;
     m.add_function(wrap_pyfunction!(agentic::providers, m)?)?;
     m.add_function(wrap_pyfunction!(agentic::models, m)?)?;
