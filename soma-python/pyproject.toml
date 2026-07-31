@@ -38,10 +38,12 @@ module-name = "soma._soma"
 
 [tool.pytest.ini_options]
 # Slow tests (subprocess crash-sim, statistical TPE validation) are
-# opt-in: run them with `pytest -m slow`.
-addopts = "-m 'not slow'"
+# opt-in: run them with `pytest -m slow`. Live tests need real endpoints
+# and a key, so they are opt-in twice over: `-m live` plus $SOMA_LIVE.
+addopts = "-m 'not slow and not live'"
 markers = [
     "slow: expensive robustness tests (crash-sim subprocess, statistical TPE)",
+    "live: hits real LLM endpoints; needs $SOMA_LIVE and provider credentials",
 ]
 
 [tool.coverage.run]
