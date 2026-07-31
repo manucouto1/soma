@@ -18,7 +18,8 @@ soma/
 ├── soma-coordinator/       # worker registry, routing, health monitoring
 ├── soma-worker/            # remote execution daemon
 ├── soma-memory/            # KnowledgeBase + ChronosVector integration
-├── soma-agent/             # autonomous agent loop
+├── soma-agent/             # ResearchStep: the research loop as a Step
+├── soma-llm/               # providers (OpenAI-compatible), tools, MCP client
 ├── soma-mcp/               # MCP server for agent integration
 ├── soma-python/            # PyO3 bindings (pip install somatize)
 ├── notebooks/              # nine executed tutorial notebooks
@@ -161,15 +162,19 @@ what it descended from, and what came of it.
 
 ### `soma-agent`
 
-Autonomous agent loop for research automation.
+The research loop, as a `Step`. Proposes an experiment, runs it via
+`Effect::Graph`, reads the metrics, decides whether to continue.
 
 **Key modules:**
 
 | Module | Purpose |
 |---|---|
-| `agent.rs` | Agent struct (soul, skills, hands, memory) and its loop |
-| `action.rs` | The `Action` type an agent step produces |
-| `planner.rs` | `ResearchPlan` trait: hypothesis-to-graph generation |
+| `research.rs` | `ResearchStep`: the loop, its prompt, and its record-keeping |
+| `action.rs` | `Action` — `RunExperiment` or `Conclude`, and nothing else |
+
+It owns no loop, no journal and no record type: those are the effect
+driver's, the journal's and `somatize-memory`'s. See
+[Agents & Memory](/soma/platform/agents/).
 
 ### `soma-python`
 

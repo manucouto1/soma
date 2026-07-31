@@ -29,40 +29,49 @@ cd docs && npm run build   # production build
 cargo doc --workspace --open  # Rust API docs
 ```
 
-## Workspace (11 crates)
+## Workspace (12 crates)
 
 ```
 soma-macros     → proc macro (#[derive(SomaFilter)])
 soma-core       → types, traits, serialization ONLY (no execution logic):
-                  Filter, Value, Graph, Event, Schema, VirtualValue, Search, Study,
+                  Filter, Step, Value, Graph, Event, Schema, VirtualValue, Search, Study,
+                  Effect/Transition, Message/ContentBlock, ToolSpec, LoopCondition,
                   TrainingStrategy, DataStore (Local/S3/Zarr), StreamCache
 soma-compiler   → Graph → ExecutionPlan (cache resolution, schema validation, distribution)
                   Scheduler (distribute plan across workers), ExecutionPlan visualization
 soma-runtime    → GraphSession (primary orchestrator), parallel executor (threads),
-                  FilterLibrary (unified registry), stream executor,
+                  FilterLibrary + StepLibrary, EffectDriver + EffectJournal + GraphHandler,
+                  stream executor,
                   LRU/local/tiered cache, Grid/Random/Bayesian samplers,
                   Median/Percentile pruners, StudyRunner, PbtRunner
 soma-memory     → Experiment pool: ExperimentRecord (experiments.jsonl), DerivationMove,
                   BM25+structural retrieval, KnowledgeBase trait + MemoryKB/FileKB/ChronosKB
 soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
                   (isolated venv/conda per pipeline), Axum HTTP/WS server
-soma-agent      → Agent loop, Action, ResearchPlan trait
+soma-llm        → LlmProvider + OpenAI-compatible client (ollama/hf/nvidia/kimi/glm/
+                  deepseek/groq/vllm...), provider catalog as TOML data, Toolbox,
+                  MCP client, ReactStep/JudgeStep
+soma-agent      → ResearchStep: the research loop as a Step (propose → Effect::Graph →
+                  read metrics → conclude). Action = RunExperiment | Conclude
 soma-mcp        → MCP server (20 tools: code, knowledge, project, 7 experiment-pool kb_*)
 soma-coordinator→ worker registry, routing, heartbeat monitoring
-soma-python     → PyO3 bindings: Graph (primary API), Filter, Study, Run, RunView, soma.viz
+soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, Tool,
+                  Study, Run, RunView, soma.viz, soma.agentic
 soma/           → facade crate (`somatize`) re-exporting the workspace
-docs/           → 34 Starlight pages (sidebar guard: `cd docs && npm run check`)
-notebooks/      → 12 executed tutorial notebooks (10-12 are one campaign, sharing
-                  campaign.py); re-run with `python notebooks/execute.py`
+docs/           → 35 Starlight pages (sidebar guard: `cd docs && npm run check`)
+notebooks/      → 13 executed tutorial notebooks (10-12 are one campaign, sharing
+                  campaign.py; 13 is agentic, with an embedded mock provider so it
+                  runs with no key); re-run with `python notebooks/execute.py`
 ```
 
 ## Tests
 
 ```bash
-# 1043 total: 698 Rust + 345 Python (incl. property tests and 4 robustness tests)
+# 1267 total: 870 Rust + 397 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
+cd soma-python && SOMA_LIVE=1 pytest tests/ -m live # real endpoints: needs OLLAMA_HOST / NVIDIA_API_KEY
 cargo test -p somatize-memory --features chronos    # +ChronosVector tests
 
 # Coverage (informational, no gate)
@@ -147,6 +156,19 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   at 0.6 for failures that carry a conclusion (dead ends must stay retrievable).
   `soma-mcp/render.rs` holds the pure text renderers — the MCP text IS the API, every
   result ends with a `next:` line and a `run_dir:`.
+- **Agentic layer** (`design/agentic.md`): a flow is a graph whose nodes are effectful.
+  `Step` (sync `poll` → `Transition`; a driver performs the effects) sits beside `Filter`.
+  A filter memoizes by content; a step *journals* — pure effects keyed by content, impure
+  ones by `(run, node, turn, index)`: record once, replay on resume, never re-run.
+  Six structural NodeKinds; every behaviour (LLM, tool, judge, router) is library, and
+  every pattern is a function in `soma.agentic` returning a Graph.
+  Control flow: compiler claims loop bodies / branch arms by **dominance**, resolves
+  `BodyTerminal` → `WhenSignaled(node)`, and `ExecutionPlan::Loop` carries `carry_from`
+  separately from `until` (what a loop carries ≠ what stops it). A branch passes its
+  *input* to the chosen arm — the selector is control, not data.
+  `Effect::Graph` + `GraphHandler` make a pipeline a first-class tool for an agent.
+  Searchable: `soma.Agent(model=search(...), system=search(...))` and `g.optional(a, b)`
+  (topology as a dimension) fold into the same `search_space()` a filter graph produces.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.
 
 ## MCP Server

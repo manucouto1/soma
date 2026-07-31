@@ -69,6 +69,7 @@ export default defineConfig({
 						{ label: 'Streaming', slug: 'design/streaming' },
 						{ label: 'Gradient Propagation', slug: 'design/gradients' },
 						{ label: 'Compiler & Execution Plans', slug: 'design/compiler' },
+						{ label: 'Agentic Graphs', slug: 'design/agentic' },
 						{ label: 'Event System', slug: 'design/events' },
 						{ label: 'Experiment Tracking', slug: 'design/tracking' },
 						{ label: 'Experiment Pool', slug: 'design/experiment-pool' },
