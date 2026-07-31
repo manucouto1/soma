@@ -15,7 +15,7 @@ unchanged — schema checking on the edges, the persistent cache, ``search()``
 over a node's attributes, ``Study`` with pruning, the run tracker and the
 experiment pool.
 
-    from soma.agentic import react, route, refine, debate, parallel_vote
+    from soma.agentic import react, route, refine, debate, board, parallel_vote
 
     g = refine(
         worker=soma.Agent(model="ollama/qwen2.5", system="Write a haiku."),
@@ -35,10 +35,22 @@ from soma.filter import Filter
 
 __all__ = [
     "Revise",
+    "Brief",
+    "MajorityVote",
+    "Fanout",
+    "Done",
+    "Await",
+    "Spawn",
+    "Goto",
+    "Suspend",
+    "Run",
+    "Llm",
+    "ToolCall",
     "react",
     "route",
     "refine",
     "debate",
+    "board",
     "parallel_vote",
     "orchestrate",
 ]
@@ -77,6 +89,217 @@ class Revise(Filter):
             f"Your previous attempt:\n\n{previous}\n\n"
             f"{scored}{reason}\n\n{self.instruction}"
         )
+
+
+# ── Writing a step in Python ──
+#
+# A step is any object with `poll(ctx)`. It returns one of these — plain
+# dicts, so that what crosses into Rust is data rather than a class
+# hierarchy, and so a step can be written without importing anything but
+# these five names.
+#
+#     class Fanout:
+#         _cache_version = "1"
+#         def poll(self, ctx):
+#             if ctx.turn == 0:
+#                 return Spawn([Run("worker", item) for item in ctx.input])
+#             return Done([r["output"] for r in ctx.results])
+#
+# `poll` must be deterministic given the same context: that is what makes
+# replay work. Put anything that is not — a model call, a tool, a clock —
+# in an effect, where the journal records it once and replays it after.
+
+
+def Done(value=None):  # noqa: N802 — these read as constructors
+    """Finished, with this output."""
+    return {"transition": "done", "value": value}
+
+
+def Await(*effects):  # noqa: N802
+    """Perform these effects concurrently, then poll again with the results
+    in `ctx.results`, in the order asked."""
+    if len(effects) == 1 and isinstance(effects[0], (list, tuple)):
+        effects = tuple(effects[0])
+    return {"transition": "await", "effects": list(effects)}
+
+
+def Spawn(specs, join="all"):  # noqa: N802
+    """Run these nodes now, then poll again with their outputs.
+
+    The map half of map-reduce: the fan-out width comes from the data, not
+    from the graph, which is the one thing a static topology cannot express.
+    `join` is ``"all"`` (a failure fails the join), ``"all_settled"`` (keep
+    whatever succeeded) or ``"first"``.
+    """
+    return {"transition": "spawn", "specs": list(specs), "join": join}
+
+
+def Goto(target, carry=None):  # noqa: N802
+    """Hand control to another node. This step is done."""
+    return {"transition": "goto", "target": target, "carry": carry}
+
+
+def Suspend(reason="waiting"):  # noqa: N802
+    """Stop the run and persist it; resuming replays to here and continues."""
+    return {"transition": "suspend", "reason": reason}
+
+
+def Run(runs, input=None, label=None):  # noqa: A002, N802
+    """One spawned node: which registered step to run, and on what."""
+    return {"runs": runs, "input": input, "label": label}
+
+
+def Llm(model, prompt, system=None):  # noqa: N802
+    """Ask a model. The answer arrives as ``{"kind": "llm", "text": ...}``."""
+    return {"effect": "llm", "model": model, "prompt": prompt, "system": system}
+
+
+def ToolCall(name, args=None):  # noqa: N802
+    """Call a registered tool by name."""
+    return {"effect": "tool", "name": name, "args": args or {}}
+
+
+#: Separates the question from the panel report inside a brief. The chair
+#: splits on it to recover the bare question, so that a brief built from a
+#: brief does not nest: without this the question grows by a whole report
+#: every round and the members read an ever-longer accretion of themselves.
+PANEL_MARKER = "Other members of the panel answered as follows:"
+
+
+class Brief(Filter):
+    """Turns the board's last verdict into the next round's brief.
+
+    Round one has no verdict, so the question passes through untouched.
+    After that the members are shown what the board recorded — the tallied
+    answers and, when the chair wrote one, its summary — and asked to answer
+    again. This is the message Du et al. inject between rounds; giving every
+    member the same summarized message rather than each member the verbatim
+    text of every other is the summarizer variant the paper introduces for
+    larger panels, and it is what makes a moderator a moderator.
+    """
+
+    _kind = "stateless"
+    _cache_version = "1"
+
+    def __init__(self, instruction: str = "Answer the question again."):
+        self.instruction = instruction
+
+    def forward(self, x, state):
+        if not isinstance(x, dict):
+            return x  # round one: the question itself
+
+        question = x.get("question") or ""
+        summary = x.get("summary")
+        if not summary:
+            # The members' *reasoning*, not a tally of their conclusions.
+            # Passing only "one member answered 18" strips exactly what makes
+            # a debate work — an agent cannot be persuaded by a number it
+            # cannot check, and a panel shown only counts converges on
+            # whichever wrong answer was most popular. Du et al. hand each
+            # agent the other agents' full solutions.
+            responses = x.get("responses") or []
+            summary = "\n\n".join(
+                f"One agent solution: ```{r}```" for r in responses
+            ) or "nothing"
+
+        return (
+            f"{question}\n\n"
+            f"{PANEL_MARKER}\n{summary}\n\n"
+            f"Using their answers as additional information, {self.instruction}"
+        )
+
+
+class MajorityVote(Filter):
+    """The board as a count rather than a model.
+
+    Reads the fan-in mapping every member wrote into and returns the most
+    common answer — the aggregator Du et al. use to close a debate. Ties go
+    to whichever answer was seen first, which is arbitrary but at least
+    deterministic.
+
+    ``done`` is true once the members agree unanimously. That is what lets a
+    board stop at round two instead of buying every round it was allowed:
+    once a panel has converged, further rounds cost tokens and change
+    nothing.
+
+    The chair also republishes ``question`` so the next brief still knows
+    what is being decided — a vote that forgets the question cannot run a
+    second round.
+    """
+
+    _kind = "stateless"
+    _cache_version = "1"
+
+    #: Answers are read as the last ``\boxed{...}`` in the text, else the
+    #: last number in it. Both conventions come from the GSM8K literature.
+    def __init__(self, brief_node: str = "brief"):
+        self.brief_node = brief_node
+
+    @staticmethod
+    def extract(text: str) -> str | None:
+        """The final answer in a worked solution, or None if there isn't one."""
+        import re
+
+        if not isinstance(text, str):
+            text = str(text)
+        boxed = re.findall(r"\\boxed\{([^{}]*)\}", text)
+        candidate = boxed[-1] if boxed else None
+        if candidate is None:
+            numbers = re.findall(r"-?\d[\d,]*\.?\d*", text)
+            candidate = numbers[-1] if numbers else None
+        if candidate is None:
+            return None
+        cleaned = candidate.replace(",", "").replace("$", "").strip().rstrip(".")
+        # Normalize 18.0 and 18 to the same vote; they are the same answer.
+        try:
+            number = float(cleaned)
+            return str(int(number)) if number == int(number) else str(number)
+        except ValueError:
+            return cleaned or None
+
+    def forward(self, x, state):
+        from collections import Counter
+
+        if not isinstance(x, dict):
+            x = {"member": x}
+
+        brief = x.get(self.brief_node)
+        # Round one's brief is the bare question; later ones are the question
+        # plus the report this chair wrote. Take the part before the marker so
+        # the question republished here is the same string every round.
+        question = brief.split(PANEL_MARKER)[0].strip() if isinstance(brief, str) else ""
+
+        members = {k: v for k, v in sorted(x.items()) if k != self.brief_node}
+        responses = [v if isinstance(v, str) else str(v) for v in members.values()]
+        answers = {node: self.extract(text) for node, text in members.items()}
+        # An unreadable answer is not a vote. The reference implementation of
+        # this paper scores unparseable output as *correct*, which inflates
+        # every number it reports; dropping it is the honest reading.
+        votes = Counter(a for a in answers.values() if a is not None)
+
+        if not votes:
+            return {
+                "question": question,
+                "answer": None,
+                "votes": {},
+                "agreement": 0.0,
+                "done": False,
+                "value": None,
+                "responses": responses,
+            }
+
+        answer, count = votes.most_common(1)[0]
+        return {
+            "question": question,
+            "answer": answer,
+            "votes": dict(votes),
+            "agreement": count / sum(votes.values()),
+            "done": len(votes) == 1,
+            "value": answer,
+            # Verbatim, so the next round argues with reasoning rather than
+            # with a scoreboard.
+            "responses": responses,
+        }
 
 
 def _graph(provider: str | None, cache: str | None) -> Graph:
@@ -211,6 +434,63 @@ def debate(
     return g
 
 
+def board(
+    members: Iterable[Any],
+    chair: Any | None = None,
+    *,
+    rounds: int = 2,
+    brief: Any | None = None,
+    provider: str | None = None,
+    cache: str | None = None,
+) -> Graph:
+    """A panel answers, a chair moderates, and the panel answers again.
+
+    This is the multi-agent debate of Du et al. (ICML 2024) with the
+    summarizer variant that paper introduces for larger panels: every member
+    answers the question independently, the ``chair`` reads all of their
+    answers and records a decision, and the next round shows every member
+    what the chair recorded. The loop is ``brief → members → chair``, and
+    the chair is what stops it — the panel converging is the exit condition,
+    not a round budget running out.
+
+    The default chair is :class:`MajorityVote`, which is the aggregator the
+    paper actually uses to close a debate and which costs no tokens. Pass a
+    :class:`soma.Judge` or an agent instead to have a model moderate, in
+    which case it must report ``done`` the way a judge does.
+
+    ``rounds`` is a ceiling. Du et al. report accuracy saturating at three to
+    four rounds, so paying for more buys very little.
+
+    The members run in parallel and share no state: they influence each other
+    only through the chair, which is what makes the chair worth having. The
+    chair also reads the brief, so it can republish the question and the
+    round after it still knows what is being decided.
+
+        board([solver, solver, solver], rounds=2)
+
+    Every member being the same agent is normal — sampling makes them
+    disagree, and disagreement is what a panel is for.
+    """
+    members = list(members)
+    if len(members) < 2:
+        raise ValueError("board() needs at least two members")
+    if rounds < 1:
+        raise ValueError("board() needs at least one round")
+
+    g = _graph(provider, cache)
+    g.node("brief", brief if brief is not None else Brief())
+    chair_id = g.node("chair", chair if chair is not None else MajorityVote())
+
+    for i, member in enumerate(members):
+        member_id = g.node(f"member_{i}", member)
+        g.connect("brief", member_id)
+        g.connect(member_id, chair_id)
+    g.connect("brief", chair_id)
+
+    g.loop("board", body="brief", until=chair_id, max_iterations=rounds)
+    return g
+
+
 def parallel_vote(
     agents: Iterable[Any],
     aggregator: Any,
@@ -237,31 +517,84 @@ def parallel_vote(
     return g
 
 
+class Fanout:
+    """Spawns one worker per item of its input, then hands back the results.
+
+    The width comes from the data, which is the one thing a static topology
+    cannot express: a plan with two tasks runs two workers and a plan with
+    nine runs nine, decided while the graph is running.
+
+    Its input can be a list, a mapping with a ``tasks`` key, or the plain
+    text a planner agent wrote — in which case each non-empty line is a task,
+    with any bullet or numbering stripped.
+    """
+
+    _cache_version = "1"
+
+    def __init__(self, runs: str = "worker", max_workers: int = 16):
+        self.runs = runs
+        self.max_workers = max_workers
+
+    @staticmethod
+    def tasks(value) -> list:
+        if isinstance(value, dict):
+            value = value.get("tasks", value.get("plan", []))
+        if isinstance(value, str):
+            lines = [line.strip(" -*\t") for line in value.splitlines()]
+            return [
+                line.split(". ", 1)[-1] if line[:1].isdigit() else line
+                for line in lines
+                if line.strip()
+            ]
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
+
+    def poll(self, ctx):
+        if ctx.turn == 0:
+            work = self.tasks(ctx.input)[: self.max_workers]
+            if not work:
+                # Spawning nothing would spin. An empty plan has an answer.
+                return Done([])
+            return Spawn(
+                [Run(self.runs, task, label=f"w{i}") for i, task in enumerate(work)]
+            )
+        return Done([r.get("output") for r in ctx.results])
+
+
 def orchestrate(
     planner: Any,
     worker: Any,
     synthesizer: Any,
     *,
-    n_workers: int = 3,
+    max_workers: int = 16,
     provider: str | None = None,
     cache: str | None = None,
 ) -> Graph:
     """A planner breaks the work up, workers do it, a synthesizer joins it.
 
-    The worker pool is a fixed ``n_workers`` — every worker sees the whole
-    plan and takes the part addressed to it. Soma cannot yet size the pool
-    from the plan at runtime (that needs the dynamic fan-out of
-    ``Transition::Spawn``, which no Python step can produce yet), so pick a
-    pool wide enough for the work and expect idle workers on small plans.
+    The worker pool is sized from the plan at runtime: `planner → fanout →
+    synthesize`, where ``fanout`` spawns one ``worker`` per task the planner
+    named. This is the orchestrator-workers pattern with the fan-out actually
+    dynamic — the shape of the graph is not known until the planner has
+    spoken.
+
+    ``worker`` is registered rather than wired, because a spawned node is
+    named by the step that spawns it. A node with no edges would also be a
+    root and run once on the graph's own input; registering it keeps it
+    spawnable and nothing else.
+
+    ``max_workers`` is a ceiling on how far a plan can fan out — a planner
+    that emits four hundred lines should not open four hundred conversations.
     """
-    if n_workers < 1:
-        raise ValueError("orchestrate() needs at least one worker")
+    if max_workers < 1:
+        raise ValueError("orchestrate() needs to allow at least one worker")
 
     g = _graph(provider, cache)
-    plan_id = g.node("planner", planner)
-    synth_id = g.node("synthesize", synthesizer)
-    for i in range(n_workers):
-        worker_id = g.node(f"worker_{i}", worker)
-        g.connect(plan_id, worker_id)
-        g.connect(worker_id, synth_id)
+    g.node("planner", planner)
+    g.node("fanout", Fanout(runs="worker", max_workers=max_workers))
+    g.node("synthesize", synthesizer)
+    g.register_step("worker", worker)
+    g.connect("planner", "fanout")
+    g.connect("fanout", "synthesize")
     return g
