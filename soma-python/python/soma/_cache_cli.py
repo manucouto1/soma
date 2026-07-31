@@ -104,6 +104,46 @@ def _print_runs(infos: list[dict], plain: bool = False) -> None:
         )
 
 
+def _print_providers(entries: list[dict], plain: bool = False) -> None:
+    """Provider table. `configured` is the column that matters: every
+    endpoint is listed whether or not you can reach it, and a hosted one is
+    only reachable once the environment variable it names is set."""
+
+    def status(entry):
+        if entry["env"] is None:
+            return "local", "cyan"
+        return ("ready", "green") if entry["configured"] else ("no key", "dim")
+
+    if not plain:
+        try:
+            from rich.console import Console
+            from rich.table import Table
+
+            width = None if sys.stdout.isatty() else 160
+            table = Table(box=None, pad_edge=False, header_style="dim")
+            table.add_column("PROVIDER", style="cyan", no_wrap=True)
+            table.add_column("STATUS")
+            table.add_column("READS", no_wrap=True)
+            table.add_column("ENDPOINT")
+            for entry in entries:
+                text, style = status(entry)
+                table.add_row(
+                    entry["id"],
+                    f"[{style}]{text}[/{style}]",
+                    entry["env"] or "-",
+                    entry["base_url"],
+                )
+            Console(width=width).print(table)
+            return
+        except ImportError:
+            pass
+
+    print(f"{'PROVIDER':<14} {'STATUS':<8} {'READS':<22} ENDPOINT")
+    for entry in entries:
+        text, _ = status(entry)
+        print(f"{entry['id']:<14} {text:<8} {(entry['env'] or '-'):<22} {entry['base_url']}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="soma", description="Soma toolbox")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -161,6 +201,15 @@ def main(argv: list[str] | None = None) -> int:
     p_detach = kb_sub.add_parser("detach", help="clear HEAD; the next run starts a new line")
     for p in (p_reindex, p_head, p_checkout, p_detach):
         p.add_argument("--root", default=".soma", help="tracking root (default .soma)")
+
+    p_providers = sub.add_parser(
+        "providers", help="list LLM endpoints and whether their credentials are set"
+    )
+    p_providers.add_argument("--json", action="store_true", help="machine-readable output")
+    p_providers.add_argument("--plain", action="store_true", help="plain text, no colours")
+    p_providers.add_argument(
+        "--ready", action="store_true", help="only endpoints you can actually reach"
+    )
 
     p_report = sub.add_parser(
         "report", help="generate a self-contained HTML report for a run or study"
@@ -250,6 +299,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no runs under {args.root}/runs/")
             return 0
         _print_runs(infos, plain=args.plain)
+        return 0
+
+    if args.command == "providers":
+        import json as _json
+
+        entries = _soma.providers()
+        if args.ready:
+            entries = [e for e in entries if e["configured"]]
+        if args.json:
+            print(_json.dumps(entries, indent=2))
+            return 0
+        if not entries:
+            print("no providers configured")
+            return 0
+        _print_providers(entries, plain=args.plain)
+        # A hosted endpoint with no key is the overwhelmingly common first
+        # confusion, so say once where the fix goes rather than leaving a
+        # column of "no key" to interpret.
+        if not args.ready and any(e["env"] and not e["configured"] for e in entries):
+            print(
+                "\nSet the variable in READS to enable a provider, or override any of "
+                "them in ~/.soma/providers.toml ($SOMA_PROVIDERS)."
+            )
         return 0
 
     if args.action == "stats":

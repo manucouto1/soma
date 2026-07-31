@@ -31,11 +31,15 @@ pytestmark = [
 # server and their account, not of Soma.
 
 OLLAMA_MODEL = os.environ.get("SOMA_LIVE_OLLAMA_MODEL", "ollama/qwen2.5:14b")
-# The 8B rather than the 70B: on NVIDIA's free tier the large models are
-# heavily contended, and a test that waits five minutes for a queue slot
-# tells you nothing about Soma.
+# Chosen by measurement, not by size. On NVIDIA's free tier the 70B is
+# heavily contended — it answers 503 ResourceExhausted or queues past the
+# 300s timeout — while `meta/llama-3.1-8b-instruct` emits a correct
+# `tool_calls` every time and then, handed the result, narrates the call
+# back at you ("This JSON object represents a function call to...") instead
+# of answering. It fails the *second* turn of the react loop, not the first.
+# The 49B nemotron does both halves reliably and is not queued.
 NVIDIA_MODEL = os.environ.get(
-    "SOMA_LIVE_NVIDIA_MODEL", "nvidia/meta/llama-3.1-8b-instruct"
+    "SOMA_LIVE_NVIDIA_MODEL", "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5"
 )
 
 
