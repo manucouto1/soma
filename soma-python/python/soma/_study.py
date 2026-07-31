@@ -21,15 +21,46 @@ from soma._soma import Study as _Study
 
 
 def _graph_search_space(self: _RustGraph) -> list[dict]:
-    """Aggregate ``_soma_search_space`` from every live filter, with
-    dimension names prefixed by the node id (``"<node_id>.<param>"``)."""
+    """Aggregate the searchable dimensions of every node, with names
+    prefixed by the node id (``"<node_id>.<param>"``).
+
+    Filters declare theirs as class attributes (``lr = search(...)``);
+    agents and judges declare theirs at the call site
+    (``Agent(model=search(choices=[...]))``), because an agent's
+    hyperparameters are its constructor arguments. Both end up as the same
+    kind of dimension, so a study can search a graph that mixes them.
+    """
     dims: list[dict] = []
     for node_id, f in self.filters():
         for dim in getattr(type(f), "_soma_search_space", []):
             prefixed = dict(dim)
             prefixed["name"] = f"{node_id}.{dim['name']}"
             dims.append(prefixed)
+    for node_id, step in self.steps():
+        for dim in step.search_space():
+            prefixed = dict(dim)
+            prefixed["name"] = f"{node_id}.{dim['name']}"
+            dims.append(prefixed)
+    for source, target in self.optional_edges():
+        # Whether a connection should exist at all is a dimension like any
+        # other — the edge optimization that agentic-graph search papers do
+        # by hand, over the sampler Soma already has.
+        dims.append(
+            {
+                "type": "categorical",
+                "name": f"edge:{source}->{target}",
+                "choices": [True, False],
+            }
+        )
     return dims
+
+
+def _declared(node: Any) -> list[dict]:
+    """The dimensions a node declares, wherever it keeps them."""
+    space = getattr(node, "search_space", None)
+    if callable(space):
+        return space()
+    return getattr(type(node), "_soma_search_space", [])
 
 
 def _apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
@@ -37,10 +68,19 @@ def _apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
 
     Keys are ``"<node_id>.<attr>"`` (as produced by
     :func:`_graph_search_space`); a bare ``"<attr>"`` is accepted when
-    exactly one filter declares that attribute. Unknown keys raise.
+    exactly one node declares that attribute. Unknown keys raise.
+
+    Writing to a live agent is enough: the immutable step behind it is
+    rebuilt from the agent before the next run.
     """
     by_node = dict(self.filters())
+    by_node.update(dict(self.steps()))
     for key, value in params.items():
+        if key.startswith("edge:"):
+            source, _, target = key[len("edge:") :].partition("->")
+            self.set_edge(source, target, bool(value))
+            continue
+
         if "." in key:
             node_id, attr = key.split(".", 1)
             f = by_node.get(node_id)
@@ -52,13 +92,13 @@ def _apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
         owners = [
             f
             for f in by_node.values()
-            if any(d["name"] == key for d in getattr(type(f), "_soma_search_space", []))
+            if any(d["name"] == key for d in _declared(f))
         ]
         if not owners:
-            raise KeyError(f"apply_params: no filter declares search param '{key}'")
+            raise KeyError(f"apply_params: no node declares search param '{key}'")
         if len(owners) > 1:
             raise KeyError(
-                f"apply_params: param '{key}' is ambiguous across {len(owners)} filters; "
+                f"apply_params: param '{key}' is ambiguous across {len(owners)} nodes; "
                 f"use the 'node_id.{key}' form"
             )
         setattr(owners[0], key, value)

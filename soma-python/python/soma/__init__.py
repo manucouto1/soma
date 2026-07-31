@@ -1,11 +1,25 @@
 """Soma: A computational graph runtime for research pipelines."""
 
-from soma._soma import Graph, Run, Study, Trial, Worker, __version__
+from soma._soma import (
+    Agent,
+    Graph,
+    Judge,
+    Run,
+    Study,
+    Tool,
+    Trial,
+    Worker,
+    __version__,
+    models,
+    providers,
+    tool,
+)
 from soma.filter import Filter
 from soma._identity import CacheConfigError
 from soma.search import search
 from soma.lab import Lab
 from soma.chain import Chain, Fork
+from soma import agentic
 from soma.builder import somatize as _somatize
 
 try:
@@ -81,6 +95,14 @@ except ImportError:  # torch not installed
 
 __all__ = [
     "Graph",
+    # Agentic
+    "Agent",
+    "Judge",
+    "agentic",
+    "Tool",
+    "tool",
+    "providers",
+    "models",
     "Run",
     "Study",
     "Trial",

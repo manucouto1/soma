@@ -21,8 +21,12 @@ use somatize_core::search::{Scale, SearchDimension, SearchSpace};
 use somatize_core::study::{Direction, Objective, PruningStrategy, SearchStrategy, Study};
 use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
 use somatize_core::value::Value;
+mod agentic;
+
+use agentic::{PyAgent, PyJudge, PyTool, PyToolAdapter, to_step_spec};
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};
+use somatize_runtime::effects::{EffectDriver, EffectJournal};
 use somatize_runtime::executor::{self, Context, GraphInfo};
 use somatize_runtime::executors::study::{
     FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
@@ -30,6 +34,7 @@ use somatize_runtime::executors::study::{
 use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::runner::{LocalRunner, Runner};
 use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
+use somatize_runtime::step_library::{GraphRegistry, StepLibrary};
 use somatize_runtime::tracking::{
     LocalTracker, RunReader, advance_head, load_manifest, resolve_parent, summarize,
 };
@@ -141,6 +146,27 @@ fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyObject {
 
 // ── Value conversion ──
 
+/// A dict's JSON form, if JSON can hold it without changing it.
+///
+/// `json.dumps` is lenient — it turns tuples into lists and integer-keyed
+/// dicts into string-keyed ones — so dumping is not enough. The value has to
+/// survive the round trip unchanged to count as JSON; anything else keeps
+/// the pickle it would have had before.
+fn as_json_dict(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<serde_json::Value>> {
+    let json_mod = py.import("json")?;
+    let Ok(dumped) = json_mod.call_method1("dumps", (obj,)) else {
+        return Ok(None);
+    };
+    let text: String = dumped.extract()?;
+
+    let restored = json_mod.call_method1("loads", (&text,))?;
+    if !restored.eq(obj)? {
+        return Ok(None);
+    }
+
+    Ok(serde_json::from_str(&text).ok())
+}
+
 fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(lists) = obj.extract::<Vec<Vec<f64>>>() {
         let rows = lists.len();
@@ -155,19 +181,43 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 
     if obj.is_instance_of::<PyDict>() {
+        // A dict that JSON can hold *becomes* JSON. An opaque pickle is
+        // unreadable to everything outside this process: a loop cannot read
+        // a stop signal out of it, a branch cannot read an arm label, a
+        // report cannot show it and a remote worker in another language
+        // cannot receive it. Round-tripping is what decides — a dict with
+        // tuples or ndarrays inside comes back changed (or not at all), and
+        // those keep the pickle.
+        if let Some(json) = as_json_dict(py, obj)? {
+            return Ok(Value::json(json));
+        }
         let pickle = py.import("pickle")?;
         let data: Vec<u8> = pickle.call_method1("dumps", (obj, 5i32))?.extract()?;
         return Ok(Value::object(data));
     }
 
-    if let Ok(s) = obj.extract::<String>()
-        && let Ok(val) = serde_json::from_str(&s)
-    {
-        return Ok(Value::json(val));
+    // A control value is usually one of these. They used to be outright
+    // errors, so nothing can be relying on the old behaviour.
+    if obj.is_none() {
+        return Ok(Value::Empty);
+    }
+    if obj.is_instance_of::<pyo3::types::PyBool>() {
+        return Ok(Value::json(serde_json::Value::Bool(obj.extract::<bool>()?)));
+    }
+
+    if let Ok(s) = obj.extract::<String>() {
+        // A string that parses as JSON stays JSON — changing that would move
+        // the cache key of every pipeline already passing JSON strings.
+        // Anything else is plain text (a prompt, a label, a completion),
+        // which used to be an outright error.
+        return Ok(match serde_json::from_str(&s) {
+            Ok(val) => Value::json(val),
+            Err(_) => Value::text(s),
+        });
     }
 
     Err(PyRuntimeError::new_err(
-        "Cannot convert Python object to Value. Expected list, 2D list, dict, or JSON string.",
+        "Cannot convert Python object to Value. Expected list, 2D list, dict, str, or JSON string.",
     ))
 }
 
@@ -187,6 +237,7 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
                 Ok(values.as_slice().into_pyobject(py)?.into_any().unbind())
             }
         }
+        Value::Text(s) => Ok(s.as_ref().into_pyobject(py)?.into_any().unbind()),
         Value::Json(v) => {
             let json_str = v.to_string();
             let json_mod = py.import("json")?;
@@ -1284,6 +1335,24 @@ impl PyStudy {
 
 // ── PyGraph ──
 
+/// What a registered node *does*, once `register_behaviour` has filed it
+/// away — enough to build the graph node, and nothing else.
+enum Behaviour {
+    /// An effectful step, carrying its `step_name`.
+    Step(String),
+    /// An ordinary filter, carrying its `filter_name`.
+    Filter(String),
+}
+
+impl Behaviour {
+    fn node(&self, id: &str) -> Node {
+        match self {
+            Behaviour::Step(kind) => Node::step(id, kind),
+            Behaviour::Filter(name) => Node::filter_with_id(id, name),
+        }
+    }
+}
+
 #[pyclass(name = "Graph")]
 struct PyGraph {
     graph: Graph,
@@ -1312,6 +1381,30 @@ struct PyGraph {
     /// time. Distinct from `pickled_filters`, which exists only for
     /// remote-worker dispatch.
     live_filters: std::collections::HashMap<String, Py<PyAny>>,
+    /// Effectful step nodes, by node id. Empty for a purely computational
+    /// graph, in which case none of the agentic machinery is built.
+    steps: StepLibrary,
+    /// The live Python `Agent`/`Judge` behind each step node. A `Step` is
+    /// immutable once built, so a study that samples a new prompt or model
+    /// writes to these and the library is rebuilt from them — the same
+    /// arrangement `live_filters` has for the computational path.
+    live_steps: std::collections::HashMap<String, Py<PyAny>>,
+    /// Data edges a study may cut, in declaration order.
+    optional_edges: Vec<(String, String)>,
+    /// Optional edges currently cut, held whole together with the position
+    /// they came from, so restoring one restores its id, kind, label *and*
+    /// place — a trial that cuts an edge has to leave the graph the next
+    /// trial starts from byte-identical.
+    cut_edges: std::collections::HashMap<(String, String), (usize, Edge)>,
+    /// Tools every agent in this graph may call, by name. Collected from the
+    /// agents as they are added, so a tool declared once is callable by any
+    /// node that lists it.
+    tools: std::collections::HashMap<String, PyTool>,
+    /// Which provider serves a bare (unqualified) model name.
+    default_provider: Option<String>,
+    /// Tool sets from MCP servers. Held so the servers stay alive for the
+    /// graph's lifetime — dropping a client kills its subprocess.
+    mcp_toolboxes: Vec<somatize_llm::Toolbox>,
     /// Generic Python-side scratch dict for orchestration state that
     /// doesn't belong on the Rust struct (e.g. the registered optimiser).
     /// Lazily initialised on first access. PyGraph deliberately doesn't
@@ -1321,6 +1414,181 @@ struct PyGraph {
 }
 
 impl PyGraph {
+    /// Does anything in this graph need fitting before it can run?
+    fn has_trainable_filters(&self) -> bool {
+        self.filter_trainable.values().any(|t| *t)
+    }
+
+    /// A node id not yet taken, suffixing `_2`, `_3`, … as needed.
+    fn free_id(&self, wanted: &str) -> String {
+        if self.graph.node(wanted).is_none() {
+            return wanted.to_string();
+        }
+        let mut i = 2;
+        loop {
+            let candidate = format!("{wanted}_{i}");
+            if self.graph.node(&candidate).is_none() {
+                return candidate;
+            }
+            i += 1;
+        }
+    }
+
+    /// Register what a node *does*, without saying what shape it has in the
+    /// graph. A branch node runs a classifier and routes; a plain node runs
+    /// the same classifier and stops. The behaviour registration is
+    /// identical, so it lives here and the two callers differ only in the
+    /// [`Node`] they add.
+    ///
+    /// Returns what the caller needs to build the graph node itself.
+    fn register_behaviour(
+        &mut self,
+        py: Python<'_>,
+        node_id: &str,
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<Behaviour> {
+        if let Ok(spec) = to_step_spec(py, obj) {
+            // Tools travel with the graph, not with the node: one agent may
+            // declare a tool and another list the same one, and both should
+            // reach the same implementation.
+            for tool in spec.tools() {
+                self.tools
+                    .insert(tool.tool_name().to_string(), tool.clone());
+            }
+            let kind = spec.kind().to_string();
+            self.steps.register_arc(node_id, spec.step());
+            // Keep the live Agent/Judge: a study samples by writing to it,
+            // and the step is rebuilt from it before the next run.
+            self.live_steps
+                .insert(node_id.to_string(), obj.clone().unbind());
+            return Ok(Behaviour::Step(kind));
+        }
+
+        let bridge = PyFilterBridge::new(py, obj)?;
+        let name = bridge.name.clone();
+        self.pickled_filters.insert(
+            node_id.to_string(),
+            (bridge.pickled_bytes.clone(), bridge.requirements.clone()),
+        );
+        self.filter_sources
+            .insert(node_id.to_string(), bridge.source.clone());
+        self.filter_trainable
+            .insert(node_id.to_string(), bridge.trainable);
+        self.live_filters
+            .insert(node_id.to_string(), obj.clone().unbind());
+        self.library.register(node_id.to_string(), Box::new(bridge));
+        Ok(Behaviour::Filter(name))
+    }
+
+    /// Resolve one arm of a branch or one entry of a loop body: either the
+    /// id of a node already in the graph, or a filter/agent to add as one.
+    fn resolve_member(
+        &mut self,
+        py: Python<'_>,
+        fallback_id: &str,
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<String> {
+        if let Ok(existing) = obj.extract::<String>() {
+            if self.graph.node(&existing).is_none() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "`{existing}` names no node in this graph. Pass a filter or an \
+                     agent to create one, or an id already added with node()"
+                )));
+            }
+            return Ok(existing);
+        }
+
+        let id = self.free_id(fallback_id);
+        let node = self.register_behaviour(py, &id, obj)?.node(&id);
+        self.graph.add_node(node);
+        Ok(id)
+    }
+
+    /// Add a labelled control edge — the wire the compiler reads to decide
+    /// which nodes a loop or branch owns.
+    fn control_edge(&mut self, source: &str, target: &str, label: Option<&str>) {
+        let id = format!("e_{}", self.graph.edges.len());
+        let mut edge = Edge::control(id, source, target);
+        if let Some(label) = label {
+            edge = edge.with_label(label);
+        }
+        self.graph.add_edge(edge);
+    }
+
+    /// Build the step library and effect driver an agentic plan needs.
+    ///
+    /// Returns `None` for a graph with no steps, so a purely computational
+    /// pipeline never constructs a provider router, reads a catalog, or
+    /// touches an environment variable.
+    /// The step library as it stands *now*.
+    ///
+    /// A [`Step`] is immutable once built, so a study that samples a new
+    /// prompt or model has no way to change one in place — it writes to the
+    /// live `Agent` instead, and the library is rebuilt from those here,
+    /// before every compile and every run. Cheap: rebuilding a step is
+    /// reading a handful of fields off a Python object.
+    fn rebuild_steps(&self, py: Python<'_>) -> PyResult<StepLibrary> {
+        if self.live_steps.is_empty() {
+            return Ok(self.steps.clone());
+        }
+        let mut steps = self.steps.clone();
+        for (node_id, obj) in &self.live_steps {
+            steps.register_arc(node_id, to_step_spec(py, obj.bind(py))?.step());
+        }
+        Ok(steps)
+    }
+
+    fn step_runtime(
+        &self,
+        py: Python<'_>,
+        steps: &StepLibrary,
+    ) -> PyResult<Option<(Arc<StepLibrary>, EffectDriver)>> {
+        if steps.is_empty() {
+            return Ok(None);
+        }
+
+        // Python tools and MCP tools land in one toolbox: to a model they
+        // are the same thing, and a step names them the same way. Tools
+        // declared on a live agent are collected here too, so an agent that
+        // gained one since the graph was built can still call it.
+        let mut toolbox = somatize_llm::Toolbox::new();
+        for tool in self.tools.values() {
+            toolbox.add(Arc::new(PyToolAdapter { tool: tool.clone() }));
+        }
+        for obj in self.live_steps.values() {
+            for tool in to_step_spec(py, obj.bind(py))?.tools() {
+                toolbox.add(Arc::new(PyToolAdapter { tool: tool.clone() }));
+            }
+        }
+        for mcp in &self.mcp_toolboxes {
+            toolbox.merge_from(mcp);
+        }
+
+        let catalog = somatize_llm::Catalog::load().map_err(soma_err_to_py)?;
+        let mut router = somatize_llm::Router::from_catalog(catalog).map_err(soma_err_to_py)?;
+        if let Some(default) = &self.default_provider {
+            router = router.with_default(default);
+        }
+
+        // The journal shares the graph's cache directory, so an agentic run
+        // is resumable by the same mechanism a computational one is.
+        let cache_dir = default_cache_dir().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "an agentic graph needs somewhere to journal its effects; \
+                 set SOMA_CACHE_DIR or HOME",
+            )
+        })?;
+        let store = Arc::new(FsActionStore::new(cache_dir).map_err(soma_err_to_py)?);
+        let journal = EffectJournal::new(store.clone(), store);
+
+        let driver = EffectDriver::new(journal)
+            .with_event_bus(self.event_bus.clone())
+            .with_handler(Arc::new(somatize_llm::LlmHandler::new(router)))
+            .with_handler(Arc::new(toolbox));
+
+        Ok(Some((Arc::new(steps.clone()), driver)))
+    }
+
     /// Write the run's topology snapshot: `graph.json` (the machine
     /// contract), `graph.mmd` (the human one) and `fingerprint.json`
     /// (structural identity, with each node's filter config hash).
@@ -2002,6 +2270,13 @@ impl PyGraph {
             data_store: None,
             filter_trainable: std::collections::HashMap::new(),
             live_filters: std::collections::HashMap::new(),
+            live_steps: std::collections::HashMap::new(),
+            optional_edges: Vec::new(),
+            cut_edges: std::collections::HashMap::new(),
+            steps: StepLibrary::new(),
+            tools: std::collections::HashMap::new(),
+            default_provider: None,
+            mcp_toolboxes: Vec::new(),
             py_state: None,
         })
     }
@@ -2042,48 +2317,300 @@ impl PyGraph {
             }
         };
 
-        let bridge = PyFilterBridge::new(py, &filter_obj)?;
-
-        // Handle duplicate node ids
-        let actual_id = if self.graph.node(&node_id).is_some() {
-            let mut i = 2;
-            loop {
-                let candidate = format!("{node_id}_{i}");
-                if self.graph.node(&candidate).is_none() {
-                    break candidate;
-                }
-                i += 1;
-            }
-        } else {
-            node_id.clone()
-        };
-
-        let mut node = Node::filter_with_id(&actual_id, &bridge.name);
+        // An Agent or a Judge is a node too — it just runs a turn loop
+        // instead of a function. `register_behaviour` dispatches, so there
+        // is one way to add a node rather than a second method whose name
+        // would collide with the optimiser's `step()`.
+        let actual_id = self.free_id(&node_id);
+        let mut node = self
+            .register_behaviour(py, &actual_id, &filter_obj)?
+            .node(&actual_id);
         if let Some(t) = target {
             node = node.with_target(t);
         }
         self.graph.add_node(node);
 
-        // Store pickled bytes + requirements for remote execution, source for Nous
-        self.pickled_filters.insert(
-            actual_id.clone(),
-            (bridge.pickled_bytes.clone(), bridge.requirements.clone()),
-        );
-        self.filter_sources
-            .insert(actual_id.clone(), bridge.source.clone());
-        self.filter_trainable
-            .insert(actual_id.clone(), bridge.trainable);
-        // Retain the live Python instance so it can be retrieved by
-        // graph.filter(node_id) for the in-process training path. The
-        // FilterLibrary owns a Box<dyn Filter> wrapping the bridge; we
-        // keep an independent strong reference to the original PyObject
-        // here so callers can mutate it (e.g. set self.training=True or
-        // attach an nn.Module).
-        self.live_filters
-            .insert(actual_id.clone(), filter_obj.clone().unbind());
-        self.library.register(actual_id.clone(), Box::new(bridge));
+        Ok(actual_id)
+    }
+
+    /// Add a node that routes: it runs `condition`, reads the arm label out
+    /// of the result, and executes only that arm.
+    ///
+    /// ```python
+    /// g.branch("router", Classifier(), {
+    ///     "billing": soma.Agent(model="ollama/llama3.2", system="Billing."),
+    ///     "tech":    "tech_team",     # a node already in the graph
+    ///     "default": Escalate(),
+    /// })
+    /// ```
+    ///
+    /// The arms are declared, so the compiler rejects one that no edge
+    /// reaches and one that no arm declares — the silent-drop failure that
+    /// the multi-agent literature files under inter-agent misalignment.
+    /// An arm labelled `default` (or `else`) catches anything unmatched;
+    /// without one, an unrecognised label is an error rather than a guess.
+    #[pyo3(signature = (node_id, condition, arms, target=None))]
+    fn branch(
+        &mut self,
+        py: Python<'_>,
+        node_id: String,
+        condition: &Bound<'_, PyAny>,
+        arms: &Bound<'_, PyDict>,
+        target: Option<String>,
+    ) -> PyResult<String> {
+        if arms.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "branch() needs at least one arm; a router with nowhere to \
+                 route is just a node",
+            ));
+        }
+
+        let actual_id = self.free_id(&node_id);
+        // The branch node *is* the condition: the executor runs it and reads
+        // the arm label from its output.
+        self.register_behaviour(py, &actual_id, condition)?;
+
+        let labels: Vec<String> = arms
+            .keys()
+            .iter()
+            .map(|k| k.extract::<String>())
+            .collect::<PyResult<_>>()?;
+
+        let mut node = Node::branch_over(&actual_id, labels);
+        if let Some(t) = target {
+            node = node.with_target(t);
+        }
+        self.graph.add_node(node);
+
+        for (key, value) in arms.iter() {
+            let label = key.extract::<String>()?;
+            let arm_id = self.resolve_member(py, &label, &value)?;
+            self.control_edge(&actual_id, &arm_id, Some(&label));
+        }
 
         Ok(actual_id)
+    }
+
+    /// Add a node that repeats a body until it signals completion.
+    ///
+    /// ```python
+    /// g.node("draft", Draft())
+    /// g.node("critic", soma.Judge(model="ollama/llama3.2", rubric="..."))
+    /// g.connect("draft", "critic")
+    /// g.loop("refine", body="draft", until="critic", max_iterations=3)
+    /// ```
+    ///
+    /// `body` names the entry node(s); the loop owns those and everything
+    /// only reachable through them.
+    ///
+    /// `until` says when to stop:
+    ///
+    /// - a node id — that node's output carries the signal: a bool,
+    ///   `"done"`/`"stop"`, or a mapping with a `done` key, which is exactly
+    ///   what [`Judge`] emits;
+    /// - unset (the default) — the body's single terminal node is used, and
+    ///   a body with several terminals is a compile error rather than a race;
+    /// - `False` — never stop early; run the full `max_iterations`.
+    ///
+    /// The loop's value is its *carry*: seeded from the loop's input, then
+    /// replaced after each pass by the condition node's output. That is what
+    /// the body reads on the next round, so a refine loop refines instead of
+    /// redrafting the same thing.
+    #[pyo3(name = "loop", signature = (node_id, body, until=None, max_iterations=None))]
+    fn loop_(
+        &mut self,
+        py: Python<'_>,
+        node_id: String,
+        body: &Bound<'_, PyAny>,
+        until: Option<&Bound<'_, PyAny>>,
+        max_iterations: Option<usize>,
+    ) -> PyResult<String> {
+        // One entry or several: a list is the general case, a bare value the
+        // one people write.
+        let entries: Vec<Bound<'_, PyAny>> = match body.try_iter() {
+            Ok(iter) if !body.is_instance_of::<pyo3::types::PyString>() => {
+                iter.collect::<PyResult<_>>()?
+            }
+            _ => vec![body.clone()],
+        };
+        if entries.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "loop() needs a body",
+            ));
+        }
+
+        let actual_id = self.free_id(&node_id);
+        use somatize_core::control::LoopCondition;
+        let until = match until {
+            None => LoopCondition::BodyTerminal,
+            // `False` is the only bool that means anything here: "run the
+            // whole count". `True` would have to mean "stop immediately",
+            // which nobody writes on purpose.
+            Some(u) if u.is_instance_of::<pyo3::types::PyBool>() => {
+                if u.extract::<bool>()? {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "until=True says the loop stops before it runs. Pass a node \
+                         id to read the signal from, or False to run the full count",
+                    ));
+                }
+                LoopCondition::Exhaust
+            }
+            Some(u) => {
+                let cond = u.extract::<String>()?;
+                if self.graph.node(&cond).is_none() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "`{cond}` names no node in this graph, so it cannot be the \
+                         loop's stop condition"
+                    )));
+                }
+                LoopCondition::WhenSignaled(cond)
+            }
+        };
+
+        self.graph
+            .add_node(Node::loop_until(&actual_id, max_iterations, until));
+
+        for (i, entry) in entries.iter().enumerate() {
+            let fallback = format!("{actual_id}_body_{i}");
+            let entry_id = self.resolve_member(py, &fallback, entry)?;
+            self.control_edge(&actual_id, &entry_id, None);
+        }
+
+        Ok(actual_id)
+    }
+
+    /// Set the provider that serves model names given without a prefix.
+    ///
+    /// ```python
+    /// g.use_provider("ollama")
+    /// g.step("a", soma.Agent(model="llama3.2"))   # → ollama/llama3.2
+    /// ```
+    fn use_provider(&mut self, provider: String) {
+        self.default_provider = Some(provider);
+    }
+
+    /// Make a data edge part of the search space: a study may keep it or
+    /// cut it.
+    ///
+    /// This is topology as a hyperparameter — whether the critic should see
+    /// the retriever's output at all is exactly the kind of question a
+    /// search answers better than an argument does. Control edges are not
+    /// eligible: they are what makes a loop a loop, not a design choice.
+    ///
+    /// ```python
+    /// g.optional("retriever", "critic")
+    /// study = g.study("shape", n_trials=20)   # gains `edge:retriever->critic`
+    /// ```
+    fn optional(&mut self, source: String, target: String) -> PyResult<()> {
+        let found = self
+            .graph
+            .edges
+            .iter()
+            .find(|e| e.source == source && e.target == target);
+
+        match found {
+            None => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "there is no edge `{source}` → `{target}` to make optional"
+            ))),
+            Some(e) if e.kind != somatize_core::graph::EdgeKind::Data => {
+                Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "`{source}` → `{target}` is a control edge; cutting it would \
+                     change what the loop or branch owns, not just what flows"
+                )))
+            }
+            Some(_) => {
+                let pair = (source, target);
+                if !self.optional_edges.contains(&pair) {
+                    self.optional_edges.push(pair);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The edges a study may cut, as `(source, target)`.
+    fn optional_edges(&self) -> Vec<(String, String)> {
+        self.optional_edges.clone()
+    }
+
+    /// Keep or cut one of the optional edges.
+    ///
+    /// A cut edge is set aside whole, so restoring it restores its id, kind
+    /// and label — a trial that cuts an edge must leave the graph identical
+    /// to the one the next trial starts from.
+    fn set_edge(&mut self, source: String, target: String, enabled: bool) -> PyResult<()> {
+        let pair = (source, target);
+        if !self.optional_edges.contains(&pair) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "`{}` → `{}` was never declared optional; call optional() first",
+                pair.0, pair.1
+            )));
+        }
+
+        if enabled {
+            if let Some((at, edge)) = self.cut_edges.remove(&pair) {
+                // Back where it was, not on the end. Appending would leave a
+                // graph that is semantically the same and renders, hashes and
+                // fingerprints differently — so two trials of the same
+                // topology would not compare equal.
+                self.graph
+                    .edges
+                    .insert(at.min(self.graph.edges.len()), edge);
+            }
+        } else if !self.cut_edges.contains_key(&pair)
+            && let Some(i) = self
+                .graph
+                .edges
+                .iter()
+                .position(|e| e.source == pair.0 && e.target == pair.1)
+        {
+            let edge = self.graph.edges.remove(i);
+            self.cut_edges.insert(pair, (i, edge));
+        }
+        Ok(())
+    }
+
+    /// The live `Agent`/`Judge` behind each step node, as `(node_id, obj)`.
+    ///
+    /// The counterpart of `filters()`. A study reads their search spaces and
+    /// writes sampled values straight onto them.
+    fn steps(&self, py: Python<'_>) -> Vec<(String, PyObject)> {
+        let mut items: Vec<(String, PyObject)> = self
+            .live_steps
+            .iter()
+            .map(|(id, obj)| (id.clone(), obj.clone_ref(py)))
+            .collect();
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        items
+    }
+
+    /// Register a tool without attaching it to a particular agent.
+    fn add_tool(&mut self, tool: PyTool) {
+        self.tools.insert(tool.tool_name().to_string(), tool);
+    }
+
+    /// Start an MCP server and make everything it publishes callable.
+    ///
+    /// Returns the tool names discovered. Discovery happens now, so a
+    /// misconfigured server fails here rather than mid-run.
+    #[pyo3(signature = (command, args=None))]
+    fn add_mcp_server(
+        &mut self,
+        py: Python<'_>,
+        command: String,
+        args: Option<Vec<String>>,
+    ) -> PyResult<Vec<String>> {
+        let args = args.unwrap_or_default();
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+        // Spawning and handshaking is I/O; do not hold the GIL for it.
+        let mut toolbox = somatize_llm::Toolbox::new();
+        py.allow_threads(|| toolbox.add_mcp_server(&command, &refs))
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let names: Vec<String> = toolbox.names().into_iter().map(String::from).collect();
+        self.mcp_toolboxes.push(toolbox);
+        Ok(names)
     }
 
     /// Connect two nodes with a data edge.
@@ -2400,7 +2927,11 @@ impl PyGraph {
         chunk_size: usize,
         seed: Option<i64>,
     ) -> PyResult<PyObject> {
-        if !self.fitted {
+        // A step has no fit phase — its behaviour comes from a model and a
+        // prompt, not from learned state. A graph with nothing trainable in
+        // it therefore has nothing to fit, and demanding a fit first would
+        // be asking for a no-op.
+        if !self.fitted && self.has_trainable_filters() {
             return Err(PyRuntimeError::new_err(
                 "graph must be fitted before forward",
             ));
@@ -2471,9 +3002,11 @@ impl PyGraph {
         }
 
         // Local execution (with optional remote executor for mixed graphs)
+        let steps = self.rebuild_steps(py)?;
+        let registry = GraphRegistry::new(&self.library, &steps);
         let compile_result = somatize_compiler::compile(
             &self.graph,
-            &self.library,
+            &registry,
             CompileMode::Inference,
             Some(self.cache.as_ref()),
         )
@@ -2487,6 +3020,9 @@ impl PyGraph {
         .with_graph_info(graph_info)
         .with_seed(seed);
 
+        if let Some((steps, driver)) = self.step_runtime(py, &steps)? {
+            ctx = ctx.with_steps(steps, driver);
+        }
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
         }
@@ -2529,9 +3065,11 @@ impl PyGraph {
 
     /// Compile and execute, returning all node outputs as a dict.
     fn run(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let steps = self.rebuild_steps(py)?;
+        let registry = GraphRegistry::new(&self.library, &steps);
         let compile_result = somatize_compiler::compile(
             &self.graph,
-            &self.library,
+            &registry,
             CompileMode::NoCache,
             Some(self.cache.as_ref()),
         )
@@ -2542,6 +3080,9 @@ impl PyGraph {
         let mut ctx =
             Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
 
+        if let Some((steps, driver)) = self.step_runtime(py, &steps)? {
+            ctx = ctx.with_steps(steps, driver);
+        }
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
         }
@@ -4134,6 +4675,12 @@ fn run_to_graphviz(dir: String, overlay: bool) -> PyResult<String> {
 #[pymodule]
 fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
+    m.add_class::<PyAgent>()?;
+    m.add_class::<PyJudge>()?;
+    m.add_class::<PyTool>()?;
+    m.add_function(wrap_pyfunction!(agentic::tool, m)?)?;
+    m.add_function(wrap_pyfunction!(agentic::providers, m)?)?;
+    m.add_function(wrap_pyfunction!(agentic::models, m)?)?;
     m.add_class::<PyStudy>()?;
     m.add_class::<PyTrial>()?;
     m.add_class::<PyRun>()?;

@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 somatize-core = { workspace = true, features = ["s3"] }
 somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
+somatize-llm = { path = "../soma-llm", version = "0.3.1" }
 somatize-worker = { workspace = true }
 somatize-memory = { workspace = true }
 pyo3 = { workspace = true, features = ["extension-module"] }

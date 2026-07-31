@@ -348,9 +348,16 @@ class TestEdgeCases:
 
     def test_forward_without_fit_fails(self):
         g = make_graph()
-        g.node("doubler", DoubleFilter())
+        # A *trainable* filter has state to learn, so forward without fit is
+        # an error. (A stateless graph has nothing to fit and runs as-is.)
+        g.node("scale", ScaleFilter())
         with pytest.raises(RuntimeError, match="fitted"):
             g.forward([1.0])
+
+    def test_a_stateless_graph_needs_no_fit(self):
+        g = make_graph()
+        g.node("doubler", DoubleFilter())
+        assert g.forward([1.0, 2.0]) == [2.0, 4.0]
 
     def test_json_value_through_worker(self):
         g = make_graph()
