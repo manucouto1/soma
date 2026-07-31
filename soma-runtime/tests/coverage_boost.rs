@@ -2,6 +2,7 @@
 
 use somatize_compiler::{CompileMode, ExecutionPlan};
 use somatize_core::cache::CacheKey;
+use somatize_core::control::LoopCondition;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
@@ -128,7 +129,8 @@ impl Filter for BranchCondition {
     }
 }
 
-/// Filter that returns "done" to stop loops.
+/// A loop condition filter: speaks the termination protocol on every call,
+/// signalling `continue` until the `stop_at`-th invocation.
 struct StopFilter {
     call_count: std::sync::atomic::AtomicUsize,
     stop_at: usize,
@@ -140,15 +142,13 @@ impl Filter for StopFilter {
     fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
         Ok(Value::Empty)
     }
-    fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+    fn forward(&self, _x: &Value, _state: &Value) -> Result<Value> {
         let count = self
             .call_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if count >= self.stop_at {
-            Ok(Value::json(serde_json::json!({"done": true})))
-        } else {
-            Ok(x.clone())
-        }
+        Ok(Value::json(
+            serde_json::json!({"done": count >= self.stop_at}),
+        ))
     }
     fn meta(&self) -> FilterMeta {
         FilterMeta {
@@ -382,10 +382,95 @@ fn executor_loop_terminates_on_done() {
             node_id: "stopper".into(),
         }),
         max_iterations: Some(100),
+        until: LoopCondition::WhenSignaled("stopper".into()),
+        carry_from: None,
     };
 
     execute(&plan, &mut ctx, &lib, &cache).unwrap();
-    // Loop should have stopped after ~3 iterations, not 100
+
+    // `stop_at: 3` means the filter returns `{"done": true}` on its 4th call
+    // (counts 0,1,2 continue; 3 stops), so the loop runs exactly 4 times —
+    // not the 100 it would burn if the signal were ignored.
+    let calls = ctx
+        .execution_order
+        .iter()
+        .filter(|id| *id == "stopper")
+        .count();
+    assert_eq!(calls, 4, "loop ran {calls} times, expected 4");
+}
+
+/// A body whose designated condition node yields a tensor cannot express
+/// termination. The old executor read `_ => false` and silently burned every
+/// iteration; now it says so.
+#[test]
+fn executor_loop_rejects_unreadable_signal() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "loop_bad_signal");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("doubler", vec!["input".into()]);
+
+    let mut lib = FilterLibrary::new();
+    lib.register("doubler", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Loop {
+        node_id: "loop".into(),
+        body: Box::new(ExecutionPlan::Execute {
+            node_id: "doubler".into(),
+        }),
+        max_iterations: Some(100),
+        until: LoopCondition::WhenSignaled("doubler".into()),
+        carry_from: None,
+    };
+
+    let err = execute(&plan, &mut ctx, &lib, &cache).expect_err("must not silently loop 100x");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("termination signal") && msg.contains("doubler"),
+        "unhelpful error: {msg}"
+    );
+    // It stopped on the first iteration rather than running to the cap.
+    let calls = ctx
+        .execution_order
+        .iter()
+        .filter(|id| *id == "doubler")
+        .count();
+    assert_eq!(calls, 1, "should fail on the first iteration, ran {calls}");
+}
+
+/// `Exhaust` opts out of signals entirely and runs the full count.
+#[test]
+fn executor_loop_exhaust_runs_full_count() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "loop_exhaust");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("doubler", vec!["input".into()]);
+
+    let mut lib = FilterLibrary::new();
+    lib.register("doubler", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Loop {
+        node_id: "loop".into(),
+        body: Box::new(ExecutionPlan::Execute {
+            node_id: "doubler".into(),
+        }),
+        max_iterations: Some(5),
+        until: LoopCondition::Exhaust,
+        carry_from: None,
+    };
+
+    execute(&plan, &mut ctx, &lib, &cache).unwrap();
+    let calls = ctx
+        .execution_order
+        .iter()
+        .filter(|id| *id == "doubler")
+        .count();
+    assert_eq!(calls, 5);
 }
 
 // ── Executor coverage: Branch ──
@@ -431,6 +516,111 @@ fn executor_branch_selects_arm() {
 
     // BranchCondition returns "left", so left_doubler should have executed
     assert!(ctx.get("left_doubler").is_some(), "left arm should execute");
+    assert!(
+        ctx.get("right_doubler").is_none(),
+        "the unselected arm must not run"
+    );
+}
+
+/// A condition that names no arm must fail loudly. Falling back to `arms[0]`
+/// turns a typo into a wrong answer that only surfaces downstream.
+#[test]
+fn executor_branch_rejects_unmatched_selector() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "branch_unmatched");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("cond", vec!["input".into()]);
+
+    let mut lib = FilterLibrary::new();
+    lib.register("cond", Box::new(BranchCondition)); // returns "left"
+    lib.register("up", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Branch {
+        node_id: "cond".into(),
+        arms: vec![(
+            "billing".into(), // no arm named "left"
+            ExecutionPlan::Execute {
+                node_id: "up".into(),
+            },
+        )],
+    };
+
+    let err = execute(&plan, &mut ctx, &lib, &cache).expect_err("must not fall back to arm zero");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("left"),
+        "error should name the selector: {msg}"
+    );
+    assert!(
+        msg.contains("billing"),
+        "error should list the available arms: {msg}"
+    );
+    assert!(ctx.get("up").is_none(), "no arm should have run");
+}
+
+/// A `default` arm is the sanctioned way to accept anything unmatched.
+#[test]
+fn executor_branch_falls_back_to_default_arm() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "branch_default");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("cond", vec!["input".into()]);
+    ctx.graph_info
+        .set_predecessors("fallback", vec!["cond".into()]);
+
+    let mut lib = FilterLibrary::new();
+    lib.register("cond", Box::new(BranchCondition)); // returns "left"
+    lib.register("fallback", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Branch {
+        node_id: "cond".into(),
+        arms: vec![(
+            "default".into(),
+            ExecutionPlan::Execute {
+                node_id: "fallback".into(),
+            },
+        )],
+    };
+
+    execute(&plan, &mut ctx, &lib, &cache).unwrap();
+    assert!(ctx.get("fallback").is_some(), "default arm should run");
+}
+
+/// A condition producing a tensor names no arm at all.
+#[test]
+fn executor_branch_rejects_unreadable_condition() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "branch_unreadable");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("cond", vec!["input".into()]);
+
+    let mut lib = FilterLibrary::new();
+    lib.register("cond", Box::new(Doubler)); // yields a Tensor, not a label
+
+    let plan = ExecutionPlan::Branch {
+        node_id: "cond".into(),
+        arms: vec![(
+            "a".into(),
+            ExecutionPlan::Execute {
+                node_id: "cond".into(),
+            },
+        )],
+    };
+
+    let err = execute(&plan, &mut ctx, &lib, &cache).expect_err("must not guess an arm");
+    assert!(
+        err.to_string().contains("names no arm"),
+        "unhelpful error: {err}"
+    );
 }
 
 // ── Executor coverage: Remote fallback ──

@@ -43,6 +43,8 @@ def _decode(obj):
             t, d = obj["type"], obj["data"]
             if t == "Tensor":
                 return d.get("values", [])
+            if t == "Text":
+                return d
             if t == "Json":
                 return d
             if t == "Empty":
@@ -501,6 +503,17 @@ impl PythonProcess {
                     return Ok(Value::tensor(flat, vec![rows, cols]));
                 }
             }
+        }
+        // A bare string from Python becomes text unless it parses as JSON —
+        // byte-for-byte the rule `py_to_value` applies in-process. The two
+        // paths must agree: the same filter run locally and on a worker has
+        // to produce the same `Value`, or its cache key changes with where
+        // it ran.
+        if let Some(s) = v.as_str() {
+            return Ok(match serde_json::from_str(s) {
+                Ok(parsed) => Value::json(parsed),
+                Err(_) => Value::text(s),
+            });
         }
         Ok(Value::json(v.clone()))
     }

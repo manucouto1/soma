@@ -169,7 +169,8 @@ pub fn pipeline_summary(graph: &Graph) -> String {
             }
             Some(NodeKind::SubGraph { graph }) => format!("{id}[{} nodes]", graph.nodes.len()),
             Some(NodeKind::Loop { .. }) => format!("{id}[loop]"),
-            Some(NodeKind::Branch) => format!("{id}[branch]"),
+            Some(NodeKind::Branch { .. }) => format!("{id}[branch]"),
+            Some(NodeKind::Step { step_name }) => format!("{id}[step:{step_name}]"),
             _ => (*id).to_string(),
         })
         .collect();
@@ -236,11 +237,12 @@ fn kind_token(kind: &NodeKind) -> Result<String> {
             let inner = ArchitectureFingerprint::of(graph)?;
             format!("subgraph:{}", inner.short())
         }
-        NodeKind::Loop { max_iterations } => match max_iterations {
+        NodeKind::Loop { max_iterations, .. } => match max_iterations {
             Some(n) => format!("loop:{n}"),
             None => "loop:*".to_string(),
         },
-        NodeKind::Branch => "branch".to_string(),
+        NodeKind::Branch { .. } => "branch".to_string(),
+        NodeKind::Step { step_name } => format!("step:{step_name}"),
     })
 }
 

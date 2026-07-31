@@ -32,6 +32,7 @@ const TAG_TENSOR: u8 = 1;
 const TAG_JSON: u8 = 2;
 const TAG_BYTES: u8 = 3;
 const TAG_OBJECT: u8 = 4;
+const TAG_TEXT: u8 = 5;
 
 const COMPRESSION_RAW: u8 = 0;
 
@@ -56,6 +57,11 @@ pub fn encode_value(value: &Value) -> Result<Vec<u8>> {
             for v in values.iter() {
                 buf.extend_from_slice(&v.to_le_bytes());
             }
+        }
+        Value::Text(s) => {
+            buf.push(TAG_TEXT);
+            buf.push(COMPRESSION_RAW);
+            buf.extend_from_slice(s.as_bytes());
         }
         Value::Json(v) => {
             buf.push(TAG_JSON);
@@ -106,6 +112,11 @@ pub fn decode_value(bytes: &[u8]) -> Result<Value> {
                 .map_err(|e| SomaError::Cache(format!("codec: json decode: {e}")))?;
             Ok(Value::json(v))
         }
+        TAG_TEXT => {
+            let s = std::str::from_utf8(payload)
+                .map_err(|e| SomaError::Cache(format!("codec: text decode: {e}")))?;
+            Ok(Value::text(s))
+        }
         TAG_BYTES => Ok(Value::bytes(payload.to_vec())),
         TAG_OBJECT => Ok(Value::object(payload.to_vec())),
         other => Err(SomaError::Cache(format!("codec: unknown tag {other}"))),
@@ -155,12 +166,43 @@ mod tests {
             Value::json(json!({"a": [1, 2.5, "x"], "b": null})),
             Value::bytes(vec![0, 255, 128]),
             Value::object(vec![0x80, 0x04]),
+            Value::text(""),
+            Value::text("Summarize the following in one sentence."),
+            // Non-ASCII must survive the byte-level frame intact.
+            Value::text("resumen: ¿qué pasó? — 数字 🧬"),
         ];
         for v in values {
             let (bytes, hash) = encode_and_hash(&v).unwrap();
             assert!(hash.verify(&bytes));
             assert_eq!(decode_value(&bytes).unwrap(), v, "roundtrip failed for {v}");
         }
+    }
+
+    /// Text and a JSON string holding the same characters are different
+    /// values, and must hash differently — otherwise a prompt and a JSON
+    /// document quoting it would share a cache line.
+    #[test]
+    fn text_and_json_string_are_distinct() {
+        let (text_bytes, text_hash) = encode_and_hash(&Value::text("hello")).unwrap();
+        let (json_bytes, json_hash) = encode_and_hash(&Value::json(json!("hello"))).unwrap();
+
+        assert_ne!(text_bytes, json_bytes);
+        assert_ne!(text_hash, json_hash);
+        assert_eq!(decode_value(&text_bytes).unwrap(), Value::text("hello"));
+        assert_eq!(
+            decode_value(&json_bytes).unwrap(),
+            Value::json(json!("hello"))
+        );
+    }
+
+    /// Invalid UTF-8 in a text frame is reported, not silently replaced.
+    #[test]
+    fn text_frame_rejects_invalid_utf8() {
+        let mut frame = Vec::from(MAGIC);
+        frame.push(TAG_TEXT);
+        frame.push(COMPRESSION_RAW);
+        frame.extend_from_slice(&[0xff, 0xfe]);
+        assert!(decode_value(&frame).is_err());
     }
 
     #[test]

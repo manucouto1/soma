@@ -20,6 +20,20 @@ pub enum SomaError {
     #[error("trial pruned at step {step}: {reason}")]
     Pruned { step: usize, reason: String },
 
+    /// The run stopped at `node_id`, waiting for something outside it.
+    ///
+    /// Not a failure: the work so far is journaled and the run continues
+    /// where it left off once the answer is supplied. It travels as an error
+    /// so that `?` unwinds the whole plan — a suspended run must not have
+    /// its later nodes execute — while callers that care can match on it.
+    #[error("run `{run_id}` suspended at node `{node_id}` (turn {turn}): {reason}")]
+    Suspended {
+        run_id: String,
+        node_id: String,
+        turn: usize,
+        reason: String,
+    },
+
     #[error("schema mismatch: expected {expected}, got {got}")]
     SchemaMismatch { expected: String, got: String },
 

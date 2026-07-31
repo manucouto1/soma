@@ -31,7 +31,7 @@ pub struct StoreMeta {
     pub total_rows: usize,
     /// Remaining shape dimensions after the row axis (shape[1..] for tensors).
     pub shape_tail: Vec<usize>,
-    /// Type tag: "tensor", "json", "bytes", or "empty".
+    /// Type tag: "tensor", "text", "json", "bytes", or "empty".
     pub dtype: String,
 }
 
@@ -43,6 +43,11 @@ impl StoreMeta {
                 total_rows: shape.first().copied().unwrap_or(0),
                 shape_tail: shape.get(1..).unwrap_or_default().to_vec(),
                 dtype: "tensor".into(),
+            },
+            Value::Text(_) => Self {
+                total_rows: 1,
+                shape_tail: vec![],
+                dtype: "text".into(),
             },
             Value::Json(_) => Self {
                 total_rows: 1,

@@ -29,6 +29,10 @@ use std::sync::Arc;
 /// // Use directly with executor — no conversion needed
 /// executor::execute(&plan, &mut ctx, &lib, &cache)?;
 /// ```
+/// Cloning shares both the filters and the state store, so a clone sees
+/// whatever the original has fitted. That is what lets one library serve
+/// many graph runs — an agent running pipelines back to back, for instance.
+#[derive(Clone)]
 pub struct FilterLibrary {
     filters: HashMap<String, Arc<dyn Filter>>,
     states: Arc<dyn StateStore>,

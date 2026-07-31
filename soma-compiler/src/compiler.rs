@@ -5,10 +5,11 @@
 
 use crate::plan::ExecutionPlan;
 use somatize_core::cache::{CacheKey, CacheStore};
-use somatize_core::error::Result;
+use somatize_core::control::LoopCondition;
+use somatize_core::error::{Result, SomaError};
 use somatize_core::filter::{Filter, FilterMeta};
 use somatize_core::graph::{Graph, NodeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Compilation mode affects caching behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,7 @@ pub enum DiagnosticLevel {
 }
 
 /// Compiled result: the plan plus any diagnostics.
+#[derive(Debug)]
 pub struct CompileResult {
     pub plan: ExecutionPlan,
     pub diagnostics: Vec<Diagnostic>,
@@ -47,18 +49,38 @@ pub struct CompileResult {
 pub trait FilterRegistry: Send + Sync {
     fn meta(&self, node_id: &str) -> Option<FilterMeta>;
     fn config_hash(&self, node_id: &str) -> Option<CacheKey>;
+
+    /// Metadata for an effectful step, if this node is one.
+    ///
+    /// Defaulted so registries that only know filters need no change. A
+    /// registry that does know steps returns their schemas here, which is
+    /// what lets the compiler type-check a handoff between two agent nodes.
+    fn step_meta(&self, _node_id: &str) -> Option<somatize_core::step::StepMeta> {
+        None
+    }
 }
 
 /// Simple in-memory filter registry for compilation.
 pub struct SimpleFilterRegistry {
     entries: HashMap<String, (FilterMeta, CacheKey)>,
+    steps: HashMap<String, somatize_core::step::StepMeta>,
 }
 
 impl SimpleFilterRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            steps: HashMap::new(),
         }
+    }
+
+    /// Register a step's metadata, so its schemas take part in validation.
+    pub fn register_step_meta(
+        &mut self,
+        node_id: impl Into<String>,
+        meta: somatize_core::step::StepMeta,
+    ) {
+        self.steps.insert(node_id.into(), meta);
     }
 
     pub fn register(&mut self, node_id: impl Into<String>, filter: &dyn Filter) {
@@ -90,6 +112,55 @@ impl FilterRegistry for SimpleFilterRegistry {
 
     fn config_hash(&self, node_id: &str) -> Option<CacheKey> {
         self.entries.get(node_id).map(|(_, h)| h.clone())
+    }
+
+    fn step_meta(&self, node_id: &str) -> Option<somatize_core::step::StepMeta> {
+        self.steps.get(node_id).cloned()
+    }
+}
+
+/// Graph-wide analysis shared by every level of plan construction.
+///
+/// Both maps are computed once over the whole graph. Sub-plans (loop bodies,
+/// branch arms) project onto them rather than recomputing, so a node's
+/// position relative to the rest of the graph is the same wherever it is
+/// emitted.
+struct PlanCtx<'b> {
+    /// Topological level per node; nodes sharing a level are independent.
+    levels: HashMap<&'b str, usize>,
+    /// `dominators[n]` — every node that lies on all paths from a root to `n`.
+    dominators: HashMap<&'b str, HashSet<&'b str>>,
+}
+
+impl<'b> PlanCtx<'b> {
+    /// Does `d` lie on every path from a root to `n`? (Reflexive: `d` dominates itself.)
+    fn dominates(&self, d: &str, n: &str) -> bool {
+        self.dominators.get(n).is_some_and(|set| set.contains(d))
+    }
+
+    fn level_of(&self, n: &str) -> usize {
+        self.levels.get(n).copied().unwrap_or(0)
+    }
+
+    /// Group nodes into ordered levels, dropping levels the subset doesn't occupy.
+    fn group_by_level(&self, nodes: &[&'b str]) -> Vec<Vec<&'b str>> {
+        let mut by_level: Vec<(usize, Vec<&'b str>)> = Vec::new();
+        for &n in nodes {
+            let lvl = self.level_of(n);
+            match by_level.iter_mut().find(|(l, _)| *l == lvl) {
+                Some((_, bucket)) => bucket.push(n),
+                None => by_level.push((lvl, vec![n])),
+            }
+        }
+        by_level.sort_by_key(|(l, _)| *l);
+        by_level.into_iter().map(|(_, ns)| ns).collect()
+    }
+
+    /// Deterministic topological order: by level, then by id.
+    fn in_topo_order(&self, set: HashSet<&'b str>) -> Vec<&'b str> {
+        let mut out: Vec<&'b str> = set.into_iter().collect();
+        out.sort_by(|a, b| self.level_of(a).cmp(&self.level_of(b)).then(a.cmp(b)));
+        out
     }
 }
 
@@ -128,10 +199,18 @@ impl<'a> Compiler<'a> {
         self.check_gradient_flow(&sorted);
 
         // Validate schema compatibility
-        self.validate_schemas(&sorted);
+        self.validate_schemas(&sorted)?;
+
+        let ctx = PlanCtx {
+            levels: self.compute_levels(&sorted),
+            dominators: self.compute_dominators(&sorted),
+        };
+
+        // Reject ambiguous control flow before it can become a silent default
+        self.validate_control_flow(&sorted, &ctx)?;
 
         // Build the structural plan (detect parallelism)
-        let plan = self.build_plan(&sorted);
+        let plan = self.plan_subset(&sorted, &ctx);
 
         // Resolve caching if applicable
         let plan = if let Some(cache) = cache {
@@ -154,32 +233,239 @@ impl<'a> Compiler<'a> {
         })
     }
 
-    /// Build a plan from topologically sorted nodes, detecting parallelism.
-    fn build_plan(&self, sorted: &[&str]) -> ExecutionPlan {
-        // Compute topological levels (nodes at the same level can run in parallel)
-        let levels = self.compute_levels(sorted);
+    /// Reject control flow whose meaning would otherwise be decided at
+    /// runtime by whichever node happened to finish last.
+    fn validate_control_flow<'b>(&self, sorted: &[&'b str], ctx: &PlanCtx<'b>) -> Result<()> {
+        use somatize_core::graph::NodeKind;
+
+        let all: HashSet<&str> = sorted.iter().copied().collect();
+
+        for &node_id in sorted {
+            let Some(node) = self.graph.node(node_id) else {
+                continue;
+            };
+            match &node.kind {
+                NodeKind::Loop { until, .. } => {
+                    let body = self.claimed_subset(node_id, &all, ctx);
+                    if body.is_empty() {
+                        return Err(SomaError::Compilation(format!(
+                            "loop `{node_id}` has an empty body: it needs at least one \
+                             control edge to the node that starts each iteration"
+                        )));
+                    }
+                    if matches!(until, LoopCondition::BodyTerminal) {
+                        let terminals = self.body_terminals(&body);
+                        if terminals.len() != 1 {
+                            return Err(SomaError::Compilation(format!(
+                                "loop `{node_id}` cannot infer its stop condition: its body has \
+                                 {} terminal nodes ({}). Name the deciding node explicitly with \
+                                 `LoopCondition::WhenSignaled`, or use `LoopCondition::Exhaust` \
+                                 to always run `max_iterations` times",
+                                terminals.len(),
+                                terminals.join(", ")
+                            )));
+                        }
+                    }
+                    if let LoopCondition::WhenSignaled(target) = until
+                        && !body.contains(&target.as_str())
+                    {
+                        return Err(SomaError::Compilation(format!(
+                            "loop `{node_id}` waits on `{target}`, which is not in its body \
+                             ({}) — it would never be re-evaluated",
+                            body.join(", ")
+                        )));
+                    }
+                }
+                NodeKind::Branch { arms: declared } => {
+                    let edges = self.control_targets(node_id, &all);
+                    if edges.is_empty() {
+                        return Err(SomaError::Compilation(format!(
+                            "branch `{node_id}` has no arms: arms are the control edges \
+                             leaving it, each labelled with the value that selects it"
+                        )));
+                    }
+                    let mut seen: HashSet<String> = HashSet::new();
+                    for (target, label) in &edges {
+                        let label = label.clone().unwrap_or_else(|| target.to_string());
+                        if !seen.insert(label.clone()) {
+                            return Err(SomaError::Compilation(format!(
+                                "branch `{node_id}` has two arms labelled `{label}` — \
+                                 the second could never be selected"
+                            )));
+                        }
+                    }
+
+                    // When the node declares its label set, hold the edges to
+                    // it in both directions. A mislabelled edge is otherwise
+                    // an arm that simply never fires — visible only as a
+                    // wrong answer, and only sometimes.
+                    if !declared.is_empty() {
+                        let declared_set: HashSet<&str> =
+                            declared.iter().map(String::as_str).collect();
+
+                        for label in &seen {
+                            if !declared_set.contains(label.as_str())
+                                && !somatize_core::control::is_default_arm(label)
+                            {
+                                return Err(SomaError::Compilation(format!(
+                                    "branch `{node_id}` has an edge labelled `{label}`, which \
+                                     is not among its declared arms ({}). Fix the label, or \
+                                     declare it",
+                                    declared.join(", ")
+                                )));
+                            }
+                        }
+                        for label in declared {
+                            if !seen.contains(label) {
+                                return Err(SomaError::Compilation(format!(
+                                    "branch `{node_id}` declares arm `{label}` but no control \
+                                     edge is labelled with it, so selecting it would fail at \
+                                     runtime"
+                                )));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Nodes in `body` that no other body node depends on.
+    fn body_terminals<'b>(&self, body: &[&'b str]) -> Vec<&'b str> {
+        let member: HashSet<&str> = body.iter().copied().collect();
+        body.iter()
+            .copied()
+            .filter(|n| {
+                !self
+                    .graph
+                    .successors(n)
+                    .iter()
+                    .any(|s| member.contains(s as &str))
+            })
+            .collect()
+    }
+
+    /// Resolve `BodyTerminal` to the concrete node the executor will read.
+    /// Validation has already guaranteed this is unambiguous.
+    fn resolve_loop_condition(
+        &self,
+        node_id: &str,
+        until: &LoopCondition,
+        body: &[&str],
+    ) -> LoopCondition {
+        match until {
+            LoopCondition::BodyTerminal => match self.body_terminals(body).as_slice() {
+                [only] => LoopCondition::WhenSignaled((*only).to_string()),
+                // Unreachable after validate_control_flow; exhausting is the
+                // safe reading — it never stops early on a guess.
+                _ => {
+                    debug_assert!(false, "unresolved BodyTerminal for loop `{node_id}`");
+                    LoopCondition::Exhaust
+                }
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Plan a set of nodes, emitting each exactly once.
+    ///
+    /// A `Loop` or `Branch` in the set *owns* its body / arms: those nodes are
+    /// compiled inside the construct and excluded from this level. Without
+    /// that exclusion the body would run once more after the loop finished,
+    /// and every arm would run unconditionally after the branch had already
+    /// picked one.
+    fn plan_subset<'b>(&self, nodes: &[&'b str], ctx: &PlanCtx<'b>) -> ExecutionPlan {
+        let member: HashSet<&str> = nodes.iter().copied().collect();
+
+        let mut owned: HashSet<&str> = HashSet::new();
+        for &n in nodes {
+            for m in self.owned_by(n, &member, ctx) {
+                owned.insert(m);
+            }
+        }
+
+        // Nodes not claimed by a construct, grouped by their graph-wide
+        // topological level so relative ordering survives the projection.
+        let top: Vec<&str> = nodes
+            .iter()
+            .copied()
+            .filter(|n| !owned.contains(n))
+            .collect();
 
         let mut plan_steps: Vec<ExecutionPlan> = Vec::new();
-
-        for level in &levels {
+        for level in ctx.group_by_level(&top) {
             if level.len() == 1 {
-                plan_steps.push(self.plan_for_node(level[0]));
+                plan_steps.push(self.plan_for_node(level[0], ctx));
             } else {
                 let branches: Vec<ExecutionPlan> =
-                    level.iter().map(|id| self.plan_for_node(id)).collect();
+                    level.iter().map(|id| self.plan_for_node(id, ctx)).collect();
                 plan_steps.push(ExecutionPlan::Parallel(branches));
             }
         }
 
-        if plan_steps.len() == 1 {
-            plan_steps.into_iter().next().unwrap()
-        } else {
-            ExecutionPlan::Sequence(plan_steps)
+        match plan_steps.len() {
+            0 => ExecutionPlan::Empty,
+            1 => plan_steps.into_iter().next().unwrap(),
+            _ => ExecutionPlan::Sequence(plan_steps),
         }
     }
 
+    /// The nodes a control-flow construct claims from `member`.
+    ///
+    /// Both `Loop` and `Branch` reach their sub-plans through **control**
+    /// edges; a data edge leaving either is an ordinary downstream dependency.
+    /// A target claims every node it dominates, so a node reachable from two
+    /// arms is dominated by neither and stays outside — running once after the
+    /// branch, which is what a convergence point should do.
+    fn owned_by<'b>(
+        &self,
+        node_id: &'b str,
+        member: &HashSet<&'b str>,
+        ctx: &PlanCtx<'b>,
+    ) -> Vec<&'b str> {
+        use somatize_core::graph::NodeKind;
+
+        let Some(node) = self.graph.node(node_id) else {
+            return Vec::new();
+        };
+        if !matches!(
+            node.kind,
+            NodeKind::Loop { .. } | NodeKind::Branch { .. } | NodeKind::Step { .. }
+        ) {
+            return Vec::new();
+        }
+
+        let mut claimed = Vec::new();
+        for (entry, _) in self.control_targets(node_id, member) {
+            for &m in member {
+                if m != node_id && ctx.dominates(entry, m) {
+                    claimed.push(m);
+                }
+            }
+        }
+        claimed
+    }
+
+    /// Targets of control edges leaving `node_id`, restricted to `member`.
+    fn control_targets<'b>(
+        &self,
+        node_id: &str,
+        member: &HashSet<&'b str>,
+    ) -> Vec<(&'b str, Option<String>)> {
+        use somatize_core::graph::EdgeKind;
+
+        self.graph
+            .edges
+            .iter()
+            .filter(|e| e.source == node_id && e.kind == EdgeKind::Control)
+            .filter_map(|e| member.get(e.target.as_str()).map(|t| (*t, e.label.clone())))
+            .collect()
+    }
+
     /// Generate the execution plan for a single node based on its kind.
-    fn plan_for_node(&self, node_id: &str) -> ExecutionPlan {
+    fn plan_for_node<'b>(&self, node_id: &'b str, ctx: &PlanCtx<'b>) -> ExecutionPlan {
         use somatize_core::graph::NodeKind;
 
         let node = match self.graph.node(node_id) {
@@ -196,6 +482,25 @@ impl<'a> Compiler<'a> {
                 node_id: node_id.to_string(),
             },
 
+            NodeKind::Step { .. } => {
+                // Control edges leaving a step are the places it may hand
+                // control to. Claimed the same way branch arms are, so each
+                // target is compiled once, inside the step that reaches it.
+                let all: HashSet<&str> = ctx.levels.keys().copied().collect();
+                let handoffs: Vec<(NodeId, ExecutionPlan)> = self
+                    .control_targets(node_id, &all)
+                    .into_iter()
+                    .map(|(target, _)| {
+                        let nodes = self.dominated_subset(target, &all, ctx);
+                        (target.to_string(), self.plan_subset(&nodes, ctx))
+                    })
+                    .collect();
+                ExecutionPlan::Step {
+                    node_id: node_id.to_string(),
+                    handoffs,
+                }
+            }
+
             NodeKind::SubGraph { graph } => {
                 // Recursively compile the inner graph
                 let inner_compiler = Compiler::new(graph, self.registry, self.mode);
@@ -207,37 +512,40 @@ impl<'a> Compiler<'a> {
                 }
             }
 
-            NodeKind::Loop { max_iterations } => {
-                // The body consists of the successors of this loop node.
-                // Build a sub-plan from the successor chain.
-                let successors = self.graph.successors(node_id);
-                let body = if successors.len() == 1 {
-                    self.plan_for_node(successors[0])
-                } else if successors.len() > 1 {
-                    let branches: Vec<ExecutionPlan> =
-                        successors.iter().map(|id| self.plan_for_node(id)).collect();
-                    ExecutionPlan::Parallel(branches)
-                } else {
+            NodeKind::Loop {
+                max_iterations,
+                until,
+            } => {
+                let all: HashSet<&str> = ctx.levels.keys().copied().collect();
+                let body_nodes = self.claimed_subset(node_id, &all, ctx);
+                let body = if body_nodes.is_empty() {
                     ExecutionPlan::Empty
+                } else {
+                    self.plan_subset(&body_nodes, ctx)
                 };
                 ExecutionPlan::Loop {
                     node_id: node_id.to_string(),
                     body: Box::new(body),
                     max_iterations: *max_iterations,
+                    until: self.resolve_loop_condition(node_id, until, &body_nodes),
+                    // Whatever the stop condition is, a single-terminal body
+                    // has one obvious thing to hand to the next pass.
+                    carry_from: match self.body_terminals(&body_nodes).as_slice() {
+                        [only] => Some((*only).to_string()),
+                        _ => None,
+                    },
                 }
             }
 
-            NodeKind::Branch => {
-                // Arms come from control edges leaving this node.
+            NodeKind::Branch { .. } => {
+                let all: HashSet<&str> = ctx.levels.keys().copied().collect();
                 let arms: Vec<(String, ExecutionPlan)> = self
-                    .graph
-                    .edges
-                    .iter()
-                    .filter(|e| e.source == node_id)
-                    .map(|e| {
-                        let label = e.label.clone().unwrap_or_else(|| e.target.clone());
-                        let plan = self.plan_for_node(&e.target);
-                        (label, plan)
+                    .control_targets(node_id, &all)
+                    .into_iter()
+                    .map(|(target, label)| {
+                        let label = label.unwrap_or_else(|| target.to_string());
+                        let arm_nodes = self.dominated_subset(target, &all, ctx);
+                        (label, self.plan_subset(&arm_nodes, ctx))
                     })
                     .collect();
                 ExecutionPlan::Branch {
@@ -252,11 +560,39 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Compute topological levels: groups of nodes that can execute concurrently.
-    /// Each node's level = max(predecessor levels) + 1.
-    fn compute_levels<'b>(&self, sorted: &[&'b str]) -> Vec<Vec<&'b str>> {
+    /// Every node claimed by `node_id`'s control edges, in topological order.
+    fn claimed_subset<'b>(
+        &self,
+        node_id: &'b str,
+        universe: &HashSet<&'b str>,
+        ctx: &PlanCtx<'b>,
+    ) -> Vec<&'b str> {
+        let mut claimed: HashSet<&str> = HashSet::new();
+        for (entry, _) in self.control_targets(node_id, universe) {
+            claimed.extend(self.dominated_subset(entry, universe, ctx));
+        }
+        ctx.in_topo_order(claimed)
+    }
+
+    /// `entry` plus everything it dominates, in topological order.
+    fn dominated_subset<'b>(
+        &self,
+        entry: &'b str,
+        universe: &HashSet<&'b str>,
+        ctx: &PlanCtx<'b>,
+    ) -> Vec<&'b str> {
+        let set: HashSet<&str> = universe
+            .iter()
+            .copied()
+            .filter(|&m| ctx.dominates(entry, m))
+            .collect();
+        ctx.in_topo_order(set)
+    }
+
+    /// Topological level of each node: `max(predecessor levels) + 1`.
+    /// Nodes sharing a level have no dependency between them.
+    fn compute_levels<'b>(&self, sorted: &[&'b str]) -> HashMap<&'b str, usize> {
         let mut node_level: HashMap<&str, usize> = HashMap::new();
-        let mut max_level: usize = 0;
 
         for &node in sorted {
             let preds = self.graph.predecessors(node);
@@ -270,20 +606,33 @@ impl<'a> Compiler<'a> {
                     .unwrap_or(0)
             };
             node_level.insert(node, level);
-            if level > max_level {
-                max_level = level;
-            }
         }
 
-        let mut levels: Vec<Vec<&str>> = vec![Vec::new(); max_level + 1];
+        node_level
+    }
+
+    /// Dominator sets over the DAG: `d` dominates `n` when every path from a
+    /// root to `n` passes through `d`. Computed in topological order as
+    /// `dom(n) = {n} ∪ ⋂ dom(pred)`.
+    fn compute_dominators<'b>(&self, sorted: &[&'b str]) -> HashMap<&'b str, HashSet<&'b str>> {
+        let mut dom: HashMap<&str, HashSet<&str>> = HashMap::new();
+
         for &node in sorted {
-            let level = node_level[node];
-            levels[level].push(node);
+            let preds = self.graph.predecessors(node);
+            let mut set: HashSet<&str> = HashSet::new();
+
+            let mut pred_sets = preds.iter().filter_map(|p| dom.get(p));
+            if let Some(first) = pred_sets.next() {
+                set = first.clone();
+                for other in pred_sets {
+                    set.retain(|d| other.contains(d));
+                }
+            }
+            set.insert(node);
+            dom.insert(node, set);
         }
 
-        // Remove empty levels (shouldn't happen but defensive)
-        levels.retain(|l| !l.is_empty());
-        levels
+        dom
     }
 
     /// Cache resolution happens at RUNTIME, not here.
@@ -442,30 +791,77 @@ impl<'a> Compiler<'a> {
     /// For each edge (A → B), checks that A's output_schema is compatible
     /// with B's input_schema. Emits warnings (not errors) for mismatches,
     /// since schemas are optional and None means "accepts anything".
-    fn validate_schemas(&mut self, sorted: &[&str]) {
-        for &node_id in sorted {
-            let input_schema = self
-                .registry
-                .meta(node_id)
-                .and_then(|m| m.input_schema.clone());
+    /// What a node accepts, whether it is a filter or a step.
+    fn input_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
+        self.registry
+            .meta(node_id)
+            .and_then(|m| m.input_schema)
+            .or_else(|| {
+                self.registry
+                    .step_meta(node_id)
+                    .and_then(|m| m.input_schema)
+            })
+    }
 
+    /// What a node produces, whether it is a filter or a step.
+    fn output_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
+        self.registry
+            .meta(node_id)
+            .and_then(|m| m.output_schema)
+            .or_else(|| {
+                self.registry
+                    .step_meta(node_id)
+                    .and_then(|m| m.output_schema)
+            })
+    }
+
+    /// Check that every edge could carry what flows along it.
+    ///
+    /// Two severities, because two very different things get called a
+    /// "schema mismatch":
+    ///
+    /// - **Warning** — the dtypes differ but could plausibly line up (`f32`
+    ///   into `f64`, a fixed shape into a dynamic one). Long-standing
+    ///   behaviour; plenty of working pipelines rely on it.
+    /// - **Error** — no reading of the producer could satisfy the consumer:
+    ///   a tensor arriving where a conversation is expected. Across 1600+
+    ///   annotated multi-agent traces this class — context lost or malformed
+    ///   at a handoff — is the single largest bucket of failures after bad
+    ///   specifications. It is cheap to catch here and expensive to catch
+    ///   after a few thousand tokens.
+    fn validate_schemas(&mut self, sorted: &[&str]) -> Result<()> {
+        for &node_id in sorted {
             // Skip if this node accepts anything
-            let Some(expected_input) = input_schema else {
+            let Some(expected_input) = self.input_schema_of(node_id) else {
                 continue;
             };
 
-            // Check each predecessor's output schema
             for pred_id in self.graph.predecessors(node_id) {
-                let pred_output = self
-                    .registry
-                    .meta(pred_id)
-                    .and_then(|m| m.output_schema.clone());
-
-                let Some(actual_output) = pred_output else {
+                let Some(actual_output) = self.output_schema_of(pred_id) else {
                     continue; // predecessor output unknown, skip
                 };
 
-                if !actual_output.is_compatible_with(&expected_input) {
+                // No possible reading — refuse to build the graph.
+                if actual_output.is_incompatible_with(&expected_input) {
+                    return Err(SomaError::Compilation(format!(
+                        "`{pred_id}` outputs {actual_output} but `{node_id}` expects \
+                         {expected_input}, and there is no conversion between them. \
+                         Insert a node that adapts one to the other"
+                    )));
+                }
+
+                let same_dtype = actual_output.dtype == expected_input.dtype;
+                let both_numeric =
+                    actual_output.dtype.is_numeric() && expected_input.dtype.is_numeric();
+
+                // Warn on a shape that does not line up, or on an implicit
+                // change of numeric width. Stay quiet about the promotions the
+                // runtime performs by design (text → conversation, anything →
+                // json): those are the intended way to connect such nodes, and
+                // warning about them would train people to ignore warnings.
+                if (same_dtype && !actual_output.is_compatible_with(&expected_input))
+                    || (!same_dtype && both_numeric)
+                {
                     self.diagnostics.push(Diagnostic {
                         node_id: node_id.to_string(),
                         level: DiagnosticLevel::Warning,
@@ -477,6 +873,7 @@ impl<'a> Compiler<'a> {
                 }
             }
         }
+        Ok(())
     }
 
     /// Check gradient flow and emit warnings for each interruption.

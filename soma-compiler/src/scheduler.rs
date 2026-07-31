@@ -145,7 +145,11 @@ pub fn schedule(
 
 fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_worker: Option<&str>) {
     match plan {
-        ExecutionPlan::Execute { node_id } => {
+        // A step schedules like any other single node. Its cost profile is
+        // different — latency-bound rather than CPU-bound — which is a
+        // reason to weight it differently once the scheduler models cost at
+        // all; today it models load, and a step contributes load like the rest.
+        ExecutionPlan::Execute { node_id } | ExecutionPlan::Step { node_id, .. } => {
             let worker = if let Some(fw) = forced_worker {
                 state
                     .workers

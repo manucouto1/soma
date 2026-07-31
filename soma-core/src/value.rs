@@ -1,6 +1,7 @@
 //! Typed values flowing between filters in a pipeline.
 //!
-//! [`Value`] variants: Tensor (f64 array with shape), JSON, Bytes, Empty.
+//! [`Value`] variants: Tensor (f64 array with shape), Text, JSON, Bytes,
+//! Object, Empty.
 //! Values are serializable and content-addressable via [`crate::cache::CacheKey`].
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,14 @@ pub enum Value {
         values: Arc<Vec<f64>>,
         shape: Vec<usize>,
     },
+
+    /// UTF-8 text (Arc-wrapped for cheap cloning).
+    ///
+    /// Distinct from `Json(String)`: a prompt or completion is text, not a
+    /// JSON document that happens to be a string. Keeping them apart means
+    /// no round-trip through quoting/escaping on every hop, and lets a
+    /// schema say "this edge carries text" — see [`crate::schema::DataType`].
+    Text(Arc<str>),
 
     /// Structured JSON data (Arc-wrapped for cheap cloning).
     Json(Arc<serde_json::Value>),
@@ -43,6 +52,10 @@ impl Value {
         }
     }
 
+    pub fn text(s: impl AsRef<str>) -> Self {
+        Self::Text(Arc::from(s.as_ref()))
+    }
+
     pub fn json(val: serde_json::Value) -> Self {
         Self::Json(Arc::new(val))
     }
@@ -63,6 +76,18 @@ impl Value {
     pub fn as_tensor(&self) -> Option<(&[f64], &[usize])> {
         match self {
             Self::Tensor { values, shape } => Some((values, shape)),
+            _ => None,
+        }
+    }
+
+    /// Try to extract text.
+    ///
+    /// A `Json` string counts: a filter that returns `"hello"` as JSON and one
+    /// that returns it as text should both satisfy a consumer wanting text.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(s) => Some(s),
+            Self::Json(v) => v.as_str(),
             _ => None,
         }
     }
@@ -100,9 +125,25 @@ impl Value {
         }
         match self {
             Self::Tensor { values, shape } => nest(values, shape),
+            Self::Text(s) => serde_json::Value::String(s.to_string()),
             Self::Json(v) => (**v).clone(),
             Self::Empty => serde_json::Value::Null,
             other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
+        }
+    }
+
+    /// Short name of the variant, for error messages.
+    ///
+    /// Unlike `Display` this never renders the payload, so it is safe to put
+    /// in an error that may reach a log — a JSON value can hold a prompt.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Tensor { .. } => "Tensor",
+            Self::Text(_) => "Text",
+            Self::Json(_) => "Json",
+            Self::Bytes(_) => "Bytes",
+            Self::Object(_) => "Object",
+            Self::Empty => "Empty",
         }
     }
 
@@ -110,6 +151,7 @@ impl Value {
     pub fn size(&self) -> usize {
         match self {
             Self::Tensor { values, .. } => values.len(),
+            Self::Text(s) => s.len(),
             Self::Json(v) => v.to_string().len(),
             Self::Bytes(b) | Self::Object(b) => b.len(),
             Self::Empty => 0,
@@ -123,6 +165,7 @@ impl fmt::Display for Value {
             Self::Tensor { shape, values } => {
                 write!(f, "Tensor(shape={shape:?}, len={})", values.len())
             }
+            Self::Text(s) => write!(f, "Text(len={})", s.len()),
             Self::Json(v) => write!(f, "Json({v})"),
             Self::Bytes(b) => write!(f, "Bytes(len={})", b.len()),
             Self::Object(b) => write!(f, "Object(len={})", b.len()),

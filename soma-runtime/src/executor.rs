@@ -7,6 +7,9 @@ use crate::event_bus::EventBus;
 use crate::filter_library::FilterLibrary;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
+use somatize_core::control::{
+    LoopCondition, LoopSignal, is_default_arm, read_arm_selector, read_loop_signal,
+};
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
 use somatize_core::store::DataStore;
@@ -107,6 +110,11 @@ pub struct Context {
     /// Owned handle to the same cache passed to `execute()` — needed by
     /// the stream executor, which holds the cache across chunks.
     pub cache_arc: Option<Arc<dyn CacheStore>>,
+    /// Effectful steps, by node id. Only needed when the plan contains
+    /// `ExecutionPlan::Step`; a purely computational graph leaves it unset.
+    pub steps: Option<Arc<crate::step_library::StepLibrary>>,
+    /// Performs and journals step effects. Required alongside `steps`.
+    pub driver: Option<crate::effects::EffectDriver>,
 }
 
 impl Context {
@@ -123,7 +131,23 @@ impl Context {
             output_hashes: HashMap::new(),
             seed: None,
             cache_arc: None,
+            steps: None,
+            driver: None,
         }
+    }
+
+    /// Register the step library and effect driver an effectful plan needs.
+    ///
+    /// The driver is given the same library, so a step that fans out
+    /// dynamically can reach the workers it names.
+    pub fn with_steps(
+        mut self,
+        steps: Arc<crate::step_library::StepLibrary>,
+        driver: crate::effects::EffectDriver,
+    ) -> Self {
+        self.driver = Some(driver.with_steps(steps.clone()));
+        self.steps = Some(steps);
+        self
     }
 
     pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
@@ -254,6 +278,8 @@ impl Context {
             output_hashes: self.output_hashes.clone(),
             seed: self.seed,
             cache_arc: self.cache_arc.clone(),
+            steps: self.steps.clone(),
+            driver: self.driver.clone(),
         }
     }
 }
@@ -282,6 +308,10 @@ impl Executable for ExecutionPlan {
 
             ExecutionPlan::Execute { node_id } => execute_node(node_id, ctx, filters, cache),
 
+            ExecutionPlan::Step { node_id, handoffs } => {
+                execute_step(node_id, handoffs, ctx, filters, cache)
+            }
+
             ExecutionPlan::Sequence(steps) => {
                 for step in steps {
                     step.execute(ctx, filters, cache)?;
@@ -295,80 +325,137 @@ impl Executable for ExecutionPlan {
                 node_id,
                 body,
                 max_iterations,
+                until,
+                carry_from,
             } => {
                 let max = max_iterations.unwrap_or(100);
+                let mut ran = 0usize;
+
+                // The loop node's value is its *carry*: what the body reads
+                // on each pass. A body entry's only predecessor is the loop
+                // node itself (that control edge is what makes it the body),
+                // so without seeding this the first iteration would run on
+                // `Empty`. Seed it with the loop's own input; after each
+                // iteration the condition node's output replaces it, which is
+                // what makes a refine loop actually refine rather than redraft
+                // the same thing N times.
+                let seed = resolve_input(node_id, ctx);
+                ctx.set(node_id.clone(), seed);
+
                 for i in 0..max {
                     body.execute(ctx, filters, cache)?;
+                    ran = i + 1;
 
-                    // Check termination: if the last executed node produced a Value
-                    // that indicates "done" (true, "done", "stop", or empty), break.
-                    let should_stop = ctx
-                        .execution_order
-                        .last()
-                        .and_then(|last_id| ctx.get(last_id))
-                        .map(|v| match v {
-                            Value::Json(j) => {
-                                j.as_bool() == Some(true)
-                                    || j.as_str().map(|s| s == "done" || s == "stop") == Some(true)
-                                    || j.get("done").and_then(|d| d.as_bool()) == Some(true)
-                            }
-                            Value::Empty => true,
-                            _ => false,
-                        })
-                        .unwrap_or(false);
+                    // Advance the carry before testing the condition: even a
+                    // loop with no stop signal has to move forward, or every
+                    // pass repeats the first one.
+                    if let Some(source) = carry_from
+                        && let Some(value) = ctx.get(source).cloned()
+                    {
+                        ctx.set(node_id.clone(), value);
+                    }
 
-                    if should_stop {
+                    // Termination is read from the node the compiler resolved,
+                    // never from whichever node happened to run last — with a
+                    // parallel body "last" is a race.
+                    let LoopCondition::WhenSignaled(cond_node) = until else {
+                        continue; // Exhaust: always run the full count
+                    };
+
+                    let value = ctx.get(cond_node).ok_or_else(|| SomaError::Execution {
+                        node_id: node_id.clone(),
+                        message: format!(
+                            "loop condition node `{cond_node}` produced no output on \
+                             iteration {ran}"
+                        ),
+                    })?;
+
+                    let signal = read_loop_signal(value).ok_or_else(|| SomaError::Execution {
+                        node_id: node_id.clone(),
+                        message: format!(
+                            "loop condition node `{cond_node}` produced `{}`, which \
+                                 carries no termination signal. Return a bool, \"done\"/\"stop\", \
+                                 or {{\"done\": bool}}",
+                            value.type_name()
+                        ),
+                    })?;
+
+                    if signal == LoopSignal::Stop {
                         ctx.event_bus.emit(Event::NodeCompleted {
                             run_id: ctx.run_id.clone(),
                             node_id: node_id.clone(),
                             duration: std::time::Duration::ZERO,
-                            output_summary: format!("Loop terminated at iteration {}", i + 1),
+                            output_summary: format!("Loop terminated at iteration {ran}"),
                         });
-                        break;
+                        return Ok(());
                     }
                 }
+
+                ctx.event_bus.emit(Event::NodeCompleted {
+                    run_id: ctx.run_id.clone(),
+                    node_id: node_id.clone(),
+                    duration: std::time::Duration::ZERO,
+                    output_summary: format!("Loop exhausted {ran} iterations"),
+                });
                 Ok(())
             }
 
             ExecutionPlan::Branch { node_id, arms } => {
-                // Execute the branch node first (it produces the condition value)
-                execute_node(node_id, ctx, filters, cache)?;
+                // Execute the branch node first (it produces the condition
+                // value). It may be an ordinary filter or an effectful step:
+                // an LLM deciding where a request goes is the routing case
+                // agentic graphs are built for.
+                let request = resolve_input(node_id, ctx);
+                if ctx.steps.as_ref().is_some_and(|s| s.contains(node_id)) {
+                    execute_step(node_id, &[], ctx, filters, cache)?;
+                } else {
+                    execute_node(node_id, ctx, filters, cache)?;
+                }
 
-                // Get the condition result
                 let condition = ctx.get(node_id).cloned().unwrap_or(Value::Empty);
 
-                // Match against arm labels
-                let selected_arm = match &condition {
-                    Value::Json(j) => {
-                        // Try matching by string value, bool, or "branch" field
-                        let selector = j
-                            .as_str()
-                            .map(String::from)
-                            .or_else(|| j.as_bool().map(|b| b.to_string()))
-                            .or_else(|| j.get("branch").and_then(|b| b.as_str()).map(String::from))
-                            .unwrap_or_else(|| "true".to_string());
-
-                        arms.iter()
-                            .find(|(label, _)| label == &selector)
-                            .or_else(|| {
-                                arms.iter()
-                                    .find(|(label, _)| label == "default" || label == "else")
-                            })
-                            .or_else(|| arms.first())
-                    }
-                    _ => arms.first(),
-                };
-
-                if let Some((label, plan)) = selected_arm {
-                    ctx.event_bus.emit(Event::NodeCompleted {
-                        run_id: ctx.run_id.clone(),
+                let selector =
+                    read_arm_selector(&condition).ok_or_else(|| SomaError::Execution {
                         node_id: node_id.clone(),
-                        duration: std::time::Duration::ZERO,
-                        output_summary: format!("Branch selected: {label}"),
-                    });
-                    plan.execute(ctx, filters, cache)?;
-                }
-                Ok(())
+                        message: format!(
+                            "branch condition produced `{}`, which names no arm. Return the \
+                             arm's label as a string, a bool, or {{\"branch\": \"<label>\"}}",
+                            condition.type_name()
+                        ),
+                    })?;
+
+                let (label, plan) = arms
+                    .iter()
+                    .find(|(label, _)| label == &selector)
+                    .or_else(|| arms.iter().find(|(label, _)| is_default_arm(label)))
+                    .ok_or_else(|| SomaError::Execution {
+                        node_id: node_id.clone(),
+                        message: format!(
+                            "branch selected `{selector}`, which matches no arm ({}) and \
+                             there is no `default` arm",
+                            arms.iter()
+                                .map(|(l, _)| l.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    })?;
+
+                ctx.event_bus.emit(Event::NodeCompleted {
+                    run_id: ctx.run_id.clone(),
+                    node_id: node_id.clone(),
+                    duration: std::time::Duration::ZERO,
+                    output_summary: format!("Branch selected: {label}"),
+                });
+
+                // The selector is control, not data. An arm's only
+                // predecessor is the branch node, so leaving the label there
+                // would hand the chosen agent the string "billing" instead of
+                // the customer's question — the handoff-context loss the
+                // multi-agent failure literature keeps finding. The branch
+                // passes its input through instead; put a filter *before* it
+                // if the request needs transforming.
+                ctx.set(node_id.clone(), request);
+                plan.execute(ctx, filters, cache)
             }
 
             ExecutionPlan::Remote {
@@ -443,6 +530,120 @@ pub fn execute(
 /// `hash(config + state + input)` — if a previous run (possibly in
 /// another process, via a persistent cache) already computed this exact
 /// forward, the stored output is used and the filter never runs.
+/// Run an effectful step and store its output.
+///
+/// Unlike [`execute_node`] there is no output caching here. A step's result
+/// is not a function of its input, so a content-addressed key would be a lie;
+/// what makes a step re-runnable is the effect journal, which the driver
+/// consults per effect.
+fn execute_step(
+    node_id: &str,
+    handoffs: &[(String, ExecutionPlan)],
+    ctx: &mut Context,
+    filters: &FilterLibrary,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    let start = Instant::now();
+    let _span = tracing::info_span!("execute_step", %node_id).entered();
+
+    let steps = ctx.steps.clone().ok_or_else(|| SomaError::Execution {
+        node_id: node_id.to_string(),
+        message: "the plan contains a step but no step library was registered; \
+                  build the context with `with_steps(...)`"
+            .into(),
+    })?;
+    let driver = ctx.driver.clone().ok_or_else(|| SomaError::Execution {
+        node_id: node_id.to_string(),
+        message: "the plan contains a step but no effect driver was registered; \
+                  build the context with `with_steps(...)`"
+            .into(),
+    })?;
+    let step = steps
+        .get(node_id)
+        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
+
+    ctx.event_bus.emit(Event::NodeStarted {
+        run_id: ctx.run_id.clone(),
+        node_id: node_id.to_string(),
+        kind: somatize_core::filter::FilterKind::Opaque,
+    });
+
+    let input = resolve_input(node_id, ctx);
+    let run_id = ctx.run_id.clone();
+
+    let outcome = driver
+        .run(step.as_ref(), &run_id, node_id, &input)
+        .inspect_err(|e| {
+            ctx.event_bus.emit(Event::NodeFailed {
+                run_id: run_id.clone(),
+                node_id: node_id.to_string(),
+                error: e.to_string(),
+            });
+        })?;
+
+    match outcome {
+        crate::effects::StepOutcome::Done(output) => {
+            let summary = format!("{output}");
+            ctx.set(node_id, output);
+            ctx.event_bus.emit(Event::NodeCompleted {
+                run_id,
+                node_id: node_id.to_string(),
+                duration: start.elapsed(),
+                output_summary: summary,
+            });
+            Ok(())
+        }
+
+        // A handoff: the step is finished, and names who continues. The
+        // carried value is stored under *this* node, so the target resolves
+        // it as an ordinary predecessor output — no special path.
+        crate::effects::StepOutcome::Goto { target, carry } => {
+            let plan = handoffs
+                .iter()
+                .find(|(t, _)| *t == target)
+                .map(|(_, p)| p)
+                .ok_or_else(|| SomaError::Execution {
+                    node_id: node_id.to_string(),
+                    message: if handoffs.is_empty() {
+                        format!(
+                            "step handed control to `{target}`, but it declares no \
+                             handoffs. Add a control edge from `{node_id}` to `{target}`"
+                        )
+                    } else {
+                        format!(
+                            "step handed control to `{target}`, which is not among its \
+                             declared handoffs ({})",
+                            handoffs
+                                .iter()
+                                .map(|(t, _)| t.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    },
+                })?;
+
+            ctx.set(node_id, carry);
+            ctx.event_bus.emit(Event::NodeCompleted {
+                run_id,
+                node_id: node_id.to_string(),
+                duration: start.elapsed(),
+                output_summary: format!("handed off to {target}"),
+            });
+            plan.execute(ctx, filters, cache)
+        }
+
+        // Not a failure: the run paused. It travels as an error so the rest
+        // of the plan does not execute, and carries everything the caller
+        // needs to answer and resume.
+        crate::effects::StepOutcome::Suspended { turn, reason } => Err(SomaError::Suspended {
+            run_id,
+            node_id: node_id.to_string(),
+            turn,
+            reason: serde_json::to_string(&reason).unwrap_or_else(|_| "unknown".into()),
+        }),
+    }
+}
+
 fn execute_node(
     node_id: &str,
     ctx: &mut Context,

@@ -243,6 +243,87 @@ pub enum Event {
         flag: String,
         detail: String,
     },
+
+    // ── Level 6: Effectful steps (agentic execution) ──
+    //
+    // Payloads carry *labels*, never prompts or completions. These events
+    // land in `.soma/runs/<id>/events.jsonl` and are rendered into reports;
+    // the conversation itself belongs in the journal, which is subject to
+    // `StepMeta::journal`, not in a telemetry stream.
+    //
+    // Naming note: `AgentTurnStarted`/`AgentStepCompleted` are spelled out
+    // because `StepCompleted` above already means "one optimizer step".
+    /// A step began a turn (one `poll`).
+    AgentTurnStarted {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+    },
+
+    /// A step asked for an effect to be performed.
+    EffectRequested {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        /// `Effect::label()` — e.g. `llm:claude-opus-5`, `tool:search`.
+        effect: String,
+    },
+
+    /// An effect finished.
+    EffectCompleted {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        effect: String,
+        #[serde(with = "duration_millis")]
+        duration: Duration,
+        /// Served from the journal rather than actually performed.
+        /// A replay should be nearly all `true`.
+        replayed: bool,
+        is_error: bool,
+    },
+
+    /// A tool ran. Separate from `EffectCompleted` because tool usage is the
+    /// thing worth counting per run, and it is what a permission or audit
+    /// layer hooks into.
+    ToolCalled {
+        run_id: RunId,
+        node_id: NodeId,
+        tool: String,
+        is_error: bool,
+    },
+
+    /// Control passed from one node to another.
+    Handoff {
+        run_id: RunId,
+        from: NodeId,
+        to: NodeId,
+    },
+
+    /// The run stopped, pending something outside it.
+    Suspended {
+        run_id: RunId,
+        node_id: NodeId,
+        reason: String,
+    },
+
+    /// A suspended run picked up again.
+    Resumed {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+    },
+
+    /// A step finished, with what it cost.
+    AgentStepCompleted {
+        run_id: RunId,
+        node_id: NodeId,
+        turns: usize,
+        #[serde(with = "duration_millis")]
+        duration: Duration,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
 }
 
 /// Serde helper: Duration as milliseconds (u64).
@@ -293,6 +374,96 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+
+    /// Agent-level events ride the same envelope as everything else — that
+    /// is the point of putting them on the existing bus rather than building
+    /// a second telemetry path.
+    #[test]
+    fn agent_events_roundtrip() {
+        let events = vec![
+            Event::AgentTurnStarted {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turn: 0,
+            },
+            Event::EffectRequested {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turn: 0,
+                effect: "llm:claude-opus-5".into(),
+            },
+            Event::EffectCompleted {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turn: 0,
+                effect: "llm:claude-opus-5".into(),
+                duration: Duration::from_millis(1200),
+                replayed: false,
+                is_error: false,
+            },
+            Event::ToolCalled {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                tool: "search".into(),
+                is_error: false,
+            },
+            Event::Handoff {
+                run_id: "r".into(),
+                from: "router".into(),
+                to: "billing".into(),
+            },
+            Event::Suspended {
+                run_id: "r".into(),
+                node_id: "approve".into(),
+                reason: "human".into(),
+            },
+            Event::Resumed {
+                run_id: "r".into(),
+                node_id: "approve".into(),
+                turn: 3,
+            },
+            Event::AgentStepCompleted {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turns: 4,
+                duration: Duration::from_millis(8000),
+                input_tokens: 1200,
+                output_tokens: 340,
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                serde_json::to_string(&back).unwrap(),
+                json,
+                "agent event did not survive a round trip"
+            );
+        }
+    }
+
+    /// Telemetry must never carry the conversation. A prompt belongs in the
+    /// journal, which honours `StepMeta::journal`; an event stream does not.
+    #[test]
+    fn effect_events_carry_labels_not_payloads() {
+        let effect = crate::effect::Effect::Llm(crate::effect::LlmRequest::new(
+            "claude-opus-5",
+            vec![crate::message::Message::user("my secret prompt")].into(),
+        ));
+        let event = Event::EffectRequested {
+            run_id: "r".into(),
+            node_id: "n".into(),
+            turn: 0,
+            effect: effect.label(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("claude-opus-5"));
+        assert!(
+            !json.contains("secret"),
+            "the prompt leaked into telemetry: {json}"
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! Plans are data-free (no filter implementations) and serializable.
 
 use serde::{Deserialize, Serialize};
+use somatize_core::control::LoopCondition;
 use somatize_core::filter::RemoteTarget;
 use somatize_core::graph::NodeId;
 use std::fmt;
@@ -25,11 +26,41 @@ pub enum ExecutionPlan {
     /// Execute a single filter node.
     Execute { node_id: NodeId },
 
-    /// Iterate: execute body for each item in a collection.
+    /// Run an effectful step to completion: poll, perform its effects,
+    /// repeat. Distinct from `Execute` because the runtime has to drive a
+    /// turn loop and journal what it performs, not call a function once.
+    Step {
+        node_id: NodeId,
+        /// Where this step may hand control, by target node id.
+        ///
+        /// A handoff is a branch the *step* decides rather than a condition
+        /// value, so it compiles the same way: each target is claimed by the
+        /// step and appears exactly once, inside it. A `Goto` naming
+        /// something not listed here is an error, not a jump into the dark.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        handoffs: Vec<(NodeId, ExecutionPlan)>,
+    },
+
+    /// Iterate: run `body` until `until` says stop, or `max_iterations` is hit.
     Loop {
         node_id: NodeId,
         body: Box<ExecutionPlan>,
         max_iterations: Option<usize>,
+        /// Already resolved by the compiler — never `BodyTerminal` here.
+        /// The executor reads the signal from exactly this node.
+        #[serde(default)]
+        until: LoopCondition,
+        /// The node whose output each pass hands to the next one.
+        ///
+        /// Separate from `until` on purpose: what a loop carries and what
+        /// tells it to stop are different questions. A debate that runs a
+        /// fixed number of rounds has no stop signal at all, but every round
+        /// still has to start from what the last one said — otherwise the
+        /// loop just repeats its first iteration.
+        ///
+        /// `None` when the body has no single terminal to carry from.
+        #[serde(default)]
+        carry_from: Option<NodeId>,
     },
 
     /// Conditional branching: evaluate condition, pick an arm.
@@ -66,7 +97,7 @@ impl ExecutionPlan {
     /// Count total nodes in the plan.
     pub fn node_count(&self) -> usize {
         match self {
-            Self::Execute { .. } => 1,
+            Self::Execute { .. } | Self::Step { .. } => 1,
             Self::Composite { node_ids } | Self::Stream { node_ids, .. } => node_ids.len(),
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().map(|s| s.node_count()).sum()
@@ -86,6 +117,7 @@ impl ExecutionPlan {
             Self::Parallel(branches) => branches.len(),
             Self::Sequence(steps) => steps.iter().map(|s| s.parallel_branch_count()).sum(),
             Self::Execute { .. }
+            | Self::Step { .. }
             | Self::Loop { .. }
             | Self::Branch { .. }
             | Self::Remote { .. }
@@ -99,6 +131,13 @@ impl ExecutionPlan {
     pub fn node_ids(&self) -> Vec<&str> {
         match self {
             Self::Execute { node_id } => vec![node_id.as_str()],
+            Self::Step { node_id, handoffs } => {
+                let mut ids = vec![node_id.as_str()];
+                for (_, p) in handoffs {
+                    ids.extend(p.node_ids());
+                }
+                ids
+            }
             Self::Sequence(steps) | Self::Parallel(steps) => {
                 steps.iter().flat_map(|s| s.node_ids()).collect()
             }
@@ -180,6 +219,17 @@ impl ExecutionPlan {
                     let _ = writeln!(out, "    {p} --> {node_id}");
                 }
             }
+            Self::Step { node_id, handoffs } => {
+                // Parallelogram — an effectful node reaches outside the graph.
+                let _ = writeln!(out, "    {node_id}[/{node_id}/]");
+                if let Some(p) = parent {
+                    let _ = writeln!(out, "    {p} --> {node_id}");
+                }
+                for (target, plan) in handoffs {
+                    let _ = writeln!(out, "    {node_id} -.->|{target}| {target}");
+                    plan.mermaid_nodes(out, counter, None);
+                }
+            }
             Self::Sequence(steps) => {
                 let mut prev = parent.map(String::from);
                 for step in steps {
@@ -202,6 +252,7 @@ impl ExecutionPlan {
                 node_id,
                 body,
                 max_iterations,
+                ..
             } => {
                 let label = match max_iterations {
                     Some(n) => format!("{node_id} loop max={n}"),
@@ -258,7 +309,7 @@ impl ExecutionPlan {
 
     fn first_node_id(&self) -> Option<&str> {
         match self {
-            Self::Execute { node_id } => Some(node_id),
+            Self::Execute { node_id } | Self::Step { node_id, .. } => Some(node_id),
             Self::Sequence(steps) => steps.first().and_then(|s| s.first_node_id()),
             Self::Parallel(_) => None,
             Self::Loop { node_id, .. }
@@ -310,6 +361,15 @@ impl ExecutionPlan {
                     Self::add_edge(g, p, node_id, edge_label);
                 }
             }
+            Self::Step { node_id, handoffs } => {
+                g.add_node(Node::step(node_id, node_id));
+                if let Some(p) = parent {
+                    Self::add_edge(g, p, node_id, edge_label);
+                }
+                for (target, plan) in handoffs {
+                    plan.graph_nodes(g, counter, Some(node_id), Some(target));
+                }
+            }
             Self::Sequence(steps) => {
                 let mut prev = parent.map(String::from);
                 let mut label = edge_label;
@@ -336,6 +396,7 @@ impl ExecutionPlan {
                 node_id,
                 body,
                 max_iterations,
+                ..
             } => {
                 g.add_node(Node::loop_node(node_id.clone(), *max_iterations));
                 if let Some(p) = parent {
@@ -414,10 +475,19 @@ impl ExecutionPlan {
                 Ok(())
             }
             Self::Execute { node_id } => writeln!(f, "{pad}Execute({node_id})"),
+            Self::Step { node_id, handoffs } => {
+                writeln!(f, "{pad}Step({node_id})")?;
+                for (target, plan) in handoffs {
+                    writeln!(f, "{pad}  ~>{target}:")?;
+                    plan.fmt_indent(f, indent + 2)?;
+                }
+                Ok(())
+            }
             Self::Loop {
                 node_id,
                 body,
                 max_iterations,
+                ..
             } => {
                 writeln!(f, "{pad}Loop({node_id}, max={max_iterations:?}):")?;
                 body.fmt_indent(f, indent + 1)

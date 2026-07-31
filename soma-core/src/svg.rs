@@ -105,6 +105,7 @@ impl Graph {
                 let label = match &node.kind {
                     NodeKind::Loop {
                         max_iterations: Some(n),
+                        ..
                     } => {
                         format!("{} (max {n})", node.label)
                     }
@@ -114,7 +115,8 @@ impl Graph {
                     NodeKind::Filter { .. } => "filter",
                     NodeKind::SubGraph { .. } => "subgraph",
                     NodeKind::Loop { .. } => "loop",
-                    NodeKind::Branch => "branch",
+                    NodeKind::Branch { .. } => "branch",
+                    NodeKind::Step { .. } => "step",
                 };
                 let w = (label.chars().count() as f32 * CHAR_W)
                     .max(

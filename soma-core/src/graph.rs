@@ -3,6 +3,7 @@
 //! The graph is the user-facing representation of a pipeline topology.
 //! It gets compiled into an `ExecutionPlan` by the compiler.
 
+use crate::control::LoopCondition;
 use crate::error::{Result, SomaError};
 use crate::strategy::TrainingStrategy;
 use serde::{Deserialize, Serialize};
@@ -26,10 +27,28 @@ pub enum NodeKind {
     Filter { filter_name: String },
     /// A nested sub-graph (compiled recursively).
     SubGraph { graph: Box<Graph> },
-    /// A loop node — body is the sub-graph of successors.
-    Loop { max_iterations: Option<usize> },
-    /// A branch/conditional node — arms determined by control edges.
-    Branch,
+    /// A loop node. Its body is the sub-graph reached through its *control*
+    /// edges; `until` names what decides to stop.
+    Loop {
+        max_iterations: Option<usize>,
+        /// Defaults to [`LoopCondition::BodyTerminal`], resolved by the
+        /// compiler. Never inferred at runtime from execution order.
+        #[serde(default)]
+        until: LoopCondition,
+    },
+    /// A branch/conditional node. Arms are the labelled control edges
+    /// leaving it; `arms` optionally declares the complete set of labels the
+    /// condition may produce, so the compiler can catch a mislabelled edge
+    /// before the run rather than at the moment the branch is taken.
+    Branch {
+        /// Declared labels. Empty means "infer from the edges" — the
+        /// backwards-compatible default.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arms: Vec<String>,
+    },
+    /// An effectful node: calls models, tools, or other graphs, and decides
+    /// what happens next. See [`crate::step::Step`].
+    Step { step_name: String },
 }
 
 /// A node in the computational graph.
@@ -98,24 +117,64 @@ impl Node {
         }
     }
 
-    /// Create a loop node.
+    /// Create a loop node whose stop condition is its body's terminal node.
     pub fn loop_node(id: impl Into<String>, max_iterations: Option<usize>) -> Self {
+        Self::loop_until(id, max_iterations, LoopCondition::BodyTerminal)
+    }
+
+    /// Create a loop node with an explicit stop condition.
+    pub fn loop_until(
+        id: impl Into<String>,
+        max_iterations: Option<usize>,
+        until: LoopCondition,
+    ) -> Self {
         let id = id.into();
         Self {
             id: id.clone(),
             label: id,
-            kind: NodeKind::Loop { max_iterations },
+            kind: NodeKind::Loop {
+                max_iterations,
+                until,
+            },
             target: None,
         }
     }
 
-    /// Create a branch/conditional node.
+    /// Create an effectful step node.
+    pub fn step(id: impl Into<String>, step_name: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            label: id.clone(),
+            id,
+            kind: NodeKind::Step {
+                step_name: step_name.into(),
+            },
+            target: None,
+        }
+    }
+
+    /// Create a branch node whose arms are inferred from its control edges.
     pub fn branch(id: impl Into<String>) -> Self {
+        Self::branch_over(id, Vec::<String>::new())
+    }
+
+    /// Create a branch node declaring the labels its condition may produce.
+    ///
+    /// The compiler then checks the edges against this list in both
+    /// directions: a declared arm with no edge, or an edge labelling an arm
+    /// that was never declared, is a compile error rather than a branch that
+    /// silently never fires.
+    pub fn branch_over(
+        id: impl Into<String>,
+        arms: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         let id = id.into();
         Self {
             id: id.clone(),
             label: id,
-            kind: NodeKind::Branch,
+            kind: NodeKind::Branch {
+                arms: arms.into_iter().map(Into::into).collect(),
+            },
             target: None,
         }
     }
@@ -186,6 +245,13 @@ impl Edge {
             kind: EdgeKind::Control,
             label: None,
         }
+    }
+
+    /// Attach a label. On an edge leaving a `Branch` node the label names the
+    /// arm; the branch condition's value is matched against it.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 }
 
@@ -432,15 +498,20 @@ impl Graph {
                 NodeKind::SubGraph { .. } => {
                     format!("    {}[[{}]]", node.id, label_with(&node.label))
                 }
-                NodeKind::Loop { max_iterations } => {
+                NodeKind::Loop { max_iterations, .. } => {
                     let label = match max_iterations {
                         Some(n) => format!("{} (max {})", node.label, n),
                         None => node.label.clone(),
                     };
                     format!("    {}(({}))", node.id, label_with(&label))
                 }
-                NodeKind::Branch => {
+                NodeKind::Branch { .. } => {
                     format!("    {}{{{{{}}}}}", node.id, label_with(&node.label))
+                }
+                // Parallelogram: the I/O shape, which is what an effectful
+                // node is — it reaches outside the graph.
+                NodeKind::Step { .. } => {
+                    format!("    {}[/{}/]", node.id, label_with(&node.label))
                 }
             };
             let _ = writeln!(out, "{shape}");
@@ -505,7 +576,8 @@ impl Graph {
                 NodeKind::Filter { .. } => "box",
                 NodeKind::SubGraph { .. } => "doubleoctagon",
                 NodeKind::Loop { .. } => "ellipse",
-                NodeKind::Branch => "diamond",
+                NodeKind::Branch { .. } => "diamond",
+                NodeKind::Step { .. } => "parallelogram",
             };
             let ov = overlay.nodes.get(&node.id);
             let label = match ov.and_then(|o| o.sublabel_text()) {
@@ -576,11 +648,12 @@ impl Graph {
                 NodeKind::SubGraph { graph } => {
                     format!(" [subgraph: {} nodes]", graph.nodes.len())
                 }
-                NodeKind::Loop { max_iterations } => match max_iterations {
+                NodeKind::Loop { max_iterations, .. } => match max_iterations {
                     Some(n) => format!(" [loop max={n}]"),
                     None => " [loop]".into(),
                 },
-                NodeKind::Branch => " [branch]".into(),
+                NodeKind::Branch { .. } => " [branch]".into(),
+                NodeKind::Step { step_name } => format!(" [step: {step_name}]"),
             };
             let preds = self.predecessors(node_id);
             let pred_info = if preds.is_empty() {
@@ -811,12 +884,13 @@ mod tests {
         assert!(matches!(
             g.node("train_loop").unwrap().kind,
             NodeKind::Loop {
-                max_iterations: Some(100)
+                max_iterations: Some(100),
+                ..
             }
         ));
         assert!(matches!(
             g.node("check_convergence").unwrap().kind,
-            NodeKind::Branch
+            NodeKind::Branch { .. }
         ));
     }
 
