@@ -59,9 +59,11 @@ soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, To
                   Study, Run, RunView, soma.viz, soma.agentic
 soma/           → facade crate (`somatize`) re-exporting the workspace
 docs/           → 35 Starlight pages (sidebar guard: `cd docs && npm run check`)
-notebooks/      → 13 executed tutorial notebooks (10-12 are one campaign, sharing
+notebooks/      → 14 executed tutorial notebooks (10-12 are one campaign, sharing
                   campaign.py; 13 is agentic, with an embedded mock provider so it
-                  runs with no key); re-run with `python notebooks/execute.py`
+                  runs with no key; 14 replicates Du et al. multi-agent debate on
+                  GSM8K and NEEDS a real model — no mock can measure an accuracy
+                  gap); re-run with `python notebooks/execute.py`
 ```
 
 ## Tests
@@ -161,7 +163,19 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   A filter memoizes by content; a step *journals* — pure effects keyed by content, impure
   ones by `(run, node, turn, index)`: record once, replay on resume, never re-run.
   Six structural NodeKinds; every behaviour (LLM, tool, judge, router) is library, and
-  every pattern is a function in `soma.agentic` returning a Graph.
+  every pattern is a function in `soma.agentic` returning a Graph — `react`, `route`,
+  `refine`, `debate`, `board`, `parallel_vote`, `orchestrate`. `board` is Du et al.
+  multi-agent debate (ICML 2024): `brief → members → chair`, the chair also reads the
+  brief (or round 2 forgets the question), `MajorityVote` chair is a filter not a model,
+  and `done` = unanimity, so a converged panel stops early. Notebook 14 replicates it.
+  **Steps CAN be written in Python**: any object with `poll(ctx)` (duck-typed like a
+  filter's `forward`). Returns dict transitions — `Done/Await/Spawn/Goto/Suspend` from
+  `soma.agentic`. `Spawn` gives real dynamic fan-out, so `orchestrate` sizes its pool
+  from the plan (`planner → fanout → synthesize`). `g.register_step(id, step)` registers
+  a spawn target WITHOUT adding a node (a node with no edges is a root and would also
+  run on the graph input); `g.handoff(a, b)` declares the control edge `Goto` needs.
+  `py_to_value` also accepts bare int/float and non-numeric lists (both were errors —
+  numeric lists stay tensors, so no cache key moves).
   Control flow: compiler claims loop bodies / branch arms by **dominance**, resolves
   `BodyTerminal` → `WhenSignaled(node)`, and `ExecutionPlan::Loop` carries `carry_from`
   separately from `until` (what a loop carries ≠ what stops it). A branch passes its

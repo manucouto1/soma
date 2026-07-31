@@ -60,6 +60,31 @@ pub enum NodeKind {
 
 Everything else — LLM, tool, retriever, judge, aggregator, human, memory, orchestrator, panel — is a filter or a step in the registry, and every *pattern* is a function returning a graph. See [`soma.agentic`](#the-patterns-are-functions).
 
+### Writing a step in Python
+
+A step is any object with `poll(ctx)`, duck-typed exactly the way a filter's `forward` is. It returns one of five transitions, as plain dicts built by helpers, so what crosses into Rust is data rather than a class hierarchy:
+
+```python
+from soma.agentic import Done, Await, Spawn, Goto, Suspend, Run, Llm
+
+class Fanout:
+    _cache_version = "1"
+
+    def poll(self, ctx):
+        if ctx.turn == 0:
+            return Spawn([Run("worker", task) for task in ctx.input])
+        return Done([r["output"] for r in ctx.results])
+
+g.node("fanout", Fanout())
+g.register_step("worker", Worker())   # spawnable, and not a root
+```
+
+`Spawn` is the reason this exists. The width of a fan-out is often a property of the data — a plan with two tasks wants two workers and one with nine wants nine — and that is the one thing a static topology cannot say. `register_step` puts a step in the library without adding a node, because a node with no edges is a root and would also run once on the graph's own input.
+
+`Goto` needs a declared control edge (`g.handoff(a, b)`); handing control somewhere the graph never said it could is an error rather than a silent jump. `ctx` carries `input`, `turn`, `results` and `history` and nothing else on purpose: a step that accumulates rebuilds from `history`, because replay feeds back identical results and a field on `self` would drift from them.
+
+`poll` runs under the GIL on whichever thread the driver is using, so Python steps fan out for I/O concurrency, not for CPU parallelism.
+
 ### Control flow, and the rule that governs it
 
 > An unreadable signal is an error, never a default.
@@ -100,14 +125,19 @@ This is the durable-execution discipline Temporal and Restate established, over 
 ### The patterns are functions
 
 ```python
-from soma.agentic import react, route, refine, debate, parallel_vote, orchestrate
+from soma.agentic import react, route, refine, debate, board, parallel_vote, orchestrate
 
 refine(worker=Draft(), judge=soma.Judge(model="ollama/qwen2.5", rubric="..."), max_rounds=4)
 route(classifier, {"billing": BillingAgent(), "tech": TechAgent(), "default": Escalate()})
 debate([alice, bob], rounds=3, judge=critic)
+board([solver, solver, solver], rounds=2)
 ```
 
 Each returns an ordinary `Graph`, built from the same `node`, `connect`, `branch` and `loop` anyone can call. Adding a pattern is adding a function.
+
+`board` is the one worth reading as an argument rather than a convenience. It is the multi-agent debate of [Du et al. (ICML 2024)](https://arxiv.org/abs/2305.14325): a panel answers independently, a chair reads every answer and records a decision, and the next round shows the panel what the chair recorded — the summarizer variant that paper introduces for larger panels, which is what makes the chair a moderator rather than a tallying clerk. The loop is `brief → members → chair`, the chair also reads the brief so the round after it still knows the question, and the chair's `done` is the exit condition: a panel that has converged stops instead of buying the rounds it was allowed.
+
+The default chair, `MajorityVote`, is a stateless filter rather than a model — the aggregator the paper actually closes a debate with, costing no tokens and keeping the model as the only stochastic part of the flow. Pass a `Judge` or an agent instead to have a model moderate. And because the result is a graph, "five members or three, two rounds or four" is a `search_space()` dimension rather than an opinion; notebook 14 replicates the paper's GSM8K ordering and then searches that space.
 
 ### Providers are data
 
