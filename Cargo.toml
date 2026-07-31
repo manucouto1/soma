@@ -10,6 +10,7 @@ members = [
     "soma-worker",
     "soma-memory",
     "soma-agent",
+    "soma-llm",
     "soma-mcp",
     "soma-coordinator",
 ]

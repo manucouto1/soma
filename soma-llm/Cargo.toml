@@ -1,0 +1,24 @@
+[package]
+name = "somatize-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider-agnostic LLM access for Soma: one OpenAI-compatible client, a data-driven provider catalog, and an effect handler."
+
+[dependencies]
+somatize-core = { path = "../soma-core", version = "0.3.1" }
+somatize-runtime = { path = "../soma-runtime", version = "0.3.1" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "blocking",
+    "rustls-tls",
+] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

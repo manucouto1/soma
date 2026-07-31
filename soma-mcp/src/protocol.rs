@@ -79,13 +79,12 @@ pub struct ServerInfo {
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    #[serde(rename = "inputSchema")]
-    pub input_schema: serde_json::Value,
-}
+/// What this server publishes, and what an agent consumes.
+///
+/// The same type either way: [`somatize_core::tool::ToolSpec`]. Soma is both
+/// a tool provider (here) and a tool caller (`soma-llm`), and describing a
+/// tool twice is how the two descriptions drift.
+pub use somatize_core::tool::ToolSpec as ToolDefinition;
 
 #[derive(Debug, Serialize)]
 pub struct ToolCallResult {

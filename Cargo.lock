@@ -2785,6 +2785,7 @@ dependencies = [
  "serde_json",
  "somatize-compiler",
  "somatize-core",
+ "somatize-llm",
  "somatize-memory",
  "somatize-runtime",
  "somatize-worker",
@@ -2816,6 +2817,7 @@ dependencies = [
  "somatize-core",
  "somatize-memory",
  "somatize-runtime",
+ "tempfile",
  "tracing",
 ]
 
@@ -2864,6 +2866,20 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "zstd",
+]
+
+[[package]]
+name = "somatize-llm"
+version = "0.3.1"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "somatize-core",
+ "somatize-runtime",
+ "tempfile",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
