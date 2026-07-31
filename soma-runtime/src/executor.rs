@@ -788,8 +788,17 @@ fn execute_parallel(
     filters: &FilterLibrary,
     cache: &dyn CacheStore,
 ) -> Result<()> {
-    let snapshot_keys: Arc<std::collections::HashSet<String>> =
-        Arc::new(ctx.store.keys().cloned().collect());
+    // What a branch contributes is what it *wrote*, not what happens to be
+    // absent from the parent. Those differ the second time a parallel block
+    // runs: inside a `Loop`, every body node already has a value from the
+    // previous iteration, so filtering by "not already present" discarded
+    // every fresh result and left downstream fan-in reading iteration one
+    // forever — the nodes re-ran and their new outputs went nowhere.
+    //
+    // `execution_order` is appended to by every `set`/`set_virtual`, and a
+    // snapshot copies it, so whatever a branch appended past this mark is
+    // exactly its write set.
+    let order_mark = ctx.execution_order.len();
 
     // Use scoped threads for true parallelism without Send requirements
     let results: Vec<Result<Vec<(String, VirtualValue)>>> = std::thread::scope(|s| {
@@ -797,13 +806,13 @@ fn execute_parallel(
             .iter()
             .map(|branch| {
                 let mut branch_ctx = ctx.snapshot();
-                let keys = snapshot_keys.clone();
                 s.spawn(move || {
                     execute(branch, &mut branch_ctx, filters, cache)?;
-                    let new_entries: Vec<(String, VirtualValue)> = branch_ctx
-                        .store
+                    let written: std::collections::HashSet<&String> =
+                        branch_ctx.execution_order[order_mark..].iter().collect();
+                    let new_entries: Vec<(String, VirtualValue)> = written
                         .into_iter()
-                        .filter(|(k, _)| !keys.contains(k))
+                        .filter_map(|k| branch_ctx.store.get(k).map(|v| (k.clone(), v.clone())))
                         .collect();
                     Ok(new_entries)
                 })
@@ -1244,6 +1253,48 @@ mod tests {
         let mut ctx = Context::new(bus, "run_1");
         let filters = FilterLibrary::new();
         execute(&ExecutionPlan::Empty, &mut ctx, &filters, &cache).unwrap();
+    }
+
+    #[test]
+    fn parallel_merge_keeps_rerun_outputs() {
+        // Running the same parallel block twice must leave the *second*
+        // results in the context. Merging by "keys the parent lacks" passed
+        // the first pass and silently dropped every later one, so anything
+        // downstream of a parallel body inside a `Loop` read iteration one
+        // forever while the nodes dutifully re-ran.
+        let (bus, cache) = setup();
+        let mut ctx = Context::new(bus, "run_1");
+        ctx.graph_info
+            .set_predecessors("double", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("add", vec!["input".into()]);
+
+        let mut filters = FilterLibrary::new();
+        filters.register("double", Box::new(DoublerFilter));
+        filters.register("add", Box::new(AdderFilter { amount: 100.0 }));
+
+        let plan = ExecutionPlan::Parallel(vec![
+            ExecutionPlan::Execute {
+                node_id: "double".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "add".into(),
+            },
+        ]);
+
+        ctx.set("input", Value::tensor(vec![5.0], vec![1]));
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+        assert_eq!(ctx.get("double").unwrap().as_tensor().unwrap().0, &[10.0]);
+
+        // Same plan, new input — as a second loop iteration would.
+        ctx.set("input", Value::tensor(vec![7.0], vec![1]));
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        assert_eq!(
+            ctx.get("double").unwrap().as_tensor().unwrap().0,
+            &[14.0],
+            "second pass output was discarded by the merge"
+        );
+        assert_eq!(ctx.get("add").unwrap().as_tensor().unwrap().0, &[107.0]);
     }
 
     #[test]
