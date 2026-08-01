@@ -210,7 +210,7 @@ impl<'a> Compiler<'a> {
         self.validate_control_flow(&sorted, &ctx)?;
 
         // Build the structural plan (detect parallelism)
-        let plan = self.plan_subset(&sorted, &ctx);
+        let plan = self.plan_subset(&sorted, &ctx)?;
 
         // Resolve caching if applicable
         let plan = if let Some(cache) = cache {
@@ -348,24 +348,36 @@ impl<'a> Compiler<'a> {
     }
 
     /// Resolve `BodyTerminal` to the concrete node the executor will read.
-    /// Validation has already guaranteed this is unambiguous.
+    ///
+    /// `validate_control_flow` has already rejected a body without exactly
+    /// one terminal, so the error arm cannot fire. It is an error rather
+    /// than a fallback because the fallback was `Exhaust`: a debug build
+    /// asserted, and a release build quietly turned "stop when the body
+    /// says so" into "run the full iteration count" — a loop that costs N
+    /// times what it should, reported as success.
     fn resolve_loop_condition(
         &self,
         node_id: &str,
         until: &LoopCondition,
         body: &[&str],
-    ) -> LoopCondition {
+    ) -> Result<LoopCondition> {
         match until {
             LoopCondition::BodyTerminal => match self.body_terminals(body).as_slice() {
-                [only] => LoopCondition::WhenSignaled((*only).to_string()),
-                // Unreachable after validate_control_flow; exhausting is the
-                // safe reading — it never stops early on a guess.
-                _ => {
-                    debug_assert!(false, "unresolved BodyTerminal for loop `{node_id}`");
-                    LoopCondition::Exhaust
-                }
+                [only] => Ok(LoopCondition::WhenSignaled((*only).to_string())),
+                terminals => Err(SomaError::Compilation(format!(
+                    "loop `{node_id}` stops on its body terminal, but the body has {} \
+                     of them{}. Name the one that decides with \
+                     `LoopCondition::WhenSignaled`, or use `Exhaust` to always run \
+                     the full count",
+                    terminals.len(),
+                    if terminals.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", terminals.join(", "))
+                    }
+                ))),
             },
-            other => other.clone(),
+            other => Ok(other.clone()),
         }
     }
 
@@ -376,7 +388,7 @@ impl<'a> Compiler<'a> {
     /// that exclusion the body would run once more after the loop finished,
     /// and every arm would run unconditionally after the branch had already
     /// picked one.
-    fn plan_subset<'b>(&self, nodes: &[&'b str], ctx: &PlanCtx<'b>) -> ExecutionPlan {
+    fn plan_subset<'b>(&self, nodes: &[&'b str], ctx: &PlanCtx<'b>) -> Result<ExecutionPlan> {
         let member: HashSet<&str> = nodes.iter().copied().collect();
 
         let mut owned: HashSet<&str> = HashSet::new();
@@ -397,19 +409,21 @@ impl<'a> Compiler<'a> {
         let mut plan_steps: Vec<ExecutionPlan> = Vec::new();
         for level in ctx.group_by_level(&top) {
             if level.len() == 1 {
-                plan_steps.push(self.plan_for_node(level[0], ctx));
+                plan_steps.push(self.plan_for_node(level[0], ctx)?);
             } else {
-                let branches: Vec<ExecutionPlan> =
-                    level.iter().map(|id| self.plan_for_node(id, ctx)).collect();
+                let branches: Vec<ExecutionPlan> = level
+                    .iter()
+                    .map(|id| self.plan_for_node(id, ctx))
+                    .collect::<Result<_>>()?;
                 plan_steps.push(ExecutionPlan::Parallel(branches));
             }
         }
 
-        match plan_steps.len() {
+        Ok(match plan_steps.len() {
             0 => ExecutionPlan::Empty,
             1 => plan_steps.into_iter().next().unwrap(),
             _ => ExecutionPlan::Sequence(plan_steps),
-        }
+        })
     }
 
     /// The nodes a control-flow construct claims from `member`.
@@ -465,19 +479,19 @@ impl<'a> Compiler<'a> {
     }
 
     /// Generate the execution plan for a single node based on its kind.
-    fn plan_for_node<'b>(&self, node_id: &'b str, ctx: &PlanCtx<'b>) -> ExecutionPlan {
+    fn plan_for_node<'b>(&self, node_id: &'b str, ctx: &PlanCtx<'b>) -> Result<ExecutionPlan> {
         use somatize_core::graph::NodeKind;
 
         let node = match self.graph.node(node_id) {
             Some(n) => n,
             None => {
-                return ExecutionPlan::Execute {
+                return Ok(ExecutionPlan::Execute {
                     node_id: node_id.to_string(),
-                };
+                });
             }
         };
 
-        match &node.kind {
+        Ok(match &node.kind {
             NodeKind::Filter { .. } => ExecutionPlan::Execute {
                 node_id: node_id.to_string(),
             },
@@ -492,9 +506,9 @@ impl<'a> Compiler<'a> {
                     .into_iter()
                     .map(|(target, _)| {
                         let nodes = self.dominated_subset(target, &all, ctx);
-                        (target.to_string(), self.plan_subset(&nodes, ctx))
+                        Ok((target.to_string(), self.plan_subset(&nodes, ctx)?))
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
                 ExecutionPlan::Step {
                     node_id: node_id.to_string(),
                     handoffs,
@@ -521,13 +535,13 @@ impl<'a> Compiler<'a> {
                 let body = if body_nodes.is_empty() {
                     ExecutionPlan::Empty
                 } else {
-                    self.plan_subset(&body_nodes, ctx)
+                    self.plan_subset(&body_nodes, ctx)?
                 };
                 ExecutionPlan::Loop {
                     node_id: node_id.to_string(),
                     body: Box::new(body),
                     max_iterations: *max_iterations,
-                    until: self.resolve_loop_condition(node_id, until, &body_nodes),
+                    until: self.resolve_loop_condition(node_id, until, &body_nodes)?,
                     // Whatever the stop condition is, a single-terminal body
                     // has one obvious thing to hand to the next pass.
                     carry_from: match self.body_terminals(&body_nodes).as_slice() {
@@ -545,9 +559,9 @@ impl<'a> Compiler<'a> {
                     .map(|(target, label)| {
                         let label = label.unwrap_or_else(|| target.to_string());
                         let arm_nodes = self.dominated_subset(target, &all, ctx);
-                        (label, self.plan_subset(&arm_nodes, ctx))
+                        Ok((label, self.plan_subset(&arm_nodes, ctx)?))
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
                 ExecutionPlan::Branch {
                     node_id: node_id.to_string(),
                     arms,
@@ -557,7 +571,7 @@ impl<'a> Compiler<'a> {
             _ => ExecutionPlan::Execute {
                 node_id: node_id.to_string(),
             },
-        }
+        })
     }
 
     /// Every node claimed by `node_id`'s control edges, in topological order.
