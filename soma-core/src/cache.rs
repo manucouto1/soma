@@ -51,6 +51,69 @@ impl CacheKey {
         Self::from_parts(&[data])
     }
 
+    /// Hash a [`Value`] for use as cache-key material.
+    ///
+    /// Not `hash_data(serde_json::to_vec(value))`, which is what the
+    /// runtime used to do. JSON has no way to write a non-finite float:
+    /// `serde_json` turns NaN *and* every infinity into `null`, silently.
+    /// A tensor of NaN and a tensor of +∞ therefore serialized to the same
+    /// bytes, hashed to the same key, and the second one was answered with
+    /// the first one's cached output.
+    ///
+    /// Floats are hashed by their bit pattern instead, so every distinct
+    /// value gets a distinct key. Two consequences worth knowing: the two
+    /// NaN encodings are different keys (they are different bit patterns),
+    /// and `0.0` and `-0.0` are different keys too. Both are the safe
+    /// direction — a redundant miss costs a recomputation, a false hit
+    /// costs a wrong answer.
+    pub fn for_value(value: &Value) -> Self {
+        let mut hasher = Sha256::new();
+        Self::absorb(&mut hasher, value);
+        Self(hasher.finalize().into())
+    }
+
+    fn absorb(hasher: &mut Sha256, value: &Value) {
+        // A leading tag per variant keeps `Bytes(b"x")` and `Object(b"x")`
+        // apart, and a length prefix keeps concatenations apart.
+        match value {
+            Value::Tensor { values, shape } => {
+                hasher.update([0u8]);
+                hasher.update((shape.len() as u64).to_le_bytes());
+                for dim in shape {
+                    hasher.update((*dim as u64).to_le_bytes());
+                }
+                hasher.update((values.len() as u64).to_le_bytes());
+                for v in values.iter() {
+                    hasher.update(v.to_bits().to_le_bytes());
+                }
+            }
+            Value::Json(json) => {
+                hasher.update([1u8]);
+                // `serde_json::Value` cannot hold a non-finite number, and
+                // its object maps are ordered, so this round-trip is both
+                // lossless and deterministic.
+                let bytes = serde_json::to_vec(json.as_ref()).unwrap_or_default();
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(&bytes);
+            }
+            Value::Bytes(bytes) => {
+                hasher.update([2u8]);
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes.as_slice());
+            }
+            Value::Object(bytes) => {
+                hasher.update([3u8]);
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes.as_slice());
+            }
+            Value::Empty => hasher.update([4u8]),
+            // No catch-all on purpose. `Value` is `#[non_exhaustive]`
+            // downstream but not here, so a new variant fails to compile
+            // until someone decides how it hashes — which beats it
+            // silently sharing a key with whatever the fallback picked.
+        }
+    }
+
     /// Returns the hex representation.
     pub fn to_hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
@@ -114,6 +177,25 @@ pub trait CacheStore: Send + Sync {
     fn exists(&self, key: &CacheKey) -> Result<bool>;
     fn remove(&self, key: &CacheKey) -> Result<()>;
     fn metadata(&self, key: &CacheKey) -> Result<Option<EntryMeta>>;
+
+    /// Which tier this store is, for reporting.
+    ///
+    /// A single-tier store answers with its own kind. [`CacheTier::Memory`]
+    /// is the default because the in-memory store is the one people write
+    /// by hand; a store that is anything else should say so.
+    fn tier(&self) -> CacheTier {
+        CacheTier::Memory
+    }
+
+    /// Like [`CacheStore::get`], but also reports which tier served the value.
+    ///
+    /// A composed store overrides this — that is the whole point. Without
+    /// it, a hit served from disk is indistinguishable from one served from
+    /// RAM, and the numbers that are supposed to tell you whether the disk
+    /// tier is earning its keep say only that the cache was used.
+    fn get_located(&self, key: &CacheKey) -> Result<Option<(Value, CacheTier)>> {
+        Ok(self.get(key)?.map(|value| (value, self.tier())))
+    }
 }
 
 #[cfg(test)]

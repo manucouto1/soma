@@ -57,6 +57,10 @@ impl LocalCache {
 }
 
 impl CacheStore for LocalCache {
+    fn tier(&self) -> somatize_core::cache::CacheTier {
+        somatize_core::cache::CacheTier::Local
+    }
+
     fn get(&self, key: &CacheKey) -> Result<Option<Value>> {
         let path = self.key_path(key);
         if !path.exists() {
