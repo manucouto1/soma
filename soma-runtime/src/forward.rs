@@ -7,7 +7,7 @@
 
 use crate::event_bus::EventBus;
 use crate::node_catalog::NodeCatalog;
-use crate::runner::Runner;
+use crate::runner::{RunContext, Runner};
 use somatize_compiler::{CompileMode, CompileResult, compile, compile_stream};
 use somatize_core::cache::CacheStore;
 use somatize_core::error::{Result, SomaError};
@@ -30,7 +30,7 @@ pub trait ForwardStrategy {
     ) -> Result<Value>;
 }
 
-/// Standard forward: full input at once with inference caching.
+/// Full input at once, with inference caching.
 pub struct Standard;
 
 impl ForwardStrategy for Standard {
@@ -45,14 +45,12 @@ impl ForwardStrategy for Standard {
     ) -> Result<Value> {
         let CompileResult { plan, .. } =
             compile(graph, library, CompileMode::Inference, Some(cache))?;
-
-        let runner = crate::runner::LocalRunner;
-        runner.forward(&plan, library, cache, event_bus, x)
+        run_forward(graph, &plan, library, cache, event_bus, x)
     }
 }
 
-/// Streaming forward: chunk input and process through StreamExecutor.
-/// Each filter's StreamMode (FixedState/Evolving/Barrier) defines its per-chunk contract.
+/// Chunked input through [`crate::StreamExecutor`], respecting each
+/// filter's `StreamMode`.
 pub struct Stream {
     pub chunk_size: usize,
 }
@@ -68,10 +66,34 @@ impl ForwardStrategy for Stream {
         x: &Value,
     ) -> Result<Value> {
         let CompileResult { plan, .. } = compile_stream(graph, library, self.chunk_size)?;
-
-        let runner = crate::runner::LocalRunner;
-        runner.forward(&plan, library, cache, event_bus, x)
+        run_forward(graph, &plan, library, cache, event_bus, x)
     }
+}
+
+/// Run a compiled plan against the graph's *real* topology.
+///
+/// The runner used to derive its own from the plan's node order, chaining
+/// them as if every graph were a line. On a diamond it was simply wrong:
+/// `a → {b, c} → d` answered `d(c(…))`, with `d` never seeing `b` and `a`
+/// never seeing the input. Every strategy here has the graph, so every
+/// strategy passes it.
+fn run_forward(
+    graph: &Graph,
+    plan: &somatize_compiler::ExecutionPlan,
+    library: &NodeCatalog,
+    cache: &dyn CacheStore,
+    event_bus: &Arc<EventBus>,
+    x: &Value,
+) -> Result<Value> {
+    let run_id = somatize_core::util::timestamp_id("forward");
+    let ctx = RunContext::new(
+        library,
+        cache,
+        event_bus,
+        &run_id,
+        crate::executor::GraphInfo::from_graph(graph),
+    );
+    crate::runner::LocalRunner.forward(plan, &ctx, x)
 }
 
 /// Batched forward: read rows from a DataStore in fixed-size batches.
@@ -105,7 +127,6 @@ impl ForwardStrategy for Batched<'_> {
         // Compile once, reuse for each batch.
         let CompileResult { plan, .. } =
             compile(graph, library, CompileMode::Inference, Some(cache))?;
-        let runner = crate::runner::LocalRunner;
 
         let mut all_values: Vec<f64> = Vec::new();
         let mut result_shape: Option<Vec<usize>> = None;
@@ -114,7 +135,7 @@ impl ForwardStrategy for Batched<'_> {
         while rows_processed < total_rows {
             let batch_len = self.batch_size.min(total_rows - rows_processed);
             let batch = store.get_rows(self.data_ref, rows_processed, batch_len)?;
-            let output = runner.forward(&plan, library, cache, event_bus, &batch)?;
+            let output = run_forward(graph, &plan, library, cache, event_bus, &batch)?;
 
             if let Value::Tensor { values, shape } = &output {
                 if result_shape.is_none() {

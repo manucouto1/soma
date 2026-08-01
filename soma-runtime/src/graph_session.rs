@@ -155,15 +155,14 @@ impl GraphSession {
         let start = std::time::Instant::now();
 
         let runner = crate::runner::LocalRunner;
-        let result = runner.fit(
-            &plan,
+        let ctx = crate::runner::RunContext::new(
             &self.library,
             self.cache.as_ref(),
             &self.event_bus,
             &run_id,
-            x,
-            y,
+            GraphInfo::from_graph(&self.graph),
         );
+        let result = runner.fit(&plan, &ctx, x, y);
         let (_last_output, mut all_outputs) = match result {
             Ok(out) => {
                 self.event_bus.emit(Event::RunCompleted {

@@ -35,7 +35,14 @@ impl SimpleExecutor {
 
         let plan = compile(graph, filters, CompileMode::NoCache, Some(cache))?.plan;
         let run_id = somatize_core::util::timestamp_id("fit");
-        runner.fit(&plan, filters, cache, event_bus, &run_id, x, y)
+        let ctx = crate::runner::RunContext::new(
+            filters,
+            cache,
+            event_bus,
+            &run_id,
+            crate::executor::GraphInfo::from_graph(graph),
+        );
+        runner.fit(&plan, &ctx, x, y)
     }
 
     /// Forward only (inference on fitted model).
@@ -49,6 +56,14 @@ impl SimpleExecutor {
         x: &Value,
     ) -> Result<Value> {
         let plan = compile(graph, filters, CompileMode::Inference, Some(cache))?.plan;
-        runner.forward(&plan, filters, cache, event_bus, x)
+        let run_id = somatize_core::util::timestamp_id("forward");
+        let ctx = crate::runner::RunContext::new(
+            filters,
+            cache,
+            event_bus,
+            &run_id,
+            crate::executor::GraphInfo::from_graph(graph),
+        );
+        runner.forward(&plan, &ctx, x)
     }
 }

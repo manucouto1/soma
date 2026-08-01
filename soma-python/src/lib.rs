@@ -2758,15 +2758,14 @@ impl PyGraph {
                     plan_summary: compile_result.plan.summary(),
                 });
             let run_start = std::time::Instant::now();
-            let result = runner.fit(
-                &compile_result.plan,
+            let run_ctx = somatize_runtime::runner::RunContext::new(
                 &catalog,
                 self.cache.as_ref(),
                 &self.event_bus,
                 &run_id,
-                &x_val,
-                y_val.as_ref(),
+                GraphInfo::from_graph(&self.graph),
             );
+            let result = runner.fit(&compile_result.plan, &run_ctx, &x_val, y_val.as_ref());
             let (_output, states) = match result {
                 Ok(out) => {
                     self.event_bus

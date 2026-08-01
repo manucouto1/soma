@@ -4,16 +4,13 @@
 //! RemoteRunner implements Runner by serializing fit/forward calls and sending them
 //! through the transport layer.
 
-use super::Runner;
-use crate::EventBus;
+use super::{RunContext, Runner};
 use crate::node_catalog::NodeCatalog;
 
 use somatize_compiler::ExecutionPlan;
-use somatize_core::cache::CacheStore;
 use somatize_core::error::Result;
 use somatize_core::value::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Abstraction for communicating with remote workers.
 /// Implemented by WsTransport (WebSocket), but could be HTTP, gRPC, etc.
@@ -74,25 +71,17 @@ impl Runner for RemoteRunner {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &NodeCatalog,
-        _cache: &dyn CacheStore,
-        _event_bus: &Arc<EventBus>,
-        _run_id: &str,
+        ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
-        self.transport.execute(plan, filters, input, y, true)
+        self.transport.execute(plan, ctx.catalog, input, y, true)
     }
 
-    fn forward(
-        &self,
-        plan: &ExecutionPlan,
-        filters: &NodeCatalog,
-        _cache: &dyn CacheStore,
-        _event_bus: &Arc<EventBus>,
-        input: &Value,
-    ) -> Result<Value> {
-        let (output, _states) = self.transport.execute(plan, filters, input, None, false)?;
+    fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {
+        let (output, _states) = self
+            .transport
+            .execute(plan, ctx.catalog, input, None, false)?;
         Ok(output)
     }
 }

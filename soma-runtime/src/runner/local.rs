@@ -3,13 +3,12 @@
 //! This is the default runner. The worker's RemoteRunner delegates here
 //! after preparing the environment (deserializing filters, resolving input).
 
-use super::Runner;
-use crate::EventBus;
-use crate::executor::{Context, GraphInfo};
+use super::{RunContext, Runner};
+use crate::executor::Context;
 use crate::node_catalog::NodeCatalog;
 
 use somatize_compiler::ExecutionPlan;
-use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::cache::CacheKey;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
 use somatize_core::filter::{Filter, FilterKind};
@@ -37,17 +36,14 @@ pub struct LocalRunner;
 
 impl LocalRunner {
     /// Fit a Sequence plan, handling Composite steps as blocks.
-    #[allow(clippy::too_many_arguments)]
     fn fit_sequence(
         &self,
         steps: &[ExecutionPlan],
-        filters: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        run_id: &str,
+        ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
+        let filters = ctx.catalog;
         let mut current_input = input.clone();
         let mut all_outputs = HashMap::new();
 
@@ -71,16 +67,7 @@ impl LocalRunner {
             };
 
             if !handled {
-                let sub_result = <Self as Runner>::fit(
-                    self,
-                    step,
-                    filters,
-                    cache,
-                    event_bus,
-                    run_id,
-                    &current_input,
-                    y,
-                )?;
+                let sub_result = <Self as Runner>::fit(self, step, ctx, &current_input, y)?;
                 current_input = sub_result.0;
                 all_outputs.extend(sub_result.1);
             }
@@ -94,13 +81,14 @@ impl Runner for LocalRunner {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        run_id: &str,
+        ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
+        let filters = ctx.catalog;
+        let cache = ctx.cache;
+        let event_bus = ctx.events;
+        let run_id = ctx.run_id;
         // Handle Composite plan: delegate to composite_fit on the first filter
         if let ExecutionPlan::Composite { node_ids } = plan
             && let Some(peers) = collect_peers(filters, node_ids)
@@ -113,13 +101,13 @@ impl Runner for LocalRunner {
 
         // Handle Sequence that may contain Composite steps
         if let ExecutionPlan::Sequence(steps) = plan {
-            return self.fit_sequence(steps, filters, cache, event_bus, run_id, input, y);
+            return self.fit_sequence(steps, ctx, input, y);
         }
 
         // Single node or other plan types: sequential fit
         let node_id_refs = plan.node_ids();
         let node_ids: Vec<String> = node_id_refs.iter().map(|s| s.to_string()).collect();
-        let graph_info = GraphInfo::for_linear(&node_id_refs);
+        let graph_info = &ctx.graph_info;
         let mut outputs: HashMap<String, Value> = HashMap::new();
         let mut trained_states: HashMap<String, Value> = HashMap::new();
 
@@ -266,32 +254,24 @@ impl Runner for LocalRunner {
         Ok((last_output, outputs))
     }
 
-    fn forward(
-        &self,
-        plan: &ExecutionPlan,
-        filters: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        input: &Value,
-    ) -> Result<Value> {
+    fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {
         let node_ids = plan.node_ids();
-        let graph_info = GraphInfo::for_linear(&node_ids);
 
-        let mut ctx =
-            Context::new(event_bus.clone(), timestamp_id("forward")).with_graph_info(graph_info);
+        let mut exec = Context::new(ctx.events.clone(), timestamp_id("forward"))
+            .with_graph_info(ctx.graph_info.clone());
 
         // Set input for root nodes
         if let Some(first) = node_ids.first() {
-            ctx.set(format!("__input_{first}"), input.clone());
+            exec.set(format!("__input_{first}"), input.clone());
         }
-        ctx.set("__input__", input.clone());
+        exec.set("__input__", input.clone());
 
-        crate::executor::execute(plan, &mut ctx, filters, cache)?;
+        crate::executor::execute(plan, &mut exec, ctx.catalog, ctx.cache)?;
 
         // Return last executed node's output
-        ctx.execution_order
+        exec.execution_order
             .last()
-            .and_then(|id| ctx.store.remove(id))
+            .and_then(|id| exec.store.remove(id))
             .and_then(|vv| vv.as_value().cloned())
             .ok_or_else(|| SomaError::Other("no output produced".into()))
     }
@@ -300,7 +280,10 @@ impl Runner for LocalRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventBus;
     use crate::cache::MemoryCache;
+    use crate::executor::GraphInfo;
+    use somatize_core::cache::CacheStore;
     use somatize_core::filter::{FilterMeta, StreamMode};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -350,24 +333,32 @@ mod tests {
             node_id: "clf".into(),
         };
         let runner = LocalRunner;
+        // A single node: the fabricated linear topology is the real one.
+        fn ctx<'a>(
+            filters: &'a NodeCatalog,
+            cache: &'a dyn CacheStore,
+            bus: &'a Arc<EventBus>,
+        ) -> RunContext<'a> {
+            RunContext::new(filters, cache, bus, "test_run", GraphInfo::new())
+        }
         let x = Value::tensor(vec![1.0, 2.0], vec![2]);
         let y_a = Value::tensor(vec![0.0, 1.0], vec![2]);
         let y_b = Value::tensor(vec![1.0, 0.0], vec![2]);
 
         runner
-            .fit(&plan, &filters, &cache, &bus, "test_run", &x, Some(&y_a))
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, Some(&y_a))
             .unwrap();
         assert_eq!(fits.load(Ordering::SeqCst), 1);
 
         // Same features, same labels → cached state, no refit.
         runner
-            .fit(&plan, &filters, &cache, &bus, "test_run", &x, Some(&y_a))
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, Some(&y_a))
             .unwrap();
         assert_eq!(fits.load(Ordering::SeqCst), 1);
 
         // Same features, DIFFERENT labels → must refit.
         runner
-            .fit(&plan, &filters, &cache, &bus, "test_run", &x, Some(&y_b))
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, Some(&y_b))
             .unwrap();
         assert_eq!(
             fits.load(Ordering::SeqCst),
@@ -377,7 +368,7 @@ mod tests {
 
         // Unsupervised (no labels) → distinct from both supervised keys.
         runner
-            .fit(&plan, &filters, &cache, &bus, "test_run", &x, None)
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, None)
             .unwrap();
         assert_eq!(fits.load(Ordering::SeqCst), 3);
     }

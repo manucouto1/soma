@@ -5,7 +5,7 @@ use somatize_core::cache::CacheKey;
 use somatize_core::error::Result;
 use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::value::Value;
-use somatize_runtime::runner::{LocalRunner, Runner};
+use somatize_runtime::runner::{LocalRunner, RunContext, Runner};
 use somatize_runtime::{EventBus, FilterLibrary, MemoryCache};
 use std::sync::Arc;
 
@@ -71,16 +71,15 @@ fn fit_answers_with_the_last_node_not_an_arbitrary_one() {
     for _ in 0..200 {
         let mut lib = FilterLibrary::new();
         lib.register("a", Box::new(Plus(10.0)));
+        let ctx = RunContext::new(
+            &lib,
+            &cache,
+            &bus,
+            "r",
+            somatize_runtime::executor::GraphInfo::new(),
+        );
         let (out, _) = LocalRunner
-            .fit(
-                &plan,
-                &lib,
-                &cache,
-                &bus,
-                "r",
-                &Value::tensor(vec![1.0], vec![1]),
-                None,
-            )
+            .fit(&plan, &ctx, &Value::tensor(vec![1.0], vec![1]), None)
             .unwrap();
         assert_eq!(
             first(&out),

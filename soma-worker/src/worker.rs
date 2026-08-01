@@ -318,16 +318,20 @@ impl Worker {
                         ))
                     }
                 } else {
+                    let run_id = format!("worker_fit_{}", plan.plan_id);
+                    // `linear`, explicitly: a worker receives a serialized
+                    // plan and no graph, so it has no topology to consult.
+                    // Correct for the pipelines that get dispatched, and
+                    // stated here rather than assumed inside the runner.
+                    let ctx = somatize_runtime::runner::RunContext::linear(
+                        &self.filters,
+                        self.cache.as_ref(),
+                        &self.event_bus,
+                        &run_id,
+                        &plan.plan,
+                    );
                     runner
-                        .fit(
-                            &plan.plan,
-                            &self.filters,
-                            self.cache.as_ref(),
-                            &self.event_bus,
-                            &format!("worker_fit_{}", plan.plan_id),
-                            &x,
-                            y.as_ref(),
-                        )
+                        .fit(&plan.plan, &ctx, &x, y.as_ref())
                         .map(|(output, all_outputs)| {
                             // Extract trained states (prefixed __state_) and store in library
                             let mut trained_states = std::collections::HashMap::new();
@@ -348,15 +352,19 @@ impl Worker {
                         })
                 }
             }
-            ExecutionMode::Forward => runner
-                .forward(
-                    &plan.plan,
+            ExecutionMode::Forward => {
+                let run_id = format!("worker_forward_{}", plan.plan_id);
+                let ctx = somatize_runtime::runner::RunContext::linear(
                     &self.filters,
                     self.cache.as_ref(),
                     &self.event_bus,
-                    &x,
-                )
-                .map(|output| (output, std::collections::HashMap::new())),
+                    &run_id,
+                    &plan.plan,
+                );
+                runner
+                    .forward(&plan.plan, &ctx, &x)
+                    .map(|output| (output, std::collections::HashMap::new()))
+            }
         };
 
         let elapsed = start.elapsed().as_millis() as u64;
