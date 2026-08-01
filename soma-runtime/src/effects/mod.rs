@@ -21,9 +21,11 @@
 
 pub mod graph_handler;
 pub mod journal;
+pub mod sleep_handler;
 
 pub use graph_handler::GraphHandler;
 pub use journal::{EffectJournal, EffectSite};
+pub use sleep_handler::SleepHandler;
 
 use crate::event_bus::EventBus;
 use somatize_core::effect::{Effect, EffectResult, Usage};

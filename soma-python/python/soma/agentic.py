@@ -44,6 +44,8 @@ __all__ = [
     "Spawn",
     "Goto",
     "Suspend",
+    "Sleep",
+    "Custom",
     "Run",
     "Llm",
     "ToolCall",
@@ -144,6 +146,16 @@ def Goto(target, carry=None):  # noqa: N802
 def Suspend(reason="waiting"):  # noqa: N802
     """Stop the run and persist it; resuming replays to here and continues."""
     return {"transition": "suspend", "reason": reason}
+
+
+def Sleep(seconds):  # noqa: N802
+    """Wait. Journaled like anything else, so a replay does not sleep again."""
+    return {"effect": "sleep", "seconds": seconds}
+
+
+def Custom(kind, payload=None):  # noqa: N802
+    """An effect this runtime does not know, for a host-supplied handler."""
+    return {"effect": "custom", "kind": kind, "payload": payload}
 
 
 def Run(runs, input=None, label=None):  # noqa: A002, N802

@@ -1614,7 +1614,8 @@ impl PyGraph {
         let driver = EffectDriver::new(journal)
             .with_event_bus(self.event_bus.clone())
             .with_handler(Arc::new(somatize_llm::LlmHandler::new(router)))
-            .with_handler(Arc::new(toolbox));
+            .with_handler(Arc::new(toolbox))
+            .with_handler(Arc::new(somatize_runtime::effects::SleepHandler));
 
         Ok(Some(driver))
     }

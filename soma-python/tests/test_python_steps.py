@@ -262,3 +262,41 @@ def test_fanout_of_an_empty_plan_is_an_empty_answer():
     g.node("fanout", Fanout(runs="worker"))
     g.register_step("worker", Square())
     assert g.forward([]) == []
+
+
+# ── Effects a Python step can ask for ──
+
+
+def test_a_python_step_can_sleep_and_the_journal_remembers():
+    """`Sleep` and `Custom` were unreachable: `parse_effect` knew `llm`
+    and `tool` and rejected everything else, so two of the five `Effect`
+    variants existed only for Rust."""
+    import soma
+    from soma.agentic import Await, Custom, Done, Sleep
+
+    class Naps:
+        _cache_version = "v1"
+
+        def poll(self, ctx):
+            if not ctx.results:
+                return Await([Sleep(0.001)])
+            return Done("rested")
+
+    g = soma.Graph()
+    g.node("nap", Naps())
+    assert g.forward("go") == "rested"
+
+    class Asks:
+        _cache_version = "v1"
+
+        def poll(self, ctx):
+            if not ctx.results:
+                return Await([Custom("soma.test.echo", {"n": 1})])
+            return Done("asked")
+
+    g2 = soma.Graph()
+    g2.node("ask", Asks())
+    # No handler claims it, so it comes back as a failure the step sees —
+    # which is the contract, and is reached only because the effect parses.
+    with pytest.raises(RuntimeError, match="soma.test.echo"):
+        g2.forward("go")

@@ -754,8 +754,31 @@ fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
             };
             Ok(Effect::Tool { name, args })
         }
+        "sleep" => {
+            let secs: f64 = dict
+                .get_item("seconds")?
+                .ok_or_else(|| PyValueError::new_err("soma.Sleep needs `seconds`"))?
+                .extract()?;
+            if !secs.is_finite() || secs < 0.0 {
+                return Err(PyValueError::new_err(
+                    "soma.Sleep needs a finite, non-negative number of seconds",
+                ));
+            }
+            Ok(Effect::Sleep(std::time::Duration::from_secs_f64(secs)))
+        }
+        "custom" => {
+            let kind: String = dict
+                .get_item("kind")?
+                .ok_or_else(|| PyValueError::new_err("soma.Custom needs `kind`"))?
+                .extract()?;
+            let payload = match dict.get_item("payload")? {
+                Some(p) => py_to_value(py, &p)?,
+                None => Value::Empty,
+            };
+            Ok(Effect::Custom { kind, payload })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect {other:?}; expected llm or tool"
+            "unknown effect {other:?}; expected llm, tool, sleep or custom"
         ))),
     }
 }
