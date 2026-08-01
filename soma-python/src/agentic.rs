@@ -288,6 +288,9 @@ pub struct PyAgent {
     max_tokens: Option<u32>,
     effort: Option<String>,
     text_only: bool,
+    /// JSON Schema the answer must match, if the caller wants one.
+    schema: Option<serde_json::Value>,
+    max_repairs: usize,
     /// Dimensions declared with `search(...)` at construction, named after
     /// the argument they were passed as.
     space: Vec<serde_json::Value>,
@@ -309,6 +312,8 @@ impl PyAgent {
         max_tokens=None,
         effort=None,
         text_only=true,
+        schema=None,
+        max_repairs=1,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -320,6 +325,8 @@ impl PyAgent {
         max_tokens: Option<&Bound<'_, PyAny>>,
         effort: Option<&Bound<'_, PyAny>>,
         text_only: bool,
+        schema: Option<&Bound<'_, PyAny>>,
+        max_repairs: usize,
     ) -> PyResult<Self> {
         let mut space = Vec::new();
         Ok(Self {
@@ -330,6 +337,11 @@ impl PyAgent {
             max_tokens: searchable_opt(py, "max_tokens", max_tokens, &mut space)?,
             effort: searchable_opt(py, "effort", effort, &mut space)?,
             text_only,
+            schema: match schema {
+                Some(s) if !s.is_none() => Some(py_to_json(py, s)?),
+                _ => None,
+            },
+            max_repairs,
             space,
         })
     }
@@ -387,6 +399,12 @@ impl PyAgent {
     #[getter]
     fn tools(&self) -> Vec<PyTool> {
         self.tools.clone()
+    }
+
+    /// The shape the answer must take, if one was declared.
+    #[getter]
+    fn schema(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        self.schema.as_ref().map(|s| json_to_py(py, s)).transpose()
     }
 
     /// The dimensions this agent contributes to a study's search space.
@@ -866,6 +884,11 @@ pub(crate) fn to_step_spec(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<S
         }
         if agent.text_only {
             react = react.text_only();
+        }
+        if let Some(schema) = &agent.schema {
+            react = react
+                .with_schema(schema.clone())
+                .with_repairs(agent.max_repairs);
         }
         return Ok(StepSpec::Agent {
             step: Arc::new(react),

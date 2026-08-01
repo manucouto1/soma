@@ -35,6 +35,7 @@ from soma.filter import Filter
 
 __all__ = [
     "Revise",
+    "Validate",
     "Brief",
     "MajorityVote",
     "Fanout",
@@ -51,6 +52,7 @@ __all__ = [
     "refine",
     "debate",
     "board",
+    "self_consistency",
     "parallel_vote",
     "orchestrate",
 ]
@@ -232,8 +234,24 @@ class MajorityVote(Filter):
 
     #: Answers are read as the last ``\boxed{...}`` in the text, else the
     #: last number in it. Both conventions come from the GSM8K literature.
-    def __init__(self, brief_node: str = "brief"):
+    def __init__(self, brief_node: str = "brief", mode: str = "number"):
+        if mode not in ("number", "text"):
+            raise ValueError("mode must be 'number' or 'text'")
         self.brief_node = brief_node
+        #: ``"number"`` reads a final answer out of a worked solution, the
+        #: GSM8K convention. ``"text"`` compares whole replies, normalized —
+        #: which is what a panel answering in prose needs, and where reading
+        #: "the last number" would vote on a page reference.
+        self.mode = mode
+
+    def read(self, text) -> str | None:
+        """The answer this vote counts, under the configured mode."""
+        if self.mode == "text":
+            from soma.library import normalize_answer
+
+            normalized = normalize_answer(text)
+            return normalized or None
+        return self.extract(text)
 
     @staticmethod
     def extract(text: str) -> str | None:
@@ -271,7 +289,7 @@ class MajorityVote(Filter):
 
         members = {k: v for k, v in sorted(x.items()) if k != self.brief_node}
         responses = [v if isinstance(v, str) else str(v) for v in members.values()]
-        answers = {node: self.extract(text) for node, text in members.items()}
+        answers = {node: self.read(text) for node, text in members.items()}
         # An unreadable answer is not a vote. The reference implementation of
         # this paper scores unparseable output as *correct*, which inflates
         # every number it reports; dropping it is the honest reading.
@@ -300,6 +318,127 @@ class MajorityVote(Filter):
             # with a scoreboard.
             "responses": responses,
         }
+
+
+class Validate(Filter):
+    """Check a value against a JSON Schema, and say what is wrong.
+
+    Returns a verdict rather than raising, so the invalid case goes
+    somewhere that handles it instead of costing another model call to find
+    out what went wrong:
+
+        {"ok": bool, "errors": [...], "value": ..., "branch": "ok"|"invalid"}
+
+    The ``branch`` key is the label a :meth:`Graph.branch` reads — the
+    contract a branch condition already has, rather than a new convention
+    invented for this filter:
+
+        g.branch("check", Validate(SCHEMA), {"ok": Use(), "invalid": Repair()})
+
+    Uses the ``jsonschema`` package when it is installed. Without it, falls
+    back to checking the root type, required fields and declared property
+    types — which catches what actually goes wrong (prose instead of JSON, a
+    missing field the caller is about to index) and says so rather than
+    pretending to be a full implementation.
+    """
+
+    _kind = "stateless"
+    _cache_version = "1"
+
+    def __init__(self, schema: Mapping[str, Any], *, strict: bool = False):
+        self.schema = dict(schema)
+        self.strict = strict
+
+    def forward(self, x, state):
+        value = x
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return self._verdict(x, ["the value is not JSON"])
+        return self._verdict(value, _schema_errors(self.schema, value))
+
+    def _verdict(self, value, errors):
+        if errors and self.strict:
+            raise ValueError(f"validation failed: {'; '.join(errors)}")
+        return {
+            "ok": not errors,
+            "errors": errors,
+            "value": value,
+            "branch": "invalid" if errors else "ok",
+        }
+
+
+def _schema_errors(schema: Mapping[str, Any], value: Any) -> list[str]:
+    try:
+        import jsonschema
+    except ImportError:
+        return _structural_errors(schema, value)
+
+    validator = jsonschema.Draft202012Validator(schema)
+    return [
+        f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
+        for e in sorted(validator.iter_errors(value), key=lambda e: list(e.absolute_path))
+    ]
+
+
+_JSON_TYPES = {
+    "object": dict,
+    "array": list,
+    "string": str,
+    "number": (int, float),
+    "boolean": bool,
+    "null": type(None),
+}
+
+
+def _structural_errors(schema: Mapping[str, Any], value: Any) -> list[str]:
+    """Root type, required fields, declared property types.
+
+    Permissive on purpose: a violation missed costs a consumer an error it
+    would have hit anyway, while a violation invented sends a correct answer
+    back for a "fix".
+    """
+    errors: list[str] = []
+
+    expected = schema.get("type")
+    if expected and not _is_type(expected, value):
+        # With the root type wrong, every field check below would fire too
+        # and bury the one that matters.
+        return [f"expected {expected}, got {type(value).__name__}"]
+
+    if not isinstance(value, dict):
+        return errors
+
+    for key in schema.get("required", []):
+        if key not in value:
+            errors.append(f"missing required field `{key}`")
+
+    for key, spec in (schema.get("properties") or {}).items():
+        declared = spec.get("type") if isinstance(spec, Mapping) else None
+        if key in value and declared and not _is_type(declared, value[key]):
+            errors.append(
+                f"field `{key}` should be {declared}, got {type(value[key]).__name__}"
+            )
+
+    return errors
+
+
+def _is_type(expected: str, value: Any) -> bool:
+    if expected == "integer":
+        # A JSON Schema `integer` accepts 2.0; booleans are not integers.
+        return isinstance(value, int) and not isinstance(value, bool) or (
+            isinstance(value, float) and value.is_integer()
+        )
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    python_type = _JSON_TYPES.get(expected)
+    # A type this check does not model is not a type it may reject.
+    if python_type is None:
+        return True
+    if python_type is not bool and isinstance(value, bool):
+        return False
+    return isinstance(value, python_type)
 
 
 def _graph(provider: str | None, cache: str | None) -> Graph:
@@ -488,6 +627,51 @@ def board(
     g.connect("brief", chair_id)
 
     g.loop("board", body="brief", until=chair_id, max_iterations=rounds)
+    return g
+
+
+def self_consistency(
+    agent: Any,
+    *,
+    n: int = 5,
+    aggregator: Any = None,
+    provider: str | None = None,
+    cache: str | None = None,
+) -> Graph:
+    """Ask one agent the same thing `n` times, and take the majority.
+
+    Self-consistency (Wang et al.): sampling the same model repeatedly and
+    voting beats its single best answer, because the wrong answers disagree
+    with each other while the right one keeps coming back.
+
+    Distinct from :func:`parallel_vote` and :func:`board`, which need `n`
+    *different* agents written out. Here the diversity comes from sampling,
+    which is the version the paper actually measures — and the one that was
+    impossible to express before, since every copy of one agent would have
+    been the same node.
+
+    The default aggregator counts whole answers; pass
+    ``MajorityVote(mode="number")`` for worked solutions that end in one.
+
+        self_consistency(soma.Agent(model="ollama/qwen2.5"), n=5)
+
+    Note that identical samples of a deterministic model are exactly what
+    the cache collapses — this is worth its tokens only against a model
+    sampling at a temperature above zero.
+    """
+    if n < 2:
+        raise ValueError("self_consistency() needs at least two samples")
+
+    g = _graph(provider, cache)
+    voter = aggregator if aggregator is not None else MajorityVote(mode="text")
+    vote_id = g.node("vote", voter)
+
+    for i in range(n):
+        # One node per sample, because a node is what the runtime schedules:
+        # they run in parallel, cache separately, and appear separately in
+        # the report.
+        sample_id = g.node(f"sample_{i}", agent)
+        g.connect(sample_id, vote_id)
     return g
 
 
