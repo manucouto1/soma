@@ -1091,9 +1091,6 @@ mod tests {
         fn meta(&self) -> FilterMeta {
             panic!("meta blew up");
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     /// `execute_parallel` used to `join().unwrap()`, which re-raises a
@@ -1166,10 +1163,6 @@ mod tests {
                 output_schema: None,
             }
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     struct AdderFilter {
@@ -1205,10 +1198,6 @@ mod tests {
                 output_schema: None,
             }
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     /// Slow filter that sleeps to verify parallelism.
@@ -1240,10 +1229,6 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -1626,9 +1611,6 @@ mod tests {
                 output_schema: None,
             }
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     fn counting_setup(
@@ -1868,9 +1850,6 @@ mod tests {
                 output_schema: None,
             }
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[test]
@@ -1963,9 +1942,6 @@ mod tests {
                     input_schema: None,
                     output_schema: None,
                 }
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
             }
         }
 

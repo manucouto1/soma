@@ -137,6 +137,109 @@ impl ReactStep {
             conversation.to_value()
         }
     }
+
+    /// What to do with a model reply: finish, correct it, or run its tools.
+    fn on_reply(
+        &self,
+        ctx: &StepCtx<'_>,
+        response: &somatize_core::effect::LlmResponse,
+        mut conversation: Messages,
+    ) -> Result<Transition> {
+        Self::reject_non_answers(ctx, response)?;
+
+        if response.stop_reason == StopReason::ToolUse {
+            let calls: Vec<Effect> = response
+                .message
+                .tool_uses()
+                .map(|(_, name, input)| Effect::Tool {
+                    name: name.to_string(),
+                    args: Value::json(input.clone()),
+                })
+                .collect();
+
+            // `stop_reason: tool_use` with no calls happens; treating it
+            // as "done" beats awaiting nothing and erroring.
+            return Ok(if calls.is_empty() {
+                Transition::Done(self.finish(&conversation))
+            } else {
+                Transition::Await(calls)
+            });
+        }
+
+        // A declared shape is checked here, whether the endpoint enforced
+        // it or was merely asked to.
+        let Some(schema) = &self.schema else {
+            return Ok(Transition::Done(self.finish(&conversation)));
+        };
+
+        let text = response.message.text();
+        let violations = match extract_json(&text) {
+            Some(value) => schema_violations(schema, &value),
+            None => vec!["the reply is not JSON".to_string()],
+        };
+        if violations.is_empty() {
+            return Ok(Transition::Done(self.finish(&conversation)));
+        }
+
+        // One wrong answer buys one correction; the second is a model that
+        // cannot produce the shape, and asking again just bills for it.
+        let spent = repairs_spent(ctx, schema);
+        if spent >= self.max_repairs {
+            return Err(SomaError::Execution {
+                node_id: ctx.node_id.to_string(),
+                message: format!(
+                    "the model did not produce the required shape after {} \
+                     correction(s): {}. Last reply: {}",
+                    spent,
+                    violations.join("; "),
+                    truncate(&text, 300)
+                ),
+            });
+        }
+        conversation.push(Message::user(format!(
+            "That reply does not match the required shape: {}.\n\n\
+             Answer again with JSON only, matching this schema:\n{schema}",
+            violations.join("; ")
+        )));
+        Ok(Transition::Await(vec![self.ask(conversation)]))
+    }
+
+    /// Two of the ways a turn can end are not answers.
+    ///
+    /// Returning them as one is how an empty string ends up in a report as
+    /// the agent's considered reply.
+    fn reject_non_answers(
+        ctx: &StepCtx<'_>,
+        response: &somatize_core::effect::LlmResponse,
+    ) -> Result<()> {
+        match &response.stop_reason {
+            StopReason::Refusal { category } => Err(SomaError::Execution {
+                node_id: ctx.node_id.to_string(),
+                message: format!(
+                    "the model declined to answer{}. Rephrasing the request or \
+                     changing model is the fix; there is no partial answer to \
+                     salvage",
+                    category
+                        .as_deref()
+                        .map(|c| format!(" ({c})"))
+                        .unwrap_or_default()
+                ),
+            }),
+            // The text so far may well be useful, so it goes in the
+            // message — but it is a cut-off thought, and passing it
+            // downstream as complete is a wrong answer nobody can see is
+            // wrong.
+            StopReason::MaxTokens => Err(SomaError::Execution {
+                node_id: ctx.node_id.to_string(),
+                message: format!(
+                    "the model ran out of tokens mid-answer. Raise `max_tokens` \
+                     (or shorten the task). Partial answer: {}",
+                    truncate(&response.message.text(), 300)
+                ),
+            }),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl Step for ReactStep {
@@ -212,116 +315,38 @@ impl Step for ReactStep {
             .is_some_and(|m| m.role == Role::Assistant && m.tool_uses().next().is_some());
 
         if !awaiting_tools && let Some(EffectResult::Failed { message }) = ctx.results.first() {
-            return Err(somatize_core::error::SomaError::Execution {
+            return Err(SomaError::Execution {
                 node_id: ctx.node_id.to_string(),
                 message: format!("the model call failed: {message}"),
             });
         }
 
         match ctx.results.first() {
-            // A model reply: either it wants tools, or it is done.
-            Some(EffectResult::Llm(response)) => {
-                // Two of the ways a turn can end are not answers, and
-                // returning them as one is how an empty string ends up in a
-                // report as the agent's considered reply.
-                match &response.stop_reason {
-                    StopReason::Refusal { category } => {
-                        return Err(SomaError::Execution {
-                            node_id: ctx.node_id.to_string(),
-                            message: format!(
-                                "the model declined to answer{}. Rephrasing the request \
-                                 or changing model is the fix; there is no partial answer \
-                                 to salvage",
-                                category
-                                    .as_deref()
-                                    .map(|c| format!(" ({c})"))
-                                    .unwrap_or_default()
-                            ),
-                        });
-                    }
-                    StopReason::MaxTokens => {
-                        // The text so far may well be useful, so it goes in
-                        // the message — but it is a cut-off thought, and
-                        // passing it downstream as complete is a wrong
-                        // answer nobody can see is wrong.
-                        return Err(SomaError::Execution {
-                            node_id: ctx.node_id.to_string(),
-                            message: format!(
-                                "the model ran out of tokens mid-answer. Raise `max_tokens` \
-                                 (or shorten the task). Partial answer: {}",
-                                truncate(&response.message.text(), 300)
-                            ),
-                        });
-                    }
-                    _ => {}
-                }
-
-                if response.stop_reason != StopReason::ToolUse {
-                    // A declared shape is checked here, whether the endpoint
-                    // enforced it or was merely asked to. One wrong answer
-                    // buys one correction; the second is a model that cannot
-                    // produce the shape, and asking again just bills for it.
-                    if let Some(schema) = &self.schema {
-                        let text = response.message.text();
-                        let violations = match extract_json(&text) {
-                            Some(value) => schema_violations(schema, &value),
-                            None => vec!["the reply is not JSON".to_string()],
-                        };
-
-                        if !violations.is_empty() {
-                            let spent = repairs_spent(ctx, schema);
-                            if spent >= self.max_repairs {
-                                return Err(SomaError::Execution {
-                                    node_id: ctx.node_id.to_string(),
-                                    message: format!(
-                                        "the model did not produce the required shape after \
-                                         {} correction(s): {}. Last reply: {}",
-                                        spent,
-                                        violations.join("; "),
-                                        truncate(&text, 300)
-                                    ),
-                                });
-                            }
-                            conversation.push(Message::user(format!(
-                                "That reply does not match the required shape: {}.\n\n\
-                                 Answer again with JSON only, matching this schema:\n{schema}",
-                                violations.join("; ")
-                            )));
-                            return Ok(Transition::Await(vec![self.ask(conversation)]));
-                        }
-                    }
-                    return Ok(Transition::Done(self.finish(&conversation)));
-                }
-                let calls: Vec<Effect> = response
-                    .message
-                    .tool_uses()
-                    .map(|(_, name, input)| Effect::Tool {
-                        name: name.to_string(),
-                        args: Value::json(input.clone()),
-                    })
-                    .collect();
-
-                // `stop_reason: tool_use` with no calls happens; treating it
-                // as "done" beats awaiting nothing and erroring.
-                if calls.is_empty() {
-                    return Ok(Transition::Done(self.finish(&conversation)));
-                }
-                Ok(Transition::Await(calls))
-            }
+            Some(EffectResult::Llm(response)) => self.on_reply(ctx, response, conversation),
 
             // Tool results: hand them back and let the model continue.
             Some(EffectResult::Tool { .. }) | Some(EffectResult::Failed { .. }) => {
                 Ok(Transition::Await(vec![self.ask(conversation)]))
             }
 
-            other => Ok(Transition::Done(Value::text(format!(
-                "unexpected effect result: {other:?}"
-            )))),
+            // Something this step never asked for. It used to answer
+            // `Done(Value::text("unexpected effect result: …"))` — an
+            // error rendered as a successful output, which then flows
+            // downstream as the agent's reply and reaches a report as
+            // though the model had written it.
+            other => Err(SomaError::Execution {
+                node_id: ctx.node_id.to_string(),
+                message: format!(
+                    "a ReactStep awaits model calls and tool calls, and was handed \
+                     {}. This is a bug in whatever performed the effect, not a \
+                     model answer",
+                    match other {
+                        Some(r) => format!("{r:?}"),
+                        None => "nothing".to_string(),
+                    }
+                ),
+            }),
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -526,9 +551,6 @@ impl Step for LlmStep {
     fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
         self.inner.poll(ctx)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A verdict a judge returns.
@@ -664,16 +686,30 @@ impl Step for JudgeStep {
             })))),
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use somatize_core::effect::{LlmResponse, Usage};
+
+    /// An effect result a ReactStep never asked for used to come back as
+    /// `Done(Value::text("unexpected effect result: …"))` — an error
+    /// rendered as a successful output, which then flows downstream as
+    /// the agent's reply and reaches a report as though a model wrote it.
+    #[test]
+    fn an_effect_result_it_never_asked_for_is_an_error() {
+        let step = ReactStep::new("m");
+        let results = vec![EffectResult::Node(Value::text("from somewhere else"))];
+        let input = Value::text("hi");
+        let history = vec![results.clone()];
+        let ctx = StepCtx::new("agent", "run", &input, 1).with_history(&history);
+
+        let err = step.poll(&ctx).expect_err("this is not an answer");
+        let msg = err.to_string();
+        assert!(msg.contains("awaits model calls"), "{msg}");
+        assert!(!msg.contains("unexpected effect result"), "{msg}");
+    }
 
     /// `config_hash` is part of every journal key this step writes, so a
     /// field it does not cover is two differently-configured steps sharing

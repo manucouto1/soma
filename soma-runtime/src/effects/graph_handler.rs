@@ -171,9 +171,6 @@ mod tests {
         fn config_hash(&self) -> somatize_core::cache::CacheKey {
             somatize_core::cache::CacheKey::from_parts(&[b"doubler"])
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     fn handler() -> GraphHandler {

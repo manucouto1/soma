@@ -819,10 +819,6 @@ impl Step for PyStepBridge {
             build().map_err(|e| SomaError::Other(format!("Python step `{}`: {e}", self.name)))
         })
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Anything that can become a node in the graph.

@@ -106,10 +106,6 @@ impl Filter for Scored {
     fn config_hash(&self) -> CacheKey {
         CacheKey::from_parts(&[b"scored"])
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn pipeline() -> Graph {

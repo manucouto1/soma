@@ -565,9 +565,6 @@ mod tests {
             };
             Ok(Transition::Done(Value::text(text)))
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     fn driver(handler: Arc<dyn EffectHandler>) -> (EffectDriver, tempfile::TempDir) {
@@ -689,9 +686,6 @@ mod tests {
                     .collect();
                 Ok(Transition::Done(Value::text(joined.join(","))))
             }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
 
         let (d, _dir) = driver(Arc::new(Echo));
@@ -717,9 +711,6 @@ mod tests {
                     "claude-opus-5",
                     vec![Message::user(format!("{}", ctx.turn))].into(),
                 ))]))
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
             }
         }
 
@@ -749,9 +740,6 @@ mod tests {
                     args: Value::Empty,
                 }]))
             }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
 
         let err = d.run(&WantsTool, "r", "n", &Value::Empty).unwrap_err();
@@ -772,9 +760,6 @@ mod tests {
             }
             fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
                 Ok(Transition::Await(vec![]))
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
             }
         }
         let (d, _dir) = driver(CountingLlm::new("x"));
@@ -797,9 +782,6 @@ mod tests {
             Ok(Transition::Done(Value::text(
                 ctx.input.as_text().unwrap_or_default().to_uppercase(),
             )))
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -845,9 +827,6 @@ mod tests {
                 })
                 .collect();
             Ok(Transition::Done(Value::text(joined.join("|"))))
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -934,9 +913,6 @@ mod tests {
                     join: somatize_core::effect::JoinPolicy::All,
                 })
             }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
 
         let (d, _dir) = spawning_driver(somatize_core::effect::JoinPolicy::All);
@@ -989,9 +965,6 @@ mod tests {
                     join: JoinPolicy::All,
                 })
             }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
         }
         let err = d
             .run(&SpawnsNothing, "r", "orch", &Value::Empty)
@@ -1025,9 +998,6 @@ mod tests {
                 )))),
                 Some(other) => Ok(Transition::Done(Value::text(format!("odd: {other:?}")))),
             }
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -1135,9 +1105,6 @@ mod tests {
                     ))]));
                 }
                 Ok(Transition::Done(Value::Empty))
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
             }
         }
 

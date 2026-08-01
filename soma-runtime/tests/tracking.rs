@@ -370,9 +370,6 @@ fn graph_fit_events_reach_the_run_dir() {
                 output_schema: None,
             }
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     let root = tempfile::tempdir().unwrap();
@@ -782,9 +779,6 @@ fn session_fit_and_run_emit_matching_run_bracket() {
                 input_schema: None,
                 output_schema: None,
             }
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

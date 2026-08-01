@@ -281,9 +281,6 @@ fn a_step_reaches_a_provider_and_then_replays() {
                 Some(other) => Ok(Transition::Done(Value::text(format!("{other:?}")))),
             }
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     // Serve at most twice, so a replay that wrongly calls out would be

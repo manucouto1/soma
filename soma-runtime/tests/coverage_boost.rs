@@ -48,10 +48,6 @@ impl Filter for Doubler {
             output_schema: None,
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 struct MeanFilter;
@@ -92,10 +88,6 @@ impl Filter for MeanFilter {
             output_schema: None,
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Filter that returns a JSON condition for branch testing.
@@ -122,10 +114,6 @@ impl Filter for BranchCondition {
             input_schema: None,
             output_schema: None,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -162,10 +150,6 @@ impl Filter for StopFilter {
             input_schema: None,
             output_schema: None,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

@@ -110,7 +110,7 @@ fn default_deterministic() -> bool {
 /// Each phase is independently cacheable:
 /// - State cache: `hash(config + training_data)`
 /// - Output cache: `hash(config + state + input_data)`
-pub trait Filter: Send + Sync {
+pub trait Filter: crate::any::AsAny + Send + Sync {
     /// Compute a hash of this filter's configuration.
     /// Same config must always produce the same hash.
     /// Only public constructor parameters contribute.
@@ -126,9 +126,6 @@ pub trait Filter: Send + Sync {
 
     /// Metadata for the compiler.
     fn meta(&self) -> FilterMeta;
-
-    /// Downcast support for composite execution.
-    fn as_any(&self) -> &dyn std::any::Any;
 
     /// Execute a composite fit across multiple filters that share an execution context.
     /// Used for differentiable filter chains where autograd must flow between them.
@@ -200,10 +197,6 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -284,10 +277,6 @@ mod tests {
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

@@ -765,10 +765,6 @@ impl Filter for SubprocessFilter {
         }
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn composite_fit(
         &self,
         peers: &[(String, std::sync::Arc<dyn somatize_core::filter::Filter>)],

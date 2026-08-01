@@ -219,7 +219,7 @@ impl StepMeta {
 ///
 /// Implementors are registered in the runtime's step library by node id, the
 /// same way filters are.
-pub trait Step: Send + Sync {
+pub trait Step: crate::any::AsAny + Send + Sync {
     /// Hash of this step's configuration. Same config, same hash — it is part
     /// of every journal key this step writes.
     fn config_hash(&self) -> CacheKey;
@@ -234,8 +234,6 @@ pub trait Step: Send + Sync {
     /// replay. Put the non-determinism in an [`Effect`], where it gets
     /// recorded.
     fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition>;
-
-    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[cfg(test)]
@@ -267,9 +265,6 @@ mod tests {
                     "unexpected {other:?}"
                 )))),
             }
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

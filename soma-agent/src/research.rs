@@ -292,10 +292,6 @@ impl Step for ResearchStep {
             Some(_) => Ok(Transition::Await(vec![self.ask(ctx)])),
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn to_object(

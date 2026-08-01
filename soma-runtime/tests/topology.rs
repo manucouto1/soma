@@ -38,9 +38,6 @@ impl Filter for Echo {
             output_schema: None,
         }
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// `a → {b, c} → d`.

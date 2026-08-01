@@ -98,9 +98,6 @@ impl Filter for Doubler {
             output_schema: None,
         }
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Trainable filter that learns a mean and subtracts it.
@@ -143,9 +140,6 @@ impl Filter for MeanNormalizer {
             input_schema: None,
             output_schema: None,
         }
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

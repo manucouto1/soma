@@ -51,9 +51,6 @@ impl Filter for Shout {
             output_schema: None,
         }
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Answers with a fixed reply, counting how often it is actually called.
@@ -117,9 +114,6 @@ impl Step for AskOnce {
                 message: format!("unexpected effect result: {other:?}"),
             }),
         }
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -301,9 +295,6 @@ impl Step for Router {
             carry: Value::text("routed payload"),
         })
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// `router` may hand off to `billing` or `tech`; only the chosen one runs,
@@ -431,9 +422,6 @@ impl Step for NeedsApproval {
             ))),
             Some(other) => Ok(Transition::Done(Value::text(format!("{other:?}")))),
         }
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -585,9 +573,6 @@ impl Filter for Numeric {
             ..Shout.meta()
         }
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Insists on a conversation.
@@ -602,9 +587,6 @@ impl Step for WantsMessages {
     }
     fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
         Ok(Transition::Done(Value::Empty))
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -652,9 +634,6 @@ fn a_remote_step_is_wrapped_for_dispatch() {
         fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
             Ok(Transition::Done(Value::Empty))
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     let mut catalog = NodeCatalog::new();
@@ -690,9 +669,6 @@ impl Step for RoutingStep {
             target: ctx.input.as_text().unwrap_or_default().to_string(),
             carry: Value::text("routed"),
         })
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -767,9 +743,6 @@ impl Step for PanickingStep {
     }
     fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
         panic!("the step fell over");
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

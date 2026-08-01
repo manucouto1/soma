@@ -281,10 +281,6 @@ mod tests {
                 output_schema: None,
             }
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     #[test]

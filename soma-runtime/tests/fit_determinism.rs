@@ -40,9 +40,6 @@ impl Filter for Plus {
             output_schema: None,
         }
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn first(v: &Value) -> f64 {

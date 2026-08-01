@@ -55,10 +55,6 @@ impl Filter for TrainableScaler {
             output_schema: None,
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 fn make_graph_and_library(scale: f64) -> (Graph, NodeCatalog) {
