@@ -247,7 +247,16 @@ impl Runner for LocalRunner {
             outputs.insert(node_id.clone(), output);
         }
 
-        let last_output = outputs.values().last().cloned().unwrap_or(Value::Empty);
+        // The last node in plan order, not `outputs.values().last()`.
+        // `outputs` is a `HashMap`, so that returned an arbitrary entry —
+        // including `__input_*`, meaning a single-node fit had an even
+        // chance of answering with its own input. `fit_sequence` feeds
+        // this value to the next step, so the damage travelled.
+        let last_output = node_ids
+            .last()
+            .and_then(|id| outputs.get(id))
+            .cloned()
+            .unwrap_or(Value::Empty);
 
         // Forward outputs keyed by node_id (for GraphSession inspection).
         // Trained states added with __state_ prefix (for Worker to extract).

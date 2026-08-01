@@ -1,0 +1,5 @@
+{"name":"loss","node_id":null,"step":0,"trial_id":null,"ts":"2026-07-28T08:44:43.056977086Z","value":1.0839794874191284}
+{"name":"loss","node_id":null,"step":1,"trial_id":null,"ts":"2026-07-28T08:44:43.060981587Z","value":1.0439531803131104}
+{"name":"loss","node_id":null,"step":2,"trial_id":null,"ts":"2026-07-28T08:44:43.064586621Z","value":1.0110061168670654}
+{"name":"loss","node_id":null,"step":3,"trial_id":null,"ts":"2026-07-28T08:44:43.068663634Z","value":0.9831809997558594}
+{"name":"loss","node_id":null,"step":4,"trial_id":null,"ts":"2026-07-28T08:44:43.072696133Z","value":0.9606531858444214}

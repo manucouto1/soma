@@ -1,0 +1,15 @@
+{"seq":0,"ts":"2026-07-28T08:54:09.318405145Z","event_type":"EpochStarted","run_id":"run_20260728T085409_8fe3","epoch":0,"total_epochs":5}
+{"seq":1,"ts":"2026-07-28T08:54:09.459144945Z","event_type":"StepCompleted","run_id":"run_20260728T085409_8fe3","step":0,"epoch":null}
+{"seq":2,"ts":"2026-07-28T08:54:09.460026260Z","event_type":"MetricReported","run_id":"run_20260728T085409_8fe3","metric":{"name":"loss","value":1.0964922904968262,"step":0,"timestamp":"2026-07-28T08:54:09.460023041Z"},"node_id":null,"trial_id":null}
+{"seq":3,"ts":"2026-07-28T08:54:09.460132163Z","event_type":"EpochStarted","run_id":"run_20260728T085409_8fe3","epoch":1,"total_epochs":5}
+{"seq":4,"ts":"2026-07-28T08:54:09.464117925Z","event_type":"StepCompleted","run_id":"run_20260728T085409_8fe3","step":1,"epoch":null}
+{"seq":5,"ts":"2026-07-28T08:54:09.464561213Z","event_type":"MetricReported","run_id":"run_20260728T085409_8fe3","metric":{"name":"loss","value":1.05781888961792,"step":1,"timestamp":"2026-07-28T08:54:09.464558935Z"},"node_id":null,"trial_id":null}
+{"seq":6,"ts":"2026-07-28T08:54:09.464640977Z","event_type":"EpochStarted","run_id":"run_20260728T085409_8fe3","epoch":2,"total_epochs":5}
+{"seq":7,"ts":"2026-07-28T08:54:09.467760563Z","event_type":"StepCompleted","run_id":"run_20260728T085409_8fe3","step":2,"epoch":null}
+{"seq":8,"ts":"2026-07-28T08:54:09.468159240Z","event_type":"MetricReported","run_id":"run_20260728T085409_8fe3","metric":{"name":"loss","value":1.0256472826004028,"step":2,"timestamp":"2026-07-28T08:54:09.468157036Z"},"node_id":null,"trial_id":null}
+{"seq":9,"ts":"2026-07-28T08:54:09.468234330Z","event_type":"EpochStarted","run_id":"run_20260728T085409_8fe3","epoch":3,"total_epochs":5}
+{"seq":10,"ts":"2026-07-28T08:54:09.471453999Z","event_type":"StepCompleted","run_id":"run_20260728T085409_8fe3","step":3,"epoch":null}
+{"seq":11,"ts":"2026-07-28T08:54:09.472061505Z","event_type":"MetricReported","run_id":"run_20260728T085409_8fe3","metric":{"name":"loss","value":0.9986213445663452,"step":3,"timestamp":"2026-07-28T08:54:09.472058877Z"},"node_id":null,"trial_id":null}
+{"seq":12,"ts":"2026-07-28T08:54:09.472154110Z","event_type":"EpochStarted","run_id":"run_20260728T085409_8fe3","epoch":4,"total_epochs":5}
+{"seq":13,"ts":"2026-07-28T08:54:09.475655470Z","event_type":"StepCompleted","run_id":"run_20260728T085409_8fe3","step":4,"epoch":null}
+{"seq":14,"ts":"2026-07-28T08:54:09.476149092Z","event_type":"MetricReported","run_id":"run_20260728T085409_8fe3","metric":{"name":"loss","value":0.9758332967758179,"step":4,"timestamp":"2026-07-28T08:54:09.476146433Z"},"node_id":null,"trial_id":null}

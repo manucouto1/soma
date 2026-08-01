@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "run_id": "run_20260728T084442_0221",
+  "kind": "train",
+  "name": "baseline",
+  "created_at": "2026-07-28T08:44:42.830865382Z",
+  "soma_version": "0.3.1",
+  "python_version": "3.13.13",
+  "hostname": "yilliqiya",
+  "git": {
+    "sha": "b4ceccf67d0a0703a97e366aaea0aff6c0004c3b",
+    "branch": "feature/python-orchestrator-audit",
+    "dirty": true
+  },
+  "entrypoint": "/home/manuc/miniforge3/envs/mos/bin/python",
+  "argv": [
+    "/home/manuc/miniforge3/envs/mos/bin/python",
+    "-m",
+    "ipykernel_launcher",
+    "-f",
+    "/tmp/tmpsga0j8_6.json",
+    "--HistoryManager.hist_file=:memory:"
+  ],
+  "cwd": "/mnt/cluster/projects/soma-git/notebooks",
+  "seeds": {},
+  "tags": [
+    "demo"
+  ],
+  "notes": null,
+  "parent_run_id": null,
+  "graph": {
+    "n_nodes": 1,
+    "node_ids": [
+      "encoder"
+    ],
+    "graph_path": "graph.json",
+    "mermaid_path": "graph.mmd"
+  },
+  "study_path": null
+}
