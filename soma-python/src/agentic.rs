@@ -951,15 +951,13 @@ pub(crate) fn to_step_spec(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<S
 
 // ── JSON ↔ Python ──
 
-fn py_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    let json = py.import("json")?;
-    let text: String = json.call_method1("dumps", (obj,))?.extract()?;
-    serde_json::from_str(&text).map_err(|e| PyValueError::new_err(e.to_string()))
-}
+/// The conversion pair lives in the parent module. There used to be a
+/// copy here — and the two disagreed: the other one stringified arrays
+/// and objects.
+use crate::{json_to_py, py_any_to_json};
 
-fn json_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<PyObject> {
-    let json = py.import("json")?;
-    Ok(json.call_method1("loads", (value.to_string(),))?.unbind())
+fn py_to_json(_py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    py_any_to_json(obj)
 }
 
 /// Derive a JSON Schema from a Python signature.

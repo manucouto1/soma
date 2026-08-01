@@ -38,8 +38,70 @@ use somatize_runtime::tracking::{
     LocalTracker, RunReader, advance_head, load_manifest, resolve_parent, summarize,
 };
 
+// All four derive from `RuntimeError`, which is what every `SomaError`
+// used to become. Adding a more specific type should let a caller catch
+// less, not make an existing `except RuntimeError` stop catching.
+pyo3::create_exception!(
+    _soma,
+    SomaSuspended,
+    PyRuntimeError,
+    "A run stopped, waiting for something outside it.\n\n\
+     Not a failure. Carries `run_id`, `node_id`, `turn` and `reason`, \
+     which is what `Graph.resume(...)` needs to answer it."
+);
+pyo3::create_exception!(
+    _soma,
+    SomaPruned,
+    PyRuntimeError,
+    "A study trial was stopped early by a pruner."
+);
+pyo3::create_exception!(
+    _soma,
+    SomaSchemaMismatch,
+    PyRuntimeError,
+    "Two connected nodes disagree about what flows between them."
+);
+pyo3::create_exception!(
+    _soma,
+    SomaNodeNotFound,
+    PyRuntimeError,
+    "A plan named a node the catalog does not hold."
+);
+
+/// A `SomaError` as the Python exception that matches it.
+///
+/// Every variant used to become a flat `RuntimeError` carrying only its
+/// `Display` text, including the structured ones. `Suspended` is the case
+/// that mattered: it is not a failure, it is a pause, and answering it
+/// needs the run id, node id and turn — all of which were legible only by
+/// reading the message.
 fn soma_err_to_py(e: SomaError) -> PyErr {
-    PyRuntimeError::new_err(e.to_string())
+    let text = e.to_string();
+    match e {
+        SomaError::Suspended {
+            run_id,
+            node_id,
+            turn,
+            reason,
+        } => Python::with_gil(|py| {
+            let err = SomaSuspended::new_err(text);
+            let obj = err.value(py);
+            let _ = obj.setattr("run_id", run_id);
+            let _ = obj.setattr("node_id", node_id);
+            let _ = obj.setattr("turn", turn);
+            let _ = obj.setattr("kind", reason.kind());
+            if let Ok(json) = serde_json::to_value(&*reason)
+                && let Ok(py_reason) = json_to_py(py, &json)
+            {
+                let _ = obj.setattr("reason", py_reason);
+            }
+            err
+        }),
+        SomaError::Pruned { .. } => SomaPruned::new_err(text),
+        SomaError::SchemaMismatch { .. } => SomaSchemaMismatch::new_err(text),
+        SomaError::NodeNotFound(_) => SomaNodeNotFound::new_err(text),
+        _ => PyRuntimeError::new_err(text),
+    }
 }
 
 fn py_err_to_soma(e: PyErr) -> SomaError {
@@ -104,9 +166,8 @@ fn forward_with_cache(
     Ok(output)
 }
 
-/// Convert a JSON value into the closest Python object.
-/// Convert a Python object to a JSON value via the json module.
-fn py_any_to_json(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+/// A Python object as the JSON value it describes, via the `json` module.
+pub(crate) fn py_any_to_json(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     let py = obj.py();
     let json_mod = py.import("json")?;
     let text: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
@@ -114,32 +175,16 @@ fn py_any_to_json(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not JSON-serializable: {e}")))
 }
 
-fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyObject {
-    match v {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.into_pyobject(py).unwrap().into_any().unbind()
-            } else if let Some(f) = n.as_f64() {
-                f.into_pyobject(py).unwrap().into_any().unbind()
-            } else {
-                py.None()
-            }
-        }
-        serde_json::Value::String(s) => s.into_pyobject(py).unwrap().into_any().unbind(),
-        serde_json::Value::Bool(b) => (*b)
-            .into_pyobject(py)
-            .unwrap()
-            .to_owned()
-            .into_any()
-            .unbind(),
-        serde_json::Value::Null => py.None(),
-        other => other
-            .to_string()
-            .into_pyobject(py)
-            .unwrap()
-            .into_any()
-            .unbind(),
-    }
+/// A `serde_json::Value` as the Python object it describes.
+///
+/// Through `json.loads`, so a list arrives as a list and an object as a
+/// dict. The hand-written match this replaces ended in
+/// `other => other.to_string()`: every array and every object reached
+/// Python as the *string* of its JSON. A study whose search space held a
+/// list gave `"[1, 2, 3]"` back from `trial["params"]`.
+pub(crate) fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyObject> {
+    let json = py.import("json")?;
+    Ok(json.call_method1("loads", (v.to_string(),))?.unbind())
 }
 
 // ── Value conversion ──
@@ -783,7 +828,7 @@ impl PyTrial {
     fn params(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let dict = PyDict::new(py);
         for (k, v) in &self.params {
-            dict.set_item(k, json_to_py(py, v))?;
+            dict.set_item(k, json_to_py(py, v)?)?;
         }
         Ok(dict.unbind())
     }
@@ -806,10 +851,10 @@ impl PyTrial {
     }
 
     fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
-        self.params
-            .get(key)
-            .map(|v| json_to_py(py, v))
-            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))
+        match self.params.get(key) {
+            Some(v) => json_to_py(py, v),
+            None => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
     }
 
     fn __contains__(&self, key: &str) -> bool {
@@ -817,10 +862,10 @@ impl PyTrial {
     }
 
     #[pyo3(signature = (key, default=None))]
-    fn get(&self, py: Python<'_>, key: &str, default: Option<PyObject>) -> PyObject {
+    fn get(&self, py: Python<'_>, key: &str, default: Option<PyObject>) -> PyResult<PyObject> {
         match self.params.get(key) {
             Some(v) => json_to_py(py, v),
-            None => default.unwrap_or_else(|| py.None()),
+            None => Ok(default.unwrap_or_else(|| py.None())),
         }
     }
 
@@ -895,7 +940,7 @@ fn trial_to_py(py: Python<'_>, trial: &somatize_core::study::Trial) -> PyResult<
     dict.set_item("id", &trial.id)?;
     let params_dict = PyDict::new(py);
     for (k, v) in &trial.params {
-        params_dict.set_item(k, json_to_py(py, v))?;
+        params_dict.set_item(k, json_to_py(py, v)?)?;
     }
     dict.set_item("params", params_dict)?;
     dict.set_item(
@@ -3004,7 +3049,7 @@ impl PyGraph {
     /// - No workers → local execution
     /// - Workers + all nodes non-local → entire plan dispatched to worker
     /// - Workers + mixed (some local) → local execution with remote fallback
-    #[pyo3(signature = (x, stream=false, chunk_size=1024, seed=None))]
+    #[pyo3(signature = (x, stream=false, chunk_size=1024, seed=None, run_id=None))]
     fn forward(
         &self,
         py: Python<'_>,
@@ -3012,6 +3057,7 @@ impl PyGraph {
         stream: bool,
         chunk_size: usize,
         seed: Option<i64>,
+        run_id: Option<String>,
     ) -> PyResult<PyObject> {
         // A step has no fit phase — its behaviour comes from a model and a
         // prompt, not from learned state. A graph with nothing trainable in
@@ -3098,12 +3144,14 @@ impl PyGraph {
         .map_err(soma_err_to_py)?;
 
         let graph_info = GraphInfo::from_graph(&self.graph);
-        let mut ctx = Context::new(
-            self.event_bus.clone(),
-            somatize_core::util::timestamp_id("graph_forward"),
-        )
-        .with_graph_info(graph_info)
-        .with_seed(seed);
+        // A caller resuming a suspended run passes its id back. The
+        // journal keys an impure effect by `(run, node, turn, index)`, so
+        // a fresh id would replay nothing and the answer already recorded
+        // would never be found — which is why resuming did not work.
+        let run_id = run_id.unwrap_or_else(|| somatize_core::util::timestamp_id("graph_forward"));
+        let mut ctx = Context::new(self.event_bus.clone(), run_id)
+            .with_graph_info(graph_info)
+            .with_seed(seed);
 
         if let Some(driver) = self.step_runtime(py, &catalog)? {
             ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
@@ -3222,6 +3270,48 @@ impl PyGraph {
             }
         }
         Ok(dict.into_any().unbind())
+    }
+
+    /// Answer what a suspended run was waiting for.
+    ///
+    /// Every argument comes off the `SomaSuspended` exception that stopped
+    /// the run, `reason` included — it is part of the journal key, so the
+    /// answer has to be filed against the same pause the step described,
+    /// not one reconstructed from a guess.
+    ///
+    /// The answer lands at the exact site the step paused. Running the
+    /// graph again replays every prior effect from the record, reaches
+    /// that point, and finds it waiting. There is no checkpoint file: the
+    /// journal is the checkpoint.
+    ///
+    /// This existed in Rust and nowhere else, which meant nowhere at all —
+    /// the only entry point that runs steps is this one.
+    fn resume(
+        &mut self,
+        py: Python<'_>,
+        run_id: &str,
+        node_id: &str,
+        turn: usize,
+        reason: &Bound<'_, PyAny>,
+        answer: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let reason: somatize_core::effect::SuspendReason =
+            serde_json::from_value(py_any_to_json(reason)?).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "`reason` should be the one from the SomaSuspended exception: {e}"
+                ))
+            })?;
+
+        let catalog = self.rebuild_catalog(py)?;
+        let driver = self.step_runtime(py, &catalog)?.ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "this graph has no effectful nodes, so nothing in it can suspend",
+            )
+        })?;
+
+        driver
+            .resume_with(run_id, node_id, turn, &reason, py_to_value(py, answer)?)
+            .map_err(soma_err_to_py)
     }
 
     /// Compile the graph and return diagnostic information.
@@ -4817,6 +4907,13 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(graph_json_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(graph_json_to_svg, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_svg, m)?)?;
+    m.add("SomaSuspended", m.py().get_type::<SomaSuspended>())?;
+    m.add("SomaPruned", m.py().get_type::<SomaPruned>())?;
+    m.add(
+        "SomaSchemaMismatch",
+        m.py().get_type::<SomaSchemaMismatch>(),
+    )?;
+    m.add("SomaNodeNotFound", m.py().get_type::<SomaNodeNotFound>())?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
