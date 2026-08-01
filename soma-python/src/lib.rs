@@ -122,50 +122,6 @@ fn default_cache_dir() -> Option<std::path::PathBuf> {
         .map(|home| std::path::PathBuf::from(home).join(".soma").join("cache"))
 }
 
-/// Forward with output memoization: key = hash(config + state + input).
-/// An unhashable state or input means "uncacheable", not an error.
-#[allow(clippy::too_many_arguments)]
-fn forward_with_cache(
-    cache: &dyn somatize_core::cache::CacheStore,
-    filter: &dyn somatize_core::filter::Filter,
-    meta: &somatize_core::filter::FilterMeta,
-    input: &Value,
-    input_hash: Option<&somatize_core::cache::CacheKey>,
-    state: &Value,
-    origin: &somatize_core::cache::Origin,
-    seed: Option<i64>,
-) -> somatize_core::error::Result<Value> {
-    // Nondeterministic forwards are excluded: serving a recorded result
-    // would freeze what the user expects to vary. A seeded run may cache
-    // them: the seed is in the key, so results vary across seeds but are
-    // stable within one.
-    let out_key = if meta.cacheable && (meta.deterministic || seed.is_some()) {
-        input_hash.map(|input_hash| {
-            somatize_runtime::executor::salt_with_seed(
-                somatize_core::cache::CacheKey::for_output(
-                    &filter.config_hash(),
-                    &somatize_core::cache::CacheKey::for_value(state),
-                    input_hash,
-                ),
-                seed,
-            )
-        })
-    } else {
-        None
-    };
-    if let Some(key) = &out_key
-        && let Ok(Some(cached)) = cache.get(key)
-    {
-        return Ok(cached);
-    }
-    let start = std::time::Instant::now();
-    let output = filter.forward(input, state)?;
-    if let Some(key) = &out_key {
-        let _ = cache.put_computed(key, &output, origin, start.elapsed(), meta.deterministic);
-    }
-    Ok(output)
-}
-
 /// A Python object as the JSON value it describes, via the `json` module.
 pub(crate) fn py_any_to_json(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     let py = obj.py();
@@ -2599,163 +2555,77 @@ impl PyGraph {
             return Ok(());
         }
 
-        // Local fit
+        // Local fit.
+        //
+        // Through the compiler and the runner, like every other entry
+        // point. This used to be a topological loop written here, walking
+        // `graph.topological_sort()` and calling fit/forward node by node
+        // — so it ignored parallelism, loops and branches, and it was the
+        // only fit anywhere that salted its state keys with the seed. Now
+        // the runner salts, and the loop is gone.
         self.graph.validate().map_err(soma_err_to_py)?;
-        let sorted = self.graph.topological_sort().map_err(soma_err_to_py)?;
-        let graph_info = GraphInfo::from_graph(&self.graph);
+        let catalog = self.rebuild_catalog(py)?;
+        let compile_result = compile(
+            &self.graph,
+            &catalog,
+            CompileMode::NoCache,
+            Some(self.cache.as_ref()),
+        )
+        .map_err(soma_err_to_py)?;
+
         let run_id = somatize_core::util::timestamp_id("graph_fit");
-
-        let roots = self.graph.roots();
-        let mut outputs: std::collections::HashMap<String, Value> =
-            std::collections::HashMap::new();
-        for root_id in &roots {
-            outputs.insert(format!("__input_{root_id}"), x_val.clone());
-        }
-
         self.event_bus
             .emit(somatize_core::event::Event::RunStarted {
                 run_id: run_id.clone(),
-                plan_summary: somatize_core::event::PlanSummary {
-                    total_nodes: sorted.len(),
-                    cached_nodes: 0,
-                    parallel_branches: 0,
-                },
+                plan_summary: compile_result.plan.summary(),
             });
         let run_start = std::time::Instant::now();
-        let bus = self.event_bus.clone();
 
-        let fit_result: PyResult<()> = (|| {
-            for node_id in &sorted {
-                let filter = self.library.get(node_id).ok_or_else(|| {
-                    PyRuntimeError::new_err(format!("filter not found: {node_id}"))
-                })?;
+        let run_ctx = somatize_runtime::runner::RunContext::new(
+            &catalog,
+            self.cache.as_ref(),
+            &self.event_bus,
+            &run_id,
+            GraphInfo::from_graph(&self.graph),
+        )
+        .with_seed(seed);
 
+        // Release the GIL: a Parallel plan runs branches on scoped threads
+        // whose Python filters must acquire it.
+        let result = py.allow_threads(|| {
+            LocalRunner.fit(&compile_result.plan, &run_ctx, &x_val, y_val.as_ref())
+        });
+
+        let (_output, states) = match result {
+            Ok(out) => {
                 self.event_bus
-                    .emit(somatize_core::event::Event::NodeStarted {
-                        run_id: run_id.clone(),
-                        node_id: node_id.to_string(),
-                        kind: filter.meta().kind,
-                        effectful: false,
+                    .emit(somatize_core::event::Event::RunCompleted {
+                        run_id,
+                        duration: run_start.elapsed(),
                     });
-
-                let preds = graph_info.predecessors(node_id);
-                let input = match preds.len() {
-                    0 => x_val.clone(),
-                    1 => outputs
-                        .get(&preds[0])
-                        .cloned()
-                        .unwrap_or_else(|| x_val.clone()),
-                    _ => {
-                        let mut merged = serde_json::Map::new();
-                        for pred_id in preds {
-                            if let Some(val) = outputs.get(pred_id.as_str()) {
-                                let json_val = val.to_plain_json();
-                                merged.insert(pred_id.clone(), json_val);
-                            }
-                        }
-                        Value::json(serde_json::Value::Object(merged))
-                    }
-                };
-
-                let meta = filter.meta();
-                let start = std::time::Instant::now();
-
-                let origin = somatize_core::cache::Origin::Computed {
-                    node_id: node_id.to_string(),
-                    run_id: run_id.clone(),
-                };
-                let input_hash = Some(somatize_core::cache::CacheKey::for_value(&input));
-
-                let output = if meta.kind == somatize_core::filter::FilterKind::Trainable {
-                    // Labels are part of the state key: the same features
-                    // trained against different labels must not collide.
-                    let y_hash = y_val
-                        .as_ref()
-                        .map(somatize_core::cache::CacheKey::for_value);
-                    let state_key = input_hash.as_ref().map(|x_hash| {
-                        somatize_runtime::executor::salt_with_seed(
-                            somatize_core::cache::CacheKey::for_state(
-                                &filter.config_hash(),
-                                x_hash,
-                                y_hash.as_ref(),
-                            ),
-                            seed,
-                        )
-                    });
-
-                    let cached_state = state_key
-                        .as_ref()
-                        .and_then(|key| self.cache.get(key).ok().flatten());
-                    let state = if let Some(cached) = cached_state {
-                        cached
-                    } else {
-                        let fit_start = std::time::Instant::now();
-                        let s = filter.fit(&input, y_val.as_ref()).map_err(soma_err_to_py)?;
-                        if let Some(key) = &state_key {
-                            let _ = self.cache.put_computed(
-                                key,
-                                &s,
-                                &origin,
-                                fit_start.elapsed(),
-                                true,
-                            );
-                        }
-                        s
-                    };
-
-                    let out = forward_with_cache(
-                        self.cache.as_ref(),
-                        filter.as_ref(),
-                        &meta,
-                        &input,
-                        input_hash.as_ref(),
-                        &state,
-                        &origin,
-                        seed,
-                    )
-                    .map_err(soma_err_to_py)?;
-                    self.library
-                        .try_set_state(node_id.to_string(), state)
-                        .map_err(soma_err_to_py)?;
-                    out
-                } else {
-                    forward_with_cache(
-                        self.cache.as_ref(),
-                        filter.as_ref(),
-                        &meta,
-                        &input,
-                        input_hash.as_ref(),
-                        &Value::Empty,
-                        &origin,
-                        seed,
-                    )
-                    .map_err(soma_err_to_py)?
-                };
-
-                self.event_bus
-                    .emit(somatize_core::event::Event::NodeCompleted {
-                        run_id: run_id.clone(),
-                        node_id: node_id.to_string(),
-                        duration: start.elapsed(),
-                        output_summary: format!("{output}"),
-                    });
-
-                outputs.insert(node_id.to_string(), output);
+                out
             }
-            Ok(())
-        })();
-
-        match &fit_result {
-            Ok(()) => bus.emit(somatize_core::event::Event::RunCompleted {
-                run_id,
-                duration: run_start.elapsed(),
-            }),
-            Err(e) => bus.emit(somatize_core::event::Event::RunFailed {
-                run_id,
-                error: e.to_string(),
-            }),
+            Err(e) => {
+                self.event_bus.emit(somatize_core::event::Event::RunFailed {
+                    run_id,
+                    error: e.to_string(),
+                });
+                return Err(soma_err_to_py(e));
+            }
         };
-        fit_result?;
+
+        // Only the `__state_` keys. The map also holds each node's
+        // *output* under its bare id, so stripping a prefix that is not
+        // there stores an output as a state — and which one wins depends
+        // on `HashMap` order, so a scaler ends up with no learned mean
+        // roughly half the time.
+        for (key, state) in states {
+            if let Some(node_id) = key.strip_prefix("__state_") {
+                self.library
+                    .try_set_state(node_id, state)
+                    .map_err(soma_err_to_py)?;
+            }
+        }
 
         self.fitted = true;
         Ok(())

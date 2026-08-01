@@ -164,10 +164,13 @@ impl Runner for LocalRunner {
             let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
                 // Labels are part of the key: the same features trained
                 // against different labels must not collide.
-                let state_key = Some(CacheKey::for_state(
-                    &filter.config_hash(),
-                    &CacheKey::for_value(&node_input),
-                    y.map(CacheKey::for_value).as_ref(),
+                let state_key = Some(crate::executor::salt_with_seed(
+                    CacheKey::for_state(
+                        &filter.config_hash(),
+                        &CacheKey::for_value(&node_input),
+                        y.map(CacheKey::for_value).as_ref(),
+                    ),
+                    ctx.seed,
                 ));
 
                 let cached_state = match &state_key {

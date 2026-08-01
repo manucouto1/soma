@@ -38,6 +38,12 @@ pub struct RunContext<'a> {
     /// group a run's events.
     pub run_id: &'a str,
     pub graph_info: GraphInfo,
+    /// The run's experiment seed, folded into every cache key.
+    ///
+    /// Without it two seeds share a state cache line, so the second one
+    /// trains on the first one's recorded state and the sweep measures
+    /// one seed N times. Only the Python fit path used to salt.
+    pub seed: Option<i64>,
 }
 
 impl<'a> RunContext<'a> {
@@ -54,7 +60,14 @@ impl<'a> RunContext<'a> {
             events,
             run_id,
             graph_info,
+            seed: None,
         }
+    }
+
+    /// Fold this run's seed into the cache keys.
+    pub fn with_seed(mut self, seed: Option<i64>) -> Self {
+        self.seed = seed;
+        self
     }
 
     /// For a caller that has only a plan: treat it as a chain.
