@@ -36,12 +36,19 @@ pub struct LocalRunner;
 
 impl LocalRunner {
     /// Fit a Sequence plan, handling Composite steps as blocks.
+    ///
+    /// `outputs` is the run's single store, threaded through every step.
+    /// It used to be one map per recursive call, so a node whose
+    /// predecessors ran in an earlier step of the sequence — anything
+    /// downstream of a fan-out — looked them up in an empty map and was
+    /// fitted on `{}`.
     fn fit_sequence(
         &self,
         steps: &[ExecutionPlan],
         ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
+        outputs: &mut HashMap<String, Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
         let filters = ctx.catalog;
         let mut current_input = input.clone();
@@ -59,6 +66,7 @@ impl LocalRunner {
                 }
                 if let Some(last_id) = node_ids.last() {
                     all_outputs.insert(last_id.clone(), output.clone());
+                    outputs.insert(last_id.clone(), output.clone());
                 }
                 current_input = output;
                 true
@@ -67,7 +75,7 @@ impl LocalRunner {
             };
 
             if !handled {
-                let sub_result = <Self as Runner>::fit(self, step, ctx, &current_input, y)?;
+                let sub_result = self.fit_into(step, ctx, &current_input, y, outputs)?;
                 current_input = sub_result.0;
                 all_outputs.extend(sub_result.1);
             }
@@ -75,15 +83,16 @@ impl LocalRunner {
 
         Ok((current_input, all_outputs))
     }
-}
 
-impl Runner for LocalRunner {
-    fn fit(
+    /// Fit `plan`, reading predecessors from — and writing results into —
+    /// the run's shared output store.
+    fn fit_into(
         &self,
         plan: &ExecutionPlan,
         ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
+        outputs: &mut HashMap<String, Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
         let filters = ctx.catalog;
         let cache = ctx.cache;
@@ -101,14 +110,13 @@ impl Runner for LocalRunner {
 
         // Handle Sequence that may contain Composite steps
         if let ExecutionPlan::Sequence(steps) = plan {
-            return self.fit_sequence(steps, ctx, input, y);
+            return self.fit_sequence(steps, ctx, input, y, outputs);
         }
 
         // Single node or other plan types: sequential fit
         let node_id_refs = plan.node_ids();
         let node_ids: Vec<String> = node_id_refs.iter().map(|s| s.to_string()).collect();
         let graph_info = &ctx.graph_info;
-        let mut outputs: HashMap<String, Value> = HashMap::new();
         let mut trained_states: HashMap<String, Value> = HashMap::new();
 
         if let Some(first) = node_ids.first() {
@@ -251,10 +259,35 @@ impl Runner for LocalRunner {
 
         // Forward outputs keyed by node_id (for GraphSession inspection).
         // Trained states added with __state_ prefix (for Worker to extract).
+        let mut produced: HashMap<String, Value> = HashMap::new();
+        for id in &node_ids {
+            if let Some(v) = outputs.get(id) {
+                produced.insert(id.clone(), v.clone());
+            }
+        }
         for (id, state) in &trained_states {
+            produced.insert(format!("__state_{id}"), state.clone());
             outputs.insert(format!("__state_{id}"), state.clone());
         }
-        Ok((last_output, outputs))
+        Ok((last_output, produced))
+    }
+}
+
+impl Runner for LocalRunner {
+    fn fit(
+        &self,
+        plan: &ExecutionPlan,
+        ctx: &RunContext<'_>,
+        input: &Value,
+        y: Option<&Value>,
+    ) -> Result<(Value, HashMap<String, Value>)> {
+        // One store for the whole run. Every node reads its predecessors
+        // out of this, so a fan-in sees both of them.
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        if let Some(first) = plan.node_ids().first() {
+            outputs.insert(format!("__input_{first}"), input.clone());
+        }
+        self.fit_into(plan, ctx, input, y, &mut outputs)
     }
 
     fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {

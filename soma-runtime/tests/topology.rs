@@ -79,3 +79,90 @@ fn a_diamond_reaches_both_branches() {
         "`d` must see the branch through `c`: {text}"
     );
 }
+
+/// A trainable node behind a fan-out is fitted on what its predecessors
+/// produced.
+///
+/// `forward` on this shape has a test; `fit` did not, and it was broken —
+/// twice over, in opposite directions. `LocalRunner::fit` builds an
+/// output store, and `fit_sequence` used to hand each step of a sequence
+/// a *fresh* one. So `sink`, running in a later step than the parallel
+/// pair that feeds it, looked its predecessors up in an empty map and was
+/// fitted on `{}`.
+///
+/// Before the runner was given the real topology it was wrong the other
+/// way: `GraphInfo::for_linear` said `sink` had one predecessor, and the
+/// one-predecessor arm falls back to the threaded input, so the fit saw
+/// whichever branch happened to be last in plan order.
+#[test]
+fn a_fan_in_is_fitted_on_both_branches() {
+    use somatize_core::error::Result as SomaResult;
+    use std::sync::{Arc, Mutex};
+
+    /// Records what it was asked to fit on.
+    struct Recorder(Arc<Mutex<Option<Value>>>);
+
+    impl Filter for Recorder {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Recorder"])
+        }
+        fn fit(&self, x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
+            *self.0.lock().unwrap() = Some(x.clone());
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _s: &Value) -> SomaResult<Value> {
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "Recorder".into(),
+                kind: FilterKind::Trainable,
+                cacheable: false,
+                differentiable: false,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(None));
+
+    let mut g = Graph::new();
+    for id in ["src", "left", "right"] {
+        g.add_node(Node::filter_with_id(id, id));
+    }
+    g.add_node(Node::filter_with_id("sink", "sink"));
+    g.add_edge(Edge::data("e1", "src", "left"));
+    g.add_edge(Edge::data("e2", "src", "right"));
+    g.add_edge(Edge::data("e3", "left", "sink"));
+    g.add_edge(Edge::data("e4", "right", "sink"));
+
+    let mut lib = NodeCatalog::new();
+    for id in ["src", "left", "right"] {
+        lib.register(id, Box::new(Echo(id.to_string())));
+    }
+    lib.register("sink", Box::new(Recorder(seen.clone())));
+
+    let mut session = GraphSession::new(g, lib);
+    session.fit(&Value::text("X"), None).unwrap();
+
+    let fitted = seen
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("sink should have been fitted");
+    let json = fitted
+        .as_json()
+        .unwrap_or_else(|| panic!("a fan-in should be fitted on a map, got {fitted:?}"));
+    let obj = json
+        .as_object()
+        .expect("a JSON object keyed by predecessor");
+
+    assert!(
+        obj.contains_key("left") && obj.contains_key("right"),
+        "the fit must see both branches, got {obj:?}"
+    );
+}
