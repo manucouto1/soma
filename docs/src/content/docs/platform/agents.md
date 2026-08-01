@@ -32,8 +32,8 @@ let agent = ResearchStep::new("ollama/qwen2.5", "beat 0.8 held-out F1", pipeline
     .with_history(kb.all()?)        // start from what is already known
     .with_max_iterations(10);
 
-let mut steps = StepLibrary::new();
-steps.register("researcher", Box::new(agent));
+let mut catalog = NodeCatalog::new();
+catalog.register_step("researcher", Box::new(agent));
 ```
 
 The driver needs two handlers: one that serves `Effect::Llm` (from

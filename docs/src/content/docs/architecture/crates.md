@@ -107,7 +107,7 @@ Executes plans. This is where computation happens.
 | `graph_session.rs` | `GraphSession` — the primary orchestrator (graph + library + cache + events) |
 | `executor.rs` | Tree-walk plan executor, and the per-node runtime cache resolution |
 | `forward.rs` | Forward-pass helpers shared by the executors |
-| `filter_library.rs` | Unified registry: filters, their states, and the compiler's `FilterRegistry` |
+| `node_catalog.rs` | `NodeCatalog` — every node (filter or step), their states, and the compiler's `NodeRegistry` |
 | `event_bus.rs` | Async broadcast of `Event` to subscribers, plus lossless sinks |
 | `cache/fs_store.rs` | `FsActionStore` — action records + BLAKE3 content-addressed blobs |
 | `cache/gc.rs` | Value-density eviction down to a size budget (`soma cache gc`) |

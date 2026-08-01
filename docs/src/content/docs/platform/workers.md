@@ -55,7 +55,7 @@ pub struct Worker {
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
-    filters: FilterLibrary,
+    filters: NodeCatalog,
     /// Optional persistent DataStore (S3, Zarr, …), configured by the user.
     data_store: Option<Arc<dyn DataStore>>,
     /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.

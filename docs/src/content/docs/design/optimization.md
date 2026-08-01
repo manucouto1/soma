@@ -149,7 +149,7 @@ pub trait Searchable {
 Aggregation happens **Python-side**, not in `soma-core`: a Rust `Node`
 stores only the filter *name* (`NodeKind::Filter { filter_name }`) —
 live filter instances exist in Python (`graph.filters()`) or in the
-runtime's `FilterLibrary`, so the core graph cannot reach their search
+runtime's `NodeCatalog`, so the core graph cannot reach their search
 spaces. `graph.search_space()` (installed by `soma/_study.py`) collects
 every filter's `search()` descriptors and prefixes dimension names with
 the node id to avoid collisions; `graph.apply_params()` writes a
@@ -170,7 +170,7 @@ study = g.study("tune", strategy="grid", n_trials=4,
 ```
 
 (Rust-side, `SearchSpace::merge_with_prefix` exists for the same
-purpose once `FilterLibrary`-level aggregation lands; the `Searchable`
+purpose once `NodeCatalog`-level aggregation lands; the `Searchable`
 trait below is derived today but not yet invoked by any runner.)
 
 ## Search Strategies
