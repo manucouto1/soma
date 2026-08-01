@@ -10,7 +10,7 @@ import pytest
 
 import soma
 
-from test_agentic import MockProvider, providers_file, says  # noqa: F401
+from conftest import MockProvider, says  # noqa: F401
 
 
 class Scale(soma.Filter):

@@ -12,7 +12,7 @@ import pytest
 import soma
 from soma.agentic import debate, parallel_vote, refine, route
 
-from test_agentic import MockProvider, providers_file, says  # noqa: F401
+from conftest import MockProvider, says  # noqa: F401
 
 
 class Echo(soma.Filter):

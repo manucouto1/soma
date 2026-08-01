@@ -6,106 +6,11 @@ localhost, so nothing here needs a key or a network.
 """
 
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
 import soma
-
-
-# ── A mock OpenAI-compatible endpoint ──
-
-
-class _Scripted(BaseHTTPRequestHandler):
-    """Answers with the next scripted body, recording what it was sent."""
-
-    def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's naming
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length) or b"{}")
-        self.server.received.append(body)
-
-        script = self.server.script
-        reply = script[min(len(self.server.received) - 1, len(script) - 1)]
-        payload = json.dumps(reply).encode()
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def log_message(self, *_args):
-        pass  # keep pytest output clean
-
-
-class MockProvider:
-    """A scripted chat-completions endpoint, as a context manager."""
-
-    def __init__(self, script):
-        self.server = HTTPServer(("127.0.0.1", 0), _Scripted)
-        self.server.script = script
-        self.server.received = []
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-
-    def __enter__(self):
-        self.thread.start()
-        return self
-
-    def __exit__(self, *_exc):
-        self.server.shutdown()
-        self.server.server_close()
-
-    @property
-    def base_url(self):
-        return f"http://127.0.0.1:{self.server.server_port}/v1"
-
-    @property
-    def received(self):
-        return self.server.received
-
-
-def says(text):
-    return {
-        "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 3},
-    }
-
-
-def wants_tool(name, arguments):
-    return {
-        "choices": [
-            {
-                "message": {
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {"name": name, "arguments": json.dumps(arguments)},
-                        }
-                    ],
-                },
-                "finish_reason": "tool_calls",
-            }
-        ],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 3},
-    }
-
-
-@pytest.fixture
-def providers_file(tmp_path, monkeypatch):
-    """Point Soma's provider catalog at a throwaway file."""
-
-    def _write(base_url):
-        path = tmp_path / "providers.toml"
-        path.write_text(
-            f'[providers.mock]\nbase_url = "{base_url}"\nauth = {{ type = "none" }}\n'
-        )
-        monkeypatch.setenv("SOMA_PROVIDERS", str(path))
-        monkeypatch.setenv("SOMA_CACHE_DIR", str(tmp_path / "cache"))
-
-    return _write
+from conftest import MockProvider, Reply, says, wants_tool  # noqa: F401
 
 
 # ── Tools ──
