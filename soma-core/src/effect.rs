@@ -181,6 +181,26 @@ impl LlmRequest {
 
 pub use crate::tool::ToolSpec;
 
+/// Performs one kind of effect.
+///
+/// Handlers are tried in order; the first that claims an effect wins.
+///
+/// Lives here rather than beside the driver that runs them, so a crate can
+/// implement a handler without depending on the execution engine —
+/// `soma-llm` is one, and what it needs is a provider client, not a
+/// scheduler.
+pub trait EffectHandler: Send + Sync {
+    /// Will this handler take that effect?
+    fn handles(&self, effect: &Effect) -> bool;
+
+    /// Perform it. Blocking.
+    ///
+    /// A transport failure should come back as [`EffectResult::Failed`],
+    /// not `Err` — the step decides whether to retry, fall back, or stop.
+    /// Reserve `Err` for conditions the step cannot act on.
+    fn perform(&self, effect: &Effect) -> crate::error::Result<EffectResult>;
+}
+
 /// What came back from performing an effect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]

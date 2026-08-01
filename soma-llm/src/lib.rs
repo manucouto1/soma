@@ -40,9 +40,9 @@ pub use openai_compat::OpenAiCompatible;
 pub use steps::{JudgeStep, LlmStep, ReactStep, Verdict};
 pub use tools::{FnTool, Tool, ToolOutcome, Toolbox};
 
+use somatize_core::effect::EffectHandler;
 use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse};
 use somatize_core::error::{Result, SomaError};
-use somatize_runtime::effects::EffectHandler;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

@@ -54,22 +54,7 @@ fn suspend_label(reason: &somatize_core::effect::SuspendReason) -> &'static str 
     }
 }
 
-/// Performs one kind of effect.
-///
-/// Handlers are tried in order; the first that claims an effect wins. The
-/// LLM handler lives in `soma-llm` so that core and runtime stay free of
-/// network dependencies.
-pub trait EffectHandler: Send + Sync {
-    /// Will this handler take that effect?
-    fn handles(&self, effect: &Effect) -> bool;
-
-    /// Perform it. Blocking.
-    ///
-    /// A transport failure should come back as [`EffectResult::Failed`],
-    /// not `Err` — the step decides whether to retry, fall back, or stop.
-    /// Reserve `Err` for conditions the step cannot act on.
-    fn perform(&self, effect: &Effect) -> Result<EffectResult>;
-}
+pub use somatize_core::effect::EffectHandler;
 
 /// How a step finished.
 #[derive(Debug)]
