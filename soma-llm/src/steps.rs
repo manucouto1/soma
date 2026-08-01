@@ -27,6 +27,7 @@ use somatize_core::value::Value;
 /// Input may be a bare prompt or a whole conversation — see
 /// [`Messages::from_value`]. Output is the conversation, so a downstream
 /// node sees the reasoning and not only the conclusion.
+#[derive(Clone)]
 pub struct ReactStep {
     model: String,
     system: Option<String>,
@@ -141,13 +142,33 @@ impl Step for ReactStep {
     fn config_hash(&self) -> CacheKey {
         // Everything that changes what this step would do. Tools included:
         // the same prompt with a different toolset is a different node.
+        //
+        // *Everything*, and the list is checked by a test. This hash is
+        // part of every journal key the step writes, so a field left out
+        // means two differently-configured steps replaying each other's
+        // answers. `schema` and `max_tokens` change the request itself;
+        // `text_only` changes the output type; `max_turns` and
+        // `max_repairs` change when it stops.
         let tools = serde_json::to_vec(&self.tools).unwrap_or_default();
+        let schema = self
+            .schema
+            .as_ref()
+            .map(|s| serde_json::to_vec(s).unwrap_or_default())
+            .unwrap_or_default();
+        // `None` is the empty part, `Some(n)` its four bytes. Parts are
+        // length-prefixed, so unset and `Some(0)` stay distinct.
+        let max_tokens = self.max_tokens.map(u32::to_le_bytes);
         CacheKey::from_parts(&[
             b"ReactStep",
             self.model.as_bytes(),
             self.system.as_deref().unwrap_or("").as_bytes(),
             &tools,
             self.effort.as_deref().unwrap_or("").as_bytes(),
+            &self.max_turns.to_le_bytes(),
+            max_tokens.as_ref().map(|b| &b[..]).unwrap_or(&[]),
+            &[u8::from(self.text_only)],
+            &schema,
+            &self.max_repairs.to_le_bytes(),
         ])
     }
 
@@ -677,6 +698,70 @@ fn extract_json(text: &str) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
     use somatize_core::effect::{LlmResponse, Usage};
+
+    /// `config_hash` is part of every journal key this step writes, so a
+    /// field it does not cover is two differently-configured steps sharing
+    /// a key and replaying each other's answers. It used to cover four of
+    /// the nine, missing `max_turns`, `max_tokens`, `text_only`, `schema`
+    /// and `max_repairs` — `schema` changes the request that gets sent.
+    ///
+    /// Adding a field to `ReactStep` without adding it here should fail
+    /// this test. It cannot check that automatically, so it enumerates:
+    /// keep the list in step with the struct.
+    #[test]
+    fn config_hash_covers_every_field() {
+        let base = ReactStep::new("m");
+        let variants: Vec<(&str, ReactStep)> = vec![
+            ("model", ReactStep::new("other")),
+            ("system", base.clone().with_system("be brief")),
+            (
+                "tools",
+                base.clone().with_tools(vec![ToolSpec::new(
+                    "t",
+                    "does a thing",
+                    serde_json::json!({}),
+                )]),
+            ),
+            ("max_turns", base.clone().with_max_turns(99)),
+            ("max_tokens", base.clone().with_max_tokens(7)),
+            ("effort", base.clone().with_effort("high")),
+            ("text_only", base.clone().text_only()),
+            (
+                "schema",
+                base.clone()
+                    .with_schema(serde_json::json!({"type": "object"})),
+            ),
+            ("max_repairs", base.clone().with_repairs(4)),
+        ];
+
+        for (field, variant) in &variants {
+            assert_ne!(
+                base.config_hash(),
+                variant.config_hash(),
+                "changing `{field}` must change the config hash"
+            );
+        }
+
+        // And distinct from each other, not merely from the base.
+        for (i, (fa, a)) in variants.iter().enumerate() {
+            for (fb, b) in &variants[i + 1..] {
+                assert_ne!(
+                    a.config_hash(),
+                    b.config_hash(),
+                    "`{fa}` and `{fb}` must not collide"
+                );
+            }
+        }
+    }
+
+    /// `None` and `Some(0)` are different configurations.
+    #[test]
+    fn config_hash_separates_unset_from_zero() {
+        assert_ne!(
+            ReactStep::new("m").config_hash(),
+            ReactStep::new("m").with_max_tokens(0).config_hash()
+        );
+    }
 
     fn reply(message: Message, stop: StopReason) -> EffectResult {
         EffectResult::Llm(LlmResponse {
