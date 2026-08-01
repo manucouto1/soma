@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use somatize_core::error::{Result, SomaError};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 /// How a provider wants credentials presented.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +118,105 @@ impl Default for Quirks {
     }
 }
 
+/// How hard to try when an endpoint pushes back.
+///
+/// Policy, not mechanism — it lives here with the rest of the provider data
+/// so a rate-limited endpoint is tuned in `providers.toml` without a
+/// rebuild. A local Ollama wants almost none of this; a free-tier hosted
+/// endpoint wants all of it.
+///
+/// ```toml
+/// [providers.nvidia.retry]
+/// max_attempts = 6
+/// budget_secs = 900
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetryPolicy {
+    /// Total tries, not retries: 1 means never retry.
+    pub max_attempts: u32,
+
+    /// First backoff, doubling from there.
+    pub base_ms: u64,
+
+    /// Ceiling on a single wait. A `Retry-After` longer than this is
+    /// honoured up to here and no further — an endpoint asking for an hour
+    /// is telling you to come back later, not to block a thread.
+    pub max_ms: u64,
+
+    /// Wall clock across every attempt, checked *before* starting another
+    /// one. The last attempt can still overshoot by up to `timeout_secs`,
+    /// which is the honest bound: this budget decides whether to try again,
+    /// it cannot interrupt a request already in flight.
+    pub budget_secs: u64,
+
+    /// Spread concurrent retries out. On by default, and off in tests —
+    /// a study firing twenty trials at once would otherwise synchronise
+    /// their retries into the same thundering wave that caused the 429.
+    pub jitter: bool,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 4,
+            base_ms: 500,
+            max_ms: 30_000,
+            budget_secs: 600,
+            jitter: true,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Never retry. For a caller that wants to see the first failure.
+    pub fn none() -> Self {
+        Self {
+            max_attempts: 1,
+            ..Self::default()
+        }
+    }
+
+    /// How long to wait before attempt `attempt` (0-based), given what the
+    /// endpoint asked for, if anything.
+    ///
+    /// A `Retry-After` is an instruction and wins outright: the endpoint
+    /// knows when its window resets and guessing shorter just burns another
+    /// rejection.
+    pub fn backoff(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
+        if let Some(asked) = retry_after {
+            return asked.min(Duration::from_millis(self.max_ms));
+        }
+        let exponential = self
+            .base_ms
+            .saturating_mul(1u64 << attempt.min(20))
+            .min(self.max_ms);
+        Duration::from_millis(if self.jitter {
+            // Full jitter: uniform in [0, exponential]. Cheaper and better
+            // behaved under load than jittering around the midpoint.
+            jitter_below(exponential)
+        } else {
+            exponential
+        })
+    }
+}
+
+/// A pseudo-random value in `[0, ceiling]`, from the clock.
+///
+/// Deliberately not a real RNG: spreading retries needs unpredictability
+/// between processes, not statistical quality, and it is not worth a
+/// dependency.
+fn jitter_below(ceiling: u64) -> u64 {
+    if ceiling == 0 {
+        return 0;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos % (ceiling + 1)
+}
+
 /// Everything needed to talk to one endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -148,6 +248,10 @@ pub struct ProviderConfig {
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
 
+    /// What to do when this endpoint pushes back.
+    #[serde(default)]
+    pub retry: RetryPolicy,
+
     /// Human-readable note, surfaced in listings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -171,8 +275,32 @@ impl ProviderConfig {
             headers: BTreeMap::new(),
             quirks: Quirks::default(),
             timeout_secs: default_timeout(),
+            retry: RetryPolicy::default(),
             note: None,
         }
+    }
+
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    /// Complain about a configuration that cannot mean what it says.
+    ///
+    /// A retry budget shorter than one request's timeout promises retries
+    /// that can never happen. Warn rather than correct: silently rewriting
+    /// somebody's TOML is worse than telling them it is wrong.
+    pub fn warnings(&self, id: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.retry.max_attempts > 1 && self.retry.budget_secs < self.timeout_secs {
+            out.push(format!(
+                "provider `{id}`: retry.budget_secs ({}) is below timeout_secs ({}), so a \
+                 request that times out leaves no budget to retry. Raise the budget to at \
+                 least the timeout.",
+                self.retry.budget_secs, self.timeout_secs
+            ));
+        }
+        out
     }
 
     /// A hosted endpoint reading its key from `env`.
@@ -329,7 +457,21 @@ impl Catalog {
             ))
         })?;
         catalog.providers.extend(extra.providers);
+        // Overridden settings can contradict each other; say so at load,
+        // when the file is in front of the reader, rather than at the point
+        // some retry silently never happens.
+        for warning in catalog.warnings() {
+            tracing::warn!("{warning}");
+        }
         Ok(catalog)
+    }
+
+    /// Configurations that cannot mean what they say, across every provider.
+    pub fn warnings(&self) -> Vec<String> {
+        self.providers
+            .iter()
+            .flat_map(|(id, config)| config.warnings(id))
+            .collect()
     }
 
     /// Built-ins plus `$SOMA_PROVIDERS`, else `~/.soma/providers.toml`.

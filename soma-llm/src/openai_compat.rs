@@ -10,13 +10,176 @@
 //! and back. That translation is the only place provider shape leaks, and
 //! keeping it in one file is the point.
 
-use crate::catalog::ProviderConfig;
+use crate::catalog::{ProviderConfig, RetryPolicy};
 use crate::{LlmProvider, ModelInfo};
 use serde::{Deserialize, Serialize};
 use somatize_core::effect::{LlmRequest, LlmResponse, StopReason, ToolSpec, Usage};
 use somatize_core::error::{Result, SomaError};
 use somatize_core::message::{ContentBlock, Message, Role};
 use std::time::Duration;
+
+// ── Pushback ──
+//
+// Retrying belongs here, in the transport, not in the step that asked for
+// the completion. A 429 is not a decision about the work: the step has no
+// information the client lacks, and by the time a `Failed` reaches it the
+// only honest reading is "this will not get better by asking again" — which
+// is exactly what `ReactStep` already assumes when it stops.
+
+/// What an endpoint's refusal means for trying again.
+enum Pushback {
+    /// Worth another attempt, after the delay the endpoint asked for (if it
+    /// bothered to say).
+    Retryable(Option<Duration>),
+    /// Asking again will produce the same answer. A 401 does not improve
+    /// with patience.
+    Fatal,
+}
+
+/// Read a refusal. Anything not listed is fatal — the safe direction, since
+/// retrying a 400 wastes four round trips to reach the same error.
+fn classify(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> Pushback {
+    let retryable = matches!(status.as_u16(), 408 | 425 | 429 | 500 | 502 | 503 | 504);
+    if retryable {
+        Pushback::Retryable(retry_after(headers))
+    } else {
+        Pushback::Fatal
+    }
+}
+
+/// `Retry-After`, in either form the RFC allows: delta-seconds, or an HTTP
+/// date. Endpoints use both, so reading only the first would silently ignore
+/// half of them and hammer straight back.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+
+    if let Ok(seconds) = raw.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+
+    let when = httpdate_to_unix(raw.trim())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(Duration::from_secs(when.saturating_sub(now)))
+}
+
+/// Seconds since the epoch for an IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`).
+///
+/// The only format RFC 9110 requires a sender to produce, so parsing it by
+/// hand is a dozen lines rather than a dependency.
+fn httpdate_to_unix(text: &str) -> Option<u64> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    let day: u64 = parts[1].parse().ok()?;
+    let month = match parts[2] {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let year: u64 = parts[3].parse().ok()?;
+    let clock: Vec<&str> = parts[4].split(':').collect();
+    if clock.len() != 3 {
+        return None;
+    }
+    let (h, m, s): (u64, u64, u64) = (
+        clock[0].parse().ok()?,
+        clock[1].parse().ok()?,
+        clock[2].parse().ok()?,
+    );
+
+    // Days from the epoch to the start of `year`, then to the start of
+    // `month`. Civil-from-days, the usual closed form.
+    let (y, mth) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * mth + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe;
+    // 719_468 shifts the 0000-03-01 epoch this form uses to 1970-01-01.
+    Some((days - 719_468) * 86_400 + h * 3600 + m * 60 + s)
+}
+
+/// Run `attempt` until it succeeds, gives up, or runs out of budget.
+///
+/// `attempt` returns `Ok(value)` on success, or `Err((pushback, error))`.
+fn retrying<T>(
+    policy: &RetryPolicy,
+    provider: &str,
+    what: &str,
+    mut attempt: impl FnMut() -> std::result::Result<T, (Pushback, SomaError)>,
+) -> Result<T> {
+    let started = std::time::Instant::now();
+    let mut first: Option<String> = None;
+    let mut last: Option<SomaError> = None;
+
+    for tries in 0..policy.max_attempts.max(1) {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err((Pushback::Fatal, e)) => return Err(e),
+            Err((Pushback::Retryable(asked), e)) => {
+                first.get_or_insert_with(|| e.to_string());
+                last = Some(e);
+                let is_last = tries + 1 >= policy.max_attempts.max(1);
+                let wait = policy.backoff(tries, asked);
+                let spent = started.elapsed();
+                // Checked before sleeping, not after: a wait that would
+                // overrun the budget is a wait nobody wants to sit through.
+                let would_overrun = spent + wait >= Duration::from_secs(policy.budget_secs);
+
+                if is_last || would_overrun {
+                    break;
+                }
+                tracing::warn!(
+                    provider,
+                    what,
+                    attempt = tries + 1,
+                    wait_ms = wait.as_millis() as u64,
+                    error = %last.as_ref().map(|e| e.to_string()).unwrap_or_default(),
+                    "retrying after pushback"
+                );
+                std::thread::sleep(wait);
+            }
+        }
+    }
+
+    // The count matters in the message: "failed after 4 attempts" is a
+    // configuration problem, "failed" is a mystery.
+    let last = last
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| "no error recorded".into());
+
+    // When the attempts failed differently, the first one is usually the
+    // diagnosis and the rest are consequences — an endpoint that answers
+    // with an HTML error page and then stops answering at all has told you
+    // two things, and only reporting the second loses the useful one.
+    let context = match &first {
+        Some(f) if *f != last => format!(" (first attempt: {f})"),
+        _ => String::new(),
+    };
+
+    Err(SomaError::Other(format!(
+        "`{provider}` {what} failed after {} attempt(s): {last}{context}",
+        policy.max_attempts.max(1),
+    )))
+}
 
 /// A provider reached over the OpenAI chat-completions shape.
 pub struct OpenAiCompatible {
@@ -82,10 +245,49 @@ impl OpenAiCompatible {
             });
         }
 
+        // A schema an endpoint can enforce is worth far more than one it is
+        // merely asked to respect: constrained decoding cannot produce
+        // prose, while a prompt can. Where the endpoint cannot, say it in
+        // words — worse, but better than dropping the requirement and
+        // letting the caller wonder why nothing validates.
+        let mut prompt_schema: Option<String> = None;
+        if let Some(schema) = &req.schema
+            && !quirks.supports_json_schema
+        {
+            prompt_schema = Some(format!(
+                "Reply with JSON only — no prose, no code fences — matching this \
+                 JSON Schema:\n{schema}"
+            ));
+        }
+        if let Some(instruction) = &prompt_schema {
+            match messages.iter_mut().find(|m| m.role == "system") {
+                Some(system) => {
+                    system.content = Some(match system.content.take() {
+                        Some(existing) => format!("{existing}\n\n{instruction}"),
+                        None => instruction.clone(),
+                    });
+                }
+                None => messages.insert(0, WireMessage::system(instruction)),
+            }
+        }
+
         let mut body = serde_json::json!({
             "model": self.config.wire_model(&req.model),
             "messages": messages,
         });
+
+        if let Some(schema) = &req.schema
+            && quirks.supports_json_schema
+        {
+            body["response_format"] = serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": schema,
+                    "strict": true,
+                },
+            });
+        }
 
         if let Some(max) = req.max_tokens {
             body[quirks.max_tokens_field.as_str()] = serde_json::json!(max);
@@ -146,54 +348,94 @@ impl LlmProvider for OpenAiCompatible {
 
     fn complete(&self, req: &LlmRequest) -> Result<LlmResponse> {
         let url = self.config.chat_url();
-        let response = self
-            .request(reqwest::Method::POST, &url)?
-            .json(&self.body(req))
-            .send()
-            .map_err(|e| SomaError::Other(format!("`{}` at {url}: {e}", self.id)))?;
+        let body = self.body(req);
 
-        let status = response.status();
-        let text = response
-            .text()
-            .map_err(|e| SomaError::Other(format!("`{}`: reading response: {e}", self.id)))?;
+        retrying(&self.config.retry, &self.id, "completion", || {
+            let response = self
+                .request(reqwest::Method::POST, &url)
+                .map_err(|e| (Pushback::Fatal, e))?
+                .json(&body)
+                .send()
+                // A connection refused, reset or timed out says nothing
+                // about the request — only that this attempt did not land.
+                .map_err(|e| {
+                    (
+                        Pushback::Retryable(None),
+                        SomaError::Other(format!("`{}` at {url}: {e}", self.id)),
+                    )
+                })?;
 
-        if !status.is_success() {
-            // Endpoints bury the useful part in differently-shaped error
-            // envelopes; show the body rather than guess at its schema.
-            return Err(SomaError::Other(format!(
-                "`{}` returned {status}: {}",
-                self.id,
-                text.trim()
-            )));
-        }
+            let status = response.status();
+            let pushback = classify(status, response.headers());
+            let text = response.text().map_err(|e| {
+                (
+                    Pushback::Retryable(None),
+                    SomaError::Other(format!("`{}`: reading response: {e}", self.id)),
+                )
+            })?;
 
-        let raw: WireResponse = serde_json::from_str(&text).map_err(|e| {
-            SomaError::Other(format!(
-                "`{}` returned a body that is not a chat completion: {e}. Body: {}",
-                self.id,
-                truncate(&text, 400)
-            ))
-        })?;
-        self.parse(raw)
+            if !status.is_success() {
+                // Endpoints bury the useful part in differently-shaped error
+                // envelopes; show the body rather than guess at its schema.
+                return Err((
+                    pushback,
+                    SomaError::Other(format!(
+                        "`{}` returned {status}: {}",
+                        self.id,
+                        truncate(text.trim(), 400)
+                    )),
+                ));
+            }
+
+            // A 200 carrying something that is not a chat completion is a
+            // proxy or a captive portal answering for the endpoint. Worth
+            // one more try; it is not a request the caller can fix.
+            let raw: WireResponse = serde_json::from_str(&text).map_err(|e| {
+                (
+                    Pushback::Retryable(None),
+                    SomaError::Other(format!(
+                        "`{}` returned a body that is not a chat completion: {e}. Body: {}",
+                        self.id,
+                        truncate(&text, 400)
+                    )),
+                )
+            })?;
+
+            self.parse(raw).map_err(|e| (Pushback::Fatal, e))
+        })
     }
 
     fn models(&self) -> Result<Vec<ModelInfo>> {
         let url = self.config.models_url();
-        let response = self
-            .request(reqwest::Method::GET, &url)?
-            .send()
-            .map_err(|e| SomaError::Other(format!("`{}` at {url}: {e}", self.id)))?;
 
-        if !response.status().is_success() {
-            return Err(SomaError::Other(format!(
-                "`{}` model listing returned {}",
-                self.id,
-                response.status()
-            )));
-        }
-        let listing: WireModels = response
-            .json()
-            .map_err(|e| SomaError::Other(format!("`{}`: parsing model list: {e}", self.id)))?;
+        let listing: WireModels = retrying(&self.config.retry, &self.id, "model listing", || {
+            let response = self
+                .request(reqwest::Method::GET, &url)
+                .map_err(|e| (Pushback::Fatal, e))?
+                .send()
+                .map_err(|e| {
+                    (
+                        Pushback::Retryable(None),
+                        SomaError::Other(format!("`{}` at {url}: {e}", self.id)),
+                    )
+                })?;
+
+            let status = response.status();
+            let pushback = classify(status, response.headers());
+            if !status.is_success() {
+                return Err((
+                    pushback,
+                    SomaError::Other(format!("`{}` model listing returned {status}", self.id)),
+                ));
+            }
+
+            response.json().map_err(|e| {
+                (
+                    Pushback::Retryable(None),
+                    SomaError::Other(format!("`{}`: parsing model list: {e}", self.id)),
+                )
+            })
+        })?;
 
         Ok(listing
             .data
