@@ -122,6 +122,16 @@ pub struct LlmRequest {
     /// Reasoning depth, in the provider's terms (`low` … `max`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// JSON Schema the reply must satisfy.
+    ///
+    /// A request, not a guarantee: endpoints that support constrained
+    /// decoding enforce it, and the rest are asked in the prompt and may
+    /// still answer with prose. Whoever consumes the reply validates it —
+    /// see [`crate::schema::Schema`] for the graph-level contract, which is
+    /// a different thing: this constrains one model call, that one
+    /// constrains an edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 impl LlmRequest {
@@ -133,6 +143,7 @@ impl LlmRequest {
             max_tokens: None,
             tools: Vec::new(),
             effort: None,
+            schema: None,
         }
     }
 
@@ -153,6 +164,12 @@ impl LlmRequest {
 
     pub fn with_effort(mut self, effort: impl Into<String>) -> Self {
         self.effort = Some(effort.into());
+        self
+    }
+
+    /// Ask for a reply shaped like `schema`.
+    pub fn with_schema(mut self, schema: serde_json::Value) -> Self {
+        self.schema = Some(schema);
         self
     }
 

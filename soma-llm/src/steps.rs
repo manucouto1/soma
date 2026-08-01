@@ -11,7 +11,7 @@
 
 use somatize_core::cache::CacheKey;
 use somatize_core::effect::{Effect, EffectResult, LlmRequest, StopReason, ToolSpec};
-use somatize_core::error::Result;
+use somatize_core::error::{Result, SomaError};
 use somatize_core::message::{ContentBlock, Message, Messages, Role};
 use somatize_core::schema::Schema;
 use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
@@ -36,6 +36,10 @@ pub struct ReactStep {
     effort: Option<String>,
     /// Return only the final prose rather than the whole conversation.
     text_only: bool,
+    /// Shape the final answer must take, if any.
+    schema: Option<serde_json::Value>,
+    /// How many schema violations may be handed back for correction.
+    max_repairs: usize,
 }
 
 impl ReactStep {
@@ -48,6 +52,8 @@ impl ReactStep {
             max_tokens: None,
             effort: None,
             text_only: false,
+            schema: None,
+            max_repairs: 1,
         }
     }
 
@@ -85,6 +91,26 @@ impl ReactStep {
         self
     }
 
+    /// Require the final answer to match a JSON Schema.
+    ///
+    /// Endpoints that support constrained decoding enforce it; the rest are
+    /// asked in the prompt. Either way the reply is checked here, and one
+    /// wrong answer buys one correction — see [`Self::with_repairs`].
+    pub fn with_schema(mut self, schema: serde_json::Value) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    /// How many times a schema violation may be handed back for correction.
+    ///
+    /// One by default. A repair loop without a ceiling is an open invoice:
+    /// a model that cannot produce the shape will not learn to on the
+    /// fifteenth try, and every attempt is billed.
+    pub fn with_repairs(mut self, n: usize) -> Self {
+        self.max_repairs = n;
+        self
+    }
+
     fn ask(&self, messages: Messages) -> Effect {
         let mut req = LlmRequest::new(&self.model, messages);
         if let Some(system) = &self.system {
@@ -95,6 +121,9 @@ impl ReactStep {
         }
         if let Some(effort) = &self.effort {
             req = req.with_effort(effort);
+        }
+        if let Some(schema) = &self.schema {
+            req = req.with_schema(schema.clone());
         }
         req.with_tools(self.tools.clone()).into_effect()
     }
@@ -170,7 +199,75 @@ impl Step for ReactStep {
         match ctx.results.first() {
             // A model reply: either it wants tools, or it is done.
             Some(EffectResult::Llm(response)) => {
+                // Two of the ways a turn can end are not answers, and
+                // returning them as one is how an empty string ends up in a
+                // report as the agent's considered reply.
+                match &response.stop_reason {
+                    StopReason::Refusal { category } => {
+                        return Err(SomaError::Execution {
+                            node_id: ctx.node_id.to_string(),
+                            message: format!(
+                                "the model declined to answer{}. Rephrasing the request \
+                                 or changing model is the fix; there is no partial answer \
+                                 to salvage",
+                                category
+                                    .as_deref()
+                                    .map(|c| format!(" ({c})"))
+                                    .unwrap_or_default()
+                            ),
+                        });
+                    }
+                    StopReason::MaxTokens => {
+                        // The text so far may well be useful, so it goes in
+                        // the message — but it is a cut-off thought, and
+                        // passing it downstream as complete is a wrong
+                        // answer nobody can see is wrong.
+                        return Err(SomaError::Execution {
+                            node_id: ctx.node_id.to_string(),
+                            message: format!(
+                                "the model ran out of tokens mid-answer. Raise `max_tokens` \
+                                 (or shorten the task). Partial answer: {}",
+                                truncate(&response.message.text(), 300)
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+
                 if response.stop_reason != StopReason::ToolUse {
+                    // A declared shape is checked here, whether the endpoint
+                    // enforced it or was merely asked to. One wrong answer
+                    // buys one correction; the second is a model that cannot
+                    // produce the shape, and asking again just bills for it.
+                    if let Some(schema) = &self.schema {
+                        let text = response.message.text();
+                        let violations = match extract_json(&text) {
+                            Some(value) => schema_violations(schema, &value),
+                            None => vec!["the reply is not JSON".to_string()],
+                        };
+
+                        if !violations.is_empty() {
+                            let spent = repairs_spent(ctx, schema);
+                            if spent >= self.max_repairs {
+                                return Err(SomaError::Execution {
+                                    node_id: ctx.node_id.to_string(),
+                                    message: format!(
+                                        "the model did not produce the required shape after \
+                                         {} correction(s): {}. Last reply: {}",
+                                        spent,
+                                        violations.join("; "),
+                                        truncate(&text, 300)
+                                    ),
+                                });
+                            }
+                            conversation.push(Message::user(format!(
+                                "That reply does not match the required shape: {}.\n\n\
+                                 Answer again with JSON only, matching this schema:\n{schema}",
+                                violations.join("; ")
+                            )));
+                            return Ok(Transition::Await(vec![self.ask(conversation)]));
+                        }
+                    }
                     return Ok(Transition::Done(self.finish(&conversation)));
                 }
                 let calls: Vec<Effect> = response
@@ -204,6 +301,122 @@ impl Step for ReactStep {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+/// How many corrections this run has already spent on the schema.
+///
+/// Counted from the turns rather than kept in a field, like everything else
+/// a step "remembers": a replay re-derives the same number because it
+/// replays the same results.
+///
+/// The last turn is skipped — `ctx.results` *is* `ctx.history.last()`, so
+/// counting it would charge the reply currently being judged against the
+/// budget for correcting it, and the first mistake would be the last.
+fn repairs_spent(ctx: &StepCtx<'_>, schema: &serde_json::Value) -> usize {
+    let previous = ctx.history.len().saturating_sub(1);
+    ctx.history
+        .iter()
+        .take(previous)
+        .filter_map(|turn| match turn.first() {
+            Some(EffectResult::Llm(response)) => Some(response.message.text()),
+            _ => None,
+        })
+        .filter(|text| match extract_json(text) {
+            Some(value) => !schema_violations(schema, &value).is_empty(),
+            None => true,
+        })
+        .count()
+}
+
+/// Where `value` departs from `schema`, in words a model can act on.
+///
+/// Not a JSON Schema implementation, and deliberately not: the full spec is
+/// a library, and what a repair loop needs is the check that catches what
+/// actually goes wrong — the model answered with prose, or left out a field
+/// the caller is about to index. Root type and `required` cover both, and a
+/// declared property type covers the third.
+///
+/// Being permissive here is the safe direction: a violation missed costs a
+/// consumer an error it would have got anyway, while a violation invented
+/// costs a real model call to "fix" something that was already correct.
+fn schema_violations(schema: &serde_json::Value, value: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+
+    if let Some(expected) = schema.get("type").and_then(|t| t.as_str())
+        && !matches_type(expected, value)
+    {
+        out.push(format!("expected {expected}, got {}", json_type(value)));
+        // Everything below assumes the root type; with it wrong they would
+        // all fire at once and bury the one that matters.
+        return out;
+    }
+
+    let Some(object) = value.as_object() else {
+        return out;
+    };
+
+    for key in schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|k| k.as_str())
+    {
+        if !object.contains_key(key) {
+            out.push(format!("missing required field `{key}`"));
+        }
+    }
+
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (key, spec) in properties {
+            if let Some(present) = object.get(key)
+                && let Some(expected) = spec.get("type").and_then(|t| t.as_str())
+                && !matches_type(expected, present)
+            {
+                out.push(format!(
+                    "field `{key}` should be {expected}, got {}",
+                    json_type(present)
+                ));
+            }
+        }
+    }
+
+    out
+}
+
+fn matches_type(expected: &str, value: &serde_json::Value) -> bool {
+    match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        // A JSON Schema `integer` accepts 2.0; so does this.
+        "integer" => value.as_f64().is_some_and(|n| n.fract() == 0.0),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        // A type this check does not model is not a type it may reject.
+        _ => true,
+    }
+}
+
+fn json_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Object(_) => "object",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Null => "null",
+    }
+}
+
+/// Enough of a partial answer to recognise, without pasting a whole
+/// truncated essay into an error message.
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    text.chars().take(max).collect::<String>() + "…"
 }
 
 /// Fold a turn's effect results back into the conversation.
