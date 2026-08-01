@@ -23,6 +23,28 @@ pub struct Worker {
     temp_store: Arc<LocalDataStore>,
     /// Environment manager for creating venvs with filter dependencies.
     env_manager: crate::env_manager::EnvManager,
+    /// Which interpreter to unpickle filters in, when no venv is needed.
+    ///
+    /// A cloudpickled filter can only be reconstructed by an interpreter
+    /// close enough to the one that pickled it. Defaulting to `python3`
+    /// off `PATH` means the worker will happily pick a different minor
+    /// version from the process that sent the work, and cloudpickle then
+    /// returns the class's `__dict__` instead of an instance — which
+    /// surfaces as `'dict' object is not callable`, from inside a
+    /// subprocess, with nothing pointing at the version gap.
+    python: String,
+}
+
+/// `$SOMA_PYTHON`, else `python3` off `PATH`.
+///
+/// The env var exists because a worker started from a shell has no other
+/// way to be told, and `python3` is frequently not the interpreter whose
+/// pickles it will be asked to read.
+fn default_python() -> String {
+    std::env::var("SOMA_PYTHON")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "python3".to_string())
 }
 
 impl Worker {
@@ -43,7 +65,19 @@ impl Worker {
                 env_path,
                 crate::env_manager::EnvType::Venv,
             ),
+            python: default_python(),
         }
+    }
+
+    /// Run filters in this interpreter rather than whatever `python3`
+    /// resolves to.
+    ///
+    /// An embedding process should pass its own `sys.executable`: it is
+    /// the interpreter that pickled the filters, so it is the only one
+    /// certain to unpickle them.
+    pub fn with_python(mut self, python: impl Into<String>) -> Self {
+        self.python = python.into();
+        self
     }
 
     /// Set a custom cache store (e.g. tiered or shared).
@@ -156,7 +190,7 @@ impl Worker {
 
         // Create/reuse venv if there are pip requirements, otherwise use system python
         let python_path = if all_reqs.is_empty() {
-            "python3".to_string()
+            self.python.clone()
         } else {
             let reqs_str = all_reqs.join("\n");
             match self.env_manager.ensure_env(&plan.plan_id, &reqs_str) {
@@ -166,7 +200,7 @@ impl Worker {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create venv, falling back to system python: {e}");
-                    "python3".to_string()
+                    self.python.clone()
                 }
             }
         };
@@ -191,12 +225,24 @@ impl Worker {
                 filter_specs.len()
             );
 
-            let mut proc = crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
+            let proc = crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
                 .map_err(|e| {
-                    tracing::error!("Failed to spawn Python process: {e}");
+                    // Not `.expect`: this runs on a tokio worker thread, so
+                    // a panic here took the whole worker down — every other
+                    // pipeline it was holding with it — because one plan
+                    // named an interpreter that would not start.
+                    tracing::error!(python = %python_path, "failed to spawn Python: {e}");
                     e
-                })
-                .expect("PythonProcess spawn failed");
+                });
+            let mut proc = match proc {
+                Ok(p) => p,
+                Err(e) => {
+                    return PlanResult::Failed {
+                        error: format!("could not start `{python_path}`: {e}"),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+            };
 
             // Load trained states from previous epochs (SET_STATE)
             for sf in &plan.filters {

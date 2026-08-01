@@ -3935,6 +3935,16 @@ impl PyWorker {
 
     /// Start the worker server (blocking). Releases the GIL so other threads can run.
     fn serve(&self, py: Python<'_>) -> PyResult<()> {
+        // This interpreter, not whatever `python3` resolves to. A filter
+        // arrives cloudpickled by the process that built the graph; only
+        // an interpreter of the same version reliably reconstructs it,
+        // and a mismatch surfaces inside a subprocess as
+        // `'dict' object is not callable` with nothing naming the cause.
+        let python: String = py
+            .import("sys")?
+            .getattr("executable")?
+            .extract()
+            .unwrap_or_else(|_| "python3".to_string());
         let port = self.port;
         let tags = self.tags.clone();
         let token = self.token.clone();
@@ -3973,7 +3983,7 @@ impl PyWorker {
                 eprintln!("Soma worker '{id}' starting on port {port}");
                 eprintln!("Capabilities: {}", caps.summary());
 
-                let worker = somatize_worker::Worker::new(&id, caps.clone());
+                let worker = somatize_worker::Worker::new(&id, caps.clone()).with_python(&python);
                 let addr = format!("0.0.0.0:{port}");
 
                 // Register with coordinator if configured
