@@ -773,7 +773,12 @@ fn graph_run_free_function() {
     lib.register("doubler", Box::new(Doubler));
 
     let cache = MemoryCache::default();
-    let result = somatize_runtime::graph_run(&graph, &lib, CompileMode::NoCache, &cache);
+    let result = somatize_runtime::graph_run(
+        &graph,
+        &lib,
+        CompileMode::NoCache,
+        std::sync::Arc::new(cache),
+    );
     assert!(result.is_ok());
 }
 
@@ -785,7 +790,8 @@ fn graph_fit_free_function_trainable() {
 
     let cache = MemoryCache::default();
     let x = Value::tensor(vec![10.0, 20.0], vec![2]);
-    let outputs = somatize_runtime::graph_fit(&graph, &lib, &x, None, &cache).unwrap();
+    let outputs =
+        somatize_runtime::graph_fit(&graph, &lib, &x, None, std::sync::Arc::new(cache)).unwrap();
 
     assert!(outputs.contains_key("mean"));
     let (data, _) = outputs["mean"].as_tensor().unwrap();
@@ -801,7 +807,7 @@ fn graph_predict_free_function() {
 
     let cache = MemoryCache::default();
     let x = Value::tensor(vec![3.0], vec![1]);
-    let result = somatize_runtime::graph_predict(&graph, &lib, &x, &cache);
+    let result = somatize_runtime::graph_predict(&graph, &lib, &x, std::sync::Arc::new(cache));
     // May or may not work depending on cache state, but the path is exercised
     let _ = result;
 }
