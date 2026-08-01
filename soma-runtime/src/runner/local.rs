@@ -171,8 +171,7 @@ impl Runner for LocalRunner {
             };
             let empty_state = Value::Empty;
             let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
-                let data_hash =
-                    CacheKey::hash_data(&serde_json::to_vec(&node_input).unwrap_or_default());
+                let data_hash = CacheKey::for_value(&node_input);
                 let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
 
                 let s = if let Some(cached) = cache.get(&state_key)? {
