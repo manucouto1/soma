@@ -1,0 +1,1 @@
+{"filter": "encoder", "step": 0, "file": "encoder/step_000000.safetensors", "keys": ["act_abs_mean", "act_zero_frac", "corr", "out_grad_abs_mean"], "eff_rank": 6.013383388519287, "cka": {"a|b": 0.5314491987228394}}
