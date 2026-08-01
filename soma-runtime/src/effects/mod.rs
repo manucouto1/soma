@@ -78,9 +78,9 @@ pub struct EffectDriver {
     handlers: Vec<Arc<dyn EffectHandler>>,
     journal: EffectJournal,
     event_bus: Option<Arc<EventBus>>,
-    /// Needed only to satisfy [`Transition::Spawn`], which names steps to
+    /// Needed only to satisfy [`Transition::Spawn`], which names nodes to
     /// create mid-run.
-    steps: Option<Arc<crate::step_library::StepLibrary>>,
+    catalog: Option<Arc<crate::node_catalog::NodeCatalog>>,
 }
 
 impl EffectDriver {
@@ -89,13 +89,13 @@ impl EffectDriver {
             handlers: Vec::new(),
             journal,
             event_bus: None,
-            steps: None,
+            catalog: None,
         }
     }
 
     /// Provide the step library that dynamic fan-out draws from.
-    pub fn with_steps(mut self, steps: Arc<crate::step_library::StepLibrary>) -> Self {
-        self.steps = Some(steps);
+    pub fn with_catalog(mut self, catalog: Arc<crate::node_catalog::NodeCatalog>) -> Self {
+        self.catalog = Some(catalog);
         self
     }
 
@@ -311,10 +311,10 @@ impl EffectDriver {
     ) -> Result<Vec<EffectResult>> {
         use somatize_core::effect::JoinPolicy;
 
-        let steps = self.steps.as_ref().ok_or_else(|| SomaError::Execution {
+        let catalog = self.catalog.as_ref().ok_or_else(|| SomaError::Execution {
             node_id: node_id.to_string(),
             message: "step spawned work, but the driver has no step library; \
-                      build it with `EffectDriver::with_steps(...)`"
+                      build it with `EffectDriver::with_catalog(...)`"
                 .into(),
         })?;
 
@@ -329,8 +329,8 @@ impl EffectDriver {
                         .unwrap_or_else(|| format!("{turn}.{index}"));
                     let child_id = format!("{node_id}/{label}");
                     scope.spawn(move || {
-                        let step = steps
-                            .get(&spec.runs)
+                        let step = catalog
+                            .step(&spec.runs)
                             .ok_or_else(|| SomaError::NodeNotFound(spec.runs.clone()))?;
                         match self.run(step.as_ref(), run_id, &child_id, &spec.input)? {
                             StepOutcome::Done(value) => Ok(EffectResult::Node(value)),
@@ -522,7 +522,6 @@ impl EffectDriver {
 mod tests {
     use super::*;
     use crate::cache::fs_store::FsActionStore;
-    use crate::step_library::StepLibrary;
     use somatize_core::cache::CacheKey;
     use somatize_core::effect::{LlmRequest, LlmResponse, StopReason};
     use somatize_core::message::Message;
@@ -881,11 +880,14 @@ mod tests {
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
         let journal = EffectJournal::new(store.clone(), store);
 
-        let mut steps = StepLibrary::new();
-        steps.register("worker", Box::new(Worker));
-        steps.register("orchestrator", Box::new(Orchestrator { join }));
+        let mut steps = crate::node_catalog::NodeCatalog::new();
+        steps.register_step("worker", Box::new(Worker));
+        steps.register_step("orchestrator", Box::new(Orchestrator { join }));
 
-        (EffectDriver::new(journal).with_steps(Arc::new(steps)), dir)
+        (
+            EffectDriver::new(journal).with_catalog(Arc::new(steps)),
+            dir,
+        )
     }
 
     #[test]
@@ -985,7 +987,7 @@ mod tests {
                 &Value::text("a"),
             )
             .unwrap_err();
-        assert!(err.to_string().contains("with_steps"), "{err}");
+        assert!(err.to_string().contains("with_catalog"), "{err}");
     }
 
     /// Spawning nothing would spin; say so.

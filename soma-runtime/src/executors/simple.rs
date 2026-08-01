@@ -4,7 +4,7 @@
 //! No loops, no sampling, no chunking — just compile → fit → forward.
 
 use crate::EventBus;
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 use crate::runner::Runner;
 
 use somatize_compiler::{CompileMode, compile};
@@ -25,7 +25,7 @@ impl SimpleExecutor {
         &self,
         runner: &dyn Runner,
         graph: &Graph,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         x: &Value,
@@ -43,7 +43,7 @@ impl SimpleExecutor {
         &self,
         runner: &dyn Runner,
         graph: &Graph,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         x: &Value,

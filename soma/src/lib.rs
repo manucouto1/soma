@@ -30,7 +30,7 @@
 //!     Node::new("model", "Model", "Model"),
 //! ]);
 //!
-//! let mut lib = FilterLibrary::new();
+//! let mut lib = NodeCatalog::new();
 //! lib.register("scaler", Box::new(MyScaler));
 //! lib.register("model", Box::new(MyModel));
 //!
@@ -78,8 +78,8 @@ pub mod prelude {
 
     // Runtime
     pub use somatize_runtime::cache::MemoryCache;
-    pub use somatize_runtime::filter_library::FilterLibrary;
     pub use somatize_runtime::graph_session::GraphSession;
+    pub use somatize_runtime::node_catalog::NodeCatalog;
     pub use somatize_runtime::{EventBus, execute};
 
     // Derive macro

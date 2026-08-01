@@ -11,8 +11,8 @@
 
 use crate::cache::MemoryCache;
 use crate::effects::EffectHandler;
-use crate::filter_library::FilterLibrary;
 use crate::graph_session::GraphSession;
+use crate::node_catalog::NodeCatalog;
 use somatize_core::cache::CacheStore;
 use somatize_core::effect::{Effect, EffectResult, GraphEffectMode};
 use somatize_core::error::{Result, SomaError};
@@ -23,13 +23,13 @@ use std::sync::Arc;
 /// Holds the filters those graphs are built from — a graph names its nodes,
 /// it does not carry their implementations — plus the cache they share.
 pub struct GraphHandler {
-    library: FilterLibrary,
+    library: NodeCatalog,
     cache: Arc<dyn CacheStore>,
 }
 
 impl GraphHandler {
     /// A handler over `library`, with an in-memory cache.
-    pub fn new(library: FilterLibrary) -> Self {
+    pub fn new(library: NodeCatalog) -> Self {
         Self {
             library,
             cache: Arc::new(MemoryCache::new(64 * 1024 * 1024)),
@@ -44,7 +44,7 @@ impl GraphHandler {
     }
 
     /// The filters available to graphs run through this handler.
-    pub fn library(&self) -> &FilterLibrary {
+    pub fn library(&self) -> &NodeCatalog {
         &self.library
     }
 }
@@ -177,7 +177,7 @@ mod tests {
     }
 
     fn handler() -> GraphHandler {
-        let mut library = FilterLibrary::new();
+        let mut library = NodeCatalog::new();
         library.register("double", Box::new(Doubler));
         GraphHandler::new(library)
     }

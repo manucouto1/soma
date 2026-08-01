@@ -19,8 +19,7 @@ use somatize_runtime::cache::fs_store::FsActionStore;
 use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal};
 use somatize_runtime::event_bus::EventBus;
 use somatize_runtime::executor::{Context, GraphInfo, execute};
-use somatize_runtime::filter_library::FilterLibrary;
-use somatize_runtime::step_library::StepLibrary;
+use somatize_runtime::node_catalog::NodeCatalog;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -128,9 +127,22 @@ impl Step for AskOnce {
 
 struct Harness {
     _dir: tempfile::TempDir,
-    steps: Arc<StepLibrary>,
+    /// Filters and steps together — the catalog is one registry now, and
+    /// the executor gets the same value the compiler read.
+    catalog: NodeCatalog,
     driver: EffectDriver,
     llm: Arc<FakeLlm>,
+}
+
+impl Harness {
+    /// The harness catalog plus whatever filters this test needs.
+    fn with_filters(&self, ids: &[&str]) -> NodeCatalog {
+        let mut catalog = self.catalog.clone();
+        for id in ids {
+            catalog.register(*id, Box::new(Shout));
+        }
+        catalog
+    }
 }
 
 fn harness() -> Harness {
@@ -139,12 +151,12 @@ fn harness() -> Harness {
     let journal = EffectJournal::new(store.clone(), store);
     let llm = FakeLlm::new();
 
-    let mut steps = StepLibrary::new();
-    steps.register("ask", Box::new(AskOnce));
+    let mut catalog = NodeCatalog::new();
+    catalog.register_step("ask", Box::new(AskOnce));
 
     Harness {
         _dir: dir,
-        steps: Arc::new(steps),
+        catalog,
         driver: EffectDriver::new(journal).with_handler(llm.clone()),
         llm,
     }
@@ -191,14 +203,12 @@ fn a_step_reads_from_and_writes_to_its_neighbours() {
     let bus = Arc::new(EventBus::new(256));
     let cache = MemoryCache::default();
 
-    let mut filters = FilterLibrary::new();
-    filters.register("prep", Box::new(Shout));
-    filters.register("shout", Box::new(Shout));
+    let filters = h.with_filters(&["prep", "shout"]);
 
     let g = mixed_graph();
     let mut ctx = Context::new(bus, "run-1")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_steps(h.steps.clone(), h.driver.clone());
+        .with_driver(h.driver.clone(), Arc::new(filters.clone()));
     ctx.set("prep", Value::text("what is soma?"));
 
     let mut reg = SimpleFilterRegistry::new();
@@ -227,9 +237,7 @@ fn re_running_the_same_run_replays_instead_of_calling() {
     let h = harness();
     let cache = MemoryCache::default();
 
-    let mut filters = FilterLibrary::new();
-    filters.register("prep", Box::new(Shout));
-    filters.register("shout", Box::new(Shout));
+    let filters = h.with_filters(&["prep", "shout"]);
 
     let g = mixed_graph();
     let mut reg = SimpleFilterRegistry::new();
@@ -245,7 +253,7 @@ fn re_running_the_same_run_replays_instead_of_calling() {
         let bus = Arc::new(EventBus::new(256));
         let mut ctx = Context::new(bus, "run-same")
             .with_graph_info(GraphInfo::from_graph(&g))
-            .with_steps(h.steps.clone(), h.driver.clone());
+            .with_driver(h.driver.clone(), Arc::new(filters.clone()));
         ctx.set("prep", Value::text("hello"));
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
         outputs.push(ctx.get("shout").and_then(|v| v.as_text()).map(String::from));
@@ -261,7 +269,7 @@ fn re_running_the_same_run_replays_instead_of_calling() {
 fn a_step_without_a_library_explains_itself() {
     let bus = Arc::new(EventBus::new(64));
     let cache = MemoryCache::default();
-    let filters = FilterLibrary::new();
+    let filters = NodeCatalog::new();
 
     let mut ctx = Context::new(bus, "run-x");
     ctx.set("ask", Value::text("hi"));
@@ -272,8 +280,7 @@ fn a_step_without_a_library_explains_itself() {
     };
     let err = execute(&plan, &mut ctx, &filters, &cache).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("step library"), "{msg}");
-    assert!(msg.contains("with_steps"), "{msg}");
+    assert!(msg.contains("ask"), "should name the node: {msg}");
 }
 
 // ── Handoffs ──
@@ -329,11 +336,8 @@ fn a_handoff_runs_only_the_chosen_target() {
     let journal = EffectJournal::new(store.clone(), store);
     let driver = EffectDriver::new(journal);
 
-    let mut steps = StepLibrary::new();
-    steps.register("router", Box::new(Router));
-    let steps = Arc::new(steps);
-
-    let mut filters = FilterLibrary::new();
+    let mut filters = NodeCatalog::new();
+    filters.register_step("router", Box::new(Router));
     filters.register("billing", Box::new(Shout));
     filters.register("tech", Box::new(Shout));
 
@@ -343,7 +347,7 @@ fn a_handoff_runs_only_the_chosen_target() {
 
     let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-handoff")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_steps(steps, driver);
+        .with_driver(driver, Arc::new(filters.clone()));
     ctx.set("router", Value::text("tech"));
 
     execute(&plan, &mut ctx, &filters, &cache).unwrap();
@@ -381,17 +385,16 @@ fn an_undeclared_handoff_target_is_reported() {
     let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
     let driver = EffectDriver::new(EffectJournal::new(store.clone(), store));
 
-    let mut steps = StepLibrary::new();
-    steps.register("router", Box::new(Router));
+    let mut filters = NodeCatalog::new();
+    filters.register_step("router", Box::new(Router));
 
     let g = routed_graph();
     let plan = routed_plan();
     let cache = MemoryCache::default();
-    let filters = FilterLibrary::new();
 
     let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-bad-handoff")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_steps(Arc::new(steps), driver);
+        .with_driver(driver, Arc::new(filters.clone()));
     ctx.set("router", Value::text("legal"));
 
     let err = execute(&plan, &mut ctx, &filters, &cache).unwrap_err();
@@ -444,11 +447,8 @@ fn a_suspended_run_halts_the_plan_and_then_resumes() {
     let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
     let driver = EffectDriver::new(EffectJournal::new(store.clone(), store));
 
-    let mut steps = StepLibrary::new();
-    steps.register("approve", Box::new(NeedsApproval));
-    let steps = Arc::new(steps);
-
-    let mut filters = FilterLibrary::new();
+    let mut filters = NodeCatalog::new();
+    filters.register_step("approve", Box::new(NeedsApproval));
     filters.register("after", Box::new(Shout));
 
     let mut g = Graph::new();
@@ -466,7 +466,7 @@ fn a_suspended_run_halts_the_plan_and_then_resumes() {
     let run = |driver: EffectDriver| {
         let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-approve")
             .with_graph_info(GraphInfo::from_graph(&g))
-            .with_steps(steps.clone(), driver);
+            .with_driver(driver, Arc::new(filters.clone()));
         let outcome = execute(&plan, &mut ctx, &filters, &cache);
         (outcome, ctx)
     };
@@ -513,11 +513,11 @@ fn a_step_emits_agent_events() {
     let bus = Arc::new(EventBus::new(256));
     let mut rx = bus.subscribe();
     let cache = MemoryCache::default();
-    let filters = FilterLibrary::new();
+    let filters = h.catalog.clone();
 
-    let mut ctx = Context::new(bus.clone(), "run-events").with_steps(
-        h.steps.clone(),
+    let mut ctx = Context::new(bus.clone(), "run-events").with_driver(
         h.driver.clone().with_event_bus(bus.clone()),
+        Arc::new(filters.clone()),
     );
     ctx.set("ask", Value::text("hi"));
 
@@ -560,4 +560,115 @@ fn a_step_emits_agent_events() {
     assert_eq!(requested, 1);
     assert_eq!(completed, 1);
     assert_eq!(finished, 1);
+}
+
+// ── One registry ──
+
+/// Produces a tensor and says so, which no agent can read.
+struct Numeric;
+
+impl Filter for Numeric {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"Numeric"])
+    }
+    fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+        Ok(Value::Empty)
+    }
+    fn forward(&self, _x: &Value, _state: &Value) -> Result<Value> {
+        Ok(Value::tensor(vec![1.0], vec![1]))
+    }
+    fn meta(&self) -> FilterMeta {
+        FilterMeta {
+            output_schema: Some(somatize_core::schema::Schema::scalar(
+                somatize_core::schema::DataType::Float64,
+            )),
+            ..Shout.meta()
+        }
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Insists on a conversation.
+struct WantsMessages;
+
+impl Step for WantsMessages {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"WantsMessages"])
+    }
+    fn meta(&self) -> StepMeta {
+        StepMeta::new("WantsMessages").with_input_schema(somatize_core::schema::Schema::messages())
+    }
+    fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
+        Ok(Transition::Done(Value::Empty))
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Filters and steps share one registry, so a step's declared input is
+/// checked against its predecessor's output like any other edge.
+///
+/// It used to depend on which registry the caller happened to pass: the
+/// filter library alone answered `None` for every step, so every edge into
+/// an agent went unchecked — and `Graph.compile()` in Python passed exactly
+/// that, while `run()` and `forward()` passed a registry spanning both.
+#[test]
+fn a_step_edge_is_schema_checked_like_any_other() {
+    let mut catalog = NodeCatalog::new();
+    catalog.register("numeric", Box::new(Numeric));
+    catalog.register_step("agent", Box::new(WantsMessages));
+
+    let mut g = Graph::new();
+    g.add_node(Node::filter_with_id("numeric", "numeric"));
+    g.add_node(Node::step("agent", "WantsMessages"));
+    g.add_edge(Edge::data("e", "numeric", "agent"));
+
+    let err = compile(&g, &catalog, CompileMode::Inference, None)
+        .expect_err("a float cannot become a conversation");
+    let msg = err.to_string();
+    assert!(msg.contains("numeric") && msg.contains("agent"), "{msg}");
+}
+
+/// A step's `distribution` was a field nothing ever read: the compiler
+/// asked the filter registry, which knew nothing about steps. Now that
+/// there is one registry, a step marked remote is wrapped like a filter.
+#[test]
+fn a_remote_step_is_wrapped_for_dispatch() {
+    struct RemoteStep;
+
+    impl Step for RemoteStep {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"RemoteStep"])
+        }
+        fn meta(&self) -> StepMeta {
+            let mut m = StepMeta::new("RemoteStep");
+            m.distribution =
+                Distribution::Remote(somatize_core::filter::RemoteTarget::Tag("gpu".into()));
+            m
+        }
+        fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
+            Ok(Transition::Done(Value::Empty))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    let mut catalog = NodeCatalog::new();
+    catalog.register_step("far", Box::new(RemoteStep));
+
+    let mut g = Graph::new();
+    g.add_node(Node::step("far", "RemoteStep"));
+
+    let plan = compile(&g, &catalog, CompileMode::Inference, None)
+        .expect("compiles")
+        .plan;
+
+    assert!(
+        matches!(plan, somatize_compiler::ExecutionPlan::Remote { .. }),
+        "expected the step to be wrapped for dispatch, got {plan}"
+    );
 }

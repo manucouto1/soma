@@ -10,8 +10,8 @@ use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::executor::Context;
-use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::node_catalog::NodeCatalog;
 use somatize_runtime::runner::Transport;
 use somatize_runtime::*;
 use std::sync::Arc;
@@ -185,7 +185,7 @@ fn linear_graph(ids: &[&str]) -> Graph {
 #[test]
 fn session_run_returns_all_outputs() {
     let graph = linear_graph(&["doubler", "doubler2"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
     lib.register("doubler2", Box::new(Doubler));
 
@@ -200,7 +200,7 @@ fn session_run_returns_all_outputs() {
 #[test]
 fn session_forward_after_fit() {
     let graph = linear_graph(&["mean", "doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
     lib.register("doubler", Box::new(Doubler));
 
@@ -221,7 +221,7 @@ fn session_forward_after_fit() {
 #[test]
 fn session_compile_all_modes() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let session = GraphSession::new(graph, lib);
@@ -239,7 +239,7 @@ fn session_compile_all_modes() {
 #[test]
 fn session_with_data_store() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let tmp = tempfile::tempdir().unwrap();
@@ -258,7 +258,7 @@ fn session_with_transport() {
         fn execute(
             &self,
             _plan: &ExecutionPlan,
-            _filters: &FilterLibrary,
+            _filters: &NodeCatalog,
             _input: &Value,
             _y: Option<&Value>,
             _fit_mode: bool,
@@ -292,7 +292,7 @@ fn session_with_transport() {
     }
 
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let session = GraphSession::new(graph, lib).with_transport(Arc::new(DummyTransport));
@@ -304,7 +304,7 @@ fn session_with_transport() {
 #[test]
 fn session_graph_and_library_accessors() {
     let graph = linear_graph(&["a"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("a", Box::new(Doubler));
 
     let mut session = GraphSession::new(graph, lib);
@@ -320,7 +320,7 @@ fn session_graph_and_library_accessors() {
 #[test]
 fn session_persist_and_load_states() {
     let graph = linear_graph(&["mean"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
 
     let tmp = tempfile::tempdir().unwrap();
@@ -336,7 +336,7 @@ fn session_persist_and_load_states() {
     let data_ref = session.persist_states().unwrap();
 
     // New session, load states
-    let mut lib2 = FilterLibrary::new();
+    let mut lib2 = NodeCatalog::new();
     lib2.register("mean", Box::new(MeanFilter));
     let mut session2 = GraphSession::new(graph, lib2).with_data_store(store);
 
@@ -347,7 +347,7 @@ fn session_persist_and_load_states() {
 #[test]
 fn session_persist_without_datastore_errors() {
     let graph = linear_graph(&["mean"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
 
     let session = GraphSession::new(graph, lib);
@@ -367,7 +367,7 @@ fn executor_loop_terminates_on_done() {
     ctx.graph_info
         .set_predecessors("stopper", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register(
         "stopper",
         Box::new(StopFilter {
@@ -412,7 +412,7 @@ fn executor_loop_rejects_unreadable_signal() {
     ctx.graph_info
         .set_predecessors("doubler", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let plan = ExecutionPlan::Loop {
@@ -451,7 +451,7 @@ fn executor_loop_exhaust_runs_full_count() {
     ctx.graph_info
         .set_predecessors("doubler", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let plan = ExecutionPlan::Loop {
@@ -489,7 +489,7 @@ fn executor_branch_selects_arm() {
     ctx.graph_info
         .set_predecessors("right_doubler", vec!["cond".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("cond", Box::new(BranchCondition));
     lib.register("left_doubler", Box::new(Doubler));
     lib.register("right_doubler", Box::new(Doubler));
@@ -534,7 +534,7 @@ fn executor_branch_rejects_unmatched_selector() {
     ctx.graph_info
         .set_predecessors("cond", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("cond", Box::new(BranchCondition)); // returns "left"
     lib.register("up", Box::new(Doubler));
 
@@ -574,7 +574,7 @@ fn executor_branch_falls_back_to_default_arm() {
     ctx.graph_info
         .set_predecessors("fallback", vec!["cond".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("cond", Box::new(BranchCondition)); // returns "left"
     lib.register("fallback", Box::new(Doubler));
 
@@ -603,7 +603,7 @@ fn executor_branch_rejects_unreadable_condition() {
     ctx.graph_info
         .set_predecessors("cond", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("cond", Box::new(Doubler)); // yields a Tensor, not a label
 
     let plan = ExecutionPlan::Branch {
@@ -635,7 +635,7 @@ fn executor_remote_falls_back_to_local() {
     ctx.graph_info
         .set_predecessors("doubler", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     // No remote executor set → should fall back to local
@@ -663,7 +663,7 @@ fn executor_remote_with_transport() {
         fn execute(
             &self,
             _plan: &ExecutionPlan,
-            _filters: &FilterLibrary,
+            _filters: &NodeCatalog,
             input: &Value,
             _y: Option<&Value>,
             _fit_mode: bool,
@@ -711,7 +711,7 @@ fn executor_remote_with_transport() {
     ctx.graph_info
         .set_predecessors("remote_node", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("remote_node", Box::new(Doubler));
 
     let plan = ExecutionPlan::Remote {
@@ -750,7 +750,7 @@ fn executor_spills_large_values_to_datastore() {
     ctx.graph_info
         .set_predecessors("doubler", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let plan = ExecutionPlan::Execute {
@@ -769,7 +769,7 @@ fn executor_spills_large_values_to_datastore() {
 #[test]
 fn graph_run_free_function() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let cache = MemoryCache::default();
@@ -780,7 +780,7 @@ fn graph_run_free_function() {
 #[test]
 fn graph_fit_free_function_trainable() {
     let graph = linear_graph(&["mean"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
 
     let cache = MemoryCache::default();
@@ -796,7 +796,7 @@ fn graph_fit_free_function_trainable() {
 #[test]
 fn graph_predict_free_function() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let cache = MemoryCache::default();

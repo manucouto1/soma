@@ -6,7 +6,7 @@
 use super::Runner;
 use crate::EventBus;
 use crate::executor::{Context, Executable, GraphInfo};
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::{CacheKey, CacheStore};
@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// Returns ``None`` if any id is missing from the library — in that case
 /// the runner falls back to sequential execution with a NodeNotFound error.
 fn collect_peers(
-    filters: &FilterLibrary,
+    filters: &NodeCatalog,
     node_ids: &[String],
 ) -> Option<Vec<(String, Arc<dyn Filter>)>> {
     node_ids
@@ -41,7 +41,7 @@ impl LocalRunner {
     fn fit_sequence(
         &self,
         steps: &[ExecutionPlan],
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         run_id: &str,
@@ -94,7 +94,7 @@ impl Runner for LocalRunner {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         run_id: &str,
@@ -259,7 +259,7 @@ impl Runner for LocalRunner {
     fn forward(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         input: &Value,
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn state_cache_key_is_sensitive_to_labels() {
         let fits = Arc::new(AtomicUsize::new(0));
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("clf", Box::new(CountingFitFilter { fits: fits.clone() }));
 
         let cache = MemoryCache::default();

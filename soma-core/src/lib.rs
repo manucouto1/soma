@@ -21,6 +21,7 @@ pub mod filter;
 pub mod fingerprint;
 pub mod graph;
 pub mod message;
+pub mod node;
 pub mod schema;
 pub mod search;
 pub mod state;

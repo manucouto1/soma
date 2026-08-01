@@ -14,13 +14,12 @@ pub mod effects;
 pub mod event_bus;
 pub mod executor;
 pub mod executors;
-pub mod filter_library;
 pub mod forward;
 pub mod graph_session;
+pub mod node_catalog;
 pub mod pruner;
 pub mod runner;
 pub mod sampler;
-pub mod step_library;
 pub mod tracking;
 
 pub use cache::{LocalCache, MemoryCache, TieredCache};
@@ -31,13 +30,12 @@ pub use executors::{
     FittedFilter, FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner,
     PopulationMember, StreamExecutor, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
 };
-pub use filter_library::FilterLibrary;
 pub use forward::{Batched, ForwardStrategy, Standard, Stream};
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
+pub use node_catalog::{FilterLibrary, NodeCatalog, NodeImpl};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
-pub use step_library::{GraphRegistry, StepLibrary};
 pub use tracking::{
     JsonlEventSink, LocalTracker, RunInfo, RunReader, collect_git_info, list_runs, load_manifest,
     load_status,

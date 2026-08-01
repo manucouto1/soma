@@ -6,7 +6,7 @@
 //! - [`Batched`] — rows from a [`DataStore`], batch by batch (memory-bounded)
 
 use crate::event_bus::EventBus;
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 use crate::runner::Runner;
 use somatize_compiler::{CompileMode, CompileResult, compile, compile_stream};
 use somatize_core::cache::CacheStore;
@@ -22,7 +22,7 @@ pub trait ForwardStrategy {
     fn forward(
         &self,
         graph: &Graph,
-        library: &FilterLibrary,
+        library: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         data_store: Option<&Arc<dyn DataStore>>,
@@ -37,7 +37,7 @@ impl ForwardStrategy for Standard {
     fn forward(
         &self,
         graph: &Graph,
-        library: &FilterLibrary,
+        library: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         _data_store: Option<&Arc<dyn DataStore>>,
@@ -61,7 +61,7 @@ impl ForwardStrategy for Stream {
     fn forward(
         &self,
         graph: &Graph,
-        library: &FilterLibrary,
+        library: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         _data_store: Option<&Arc<dyn DataStore>>,
@@ -85,7 +85,7 @@ impl ForwardStrategy for Batched<'_> {
     fn forward(
         &self,
         graph: &Graph,
-        library: &FilterLibrary,
+        library: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         data_store: Option<&Arc<dyn DataStore>>,
@@ -142,7 +142,7 @@ impl ForwardStrategy for Batched<'_> {
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
-    use crate::filter_library::FilterLibrary;
+    use crate::node_catalog::NodeCatalog;
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result as SomaResult;
     use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
@@ -183,11 +183,11 @@ mod tests {
         }
     }
 
-    fn make_session() -> (Graph, FilterLibrary, Arc<dyn CacheStore>, Arc<EventBus>) {
+    fn make_session() -> (Graph, NodeCatalog, Arc<dyn CacheStore>, Arc<EventBus>) {
         let mut graph = Graph::new();
         graph.nodes.push(Node::new("double", "Double", "double"));
 
-        let mut library = FilterLibrary::new();
+        let mut library = NodeCatalog::new();
         library.register("double", Box::new(DoublerFilter));
 
         let cache: Arc<dyn CacheStore> = Arc::new(MemoryCache::default());

@@ -31,10 +31,9 @@ use somatize_runtime::executor::{self, Context, GraphInfo};
 use somatize_runtime::executors::study::{
     FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
 };
-use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::node_catalog::NodeCatalog;
 use somatize_runtime::runner::{LocalRunner, Runner};
 use somatize_runtime::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
-use somatize_runtime::step_library::{GraphRegistry, StepLibrary};
 use somatize_runtime::tracking::{
     LocalTracker, RunReader, advance_head, load_manifest, resolve_parent, summarize,
 };
@@ -1388,7 +1387,7 @@ impl Behaviour {
 #[pyclass(name = "Graph")]
 struct PyGraph {
     graph: Graph,
-    library: FilterLibrary,
+    library: NodeCatalog,
     cache: Arc<dyn somatize_core::cache::CacheStore>,
     event_bus: Arc<EventBus>,
     fitted: bool,
@@ -1415,7 +1414,6 @@ struct PyGraph {
     live_filters: std::collections::HashMap<String, Py<PyAny>>,
     /// Effectful step nodes, by node id. Empty for a purely computational
     /// graph, in which case none of the agentic machinery is built.
-    steps: StepLibrary,
     /// The live Python `Agent`/`Judge` behind each step node. A `Step` is
     /// immutable once built, so a study that samples a new prompt or model
     /// writes to these and the library is rebuilt from them — the same
@@ -1488,7 +1486,7 @@ impl PyGraph {
                     .insert(tool.tool_name().to_string(), tool.clone());
             }
             let kind = spec.kind().to_string();
-            self.steps.register_arc(node_id, spec.step());
+            self.library.register_step_arc(node_id, spec.step());
             // Keep the live Agent/Judge: a study samples by writing to it,
             // and the step is rebuilt from it before the next run.
             self.live_steps
@@ -1552,30 +1550,33 @@ impl PyGraph {
     /// Returns `None` for a graph with no steps, so a purely computational
     /// pipeline never constructs a provider router, reads a catalog, or
     /// touches an environment variable.
-    /// The step library as it stands *now*.
+    /// The catalog as it stands *now* — filters and steps together.
     ///
     /// A [`Step`] is immutable once built, so a study that samples a new
     /// prompt or model has no way to change one in place — it writes to the
-    /// live `Agent` instead, and the library is rebuilt from those here,
+    /// live `Agent` instead, and the steps are rebuilt from those here,
     /// before every compile and every run. Cheap: rebuilding a step is
     /// reading a handful of fields off a Python object.
-    fn rebuild_steps(&self, py: Python<'_>) -> PyResult<StepLibrary> {
+    ///
+    /// Every entry point passes this one value, which is what stops
+    /// `compile()` from type-checking a different graph than `run()` does.
+    fn rebuild_catalog(&self, py: Python<'_>) -> PyResult<NodeCatalog> {
         if self.live_steps.is_empty() {
-            return Ok(self.steps.clone());
+            return Ok(self.library.clone());
         }
-        let mut steps = self.steps.clone();
+        let mut catalog = self.library.clone();
         for (node_id, obj) in &self.live_steps {
-            steps.register_arc(node_id, to_step_spec(py, obj.bind(py))?.step());
+            catalog.register_step_arc(node_id, to_step_spec(py, obj.bind(py))?.step());
         }
-        Ok(steps)
+        Ok(catalog)
     }
 
     fn step_runtime(
         &self,
         py: Python<'_>,
-        steps: &StepLibrary,
-    ) -> PyResult<Option<(Arc<StepLibrary>, EffectDriver)>> {
-        if steps.is_empty() {
+        catalog: &NodeCatalog,
+    ) -> PyResult<Option<EffectDriver>> {
+        if !catalog.has_steps() {
             return Ok(None);
         }
 
@@ -1618,7 +1619,7 @@ impl PyGraph {
             .with_handler(Arc::new(somatize_llm::LlmHandler::new(router)))
             .with_handler(Arc::new(toolbox));
 
-        Ok(Some((Arc::new(steps.clone()), driver)))
+        Ok(Some(driver))
     }
 
     /// Write the run's topology snapshot: `graph.json` (the machine
@@ -2291,7 +2292,7 @@ impl PyGraph {
 
         Ok(Self {
             graph: Graph::new(),
-            library: FilterLibrary::new(),
+            library: NodeCatalog::new(),
             cache: cache_store,
             event_bus: Arc::new(EventBus::new(256)),
             fitted: false,
@@ -2305,7 +2306,6 @@ impl PyGraph {
             live_steps: std::collections::HashMap::new(),
             optional_edges: Vec::new(),
             cut_edges: std::collections::HashMap::new(),
-            steps: StepLibrary::new(),
             tools: std::collections::HashMap::new(),
             default_provider: None,
             mcp_toolboxes: Vec::new(),
@@ -2390,7 +2390,7 @@ impl PyGraph {
             self.tools
                 .insert(tool.tool_name().to_string(), tool.clone());
         }
-        self.steps.register_arc(step_id, spec.step());
+        self.library.register_step_arc(step_id, spec.step());
         self.live_steps
             .insert(step_id.to_string(), obj.clone().unbind());
         Ok(step_id.to_string())
@@ -2742,9 +2742,10 @@ impl PyGraph {
                 ));
             }
             self.graph.validate().map_err(soma_err_to_py)?;
+            let catalog = self.rebuild_catalog(py)?;
             let compile_result = compile(
                 &self.graph,
-                &self.library,
+                &catalog,
                 CompileMode::Differentiable,
                 Some(self.cache.as_ref()),
             )
@@ -2759,7 +2760,7 @@ impl PyGraph {
             let run_start = std::time::Instant::now();
             let result = runner.fit(
                 &compile_result.plan,
-                &self.library,
+                &catalog,
                 self.cache.as_ref(),
                 &self.event_bus,
                 &run_id,
@@ -3032,8 +3033,9 @@ impl PyGraph {
                 return value_to_py(py, &output);
             }
             // Local streaming: compile as Stream plan, execute via StreamExecutor
+            let catalog = self.rebuild_catalog(py)?;
             let compile_result =
-                somatize_compiler::compile_stream(&self.graph, &self.library, chunk_size)
+                somatize_compiler::compile_stream(&self.graph, &catalog, chunk_size)
                     .map_err(soma_err_to_py)?;
 
             let graph_info = GraphInfo::from_graph(&self.graph);
@@ -3055,7 +3057,7 @@ impl PyGraph {
                 executor::execute(
                     &compile_result.plan,
                     &mut ctx,
-                    &self.library,
+                    &catalog,
                     self.cache.as_ref(),
                 )
             })
@@ -3087,11 +3089,10 @@ impl PyGraph {
         }
 
         // Local execution (with optional remote executor for mixed graphs)
-        let steps = self.rebuild_steps(py)?;
-        let registry = GraphRegistry::new(&self.library, &steps);
+        let catalog = self.rebuild_catalog(py)?;
         let compile_result = somatize_compiler::compile(
             &self.graph,
-            &registry,
+            &catalog,
             CompileMode::Inference,
             Some(self.cache.as_ref()),
         )
@@ -3105,8 +3106,8 @@ impl PyGraph {
         .with_graph_info(graph_info)
         .with_seed(seed);
 
-        if let Some((steps, driver)) = self.step_runtime(py, &steps)? {
-            ctx = ctx.with_steps(steps, driver);
+        if let Some(driver) = self.step_runtime(py, &catalog)? {
+            ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
         }
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
@@ -3125,7 +3126,7 @@ impl PyGraph {
             executor::execute(
                 &compile_result.plan,
                 &mut ctx,
-                &self.library,
+                &catalog,
                 self.cache.as_ref(),
             )
         })
@@ -3162,11 +3163,10 @@ impl PyGraph {
 
     /// Compile and execute, returning all node outputs as a dict.
     fn run(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let steps = self.rebuild_steps(py)?;
-        let registry = GraphRegistry::new(&self.library, &steps);
+        let catalog = self.rebuild_catalog(py)?;
         let compile_result = somatize_compiler::compile(
             &self.graph,
-            &registry,
+            &catalog,
             CompileMode::NoCache,
             Some(self.cache.as_ref()),
         )
@@ -3177,8 +3177,8 @@ impl PyGraph {
         let mut ctx =
             Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
 
-        if let Some((steps, driver)) = self.step_runtime(py, &steps)? {
-            ctx = ctx.with_steps(steps, driver);
+        if let Some(driver) = self.step_runtime(py, &catalog)? {
+            ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
         }
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
@@ -3198,7 +3198,7 @@ impl PyGraph {
             executor::execute(
                 &compile_result.plan,
                 &mut ctx,
-                &self.library,
+                &catalog,
                 self.cache.as_ref(),
             )
         });
@@ -3239,9 +3239,13 @@ impl PyGraph {
             }
         };
 
+        // The rebuilt catalog, not `self.library`: passing the filter half
+        // alone is how `.compile()` came to skip every step's schema while
+        // `.run()` checked them.
+        let catalog = self.rebuild_catalog(py)?;
         let result = somatize_compiler::compile(
             &self.graph,
-            &self.library,
+            &catalog,
             compile_mode,
             Some(self.cache.as_ref()),
         )
@@ -3400,7 +3404,7 @@ impl PyGraph {
     /// manager from Python.
     ///
     /// This is the only writer of those three files: it is the one place
-    /// where the `Graph` and the `FilterLibrary` are both in scope, so
+    /// where the `Graph` and the `NodeCatalog` are both in scope, so
     /// it is the only place that can stamp per-node config hashes into
     /// the fingerprint.
     ///

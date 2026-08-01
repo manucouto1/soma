@@ -6,7 +6,7 @@
 use somatize_compiler::ExecutionPlan;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::value::Value;
-use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::node_catalog::NodeCatalog;
 use somatize_runtime::runner::Transport;
 use std::collections::HashMap;
 
@@ -113,7 +113,7 @@ impl Transport for WsTransport {
     fn execute(
         &self,
         plan: &ExecutionPlan,
-        _filters: &FilterLibrary,
+        _filters: &NodeCatalog,
         input: &Value,
         y: Option<&Value>,
         fit_mode: bool,
@@ -124,7 +124,7 @@ impl Transport for WsTransport {
             input: Some(InputSource::Inline {
                 value: input.clone(),
             }),
-            filters: vec![], // TODO: serialize from FilterLibrary if needed
+            filters: vec![], // TODO: serialize from NodeCatalog if needed
             mode: if fit_mode {
                 ExecutionMode::Fit {
                     y: y.cloned(),

@@ -153,14 +153,14 @@ impl Filter for MeanNormalizer {
 
 use somatize_core::graph::{Graph, Node};
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::node_catalog::NodeCatalog;
 
 fn make_doubler_session() -> GraphSession {
     let mut graph = Graph::new();
     graph.nodes.push(Node::new("double", "Double", "double"));
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("double", Box::new(Doubler));
 
     let cache = Arc::new(MemoryCache::new(64 * 1024 * 1024)); // 64 MB
@@ -177,7 +177,7 @@ fn make_pipeline_session() -> GraphSession {
         .edges
         .push(Edge::data("norm_to_double", "norm", "double"));
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("norm", Box::new(MeanNormalizer));
     lib.register("double", Box::new(Doubler));
 

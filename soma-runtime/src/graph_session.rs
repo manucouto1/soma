@@ -1,13 +1,13 @@
 //! Graph session — the primary orchestrator for Graph → Compile → Execute.
 //!
-//! [`GraphSession`] binds a [`Graph`] with its [`FilterLibrary`], cache,
+//! [`GraphSession`] binds a [`Graph`] with its [`NodeCatalog`], cache,
 //! event bus, and optional distributed components into a single object
 //! that can compile, fit, and execute.
 
 use crate::cache::MemoryCache;
 use crate::event_bus::EventBus;
 use crate::executor::{self, Context, GraphInfo};
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 use crate::runner::Runner;
 use crate::runner::Transport;
 use somatize_compiler::{CompileMode, CompileResult, compile};
@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// The primary orchestrator: Graph + filters + cache + events.
 ///
 /// ```ignore
-/// let mut lib = FilterLibrary::new();
+/// let mut lib = NodeCatalog::new();
 /// lib.register("scaler", Box::new(MyScaler::new()));
 /// lib.register("model", Box::new(MyModel::new()));
 ///
@@ -35,7 +35,7 @@ use std::sync::Arc;
 /// ```
 pub struct GraphSession {
     graph: Graph,
-    library: FilterLibrary,
+    library: NodeCatalog,
     cache: Arc<dyn CacheStore>,
     event_bus: Arc<EventBus>,
     data_store: Option<Arc<dyn DataStore>>,
@@ -44,7 +44,7 @@ pub struct GraphSession {
 }
 
 impl GraphSession {
-    pub fn new(graph: Graph, library: FilterLibrary) -> Self {
+    pub fn new(graph: Graph, library: NodeCatalog) -> Self {
         Self {
             graph,
             library,
@@ -181,7 +181,7 @@ impl GraphSession {
             }
         };
 
-        // Store trained states from __state_ keys into FilterLibrary
+        // Store trained states from __state_ keys into NodeCatalog
         for (key, value) in &all_outputs {
             if let Some(node_id) = key.strip_prefix("__state_") {
                 self.library.try_set_state(node_id, value.clone())?;
@@ -299,12 +299,12 @@ impl GraphSession {
     }
 
     /// Access the filter library.
-    pub fn library(&self) -> &FilterLibrary {
+    pub fn library(&self) -> &NodeCatalog {
         &self.library
     }
 
     /// Mutable access to the filter library (for registering filters after creation).
-    pub fn library_mut(&mut self) -> &mut FilterLibrary {
+    pub fn library_mut(&mut self) -> &mut NodeCatalog {
         &mut self.library
     }
 
@@ -321,7 +321,7 @@ impl GraphSession {
 /// Compile and execute a graph, returning all node outputs.
 pub fn graph_run(
     graph: &Graph,
-    library: &FilterLibrary,
+    library: &NodeCatalog,
     mode: CompileMode,
     cache: &dyn CacheStore,
 ) -> Result<HashMap<String, Value>> {
@@ -348,7 +348,7 @@ pub fn graph_run(
 /// Fit all trainable filters in topological order.
 pub fn graph_fit(
     graph: &Graph,
-    library: &FilterLibrary,
+    library: &NodeCatalog,
     x: &Value,
     y: Option<&Value>,
     cache: &dyn CacheStore,
@@ -449,7 +449,7 @@ pub fn graph_fit(
 /// Compile in Inference mode and execute, returning the last leaf's output.
 pub fn graph_predict(
     graph: &Graph,
-    library: &FilterLibrary,
+    library: &NodeCatalog,
     x: &Value,
     cache: &dyn CacheStore,
 ) -> Result<Value> {
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn session_run_linear() {
         let graph = linear_graph(&["double", "add"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
         lib.register("add", Box::new(AdderFilter(10.0)));
 
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn session_fit_and_forward() {
         let graph = linear_graph(&["mean", "double"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("mean", Box::new(MeanFilter));
         lib.register("double", Box::new(DoublerFilter));
 
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn session_compile_diagnostics() {
         let graph = linear_graph(&["double"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
 
         let session = GraphSession::new(graph, lib);
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn graph_run_linear() {
         let graph = linear_graph(&["double", "add"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
         lib.register("add", Box::new(AdderFilter(10.0)));
 
@@ -724,7 +724,7 @@ mod tests {
         graph.edges.push(Edge::data("e1", "double", "merge"));
         graph.edges.push(Edge::data("e2", "add", "merge"));
 
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
         lib.register("add", Box::new(AdderFilter(100.0)));
 
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn graph_fit_trainable() {
         let graph = linear_graph(&["mean", "double"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("mean", Box::new(MeanFilter));
         lib.register("double", Box::new(DoublerFilter));
 
@@ -795,7 +795,7 @@ mod tests {
 
     #[test]
     fn filter_library_registry_compat() {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(DoublerFilter));
 
         let registry: &dyn FilterRegistry = &lib;

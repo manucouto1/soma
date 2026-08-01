@@ -9,6 +9,7 @@ use somatize_core::control::LoopCondition;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::filter::{Filter, FilterMeta};
 use somatize_core::graph::{Graph, NodeId};
+use somatize_core::node::NodeMeta;
 use std::collections::{HashMap, HashSet};
 
 /// Compilation mode affects caching behavior.
@@ -43,34 +44,45 @@ pub struct CompileResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Registry that maps node IDs to their filter metadata.
-/// The compiler needs metadata (cacheable, differentiable, etc.)
-/// but doesn't need the actual filter implementations.
-pub trait FilterRegistry: Send + Sync {
-    fn meta(&self, node_id: &str) -> Option<FilterMeta>;
+/// Registry that maps node IDs to their metadata.
+///
+/// The compiler needs metadata (cacheable, differentiable, schemas) but
+/// not the implementations behind it. One required accessor, answering
+/// for both kinds of node: an optional `step_meta` alongside a required
+/// `meta` is how half the schema validation came to be skipped by
+/// whichever registry forgot to override it.
+pub trait NodeRegistry: Send + Sync {
+    fn node_meta(&self, node_id: &str) -> Option<NodeMeta>;
     fn config_hash(&self, node_id: &str) -> Option<CacheKey>;
 
-    /// Metadata for an effectful step, if this node is one.
+    /// The computational view, for the phases that only make sense for a
+    /// filter: gradient flow, differentiable collapsing.
     ///
-    /// Defaulted so registries that only know filters need no change. A
-    /// registry that does know steps returns their schemas here, which is
-    /// what lets the compiler type-check a handoff between two agent nodes.
-    fn step_meta(&self, _node_id: &str) -> Option<somatize_core::step::StepMeta> {
-        None
+    /// `None` for an effectful node — deliberately. Those phases ask
+    /// "should a gradient pass through here", and the answer for a step
+    /// is not "no, and warn about it" but "the question does not apply".
+    fn meta(&self, node_id: &str) -> Option<FilterMeta> {
+        self.node_meta(node_id)
+            .filter(|m| !m.effectful)
+            .map(|m| m.as_filter_meta())
     }
 }
 
-/// Simple in-memory filter registry for compilation.
-pub struct SimpleFilterRegistry {
-    entries: HashMap<String, (FilterMeta, CacheKey)>,
-    steps: HashMap<String, somatize_core::step::StepMeta>,
+/// The port's former name, from when it only answered for filters.
+pub use NodeRegistry as FilterRegistry;
+
+/// Simple in-memory node registry for compilation.
+pub struct SimpleNodeRegistry {
+    entries: HashMap<String, (NodeMeta, CacheKey)>,
 }
 
-impl SimpleFilterRegistry {
+/// The registry's former name, from when it only held filters.
+pub type SimpleFilterRegistry = SimpleNodeRegistry;
+
+impl SimpleNodeRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            steps: HashMap::new(),
         }
     }
 
@@ -80,13 +92,18 @@ impl SimpleFilterRegistry {
         node_id: impl Into<String>,
         meta: somatize_core::step::StepMeta,
     ) {
-        self.steps.insert(node_id.into(), meta);
+        let id = node_id.into();
+        // A step's config hash is not derivable from its metadata; the
+        // compiler only needs one for cache resolution, which does not
+        // apply to an effectful node.
+        let hash = CacheKey::from_parts(&[b"step-meta", id.as_bytes()]);
+        self.entries.insert(id, (meta.into(), hash));
     }
 
     pub fn register(&mut self, node_id: impl Into<String>, filter: &dyn Filter) {
         let id = node_id.into();
         self.entries
-            .insert(id, (filter.meta(), filter.config_hash()));
+            .insert(id, (filter.meta().into(), filter.config_hash()));
     }
 
     pub fn register_meta(
@@ -95,27 +112,24 @@ impl SimpleFilterRegistry {
         meta: FilterMeta,
         config_hash: CacheKey,
     ) {
-        self.entries.insert(node_id.into(), (meta, config_hash));
+        self.entries
+            .insert(node_id.into(), (meta.into(), config_hash));
     }
 }
 
-impl Default for SimpleFilterRegistry {
+impl Default for SimpleNodeRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl FilterRegistry for SimpleFilterRegistry {
-    fn meta(&self, node_id: &str) -> Option<FilterMeta> {
+impl NodeRegistry for SimpleNodeRegistry {
+    fn node_meta(&self, node_id: &str) -> Option<NodeMeta> {
         self.entries.get(node_id).map(|(m, _)| m.clone())
     }
 
     fn config_hash(&self, node_id: &str) -> Option<CacheKey> {
         self.entries.get(node_id).map(|(_, h)| h.clone())
-    }
-
-    fn step_meta(&self, node_id: &str) -> Option<somatize_core::step::StepMeta> {
-        self.steps.get(node_id).cloned()
     }
 }
 
@@ -167,13 +181,13 @@ impl<'b> PlanCtx<'b> {
 /// Compiles a Graph into an ExecutionPlan.
 pub struct Compiler<'a> {
     graph: &'a Graph,
-    registry: &'a dyn FilterRegistry,
+    registry: &'a dyn NodeRegistry,
     mode: CompileMode,
     diagnostics: Vec<Diagnostic>,
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(graph: &'a Graph, registry: &'a dyn FilterRegistry, mode: CompileMode) -> Self {
+    pub fn new(graph: &'a Graph, registry: &'a dyn NodeRegistry, mode: CompileMode) -> Self {
         Self {
             graph,
             registry,
@@ -681,8 +695,8 @@ impl<'a> Compiler<'a> {
     /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
     fn resolve_distribution(&self, plan: ExecutionPlan) -> ExecutionPlan {
         match plan {
-            ExecutionPlan::Execute { ref node_id } => {
-                if let Some(meta) = self.registry.meta(node_id) {
+            ExecutionPlan::Execute { ref node_id } | ExecutionPlan::Step { ref node_id, .. } => {
+                if let Some(meta) = self.registry.node_meta(node_id) {
                     match &meta.distribution {
                         somatize_core::filter::Distribution::Remote(target) => {
                             ExecutionPlan::Remote {
@@ -716,10 +730,12 @@ impl<'a> Compiler<'a> {
                 let targets: Vec<_> = node_ids
                     .iter()
                     .filter_map(|nid| {
-                        self.registry.meta(nid).and_then(|m| match &m.distribution {
-                            somatize_core::filter::Distribution::Remote(t) => Some(t.clone()),
-                            _ => None,
-                        })
+                        self.registry
+                            .node_meta(nid)
+                            .and_then(|m| match &m.distribution {
+                                somatize_core::filter::Distribution::Remote(t) => Some(t.clone()),
+                                _ => None,
+                            })
                     })
                     .collect();
 
@@ -808,25 +824,15 @@ impl<'a> Compiler<'a> {
     /// What a node accepts, whether it is a filter or a step.
     fn input_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
         self.registry
-            .meta(node_id)
+            .node_meta(node_id)
             .and_then(|m| m.input_schema)
-            .or_else(|| {
-                self.registry
-                    .step_meta(node_id)
-                    .and_then(|m| m.input_schema)
-            })
     }
 
     /// What a node produces, whether it is a filter or a step.
     fn output_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
         self.registry
-            .meta(node_id)
+            .node_meta(node_id)
             .and_then(|m| m.output_schema)
-            .or_else(|| {
-                self.registry
-                    .step_meta(node_id)
-                    .and_then(|m| m.output_schema)
-            })
     }
 
     /// Check that every edge could carry what flows along it.
@@ -925,7 +931,7 @@ impl<'a> Compiler<'a> {
 /// Convenience function: compile a graph with default settings.
 pub fn compile(
     graph: &Graph,
-    registry: &dyn FilterRegistry,
+    registry: &dyn NodeRegistry,
     mode: CompileMode,
     cache: Option<&dyn CacheStore>,
 ) -> Result<CompileResult> {
@@ -939,7 +945,7 @@ pub fn compile(
 /// `StreamExecutor` that respects each filter's `StreamMode`.
 pub fn compile_stream(
     graph: &Graph,
-    _registry: &dyn FilterRegistry,
+    _registry: &dyn NodeRegistry,
     chunk_size: usize,
 ) -> Result<CompileResult> {
     graph.validate()?;

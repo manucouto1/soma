@@ -6,7 +6,7 @@ use somatize_core::event::Event;
 use somatize_core::filter::Filter;
 use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
-use somatize_runtime::{EventBus, FilterLibrary, MemoryCache, Runner};
+use somatize_runtime::{EventBus, MemoryCache, NodeCatalog, Runner};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,7 +16,7 @@ pub struct Worker {
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
-    filters: FilterLibrary,
+    filters: NodeCatalog,
     /// Optional persistent DataStore (S3, Zarr, etc.) — configured by user.
     data_store: Option<Arc<dyn DataStore>>,
     /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
@@ -36,7 +36,7 @@ impl Worker {
             capabilities,
             event_bus: Arc::new(EventBus::new(256)),
             cache: Arc::new(MemoryCache::default()),
-            filters: FilterLibrary::new(),
+            filters: NodeCatalog::new(),
             data_store: None,
             temp_store: Arc::new(temp_store),
             env_manager: crate::env_manager::EnvManager::new(

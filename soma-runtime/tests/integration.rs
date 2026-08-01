@@ -186,7 +186,7 @@ fn full_workflow_fit_forward_cache_rerun() {
 
     // Run 1: fit + forward
     let graph = make_linear_graph(&["normalizer", "model"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("normalizer", Box::new(Normalizer));
     lib.register(
         "model",
@@ -207,7 +207,7 @@ fn full_workflow_fit_forward_cache_rerun() {
 
     // Run 2: same config + same data → states should be cached
     let graph2 = make_linear_graph(&["normalizer", "model"]);
-    let mut lib2 = FilterLibrary::new();
+    let mut lib2 = NodeCatalog::new();
     lib2.register("normalizer", Box::new(Normalizer));
     lib2.register(
         "model",
@@ -230,7 +230,7 @@ fn cache_invalidation_on_config_change() {
 
     // Run 1: lr = 0.01
     let graph = make_linear_graph(&["model"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register(
         "model",
         Box::new(LinearModel {
@@ -244,7 +244,7 @@ fn cache_invalidation_on_config_change() {
 
     // Run 2: lr = 0.1 (different config)
     let graph2 = make_linear_graph(&["model"]);
-    let mut lib2 = FilterLibrary::new();
+    let mut lib2 = NodeCatalog::new();
     lib2.register("model", Box::new(LinearModel { learning_rate: 0.1 }));
     let mut s2 = GraphSession::new(graph2, lib2).with_cache(cache.clone());
 
@@ -260,7 +260,7 @@ fn cache_invalidation_on_data_change() {
     let cache = Arc::new(MemoryCache::default());
 
     let graph = make_linear_graph(&["normalizer"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("normalizer", Box::new(Normalizer));
     let mut s = GraphSession::new(graph, lib).with_cache(cache.clone());
 
@@ -271,7 +271,7 @@ fn cache_invalidation_on_data_change() {
 
     // Fit with data B
     let graph2 = make_linear_graph(&["normalizer"]);
-    let mut lib2 = FilterLibrary::new();
+    let mut lib2 = NodeCatalog::new();
     lib2.register("normalizer", Box::new(Normalizer));
     let mut s2 = GraphSession::new(graph2, lib2).with_cache(cache.clone());
 
@@ -329,7 +329,7 @@ fn study_with_graph_integration() {
             let lr = params["lr"].as_f64().unwrap();
 
             let graph = make_linear_graph(&["normalizer", "model"]);
-            let mut lib = FilterLibrary::new();
+            let mut lib = NodeCatalog::new();
             lib.register("normalizer", Box::new(Normalizer));
             lib.register("model", Box::new(LinearModel { learning_rate: lr }));
 
@@ -374,7 +374,7 @@ fn study_with_graph_integration() {
 #[test]
 fn graph_fit_error_propagates() {
     let graph = make_linear_graph(&["normalizer", "fail"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("normalizer", Box::new(Normalizer));
     lib.register("fail", Box::new(FailingFilter));
 
@@ -451,7 +451,7 @@ fn study_continues_after_failed_trials() {
 #[test]
 fn graph_single_filter() {
     let graph = make_linear_graph(&["normalizer"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("normalizer", Box::new(Normalizer));
 
     let mut session = GraphSession::new(graph, lib);
@@ -469,7 +469,7 @@ fn graph_single_filter() {
 #[test]
 fn graph_single_sample() {
     let graph = make_linear_graph(&["normalizer"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("normalizer", Box::new(Normalizer));
 
     let mut session = GraphSession::new(graph, lib);
@@ -524,7 +524,7 @@ fn compile_then_execute_with_cache() {
     let norm_output = normalizer.forward(&input, &norm_state).unwrap();
     let model_state = model.fit(&norm_output, None).unwrap();
 
-    let mut filters = FilterLibrary::new();
+    let mut filters = NodeCatalog::new();
     filters.register("normalizer", Box::new(Normalizer));
     filters.try_set_state("normalizer", norm_state).unwrap();
     filters.register(

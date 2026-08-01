@@ -6,7 +6,7 @@
 
 use super::Runner;
 use crate::EventBus;
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
@@ -22,7 +22,7 @@ pub trait Transport: Send + Sync {
     fn execute(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         input: &Value,
         y: Option<&Value>,
         fit_mode: bool,
@@ -46,7 +46,7 @@ pub trait Transport: Send + Sync {
             node_id: node_id.to_string(),
         };
         let input_val = input.cloned().unwrap_or(Value::Empty);
-        let filters = crate::filter_library::FilterLibrary::new();
+        let filters = crate::node_catalog::NodeCatalog::new();
         let (output, _) = self.execute(&plan, &filters, &input_val, None, false)?;
         Ok(output)
     }
@@ -74,7 +74,7 @@ impl Runner for RemoteRunner {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         _cache: &dyn CacheStore,
         _event_bus: &Arc<EventBus>,
         _run_id: &str,
@@ -87,7 +87,7 @@ impl Runner for RemoteRunner {
     fn forward(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         _cache: &dyn CacheStore,
         _event_bus: &Arc<EventBus>,
         input: &Value,

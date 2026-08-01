@@ -4,7 +4,7 @@
 //! and branch execution. Uses [`GraphInfo`] for topology-aware input resolution.
 
 use crate::event_bus::EventBus;
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
 use somatize_core::control::{
@@ -110,10 +110,14 @@ pub struct Context {
     /// Owned handle to the same cache passed to `execute()` — needed by
     /// the stream executor, which holds the cache across chunks.
     pub cache_arc: Option<Arc<dyn CacheStore>>,
-    /// Effectful steps, by node id. Only needed when the plan contains
-    /// `ExecutionPlan::Step`; a purely computational graph leaves it unset.
-    pub steps: Option<Arc<crate::step_library::StepLibrary>>,
-    /// Performs and journals step effects. Required alongside `steps`.
+    /// Performs and journals step effects. Only needed when the plan
+    /// contains a step; a purely computational graph leaves it unset.
+    ///
+    /// The steps themselves are not here: they live in the same
+    /// [`NodeCatalog`](crate::node_catalog::NodeCatalog) as the filters,
+    /// which the executor already receives. Keeping a second registry in
+    /// the context is what let the branch arm decide a node's kind by
+    /// asking whether it happened to be in it.
     pub driver: Option<crate::effects::EffectDriver>,
 }
 
@@ -131,22 +135,20 @@ impl Context {
             output_hashes: HashMap::new(),
             seed: None,
             cache_arc: None,
-            steps: None,
             driver: None,
         }
     }
 
-    /// Register the step library and effect driver an effectful plan needs.
+    /// Register the effect driver an effectful plan needs.
     ///
-    /// The driver is given the same library, so a step that fans out
-    /// dynamically can reach the workers it names.
-    pub fn with_steps(
+    /// The driver is given the catalog too, so a step that fans out
+    /// dynamically can reach the nodes it names.
+    pub fn with_driver(
         mut self,
-        steps: Arc<crate::step_library::StepLibrary>,
         driver: crate::effects::EffectDriver,
+        catalog: Arc<crate::node_catalog::NodeCatalog>,
     ) -> Self {
-        self.driver = Some(driver.with_steps(steps.clone()));
-        self.steps = Some(steps);
+        self.driver = Some(driver.with_catalog(catalog));
         self
     }
 
@@ -274,7 +276,6 @@ impl Context {
             output_hashes: self.output_hashes.clone(),
             seed: self.seed,
             cache_arc: self.cache_arc.clone(),
-            steps: self.steps.clone(),
             driver: self.driver.clone(),
         }
     }
@@ -287,7 +288,7 @@ pub trait Executable {
     fn execute(
         &self,
         ctx: &mut Context,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
     ) -> Result<()>;
 }
@@ -296,7 +297,7 @@ impl Executable for ExecutionPlan {
     fn execute(
         &self,
         ctx: &mut Context,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
     ) -> Result<()> {
         match self {
@@ -402,7 +403,7 @@ impl Executable for ExecutionPlan {
                 // an LLM deciding where a request goes is the routing case
                 // agentic graphs are built for.
                 let request = resolve_input(node_id, ctx);
-                if ctx.steps.as_ref().is_some_and(|s| s.contains(node_id)) {
+                if filters.is_step(node_id) {
                     execute_step(node_id, &[], ctx, filters, cache)?;
                 } else {
                     execute_node(node_id, ctx, filters, cache)?;
@@ -527,7 +528,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 pub fn execute(
     plan: &ExecutionPlan,
     ctx: &mut Context,
-    filters: &FilterLibrary,
+    filters: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     plan.execute(ctx, filters, cache)
@@ -549,27 +550,21 @@ fn execute_step(
     node_id: &str,
     handoffs: &[(String, ExecutionPlan)],
     ctx: &mut Context,
-    filters: &FilterLibrary,
+    filters: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     let start = Instant::now();
     let _span = tracing::info_span!("execute_step", %node_id).entered();
 
-    let steps = ctx.steps.clone().ok_or_else(|| SomaError::Execution {
-        node_id: node_id.to_string(),
-        message: "the plan contains a step but no step library was registered; \
-                  build the context with `with_steps(...)`"
-            .into(),
-    })?;
+    let step = filters
+        .step(node_id)
+        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
     let driver = ctx.driver.clone().ok_or_else(|| SomaError::Execution {
         node_id: node_id.to_string(),
         message: "the plan contains a step but no effect driver was registered; \
-                  build the context with `with_steps(...)`"
+                  build the context with `with_driver(...)`"
             .into(),
     })?;
-    let step = steps
-        .get(node_id)
-        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
 
     ctx.event_bus.emit(Event::NodeStarted {
         run_id: ctx.run_id.clone(),
@@ -656,7 +651,7 @@ fn execute_step(
 fn execute_node(
     node_id: &str,
     ctx: &mut Context,
-    filters: &FilterLibrary,
+    filters: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     let start = Instant::now();
@@ -785,7 +780,7 @@ fn execute_node(
 fn execute_parallel(
     branches: &[ExecutionPlan],
     ctx: &mut Context,
-    filters: &FilterLibrary,
+    filters: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     // What a branch contributes is what it *wrote*, not what happens to be
@@ -905,7 +900,7 @@ fn execute_stream(
     node_ids: &[String],
     chunk_size: usize,
     ctx: &mut Context,
-    filters: &FilterLibrary,
+    filters: &NodeCatalog,
     _cache: &dyn CacheStore,
 ) -> Result<()> {
     use crate::executors::{FittedFilter, StreamExecutor};
@@ -1077,7 +1072,7 @@ mod tests {
     /// in a parallel branch.
     #[test]
     fn a_panicking_parallel_branch_becomes_an_error() {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("boom", Box::new(PanicsInMeta));
         lib.register("fine", Box::new(DoublerFilter));
 
@@ -1233,7 +1228,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("doubler", vec!["input".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("doubler", Box::new(DoublerFilter));
 
         let plan = ExecutionPlan::Execute {
@@ -1256,7 +1251,7 @@ mod tests {
         let graph_info = GraphInfo::for_linear(&["input", "add", "double"]);
         ctx.graph_info = graph_info;
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("add", Box::new(AdderFilter { amount: 10.0 }));
         filters.register("double", Box::new(DoublerFilter));
 
@@ -1287,7 +1282,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("double", vec!["input".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("double", Box::new(DoublerFilter));
 
         execute(
@@ -1313,7 +1308,7 @@ mod tests {
     fn execute_missing_filter_errors() {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
-        let filters = FilterLibrary::new();
+        let filters = NodeCatalog::new();
 
         let result = execute(
             &ExecutionPlan::Execute {
@@ -1330,7 +1325,7 @@ mod tests {
     fn execute_empty_plan() {
         let (bus, cache) = setup();
         let mut ctx = Context::new(bus, "run_1");
-        let filters = FilterLibrary::new();
+        let filters = NodeCatalog::new();
         execute(&ExecutionPlan::Empty, &mut ctx, &filters, &cache).unwrap();
     }
 
@@ -1347,7 +1342,7 @@ mod tests {
             .set_predecessors("double", vec!["input".into()]);
         ctx.graph_info.set_predecessors("add", vec!["input".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("double", Box::new(DoublerFilter));
         filters.register("add", Box::new(AdderFilter { amount: 100.0 }));
 
@@ -1385,7 +1380,7 @@ mod tests {
             .set_predecessors("double", vec!["input".into()]);
         ctx.graph_info.set_predecessors("add", vec!["input".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("double", Box::new(DoublerFilter));
         filters.register("add", Box::new(AdderFilter { amount: 100.0 }));
 
@@ -1416,7 +1411,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("slow_b", vec!["input".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register(
             "slow_a",
             Box::new(SlowFilter {
@@ -1515,7 +1510,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("double", vec!["__input__".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("double", Box::new(DoublerFilter));
 
         let plan = ExecutionPlan::Stream {
@@ -1544,7 +1539,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("add", vec!["double".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("double", Box::new(DoublerFilter));
         filters.register("add", Box::new(AdderFilter { amount: 10.0 }));
 
@@ -1607,13 +1602,9 @@ mod tests {
 
     fn counting_setup(
         cacheable: bool,
-    ) -> (
-        FilterLibrary,
-        Arc<std::sync::atomic::AtomicUsize>,
-        GraphInfo,
-    ) {
+    ) -> (NodeCatalog, Arc<std::sync::atomic::AtomicUsize>, GraphInfo) {
         let forwards = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register(
             "a",
             Box::new(CountingFilter {
@@ -1634,7 +1625,7 @@ mod tests {
         (filters, forwards, info)
     }
 
-    fn run_chain(cache: &dyn CacheStore, filters: &FilterLibrary, info: &GraphInfo) -> Value {
+    fn run_chain(cache: &dyn CacheStore, filters: &NodeCatalog, info: &GraphInfo) -> Value {
         let bus = Arc::new(EventBus::new(64));
         let mut ctx = Context::new(bus, "run").with_graph_info(info.clone());
         ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
@@ -1871,7 +1862,7 @@ mod tests {
         ]);
 
         let run = |salt: f64| {
-            let mut filters = FilterLibrary::new();
+            let mut filters = NodeCatalog::new();
             filters.register(
                 "a",
                 Box::new(SaltedFilter {
@@ -1948,7 +1939,7 @@ mod tests {
         }
 
         let forwards = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register(
             "rng",
             Box::new(RandomishFilter {
@@ -1986,7 +1977,7 @@ mod tests {
         ctx.graph_info
             .set_predecessors("double", vec!["__input__".into()]);
 
-        let mut filters = FilterLibrary::new();
+        let mut filters = NodeCatalog::new();
         filters.register("double", Box::new(DoublerFilter));
 
         // chunk_size larger than input → single chunk

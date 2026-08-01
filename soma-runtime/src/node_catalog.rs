@@ -1,28 +1,66 @@
-//! Unified filter registry — holds implementations, metadata, and trained states.
+//! One registry for every node in a graph — implementations, metadata,
+//! and trained states.
 //!
-//! [`FilterLibrary`] is the single registry for the entire pipeline:
-//! the compiler reads metadata via [`FilterRegistry`], and the executor
-//! reads filters and states directly. No intermediate conversion needed.
+//! [`NodeCatalog`] holds both kinds of node. Filters and steps used to
+//! live in separate registries joined by a borrow-pair adapter, which
+//! meant three ways to answer "what is this node", and callers that
+//! reached for the filter half alone silently skipped half the schema
+//! validation. There is one place to ask now.
+//!
+//! The compiler reads metadata through [`NodeRegistry`]; the executor
+//! reads implementations and states directly. No intermediate conversion.
 //!
 //! States live in a pluggable [`StateStore`] — by default
 //! [`MemoryStateStore`], but users can inject a disk- or S3-backed store
-//! for pipelines whose trained states don't fit comfortably in RAM.
+//! for pipelines whose trained states don't fit comfortably in RAM. Steps
+//! hold no trained state: their history is the journal.
 
-use somatize_compiler::FilterRegistry;
+use somatize_compiler::NodeRegistry;
 use somatize_core::cache::CacheKey;
 use somatize_core::error::Result;
-use somatize_core::filter::{Filter, FilterMeta};
+use somatize_core::filter::Filter;
+#[cfg(test)]
+use somatize_core::filter::FilterMeta;
+use somatize_core::node::NodeMeta;
 use somatize_core::state::{MemoryStateStore, StateStore};
+use somatize_core::step::Step;
 use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Unified registry of filter implementations, metadata, and trained states.
+/// What sits behind a node id.
+///
+/// The only place in the workspace that names the two kinds. Everything
+/// downstream asks [`NodeCatalog::node_meta`] instead, which answers for
+/// both.
+#[derive(Clone)]
+pub enum NodeImpl {
+    Filter(Arc<dyn Filter>),
+    Step(Arc<dyn Step>),
+}
+
+impl NodeImpl {
+    pub fn meta(&self) -> NodeMeta {
+        match self {
+            Self::Filter(f) => f.meta().into(),
+            Self::Step(s) => s.meta().into(),
+        }
+    }
+
+    pub fn config_hash(&self) -> CacheKey {
+        match self {
+            Self::Filter(f) => f.config_hash(),
+            Self::Step(s) => s.config_hash(),
+        }
+    }
+}
+
+/// Every node a graph can execute, plus the states its filters have learned.
 ///
 /// ```ignore
-/// let mut lib = FilterLibrary::new();
+/// let mut lib = NodeCatalog::new();
 /// lib.register("scaler", Box::new(MyScaler { scale: 2.0 }));
-/// lib.register("model", Box::new(MyModel::default()));
+/// lib.register_step("researcher", Box::new(ReactStep::new("claude-opus-5")));
 ///
 /// // Use as compiler registry
 /// let result = somatize_compiler::compile(&graph, &lib, mode, cache)?;
@@ -30,50 +68,122 @@ use std::sync::Arc;
 /// // Use directly with executor — no conversion needed
 /// executor::execute(&plan, &mut ctx, &lib, &cache)?;
 /// ```
-/// Cloning shares both the filters and the state store, so a clone sees
-/// whatever the original has fitted. That is what lets one library serve
+/// Cloning shares both the nodes and the state store, so a clone sees
+/// whatever the original has fitted. That is what lets one catalog serve
 /// many graph runs — an agent running pipelines back to back, for instance.
 #[derive(Clone)]
-pub struct FilterLibrary {
-    filters: HashMap<String, Arc<dyn Filter>>,
+pub struct NodeCatalog {
+    nodes: HashMap<String, NodeImpl>,
     states: Arc<dyn StateStore>,
 }
 
-impl FilterLibrary {
-    /// Create a new library with an in-memory state store.
+/// The catalog's former name, from when it only held filters.
+pub type FilterLibrary = NodeCatalog;
+
+impl NodeCatalog {
+    /// Create a new catalog with an in-memory state store.
     pub fn new() -> Self {
         Self {
-            filters: HashMap::new(),
+            nodes: HashMap::new(),
             states: Arc::new(MemoryStateStore::new()),
         }
     }
 
-    /// Create a library with a custom [`StateStore`] backend.
+    /// Create a catalog with a custom [`StateStore`] backend.
     pub fn with_state_store(states: Arc<dyn StateStore>) -> Self {
         Self {
-            filters: HashMap::new(),
+            nodes: HashMap::new(),
             states,
         }
     }
 
     /// Register a filter for a given node ID.
     pub fn register(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
-        self.filters.insert(node_id.into(), Arc::from(filter));
+        self.nodes
+            .insert(node_id.into(), NodeImpl::Filter(Arc::from(filter)));
     }
 
-    /// Number of registered filters.
+    /// Register a step for a given node ID.
+    pub fn register_step(&mut self, node_id: impl Into<String>, step: Box<dyn Step>) {
+        self.nodes
+            .insert(node_id.into(), NodeImpl::Step(Arc::from(step)));
+    }
+
+    /// Register an already-shared step, for callers that built one
+    /// elsewhere (the Python bindings do).
+    pub fn register_step_arc(&mut self, node_id: impl Into<String>, step: Arc<dyn Step>) {
+        self.nodes.insert(node_id.into(), NodeImpl::Step(step));
+    }
+
+    /// Number of registered nodes, of either kind.
     pub fn len(&self) -> usize {
-        self.filters.len()
+        self.nodes.len()
     }
 
-    /// Whether the library is empty.
+    /// Whether the catalog is empty.
     pub fn is_empty(&self) -> bool {
-        self.filters.is_empty()
+        self.nodes.is_empty()
     }
 
-    /// Get a filter by node ID.
+    /// What sits behind a node id.
+    pub fn node(&self, node_id: &str) -> Option<&NodeImpl> {
+        self.nodes.get(node_id)
+    }
+
+    /// A node's contract, whichever kind it is.
+    pub fn node_meta(&self, node_id: &str) -> Option<NodeMeta> {
+        self.nodes.get(node_id).map(NodeImpl::meta)
+    }
+
+    /// Get a filter by node ID. `None` if the id is a step, or unknown.
     pub fn get(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
-        self.filters.get(node_id).cloned()
+        match self.nodes.get(node_id) {
+            Some(NodeImpl::Filter(f)) => Some(f.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get a step by node ID. `None` if the id is a filter, or unknown.
+    pub fn step(&self, node_id: &str) -> Option<Arc<dyn Step>> {
+        match self.nodes.get(node_id) {
+            Some(NodeImpl::Step(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// Is this node effectful?
+    pub fn is_step(&self, node_id: &str) -> bool {
+        matches!(self.nodes.get(node_id), Some(NodeImpl::Step(_)))
+    }
+
+    /// Does the catalog hold any effectful node at all?
+    ///
+    /// The question a caller asks before building an effect driver, which
+    /// costs a provider catalog read and a journal directory.
+    pub fn has_steps(&self) -> bool {
+        self.nodes.values().any(|n| matches!(n, NodeImpl::Step(_)))
+    }
+
+    /// Registered node ids, sorted, so listings are stable.
+    pub fn node_ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.nodes.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Learn a node's state, if it has one to learn.
+    ///
+    /// `None` means "nothing to learn here" — a stateless filter, an
+    /// opaque one, or a step — which is a different answer from an error.
+    pub fn learn(&self, node_id: &str, x: &Value, y: Option<&Value>) -> Option<Result<Value>> {
+        match self.nodes.get(node_id)? {
+            NodeImpl::Filter(f)
+                if f.meta().kind == somatize_core::filter::FilterKind::Trainable =>
+            {
+                Some(f.fit(x, y))
+            }
+            _ => None,
+        }
     }
 
     /// Store a trained state for a node.
@@ -87,7 +197,7 @@ impl FilterLibrary {
 
     /// Store a trained state, reporting a store failure through the log.
     ///
-    /// Prefer [`FilterLibrary::try_set_state`]: a state that failed to
+    /// Prefer [`NodeCatalog::try_set_state`]: a state that failed to
     /// store is a state the next `forward` will not find, and only the
     /// caller knows whether that is worth stopping for.
     #[deprecated(
@@ -108,7 +218,7 @@ impl FilterLibrary {
         self.states.get(node_id).ok().flatten()
     }
 
-    /// Drop all stored states (but keep filters).
+    /// Drop all stored states (but keep the nodes).
     pub fn clear_states(&self) {
         let _ = self.states.clear();
     }
@@ -120,21 +230,24 @@ impl FilterLibrary {
     }
 }
 
-impl Default for FilterLibrary {
+impl Default for NodeCatalog {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Implements [`FilterRegistry`] so the compiler can read metadata
-/// directly from the registered filter implementations.
-impl FilterRegistry for FilterLibrary {
-    fn meta(&self, node_id: &str) -> Option<FilterMeta> {
-        self.filters.get(node_id).map(|f| f.meta())
+/// Implements [`NodeRegistry`] so the compiler can read metadata directly
+/// from the registered implementations — filters *and* steps.
+///
+/// This is what closed the hole where a caller passing the filter half
+/// alone got the graph compiled with every step edge unchecked.
+impl NodeRegistry for NodeCatalog {
+    fn node_meta(&self, node_id: &str) -> Option<NodeMeta> {
+        NodeCatalog::node_meta(self, node_id)
     }
 
     fn config_hash(&self, node_id: &str) -> Option<CacheKey> {
-        self.filters.get(node_id).map(|f| f.config_hash())
+        self.nodes.get(node_id).map(NodeImpl::config_hash)
     }
 }
 

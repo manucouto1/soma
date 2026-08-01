@@ -340,7 +340,7 @@ fn graph_fit_events_reach_the_run_dir() {
     use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     use somatize_core::graph::{Edge, Graph, Node};
     use somatize_core::value::Value;
-    use somatize_runtime::{FilterLibrary, GraphSession};
+    use somatize_runtime::{GraphSession, NodeCatalog};
 
     struct Doubler;
     impl Filter for Doubler {
@@ -382,7 +382,7 @@ fn graph_fit_events_reach_the_run_dir() {
     graph.nodes.push(Node::new("a", "a", "a"));
     graph.nodes.push(Node::new("b", "b", "b"));
     graph.edges.push(Edge::data("e0", "a", "b"));
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("a", Box::new(Doubler));
     lib.register("b", Box::new(Doubler));
 
@@ -756,7 +756,7 @@ fn session_fit_and_run_emit_matching_run_bracket() {
     use somatize_core::graph::{Edge, Graph, Node};
     use somatize_core::value::Value;
     use somatize_runtime::tracking::RunReader;
-    use somatize_runtime::{FilterLibrary, GraphSession};
+    use somatize_runtime::{GraphSession, NodeCatalog};
 
     struct Doubler;
     impl Filter for Doubler {
@@ -794,7 +794,7 @@ fn session_fit_and_run_emit_matching_run_bracket() {
     graph.nodes.push(Node::new("a", "a", "a"));
     graph.nodes.push(Node::new("b", "b", "b"));
     graph.edges.push(Edge::data("e0", "a", "b"));
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("a", Box::new(Doubler));
     lib.register("b", Box::new(Doubler));
 

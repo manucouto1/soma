@@ -17,7 +17,7 @@ use somatize_runtime::cache::FsActionStore;
 use somatize_runtime::effects::{
     EffectDriver, EffectHandler, EffectJournal, GraphHandler, StepOutcome,
 };
-use somatize_runtime::filter_library::FilterLibrary;
+use somatize_runtime::node_catalog::NodeCatalog;
 use std::sync::{Arc, Mutex};
 
 // ── A model that answers from a script ──
@@ -118,8 +118,8 @@ fn pipeline() -> Graph {
     graph
 }
 
-fn library() -> FilterLibrary {
-    let mut library = FilterLibrary::new();
+fn library() -> NodeCatalog {
+    let mut library = NodeCatalog::new();
     library.register("classifier", Box::new(Scored));
     library
 }

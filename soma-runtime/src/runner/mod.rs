@@ -14,7 +14,7 @@ use somatize_core::value::Value;
 use std::collections::HashMap;
 
 use crate::EventBus;
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 use std::sync::Arc;
 
 /// Contract for executing plans. Every execution mode (local, remote, stream)
@@ -30,7 +30,7 @@ pub trait Runner: Send + Sync {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         run_id: &str,
@@ -42,7 +42,7 @@ pub trait Runner: Send + Sync {
     fn forward(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         cache: &dyn CacheStore,
         event_bus: &Arc<EventBus>,
         input: &Value,
