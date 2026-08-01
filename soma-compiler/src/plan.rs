@@ -94,75 +94,78 @@ pub enum ExecutionPlan {
 }
 
 impl ExecutionPlan {
-    /// Count total nodes in the plan.
-    pub fn node_count(&self) -> usize {
+    /// The node ids this variant introduces itself, excluding its children.
+    ///
+    /// `Remote` introduces none: it wraps a plan that already names the
+    /// node. Counting it here as well is what made `node_ids()` return the
+    /// same id twice for every remote node — and `LocalRunner::fit`, which
+    /// iterates that list, fit it twice.
+    fn own_node_ids(&self) -> &[String] {
         match self {
-            Self::Execute { .. } | Self::Step { .. } => 1,
-            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => node_ids.len(),
-            Self::Sequence(steps) | Self::Parallel(steps) => {
-                steps.iter().map(|s| s.node_count()).sum()
-            }
-            Self::Loop { body, .. } => 1 + body.node_count(),
-            Self::Branch { arms, .. } => {
-                1 + arms.iter().map(|(_, p)| p.node_count()).sum::<usize>()
-            }
-            Self::Remote { plan, .. } => plan.node_count(),
-            Self::Empty => 0,
+            Self::Execute { node_id }
+            | Self::Step { node_id, .. }
+            | Self::Loop { node_id, .. }
+            | Self::Branch { node_id, .. } => std::slice::from_ref(node_id),
+            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => node_ids,
+            Self::Remote { .. } | Self::Sequence(_) | Self::Parallel(_) | Self::Empty => &[],
         }
     }
 
+    /// The sub-plans nested inside this one, each with its edge label if it
+    /// has one — a branch arm's label, a handoff's target.
+    ///
+    /// One structural walk, so the accessors below cannot disagree about
+    /// the shape of the tree. They used to: `node_count` skipped a step's
+    /// handoffs while `node_ids` collected them, so an agentic plan
+    /// reported fewer nodes than it had.
+    pub fn children(&self) -> impl Iterator<Item = (Option<&str>, &ExecutionPlan)> {
+        let labelled: &[(String, ExecutionPlan)] = match self {
+            Self::Step { handoffs, .. } => handoffs,
+            Self::Branch { arms, .. } => arms,
+            _ => &[],
+        };
+        let plain: &[ExecutionPlan] = match self {
+            Self::Sequence(steps) | Self::Parallel(steps) => steps,
+            _ => &[],
+        };
+        let single: Option<&ExecutionPlan> = match self {
+            Self::Loop { body, .. } => Some(body),
+            Self::Remote { plan, .. } => Some(plan),
+            _ => None,
+        };
+
+        labelled
+            .iter()
+            .map(|(l, p)| (Some(l.as_str()), p))
+            .chain(plain.iter().map(|p| (None, p)))
+            .chain(single.map(|p| (None, p)))
+    }
+
+    /// Count total nodes in the plan.
+    pub fn node_count(&self) -> usize {
+        self.own_node_ids().len() + self.children().map(|(_, p)| p.node_count()).sum::<usize>()
+    }
+
     /// Count parallel branches at the top level of the plan.
+    ///
+    /// Top level only, deliberately: this feeds a run's summary, and a
+    /// fan-out inside a loop body happens once per iteration rather than
+    /// once per run.
     pub fn parallel_branch_count(&self) -> usize {
         match self {
             Self::Parallel(branches) => branches.len(),
             Self::Sequence(steps) => steps.iter().map(|s| s.parallel_branch_count()).sum(),
-            Self::Execute { .. }
-            | Self::Step { .. }
-            | Self::Loop { .. }
-            | Self::Branch { .. }
-            | Self::Remote { .. }
-            | Self::Composite { .. }
-            | Self::Stream { .. }
-            | Self::Empty => 0,
+            _ => 0,
         }
     }
 
     /// Collect all node IDs referenced in the plan.
     pub fn node_ids(&self) -> Vec<&str> {
-        match self {
-            Self::Execute { node_id } => vec![node_id.as_str()],
-            Self::Step { node_id, handoffs } => {
-                let mut ids = vec![node_id.as_str()];
-                for (_, p) in handoffs {
-                    ids.extend(p.node_ids());
-                }
-                ids
-            }
-            Self::Sequence(steps) | Self::Parallel(steps) => {
-                steps.iter().flat_map(|s| s.node_ids()).collect()
-            }
-            Self::Loop { node_id, body, .. } => {
-                let mut ids = vec![node_id.as_str()];
-                ids.extend(body.node_ids());
-                ids
-            }
-            Self::Branch { node_id, arms, .. } => {
-                let mut ids = vec![node_id.as_str()];
-                for (_, p) in arms {
-                    ids.extend(p.node_ids());
-                }
-                ids
-            }
-            Self::Remote { node_id, plan, .. } => {
-                let mut ids = vec![node_id.as_str()];
-                ids.extend(plan.node_ids());
-                ids
-            }
-            Self::Composite { node_ids } | Self::Stream { node_ids, .. } => {
-                node_ids.iter().map(|s| s.as_str()).collect()
-            }
-            Self::Empty => vec![],
+        let mut ids: Vec<&str> = self.own_node_ids().iter().map(String::as_str).collect();
+        for (_, child) in self.children() {
+            ids.extend(child.node_ids());
         }
+        ids
     }
 
     /// Create a PlanSummary for event payloads.
@@ -210,6 +213,13 @@ impl ExecutionPlan {
         out
     }
 
+    /// Renders directly rather than over [`Self::children`], and so does
+    /// [`Self::graph_nodes`], because the two do not draw the same picture:
+    /// mermaid synthesises an `arm_N` node between a branch and each arm
+    /// and draws handoffs as dotted edges to the target, while `to_graph`
+    /// parents an arm straight to the branch and puts the label on the
+    /// edge. Folding them together would have to change one of the two
+    /// outputs. They share the shape of the recursion, not its result.
     fn mermaid_nodes(&self, out: &mut String, counter: &mut usize, parent: Option<&str>) {
         use std::fmt::Write;
         match self {
@@ -535,6 +545,88 @@ impl ExecutionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Remote` wraps a plan that already names the node, so counting the
+    /// wrapper's id as well listed it twice. `LocalRunner::fit` iterates
+    /// this list, so a remote trainable node was fitted twice.
+    #[test]
+    fn a_remote_node_is_listed_once() {
+        let plan = ExecutionPlan::Remote {
+            node_id: "n".into(),
+            target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+            plan: Box::new(ExecutionPlan::Execute {
+                node_id: "n".into(),
+            }),
+        };
+        assert_eq!(plan.node_ids(), vec!["n"]);
+        assert_eq!(plan.node_count(), 1);
+    }
+
+    /// `node_count` and `node_ids` walk the same tree and must agree.
+    /// `node_count` used to skip a step's handoffs while `node_ids`
+    /// collected them, so an agentic plan reported fewer nodes than it ran.
+    #[test]
+    fn the_two_walks_agree_on_a_plan_with_handoffs() {
+        let plan = ExecutionPlan::Step {
+            node_id: "router".into(),
+            handoffs: vec![
+                (
+                    "billing".into(),
+                    ExecutionPlan::Execute {
+                        node_id: "billing".into(),
+                    },
+                ),
+                (
+                    "tech".into(),
+                    ExecutionPlan::Sequence(vec![
+                        ExecutionPlan::Execute {
+                            node_id: "triage".into(),
+                        },
+                        ExecutionPlan::Execute {
+                            node_id: "tech".into(),
+                        },
+                    ]),
+                ),
+            ],
+        };
+
+        assert_eq!(plan.node_ids(), vec!["router", "billing", "triage", "tech"]);
+        assert_eq!(plan.node_count(), plan.node_ids().len());
+    }
+
+    /// Whatever the shape, the two accessors count the same tree.
+    #[test]
+    fn node_count_is_the_length_of_node_ids() {
+        let plan = ExecutionPlan::Sequence(vec![
+            ExecutionPlan::Execute {
+                node_id: "prep".into(),
+            },
+            ExecutionPlan::Parallel(vec![
+                ExecutionPlan::Execute {
+                    node_id: "a".into(),
+                },
+                ExecutionPlan::Loop {
+                    node_id: "refine".into(),
+                    body: Box::new(ExecutionPlan::Execute {
+                        node_id: "draft".into(),
+                    }),
+                    max_iterations: Some(3),
+                    until: somatize_core::control::LoopCondition::Exhaust,
+                    carry_from: None,
+                },
+            ]),
+            ExecutionPlan::Branch {
+                node_id: "route".into(),
+                arms: vec![(
+                    "left".into(),
+                    ExecutionPlan::Execute {
+                        node_id: "l".into(),
+                    },
+                )],
+            },
+        ]);
+        assert_eq!(plan.node_count(), plan.node_ids().len());
+    }
 
     #[test]
     fn node_count_linear() {
