@@ -138,6 +138,7 @@ impl Runner for LocalRunner {
                 run_id: run_id.to_string(),
                 node_id: node_id.to_string(),
                 kind: meta.kind,
+                effectful: false,
             });
 
             // Resolve input from predecessors

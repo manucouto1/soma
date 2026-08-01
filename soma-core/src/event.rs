@@ -53,6 +53,15 @@ pub enum Event {
         run_id: RunId,
         node_id: NodeId,
         kind: FilterKind,
+        /// Does this node reach outside the graph — a model, a tool, a
+        /// person?
+        ///
+        /// An effectful node has no honest [`FilterKind`], and reporting
+        /// it as `Opaque` made every consumer see an agent as a filter it
+        /// could not look inside. Defaulted so run logs written before
+        /// this field existed still parse.
+        #[serde(default)]
+        effectful: bool,
     },
 
     /// A filter node reports progress (0.0 to 1.0).

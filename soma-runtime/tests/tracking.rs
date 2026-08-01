@@ -599,6 +599,7 @@ fn run_reader_aggregates_a_tracked_run() {
         run_id: rid.clone(),
         node_id: "scaler".into(),
         kind: somatize_core::filter::FilterKind::Trainable,
+        effectful: false,
     });
     sink.record(&Event::NodeCompleted {
         run_id: rid.clone(),
@@ -878,6 +879,7 @@ fn run_reader_overlay_and_annotated_mermaid() {
             run_id: rid.clone(),
             node_id: "scaler".into(),
             kind: somatize_core::filter::FilterKind::Trainable,
+            effectful: false,
         });
         sink.record(&Event::NodeCompleted {
             run_id: rid.clone(),

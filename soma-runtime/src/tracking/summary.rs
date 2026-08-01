@@ -341,6 +341,7 @@ mod tests {
                 run_id: run_id.clone(),
                 node_id: node.into(),
                 kind: FilterKind::Trainable,
+                effectful: false,
             });
             sink.record(&Event::NodeCompleted {
                 run_id: run_id.clone(),
@@ -427,6 +428,7 @@ mod tests {
             run_id: tracker.run_id().into(),
             node_id: "encoder".into(),
             kind: FilterKind::Trainable,
+            effectful: false,
         });
         sink.record(&Event::NodeFailed {
             run_id: tracker.run_id().into(),

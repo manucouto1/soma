@@ -4,7 +4,7 @@
 //! and branch execution. Uses [`GraphInfo`] for topology-aware input resolution.
 
 use crate::event_bus::EventBus;
-use crate::node_catalog::NodeCatalog;
+use crate::node_catalog::{NodeCatalog, NodeImpl};
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
 use somatize_core::control::{
@@ -12,6 +12,7 @@ use somatize_core::control::{
 };
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
+use somatize_core::node::NodeOutcome;
 use somatize_core::store::DataStore;
 use somatize_core::value::Value;
 use somatize_core::virtual_value::VirtualValue;
@@ -303,10 +304,11 @@ impl Executable for ExecutionPlan {
         match self {
             ExecutionPlan::Empty => Ok(()),
 
-            ExecutionPlan::Execute { node_id } => execute_node(node_id, ctx, filters, cache),
+            // One call for both: a filter simply declares no handoffs.
+            ExecutionPlan::Execute { node_id } => execute_node(node_id, &[], ctx, filters, cache),
 
             ExecutionPlan::Step { node_id, handoffs } => {
-                execute_step(node_id, handoffs, ctx, filters, cache)
+                execute_node(node_id, handoffs, ctx, filters, cache)
             }
 
             ExecutionPlan::Sequence(steps) => {
@@ -401,25 +403,40 @@ impl Executable for ExecutionPlan {
                 // Execute the branch node first (it produces the condition
                 // value). It may be an ordinary filter or an effectful step:
                 // an LLM deciding where a request goes is the routing case
-                // agentic graphs are built for.
+                // agentic graphs are built for. Which it is no longer needs
+                // asking — one call runs either, and the outcome says how
+                // the arm was chosen.
                 let request = resolve_input(node_id, ctx);
-                if filters.is_step(node_id) {
-                    execute_step(node_id, &[], ctx, filters, cache)?;
-                } else {
-                    execute_node(node_id, ctx, filters, cache)?;
-                }
+                let outcome = run_node(node_id, ctx, filters, cache)?;
 
-                let condition = ctx.get(node_id).cloned().unwrap_or(Value::Empty);
+                let selector = match outcome {
+                    // A routing step names its arm directly. This used to
+                    // be unreachable: the branch called the step with no
+                    // handoffs — its control edges having been consumed as
+                    // the branch's arms — so a `Goto` always errored.
+                    NodeOutcome::HandOff { target, .. } => target,
 
-                let selector =
-                    read_arm_selector(&condition).ok_or_else(|| SomaError::Execution {
-                        node_id: node_id.clone(),
-                        message: format!(
-                            "branch condition produced `{}`, which names no arm. Return the \
-                             arm's label as a string, a bool, or {{\"branch\": \"<label>\"}}",
-                            condition.type_name()
-                        ),
-                    })?;
+                    NodeOutcome::Produced(condition) => {
+                        read_arm_selector(&condition).ok_or_else(|| SomaError::Execution {
+                            node_id: node_id.clone(),
+                            message: format!(
+                                "branch condition produced `{}`, which names no arm. Return \
+                                 the arm's label as a string, a bool, or \
+                                 {{\"branch\": \"<label>\"}}",
+                                condition.type_name()
+                            ),
+                        })?
+                    }
+
+                    NodeOutcome::Paused { turn, reason } => {
+                        return Err(SomaError::Suspended {
+                            run_id: ctx.run_id.clone(),
+                            node_id: node_id.clone(),
+                            turn,
+                            reason: Box::new(reason),
+                        });
+                    }
+                };
 
                 let (label, plan) = arms
                     .iter()
@@ -481,7 +498,7 @@ impl Executable for ExecutionPlan {
                 // Sequential fallback — execute each node in order.
                 // A future Python-aware executor will pass tensors directly.
                 for nid in node_ids {
-                    execute_node(nid, ctx, filters, cache)?;
+                    execute_node(nid, &[], ctx, filters, cache)?;
                 }
                 Ok(())
             }
@@ -534,151 +551,117 @@ pub fn execute(
     plan.execute(ctx, filters, cache)
 }
 
-/// Execute a single filter node.
+/// Run one node and act on how it finished.
 ///
-/// Cacheable nodes are memoized: the output key is
-/// `hash(config + state + input)` — if a previous run (possibly in
-/// another process, via a persistent cache) already computed this exact
-/// forward, the stored output is used and the filter never runs.
-/// Run an effectful step and store its output.
-///
-/// Unlike [`execute_node`] there is no output caching here. A step's result
-/// is not a function of its input, so a content-addressed key would be a lie;
-/// what makes a step re-runnable is the effect journal, which the driver
-/// consults per effect.
-fn execute_step(
+/// The single entry point for both kinds. Everything that does not depend
+/// on which kind ran — resolving the input, the output cache, containing a
+/// panic, the start/complete/fail events — happens once, in [`run_node`].
+/// What is left here is the control flow only a step can ask for.
+fn execute_node(
     node_id: &str,
     handoffs: &[(String, ExecutionPlan)],
     ctx: &mut Context,
-    filters: &NodeCatalog,
+    catalog: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
-    let start = Instant::now();
-    let _span = tracing::info_span!("execute_step", %node_id).entered();
+    match run_node(node_id, ctx, catalog, cache)? {
+        NodeOutcome::Produced(_) => Ok(()),
 
-    let step = filters
-        .step(node_id)
-        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
-    let driver = ctx.driver.clone().ok_or_else(|| SomaError::Execution {
-        node_id: node_id.to_string(),
-        message: "the plan contains a step but no effect driver was registered; \
-                  build the context with `with_driver(...)`"
-            .into(),
-    })?;
-
-    ctx.event_bus.emit(Event::NodeStarted {
-        run_id: ctx.run_id.clone(),
-        node_id: node_id.to_string(),
-        kind: somatize_core::filter::FilterKind::Opaque,
-    });
-
-    let input = resolve_input(node_id, ctx);
-    let run_id = ctx.run_id.clone();
-
-    let outcome = driver
-        .run(step.as_ref(), &run_id, node_id, &input)
-        .inspect_err(|e| {
-            ctx.event_bus.emit(Event::NodeFailed {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                error: e.to_string(),
-            });
-        })?;
-
-    match outcome {
-        crate::effects::StepOutcome::Done(output) => {
-            let summary = format!("{output}");
-            ctx.set(node_id, output);
-            ctx.event_bus.emit(Event::NodeCompleted {
-                run_id,
-                node_id: node_id.to_string(),
-                duration: start.elapsed(),
-                output_summary: summary,
-            });
-            Ok(())
+        // A handoff: the node is finished and names who continues.
+        NodeOutcome::HandOff { target, .. } => {
+            let plan = select_handoff(node_id, &target, handoffs)?;
+            plan.execute(ctx, catalog, cache)
         }
 
-        // A handoff: the step is finished, and names who continues. The
-        // carried value is stored under *this* node, so the target resolves
-        // it as an ordinary predecessor output — no special path.
-        crate::effects::StepOutcome::Goto { target, carry } => {
-            let plan = handoffs
-                .iter()
-                .find(|(t, _)| *t == target)
-                .map(|(_, p)| p)
-                .ok_or_else(|| SomaError::Execution {
-                    node_id: node_id.to_string(),
-                    message: if handoffs.is_empty() {
-                        format!(
-                            "step handed control to `{target}`, but it declares no \
-                             handoffs. Add a control edge from `{node_id}` to `{target}`"
-                        )
-                    } else {
-                        format!(
-                            "step handed control to `{target}`, which is not among its \
-                             declared handoffs ({})",
-                            handoffs
-                                .iter()
-                                .map(|(t, _)| t.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    },
-                })?;
-
-            ctx.set(node_id, carry);
-            ctx.event_bus.emit(Event::NodeCompleted {
-                run_id,
-                node_id: node_id.to_string(),
-                duration: start.elapsed(),
-                output_summary: format!("handed off to {target}"),
-            });
-            plan.execute(ctx, filters, cache)
-        }
-
-        // Not a failure: the run paused. It travels as an error so the rest
-        // of the plan does not execute, and carries everything the caller
-        // needs to answer and resume.
-        crate::effects::StepOutcome::Suspended { turn, reason } => Err(SomaError::Suspended {
-            run_id,
+        // Not a failure: the run paused. It travels as an error so the
+        // rest of the plan does not execute, and carries everything the
+        // caller needs to answer and resume.
+        NodeOutcome::Paused { turn, reason } => Err(SomaError::Suspended {
+            run_id: ctx.run_id.clone(),
             node_id: node_id.to_string(),
             turn,
-            reason: serde_json::to_string(&reason).unwrap_or_else(|_| "unknown".into()),
+            reason: Box::new(reason),
         }),
     }
 }
 
-fn execute_node(
+/// Which sub-plan a handoff target names.
+fn select_handoff<'p>(
+    node_id: &str,
+    target: &str,
+    handoffs: &'p [(String, ExecutionPlan)],
+) -> Result<&'p ExecutionPlan> {
+    handoffs
+        .iter()
+        .find(|(t, _)| t == target)
+        .map(|(_, p)| p)
+        .ok_or_else(|| SomaError::Execution {
+            node_id: node_id.to_string(),
+            message: if handoffs.is_empty() {
+                format!(
+                    "step handed control to `{target}`, but it declares no \
+                     handoffs. Add a control edge from `{node_id}` to `{target}`"
+                )
+            } else {
+                format!(
+                    "step handed control to `{target}`, which is not among its \
+                     declared handoffs ({})",
+                    handoffs
+                        .iter()
+                        .map(|(t, _)| t.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
+        })
+}
+
+/// Everything running a node involves that is the same for both kinds.
+///
+/// Cacheable nodes are memoized: the output key is
+/// `hash(config + state + input)` — if a previous run (possibly in another
+/// process, via a persistent cache) already computed this exact forward,
+/// the stored output is used and the node never runs.
+///
+/// A step never reaches that path, and not because of a check here: its
+/// [`NodeMeta`](somatize_core::node::NodeMeta) declares
+/// `cacheable: false`, so the guard below skips it the way it skips a
+/// filter that declared the same. What makes a step re-runnable instead is
+/// the effect journal, which the driver consults per effect.
+///
+/// The produced value — or a handoff's carry — is stored under `node_id`
+/// before returning, so a successor resolves it as an ordinary predecessor
+/// output.
+fn run_node(
     node_id: &str,
     ctx: &mut Context,
-    filters: &NodeCatalog,
+    catalog: &NodeCatalog,
     cache: &dyn CacheStore,
-) -> Result<()> {
+) -> Result<NodeOutcome> {
     let start = Instant::now();
 
-    let filter = filters
-        .get(node_id)
-        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
-    let meta = filter.meta();
+    let node = catalog
+        .node(node_id)
+        .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?
+        .clone();
+    let meta = node.meta();
 
-    let _span = tracing::info_span!("execute_node", %node_id).entered();
+    let _span = tracing::info_span!("run_node", %node_id).entered();
 
     let input = resolve_input(node_id, ctx);
     // Borrow state via Arc — cloning the inner Value here would deep-copy
     // potentially huge tensors (encoder outputs, model weights) on every
     // forward call. Arc::clone is a cheap atomic increment.
-    let state = filters.get_state(node_id);
+    let state = catalog.get_state(node_id);
     let state_ref: &Value = state.as_deref().unwrap_or(&Value::Empty);
 
-    // An unhashable state/input means "uncacheable", not an error:
-    // execution proceeds, only memoization is skipped. Nondeterministic
-    // forwards (declared via `deterministic = false`) are also excluded:
-    // serving a recorded result would silently freeze what the user
-    // expects to vary. (Their fit STATES still cache — any recorded
+    // Nondeterministic forwards (declared via `deterministic = false`) are
+    // excluded: serving a recorded result would silently freeze what the
+    // user expects to vary. (Their fit STATES still cache — any recorded
     // training result is acceptable, constructive-trace semantics.)
     let out_key = if meta.cacheable && meta.deterministic {
         let key = somatize_core::cache::CacheKey::for_output(
-            &filter.config_hash(),
+            &node.config_hash(),
             &somatize_core::cache::CacheKey::for_value(state_ref),
             &ctx.input_hash(node_id, &input),
         );
@@ -693,7 +676,7 @@ fn execute_node(
     if let Some(key) = &out_key
         && let Ok(Some((cached, tier))) = cache.get_located(key)
     {
-        ctx.set(node_id.to_string(), cached);
+        ctx.set(node_id.to_string(), cached.clone());
         ctx.event_bus.emit(Event::NodeCacheHit {
             run_id: ctx.run_id.clone(),
             node_id: node_id.to_string(),
@@ -701,7 +684,7 @@ fn execute_node(
             tier,
             load_time: start.elapsed(),
         });
-        return Ok(());
+        return Ok(NodeOutcome::Produced(cached));
     }
 
     if let Some(key) = &out_key {
@@ -716,28 +699,44 @@ fn execute_node(
         run_id: ctx.run_id.clone(),
         node_id: node_id.to_string(),
         kind: meta.kind,
+        effectful: meta.effectful,
     });
 
-    // catch_unwind: a panic in a user filter must not crash the process
+    // catch_unwind: a panic in user code must not crash the process. It
+    // wraps the step branch too — a Python step is user code by the same
+    // argument a Python filter is, and it used to take the process down.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        filter.forward(&input, state_ref)
+        run_node_inner(&node, node_id, ctx, &input, state_ref)
     }));
 
     let result = match result {
         Ok(inner) => inner,
         Err(panic) => {
             let msg = panic_message(&*panic);
-            tracing::error!(node_id, "filter panicked: {msg}");
+            tracing::error!(node_id, "node panicked: {msg}");
             Err(SomaError::Execution {
                 node_id: node_id.to_string(),
-                message: format!("filter panicked: {msg}"),
+                message: format!("node panicked: {msg}"),
             })
         }
     };
 
-    match result {
-        Ok(output) => {
-            let duration = start.elapsed();
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            tracing::error!(node_id, error = %e, "node execution failed");
+            ctx.event_bus.emit(Event::NodeFailed {
+                run_id: ctx.run_id.clone(),
+                node_id: node_id.to_string(),
+                error: e.to_string(),
+            });
+            return Err(e);
+        }
+    };
+
+    let duration = start.elapsed();
+    match &outcome {
+        NodeOutcome::Produced(output) => {
             let summary = format!("{output}");
             if let Some(key) = &out_key {
                 // Best-effort: a full cache disk must never fail the run.
@@ -746,12 +745,12 @@ fn execute_node(
                     run_id: ctx.run_id.clone(),
                 };
                 if let Err(e) =
-                    cache.put_computed(key, &output, &origin, duration, meta.deterministic)
+                    cache.put_computed(key, output, &origin, duration, meta.deterministic)
                 {
                     tracing::warn!(node_id, error = %e, "failed to cache node output");
                 }
             }
-            let vv = ctx.maybe_spill(node_id, output);
+            let vv = ctx.maybe_spill(node_id, output.clone());
             ctx.set_virtual(node_id, vv);
             ctx.event_bus.emit(Event::NodeCompleted {
                 run_id: ctx.run_id.clone(),
@@ -759,16 +758,46 @@ fn execute_node(
                 duration,
                 output_summary: summary,
             });
-            Ok(())
         }
-        Err(e) => {
-            tracing::error!(node_id, error = %e, "node execution failed");
-            ctx.event_bus.emit(Event::NodeFailed {
+
+        // The carried value is stored under *this* node, so the target
+        // resolves it as an ordinary predecessor output — no special path.
+        NodeOutcome::HandOff { target, carry } => {
+            ctx.set(node_id, carry.clone());
+            ctx.event_bus.emit(Event::NodeCompleted {
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.to_string(),
-                error: e.to_string(),
+                duration,
+                output_summary: format!("handed off to {target}"),
             });
-            Err(e)
+        }
+
+        // Nothing to store: the node did not finish.
+        NodeOutcome::Paused { .. } => {}
+    }
+
+    Ok(outcome)
+}
+
+/// The only place in the runtime that knows a filter from a step.
+fn run_node_inner(
+    node: &NodeImpl,
+    node_id: &str,
+    ctx: &Context,
+    input: &Value,
+    state: &Value,
+) -> Result<NodeOutcome> {
+    match node {
+        NodeImpl::Filter(filter) => filter.forward(input, state).map(NodeOutcome::Produced),
+
+        NodeImpl::Step(step) => {
+            let driver = ctx.driver.as_ref().ok_or_else(|| SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: "the plan contains a step but no effect driver was registered; \
+                          build the context with `with_driver(...)`"
+                    .into(),
+            })?;
+            driver.run(step.as_ref(), &ctx.run_id, node_id, input)
         }
     }
 }
@@ -972,6 +1001,7 @@ fn execute_stream(
             run_id: ctx.run_id.clone(),
             node_id: format!("{last_id}#chunk_{i}"),
             kind: somatize_core::filter::FilterKind::Stateless,
+            effectful: false,
         });
         if let Some(output) = executor.process_chunk(chunk)? {
             append_output(output);

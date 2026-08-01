@@ -18,10 +18,44 @@
 //! the cache guard the executor already runs skips a step without anyone
 //! writing `if is_step`.
 
+use crate::effect::SuspendReason;
 use crate::filter::{Distribution, FilterKind, FilterMeta};
+use crate::graph::NodeId;
 use crate::schema::Schema;
 use crate::step::StepMeta;
+use crate::value::Value;
 use serde::{Deserialize, Serialize};
+
+/// How a node finished.
+///
+/// The three ways execution can leave a node, whichever kind it was. A
+/// filter only ever produces; a step can also hand control on or stop and
+/// wait. The runtime used to carry this as `StepOutcome` and translate it
+/// three times on the way out — into control flow, then into an error
+/// with the reason flattened to a JSON string that nothing parsed back.
+///
+/// Deliberately *not* `#[non_exhaustive]`, against the convention for
+/// public enums here. Every consumer of this type is deciding control
+/// flow, and a wildcard arm in that position is a silent wrong answer —
+/// the pattern that let an unhandled plan variant become a successful
+/// no-op. If a fourth way to finish is ever added, the places that must
+/// think about it should stop compiling.
+#[derive(Debug)]
+pub enum NodeOutcome {
+    /// A value, which the node's successors read as its output.
+    Produced(Value),
+
+    /// Control passes to another node, carrying a value.
+    ///
+    /// The carry is stored under the *handing* node, so the target reads
+    /// it as an ordinary predecessor output rather than through a special
+    /// path.
+    HandOff { target: NodeId, carry: Value },
+
+    /// The run stopped, pending something outside it. `turn` is where to
+    /// deliver the answer when resuming.
+    Paused { turn: usize, reason: SuspendReason },
+}
 
 /// A node's contract, independent of whether it computes or acts.
 #[derive(Debug, Clone, Serialize, Deserialize)]

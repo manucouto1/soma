@@ -46,31 +46,9 @@ fn suspension_effect(reason: &somatize_core::effect::SuspendReason) -> Effect {
     }
 }
 
-fn suspend_label(reason: &somatize_core::effect::SuspendReason) -> &'static str {
-    match reason {
-        somatize_core::effect::SuspendReason::Human { .. } => "human",
-        somatize_core::effect::SuspendReason::External { .. } => "external",
-        _ => "other",
-    }
-}
-
 pub use somatize_core::effect::EffectHandler;
 
-/// How a step finished.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum StepOutcome {
-    /// Produced a value.
-    Done(Value),
-    /// Handed control to another node.
-    Goto { target: String, carry: Value },
-    /// Stopped, pending something external. `turn` is where to deliver the
-    /// answer — see [`EffectDriver::resume_with`].
-    Suspended {
-        turn: usize,
-        reason: somatize_core::effect::SuspendReason,
-    },
-}
+pub use somatize_core::node::NodeOutcome;
 
 /// Drives steps: performs their effects, journals them, emits their events.
 #[derive(Clone)]
@@ -126,7 +104,7 @@ impl EffectDriver {
         run_id: &str,
         node_id: &str,
         input: &Value,
-    ) -> Result<StepOutcome> {
+    ) -> Result<NodeOutcome> {
         let meta = step.meta();
         // A step may decline journaling; honour it for this step only.
         let journal = self
@@ -168,7 +146,7 @@ impl EffectDriver {
 
                 Transition::Done(value) => {
                     self.finish(run_id, node_id, turn + 1, started, usage);
-                    return Ok(StepOutcome::Done(value));
+                    return Ok(NodeOutcome::Produced(value));
                 }
 
                 Transition::Goto { target, carry } => {
@@ -178,7 +156,7 @@ impl EffectDriver {
                         to: target.clone(),
                     });
                     self.finish(run_id, node_id, turn + 1, started, usage);
-                    return Ok(StepOutcome::Goto { target, carry });
+                    return Ok(NodeOutcome::HandOff { target, carry });
                 }
 
                 // Suspension is journaled like any other awaited thing. On a
@@ -208,9 +186,9 @@ impl EffectDriver {
                     self.emit(Event::Suspended {
                         run_id: run_id.to_string(),
                         node_id: node_id.to_string(),
-                        reason: suspend_label(&reason).to_string(),
+                        reason: reason.kind().to_string(),
                     });
-                    return Ok(StepOutcome::Suspended { turn, reason });
+                    return Ok(NodeOutcome::Paused { turn, reason });
                 }
 
                 Transition::Spawn { specs, join } => {
@@ -263,7 +241,7 @@ impl EffectDriver {
     /// checkpoint file: the journal *is* the checkpoint.
     ///
     /// `node_id`, `turn` and `reason` come from the
-    /// [`StepOutcome::Suspended`] that stopped the run.
+    /// [`NodeOutcome::Paused`] that stopped the run.
     pub fn resume_with(
         &self,
         run_id: &str,
@@ -333,8 +311,8 @@ impl EffectDriver {
                             .step(&spec.runs)
                             .ok_or_else(|| SomaError::NodeNotFound(spec.runs.clone()))?;
                         match self.run(step.as_ref(), run_id, &child_id, &spec.input)? {
-                            StepOutcome::Done(value) => Ok(EffectResult::Node(value)),
-                            StepOutcome::Goto { target, .. } => Err(SomaError::Execution {
+                            NodeOutcome::Produced(value) => Ok(EffectResult::Node(value)),
+                            NodeOutcome::HandOff { target, .. } => Err(SomaError::Execution {
                                 node_id: child_id.clone(),
                                 message: format!(
                                     "a spawned step handed control to `{target}`; spawned \
@@ -342,7 +320,7 @@ impl EffectDriver {
                                      in the graph to hand control to"
                                 ),
                             }),
-                            StepOutcome::Suspended { .. } => Err(SomaError::Execution {
+                            NodeOutcome::Paused { .. } => Err(SomaError::Execution {
                                 node_id: child_id.clone(),
                                 message: "a spawned step suspended; suspension is only \
                                           supported for nodes in the graph"
@@ -609,7 +587,7 @@ mod tests {
             .unwrap();
 
         match out {
-            StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("hello")),
+            NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("hello")),
             other => panic!("expected Done, got {other:?}"),
         }
         assert_eq!(llm.calls.load(Ordering::SeqCst), 3);
@@ -642,7 +620,7 @@ mod tests {
             "a replay called the model again"
         );
         match (first, second) {
-            (StepOutcome::Done(a), StepOutcome::Done(b)) => assert_eq!(a, b),
+            (NodeOutcome::Produced(a), NodeOutcome::Produced(b)) => assert_eq!(a, b),
             other => panic!("expected two Done outcomes, got {other:?}"),
         }
     }
@@ -718,7 +696,7 @@ mod tests {
 
         let (d, _dir) = driver(Arc::new(Echo));
         match d.run(&FanOut, "r", "n", &Value::Empty).unwrap() {
-            StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("0,1,2")),
+            NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("0,1,2")),
             other => panic!("{other:?}"),
         }
     }
@@ -907,7 +885,7 @@ mod tests {
             .unwrap();
 
         match out {
-            StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("ALPHA|BETA|GAMMA")),
+            NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("ALPHA|BETA|GAMMA")),
             other => panic!("{other:?}"),
         }
     }
@@ -928,7 +906,7 @@ mod tests {
         let replay = d.run(&orch, "r", "orch", &Value::text("a,b,c")).unwrap();
 
         match (first, replay) {
-            (StepOutcome::Done(a), StepOutcome::Done(b)) => {
+            (NodeOutcome::Produced(a), NodeOutcome::Produced(b)) => {
                 assert_eq!(a.as_text(), Some("A|B|C"));
                 assert_eq!(a, b, "replay of a fan-out diverged");
             }
@@ -1071,7 +1049,7 @@ mod tests {
             .run(&NeedsApproval, "run-hitl", "approve", &Value::Empty)
             .unwrap();
         let turn = match first {
-            StepOutcome::Suspended { turn, .. } => turn,
+            NodeOutcome::Paused { turn, .. } => turn,
             other => panic!("expected a suspension, got {other:?}"),
         };
         assert_eq!(turn, 0);
@@ -1083,7 +1061,7 @@ mod tests {
             .run(&NeedsApproval, "run-hitl", "approve", &Value::Empty)
             .unwrap()
         {
-            StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("decision: yes")),
+            NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("decision: yes")),
             other => panic!("expected Done after resuming, got {other:?}"),
         }
     }
@@ -1098,7 +1076,7 @@ mod tests {
                 .run(&NeedsApproval, "r", "approve", &Value::Empty)
                 .unwrap()
             {
-                StepOutcome::Suspended { .. } => {}
+                NodeOutcome::Paused { .. } => {}
                 other => panic!("expected a suspension, got {other:?}"),
             }
         }
@@ -1118,7 +1096,7 @@ mod tests {
             .run(&NeedsApproval, "run-B", "approve", &Value::Empty)
             .unwrap()
         {
-            StepOutcome::Suspended { .. } => {}
+            NodeOutcome::Paused { .. } => {}
             other => panic!("run B reused run A's approval: {other:?}"),
         }
     }

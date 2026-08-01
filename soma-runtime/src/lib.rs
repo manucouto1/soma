@@ -23,7 +23,7 @@ pub mod sampler;
 pub mod tracking;
 
 pub use cache::{LocalCache, MemoryCache, TieredCache};
-pub use effects::{EffectDriver, EffectHandler, EffectJournal, EffectSite, StepOutcome};
+pub use effects::{EffectDriver, EffectHandler, EffectJournal, EffectSite, NodeOutcome};
 pub use event_bus::EventBus;
 pub use executor::{Context, GraphInfo, execute, resolve_input};
 pub use executors::{

@@ -26,12 +26,20 @@ pub enum SomaError {
     /// where it left off once the answer is supplied. It travels as an error
     /// so that `?` unwinds the whole plan — a suspended run must not have
     /// its later nodes execute — while callers that care can match on it.
-    #[error("run `{run_id}` suspended at node `{node_id}` (turn {turn}): {reason}")]
+    /// `reason` stays typed. It used to be
+    /// `serde_json::to_string(&reason).unwrap_or("unknown")` — the shape a
+    /// caller needs in order to answer, flattened into a string that
+    /// nothing ever parsed back, which is why resuming was unreachable
+    /// from anywhere but Rust.
+    #[error("run `{run_id}` suspended at node `{node_id}` (turn {turn}): {}", reason.label())]
     Suspended {
         run_id: String,
         node_id: String,
         turn: usize,
-        reason: String,
+        /// Boxed: `SomaError` is returned from nearly every function in
+        /// the workspace, and this is the only variant with a payload
+        /// worth more than a pointer.
+        reason: Box<crate::effect::SuspendReason>,
     },
 
     #[error("schema mismatch: expected {expected}, got {got}")]

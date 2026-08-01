@@ -672,3 +672,137 @@ fn a_remote_step_is_wrapped_for_dispatch() {
         "expected the step to be wrapped for dispatch, got {plan}"
     );
 }
+
+// ── One execution site ──
+
+/// A step deciding which branch arm runs.
+struct RoutingStep;
+
+impl Step for RoutingStep {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"RoutingStep"])
+    }
+    fn meta(&self) -> StepMeta {
+        StepMeta::new("RoutingStep")
+    }
+    fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
+        Ok(Transition::Goto {
+            target: ctx.input.as_text().unwrap_or_default().to_string(),
+            carry: Value::text("routed"),
+        })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A step can be a branch's condition and name the arm with `Goto`.
+///
+/// This could not work before. The branch called the step with an empty
+/// handoff list — its control edges having been consumed as the branch's
+/// arms — so `Goto` always hit "it declares no handoffs". The branch reads
+/// the outcome now, and a handoff names an arm as directly as a returned
+/// label does.
+#[test]
+fn a_step_can_decide_a_branch_by_handing_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
+    let driver = EffectDriver::new(EffectJournal::new(store.clone(), store));
+
+    let mut catalog = NodeCatalog::new();
+    catalog.register_step("router", Box::new(RoutingStep));
+    catalog.register("billing", Box::new(Shout));
+    catalog.register("tech", Box::new(Shout));
+
+    let mut g = Graph::new();
+    g.add_node(Node::branch("router"));
+    g.add_node(Node::filter_with_id("billing", "billing"));
+    g.add_node(Node::filter_with_id("tech", "tech"));
+    g.add_edge(Edge::control("c1", "router", "billing").with_label("billing"));
+    g.add_edge(Edge::control("c2", "router", "tech").with_label("tech"));
+
+    let plan = somatize_compiler::ExecutionPlan::Branch {
+        node_id: "router".into(),
+        arms: vec![
+            (
+                "billing".into(),
+                somatize_compiler::ExecutionPlan::Execute {
+                    node_id: "billing".into(),
+                },
+            ),
+            (
+                "tech".into(),
+                somatize_compiler::ExecutionPlan::Execute {
+                    node_id: "tech".into(),
+                },
+            ),
+        ],
+    };
+
+    let cache = MemoryCache::default();
+    let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-branch-step")
+        .with_graph_info(GraphInfo::from_graph(&g))
+        .with_driver(driver, Arc::new(catalog.clone()));
+    ctx.set("__input__", Value::text("tech"));
+    ctx.set("router", Value::text("tech"));
+
+    execute(&plan, &mut ctx, &catalog, &cache).expect("the step should pick an arm");
+
+    assert!(ctx.get("tech").is_some(), "the named arm should have run");
+    assert!(
+        ctx.get("billing").is_none(),
+        "the arm that was not named must not run"
+    );
+}
+
+/// Panics in `poll`, the way a Python step with a bug does.
+struct PanickingStep;
+
+impl Step for PanickingStep {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"PanickingStep"])
+    }
+    fn meta(&self) -> StepMeta {
+        StepMeta::new("PanickingStep")
+    }
+    fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
+        panic!("the step fell over");
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A panicking step is an error, not a dead process.
+///
+/// `catch_unwind` used to wrap only the filter path, on the argument that
+/// a user's filter must not take the runtime down. A step written in
+/// Python is user code by exactly the same argument, and it had no such
+/// protection — until both went through one execution site.
+#[test]
+fn a_panicking_step_is_contained_like_a_panicking_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
+    let driver = EffectDriver::new(EffectJournal::new(store.clone(), store));
+
+    let mut catalog = NodeCatalog::new();
+    catalog.register_step("boom", Box::new(PanickingStep));
+
+    let cache = MemoryCache::default();
+    let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-panic-step")
+        .with_driver(driver, Arc::new(catalog.clone()));
+    ctx.set("boom", Value::text("go"));
+
+    let plan = somatize_compiler::ExecutionPlan::Step {
+        node_id: "boom".into(),
+        handoffs: vec![],
+    };
+
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = execute(&plan, &mut ctx, &catalog, &cache);
+    std::panic::set_hook(previous);
+
+    let err = result.expect_err("a panicking step must not be a success");
+    assert!(err.to_string().contains("the step fell over"), "{err}");
+}

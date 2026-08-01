@@ -365,6 +365,24 @@ pub enum SuspendReason {
     External { token: String },
 }
 
+impl SuspendReason {
+    /// A short description, for an error message or an event payload.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Human { prompt, .. } => format!("waiting on a person: {prompt}"),
+            Self::External { token } => format!("waiting on `{token}`"),
+        }
+    }
+
+    /// The kind, as a stable token events can be grouped by.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Human { .. } => "human",
+            Self::External { .. } => "external",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

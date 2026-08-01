@@ -376,6 +376,7 @@ pub fn graph_fit(
             run_id: run_id.clone(),
             node_id: node_id.to_string(),
             kind: filter.meta().kind,
+            effectful: false,
         });
 
         let preds = graph_info.predecessors(node_id);

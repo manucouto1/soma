@@ -15,7 +15,7 @@ use somatize_llm::{
     Auth, Catalog, LlmHandler, LlmProvider, OpenAiCompatible, ProviderConfig, Router,
 };
 use somatize_runtime::cache::fs_store::FsActionStore;
-use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal, StepOutcome};
+use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal, NodeOutcome};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -313,7 +313,7 @@ fn a_step_reaches_a_provider_and_then_replays() {
         "the replay went back out to the provider"
     );
     match (first, replayed) {
-        (StepOutcome::Done(a), StepOutcome::Done(b)) => {
+        (NodeOutcome::Produced(a), NodeOutcome::Produced(b)) => {
             assert_eq!(a.as_text(), Some("the recorded answer"));
             assert_eq!(a, b);
         }

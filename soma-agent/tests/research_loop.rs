@@ -15,7 +15,7 @@ use somatize_core::message::Message;
 use somatize_core::value::Value;
 use somatize_runtime::cache::FsActionStore;
 use somatize_runtime::effects::{
-    EffectDriver, EffectHandler, EffectJournal, GraphHandler, StepOutcome,
+    EffectDriver, EffectHandler, EffectJournal, GraphHandler, NodeOutcome,
 };
 use somatize_runtime::node_catalog::NodeCatalog;
 use std::sync::{Arc, Mutex};
@@ -150,7 +150,7 @@ fn run(step: ResearchStep, model: Arc<ScriptedModel>) -> Value {
         .run(&step, "run_1", "researcher", &Value::Empty)
         .unwrap()
     {
-        StepOutcome::Done(value) => value,
+        NodeOutcome::Produced(value) => value,
         other => panic!("expected the loop to finish, got {other:?}"),
     }
 }

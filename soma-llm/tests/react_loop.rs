@@ -8,7 +8,7 @@
 use somatize_core::value::Value;
 use somatize_llm::{Catalog, LlmHandler, ProviderConfig, ReactStep, Router, ToolOutcome, Toolbox};
 use somatize_runtime::cache::fs_store::FsActionStore;
-use somatize_runtime::effects::{EffectDriver, EffectJournal, StepOutcome};
+use somatize_runtime::effects::{EffectDriver, EffectJournal, NodeOutcome};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -176,7 +176,7 @@ fn a_react_step_calls_a_tool_and_answers() {
         .unwrap();
 
     match outcome {
-        StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("It is sunny in Vigo.")),
+        NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("It is sunny in Vigo.")),
         other => panic!("{other:?}"),
     }
     assert_eq!(server.calls(), 2, "one call to ask, one to answer");
@@ -226,7 +226,7 @@ fn replaying_a_react_run_performs_nothing() {
 
     assert_eq!(server.calls(), 2, "the replay went back to the model");
     match (first, replayed) {
-        (StepOutcome::Done(a), StepOutcome::Done(b)) => assert_eq!(a, b),
+        (NodeOutcome::Produced(a), NodeOutcome::Produced(b)) => assert_eq!(a, b),
         other => panic!("{other:?}"),
     }
 }
@@ -247,7 +247,7 @@ fn an_unknown_tool_is_reported_to_the_model() {
 
     // The run completed: the model was told, and answered anyway.
     match outcome {
-        StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("It is sunny in Vigo.")),
+        NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("It is sunny in Vigo.")),
         other => panic!("{other:?}"),
     }
 
@@ -313,7 +313,7 @@ for line in sys.stdin:
         .unwrap();
 
     match outcome {
-        StepOutcome::Done(v) => assert_eq!(v.as_text(), Some("It is sunny in Vigo.")),
+        NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("It is sunny in Vigo.")),
         other => panic!("{other:?}"),
     }
 
