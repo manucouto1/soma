@@ -40,7 +40,7 @@ soma-core       → types, traits, serialization ONLY (no execution logic):
 soma-compiler   → Graph → ExecutionPlan (cache resolution, schema validation, distribution)
                   Scheduler (distribute plan across workers), ExecutionPlan visualization
 soma-runtime    → GraphSession (primary orchestrator), parallel executor (threads),
-                  FilterLibrary + StepLibrary, EffectDriver + EffectJournal + GraphHandler,
+                  NodeCatalog (filters AND steps), EffectDriver + EffectJournal + GraphHandler,
                   stream executor,
                   LRU/local/tiered cache, Grid/Random/Bayesian samplers,
                   Median/Percentile pruners, StudyRunner, PbtRunner
@@ -69,7 +69,7 @@ notebooks/      → 14 executed tutorial notebooks (10-12 are one campaign, shar
 ## Tests
 
 ```bash
-# 1267 total: 870 Rust + 397 Python (incl. property tests and 4 robustness tests)
+# 906 Rust + 387 Python (incl. property tests and 4 robustness tests)
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
@@ -96,8 +96,24 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **CacheKey**: SHA-256, resolved at RUNTIME per node: state = `hash(config + x + y)`, output = `hash(config + state + input)`, seed salted in when set. Downstream keys use input *content* hashes → early cutoff.
 - **Persistent cache**: `Graph()` defaults to tiered(memory LRU → `FsActionStore` at `$SOMA_CACHE_DIR` || `~/.soma/cache`). Two-table store: action records (kept forever) + BLAKE3 CAS blobs (evictable). `soma cache stats|gc|pin|verify|purge-v1`.
 - **Filter identity**: Rust = canonical CBOR of fields (+`#[soma(cache_version)]`); Python = qualname + canonical config + source-hash ladder (`_cache_version` → `inspect.getsource` → cloudpickle+warning). Unhashable ⇒ `CacheConfigError`, never a silent key.
-- **GraphSession**: Primary orchestrator — binds Graph + FilterLibrary + cache + events. Methods: fit, forward, compile, run.
-- **FilterLibrary**: Unified registry — implements FilterRegistry (compiler) + holds filters + states (executor). Replaces old FilterStore.
+- **GraphSession**: Primary orchestrator — binds Graph + NodeCatalog + cache + events. Methods: fit, forward, compile, run.
+- **NodeCatalog**: THE registry — every node, filter or step, plus the trained states.
+  Implements `NodeRegistry` (the compiler's port, one required `node_meta`) and is what the
+  executor reads. Filters and steps used to live in two registries joined by an adapter a
+  caller had to remember to build, which is how `.compile()` came to skip every step's
+  schema while `.run()` checked them.
+- **NodeMeta**: one metadata type for both kinds, with `effectful`. `From<StepMeta>` sets
+  `cacheable: false, deterministic: false`, so "a step is not output-cacheable" is data the
+  executor's existing guard reads — there is no `if is_step` anywhere.
+- **NodeOutcome** (`Produced` | `HandOff` | `Paused`): how a node finished, whichever kind
+  it was. Deliberately NOT `#[non_exhaustive]` — every consumer decides control flow, and a
+  wildcard arm there is a silent wrong answer.
+- **run_node**: the one execution site. Input resolution, the output cache, `catch_unwind`,
+  and the start/complete/fail events happen once for filters and steps alike;
+  `run_node_inner` is the only `match` in the runtime that tells them apart.
+- **RunContext**: what a runner needs besides the plan — catalog, cache, events, run id, and
+  the *real* `GraphInfo`. `RunContext::linear` is the explicit fallback for a caller that
+  has only a plan (the worker); the runner no longer invents a topology.
 - **ExecutionPlan**: Compiled from Graph. Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote.
 - **VirtualValue**: Lazy references (Materialized | Cached | Deferred | Stream).
 - **Schema**: dtype + shape for compile-time type checking between connected filters.
