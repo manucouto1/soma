@@ -202,9 +202,8 @@ fn forward_cached(
     cache: Option<&dyn CacheStore>,
 ) -> Result<Value> {
     if let Some(c) = cache {
-        let chunk_hash = CacheKey::hash_data(&serde_json::to_vec(input).unwrap_or_default());
-        let state_hash =
-            CacheKey::hash_data(&serde_json::to_vec(&fitted.state).unwrap_or_default());
+        let chunk_hash = CacheKey::for_value(input);
+        let state_hash = CacheKey::for_value(&fitted.state);
         let cache_key =
             CacheKey::for_output(&fitted.filter.config_hash(), &state_hash, &chunk_hash);
         if let Some(cached) = c.get(&cache_key)? {
@@ -259,6 +258,48 @@ mod tests {
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result as SomaResult;
     use somatize_core::filter::{Distribution, FilterKind, FilterMeta};
+
+    /// JSON cannot write a non-finite float: `serde_json` turns NaN and
+    /// both infinities into `null`. Keying the chunk cache off
+    /// `serde_json::to_vec` therefore gave `[NaN]` and `[+inf]` the same
+    /// key, and the second chunk was answered with the first one's output.
+    #[test]
+    fn non_finite_chunks_do_not_share_a_cache_key() {
+        use crate::cache::memory::MemoryCache;
+
+        let nan = Value::tensor(vec![f64::NAN], vec![1]);
+        let inf = Value::tensor(vec![f64::INFINITY], vec![1]);
+
+        // The premise: JSON really does flatten both to the same bytes.
+        assert_eq!(
+            serde_json::to_vec(&nan).unwrap(),
+            serde_json::to_vec(&inf).unwrap(),
+            "if this ever stops being true the bug is gone by other means"
+        );
+        assert_ne!(CacheKey::for_value(&nan), CacheKey::for_value(&inf));
+
+        let cache = MemoryCache::default();
+        let fitted = FittedFilter {
+            name: "doubler".into(),
+            filter: Arc::new(DoubleChunk),
+            state: Arc::new(Value::Empty),
+        };
+
+        let first = |v: &Value| match v {
+            Value::Tensor { values, .. } => values[0],
+            other => panic!("expected a tensor, got {other:?}"),
+        };
+
+        let out_nan = forward_cached(&fitted, &nan, Some(&cache)).unwrap();
+        let out_inf = forward_cached(&fitted, &inf, Some(&cache)).unwrap();
+
+        assert!(first(&out_nan).is_nan(), "NaN doubled is still NaN");
+        assert_eq!(
+            first(&out_inf),
+            f64::INFINITY,
+            "the infinite chunk was served the NaN chunk's cached output"
+        );
+    }
 
     struct DoubleChunk;
 

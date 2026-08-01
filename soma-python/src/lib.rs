@@ -79,17 +79,16 @@ fn forward_with_cache(
     // them: the seed is in the key, so results vary across seeds but are
     // stable within one.
     let out_key = if meta.cacheable && (meta.deterministic || seed.is_some()) {
-        match (somatize_core::cache::CacheKey::for_value(state), input_hash) {
-            (Ok(state_hash), Some(input_hash)) => Some(somatize_runtime::executor::salt_with_seed(
+        input_hash.map(|input_hash| {
+            somatize_runtime::executor::salt_with_seed(
                 somatize_core::cache::CacheKey::for_output(
                     &filter.config_hash(),
-                    &state_hash,
+                    &somatize_core::cache::CacheKey::for_value(state),
                     input_hash,
                 ),
                 seed,
-            )),
-            _ => None,
-        }
+            )
+        })
     } else {
         None
     };
@@ -2788,7 +2787,9 @@ impl PyGraph {
             // Regular sequential states appear under the bare node_id.
             for (key, state) in states {
                 let node_id = key.strip_prefix("__state_").unwrap_or(&key).to_string();
-                self.library.set_state(node_id, state);
+                if let Err(e) = self.library.try_set_state(node_id, state) {
+                    return Err(soma_err_to_py(e));
+                }
             }
             self.fitted = true;
             return Ok(());
@@ -2811,7 +2812,9 @@ impl PyGraph {
                 let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
                 let (_output, states) = result?;
                 for (node_id, state) in states {
-                    self.library.set_state(&node_id, state);
+                    if let Err(e) = self.library.try_set_state(&node_id, state) {
+                        return Err(soma_err_to_py(e));
+                    }
                 }
                 self.fitted = true;
                 return Ok(());
@@ -2824,7 +2827,9 @@ impl PyGraph {
             let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
             let (_output, states) = result?;
             for (node_id, state) in states {
-                self.library.set_state(&node_id, state);
+                if let Err(e) = self.library.try_set_state(&node_id, state) {
+                    return Err(soma_err_to_py(e));
+                }
             }
             self.fitted = true;
             return Ok(());
@@ -2894,28 +2899,24 @@ impl PyGraph {
                     node_id: node_id.to_string(),
                     run_id: run_id.clone(),
                 };
-                let input_hash = somatize_core::cache::CacheKey::for_value(&input).ok();
+                let input_hash = Some(somatize_core::cache::CacheKey::for_value(&input));
 
                 let output = if meta.kind == somatize_core::filter::FilterKind::Trainable {
-                    // Unhashable x/y ⇒ skip caching, never a degenerate key.
-                    // Labels are part of the state key.
-                    let y_hash = match y_val.as_ref() {
-                        Some(y) => somatize_core::cache::CacheKey::for_value(y).ok().map(Some),
-                        None => Some(None),
-                    };
-                    let state_key = match (&input_hash, y_hash) {
-                        (Some(x_hash), Some(y_hash)) => {
-                            Some(somatize_runtime::executor::salt_with_seed(
-                                somatize_core::cache::CacheKey::for_state(
-                                    &filter.config_hash(),
-                                    x_hash,
-                                    y_hash.as_ref(),
-                                ),
-                                seed,
-                            ))
-                        }
-                        _ => None,
-                    };
+                    // Labels are part of the state key: the same features
+                    // trained against different labels must not collide.
+                    let y_hash = y_val
+                        .as_ref()
+                        .map(somatize_core::cache::CacheKey::for_value);
+                    let state_key = input_hash.as_ref().map(|x_hash| {
+                        somatize_runtime::executor::salt_with_seed(
+                            somatize_core::cache::CacheKey::for_state(
+                                &filter.config_hash(),
+                                x_hash,
+                                y_hash.as_ref(),
+                            ),
+                            seed,
+                        )
+                    });
 
                     let cached_state = state_key
                         .as_ref()
@@ -2948,7 +2949,9 @@ impl PyGraph {
                         seed,
                     )
                     .map_err(soma_err_to_py)?;
-                    self.library.set_state(node_id.to_string(), state);
+                    self.library
+                        .try_set_state(node_id.to_string(), state)
+                        .map_err(soma_err_to_py)?;
                     out
                 } else {
                     forward_with_cache(
@@ -3700,7 +3703,9 @@ impl PyGraph {
         state: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let value = py_to_value(py, &state)?;
-        self.library.set_state(node_id, value);
+        self.library
+            .try_set_state(node_id, value)
+            .map_err(soma_err_to_py)?;
         Ok(())
     }
 

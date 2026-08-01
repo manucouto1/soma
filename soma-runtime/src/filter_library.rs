@@ -10,6 +10,7 @@
 
 use somatize_compiler::FilterRegistry;
 use somatize_core::cache::CacheKey;
+use somatize_core::error::Result;
 use somatize_core::filter::{Filter, FilterMeta};
 use somatize_core::state::{MemoryStateStore, StateStore};
 use somatize_core::value::Value;
@@ -79,13 +80,24 @@ impl FilterLibrary {
     ///
     /// Errors bubble up from the underlying [`StateStore`] (e.g. I/O on
     /// a disk-backed backend). The in-memory default never fails.
+    pub fn try_set_state(&self, node_id: impl Into<String>, state: Value) -> Result<()> {
+        let id = node_id.into();
+        self.states.set(&id, state)
+    }
+
+    /// Store a trained state, reporting a store failure through the log.
+    ///
+    /// Prefer [`FilterLibrary::try_set_state`]: a state that failed to
+    /// store is a state the next `forward` will not find, and only the
+    /// caller knows whether that is worth stopping for.
+    #[deprecated(
+        since = "0.3.2",
+        note = "use `try_set_state`, which reports a failing StateStore instead of swallowing it"
+    )]
     pub fn set_state(&self, node_id: impl Into<String>, state: Value) {
         let id = node_id.into();
         if let Err(e) = self.states.set(&id, state) {
-            // A failing state store is a programming/infra error; keep
-            // the panic local to this call site rather than letting an
-            // Err propagate through every caller.
-            panic!("StateStore::set failed for node {id}: {e}");
+            tracing::error!(node_id = %id, "StateStore::set failed: {e}");
         }
     }
 
@@ -196,6 +208,39 @@ mod tests {
         assert!(lib.meta("nonexistent").is_none());
     }
 
+    /// A store that refuses every write, the way a full disk or a revoked
+    /// S3 credential would.
+    struct FailingStateStore;
+
+    impl StateStore for FailingStateStore {
+        fn set(&self, _node_id: &str, _state: Value) -> Result<()> {
+            Err(somatize_core::error::SomaError::Other("disk full".into()))
+        }
+        fn get(&self, _node_id: &str) -> Result<Option<Arc<Value>>> {
+            Ok(None)
+        }
+        fn remove(&self, _node_id: &str) -> Result<()> {
+            Ok(())
+        }
+        fn clear(&self) -> Result<()> {
+            Ok(())
+        }
+        fn keys(&self) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A failing state store used to `panic!`, which aborts the host
+    /// process — a library taking the whole application down because a
+    /// disk filled up. It reports the failure now.
+    #[test]
+    fn a_failing_state_store_is_reported_not_fatal() {
+        let lib = FilterLibrary::with_state_store(Arc::new(FailingStateStore));
+
+        let err = lib.try_set_state("a", Value::Empty).unwrap_err();
+        assert!(err.to_string().contains("disk full"), "got: {err}");
+    }
+
     #[test]
     fn state_management() {
         let mut lib = FilterLibrary::new();
@@ -203,7 +248,8 @@ mod tests {
 
         assert!(lib.get_state("a").is_none());
 
-        lib.set_state("a", Value::json(serde_json::json!({"mean": 5.0})));
+        lib.try_set_state("a", Value::json(serde_json::json!({"mean": 5.0})))
+            .unwrap();
         let state = lib.get_state("a").unwrap();
         assert_eq!(state.as_json().unwrap()["mean"], 5.0);
     }
@@ -212,7 +258,7 @@ mod tests {
     fn clear_states_keeps_filters() {
         let mut lib = FilterLibrary::new();
         lib.register("a", Box::new(DummyFilter { name: "A".into() }));
-        lib.set_state("a", Value::Empty);
+        lib.try_set_state("a", Value::Empty).unwrap();
 
         assert!(lib.get_state("a").is_some());
         lib.clear_states();

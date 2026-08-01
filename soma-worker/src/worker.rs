@@ -88,7 +88,9 @@ impl Worker {
 
     /// Set trained state for a filter.
     pub fn set_filter_state(&mut self, node_id: &str, state: Value) {
-        self.filters.set_state(node_id, state);
+        if let Err(e) = self.filters.try_set_state(node_id, state) {
+            tracing::error!(node_id, "storing filter state failed: {e}");
+        }
     }
 
     /// Wrap output in the right delivery: inline for small, DataRef for large.
@@ -234,8 +236,10 @@ impl Worker {
                     config_hash,
                 ));
                 self.filters.register(&sf.node_id, filter);
-                if let Some(state) = &sf.state {
-                    self.filters.set_state(&sf.node_id, state.clone());
+                if let Some(state) = &sf.state
+                    && let Err(e) = self.filters.try_set_state(&sf.node_id, state.clone())
+                {
+                    tracing::error!(node_id = %sf.node_id, "storing filter state failed: {e}");
                 }
             }
 
@@ -290,7 +294,14 @@ impl Worker {
                             match result {
                                 Ok((output, states)) => {
                                     for (id, state) in &states {
-                                        self.filters.set_state(id, state.clone());
+                                        if let Err(e) =
+                                            self.filters.try_set_state(id, state.clone())
+                                        {
+                                            tracing::error!(
+                                                node_id = %id,
+                                                "storing filter state failed: {e}"
+                                            );
+                                        }
                                     }
                                     Ok((output, states))
                                 }
@@ -322,7 +333,14 @@ impl Worker {
                             let mut trained_states = std::collections::HashMap::new();
                             for (key, value) in &all_outputs {
                                 if let Some(node_id) = key.strip_prefix("__state_") {
-                                    self.filters.set_state(node_id, value.clone());
+                                    if let Err(e) =
+                                        self.filters.try_set_state(node_id, value.clone())
+                                    {
+                                        tracing::error!(
+                                            node_id,
+                                            "storing filter state failed: {e}"
+                                        );
+                                    }
                                     trained_states.insert(node_id.to_string(), value.clone());
                                 }
                             }

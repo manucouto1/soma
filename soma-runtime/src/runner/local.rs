@@ -173,20 +173,13 @@ impl Runner for LocalRunner {
             };
             let empty_state = Value::Empty;
             let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
-                // Unhashable x/y ⇒ skip caching for this node, never a
-                // degenerate key. Labels are part of the key: same features
-                // + different labels must not collide.
-                let state_key = match (
-                    CacheKey::for_value(&node_input),
-                    y.map(CacheKey::for_value).transpose(),
-                ) {
-                    (Ok(x_hash), Ok(y_hash)) => Some(CacheKey::for_state(
-                        &filter.config_hash(),
-                        &x_hash,
-                        y_hash.as_ref(),
-                    )),
-                    _ => None,
-                };
+                // Labels are part of the key: the same features trained
+                // against different labels must not collide.
+                let state_key = Some(CacheKey::for_state(
+                    &filter.config_hash(),
+                    &CacheKey::for_value(&node_input),
+                    y.map(CacheKey::for_value).as_ref(),
+                ));
 
                 let cached_state = match &state_key {
                     Some(key) => cache.get(key)?,

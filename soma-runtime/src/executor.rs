@@ -239,11 +239,7 @@ impl Context {
     /// single-predecessor fast path: the input of a 1-pred node IS that
     /// predecessor's output, so sibling consumers (diamonds) reuse the
     /// hash instead of re-serializing a potentially large value.
-    fn input_hash(
-        &mut self,
-        node_id: &str,
-        input: &Value,
-    ) -> somatize_core::error::Result<somatize_core::cache::CacheKey> {
+    fn input_hash(&mut self, node_id: &str, input: &Value) -> somatize_core::cache::CacheKey {
         let preds = self.graph_info.predecessors(node_id);
         let single_pred = match preds {
             [only] => Some(only.clone()),
@@ -251,15 +247,15 @@ impl Context {
         };
         if let Some(pred) = single_pred {
             if let Some(h) = self.output_hashes.get(&pred) {
-                return Ok(h.clone());
+                return h.clone();
             }
             // Only trust the memo association when the pred's output is
             // actually what resolve_input handed us (it may have fallen
             // back to Value::Empty if the pred produced nothing).
             if self.store.contains_key(&pred) {
-                let h = somatize_core::cache::CacheKey::for_value(input)?;
+                let h = somatize_core::cache::CacheKey::for_value(input);
                 self.output_hashes.insert(pred, h.clone());
-                return Ok(h);
+                return h;
             }
         }
         somatize_core::cache::CacheKey::for_value(input)
@@ -514,6 +510,19 @@ pub fn salt_with_seed(
     }
 }
 
+/// What a panic payload says, when it says anything at all.
+///
+/// `panic!("...")` with arguments produces a `String`; a bare literal
+/// produces a `&str`. Anything else — `panic_any` with a custom type —
+/// carries no message we can read.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown panic")
+}
+
 /// Execute a plan (convenience function, delegates to `Executable` trait).
 pub fn execute(
     plan: &ExecutionPlan,
@@ -673,33 +682,28 @@ fn execute_node(
     // expects to vary. (Their fit STATES still cache — any recorded
     // training result is acceptable, constructive-trace semantics.)
     let out_key = if meta.cacheable && meta.deterministic {
-        match (
-            somatize_core::cache::CacheKey::for_value(state_ref),
-            ctx.input_hash(node_id, &input),
-        ) {
-            (Ok(state_hash), Ok(input_hash)) => {
-                let key = somatize_core::cache::CacheKey::for_output(
-                    &filter.config_hash(),
-                    &state_hash,
-                    &input_hash,
-                );
-                Some(salt_with_seed(key, ctx.seed))
-            }
-            _ => None,
-        }
+        let key = somatize_core::cache::CacheKey::for_output(
+            &filter.config_hash(),
+            &somatize_core::cache::CacheKey::for_value(state_ref),
+            &ctx.input_hash(node_id, &input),
+        );
+        Some(salt_with_seed(key, ctx.seed))
     } else {
         None
     };
 
+    // `get_located`, not `get`: which tier served the value is the whole
+    // content of this event, and hardcoding `Memory` made every per-tier
+    // statistic report the same thing.
     if let Some(key) = &out_key
-        && let Ok(Some(cached)) = cache.get(key)
+        && let Ok(Some((cached, tier))) = cache.get_located(key)
     {
         ctx.set(node_id.to_string(), cached);
         ctx.event_bus.emit(Event::NodeCacheHit {
             run_id: ctx.run_id.clone(),
             node_id: node_id.to_string(),
             key: key.clone(),
-            tier: somatize_core::cache::CacheTier::Memory,
+            tier,
             load_time: start.elapsed(),
         });
         return Ok(());
@@ -727,11 +731,7 @@ fn execute_node(
     let result = match result {
         Ok(inner) => inner,
         Err(panic) => {
-            let msg = panic
-                .downcast_ref::<String>()
-                .map(|s| s.as_str())
-                .or_else(|| panic.downcast_ref::<&str>().copied())
-                .unwrap_or("unknown panic");
+            let msg = panic_message(&*panic);
             tracing::error!(node_id, "filter panicked: {msg}");
             Err(SomaError::Execution {
                 node_id: node_id.to_string(),
@@ -819,7 +819,24 @@ fn execute_parallel(
             })
             .collect();
 
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        // A branch thread that panicked comes back as an Err from `join`.
+        // Unwrapping it here re-panics on the *parent* thread, which
+        // aborts the process and undoes the `catch_unwind` that
+        // `execute_node` installs precisely so a user filter cannot.
+        handles
+            .into_iter()
+            .map(|h| match h.join() {
+                Ok(result) => result,
+                Err(panic) => {
+                    let msg = panic_message(&*panic);
+                    tracing::error!("parallel branch panicked: {msg}");
+                    Err(SomaError::Execution {
+                        node_id: "<parallel branch>".to_string(),
+                        message: format!("parallel branch panicked: {msg}"),
+                    })
+                }
+            })
+            .collect()
     });
 
     // Merge results and propagate first error
@@ -1029,6 +1046,68 @@ mod tests {
     use crate::cache::MemoryCache;
     use somatize_core::cache::CacheKey;
     use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+
+    /// Panics in `meta()`, which — unlike `forward()` — runs outside the
+    /// `catch_unwind` in `execute_node`, so the unwind reaches the thread
+    /// boundary.
+    struct PanicsInMeta;
+
+    impl Filter for PanicsInMeta {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"PanicsInMeta"])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            panic!("meta blew up");
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// `execute_parallel` used to `join().unwrap()`, which re-raises a
+    /// branch's panic on the parent thread. Inside `std::thread::scope`
+    /// that aborts the process — so a panic the runtime deliberately
+    /// contains everywhere else took the whole host down when it happened
+    /// in a parallel branch.
+    #[test]
+    fn a_panicking_parallel_branch_becomes_an_error() {
+        let mut lib = FilterLibrary::new();
+        lib.register("boom", Box::new(PanicsInMeta));
+        lib.register("fine", Box::new(DoublerFilter));
+
+        let cache = MemoryCache::default();
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "run-panic");
+        ctx.set("input".to_string(), Value::tensor(vec![1.0], vec![1]));
+
+        let plan = ExecutionPlan::Parallel(vec![
+            ExecutionPlan::Execute {
+                node_id: "boom".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "fine".into(),
+            },
+        ]);
+
+        // Keep the default hook from printing the backtrace this test
+        // provokes on purpose.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = execute(&plan, &mut ctx, &lib, &cache);
+        std::panic::set_hook(previous);
+
+        let err = result.expect_err("a panicking branch must not be a success");
+        assert!(
+            err.to_string().contains("meta blew up"),
+            "the panic message should survive; got: {err}"
+        );
+    }
 
     struct DoublerFilter;
 
