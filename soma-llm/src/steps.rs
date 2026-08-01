@@ -28,7 +28,7 @@ use somatize_core::value::Value;
 /// Input may be a bare prompt or a whole conversation — see
 /// [`Messages::from_value`]. Output is the conversation, so a downstream
 /// node sees the reasoning and not only the conclusion.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, somatize_core::SomaStep)]
 pub struct ReactStep {
     model: String,
     system: Option<String>,
@@ -243,37 +243,14 @@ impl ReactStep {
 }
 
 impl Step for ReactStep {
+    /// Derived, so every field is covered because it is a field.
+    ///
+    /// This was hand-written and covered four of nine — leaving out
+    /// `schema`, which changes the request that gets sent, so a step
+    /// asking for JSON could be handed the prose reply recorded by a step
+    /// that asked for none.
     fn config_hash(&self) -> CacheKey {
-        // Everything that changes what this step would do. Tools included:
-        // the same prompt with a different toolset is a different node.
-        //
-        // *Everything*, and the list is checked by a test. This hash is
-        // part of every journal key the step writes, so a field left out
-        // means two differently-configured steps replaying each other's
-        // answers. `schema` and `max_tokens` change the request itself;
-        // `text_only` changes the output type; `max_turns` and
-        // `max_repairs` change when it stops.
-        let tools = serde_json::to_vec(&self.tools).unwrap_or_default();
-        let schema = self
-            .schema
-            .as_ref()
-            .map(|s| serde_json::to_vec(s).unwrap_or_default())
-            .unwrap_or_default();
-        // `None` is the empty part, `Some(n)` its four bytes. Parts are
-        // length-prefixed, so unset and `Some(0)` stay distinct.
-        let max_tokens = self.max_tokens.map(u32::to_le_bytes);
-        CacheKey::from_parts(&[
-            b"ReactStep",
-            self.model.as_bytes(),
-            self.system.as_deref().unwrap_or("").as_bytes(),
-            &tools,
-            self.effort.as_deref().unwrap_or("").as_bytes(),
-            &self.max_turns.to_le_bytes(),
-            max_tokens.as_ref().map(|b| &b[..]).unwrap_or(&[]),
-            &[u8::from(self.text_only)],
-            &schema,
-            &self.max_repairs.to_le_bytes(),
-        ])
+        ReactStep::config_hash(self)
     }
 
     fn meta(&self) -> StepMeta {
@@ -568,6 +545,7 @@ pub struct Verdict {
 /// `{"score", "passed", "reason"}`, so a loop can read `passed` as its
 /// termination signal and a study can read `score` as its metric, with no
 /// glue between them.
+#[derive(serde::Serialize, somatize_core::SomaStep)]
 pub struct JudgeStep {
     model: String,
     rubric: String,
@@ -629,12 +607,7 @@ impl JudgeStep {
 
 impl Step for JudgeStep {
     fn config_hash(&self) -> CacheKey {
-        CacheKey::from_parts(&[
-            b"JudgeStep",
-            self.model.as_bytes(),
-            self.rubric.as_bytes(),
-            &self.threshold.to_le_bytes(),
-        ])
+        JudgeStep::config_hash(self)
     }
 
     fn meta(&self) -> StepMeta {

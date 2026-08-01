@@ -458,3 +458,77 @@ fn generate_from_sample(
         }
     }
 }
+
+/// Derive `config_hash` for a [`Step`](somatize_core::step::Step).
+///
+/// The mirror of [`macro@SomaFilter`]'s hash half, and it exists because
+/// hand-writing that hash goes wrong quietly. `ReactStep::config_hash`
+/// covered four of its nine fields for as long as it existed; the hash is
+/// part of every journal key a step writes, so two steps differing only
+/// in an uncovered field shared a key and replayed each other's recorded
+/// answers. A field added to a struct that derives this is covered
+/// because it is a field, not because someone remembered.
+///
+/// Fields are hashed as canonical CBOR — never raw serializer output
+/// (a `HashMap`'s iteration order is random) and never a silent empty
+/// fallback (two unserializable configs would collide). A field that
+/// genuinely does not belong in the key says `#[soma(skip_hash)]`, which
+/// is a decision in the source rather than an omission.
+#[proc_macro_derive(SomaStep, attributes(soma))]
+pub fn derive_soma_step(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let name_str = name.to_string();
+
+    let fields = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => &fields.named,
+            _ => panic!("SomaStep only supports structs with named fields"),
+        },
+        _ => panic!("SomaStep only supports structs"),
+    };
+
+    let struct_attrs = parse_struct_attrs(&input.attrs);
+    let cache_version_part = match &struct_attrs.cache_version {
+        Some(v) => quote! { parts.push(#v.as_bytes().to_vec()); },
+        None => quote! {},
+    };
+
+    let hash_parts: Vec<_> = fields
+        .iter()
+        .filter(|f| !parse_field_attrs(&f.attrs).skip_hash)
+        .map(|f| {
+            let field_name = f.ident.as_ref().unwrap();
+            let field_name_str = field_name.to_string();
+            quote! {
+                {
+                    let serialized = somatize_core::canon::canonical_bytes(&self.#field_name)
+                        .unwrap_or_else(|e| panic!(
+                            "field `{}` of `{}` is not canonically hashable ({}); \
+                             annotate it with #[soma(skip_hash)]",
+                            #field_name_str, #name_str, e
+                        ));
+                    parts.push(serialized);
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        impl #name {
+            /// Content-addressable hash of this step's configuration.
+            ///
+            /// Every field that is not `#[soma(skip_hash)]`, so adding one
+            /// cannot silently leave it out of the journal key.
+            pub fn config_hash(&self) -> somatize_core::cache::CacheKey {
+                let mut parts: Vec<Vec<u8>> = Vec::new();
+                parts.push(#name_str.as_bytes().to_vec());
+                #cache_version_part
+                #(#hash_parts)*
+                let refs: Vec<&[u8]> = parts.iter().map(|p| p.as_slice()).collect();
+                somatize_core::cache::CacheKey::from_parts(&refs)
+            }
+        }
+    }
+    .into()
+}

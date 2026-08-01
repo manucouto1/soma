@@ -84,4 +84,4 @@ pub use virtual_value::{ValueStatus, VirtualValue};
 pub use viz::{GraphOverlay, NodeOverlay, NodeStatus};
 
 // Re-export derive macro
-pub use somatize_macros::SomaFilter;
+pub use somatize_macros::{SomaFilter, SomaStep};

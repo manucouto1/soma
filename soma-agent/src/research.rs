@@ -33,6 +33,8 @@ use somatize_memory::ExperimentRecord;
 const HISTORY_LIMIT: usize = 20;
 
 /// An agent that proposes experiments, runs them, and decides when to stop.
+#[derive(serde::Serialize, somatize_core::SomaStep)]
+#[soma(cache_version = "soma-research-step-v1")]
 pub struct ResearchStep {
     model: String,
     objective: String,
@@ -246,13 +248,11 @@ impl ResearchStep {
 }
 
 impl Step for ResearchStep {
+    /// Derived: the pipeline under investigation is part of the key too,
+    /// which the hand-written version left out — two research loops over
+    /// different graphs shared a journal.
     fn config_hash(&self) -> somatize_core::cache::CacheKey {
-        somatize_core::cache::CacheKey::from_parts(&[
-            b"soma-research-step-v1",
-            self.model.as_bytes(),
-            self.objective.as_bytes(),
-            &self.max_iterations.to_le_bytes(),
-        ])
+        ResearchStep::config_hash(self)
     }
 
     fn meta(&self) -> StepMeta {
