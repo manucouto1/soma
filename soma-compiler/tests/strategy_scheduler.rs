@@ -89,7 +89,7 @@ fn test_workers() -> Vec<WorkerInfo> {
 fn local_strategy_compiles_normally() {
     let graph = linear_graph(&["scaler", "model"]);
 
-    let mut registry = somatize_compiler::SimpleFilterRegistry::new();
+    let mut registry = somatize_compiler::SimpleNodeRegistry::new();
     registry.register("scaler", &DummyFilter("Scaler".into()));
     registry.register("model", &DummyFilter("Model".into()));
 
@@ -109,7 +109,7 @@ fn scheduler_distributes_parallel_branches() {
     graph.edges.push(Edge::data("e3", "branch_a", "merge"));
     graph.edges.push(Edge::data("e4", "branch_b", "merge"));
 
-    let mut registry = somatize_compiler::SimpleFilterRegistry::new();
+    let mut registry = somatize_compiler::SimpleNodeRegistry::new();
     for id in ["input", "branch_a", "branch_b", "merge"] {
         registry.register(id, &DummyFilter(id.into()));
     }
@@ -129,7 +129,7 @@ fn scheduler_distributes_parallel_branches() {
 fn scheduler_groups_differentiable_nodes() {
     let graph = linear_graph(&["encoder", "decoder"]);
 
-    let mut registry = somatize_compiler::SimpleFilterRegistry::new();
+    let mut registry = somatize_compiler::SimpleNodeRegistry::new();
     registry.register("encoder", &DummyFilter("Encoder".into()));
     registry.register("decoder", &DummyFilter("Decoder".into()));
 

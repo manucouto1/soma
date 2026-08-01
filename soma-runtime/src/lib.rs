@@ -32,7 +32,7 @@ pub use executors::{
 };
 pub use forward::{Batched, ForwardStrategy, Standard, Stream};
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
-pub use node_catalog::{FilterLibrary, NodeCatalog, NodeImpl};
+pub use node_catalog::{NodeCatalog, NodeImpl};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};

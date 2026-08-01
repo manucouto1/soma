@@ -10,7 +10,7 @@
 //! - *plausible but unequal* (f32 → f64) stays a warning, as it always was;
 //! - *no possible reading* (tensor → conversation) is a compile error.
 
-use somatize_compiler::{CompileMode, DiagnosticLevel, SimpleFilterRegistry, compile};
+use somatize_compiler::{CompileMode, DiagnosticLevel, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
 use somatize_core::filter::{Distribution, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
@@ -83,7 +83,7 @@ fn an_impossible_edge_is_a_compile_error() {
     g.add_node(Node::step("agent", "Agent"));
     g.add_edge(Edge::data("e", "encoder", "agent"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "encoder",
         filter_meta(
@@ -114,7 +114,7 @@ fn a_step_output_meeting_a_tensor_input_is_rejected() {
     g.add_node(Node::filter_with_id("classifier", "classifier"));
     g.add_edge(Edge::data("e", "agent", "classifier"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_step_meta(
         "agent",
         StepMeta::new("Agent").with_output_schema(Schema::messages()),
@@ -143,7 +143,7 @@ fn text_into_a_conversation_compiles_without_complaint() {
     g.add_node(Node::step("agent", "Agent"));
     g.add_edge(Edge::data("e", "prompt", "agent"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "prompt",
         filter_meta("prompt", None, Some(Schema::text())),
@@ -173,7 +173,7 @@ fn a_plausible_mismatch_is_still_only_a_warning() {
     g.add_node(Node::filter_with_id("b", "b"));
     g.add_edge(Edge::data("e", "a", "b"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "a",
         filter_meta("a", None, Some(Schema::vector(DataType::Float32, 8))),
@@ -209,7 +209,7 @@ fn an_edge_labelling_an_undeclared_arm_is_rejected() {
     // Typo: the router will never produce "tec".
     g.add_edge(Edge::control("e2", "router", "tech").with_label("tec"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["billing", "tech"] {
         reg.register_meta(id, filter_meta(id, None, None), key(id));
     }
@@ -231,7 +231,7 @@ fn a_declared_arm_without_an_edge_is_rejected() {
     g.add_node(Node::filter_with_id("billing", "billing"));
     g.add_edge(Edge::control("e1", "router", "billing").with_label("billing"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "billing",
         filter_meta("billing", None, None),
@@ -251,7 +251,7 @@ fn declared_arms_matching_their_edges_compile() {
     g.add_edge(Edge::control("e1", "router", "billing").with_label("billing"));
     g.add_edge(Edge::control("e2", "router", "tech").with_label("tech"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["billing", "tech"] {
         reg.register_meta(id, filter_meta(id, None, None), key(id));
     }
@@ -270,7 +270,7 @@ fn a_default_arm_needs_no_declaration() {
     g.add_edge(Edge::control("e1", "router", "billing").with_label("billing"));
     g.add_edge(Edge::control("e2", "router", "other").with_label("default"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["billing", "other"] {
         reg.register_meta(id, filter_meta(id, None, None), key(id));
     }
@@ -288,7 +288,7 @@ fn undeclared_arms_are_still_inferred() {
     g.add_edge(Edge::control("e1", "router", "a").with_label("a"));
     g.add_edge(Edge::control("e2", "router", "b").with_label("b"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["a", "b"] {
         reg.register_meta(id, filter_meta(id, None, None), key(id));
     }

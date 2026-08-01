@@ -6,7 +6,7 @@ use somatize_core::error::Result;
 use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::value::Value;
 use somatize_runtime::runner::{LocalRunner, RunContext, Runner};
-use somatize_runtime::{EventBus, FilterLibrary, MemoryCache};
+use somatize_runtime::{EventBus, MemoryCache, NodeCatalog};
 use std::sync::Arc;
 
 struct Plus(f64);
@@ -69,7 +69,7 @@ fn fit_answers_with_the_last_node_not_an_arbitrary_one() {
     };
 
     for _ in 0..200 {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(Plus(10.0)));
         let ctx = RunContext::new(
             &lib,

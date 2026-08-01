@@ -7,7 +7,7 @@
 //! runs unconditionally after the branch has already selected one.
 
 use somatize_compiler::plan::ExecutionPlan;
-use somatize_compiler::{CompileMode, SimpleFilterRegistry, compile};
+use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
 use somatize_core::control::LoopCondition;
 use somatize_core::filter::{Distribution, FilterKind, FilterMeta, StreamMode};
@@ -27,8 +27,8 @@ fn meta(name: &str) -> FilterMeta {
     }
 }
 
-fn registry(node_ids: &[&str]) -> SimpleFilterRegistry {
-    let mut reg = SimpleFilterRegistry::new();
+fn registry(node_ids: &[&str]) -> SimpleNodeRegistry {
+    let mut reg = SimpleNodeRegistry::new();
     for id in node_ids {
         reg.register_meta(*id, meta(id), CacheKey::from_parts(&[id.as_bytes()]));
     }

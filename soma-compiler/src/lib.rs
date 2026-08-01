@@ -12,8 +12,8 @@ pub mod plan;
 pub mod scheduler;
 
 pub use compiler::{
-    CompileMode, CompileResult, Compiler, Diagnostic, DiagnosticLevel, FilterRegistry,
-    NodeRegistry, SimpleFilterRegistry, SimpleNodeRegistry, compile, compile_stream,
+    CompileMode, CompileResult, Compiler, Diagnostic, DiagnosticLevel, NodeRegistry,
+    SimpleNodeRegistry, compile, compile_stream,
 };
 pub use plan::ExecutionPlan;
 pub use scheduler::{

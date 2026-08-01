@@ -68,16 +68,10 @@ pub trait NodeRegistry: Send + Sync {
     }
 }
 
-/// The port's former name, from when it only answered for filters.
-pub use NodeRegistry as FilterRegistry;
-
 /// Simple in-memory node registry for compilation.
 pub struct SimpleNodeRegistry {
     entries: HashMap<String, (NodeMeta, CacheKey)>,
 }
-
-/// The registry's former name, from when it only held filters.
-pub type SimpleFilterRegistry = SimpleNodeRegistry;
 
 impl SimpleNodeRegistry {
     pub fn new() -> Self {
@@ -1033,7 +1027,7 @@ mod tests {
         }
     }
 
-    fn register_nodes(registry: &mut SimpleFilterRegistry, ids: &[&str], meta: FilterMeta) {
+    fn register_nodes(registry: &mut SimpleNodeRegistry, ids: &[&str], meta: FilterMeta) {
         for (i, id) in ids.iter().enumerate() {
             let hash = CacheKey::from_parts(&[id.as_bytes(), &[i as u8]]);
             registry.register_meta(*id, meta.clone(), hash);
@@ -1045,7 +1039,7 @@ mod tests {
     #[test]
     fn compile_empty_graph() {
         let graph = Graph::new();
-        let registry = SimpleFilterRegistry::new();
+        let registry = SimpleNodeRegistry::new();
         let result = compile(&graph, &registry, CompileMode::Inference, None).unwrap();
         assert!(matches!(result.plan, ExecutionPlan::Empty));
     }
@@ -1054,7 +1048,7 @@ mod tests {
     fn compile_single_node() {
         let mut graph = Graph::new();
         graph.add_node(Node::new("a", "A", "F"));
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a"],
@@ -1072,7 +1066,7 @@ mod tests {
             Node::new("b", "PCA", "F"),
             Node::new("c", "SVM", "F"),
         ]);
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b", "c"],
@@ -1101,7 +1095,7 @@ mod tests {
         graph.add_edge(Edge::data("e3", "b1", "merge"));
         graph.add_edge(Edge::data("e4", "b2", "merge"));
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["root", "b1", "b2", "merge"],
@@ -1128,7 +1122,7 @@ mod tests {
         graph.add_node(Node::new("b", "B", "F"));
         // No edges: fully independent
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -1149,7 +1143,7 @@ mod tests {
             Node::new("c", "SVM", "F"),
         ]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b", "c"],
@@ -1186,7 +1180,7 @@ mod tests {
     fn no_cache_mode_skips_all_caching() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -1209,7 +1203,7 @@ mod tests {
     fn differentiable_mode_skips_output_caching() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -1235,7 +1229,7 @@ mod tests {
             Node::new("linear", "Linear", "F"),
         ]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         registry.register_meta(
             "scaler",
             make_meta(FilterKind::Trainable, true),
@@ -1268,7 +1262,7 @@ mod tests {
     fn no_diagnostic_when_all_differentiable() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -1287,7 +1281,7 @@ mod tests {
         graph.add_edge(Edge::data("e1", "a", "b"));
         graph.add_edge(Edge::data("e2", "b", "a"));
 
-        let registry = SimpleFilterRegistry::new();
+        let registry = SimpleNodeRegistry::new();
         let result = compile(&graph, &registry, CompileMode::Inference, None);
         assert!(matches!(result, Err(SomaError::CycleDetected)));
     }
@@ -1304,7 +1298,7 @@ mod tests {
         graph.add_edge(Edge::data("e3", "b1", "end"));
         graph.add_edge(Edge::data("e4", "b2", "end"));
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["root", "b1", "b2", "end"],
@@ -1325,7 +1319,7 @@ mod tests {
             Node::new("evaluate", "Evaluate", "F"),
         ]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         // preprocess: local
         registry.register_meta(
             "preprocess",
@@ -1373,7 +1367,7 @@ mod tests {
     fn local_distribution_not_wrapped() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],

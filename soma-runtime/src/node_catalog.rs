@@ -77,9 +77,6 @@ pub struct NodeCatalog {
     states: Arc<dyn StateStore>,
 }
 
-/// The catalog's former name, from when it only held filters.
-pub type FilterLibrary = NodeCatalog;
-
 impl NodeCatalog {
     /// Create a new catalog with an in-memory state store.
     pub fn new() -> Self {
@@ -292,7 +289,7 @@ mod tests {
 
     #[test]
     fn register_and_query() {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(DummyFilter { name: "A".into() }));
         lib.register("b", Box::new(DummyFilter { name: "B".into() }));
 
@@ -303,7 +300,7 @@ mod tests {
 
     #[test]
     fn implements_filter_registry() {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register(
             "node_1",
             Box::new(DummyFilter {
@@ -348,7 +345,7 @@ mod tests {
     /// disk filled up. It reports the failure now.
     #[test]
     fn a_failing_state_store_is_reported_not_fatal() {
-        let lib = FilterLibrary::with_state_store(Arc::new(FailingStateStore));
+        let lib = NodeCatalog::with_state_store(Arc::new(FailingStateStore));
 
         let err = lib.try_set_state("a", Value::Empty).unwrap_err();
         assert!(err.to_string().contains("disk full"), "got: {err}");
@@ -356,7 +353,7 @@ mod tests {
 
     #[test]
     fn state_management() {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(DummyFilter { name: "A".into() }));
 
         assert!(lib.get_state("a").is_none());
@@ -369,7 +366,7 @@ mod tests {
 
     #[test]
     fn clear_states_keeps_filters() {
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(DummyFilter { name: "A".into() }));
         lib.try_set_state("a", Value::Empty).unwrap();
 

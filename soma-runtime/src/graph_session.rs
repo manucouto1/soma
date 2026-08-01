@@ -364,7 +364,7 @@ pub fn graph_predict(
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
-    use somatize_compiler::FilterRegistry;
+    use somatize_compiler::NodeRegistry;
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result;
     use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
@@ -672,11 +672,11 @@ mod tests {
     }
 
     #[test]
-    fn filter_library_registry_compat() {
+    fn the_catalog_is_the_compiler_registry() {
         let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(DoublerFilter));
 
-        let registry: &dyn FilterRegistry = &lib;
+        let registry: &dyn NodeRegistry = &lib;
         assert!(registry.meta("a").is_some());
         assert_eq!(registry.meta("a").unwrap().name, "Doubler");
         assert!(registry.config_hash("a").is_some());

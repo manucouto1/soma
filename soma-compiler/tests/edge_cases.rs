@@ -1,4 +1,4 @@
-use somatize_compiler::{CompileMode, SimpleFilterRegistry, compile};
+use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta};
 use somatize_core::error::Result;
 use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
@@ -68,7 +68,7 @@ fn gradient_multiple_interruptions() {
         Node::new("d3", "D3", "F"),
     ]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "d1",
         make_meta(FilterKind::Trainable, true),
@@ -116,7 +116,7 @@ fn gradient_all_opaque_single_warning() {
         Node::new("o3", "O3", "F"),
     ]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "o1",
         make_meta(FilterKind::Opaque, false),
@@ -156,7 +156,7 @@ fn cache_diamond_cascade() {
     graph.add_edge(Edge::data("e3", "b1", "merge"));
     graph.add_edge(Edge::data("e4", "b2", "merge"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "root",
         make_meta(FilterKind::Trainable, true),
@@ -208,7 +208,7 @@ fn compile_with_unregistered_node() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
     // Only register "a", not "b"
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "a",
         make_meta(FilterKind::Trainable, true),
@@ -229,7 +229,7 @@ fn compile_deep_chain() {
         .collect();
     let graph = linear_pipeline(nodes);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for i in 0..20 {
         reg.register_meta(
             format!("n{i}"),
@@ -248,7 +248,7 @@ fn compile_deep_chain() {
 fn all_compile_modes() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta(
         "a",
         make_meta(FilterKind::Trainable, true),
@@ -295,7 +295,7 @@ fn meta_with_schemas(output: Option<Schema>, input: Option<Schema>) -> FilterMet
 fn schema_compatible_no_warnings() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     // A outputs f64[128], B expects f64[128] → compatible
     reg.register_meta(
         "a",
@@ -321,7 +321,7 @@ fn schema_compatible_no_warnings() {
 fn schema_incompatible_dtype_warns() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     // A outputs f64, B expects i64 → incompatible
     reg.register_meta(
         "a",
@@ -349,7 +349,7 @@ fn schema_incompatible_dtype_warns() {
 fn schema_incompatible_shape_warns() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     // A outputs f64[128], B expects f64[256] → shape mismatch
     reg.register_meta(
         "a",
@@ -375,7 +375,7 @@ fn schema_incompatible_shape_warns() {
 fn schema_dynamic_compatible_with_fixed() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     // A outputs f64[batch, 128], B expects f64[32, 128] → compatible (dynamic batch)
     reg.register_meta(
         "a",
@@ -401,7 +401,7 @@ fn schema_dynamic_compatible_with_fixed() {
 fn schema_none_skips_validation() {
     let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     // Both have None schemas → no validation, no warnings
     reg.register_meta(
         "a",

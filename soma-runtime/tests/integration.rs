@@ -3,7 +3,7 @@
 //! These tests verify realistic researcher use cases:
 //! define filters → build graph → fit → forward → cache hit → invalidation.
 
-use somatize_compiler::{CompileMode, SimpleFilterRegistry, compile};
+use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::MetricRecord;
@@ -493,7 +493,7 @@ fn compile_then_execute_with_cache() {
         Node::new("model", "Model", "LinearModel"),
     ]);
 
-    let mut registry = SimpleFilterRegistry::new();
+    let mut registry = SimpleNodeRegistry::new();
     registry.register("normalizer", &Normalizer as &dyn Filter);
     registry.register(
         "model",

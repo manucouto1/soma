@@ -5,7 +5,7 @@
 //! hands its output to its successors — so a graph can mix computation and
 //! effects without either half knowing about the other.
 
-use somatize_compiler::{CompileMode, SimpleFilterRegistry, compile};
+use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
 use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse, StopReason, Usage};
 use somatize_core::error::Result;
@@ -181,7 +181,7 @@ fn mixed_graph() -> Graph {
 #[test]
 fn a_step_node_compiles_to_a_step_plan() {
     let g = mixed_graph();
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["prep", "shout"] {
         reg.register_meta(id, Shout.meta(), CacheKey::from_parts(&[id.as_bytes()]));
     }
@@ -211,7 +211,7 @@ fn a_step_reads_from_and_writes_to_its_neighbours() {
         .with_driver(h.driver.clone(), Arc::new(filters.clone()));
     ctx.set("prep", Value::text("what is soma?"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["prep", "shout"] {
         reg.register_meta(id, Shout.meta(), CacheKey::from_parts(&[id.as_bytes()]));
     }
@@ -240,7 +240,7 @@ fn re_running_the_same_run_replays_instead_of_calling() {
     let filters = h.with_filters(&["prep", "shout"]);
 
     let g = mixed_graph();
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["prep", "shout"] {
         reg.register_meta(id, Shout.meta(), CacheKey::from_parts(&[id.as_bytes()]));
     }
@@ -320,7 +320,7 @@ fn routed_graph() -> Graph {
 
 fn routed_plan() -> somatize_compiler::ExecutionPlan {
     let g = routed_graph();
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     for id in ["billing", "tech"] {
         reg.register_meta(id, Shout.meta(), CacheKey::from_parts(&[id.as_bytes()]));
     }
@@ -456,7 +456,7 @@ fn a_suspended_run_halts_the_plan_and_then_resumes() {
     g.add_node(Node::filter_with_id("after", "after"));
     g.add_edge(Edge::data("e", "approve", "after"));
 
-    let mut reg = SimpleFilterRegistry::new();
+    let mut reg = SimpleNodeRegistry::new();
     reg.register_meta("after", Shout.meta(), CacheKey::from_parts(&[b"after"]));
     let plan = compile(&g, &reg, CompileMode::Inference, None)
         .unwrap()
