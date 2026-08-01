@@ -139,9 +139,14 @@ successful one.
 
 :::caution[Rust only, for now]
 `ResearchStep` has no Python binding yet. From Python, the agentic surface
-is `soma.Agent`, `soma.Judge` and `soma.agentic` — see
+is `soma.Agent`, `soma.Judge`, `soma.agentic` and `soma.library` — see
 [Agentic Graphs](/soma/design/agentic/) — and the memory half above, which
 works today from either language.
+
+`soma.library.Retriever` is the same retrieval this page describes, as a
+node: point it at the pool and it attaches what it found to whatever passes
+through, which is how an agent reads its own memory without any of the
+plumbing below.
 :::
 
 ## Events

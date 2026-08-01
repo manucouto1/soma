@@ -49,14 +49,14 @@ soma-memory     → Experiment pool: ExperimentRecord (experiments.jsonl), Deriv
 soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
                   (isolated venv/conda per pipeline), Axum HTTP/WS server
 soma-llm        → LlmProvider + OpenAI-compatible client (ollama/hf/nvidia/kimi/glm/
-                  deepseek/groq/vllm...), provider catalog as TOML data, Toolbox,
-                  MCP client, ReactStep/JudgeStep
+                  deepseek/groq/vllm...), provider catalog as TOML data (incl.
+                  RetryPolicy + Quirks), Toolbox, MCP client, ReactStep/JudgeStep
 soma-agent      → ResearchStep: the research loop as a Step (propose → Effect::Graph →
                   read metrics → conclude). Action = RunExperiment | Conclude
 soma-mcp        → MCP server (20 tools: code, knowledge, project, 7 experiment-pool kb_*)
 soma-coordinator→ worker registry, routing, heartbeat monitoring
 soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, Tool,
-                  Study, Run, RunView, soma.viz, soma.agentic
+                  Study, Run, RunView, soma.viz, soma.agentic, soma.library
 soma/           → facade crate (`somatize`) re-exporting the workspace
 docs/           → 35 Starlight pages (sidebar guard: `cd docs && npm run check`)
 notebooks/      → 14 executed tutorial notebooks (10-12 are one campaign, sharing
@@ -183,6 +183,26 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   `Effect::Graph` + `GraphHandler` make a pipeline a first-class tool for an agent.
   Searchable: `soma.Agent(model=search(...), system=search(...))` and `g.optional(a, b)`
   (topology as a dimension) fold into the same `search_space()` a filter graph produces.
+- **Provider resilience**: retries live in the HTTP client, not the step — a 429 is
+  transport, not domain. `RetryPolicy` is a `ProviderConfig` field (TOML-overridable):
+  408/425/429/5xx + transport errors retry, everything else is fatal. `Retry-After`
+  honoured in both RFC forms, capped by `max_ms`; exponential backoff with full jitter
+  otherwise; wall-clock `budget_secs` checked BEFORE sleeping. Giving up reports the
+  last failure plus the first when they differ. Retries do NOT reach the EventBus.
+- **Structured output**: `LlmRequest.schema` + `Quirks::supports_json_schema` (which was
+  declared and never read until now) → `response_format` when the endpoint can enforce
+  it, system-prompt append when it cannot. `soma.Agent(schema=..., max_repairs=1)`:
+  one violation buys one correction, quoted back. Validation is STRUCTURAL and
+  permissive on purpose (root type, `required`, property types) — an invented violation
+  costs a real model call to "fix" a correct answer. `soma.agentic.Validate` mirrors it
+  in Python (uses `jsonschema` if installed), returning `{"ok","errors","value","branch"}`.
+- **`soma.library`**: Eval (accuracy/exact_match/token-F1/top_k; scoring nothing is an
+  ERROR, not a 0.0), Accumulator (stateful + `_deterministic=False`, the documented
+  exception), Retriever (over the pool), Compact (sliding window; enabling it
+  invalidates replay of earlier runs), `agentic.self_consistency` (one agent sampled N
+  times; `MajorityVote(mode="number"|"text")`).
+- **Not answers**: `finish_reason: length` and `content_filter` are ERRORS in ReactStep,
+  not empty replies. `forward` picks the leaf that actually ran, not `leaves.first()`.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.
 
 ## MCP Server

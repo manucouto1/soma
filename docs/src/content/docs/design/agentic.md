@@ -45,7 +45,7 @@ pub enum Transition {
 
 A step also has no state of its own. `StepCtx` carries `results` (this turn) and `history` (every previous turn), and anything a step accumulates it derives from those. This is not stylistic: derive the history and a replay reconstructs *exactly* the history the original run had, because it replays exactly the same results. Keep it in a field and the two can drift.
 
-### Six structural node kinds
+### Five structural node kinds
 
 ```rust
 pub enum NodeKind {
@@ -54,9 +54,10 @@ pub enum NodeKind {
     SubGraph { .. },
     Loop { max_iterations, until },
     Branch { arms },
-    Map { .. },
 }
 ```
+
+Five, not the six an earlier draft of this page claimed: it listed a `Map` variant for dynamic fan-out that was designed and then never needed, because `Transition::Spawn` covers the same ground from inside a step and does it better. A step knows how wide the fan-out should be — it has just read the plan — while a node kind would have to be told. The variant was never added; only this page was wrong, which is the cheap version of the same mistake the dead node types elsewhere are the expensive version of.
 
 Everything else — LLM, tool, retriever, judge, aggregator, human, memory, orchestrator, panel — is a filter or a step in the registry, and every *pattern* is a function returning a graph. See [`soma.agentic`](#the-patterns-are-functions).
 
@@ -138,6 +139,102 @@ Each returns an ordinary `Graph`, built from the same `node`, `connect`, `branch
 `board` is the one worth reading as an argument rather than a convenience. It is the multi-agent debate of [Du et al. (ICML 2024)](https://arxiv.org/abs/2305.14325): a panel answers independently, a chair reads every answer and records a decision, and the next round shows the panel what the chair recorded — the summarizer variant that paper introduces for larger panels, which is what makes the chair a moderator rather than a tallying clerk. The loop is `brief → members → chair`, the chair also reads the brief so the round after it still knows the question, and the chair's `done` is the exit condition: a panel that has converged stops instead of buying the rounds it was allowed.
 
 The default chair, `MajorityVote`, is a stateless filter rather than a model — the aggregator the paper actually closes a debate with, costing no tokens and keeping the model as the only stochastic part of the flow. Pass a `Judge` or an agent instead to have a model moderate. And because the result is a graph, "five members or three, two rounds or four" is a `search_space()` dimension rather than an opinion; notebook 14 replicates the paper's GSM8K ordering and then searches that space.
+
+### The library the patterns are made of
+
+`soma.library` holds the filters that would otherwise be written once per
+project, each subtly differently, right up until two results are compared:
+
+| Filter | For |
+|---|---|
+| `Eval` | accuracy, exact match, token-overlap F1, top-k against a reference |
+| `Accumulator` | every value a loop passed through, not just the last |
+| `Retriever` | what the experiment pool already knows that bears on this |
+| `Compact` | a transcript that would otherwise outgrow the context window |
+| `Validate` | a value against a JSON Schema, as a verdict a `branch` can route on |
+
+`Eval` is the counterpart to `Judge`, and the choice between them is not
+stylistic: a judge asks a model whether the work is good, which costs tokens
+and returns a slightly different number each time. Where a reference exists,
+a metric answers exactly, for free, and identically on every run. Keep the
+judge for what has no reference.
+
+Two of these are honest about a cost. `Accumulator` **holds state**, which
+is the one thing this design pushes back on everywhere else — there is no
+stateless way to carry a list around a loop when the nodes in between are a
+model and a judge, which do not forward values nobody asked them about. It
+declares `_deterministic = false` and is excluded from output caching.
+`Compact` **changes what the model is shown**, so switching it on invalidates
+the replay of earlier runs — correctly, since the journal is keyed on what
+was actually sent.
+
+### Asking for a shape
+
+```python
+g.node("extract", soma.Agent(model="ollama/qwen2.5", schema={
+    "type": "object",
+    "required": ["score", "reason"],
+    "properties": {"score": {"type": "number"}, "reason": {"type": "string"}},
+}))
+```
+
+An endpoint that supports constrained decoding is asked to enforce the
+schema (`response_format`); one that does not is asked in the system prompt.
+The difference matters — constrained decoding *cannot* produce prose, a
+prompt can — so the quirk that says which is which is read rather than
+assumed.
+
+Either way the reply is checked, and one wrong answer buys one correction
+with the violation quoted back. The second is a model that cannot produce
+the shape, and asking again only bills for it. `max_repairs=` raises the
+ceiling deliberately.
+
+The check is structural — root type, `required`, declared property types —
+and permissive by design: a violation missed costs a consumer an error it
+would have hit anyway, while a violation *invented* sends a correct answer
+back to be "fixed", and that costs a real model call. `Validate` uses the
+`jsonschema` package when it is installed and falls back to the same
+structural check when it is not.
+
+### When an endpoint pushes back
+
+Retrying is the client's job, not the step's. A 429 is transport, not
+domain: the step has no information the client lacks, and by the time a
+`Failed` reaches it the only honest reading is "this will not improve by
+asking again" — which is exactly what a ReAct loop already assumes when it
+stops.
+
+The policy is data, like everything else about a provider:
+
+```toml
+[providers.nvidia.retry]
+max_attempts = 6      # total tries; 1 means never retry
+base_ms = 500         # doubling from here
+max_ms = 30_000       # ceiling on one wait
+budget_secs = 900     # wall clock across all attempts
+```
+
+408, 425, 429, 500, 502, 503, 504 and transport errors are retried;
+everything else is fatal, because a 401 does not improve with patience. A
+`Retry-After` is obeyed in both forms the RFC allows — delta-seconds and an
+HTTP date — capped by `max_ms`, since an endpoint asking for an hour is
+telling you to come back later, not to block a thread. Without one, the
+backoff is exponential with full jitter, so a study firing twenty trials at
+once does not synchronise their retries into the wave that caused the rate
+limit.
+
+The wall-clock budget is checked *before* waiting, not after, so it stops
+the loop rather than interrupting a request in flight; the last attempt can
+still overshoot by up to `timeout_secs`. A budget below `timeout_secs`
+promises retries that can never happen, and the catalog says so at load
+rather than quietly rewriting it.
+
+Two limits worth knowing. Retries do **not** reach the `EventBus`, so a
+study report will not say how many a trial cost — the client has no bus and
+handing it one would be a layering change. And a run that gives up reports
+the last failure plus the first when they differ, because an endpoint that
+answers with a gateway page and then stops answering at all has told you two
+things.
 
 ### Providers are data
 
@@ -277,6 +374,10 @@ without depending on Soma's internals.
 **A branch condition may be a step.** An LLM router is the common case, so the executor dispatches the condition node to the step library when it is registered there.
 
 **A failed pipeline is a result.** `Effect::Graph` returns `EffectResult::Failed` rather than erroring: a configuration that will not run is a finding, and ending the run would discard everything learned before it.
+
+**A truncated or refused turn is not an answer.** `finish_reason: length` means the model was cut off mid-thought and `content_filter` means it declined; returning either as the reply is how an empty string ends up in a report as the agent's considered conclusion. Both are errors, and the truncation error carries the partial text, because a cut-off thought is still evidence.
+
+**A branch passes its input to the arm it chose,** and `forward` returns the leaf that actually ran. With several leaves — which a branch always creates — declaration order alone would answer with the arm that was *not* taken.
 
 ## Sources
 
