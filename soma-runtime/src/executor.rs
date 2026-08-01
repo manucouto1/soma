@@ -222,7 +222,9 @@ impl Executable for ExecutionPlan {
 
             ExecutionPlan::Cached { node_id, key } => {
                 let start = Instant::now();
-                let value = cache.get(key)?.ok_or_else(|| {
+                // `get_located`, not `get`: the tier that actually served
+                // the value is the whole content of this event.
+                let (value, tier) = cache.get_located(key)?.ok_or_else(|| {
                     SomaError::Cache(format!(
                         "expected cached value for node `{node_id}` not found"
                     ))
@@ -232,7 +234,7 @@ impl Executable for ExecutionPlan {
                     run_id: ctx.run_id.clone(),
                     node_id: node_id.clone(),
                     key: key.clone(),
-                    tier: somatize_core::cache::CacheTier::Memory,
+                    tier,
                     load_time: start.elapsed(),
                 });
                 Ok(())
@@ -371,6 +373,19 @@ impl Executable for ExecutionPlan {
     }
 }
 
+/// What a panic payload says, when it says anything at all.
+///
+/// `panic!("...")` with arguments produces a `String`; a bare literal
+/// produces a `&str`. Anything else — `panic_any` with a custom type —
+/// carries no message we can read.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<String>()
+        .map(|s| s.as_str())
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown panic")
+}
+
 /// Execute a plan (convenience function, delegates to `Executable` trait).
 pub fn execute(
     plan: &ExecutionPlan,
@@ -417,11 +432,7 @@ fn execute_node(
     let result = match result {
         Ok(inner) => inner,
         Err(panic) => {
-            let msg = panic
-                .downcast_ref::<String>()
-                .map(|s| s.as_str())
-                .or_else(|| panic.downcast_ref::<&str>().copied())
-                .unwrap_or("unknown panic");
+            let msg = panic_message(&*panic);
             tracing::error!(node_id, "filter panicked: {msg}");
             Err(SomaError::Execution {
                 node_id: node_id.to_string(),
@@ -488,7 +499,24 @@ fn execute_parallel(
             })
             .collect();
 
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        // A branch thread that panicked comes back as an Err from `join`.
+        // Unwrapping it here re-panics on the *parent* thread, which
+        // aborts the process and undoes the `catch_unwind` that
+        // `execute_node` installs precisely so a user filter cannot.
+        handles
+            .into_iter()
+            .map(|h| match h.join() {
+                Ok(result) => result,
+                Err(panic) => {
+                    let msg = panic_message(&*panic);
+                    tracing::error!("parallel branch panicked: {msg}");
+                    Err(SomaError::Execution {
+                        node_id: "<parallel branch>".to_string(),
+                        message: format!("parallel branch panicked: {msg}"),
+                    })
+                }
+            })
+            .collect()
     });
 
     // Merge results and propagate first error
@@ -706,6 +734,68 @@ mod tests {
     use crate::cache::MemoryCache;
     use somatize_core::cache::CacheKey;
     use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+
+    /// Panics in `meta()`, which — unlike `forward()` — runs outside the
+    /// `catch_unwind` in `execute_node`, so the unwind reaches the thread
+    /// boundary.
+    struct PanicsInMeta;
+
+    impl Filter for PanicsInMeta {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"PanicsInMeta"])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            panic!("meta blew up");
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// `execute_parallel` used to `join().unwrap()`, which re-raises a
+    /// branch's panic on the parent thread. Inside `std::thread::scope`
+    /// that aborts the process — so a panic the runtime deliberately
+    /// contains everywhere else took the whole host down when it happened
+    /// in a parallel branch.
+    #[test]
+    fn a_panicking_parallel_branch_becomes_an_error() {
+        let mut lib = FilterLibrary::new();
+        lib.register("boom", Box::new(PanicsInMeta));
+        lib.register("fine", Box::new(DoublerFilter));
+
+        let cache = MemoryCache::default();
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "run-panic");
+        ctx.set("input".to_string(), Value::tensor(vec![1.0], vec![1]));
+
+        let plan = ExecutionPlan::Parallel(vec![
+            ExecutionPlan::Execute {
+                node_id: "boom".into(),
+            },
+            ExecutionPlan::Execute {
+                node_id: "fine".into(),
+            },
+        ]);
+
+        // Keep the default hook from printing the backtrace this test
+        // provokes on purpose.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = execute(&plan, &mut ctx, &lib, &cache);
+        std::panic::set_hook(previous);
+
+        let err = result.expect_err("a panicking branch must not be a success");
+        assert!(
+            err.to_string().contains("meta blew up"),
+            "the panic message should survive; got: {err}"
+        );
+    }
 
     struct DoublerFilter;
 
