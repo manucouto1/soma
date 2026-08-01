@@ -1534,7 +1534,9 @@ impl PyGraph {
             // Regular sequential states appear under the bare node_id.
             for (key, state) in states {
                 let node_id = key.strip_prefix("__state_").unwrap_or(&key).to_string();
-                self.library.set_state(node_id, state);
+                if let Err(e) = self.library.try_set_state(node_id, state) {
+                    return Err(soma_err_to_py(e));
+                }
             }
             self.fitted = true;
             return Ok(());
@@ -1557,7 +1559,9 @@ impl PyGraph {
                 let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
                 let (_output, states) = result?;
                 for (node_id, state) in states {
-                    self.library.set_state(&node_id, state);
+                    if let Err(e) = self.library.try_set_state(&node_id, state) {
+                        return Err(soma_err_to_py(e));
+                    }
                 }
                 self.fitted = true;
                 return Ok(());
@@ -1570,7 +1574,9 @@ impl PyGraph {
             let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
             let (_output, states) = result?;
             for (node_id, state) in states {
-                self.library.set_state(&node_id, state);
+                if let Err(e) = self.library.try_set_state(&node_id, state) {
+                    return Err(soma_err_to_py(e));
+                }
             }
             self.fitted = true;
             return Ok(());
@@ -1641,7 +1647,9 @@ impl PyGraph {
                 };
 
                 let out = filter.forward(&input, &state).map_err(soma_err_to_py)?;
-                self.library.set_state(node_id.to_string(), state);
+                if let Err(e) = self.library.try_set_state(node_id.to_string(), state) {
+                    return Err(soma_err_to_py(e));
+                }
                 out
             } else {
                 filter

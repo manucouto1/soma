@@ -137,7 +137,7 @@ impl GraphSession {
         // Store trained states from __state_ keys into FilterLibrary
         for (key, value) in &all_outputs {
             if let Some(node_id) = key.strip_prefix("__state_") {
-                self.library.set_state(node_id, value.clone());
+                self.library.try_set_state(node_id, value.clone())?;
             }
         }
 
@@ -222,7 +222,7 @@ impl GraphSession {
         for (node_id, json_val) in obj {
             let value: Value = serde_json::from_value(json_val.clone())
                 .map_err(|e| SomaError::Other(format!("state deserialize: {e}")))?;
-            self.library.set_state(node_id.clone(), value);
+            self.library.try_set_state(node_id.clone(), value)?;
         }
 
         self.fitted = true;
@@ -351,7 +351,7 @@ pub fn graph_fit(
         let start = std::time::Instant::now();
 
         let (state, output) = if meta.kind == FilterKind::Trainable {
-            let data_hash = CacheKey::hash_data(&serde_json::to_vec(&input).unwrap_or_default());
+            let data_hash = CacheKey::for_value(&input);
             let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
 
             let state = if let Some(cached) = cache.get(&state_key)? {

@@ -522,14 +522,14 @@ fn compile_then_execute_with_cache() {
 
     let mut filters = FilterLibrary::new();
     filters.register("normalizer", Box::new(Normalizer));
-    filters.set_state("normalizer", norm_state);
+    filters.try_set_state("normalizer", norm_state).unwrap();
     filters.register(
         "model",
         Box::new(LinearModel {
             learning_rate: 0.01,
         }),
     );
-    filters.set_state("model", model_state);
+    filters.try_set_state("model", model_state).unwrap();
 
     execute(&result.plan, &mut ctx, &filters, &cache).unwrap();
 
