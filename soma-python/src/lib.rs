@@ -3128,8 +3128,20 @@ impl PyGraph {
         })
         .map_err(soma_err_to_py)?;
 
+        // Which leaf is "the output" when there are several? Prefer one that
+        // actually ran. A branch makes every arm a leaf, so declaration
+        // order alone would return the arm that was *not* taken — an empty
+        // value, from a node that never executed.
+        //
+        // Among leaves that did produce something, declaration order still
+        // decides, so a parallel fan-out answers the same as it always has.
         let leaves = self.graph.leaves();
-        let output = if let Some(leaf_id) = leaves.first() {
+        let produced = leaves
+            .iter()
+            .find(|id| ctx.store.contains_key(**id))
+            .or_else(|| leaves.first());
+
+        let output = if let Some(leaf_id) = produced {
             ctx.store
                 .remove(*leaf_id)
                 .and_then(|vv| vv.as_value().cloned())
