@@ -5,7 +5,7 @@
 
 use super::Runner;
 use crate::EventBus;
-use crate::executor::{Context, Executable, GraphInfo};
+use crate::executor::{Context, GraphInfo};
 use crate::node_catalog::NodeCatalog;
 
 use somatize_compiler::ExecutionPlan;
@@ -277,7 +277,7 @@ impl Runner for LocalRunner {
         }
         ctx.set("__input__", input.clone());
 
-        plan.execute(&mut ctx, filters, cache)?;
+        crate::executor::execute(plan, &mut ctx, filters, cache)?;
 
         // Return last executed node's output
         ctx.execution_order

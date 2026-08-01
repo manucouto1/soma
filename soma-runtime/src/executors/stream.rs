@@ -11,6 +11,7 @@ use somatize_core::value::Value;
 use std::sync::Arc;
 
 /// A fitted filter with its learned state, ready for streaming.
+#[derive(Clone)]
 pub struct FittedFilter {
     pub name: String,
     pub filter: Arc<dyn Filter>,
@@ -62,6 +63,24 @@ impl StreamExecutor {
     /// Process a single chunk through the pipeline.
     /// Returns the output chunk, or None if a Barrier filter is still accumulating.
     pub fn process_chunk(&mut self, chunk: Value) -> Result<Option<Value>> {
+        let cache = self.cache.clone();
+        self.process_chunk_cached(chunk, cache.as_deref())
+    }
+
+    /// Process a chunk against a borrowed cache.
+    ///
+    /// The executor's own `cache` is an `Arc` because a long-lived one
+    /// (the worker keeps executors in a map between requests) outlives any
+    /// borrow. A caller that already holds the store — the plan executor
+    /// does, as a `&dyn` argument — has no `Arc` to give and would
+    /// otherwise have to leave chunk caching off. That is what happened:
+    /// `LocalRunner::forward` never set the owned handle, so every
+    /// streaming forward ran uncached and said nothing about it.
+    pub fn process_chunk_cached(
+        &mut self,
+        chunk: Value,
+        cache: Option<&dyn CacheStore>,
+    ) -> Result<Option<Value>> {
         let mut current = chunk;
         self.chunk_count += 1;
 
@@ -72,7 +91,7 @@ impl StreamExecutor {
                 &self.filters[i],
                 &current,
                 &mut self.states[i],
-                self.cache.as_deref(),
+                cache,
                 self.chunk_count,
             )? {
                 ChunkResult::Output(val) => current = val,
@@ -527,5 +546,37 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(r1, r2);
+    }
+
+    /// A caller holding the store as a borrow — which the plan executor
+    /// does — could not enable chunk caching: `with_cache` wants an `Arc`.
+    /// So `LocalRunner::forward` never set one, and every streaming
+    /// forward ran uncached without saying so.
+    #[test]
+    fn a_borrowed_cache_is_enough_to_cache_chunks() {
+        use crate::cache::memory::MemoryCache;
+
+        let cache = MemoryCache::default();
+        let fitted = vec![FittedFilter {
+            name: "doubler".into(),
+            filter: Arc::new(DoubleChunk),
+            state: Arc::new(Value::Empty),
+        }];
+
+        let chunk = Value::tensor(vec![1.0, 2.0], vec![2]);
+
+        let mut first = StreamExecutor::new(fitted.clone());
+        let a = first
+            .process_chunk_cached(chunk.clone(), Some(&cache))
+            .unwrap();
+        assert!(a.is_some());
+
+        // A second executor over the same store serves the chunk from the
+        // cache rather than recomputing it — which is only observable
+        // because the store was populated at all.
+        let mut second = StreamExecutor::new(fitted);
+        let b = second.process_chunk_cached(chunk, Some(&cache)).unwrap();
+        assert_eq!(a, b);
+        assert!(!cache.is_empty(), "the chunk should have been cached");
     }
 }

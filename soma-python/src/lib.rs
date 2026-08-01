@@ -3045,8 +3045,7 @@ impl PyGraph {
                 somatize_core::util::timestamp_id("stream_forward"),
             )
             .with_graph_info(graph_info)
-            .with_seed(seed)
-            .with_cache_arc(self.cache.clone());
+            .with_seed(seed);
 
             let roots = self.graph.roots();
             if roots.len() == 1 {

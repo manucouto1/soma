@@ -108,9 +108,6 @@ pub struct Context {
     /// each seed owns an independent cache line (a 5-seed study is 5
     /// resumable computations, not one).
     pub seed: Option<i64>,
-    /// Owned handle to the same cache passed to `execute()` — needed by
-    /// the stream executor, which holds the cache across chunks.
-    pub cache_arc: Option<Arc<dyn CacheStore>>,
     /// Performs and journals step effects. Only needed when the plan
     /// contains a step; a purely computational graph leaves it unset.
     ///
@@ -135,7 +132,6 @@ impl Context {
             spill_threshold: 0,
             output_hashes: HashMap::new(),
             seed: None,
-            cache_arc: None,
             driver: None,
         }
     }
@@ -161,13 +157,6 @@ impl Context {
     /// Set the experiment seed (hashed into every cache key).
     pub fn with_seed(mut self, seed: Option<i64>) -> Self {
         self.seed = seed;
-        self
-    }
-
-    /// Provide an owned cache handle (enables chunk-level caching in
-    /// streaming plans; pass the same store given to `execute()`).
-    pub fn with_cache_arc(mut self, cache: Arc<dyn CacheStore>) -> Self {
-        self.cache_arc = Some(cache);
         self
     }
 
@@ -276,244 +265,272 @@ impl Context {
             spill_threshold: self.spill_threshold,
             output_hashes: self.output_hashes.clone(),
             seed: self.seed,
-            cache_arc: self.cache_arc.clone(),
             driver: self.driver.clone(),
         }
     }
 }
 
-/// Execute a compiled plan synchronously.
-/// For parallel branches, uses the async executor under the hood.
-/// Contract for executing a plan.
-pub trait Executable {
-    fn execute(
-        &self,
-        ctx: &mut Context,
-        filters: &NodeCatalog,
-        cache: &dyn CacheStore,
-    ) -> Result<()>;
+/// Execute a compiled plan.
+///
+/// Every arm delegates. The variants that need real work — a node, a loop,
+/// a branch, a fan-out — each have a function, so this reads as the list of
+/// things a plan can be rather than as their implementations.
+pub fn execute(
+    plan: &ExecutionPlan,
+    ctx: &mut Context,
+    catalog: &NodeCatalog,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    match plan {
+        ExecutionPlan::Empty => Ok(()),
+
+        // One call for both: a filter simply declares no handoffs.
+        ExecutionPlan::Execute { node_id } => execute_node(node_id, &[], ctx, catalog, cache),
+
+        ExecutionPlan::Step { node_id, handoffs } => {
+            execute_node(node_id, handoffs, ctx, catalog, cache)
+        }
+
+        ExecutionPlan::Sequence(steps) => {
+            for step in steps {
+                execute(step, ctx, catalog, cache)?;
+            }
+            Ok(())
+        }
+
+        ExecutionPlan::Parallel(branches) => execute_parallel(branches, ctx, catalog, cache),
+
+        ExecutionPlan::Loop {
+            node_id,
+            body,
+            max_iterations,
+            until,
+            carry_from,
+        } => execute_loop(
+            node_id,
+            body,
+            *max_iterations,
+            until,
+            carry_from.as_deref(),
+            ctx,
+            catalog,
+            cache,
+        ),
+
+        ExecutionPlan::Branch { node_id, arms } => {
+            execute_branch(node_id, arms, ctx, catalog, cache)
+        }
+
+        ExecutionPlan::Remote {
+            node_id,
+            target: _,
+            plan,
+        } => execute_remote(node_id, plan, ctx, catalog, cache),
+
+        ExecutionPlan::Composite { node_ids } => {
+            // Sequential fallback — execute each node in order.
+            // A future Python-aware executor will pass tensors directly.
+            for nid in node_ids {
+                execute_node(nid, &[], ctx, catalog, cache)?;
+            }
+            Ok(())
+        }
+
+        ExecutionPlan::Stream {
+            node_ids,
+            chunk_size,
+        } => execute_stream(node_ids, *chunk_size, ctx, catalog, cache),
+
+        // `ExecutionPlan` is `#[non_exhaustive]`, so this arm is reachable
+        // from a plan built by a newer compiler — deserialized from a
+        // worker, say. It used to `warn!` and return `Ok(())`: a plan the
+        // runtime did not understand was reported as having run, naming
+        // neither the variant nor the node.
+        other => Err(SomaError::Execution {
+            node_id: other
+                .node_ids()
+                .first()
+                .map_or_else(|| "<plan>".to_string(), |id| (*id).to_string()),
+            message: format!(
+                "this runtime does not know how to execute `{other:?}`. It was \
+                 probably compiled by a newer version"
+            ),
+        }),
+    }
 }
 
-impl Executable for ExecutionPlan {
-    fn execute(
-        &self,
-        ctx: &mut Context,
-        filters: &NodeCatalog,
-        cache: &dyn CacheStore,
-    ) -> Result<()> {
-        match self {
-            ExecutionPlan::Empty => Ok(()),
+/// Iterate `body` until the condition says stop, or the count runs out.
+#[allow(clippy::too_many_arguments)]
+fn execute_loop(
+    node_id: &str,
+    body: &ExecutionPlan,
+    max_iterations: Option<usize>,
+    until: &LoopCondition,
+    carry_from: Option<&str>,
+    ctx: &mut Context,
+    catalog: &NodeCatalog,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    let max = max_iterations.unwrap_or(100);
+    let mut ran = 0usize;
 
-            // One call for both: a filter simply declares no handoffs.
-            ExecutionPlan::Execute { node_id } => execute_node(node_id, &[], ctx, filters, cache),
+    // The loop node's value is its *carry*: what the body reads on each
+    // pass. A body entry's only predecessor is the loop node itself (that
+    // control edge is what makes it the body), so without seeding this the
+    // first iteration would run on `Empty`. Seed it with the loop's own
+    // input; after each iteration the condition node's output replaces it,
+    // which is what makes a refine loop actually refine rather than
+    // redraft the same thing N times.
+    let seed = resolve_input(node_id, ctx);
+    ctx.set(node_id.to_string(), seed);
 
-            ExecutionPlan::Step { node_id, handoffs } => {
-                execute_node(node_id, handoffs, ctx, filters, cache)
-            }
+    for i in 0..max {
+        execute(body, ctx, catalog, cache)?;
+        ran = i + 1;
 
-            ExecutionPlan::Sequence(steps) => {
-                for step in steps {
-                    step.execute(ctx, filters, cache)?;
-                }
-                Ok(())
-            }
+        // Advance the carry before testing the condition: even a loop with
+        // no stop signal has to move forward, or every pass repeats the
+        // first one.
+        if let Some(source) = carry_from
+            && let Some(value) = ctx.get(source).cloned()
+        {
+            ctx.set(node_id.to_string(), value);
+        }
 
-            ExecutionPlan::Parallel(branches) => execute_parallel(branches, ctx, filters, cache),
+        // Termination is read from the node the compiler resolved, never
+        // from whichever node happened to run last — with a parallel body
+        // "last" is a race.
+        let LoopCondition::WhenSignaled(cond_node) = until else {
+            continue; // Exhaust: always run the full count
+        };
 
-            ExecutionPlan::Loop {
-                node_id,
-                body,
-                max_iterations,
-                until,
-                carry_from,
-            } => {
-                let max = max_iterations.unwrap_or(100);
-                let mut ran = 0usize;
+        let value = ctx.get(cond_node).ok_or_else(|| SomaError::Execution {
+            node_id: node_id.to_string(),
+            message: format!(
+                "loop condition node `{cond_node}` produced no output on iteration {ran}"
+            ),
+        })?;
 
-                // The loop node's value is its *carry*: what the body reads
-                // on each pass. A body entry's only predecessor is the loop
-                // node itself (that control edge is what makes it the body),
-                // so without seeding this the first iteration would run on
-                // `Empty`. Seed it with the loop's own input; after each
-                // iteration the condition node's output replaces it, which is
-                // what makes a refine loop actually refine rather than redraft
-                // the same thing N times.
-                let seed = resolve_input(node_id, ctx);
-                ctx.set(node_id.clone(), seed);
+        let signal = read_loop_signal(value).ok_or_else(|| SomaError::Execution {
+            node_id: node_id.to_string(),
+            message: format!(
+                "loop condition node `{cond_node}` produced `{}`, which carries no \
+                 termination signal. Return a bool, \"done\"/\"stop\", or \
+                 {{\"done\": bool}}",
+                value.type_name()
+            ),
+        })?;
 
-                for i in 0..max {
-                    body.execute(ctx, filters, cache)?;
-                    ran = i + 1;
-
-                    // Advance the carry before testing the condition: even a
-                    // loop with no stop signal has to move forward, or every
-                    // pass repeats the first one.
-                    if let Some(source) = carry_from
-                        && let Some(value) = ctx.get(source).cloned()
-                    {
-                        ctx.set(node_id.clone(), value);
-                    }
-
-                    // Termination is read from the node the compiler resolved,
-                    // never from whichever node happened to run last — with a
-                    // parallel body "last" is a race.
-                    let LoopCondition::WhenSignaled(cond_node) = until else {
-                        continue; // Exhaust: always run the full count
-                    };
-
-                    let value = ctx.get(cond_node).ok_or_else(|| SomaError::Execution {
-                        node_id: node_id.clone(),
-                        message: format!(
-                            "loop condition node `{cond_node}` produced no output on \
-                             iteration {ran}"
-                        ),
-                    })?;
-
-                    let signal = read_loop_signal(value).ok_or_else(|| SomaError::Execution {
-                        node_id: node_id.clone(),
-                        message: format!(
-                            "loop condition node `{cond_node}` produced `{}`, which \
-                                 carries no termination signal. Return a bool, \"done\"/\"stop\", \
-                                 or {{\"done\": bool}}",
-                            value.type_name()
-                        ),
-                    })?;
-
-                    if signal == LoopSignal::Stop {
-                        ctx.event_bus.emit(Event::NodeCompleted {
-                            run_id: ctx.run_id.clone(),
-                            node_id: node_id.clone(),
-                            duration: std::time::Duration::ZERO,
-                            output_summary: format!("Loop terminated at iteration {ran}"),
-                        });
-                        return Ok(());
-                    }
-                }
-
-                ctx.event_bus.emit(Event::NodeCompleted {
-                    run_id: ctx.run_id.clone(),
-                    node_id: node_id.clone(),
-                    duration: std::time::Duration::ZERO,
-                    output_summary: format!("Loop exhausted {ran} iterations"),
-                });
-                Ok(())
-            }
-
-            ExecutionPlan::Branch { node_id, arms } => {
-                // Execute the branch node first (it produces the condition
-                // value). It may be an ordinary filter or an effectful step:
-                // an LLM deciding where a request goes is the routing case
-                // agentic graphs are built for. Which it is no longer needs
-                // asking — one call runs either, and the outcome says how
-                // the arm was chosen.
-                let request = resolve_input(node_id, ctx);
-                let outcome = run_node(node_id, ctx, filters, cache)?;
-
-                let selector = match outcome {
-                    // A routing step names its arm directly. This used to
-                    // be unreachable: the branch called the step with no
-                    // handoffs — its control edges having been consumed as
-                    // the branch's arms — so a `Goto` always errored.
-                    NodeOutcome::HandOff { target, .. } => target,
-
-                    NodeOutcome::Produced(condition) => {
-                        read_arm_selector(&condition).ok_or_else(|| SomaError::Execution {
-                            node_id: node_id.clone(),
-                            message: format!(
-                                "branch condition produced `{}`, which names no arm. Return \
-                                 the arm's label as a string, a bool, or \
-                                 {{\"branch\": \"<label>\"}}",
-                                condition.type_name()
-                            ),
-                        })?
-                    }
-
-                    NodeOutcome::Paused { turn, reason } => {
-                        return Err(SomaError::Suspended {
-                            run_id: ctx.run_id.clone(),
-                            node_id: node_id.clone(),
-                            turn,
-                            reason: Box::new(reason),
-                        });
-                    }
-                };
-
-                let (label, plan) = arms
-                    .iter()
-                    .find(|(label, _)| label == &selector)
-                    .or_else(|| arms.iter().find(|(label, _)| is_default_arm(label)))
-                    .ok_or_else(|| SomaError::Execution {
-                        node_id: node_id.clone(),
-                        message: format!(
-                            "branch selected `{selector}`, which matches no arm ({}) and \
-                             there is no `default` arm",
-                            arms.iter()
-                                .map(|(l, _)| l.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    })?;
-
-                ctx.event_bus.emit(Event::NodeCompleted {
-                    run_id: ctx.run_id.clone(),
-                    node_id: node_id.clone(),
-                    duration: std::time::Duration::ZERO,
-                    output_summary: format!("Branch selected: {label}"),
-                });
-
-                // The selector is control, not data. An arm's only
-                // predecessor is the branch node, so leaving the label there
-                // would hand the chosen agent the string "billing" instead of
-                // the customer's question — the handoff-context loss the
-                // multi-agent failure literature keeps finding. The branch
-                // passes its input through instead; put a filter *before* it
-                // if the request needs transforming.
-                ctx.set(node_id.clone(), request);
-                plan.execute(ctx, filters, cache)
-            }
-
-            ExecutionPlan::Remote {
-                node_id,
-                target: _,
-                plan,
-            } => {
-                if let Some(transport) = &ctx.transport {
-                    // Gather input from predecessors
-                    let input = ctx
-                        .graph_info
-                        .predecessors(node_id)
-                        .first()
-                        .and_then(|pred| ctx.get(pred));
-
-                    let result = transport.execute_node(node_id, input)?;
-                    ctx.set(node_id.clone(), result);
-                    Ok(())
-                } else {
-                    // No transport — fall back to local execution
-                    plan.execute(ctx, filters, cache)
-                }
-            }
-
-            ExecutionPlan::Composite { node_ids } => {
-                // Sequential fallback — execute each node in order.
-                // A future Python-aware executor will pass tensors directly.
-                for nid in node_ids {
-                    execute_node(nid, &[], ctx, filters, cache)?;
-                }
-                Ok(())
-            }
-
-            ExecutionPlan::Stream {
-                node_ids,
-                chunk_size,
-            } => execute_stream(node_ids, *chunk_size, ctx, filters, cache),
-
-            _ => {
-                tracing::warn!("Unhandled ExecutionPlan variant");
-                Ok(())
-            }
+        if signal == LoopSignal::Stop {
+            emit_control_completed(ctx, node_id, format!("Loop terminated at iteration {ran}"));
+            return Ok(());
         }
     }
+
+    emit_control_completed(ctx, node_id, format!("Loop exhausted {ran} iterations"));
+    Ok(())
+}
+
+/// Run the condition node, then the one arm it names.
+fn execute_branch(
+    node_id: &str,
+    arms: &[(String, ExecutionPlan)],
+    ctx: &mut Context,
+    catalog: &NodeCatalog,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    // The condition node may be an ordinary filter or an effectful step:
+    // an LLM deciding where a request goes is the routing case agentic
+    // graphs are built for. Which it is no longer needs asking — one call
+    // runs either, and the outcome says how the arm was chosen.
+    let request = resolve_input(node_id, ctx);
+
+    let selector = match run_node(node_id, ctx, catalog, cache)? {
+        // A routing step names its arm directly. This used to be
+        // unreachable: the branch called the step with no handoffs — its
+        // control edges having been consumed as the branch's arms — so a
+        // `Goto` always errored.
+        NodeOutcome::HandOff { target, .. } => target,
+
+        NodeOutcome::Produced(condition) => {
+            read_arm_selector(&condition).ok_or_else(|| SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!(
+                    "branch condition produced `{}`, which names no arm. Return the \
+                     arm's label as a string, a bool, or {{\"branch\": \"<label>\"}}",
+                    condition.type_name()
+                ),
+            })?
+        }
+
+        NodeOutcome::Paused { turn, reason } => {
+            return Err(SomaError::Suspended {
+                run_id: ctx.run_id.clone(),
+                node_id: node_id.to_string(),
+                turn,
+                reason: Box::new(reason),
+            });
+        }
+    };
+
+    let (label, plan) = arms
+        .iter()
+        .find(|(label, _)| label == &selector)
+        .or_else(|| arms.iter().find(|(label, _)| is_default_arm(label)))
+        .ok_or_else(|| SomaError::Execution {
+            node_id: node_id.to_string(),
+            message: format!(
+                "branch selected `{selector}`, which matches no arm ({}) and there is \
+                 no `default` arm",
+                arms.iter()
+                    .map(|(l, _)| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        })?;
+
+    emit_control_completed(ctx, node_id, format!("Branch selected: {label}"));
+
+    // The selector is control, not data. An arm's only predecessor is the
+    // branch node, so leaving the label there would hand the chosen agent
+    // the string "billing" instead of the customer's question — the
+    // handoff-context loss the multi-agent failure literature keeps
+    // finding. The branch passes its input through instead; put a filter
+    // *before* it if the request needs transforming.
+    ctx.set(node_id.to_string(), request);
+    execute(plan, ctx, catalog, cache)
+}
+
+/// Hand a node to a worker, or run it here if there is no transport.
+fn execute_remote(
+    node_id: &str,
+    plan: &ExecutionPlan,
+    ctx: &mut Context,
+    catalog: &NodeCatalog,
+    cache: &dyn CacheStore,
+) -> Result<()> {
+    let Some(transport) = ctx.transport.clone() else {
+        return execute(plan, ctx, catalog, cache);
+    };
+    let input = ctx
+        .graph_info
+        .predecessors(node_id)
+        .first()
+        .and_then(|pred| ctx.get(pred));
+    let result = transport.execute_node(node_id, input)?;
+    ctx.set(node_id.to_string(), result);
+    Ok(())
+}
+
+/// A control-flow construct finishing. It has no duration of its own —
+/// the time is in the nodes it ran.
+fn emit_control_completed(ctx: &Context, node_id: &str, summary: String) {
+    ctx.event_bus.emit(Event::NodeCompleted {
+        run_id: ctx.run_id.clone(),
+        node_id: node_id.to_string(),
+        duration: std::time::Duration::ZERO,
+        output_summary: summary,
+    });
 }
 
 /// Salt a cache key with the run's experiment seed, when set.
@@ -541,16 +558,6 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic")
 }
 
-/// Execute a plan (convenience function, delegates to `Executable` trait).
-pub fn execute(
-    plan: &ExecutionPlan,
-    ctx: &mut Context,
-    filters: &NodeCatalog,
-    cache: &dyn CacheStore,
-) -> Result<()> {
-    plan.execute(ctx, filters, cache)
-}
-
 /// Run one node and act on how it finished.
 ///
 /// The single entry point for both kinds. Everything that does not depend
@@ -570,7 +577,7 @@ fn execute_node(
         // A handoff: the node is finished and names who continues.
         NodeOutcome::HandOff { target, .. } => {
             let plan = select_handoff(node_id, &target, handoffs)?;
-            plan.execute(ctx, catalog, cache)
+            execute(plan, ctx, catalog, cache)
         }
 
         // Not a failure: the run paused. It travels as an error so the
@@ -930,7 +937,7 @@ fn execute_stream(
     chunk_size: usize,
     ctx: &mut Context,
     filters: &NodeCatalog,
-    _cache: &dyn CacheStore,
+    cache: &dyn CacheStore,
 ) -> Result<()> {
     use crate::executors::{FittedFilter, StreamExecutor};
 
@@ -963,13 +970,7 @@ fn execute_stream(
     // Chunk the input along the first tensor dimension.
     let chunks = chunk_value(&input, chunk_size);
 
-    // Process chunks through the stream executor. Chunk-level caching
-    // needs an owned handle (the executor keeps it across chunks) —
-    // provided via `Context::with_cache_arc`.
     let mut executor = StreamExecutor::new(fitted);
-    if let Some(c) = ctx.cache_arc.clone() {
-        executor = executor.with_cache(c);
-    }
 
     let last_id = node_ids.last().unwrap();
 
@@ -1003,7 +1004,7 @@ fn execute_stream(
             kind: somatize_core::filter::FilterKind::Stateless,
             effectful: false,
         });
-        if let Some(output) = executor.process_chunk(chunk)? {
+        if let Some(output) = executor.process_chunk_cached(chunk, Some(cache))? {
             append_output(output);
         }
     }
