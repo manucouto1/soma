@@ -20,6 +20,7 @@ from soma.search import search
 from soma.lab import Lab
 from soma.chain import Chain, Fork
 from soma import agentic
+from soma import library
 from soma.builder import somatize as _somatize
 
 try:
@@ -99,6 +100,7 @@ __all__ = [
     "Agent",
     "Judge",
     "agentic",
+    "library",
     "Tool",
     "tool",
     "providers",
