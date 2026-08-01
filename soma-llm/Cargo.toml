@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Provider-agnostic LLM access for Soma: one OpenAI-compatible client, a data-driven provider catalog, and an effect handler."
 
 [dependencies]
-somatize-core = { path = "../soma-core", version = "0.3.2" }
+somatize-core = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -23,5 +23,5 @@ tracing = { workspace = true }
 # Only the tests drive a real EffectDriver. The crate itself needs nothing
 # from the execution engine beyond the `EffectHandler` trait, which lives
 # in soma-core.
-somatize-runtime = { path = "../soma-runtime", version = "0.3.2" }
+somatize-runtime = { workspace = true }
 tempfile = "3"

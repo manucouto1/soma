@@ -15,6 +15,7 @@ use somatize_core::error::{Result, SomaError};
 use somatize_core::message::{ContentBlock, Message, Messages, Role};
 use somatize_core::schema::Schema;
 use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+use somatize_core::util::{extract_json, truncate};
 use somatize_core::value::Value;
 
 /// Ask the model; run whatever tools it asks for; repeat until it stops.
@@ -431,15 +432,6 @@ fn json_type(value: &serde_json::Value) -> &'static str {
     }
 }
 
-/// Enough of a partial answer to recognise, without pasting a whole
-/// truncated essay into an error message.
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    text.chars().take(max).collect::<String>() + "…"
-}
-
 /// Fold a turn's effect results back into the conversation.
 ///
 /// A model reply appends its assistant turn verbatim — prose and tool calls
@@ -676,22 +668,6 @@ impl Step for JudgeStep {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-}
-
-/// Pull a JSON object out of a reply that may be fenced or prefaced.
-///
-/// Models wrap JSON in ```json fences, or preface it with a sentence, often
-/// enough that requiring a bare object would fail on working output.
-fn extract_json(text: &str) -> Option<serde_json::Value> {
-    if let Ok(value) = serde_json::from_str(text.trim()) {
-        return Some(value);
-    }
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    serde_json::from_str(&text[start..=end]).ok()
 }
 
 #[cfg(test)]

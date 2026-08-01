@@ -8,16 +8,16 @@
 //! ```toml
 //! # Everything
 //! [dependencies]
-//! soma = "0.2"
+//! somatize = "0.4"
 //!
 //! # With S3 + Zarr storage
 //! [dependencies]
-//! soma = { version = "0.2", features = ["s3", "zarr"] }
+//! somatize = { version = "0.4", features = ["s3", "zarr"] }
 //!
 //! # Or pick individual crates
 //! [dependencies]
-//! soma-core = "0.2"
-//! soma-runtime = "0.2"
+//! somatize-core = "0.4"
+//! somatize-runtime = "0.4"
 //! ```
 //!
 //! ## Quick start
@@ -57,8 +57,16 @@ pub use somatize_worker as worker;
 /// Autonomous research agent.
 pub use somatize_agent as agent;
 
+/// Provider-agnostic LLM access: the OpenAI-compatible client, the
+/// provider catalog, `ReactStep`, `JudgeStep`, the toolbox.
+///
+/// Absent until now, which meant the facade could not reach the agentic
+/// surface it advertises — a Rust caller had to depend on `somatize-llm`
+/// directly while `soma::` pretended the workspace ended at `agent`.
+pub use somatize_llm as llm;
+
 /// Derive macros (#[derive(SomaFilter)]).
-pub use somatize_macros;
+pub use somatize_macros as macros;
 
 /// Prelude — import the most commonly used types.
 pub mod prelude {

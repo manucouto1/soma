@@ -11,10 +11,10 @@ name = "_soma"
 crate-type = ["cdylib"]
 
 [dependencies]
-somatize-core = { workspace = true, features = ["s3"] }
+somatize-core = { workspace = true }
 somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
-somatize-llm = { path = "../soma-llm", version = "0.3.1" }
+somatize-llm = { workspace = true }
 somatize-worker = { workspace = true }
 somatize-memory = { workspace = true }
 pyo3 = { workspace = true, features = ["extension-module"] }
@@ -28,3 +28,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "blo
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 rmp-serde = "1"
+
+[features]
+# On by default so a wheel keeps the S3 data store it has always had.
+# Declared rather than hardcoded, so a local build can drop rust-s3,
+# tokio and rustls with `--no-default-features`.
+default = ["s3"]
+s3 = ["somatize-core/s3"]

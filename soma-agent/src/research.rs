@@ -25,6 +25,7 @@ use somatize_core::error::{Result, SomaError};
 use somatize_core::graph::Graph;
 use somatize_core::message::{Message, Messages};
 use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+use somatize_core::util::{extract_json, truncate};
 use somatize_core::value::Value;
 use somatize_memory::ExperimentRecord;
 
@@ -341,42 +342,6 @@ fn collect_numbers(
         // number anyone wants to compare experiments on.
         _ => {}
     }
-}
-
-/// The first balanced JSON object in a reply.
-fn extract_json(text: &str) -> Option<serde_json::Value> {
-    let start = text.find('{')?;
-    let bytes = text.as_bytes();
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for (i, &b) in bytes.iter().enumerate().skip(start) {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match b {
-            b'\\' if in_string => escaped = true,
-            b'"' => in_string = !in_string,
-            b'{' if !in_string => depth += 1,
-            b'}' if !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    return serde_json::from_str(&text[start..=i]).ok();
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    text.chars().take(max).collect::<String>() + "…"
 }
 
 #[cfg(test)]

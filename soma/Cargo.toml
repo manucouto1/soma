@@ -16,6 +16,7 @@ somatize-runtime = { workspace = true }
 somatize-memory = { workspace = true }
 somatize-worker = { workspace = true }
 somatize-agent = { workspace = true }
+somatize-llm = { workspace = true }
 somatize-macros = { workspace = true }
 
 [features]
