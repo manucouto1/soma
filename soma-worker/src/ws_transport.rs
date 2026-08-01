@@ -26,8 +26,21 @@ impl WsTransport {
         }
     }
 
-    /// Send a CoordinatorToWorker message and wait for response.
-    fn send_msg(&self, msg: &CoordinatorToWorker) -> Result<WorkerToCoordinator> {
+    /// The worker's HTTP address, for the bulk endpoints.
+    fn http_addr(&self) -> String {
+        self.address
+            .replace("ws://", "http://")
+            .replace("wss://", "https://")
+    }
+
+    /// Send a `CoordinatorToWorker` message and wait for the response.
+    ///
+    /// Public because a caller that builds its own plan — the Python
+    /// bindings decide which worker gets which filters, which is policy,
+    /// not transport — should not have to open its own socket to ship it.
+    /// A second `connect_async` elsewhere is a second place to get the
+    /// frame-size configuration wrong.
+    pub fn send_msg(&self, msg: &CoordinatorToWorker) -> Result<WorkerToCoordinator> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -73,16 +86,183 @@ impl WsTransport {
         })
     }
 
+    /// Send a message without waiting for an answer.
+    ///
+    /// `Shutdown` is the one that needs this: the worker is not going to
+    /// reply, so [`WsTransport::send_msg`] would block until the socket
+    /// closed.
+    pub fn notify(&self, msg: &CoordinatorToWorker) -> Result<()> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SomaError::Other(format!("tokio: {e}")))?;
+
+        let url = match &self.token {
+            Some(t) => format!("{}/ws?token={t}", self.address),
+            None => format!("{}/ws", self.address),
+        };
+        let json =
+            serde_json::to_string(msg).map_err(|e| SomaError::Other(format!("serialize: {e}")))?;
+
+        rt.block_on(async move {
+            use futures_util::SinkExt;
+            use tokio_tungstenite::tungstenite::Message;
+
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .map_err(|e| SomaError::Other(format!("WS connect: {e}")))?;
+            ws.send(Message::Text(json.into()))
+                .await
+                .map_err(|e| SomaError::Other(format!("WS send: {e}")))
+        })
+    }
+
+    /// Upload a value to the worker's `/upload` endpoint, for payloads too
+    /// large to travel inline in a WebSocket message.
+    pub fn upload(&self, value: &Value) -> Result<somatize_core::store::DataRef> {
+        let url = format!("{}/upload", self.http_addr());
+        let body = serde_json::to_vec(value)
+            .map_err(|e| SomaError::Other(format!("serialize upload: {e}")))?;
+        let token = self.token.clone();
+
+        // Blocking HTTP on its own thread: this may be called from inside
+        // a tokio runtime, and nesting one is a panic.
+        std::thread::spawn(move || {
+            let client = reqwest::blocking::Client::new();
+            let mut req = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(body);
+            if let Some(t) = &token {
+                req = req.query(&[("token", t.as_str())]);
+            }
+            let resp = req
+                .send()
+                .map_err(|e| SomaError::Other(format!("HTTP upload: {e}")))?;
+            if !resp.status().is_success() {
+                return Err(SomaError::Other(format!(
+                    "HTTP upload failed: {}",
+                    resp.status()
+                )));
+            }
+            resp.json::<somatize_core::store::DataRef>()
+                .map_err(|e| SomaError::Other(format!("parse upload response: {e}")))
+        })
+        .join()
+        .map_err(|_| SomaError::Other("upload thread panicked".into()))?
+    }
+
+    /// Ship a plan and a stream of chunks over one WebSocket, collecting
+    /// results as they come back.
+    ///
+    /// The binary side of the protocol. It lived in the Python bindings,
+    /// which meant a second hand-rolled `connect_async` and a second copy
+    /// of the msgpack `StreamMessage` framing, a crate away from the enum
+    /// that defines it.
+    pub fn stream_plan(&self, plan: SerializedPlan, chunks: Vec<Value>) -> Result<Value> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| SomaError::Other(format!("tokio: {e}")))?;
+
+        let stream_id = plan.plan_id.clone();
+        let total_chunks = chunks.len();
+        let url = match &self.token {
+            Some(t) => format!("{}/ws?token={t}", self.address),
+            None => format!("{}/ws", self.address),
+        };
+
+        rt.block_on(async move {
+            use futures_util::StreamExt;
+            use tokio_tungstenite::tungstenite::Message;
+
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .map_err(|e| SomaError::Other(format!("WS connect: {e}")))?;
+
+            send_frame(
+                &mut ws,
+                StreamMessage::StreamBegin {
+                    stream_id: stream_id.clone(),
+                    plan_id: stream_id.clone(),
+                    total_chunks: Some(total_chunks),
+                    plan: Box::new(plan),
+                },
+            )
+            .await?;
+
+            let mut results: Vec<Value> = Vec::new();
+
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                send_frame(
+                    &mut ws,
+                    StreamMessage::ChunkData {
+                        stream_id: stream_id.clone(),
+                        chunk_index: i,
+                        value: chunk,
+                    },
+                )
+                .await?;
+
+                // Drain whatever has come back so far, so a long stream
+                // does not queue every result until the end.
+                while let Ok(Some(Ok(Message::Binary(resp)))) =
+                    tokio::time::timeout(std::time::Duration::from_millis(1), ws.next()).await
+                {
+                    if let Ok(StreamMessage::ChunkResult { value, .. }) =
+                        rmp_serde::from_slice(&resp)
+                    {
+                        results.push(value);
+                    }
+                }
+            }
+
+            send_frame(
+                &mut ws,
+                StreamMessage::StreamEnd {
+                    stream_id: stream_id.clone(),
+                },
+            )
+            .await?;
+
+            // Whatever is left, then the barrier filters' flush.
+            let mut flushed: Option<Value> = None;
+            while let Some(Ok(Message::Binary(resp))) = ws.next().await {
+                match rmp_serde::from_slice::<StreamMessage>(&resp) {
+                    Ok(StreamMessage::ChunkResult { value, .. }) => results.push(value),
+                    Ok(StreamMessage::StreamComplete { result, .. }) => match result {
+                        PlanResult::Success { output, .. } => {
+                            let v = self.resolve_output(&output)?;
+                            if !v.is_empty() {
+                                flushed = Some(v);
+                            }
+                            break;
+                        }
+                        PlanResult::Failed { error, .. } => {
+                            return Err(SomaError::Other(format!("stream error: {error}")));
+                        }
+                    },
+                    _ => {}
+                }
+            }
+
+            if let Some(v) = flushed {
+                results.push(v);
+            }
+            match results.len() {
+                0 => Ok(Value::Empty),
+                1 => Ok(results.into_iter().next().unwrap()),
+                _ => somatize_runtime::executors::materialize_buffer(&results),
+            }
+        })
+    }
+
     /// Resolve OutputDelivery — inline or download via HTTP.
-    fn resolve_output(&self, delivery: &OutputDelivery) -> Result<Value> {
+    pub fn resolve_output(&self, delivery: &OutputDelivery) -> Result<Value> {
         match delivery {
             OutputDelivery::Inline { value } => Ok(value.clone()),
             OutputDelivery::Reference { data_ref } => {
-                let http_addr = self
-                    .address
-                    .replace("ws://", "http://")
-                    .replace("wss://", "https://");
-                let url = format!("{http_addr}/download");
+                let url = format!("{}/download", self.http_addr());
                 let ref_json = serde_json::to_string(data_ref)
                     .map_err(|e| SomaError::Other(format!("serialize ref: {e}")))?;
                 let token = self.token.clone();
@@ -107,6 +287,21 @@ impl WsTransport {
             }
         }
     }
+}
+
+/// One msgpack frame down a socket.
+async fn send_frame<S>(ws: &mut S, msg: StreamMessage) -> Result<()>
+where
+    S: futures_util::Sink<tokio_tungstenite::tungstenite::Message> + Unpin,
+    S::Error: std::fmt::Display,
+{
+    use futures_util::SinkExt;
+    let bytes = rmp_serde::to_vec(&msg).map_err(|e| SomaError::Other(format!("msgpack: {e}")))?;
+    ws.send(tokio_tungstenite::tungstenite::Message::Binary(
+        bytes.into(),
+    ))
+    .await
+    .map_err(|e| SomaError::Other(format!("WS send: {e}")))
 }
 
 impl Transport for WsTransport {

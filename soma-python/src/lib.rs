@@ -1761,39 +1761,11 @@ impl PyGraph {
 
     /// Send a Shutdown message to a worker via WebSocket.
     fn send_shutdown(address: &str, token: Option<&str>, reason: &str) -> PyResult<()> {
-        use somatize_worker::protocol::CoordinatorToWorker;
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
-
-        rt.block_on(async {
-            let url = if let Some(t) = token {
-                format!("{address}/ws?token={t}")
-            } else {
-                format!("{address}/ws")
-            };
-
-            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS connect: {e}")))?;
-
-            use futures_util::SinkExt;
-            use tokio_tungstenite::tungstenite::Message;
-
-            let msg = CoordinatorToWorker::Shutdown {
+        somatize_worker::WsTransport::new(address, token.map(str::to_string))
+            .notify(&somatize_worker::protocol::CoordinatorToWorker::Shutdown {
                 reason: reason.to_string(),
-            };
-            let json = serde_json::to_string(&msg)
-                .map_err(|e| PyRuntimeError::new_err(format!("serialize: {e}")))?;
-
-            ws.send(Message::Text(json.into()))
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
-
-            Ok(())
-        })
+            })
+            .map_err(soma_err_to_py)
     }
 
     /// Decide how to transport input data to the worker.
@@ -1804,8 +1776,7 @@ impl PyGraph {
     fn resolve_transport(
         &self,
         x: &Value,
-        addr: &str,
-        token: &Option<String>,
+        transport: &somatize_worker::WsTransport,
     ) -> Result<somatize_worker::protocol::InputSource, PyErr> {
         use somatize_core::cache::CacheKey;
         use somatize_worker::protocol::InputSource;
@@ -1821,125 +1792,11 @@ impl PyGraph {
         // Estimate payload size
         let size_bytes = serde_json::to_vec(x).map(|v| v.len()).unwrap_or(0);
         if size_bytes >= somatize_core::store::INLINE_THRESHOLD_BYTES {
-            let data_ref = self.http_upload(x, addr, token)?;
+            let data_ref = transport.upload(x).map_err(soma_err_to_py)?;
             return Ok(InputSource::Reference { data_ref });
         }
 
         Ok(InputSource::Inline { value: x.clone() })
-    }
-
-    /// Upload a Value to the worker via HTTP POST /upload.
-    /// Runs in a dedicated thread to avoid tokio runtime nesting.
-    fn http_upload(
-        &self,
-        value: &Value,
-        addr: &str,
-        token: &Option<String>,
-    ) -> Result<somatize_core::store::DataRef, PyErr> {
-        let http_addr = addr
-            .replace("ws://", "http://")
-            .replace("wss://", "https://");
-        let url = format!("{http_addr}/upload");
-
-        let body = serde_json::to_vec(value)
-            .map_err(|e| PyRuntimeError::new_err(format!("json serialize: {e}")))?;
-
-        let token = token.clone();
-
-        // Run blocking HTTP in a dedicated thread to avoid tokio runtime conflicts
-        std::thread::spawn(move || {
-            let client = reqwest::blocking::Client::new();
-            let mut req = client
-                .post(&url)
-                .header("Content-Type", "application/json")
-                .body(body);
-
-            if let Some(t) = &token {
-                req = req.query(&[("token", t.as_str())]);
-            }
-
-            let resp = req
-                .send()
-                .map_err(|e| PyRuntimeError::new_err(format!("HTTP upload: {e}")))?;
-
-            if !resp.status().is_success() {
-                return Err(PyRuntimeError::new_err(format!(
-                    "HTTP upload failed: {}",
-                    resp.status()
-                )));
-            }
-
-            resp.json::<somatize_core::store::DataRef>()
-                .map_err(|e| PyRuntimeError::new_err(format!("parse upload response: {e}")))
-        })
-        .join()
-        .map_err(|_| PyRuntimeError::new_err("HTTP upload thread panicked"))?
-    }
-
-    /// Resolve an OutputDelivery into a Value.
-    ///
-    /// Inline → return value directly.
-    /// Reference → download from worker via HTTP GET /download.
-    fn resolve_output(
-        delivery: somatize_worker::protocol::OutputDelivery,
-        addr: &str,
-        token: &Option<String>,
-    ) -> Result<Value, PyErr> {
-        use somatize_worker::protocol::OutputDelivery;
-        match delivery {
-            OutputDelivery::Inline { value } => Ok(value),
-            OutputDelivery::Reference { data_ref } => Self::http_download(&data_ref, addr, token),
-            _ => Err(PyRuntimeError::new_err("unknown OutputDelivery variant")),
-        }
-    }
-
-    /// Download a Value from a worker via HTTP GET /download.
-    fn http_download(
-        data_ref: &somatize_core::store::DataRef,
-        addr: &str,
-        token: &Option<String>,
-    ) -> Result<Value, PyErr> {
-        let http_addr = addr
-            .replace("ws://", "http://")
-            .replace("wss://", "https://");
-        let url = format!("{http_addr}/download");
-
-        let ref_json = serde_json::to_string(data_ref)
-            .map_err(|e| PyRuntimeError::new_err(format!("serialize data_ref: {e}")))?;
-
-        let token = token.clone();
-
-        // Run blocking HTTP in a dedicated thread to avoid tokio runtime conflicts
-        std::thread::spawn(move || {
-            let client = reqwest::blocking::Client::new();
-            let mut req = client.get(&url).query(&[("ref", &ref_json)]);
-
-            if let Some(t) = &token {
-                req = req.query(&[("token", t.as_str())]);
-            }
-
-            let resp = req
-                .send()
-                .map_err(|e| PyRuntimeError::new_err(format!("HTTP download: {e}")))?;
-
-            if !resp.status().is_success() {
-                return Err(PyRuntimeError::new_err(format!(
-                    "HTTP download failed: {}",
-                    resp.status()
-                )));
-            }
-
-            let bytes = resp
-                .bytes()
-                .map_err(|e| PyRuntimeError::new_err(format!("read download response: {e}")))?;
-
-            rmp_serde::from_slice(&bytes).or_else(|_| {
-                serde_json::from_slice(&bytes)
-                    .map_err(|e| PyRuntimeError::new_err(format!("deserialize download: {e}")))
-            })
-        })
-        .join()
-        .map_err(|_| PyRuntimeError::new_err("HTTP download thread panicked"))?
     }
 
     /// Send a plan to a remote worker via WebSocket.
@@ -2004,7 +1861,8 @@ impl PyGraph {
             })
             .collect();
 
-        let input_source = self.resolve_transport(x, &addr, &token)?;
+        let transport = somatize_worker::WsTransport::new(&addr, token.clone());
+        let input_source = self.resolve_transport(x, &transport)?;
         let plan = SerializedPlan {
             plan_id: somatize_core::util::timestamp_id("remote_plan"),
             plan: compile_result.plan,
@@ -2014,54 +1872,27 @@ impl PyGraph {
             metadata: serde_json::json!({}),
         };
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
+        // The socket, the framing and the size limits belong to the
+        // transport. This function decides *which* worker gets *which*
+        // filters — policy — and hands the result over.
+        let reply = transport
+            .send_msg(&CoordinatorToWorker::AssignPlan { plan })
+            .map_err(soma_err_to_py)?;
 
-        rt.block_on(async {
-            let url = if let Some(t) = &token {
-                format!("{addr}/ws?token={t}")
-            } else {
-                format!("{addr}/ws")
-            };
-
-            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS connect: {e}")))?;
-
-            use futures_util::{SinkExt, StreamExt};
-            use tokio_tungstenite::tungstenite::Message;
-
-            let msg = CoordinatorToWorker::AssignPlan { plan };
-            let json = serde_json::to_string(&msg)
-                .map_err(|e| PyRuntimeError::new_err(format!("serialize: {e}")))?;
-
-            ws.send(Message::Text(json.into()))
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
-
-            while let Some(Ok(Message::Text(response))) = ws.next().await {
-                if let Ok(result) = serde_json::from_str::<WorkerToCoordinator>(&response) {
-                    match result {
-                        WorkerToCoordinator::PlanResult { result, .. } => match result {
-                            PlanResult::Success { output, states, .. } => {
-                                let _ = ws.close(None).await;
-                                let value = Self::resolve_output(output, &addr, &token)?;
-                                return Ok((value, states));
-                            }
-                            PlanResult::Failed { error, .. } => {
-                                let _ = ws.close(None).await;
-                                return Err(PyRuntimeError::new_err(format!("remote: {error}")));
-                            }
-                        },
-                        _ => continue,
-                    }
+        match reply {
+            WorkerToCoordinator::PlanResult { result, .. } => match result {
+                PlanResult::Success { output, states, .. } => {
+                    let value = transport.resolve_output(&output).map_err(soma_err_to_py)?;
+                    Ok((value, states))
                 }
-            }
-
-            Err(PyRuntimeError::new_err("worker closed without result"))
-        })
+                PlanResult::Failed { error, .. } => {
+                    Err(PyRuntimeError::new_err(format!("remote: {error}")))
+                }
+            },
+            other => Err(PyRuntimeError::new_err(format!(
+                "worker answered with {other:?} instead of a plan result"
+            ))),
+        }
     }
 
     /// Stream data to a worker in chunks via WebSocket Binary frames.
@@ -2114,13 +1945,11 @@ impl PyGraph {
             })
             .collect();
 
-        // Split Value into chunks
         let chunks = Self::chunk_value(x, chunk_size);
-        let total_chunks = chunks.len();
         let stream_id = somatize_core::util::timestamp_id("stream");
 
         let plan = SerializedPlan {
-            plan_id: stream_id.clone(),
+            plan_id: stream_id,
             plan: compile_result.plan,
             input: None, // input comes via chunks
             filters,
@@ -2128,115 +1957,9 @@ impl PyGraph {
             metadata: serde_json::json!({}),
         };
 
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| PyRuntimeError::new_err(format!("tokio: {e}")))?;
-
-        rt.block_on(async {
-            let url = if let Some(t) = &token {
-                format!("{addr}/ws?token={t}")
-            } else {
-                format!("{addr}/ws")
-            };
-
-            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS connect: {e}")))?;
-
-            use futures_util::{SinkExt, StreamExt};
-            use tokio_tungstenite::tungstenite::Message;
-
-            // 1. Send StreamBegin
-            let begin = StreamMessage::StreamBegin {
-                stream_id: stream_id.clone(),
-                plan_id: stream_id.clone(),
-                total_chunks: Some(total_chunks),
-                plan: Box::new(plan),
-            };
-            let bytes = rmp_serde::to_vec(&begin)
-                .map_err(|e| PyRuntimeError::new_err(format!("msgpack: {e}")))?;
-            ws.send(Message::Binary(bytes.into()))
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS send: {e}")))?;
-
-            // 2. Send chunks, collect ChunkResults as they arrive
-            let mut chunk_results: Vec<Value> = Vec::new();
-
-            for (i, chunk) in chunks.into_iter().enumerate() {
-                let chunk_msg = StreamMessage::ChunkData {
-                    stream_id: stream_id.clone(),
-                    chunk_index: i,
-                    value: chunk,
-                };
-                let bytes = rmp_serde::to_vec(&chunk_msg)
-                    .map_err(|e| PyRuntimeError::new_err(format!("msgpack: {e}")))?;
-                ws.send(Message::Binary(bytes.into()))
-                    .await
-                    .map_err(|e| PyRuntimeError::new_err(format!("WS send chunk: {e}")))?;
-
-                // Drain ChunkResults that arrived so far
-                while let Ok(Some(Ok(Message::Binary(resp)))) =
-                    tokio::time::timeout(std::time::Duration::from_millis(1), ws.next()).await
-                {
-                    if let Ok(StreamMessage::ChunkResult { value, .. }) =
-                        rmp_serde::from_slice(&resp)
-                    {
-                        chunk_results.push(value);
-                    }
-                }
-            }
-
-            // 3. Send StreamEnd
-            let end = StreamMessage::StreamEnd {
-                stream_id: stream_id.clone(),
-            };
-            let bytes = rmp_serde::to_vec(&end)
-                .map_err(|e| PyRuntimeError::new_err(format!("msgpack: {e}")))?;
-            ws.send(Message::Binary(bytes.into()))
-                .await
-                .map_err(|e| PyRuntimeError::new_err(format!("WS send end: {e}")))?;
-
-            // 4. Drain remaining ChunkResults + wait for StreamComplete
-            let mut flush_value: Option<Value> = None;
-            while let Some(Ok(msg)) = ws.next().await {
-                if let Message::Binary(resp) = msg {
-                    match rmp_serde::from_slice::<StreamMessage>(&resp) {
-                        Ok(StreamMessage::ChunkResult { value, .. }) => {
-                            chunk_results.push(value);
-                        }
-                        Ok(StreamMessage::StreamComplete { result, .. }) => match result {
-                            PlanResult::Success { output, .. } => {
-                                let v = Self::resolve_output(output, &addr, &token)?;
-                                if !v.is_empty() {
-                                    flush_value = Some(v);
-                                }
-                                break;
-                            }
-                            PlanResult::Failed { error, .. } => {
-                                return Err(PyRuntimeError::new_err(format!(
-                                    "stream error: {error}"
-                                )));
-                            }
-                        },
-                        _ => {}
-                    }
-                }
-            }
-
-            // 5. Combine: chunk results (progressive) + flush result (barrier)
-            if let Some(flushed) = flush_value {
-                chunk_results.push(flushed);
-            }
-            if chunk_results.is_empty() {
-                return Ok(Value::Empty);
-            }
-            if chunk_results.len() == 1 {
-                return Ok(chunk_results.into_iter().next().unwrap());
-            }
-            // Concatenate tensors along first dimension
-            somatize_runtime::executors::materialize_buffer(&chunk_results).map_err(soma_err_to_py)
-        })
+        somatize_worker::WsTransport::new(&addr, token)
+            .stream_plan(plan, chunks)
+            .map_err(soma_err_to_py)
     }
 
     /// Split a Value into chunks for streaming.

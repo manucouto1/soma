@@ -2775,12 +2775,10 @@ name = "soma-python"
 version = "0.4.0"
 dependencies = [
  "chrono",
- "futures-util",
  "hostname",
  "numpy",
  "pyo3",
  "reqwest",
- "rmp-serde",
  "serde",
  "serde_json",
  "somatize-compiler",
@@ -2790,7 +2788,6 @@ dependencies = [
  "somatize-runtime",
  "somatize-worker",
  "tokio",
- "tokio-tungstenite",
 ]
 
 [[package]]
