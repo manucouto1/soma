@@ -1925,7 +1925,7 @@ impl PyGraph {
             .notify(&somatize_worker::protocol::CoordinatorToWorker::Shutdown {
                 reason: reason.to_string(),
             })
-            .map_err(soma_err_to_py)
+            .map_err(|e| soma_err_to_py(e.into()))
     }
 
     /// Decide how to transport input data to the worker.
@@ -1952,7 +1952,7 @@ impl PyGraph {
         // Estimate payload size
         let size_bytes = serde_json::to_vec(x).map(|v| v.len()).unwrap_or(0);
         if size_bytes >= somatize_core::store::INLINE_THRESHOLD_BYTES {
-            let data_ref = transport.upload(x).map_err(soma_err_to_py)?;
+            let data_ref = transport.upload(x).map_err(|e| soma_err_to_py(e.into()))?;
             return Ok(InputSource::Reference { data_ref });
         }
 
@@ -2038,12 +2038,14 @@ impl PyGraph {
         // filters — policy — and hands the result over.
         let reply = transport
             .send_msg(&CoordinatorToWorker::AssignPlan { plan })
-            .map_err(soma_err_to_py)?;
+            .map_err(|e| soma_err_to_py(e.into()))?;
 
         match reply {
             WorkerToCoordinator::PlanResult { result, .. } => match result {
                 PlanResult::Success { output, states, .. } => {
-                    let value = transport.resolve_output(&output).map_err(soma_err_to_py)?;
+                    let value = transport
+                        .resolve_output(&output)
+                        .map_err(|e| soma_err_to_py(e.into()))?;
                     Ok((value, states))
                 }
                 PlanResult::Failed { error, .. } => {
@@ -2121,7 +2123,7 @@ impl PyGraph {
 
         somatize_worker::WsTransport::new(&addr, token)
             .stream_plan(plan, chunks)
-            .map_err(soma_err_to_py)
+            .map_err(|e| soma_err_to_py(e.into()))
     }
 
     /// Split a Value into chunks for streaming.

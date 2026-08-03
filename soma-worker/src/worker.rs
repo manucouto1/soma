@@ -350,7 +350,9 @@ impl Worker {
                                 .process
                                 .lock()
                                 .map_err(|e| {
-                                    somatize_core::error::SomaError::Other(format!("mutex: {e}"))
+                                    crate::error::WorkerError::Concurrency(format!(
+                                        "process mutex poisoned: {e}"
+                                    ))
                                 })
                                 .and_then(|mut proc| {
                                     proc.batched_fit(&node_ids, &x, y.as_ref(), *bs)
@@ -369,7 +371,7 @@ impl Worker {
                                     }
                                     Ok((output, states))
                                 }
-                                Err(e) => Err(e),
+                                Err(e) => Err(e.into()),
                             }
                         } else {
                             Err(somatize_core::error::SomaError::Other(

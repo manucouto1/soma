@@ -3,8 +3,8 @@
 //! Implements the `Transport` trait from soma-runtime, sending plans to
 //! remote workers via WebSocket and receiving results.
 
+use crate::error::{Result, WorkerError};
 use somatize_compiler::ExecutionPlan;
-use somatize_core::error::{Result, SomaError};
 use somatize_core::value::Value;
 use somatize_runtime::executor::RunMode;
 use somatize_runtime::node_catalog::NodeCatalog;
@@ -46,11 +46,11 @@ where
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .map_err(|e| SomaError::Other(format!("tokio: {e}")))?
+                    .map_err(|e| WorkerError::Concurrency(format!("tokio: {e}")))?
                     .block_on(fut)
             })
             .join()
-            .map_err(|_| SomaError::Other("transport thread panicked".into()))?
+            .map_err(|_| WorkerError::Concurrency("transport thread panicked".into()))?
     })
 }
 
@@ -94,17 +94,17 @@ impl WsTransport {
             let (mut ws, _) =
                 tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false)
                     .await
-                    .map_err(|e| SomaError::Other(format!("WS connect: {e}")))?;
+                    .map_err(|e| WorkerError::Transport(format!("WS connect: {e}")))?;
 
             use futures_util::{SinkExt, StreamExt};
             use tokio_tungstenite::tungstenite::Message;
 
             let json = serde_json::to_string(msg)
-                .map_err(|e| SomaError::Other(format!("serialize: {e}")))?;
+                .map_err(|e| WorkerError::Encoding(format!("serialize: {e}")))?;
 
             ws.send(Message::Text(json.into()))
                 .await
-                .map_err(|e| SomaError::Other(format!("WS send: {e}")))?;
+                .map_err(|e| WorkerError::Transport(format!("WS send: {e}")))?;
 
             while let Some(Ok(Message::Text(response))) = ws.next().await {
                 if let Ok(result) = serde_json::from_str::<WorkerToCoordinator>(&response) {
@@ -113,7 +113,9 @@ impl WsTransport {
                 }
             }
 
-            Err(SomaError::Other("worker closed without response".into()))
+            Err(WorkerError::Transport(
+                "worker closed without response".into(),
+            ))
         })
     }
 
@@ -127,8 +129,8 @@ impl WsTransport {
             Some(t) => format!("{}/ws?token={t}", self.address),
             None => format!("{}/ws", self.address),
         };
-        let json =
-            serde_json::to_string(msg).map_err(|e| SomaError::Other(format!("serialize: {e}")))?;
+        let json = serde_json::to_string(msg)
+            .map_err(|e| WorkerError::Encoding(format!("serialize: {e}")))?;
 
         on_own_runtime(async move {
             use futures_util::SinkExt;
@@ -136,10 +138,10 @@ impl WsTransport {
 
             let (mut ws, _) = tokio_tungstenite::connect_async(&url)
                 .await
-                .map_err(|e| SomaError::Other(format!("WS connect: {e}")))?;
+                .map_err(|e| WorkerError::Transport(format!("WS connect: {e}")))?;
             ws.send(Message::Text(json.into()))
                 .await
-                .map_err(|e| SomaError::Other(format!("WS send: {e}")))
+                .map_err(|e| WorkerError::Transport(format!("WS send: {e}")))
         })
     }
 
@@ -148,7 +150,7 @@ impl WsTransport {
     pub fn upload(&self, value: &Value) -> Result<somatize_core::store::DataRef> {
         let url = format!("{}/upload", self.http_addr());
         let body = serde_json::to_vec(value)
-            .map_err(|e| SomaError::Other(format!("serialize upload: {e}")))?;
+            .map_err(|e| WorkerError::Encoding(format!("serialize upload: {e}")))?;
         let token = self.token.clone();
 
         // Blocking HTTP on its own thread: this may be called from inside
@@ -164,18 +166,18 @@ impl WsTransport {
             }
             let resp = req
                 .send()
-                .map_err(|e| SomaError::Other(format!("HTTP upload: {e}")))?;
+                .map_err(|e| WorkerError::Transport(format!("HTTP upload: {e}")))?;
             if !resp.status().is_success() {
-                return Err(SomaError::Other(format!(
+                return Err(WorkerError::Transport(format!(
                     "HTTP upload failed: {}",
                     resp.status()
                 )));
             }
             resp.json::<somatize_core::store::DataRef>()
-                .map_err(|e| SomaError::Other(format!("parse upload response: {e}")))
+                .map_err(|e| WorkerError::Encoding(format!("parse upload response: {e}")))
         })
         .join()
-        .map_err(|_| SomaError::Other("upload thread panicked".into()))?
+        .map_err(|_| WorkerError::Concurrency("upload thread panicked".into()))?
     }
 
     /// Ship a plan and a stream of chunks over one WebSocket, collecting
@@ -199,7 +201,7 @@ impl WsTransport {
 
             let (mut ws, _) = tokio_tungstenite::connect_async(&url)
                 .await
-                .map_err(|e| SomaError::Other(format!("WS connect: {e}")))?;
+                .map_err(|e| WorkerError::Transport(format!("WS connect: {e}")))?;
 
             send_frame(
                 &mut ws,
@@ -260,7 +262,7 @@ impl WsTransport {
                             break;
                         }
                         PlanResult::Failed { error, .. } => {
-                            return Err(SomaError::Other(format!("stream error: {error}")));
+                            return Err(WorkerError::Remote(format!("stream error: {error}")));
                         }
                     },
                     _ => {}
@@ -273,7 +275,7 @@ impl WsTransport {
             match results.len() {
                 0 => Ok(Value::Empty),
                 1 => Ok(results.into_iter().next().unwrap()),
-                _ => somatize_runtime::executors::materialize_buffer(&results),
+                _ => Ok(somatize_runtime::executors::materialize_buffer(&results)?),
             }
         })
     }
@@ -285,7 +287,7 @@ impl WsTransport {
             OutputDelivery::Reference { data_ref } => {
                 let url = format!("{}/download", self.http_addr());
                 let ref_json = serde_json::to_string(data_ref)
-                    .map_err(|e| SomaError::Other(format!("serialize ref: {e}")))?;
+                    .map_err(|e| WorkerError::Encoding(format!("serialize ref: {e}")))?;
                 let token = self.token.clone();
 
                 std::thread::spawn(move || {
@@ -296,15 +298,15 @@ impl WsTransport {
                     }
                     let resp = req
                         .send()
-                        .map_err(|e| SomaError::Other(format!("HTTP download: {e}")))?;
+                        .map_err(|e| WorkerError::Transport(format!("HTTP download: {e}")))?;
                     let bytes = resp
                         .bytes()
-                        .map_err(|e| SomaError::Other(format!("read response: {e}")))?;
+                        .map_err(|e| WorkerError::Transport(format!("read response: {e}")))?;
                     serde_json::from_slice(&bytes)
-                        .map_err(|e| SomaError::Other(format!("deserialize: {e}")))
+                        .map_err(|e| WorkerError::Encoding(format!("deserialize: {e}")))
                 })
                 .join()
-                .map_err(|_| SomaError::Other("download thread panicked".into()))?
+                .map_err(|_| WorkerError::Concurrency("download thread panicked".into()))?
             }
         }
     }
@@ -322,9 +324,15 @@ where
         bytes.into(),
     ))
     .await
-    .map_err(|e| SomaError::Other(format!("WS send: {e}")))
+    .map_err(|e| WorkerError::Transport(format!("WS send: {e}")))
 }
 
+/// The seam.
+///
+/// `Transport` is a `soma-runtime` trait, so these return `SomaError`
+/// while everything behind them is a typed [`WorkerError`]. A refused
+/// socket and a reply that would not decode stay distinguishable inside
+/// this crate, which is where the retry decision is made.
 impl Transport for WsTransport {
     fn execute(
         &self,
@@ -332,7 +340,7 @@ impl Transport for WsTransport {
         _filters: &NodeCatalog,
         input: &Value,
         mode: &RunMode,
-    ) -> Result<(Value, HashMap<String, Value>)> {
+    ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
         let serialized = SerializedPlan {
             protocol_version: PROTOCOL_VERSION,
             plan_id: somatize_core::util::timestamp_id("remote"),
@@ -359,29 +367,32 @@ impl Transport for WsTransport {
                     Ok((value, states))
                 }
                 PlanResult::Failed { error, .. } => {
-                    Err(SomaError::Other(format!("remote: {error}")))
+                    Err(WorkerError::Remote(format!("remote: {error}")).into())
                 }
             },
-            other => Err(SomaError::Other(format!(
-                "expected PlanResult, got: {other:?}"
-            ))),
+            other => {
+                Err(WorkerError::Transport(format!("expected PlanResult, got: {other:?}")).into())
+            }
         }
     }
 
-    fn get_state(&self, node_ids: &[String]) -> Result<HashMap<String, Value>> {
+    fn get_state(
+        &self,
+        node_ids: &[String],
+    ) -> somatize_core::error::Result<HashMap<String, Value>> {
         let msg = CoordinatorToWorker::GetState {
             plan_id: String::new(),
             node_ids: node_ids.to_vec(),
         };
         match self.send_msg(&msg)? {
             WorkerToCoordinator::StateResult { states, .. } => Ok(states),
-            other => Err(SomaError::Other(format!(
-                "expected StateResult, got: {other:?}"
-            ))),
+            other => {
+                Err(WorkerError::Transport(format!("expected StateResult, got: {other:?}")).into())
+            }
         }
     }
 
-    fn set_state(&self, states: &HashMap<String, Value>) -> Result<()> {
+    fn set_state(&self, states: &HashMap<String, Value>) -> somatize_core::error::Result<()> {
         let msg = CoordinatorToWorker::SetState {
             plan_id: String::new(),
             states: states.clone(),
@@ -390,20 +401,27 @@ impl Transport for WsTransport {
         Ok(())
     }
 
-    fn get_gradients(&self, node_ids: &[String]) -> Result<HashMap<String, Value>> {
+    fn get_gradients(
+        &self,
+        node_ids: &[String],
+    ) -> somatize_core::error::Result<HashMap<String, Value>> {
         let msg = CoordinatorToWorker::GetGradients {
             plan_id: String::new(),
             node_ids: node_ids.to_vec(),
         };
         match self.send_msg(&msg)? {
             WorkerToCoordinator::GradientsResult { gradients, .. } => Ok(gradients),
-            other => Err(SomaError::Other(format!(
+            other => Err(WorkerError::Transport(format!(
                 "expected GradientsResult, got: {other:?}"
-            ))),
+            ))
+            .into()),
         }
     }
 
-    fn apply_gradients(&self, gradients: &HashMap<String, Value>) -> Result<()> {
+    fn apply_gradients(
+        &self,
+        gradients: &HashMap<String, Value>,
+    ) -> somatize_core::error::Result<()> {
         let msg = CoordinatorToWorker::ApplyGradients {
             plan_id: String::new(),
             gradients: gradients.clone(),

@@ -9,6 +9,7 @@
 
 pub mod detect;
 pub mod env_manager;
+pub mod error;
 pub mod protocol;
 pub mod python_process;
 pub mod server;
@@ -17,6 +18,7 @@ pub mod ws_transport;
 
 pub use detect::ResourceLimits;
 pub use env_manager::EnvManager;
+pub use error::WorkerError;
 pub use protocol::*;
 pub use python_process::{PythonProcess, SubprocessFilter};
 pub use server::{

@@ -1,6 +1,7 @@
 //! Python environment manager: creates and maintains isolated venvs/conda envs
 //! per pipeline, with incremental dependency updates.
 
+use crate::error::{Result, WorkerError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -43,7 +44,7 @@ impl EnvManager {
 
     /// Get or create an environment for a pipeline.
     /// Returns the path to the Python binary.
-    pub fn ensure_env(&self, pipeline_id: &str, requirements: &str) -> Result<PathBuf, String> {
+    pub fn ensure_env(&self, pipeline_id: &str, requirements: &str) -> Result<PathBuf> {
         let req_hash = Self::hash_requirements(requirements);
         let env_dir = self.base_dir.join(format!("env-{pipeline_id}"));
         let lockfile_path = env_dir.join("lockfile.json");
@@ -93,18 +94,18 @@ impl EnvManager {
 
     // ── Internal ──
 
-    fn create_env(&self, env_dir: &Path) -> Result<(), String> {
+    fn create_env(&self, env_dir: &Path) -> Result<()> {
         match self.env_type {
             EnvType::Venv => {
                 let output = Command::new("python3")
                     .args(["-m", "venv", &env_dir.to_string_lossy()])
                     .output()
-                    .map_err(|e| format!("Failed to create venv: {e}"))?;
+                    .map_err(|e| WorkerError::Env(format!("Failed to create venv: {e}")))?;
                 if !output.status.success() {
-                    return Err(format!(
+                    return Err(WorkerError::Env(format!(
                         "venv creation failed: {}",
                         String::from_utf8_lossy(&output.stderr)
-                    ));
+                    )));
                 }
             }
             EnvType::Conda => {
@@ -118,25 +119,25 @@ impl EnvManager {
                         "-q",
                     ])
                     .output()
-                    .map_err(|e| format!("Failed to create conda env: {e}"))?;
+                    .map_err(|e| WorkerError::Env(format!("Failed to create conda env: {e}")))?;
                 if !output.status.success() {
-                    return Err(format!(
+                    return Err(WorkerError::Env(format!(
                         "conda create failed: {}",
                         String::from_utf8_lossy(&output.stderr)
-                    ));
+                    )));
                 }
             }
         }
         Ok(())
     }
 
-    fn install_requirements(&self, env_dir: &Path, requirements: &str) -> Result<(), String> {
+    fn install_requirements(&self, env_dir: &Path, requirements: &str) -> Result<()> {
         let pip = self.pip_path(env_dir);
 
         // Write requirements to temp file
         let req_file = env_dir.join("requirements.txt");
         std::fs::write(&req_file, requirements)
-            .map_err(|e| format!("Failed to write requirements.txt: {e}"))?;
+            .map_err(|e| WorkerError::Env(format!("Failed to write requirements.txt: {e}")))?;
 
         // Always ensure soma is installed
         let _ = Command::new(&pip).args(["install", "soma"]).output();
@@ -144,13 +145,13 @@ impl EnvManager {
         let output = Command::new(&pip)
             .args(["install", "-r", &req_file.to_string_lossy(), "-q"])
             .output()
-            .map_err(|e| format!("pip install failed: {e}"))?;
+            .map_err(|e| WorkerError::Env(format!("pip install failed: {e}")))?;
 
         if !output.status.success() {
-            return Err(format!(
+            return Err(WorkerError::Env(format!(
                 "pip install failed:\n{}",
                 String::from_utf8_lossy(&output.stderr)
-            ));
+            )));
         }
 
         Ok(())
@@ -161,7 +162,7 @@ impl EnvManager {
         env_dir: &Path,
         new_requirements: &str,
         old_lockfile: &EnvLockfile,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let new_packages = Self::parse_requirements(new_requirements);
         let pip = self.pip_path(env_dir);
 
@@ -200,25 +201,28 @@ impl EnvManager {
                 .args(&to_install)
                 .arg("-q")
                 .output()
-                .map_err(|e| format!("pip install failed: {e}"))?;
+                .map_err(|e| WorkerError::Env(format!("pip install failed: {e}")))?;
 
             if !output.status.success() {
-                return Err(format!(
+                return Err(WorkerError::Env(format!(
                     "pip install failed:\n{}",
                     String::from_utf8_lossy(&output.stderr)
-                ));
+                )));
             }
         }
 
         Ok(())
     }
 
-    fn python_path(&self, env_dir: &Path) -> Result<PathBuf, String> {
+    fn python_path(&self, env_dir: &Path) -> Result<PathBuf> {
         let path = env_dir.join("bin").join("python");
         if path.exists() {
             Ok(path)
         } else {
-            Err(format!("Python not found at {}", path.display()))
+            Err(WorkerError::Env(format!(
+                "Python not found at {}",
+                path.display()
+            )))
         }
     }
 
@@ -275,20 +279,22 @@ impl EnvManager {
         packages
     }
 
-    fn read_lockfile(&self, path: &Path) -> Result<EnvLockfile, String> {
-        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&content).map_err(|e| e.to_string())
+    fn read_lockfile(&self, path: &Path) -> Result<EnvLockfile> {
+        let content = std::fs::read_to_string(path).map_err(|e| WorkerError::Env(e.to_string()))?;
+        serde_json::from_str(&content).map_err(|e| WorkerError::Encoding(e.to_string()))
     }
 
-    fn write_lockfile(&self, path: &Path, requirements: &str, hash: &str) -> Result<(), String> {
+    fn write_lockfile(&self, path: &Path, requirements: &str, hash: &str) -> Result<()> {
         let lockfile = EnvLockfile {
             packages: Self::parse_requirements(requirements),
             requirements_hash: hash.to_string(),
             env_type: self.env_type.clone(),
             python_version: "3.11".to_string(),
         };
-        let json = serde_json::to_string_pretty(&lockfile).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| format!("Failed to write lockfile: {e}"))
+        let json =
+            serde_json::to_string_pretty(&lockfile).map_err(|e| WorkerError::Env(e.to_string()))?;
+        std::fs::write(path, json)
+            .map_err(|e| WorkerError::Env(format!("Failed to write lockfile: {e}")))
     }
 }
 
