@@ -147,25 +147,85 @@ pub(crate) fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyOb
 
 // ── Value conversion ──
 
-/// A dict's JSON form, if JSON can hold it without changing it.
+/// A value's JSON form, if JSON can hold it without changing it.
 ///
-/// `json.dumps` is lenient — it turns tuples into lists and integer-keyed
-/// dicts into string-keyed ones — so dumping is not enough. The value has to
-/// survive the round trip unchanged to count as JSON; anything else keeps
-/// the pickle it would have had before.
-fn as_json_dict(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<serde_json::Value>> {
-    let json_mod = py.import("json")?;
-    let Ok(dumped) = json_mod.call_method1("dumps", (obj,)) else {
-        return Ok(None);
-    };
-    let text: String = dumped.extract()?;
-
-    let restored = json_mod.call_method1("loads", (&text,))?;
-    if !restored.eq(obj)? {
-        return Ok(None);
+/// The question is not "does `json.dumps` succeed" — it is lenient, and
+/// turns a tuple into a list and an integer key into a string. It is
+/// "does the value survive", because whatever this returns becomes the
+/// value a loop reads a stop signal out of, a branch reads an arm label
+/// out of, and a remote worker in another language receives. A value
+/// that would come back changed keeps its pickle instead.
+///
+/// This used to answer by round-tripping: `json.dumps`, `json.loads`,
+/// then `==` against the original. Correct, and three Python calls plus
+/// a `serde_json` parse *per dict, per node hop* — on the path every
+/// value takes between two filters. Walking the object once in Rust
+/// answers the same question directly, and says which construct was the
+/// problem rather than inferring it from an inequality.
+///
+/// Deliberately equivalent to the round-trip, case for case:
+///
+/// - a tuple became a list and compared unequal → rejected here too;
+/// - an integer key became `"1"` and compared unequal → rejected;
+/// - `NaN` and `±inf` are what `json.dumps` writes as bare `NaN`/`Infinity`,
+///   and `NaN != NaN` made the round-trip reject them. They are rejected
+///   here explicitly, because `serde_json` turns a non-finite float into
+///   `null` — the same silent flattening that once gave two different
+///   tensors one cache key;
+/// - an integer too large for `i64`/`u64` round-tripped fine but has no
+///   `serde_json::Number`, so it is rejected rather than quietly losing
+///   precision as an `f64`.
+fn as_json(obj: &Bound<'_, PyAny>) -> PyResult<Option<serde_json::Value>> {
+    // Order matters: in Python `bool` is an `int`, so bool goes first.
+    if obj.is_none() {
+        return Ok(Some(serde_json::Value::Null));
     }
-
-    Ok(serde_json::from_str(&text).ok())
+    if obj.is_instance_of::<pyo3::types::PyBool>() {
+        return Ok(Some(serde_json::Value::Bool(obj.extract::<bool>()?)));
+    }
+    if obj.is_instance_of::<pyo3::types::PyInt>() {
+        return Ok(obj
+            .extract::<i64>()
+            .ok()
+            .map(serde_json::Value::from)
+            .or_else(|| obj.extract::<u64>().ok().map(serde_json::Value::from)));
+    }
+    if obj.is_instance_of::<pyo3::types::PyFloat>() {
+        let f = obj.extract::<f64>()?;
+        return Ok(f.is_finite().then(|| serde_json::Value::from(f)));
+    }
+    if obj.is_instance_of::<pyo3::types::PyString>() {
+        return Ok(Some(serde_json::Value::String(obj.extract::<String>()?)));
+    }
+    if obj.is_instance_of::<PyList>() {
+        let mut out = Vec::new();
+        for item in obj.try_iter()? {
+            match as_json(&item?)? {
+                Some(v) => out.push(v),
+                None => return Ok(None),
+            }
+        }
+        return Ok(Some(serde_json::Value::Array(out)));
+    }
+    if let Ok(dict) = obj.downcast::<PyDict>() {
+        let mut map = serde_json::Map::with_capacity(dict.len());
+        for (key, value) in dict.iter() {
+            // A non-string key is what `json.dumps` would have stringified.
+            let Ok(key) = key.extract::<String>() else {
+                return Ok(None);
+            };
+            match as_json(&value)? {
+                Some(v) => {
+                    map.insert(key, v);
+                }
+                None => return Ok(None),
+            }
+        }
+        return Ok(Some(serde_json::Value::Object(map)));
+    }
+    // A tuple, an ndarray, a dataclass, anything custom: JSON would either
+    // refuse it or change it.
+    Ok(None)
 }
 
 fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -186,7 +246,7 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     // existing cache key moves; this only rescues what used to be a flat
     // "cannot convert" on the most ordinary thing to hand a fan-out.
     if obj.is_instance_of::<PyList>()
-        && let Some(json) = as_json_dict(py, obj)?
+        && let Some(json) = as_json(obj)?
     {
         return Ok(Value::json(json));
     }
@@ -199,7 +259,7 @@ fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         // cannot receive it. Round-tripping is what decides — a dict with
         // tuples or ndarrays inside comes back changed (or not at all), and
         // those keep the pickle.
-        if let Some(json) = as_json_dict(py, obj)? {
+        if let Some(json) = as_json(obj)? {
             return Ok(Value::json(json));
         }
         let pickle = py.import("pickle")?;

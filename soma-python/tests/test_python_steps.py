@@ -346,3 +346,71 @@ def test_a_graph_mixing_a_filter_and_a_step_can_be_fitted():
     # centre([1,2,3]) = [-1,0,1], summing to 0.
     assert g.get_node_state("centre") == {"mean": 2.0}
     assert g.forward([1.0, 2.0, 3.0]) == 0.0
+
+
+# ── What JSON may hold, and what keeps its pickle ────────────
+
+
+class Echo:
+    """Returns whatever reached it, so a value's crossing is observable."""
+
+    _cache_version = "1"
+
+    def poll(self, ctx):
+        return Done(ctx.input)
+
+
+def _round_trip(value):
+    """Send `value` through a step and read back what arrived."""
+    g = soma.Graph(cache="memory")
+    g.node("echo", Echo())
+    return g.forward(value)
+
+
+def test_a_plain_dict_crosses_as_json():
+    """A dict JSON can hold becomes JSON, so a loop, a branch, a report
+    and a worker in another language can all read it."""
+    assert _round_trip({"a": 1, "b": [1, 2], "c": "x"}) == {
+        "a": 1,
+        "b": [1, 2],
+        "c": "x",
+    }
+
+
+def test_nested_structures_survive():
+    value = {"outer": {"inner": [1, {"deep": True}, None]}}
+    assert _round_trip(value) == value
+
+
+def test_a_tuple_does_not_pretend_to_be_a_list():
+    """`json.dumps` would turn it into a list, so it is not JSON-holdable
+    and keeps its pickle instead of arriving changed."""
+    out = _round_trip({"pair": (1, 2)})
+    assert out == {"pair": (1, 2)}, "a tuple must come back a tuple"
+
+
+def test_an_integer_keyed_dict_keeps_its_keys():
+    """`json.dumps` would stringify the key to `"1"`."""
+    out = _round_trip({1: "one", 2: "two"})
+    assert out == {1: "one", 2: "two"}
+
+
+def test_a_non_finite_float_is_not_flattened_to_null():
+    """`serde_json` writes a non-finite float as `null`.
+
+    That is the same silent flattening that once gave two different
+    tensors one cache key, so such a dict must not take the JSON path.
+    """
+    out = _round_trip({"x": float("nan")})
+    assert isinstance(out["x"], float)
+    assert out["x"] != out["x"], "NaN must come back NaN, not null"
+
+    inf = _round_trip({"x": float("inf")})
+    assert inf["x"] == float("inf")
+
+
+def test_a_bool_is_not_an_int():
+    """In Python `bool` is an `int`, so order of checks is load-bearing."""
+    out = _round_trip({"flag": True, "count": 1})
+    assert out["flag"] is True
+    assert out["count"] == 1
