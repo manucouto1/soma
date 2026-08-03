@@ -316,39 +316,13 @@ pub enum OutputDelivery {
     },
 }
 
-impl OutputDelivery {
-    /// Resolve the output to a concrete Value.
-    /// For Reference: downloads via HTTP from the worker.
-    pub fn resolve(&self, addr: &str, token: &Option<String>) -> Value {
-        match self {
-            OutputDelivery::Inline { value } => value.clone(),
-            OutputDelivery::Reference { data_ref } => {
-                // HTTP download in a dedicated thread (avoids tokio nesting)
-                let http_addr = addr
-                    .replace("ws://", "http://")
-                    .replace("wss://", "https://");
-                let url = format!("{http_addr}/download");
-                let ref_json = serde_json::to_string(data_ref).unwrap_or_default();
-                let token = token.clone();
-
-                std::thread::spawn(move || {
-                    let client = reqwest::blocking::Client::new();
-                    let mut req = client.get(&url).query(&[("ref", &ref_json)]);
-                    if let Some(t) = &token {
-                        req = req.query(&[("token", t.as_str())]);
-                    }
-                    let resp = req.send().ok()?;
-                    let bytes = resp.bytes().ok()?;
-                    serde_json::from_slice(&bytes).ok()
-                })
-                .join()
-                .ok()
-                .flatten()
-                .unwrap_or(Value::Empty)
-            }
-        }
-    }
-}
+// `OutputDelivery::resolve` lived here and had no callers. It downloaded a
+// referenced output over HTTP and mapped *every* failure — connection
+// refused, auth rejected, malformed body — to `Value::Empty`, so a failed
+// download was indistinguishable from a plan that legitimately produced
+// nothing. The working implementation is `WsTransport::resolve_output`,
+// which does the same download and returns `Result`; keeping a lenient
+// duplicate beside it only invited a caller to pick the wrong one.
 
 /// Result of a plan execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]

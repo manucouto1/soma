@@ -174,37 +174,37 @@ async fn main() {
         }
     }
 
-    // Start server with graceful shutdown on Ctrl+C
-    let shutdown = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to listen for Ctrl+C");
-        tracing::info!("Ctrl+C received, shutting down...");
+    if args.token.is_some() {
+        tracing::info!("Authentication enabled");
+    }
+    let (router, requested) = somatize_worker::worker_router_with_shutdown(
+        worker,
+        &args.env_dir,
+        &args.work_dir,
+        args.token.clone(),
+    );
+
+    // Two ways to stop, one path out: Ctrl+C, or a `Shutdown` message over
+    // the WebSocket. The latter used to call `std::process::exit(0)` from
+    // inside the handler, which skipped this graceful shutdown entirely.
+    let shutdown = async move {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                match result {
+                    Ok(()) => tracing::info!("Ctrl+C received, shutting down..."),
+                    Err(e) => tracing::warn!("could not listen for Ctrl+C: {e}"),
+                }
+            }
+            _ = requested.wait() => tracing::info!("shutdown requested by coordinator"),
+        }
     };
 
-    if let Some(token) = args.token {
-        tracing::info!("Authentication enabled");
-        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-        tracing::info!("Worker listening on {addr}");
-        let router = somatize_worker::worker_router_authenticated(
-            worker,
-            &args.env_dir,
-            &args.work_dir,
-            &token,
-        );
-        axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown)
-            .await
-            .unwrap();
-    } else {
-        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-        tracing::info!("Worker listening on {addr}");
-        let router = somatize_worker::worker_router(worker);
-        axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown)
-            .await
-            .unwrap();
-    }
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    tracing::info!("Worker listening on {addr}");
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
+        .await
+        .unwrap();
 
     tracing::info!("Worker stopped.");
 }

@@ -258,3 +258,51 @@ async fn worker_health_and_info() {
 
     server.abort();
 }
+
+/// A `Shutdown` message must stop the *server*, not the process.
+///
+/// This test could not exist before: the handler called
+/// `std::process::exit(0)`, which would have taken the test binary down
+/// mid-run. The same call also killed the user's interpreter, because
+/// `soma.Worker.serve()` runs this server on a thread inside their Python
+/// process.
+#[tokio::test]
+async fn a_shutdown_message_stops_the_server_and_not_the_process() {
+    use futures_util::{SinkExt, StreamExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (router, shutdown) = somatize_worker::worker_router_with_shutdown(
+        make_worker(),
+        "/tmp/soma-envs-test",
+        "/tmp/soma-work-test",
+        None,
+    );
+
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move { shutdown.wait().await })
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let url = format!("ws://{addr}/ws");
+    let (mut ws, _) = connect_async(&url).await.expect("WS connect failed");
+    let msg = CoordinatorToWorker::Shutdown {
+        reason: "test".into(),
+    };
+    ws.send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let ack = ws.next().await.expect("no ack").expect("ws error");
+    assert!(ack.to_text().unwrap().contains("ShutdownAck"));
+
+    // The server task finishes on its own; reaching this line at all means
+    // the process survived.
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("server did not shut down within 5s")
+        .expect("server task panicked");
+}

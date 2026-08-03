@@ -21,9 +21,34 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Resolves when the worker has been asked to stop.
+///
+/// A `Shutdown` message used to call `std::process::exit(0)` from inside the
+/// WebSocket handler. That is wrong twice over: it skips the graceful
+/// shutdown the binary wires up, and this crate is *embedded* — `Worker.serve()`
+/// runs this server on a thread of the user's Python process, so exiting
+/// killed their interpreter. Asking the serve loop to stop is the only
+/// thing a library may do.
+#[derive(Clone)]
+pub struct ShutdownSignal(Arc<tokio::sync::Notify>);
+
+impl ShutdownSignal {
+    /// Wait until shutdown is requested.
+    pub async fn wait(&self) {
+        self.0.notified().await;
+    }
+
+    /// Ask the worker to stop.
+    pub fn trigger(&self) {
+        self.0.notify_waiters();
+    }
+}
+
 /// Shared state for the worker HTTP/WebSocket server.
 struct ServerState {
     worker: Mutex<Worker>,
+    /// Notified when a `Shutdown` message arrives.
+    shutdown: ShutdownSignal,
     env_manager: EnvManager,
     work_dir: PathBuf,
     /// Optional bearer token for authentication.
@@ -67,11 +92,27 @@ fn worker_router_full(
     work_dir: impl Into<PathBuf>,
     token: Option<String>,
 ) -> Router {
+    worker_router_with_shutdown(worker, env_dir, work_dir, token).0
+}
+
+/// Build a worker router together with the handle that stops it.
+///
+/// Callers that own the serve loop (the binary, [`serve_worker`]) pass the
+/// signal to `with_graceful_shutdown` so a `Shutdown` message ends the
+/// server the same way Ctrl+C does.
+pub fn worker_router_with_shutdown(
+    worker: Worker,
+    env_dir: impl Into<PathBuf>,
+    work_dir: impl Into<PathBuf>,
+    token: Option<String>,
+) -> (Router, ShutdownSignal) {
     let work = work_dir.into();
     std::fs::create_dir_all(&work).ok();
     let temp_store = worker.temp_store().clone();
+    let shutdown = ShutdownSignal(Arc::new(tokio::sync::Notify::new()));
     let state = Arc::new(ServerState {
         worker: Mutex::new(worker),
+        shutdown: shutdown.clone(),
         env_manager: EnvManager::new(env_dir, EnvType::Venv),
         work_dir: work,
         token,
@@ -79,12 +120,18 @@ fn worker_router_full(
         temp_uploads: Mutex::new(HashMap::new()),
         active_streams: Mutex::new(HashMap::new()),
     });
-    // Background cleanup: remove temp uploads older than 1 hour
+    // Background cleanup: remove temp uploads older than 1 hour. It stops
+    // with the server rather than outliving it — this task used to run
+    // forever, so a test that built a router leaked one per router.
     let cleanup_state = state.clone();
+    let cleanup_shutdown = shutdown.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = cleanup_shutdown.wait() => break,
+            }
             let cutoff = Instant::now() - std::time::Duration::from_secs(3600);
             let expired: Vec<CacheKey> = {
                 let uploads = cleanup_state
@@ -114,21 +161,26 @@ fn worker_router_full(
         }
     });
 
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/info", get(info))
         .route("/upload", post(upload_data))
         .route("/download", get(download_data))
         .route("/ws", get(ws_handler))
         .layer(DefaultBodyLimit::disable()) // No limit — workers handle arbitrary data sizes
-        .with_state(state)
+        .with_state(state);
+    (router, shutdown)
 }
 
 /// Start a worker server on the given address.
 pub async fn serve_worker(worker: Worker, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Worker server listening on {addr}");
-    axum::serve(listener, worker_router(worker)).await?;
+    let (router, shutdown) =
+        worker_router_with_shutdown(worker, "/tmp/soma-envs", "/tmp/soma-work", None);
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move { shutdown.wait().await })
+        .await?;
     Ok(())
 }
 
@@ -140,8 +192,15 @@ pub async fn serve_worker_authenticated(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Worker server listening on {addr} (authenticated)");
-    let router = worker_router_authenticated(worker, "/tmp/soma-envs", "/tmp/soma-work", token);
-    axum::serve(listener, router).await?;
+    let (router, shutdown) = worker_router_with_shutdown(
+        worker,
+        "/tmp/soma-envs",
+        "/tmp/soma-work",
+        Some(token.to_string()),
+    );
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move { shutdown.wait().await })
+        .await?;
     Ok(())
 }
 
@@ -262,33 +321,70 @@ async fn ws_handler(
         .on_upgrade(move |socket| handle_ws(socket, state)))
 }
 
+/// A well-formed error reply.
+///
+/// These used to be built by interpolating the error straight into a JSON
+/// string literal, so a message containing a quote or a backslash — which
+/// serde's own parse errors do contain — produced invalid JSON. The client
+/// then reported a parse failure instead of the failure that happened.
+///
+/// Still not a `WorkerToCoordinator` variant, so a client cannot match on
+/// it; that is a wire-protocol change and belongs with versioning it.
+fn error_reply(message: &str) -> String {
+    serde_json::json!({ "error": message }).to_string()
+}
+
 async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
     loop {
         match socket.recv().await {
             Some(Ok(Message::Text(text))) => {
                 let response = match serde_json::from_str::<CoordinatorToWorker>(&text) {
                     Ok(CoordinatorToWorker::AssignPlan { plan }) => {
-                        let mut worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
-                        let plan_id = plan.plan_id.clone();
-                        let worker_id = worker.id.clone();
-                        let result = worker.execute_plan(&plan);
-                        let msg = WorkerToCoordinator::PlanResult {
-                            worker_id,
-                            plan_id,
-                            result,
-                        };
-                        serde_json::to_string(&msg).unwrap_or_default()
+                        // Off the reactor: executing a plan creates a venv,
+                        // pip-installs into it and drives a Python
+                        // subprocess to completion. Running that inline in
+                        // an async handler parked a tokio worker thread for
+                        // the whole plan, so `/health` and every other
+                        // connection stalled behind it.
+                        let st = state.clone();
+                        let joined = tokio::task::spawn_blocking(move || {
+                            let mut worker = st.worker.lock().unwrap_or_else(|e| e.into_inner());
+                            let plan_id = plan.plan_id.clone();
+                            let worker_id = worker.id.clone();
+                            let result = worker.execute_plan(&plan);
+                            WorkerToCoordinator::PlanResult {
+                                worker_id,
+                                plan_id,
+                                result,
+                            }
+                        })
+                        .await;
+                        match joined {
+                            Ok(msg) => serde_json::to_string(&msg).unwrap_or_default(),
+                            // A panic no longer reaches the reactor; report
+                            // it as a failure of this plan and keep serving.
+                            Err(e) => error_reply(&format!("plan execution panicked: {e}")),
+                        }
                     }
                     Ok(CoordinatorToWorker::StatusRequest) => {
                         let worker = state.worker.lock().unwrap_or_else(|e| e.into_inner());
                         serde_json::to_string(&worker.registration_message()).unwrap_or_default()
                     }
                     Ok(CoordinatorToWorker::CancelPlan { .. }) => {
-                        r#"{"status": "cancel_not_implemented"}"#.to_string()
+                        error_reply("cancelling a running plan is not implemented")
                     }
                     Ok(CoordinatorToWorker::AssignPythonJob { job }) => {
-                        // Send progress messages during execution
-                        let messages = execute_python_job_with_progress(&state, &job);
+                        // Same reasoning as AssignPlan: this creates an env
+                        // and runs a subprocess.
+                        let st = state.clone();
+                        let messages = match tokio::task::spawn_blocking(move || {
+                            execute_python_job_with_progress(&st, &job)
+                        })
+                        .await
+                        {
+                            Ok(messages) => messages,
+                            Err(e) => vec![error_reply(&format!("python job panicked: {e}"))],
+                        };
                         // Send all but the last as intermediate messages
                         for msg in &messages[..messages.len().saturating_sub(1)] {
                             if socket
@@ -309,19 +405,22 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         let _ = socket
                             .send(Message::Text(r#"{"type":"ShutdownAck"}"#.into()))
                             .await;
-                        std::process::exit(0);
+                        // Ask the serve loop to wind down; do not exit the
+                        // process. This crate also runs inside the user's
+                        // Python interpreter.
+                        state.shutdown.trigger();
+                        break;
                     }
                     Ok(
                         CoordinatorToWorker::GetState { .. }
                         | CoordinatorToWorker::SetState { .. }
                         | CoordinatorToWorker::GetGradients { .. }
                         | CoordinatorToWorker::ApplyGradients { .. },
-                    ) => {
-                        r#"{"error":"get_state/set_state/get_gradients/apply_gradients not yet implemented for SubprocessFilter"}"#.to_string()
-                    }
-                    Err(e) => {
-                        format!(r#"{{"error": "invalid message: {e}"}}"#)
-                    }
+                    ) => error_reply(
+                        "get_state/set_state/get_gradients/apply_gradients \
+                         are not implemented for SubprocessFilter",
+                    ),
+                    Err(e) => error_reply(&format!("invalid message: {e}")),
                 };
 
                 if socket.send(Message::Text(response.into())).await.is_err() {
@@ -330,7 +429,16 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
             }
             Some(Ok(Message::Binary(bytes))) => {
                 if let Ok(stream_msg) = rmp_serde::from_slice::<StreamMessage>(&bytes) {
-                    let reply = handle_stream_message(stream_msg, &state);
+                    // Chunk processing drives the same Python subprocess as
+                    // a plan does, so it belongs off the reactor too.
+                    let st = state.clone();
+                    let reply =
+                        tokio::task::spawn_blocking(move || handle_stream_message(stream_msg, &st))
+                            .await
+                            .unwrap_or_else(|e| {
+                                tracing::error!("stream message handler panicked: {e}");
+                                None
+                            });
                     if let Some(reply_msg) = reply {
                         let reply_bytes = rmp_serde::to_vec(&reply_msg).unwrap_or_default();
                         if socket
