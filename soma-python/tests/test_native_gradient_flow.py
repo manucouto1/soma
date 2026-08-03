@@ -420,3 +420,42 @@ def test_a_linear_chain_still_trains():
     out, aux = result
     assert out.shape == (3, 2)
     assert isinstance(aux, dict)
+
+
+# ── One forward, one owner ───────────────────────────────────
+
+
+def test_forward_is_not_shadowed_at_import_time():
+    """`Graph.forward` is the Rust method, and stays that way.
+
+    The differentiable walk used to be installed over it when
+    `soma._orchestrator` was imported, so two implementations answered to
+    one name, `help(Graph.forward)` described whichever had won, and no
+    static analysis could see the substitution. The dispatch lives in the
+    Rust method now; the walk is a function it calls by name.
+    """
+    import soma
+    from soma._soma import Graph as _RustGraph
+
+    assert soma.Graph.forward is _RustGraph.forward
+    assert "Forward data through the compiled graph" in (soma.Graph.forward.__doc__ or "")
+
+
+def test_the_differentiable_walk_is_reachable_by_name():
+    """It is a named function, not an anonymous replacement."""
+    from soma._orchestrator import differentiable_forward
+
+    assert callable(differentiable_forward)
+
+
+def test_a_torch_graph_still_takes_the_python_walk():
+    """The dispatch has to actually route, not just exist."""
+    g = Graph()
+    g.node("h", Dense(4))
+    g.node("out", Dense(2))
+    g.edge("h", "out")
+    g.train()
+
+    out, aux = g.forward(torch.randn(3, 8))
+    assert out.requires_grad, "autograd must survive the forward"
+    assert isinstance(aux, dict)

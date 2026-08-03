@@ -149,9 +149,6 @@ def _parameters(self: _RustGraph) -> Iterable[Any]:
 # ── Forward (polymorphic on training state) ──────────────────
 
 
-_RUST_FORWARD = _RustGraph.forward
-
-
 def _require_chain(graph: _RustGraph, node_ids: list[str]) -> None:
     """Refuse a topology this walk cannot execute.
 
@@ -204,36 +201,26 @@ def _require_chain(graph: _RustGraph, node_ids: list[str]) -> None:
         )
 
 
-def _forward(self: _RustGraph, x: Any, *args, **kwargs):
-    """Polymorphic forward.
+def differentiable_forward(self: _RustGraph, x: Any):
+    """Walk the graph in Python so autograd survives it.
 
-    - **Pure-legacy graph** (no live filter has ``_module``): delegates
-      to the Rust inference path; signature unchanged. This keeps the
-      ``g.fit() → g.forward()`` flow working for graphs that don't use
-      ``DifferentiableFilter``.
-    - **Mixed or training graph** (any live filter has ``_module``):
-      walks live filters in topological order Python-side. Each filter's
-      output threads as the next filter's input. ``DifferentiableFilter``
-      forwards branch on ``self.training`` (autograd live in train,
-      ``no_grad`` in eval). Legacy filters get their state from the
-      runtime library so non-trainable filters (e.g. a threshold node)
-      can sit in the same chain. Returns ``(out, aux_by_node)``.
+    Called by ``Graph.forward`` when the graph holds torch modules —
+    autograd does not survive the ``Value`` boundary, so the Rust path
+    cannot be used for these. Every filter's output threads into the
+    next. ``DifferentiableFilter`` forwards branch on ``self.training``
+    (autograd live in train, ``no_grad`` in eval); ordinary filters get
+    their state from the runtime library so a non-trainable node can sit
+    in the same chain.
 
-    The training branch ignores the ``state`` argument for diff filters
-    because each holds its own params on ``self._module``.
+    Returns ``(out, aux_by_node)`` while training and bare ``out`` in
+    eval, matching what the Rust path produces.
+
+    This used to be installed *over* ``Graph.forward`` at import time,
+    which meant two implementations answered to one name and the choice
+    between them depended on what had been imported. The dispatch lives
+    in ``Graph.forward`` now; this is the branch it names.
     """
-    # Walk Python-side only for mixed/training graphs: any live filter
-    # that is differentiable (``build_module``) or already materialized
-    # (``_module``). Pure-legacy graphs — including worker-distributed
-    # ones — must fall through to the Rust forward path, which owns the
-    # fitted check and remote dispatch.
     pairs = list(self.filters())
-    if not pairs or not any(
-        getattr(f, "_module", None) is not None or hasattr(f, "build_module")
-        for _, f in pairs
-    ):
-        return _RUST_FORWARD(self, x, *args, **kwargs)
-
     _require_chain(self, [node_id for node_id, _ in pairs])
 
     target_device = self.py_state.get("device")
@@ -426,7 +413,6 @@ def _install() -> None:
     _RustGraph.eval = _eval
     _RustGraph.to = _to
     _RustGraph.parameters = _parameters
-    _RustGraph.forward = _forward
     _RustGraph.set_optimizer = _set_optimizer
     _RustGraph.make_optimizer = _make_optimizer
     _RustGraph.optimizer = _optimizer

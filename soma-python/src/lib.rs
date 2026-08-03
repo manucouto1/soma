@@ -1475,6 +1475,179 @@ impl PyGraph {
         self.filter_trainable.values().any(|t| *t)
     }
 
+    /// Rebuild plan and run it here (or on workers). The non-autograd path.
+    fn forward_local(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, pyo3::types::PyAny>,
+        stream: bool,
+        chunk_size: usize,
+        seed: Option<i64>,
+        run_id: Option<String>,
+    ) -> PyResult<PyObject> {
+        // A step has no fit phase — its behaviour comes from a model and a
+        // prompt, not from learned state. A graph with nothing trainable in
+        // it therefore has nothing to fit, and demanding a fit first would
+        // be asking for a no-op.
+        if !self.fitted && self.has_trainable_filters() {
+            return Err(PyRuntimeError::new_err(
+                "graph must be fitted before forward",
+            ));
+        }
+        let x_val = py_to_value(py, x)?;
+
+        // Streaming mode: remote via WS Binary, local via StreamExecutor
+        if stream {
+            if !self.workers.is_empty() {
+                // Release GIL during WS dispatch so worker thread can acquire
+                // it for Python execution.
+                let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
+                return value_to_py(py, &output);
+            }
+            // Local streaming: compile as Stream plan, execute via StreamExecutor
+            let catalog = self.rebuild_catalog(py)?;
+            let compile_result =
+                somatize_compiler::compile_stream(&self.graph, &catalog, chunk_size)
+                    .map_err(soma_err_to_py)?;
+
+            let graph_info = GraphInfo::from_graph(&self.graph);
+            let mut ctx = Context::new(
+                self.event_bus.clone(),
+                somatize_core::util::timestamp_id("stream_forward"),
+            )
+            .with_graph_info(graph_info)
+            .with_seed(seed);
+
+            let roots = self.graph.roots();
+            if roots.len() == 1 {
+                ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
+            }
+            ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
+
+            py.allow_threads(|| {
+                executor::execute(
+                    &compile_result.plan,
+                    &mut ctx,
+                    &catalog,
+                    self.cache.as_ref(),
+                )
+            })
+            .map_err(soma_err_to_py)?;
+
+            let leaves = self.graph.leaves();
+            let output = if let Some(leaf_id) = leaves.first() {
+                ctx.store
+                    .remove(*leaf_id)
+                    .and_then(|vv| vv.as_value().cloned())
+                    .unwrap_or(Value::Empty)
+            } else {
+                ctx.execution_order
+                    .last()
+                    .and_then(|id| ctx.store.remove(id))
+                    .and_then(|vv| vv.as_value().cloned())
+                    .unwrap_or(Value::Empty)
+            };
+
+            return value_to_py(py, &output);
+        }
+
+        // Dispatch entire plan remotely if workers registered and no node forces local
+        if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
+            let (output, _states) = py.allow_threads(|| {
+                self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)
+            })?;
+            return value_to_py(py, &output);
+        }
+
+        // Local execution (with optional remote executor for mixed graphs)
+        let catalog = self.rebuild_catalog(py)?;
+        let compile_result = somatize_compiler::compile(
+            &self.graph,
+            &catalog,
+            CompileMode::Inference,
+            Some(self.cache.as_ref()),
+        )
+        .map_err(soma_err_to_py)?;
+
+        let graph_info = GraphInfo::from_graph(&self.graph);
+        // A caller resuming a suspended run passes its id back. The
+        // journal keys an impure effect by `(run, node, turn, index)`, so
+        // a fresh id would replay nothing and the answer already recorded
+        // would never be found — which is why resuming did not work.
+        let run_id = run_id.unwrap_or_else(|| somatize_core::util::timestamp_id("graph_forward"));
+        let mut ctx = Context::new(self.event_bus.clone(), run_id)
+            .with_graph_info(graph_info)
+            .with_seed(seed);
+
+        if let Some(driver) = self.step_runtime(py, &catalog)? {
+            ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
+        }
+        if let Some(transport) = self.make_transport() {
+            ctx = ctx.with_transport(transport);
+        }
+
+        let roots = self.graph.roots();
+        if roots.len() == 1 {
+            ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
+        }
+        ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
+
+        // Release the GIL: Parallel plans run branches on scoped threads
+        // whose Python filters must acquire it — holding it here would
+        // deadlock the join.
+        py.allow_threads(|| {
+            executor::execute(
+                &compile_result.plan,
+                &mut ctx,
+                &catalog,
+                self.cache.as_ref(),
+            )
+        })
+        .map_err(soma_err_to_py)?;
+
+        // Which leaf is "the output" when there are several? Prefer one that
+        // actually ran. A branch makes every arm a leaf, so declaration
+        // order alone would return the arm that was *not* taken — an empty
+        // value, from a node that never executed.
+        //
+        // Among leaves that did produce something, declaration order still
+        // decides, so a parallel fan-out answers the same as it always has.
+        let leaves = self.graph.leaves();
+        let produced = leaves
+            .iter()
+            .find(|id| ctx.store.contains_key(**id))
+            .or_else(|| leaves.first());
+
+        let output = if let Some(leaf_id) = produced {
+            ctx.store
+                .remove(*leaf_id)
+                .and_then(|vv| vv.as_value().cloned())
+                .unwrap_or(Value::Empty)
+        } else {
+            ctx.execution_order
+                .last()
+                .and_then(|id| ctx.store.remove(id))
+                .and_then(|vv| vv.as_value().cloned())
+                .unwrap_or(Value::Empty)
+        };
+
+        value_to_py(py, &output)
+    }
+
+    /// Does any live filter carry a torch module?
+    ///
+    /// `build_module` is the declaration (a `DifferentiableFilter` that has
+    /// not been materialised yet) and `_module` is the materialised one;
+    /// either means autograd has to survive this forward, so the Python
+    /// walk owns it.
+    fn has_differentiable_filters(&self, py: Python<'_>) -> bool {
+        self.live_filters.values().any(|f| {
+            let f = f.bind(py);
+            f.hasattr("build_module").unwrap_or(false)
+                || f.getattr("_module").is_ok_and(|m| !m.is_none())
+        })
+    }
+
     /// A node id not yet taken, suffixing `_2`, `_3`, … as needed.
     fn free_id(&self, wanted: &str) -> String {
         if self.graph.node(wanted).is_none() {
@@ -2682,7 +2855,7 @@ impl PyGraph {
     /// - Workers + mixed (some local) → local execution with remote fallback
     #[pyo3(signature = (x, stream=false, chunk_size=1024, seed=None, run_id=None))]
     fn forward(
-        &self,
+        slf: PyRef<'_, Self>,
         py: Python<'_>,
         x: &Bound<'_, pyo3::types::PyAny>,
         stream: bool,
@@ -2690,153 +2863,25 @@ impl PyGraph {
         seed: Option<i64>,
         run_id: Option<String>,
     ) -> PyResult<PyObject> {
-        // A step has no fit phase — its behaviour comes from a model and a
-        // prompt, not from learned state. A graph with nothing trainable in
-        // it therefore has nothing to fit, and demanding a fit first would
-        // be asking for a no-op.
-        if !self.fitted && self.has_trainable_filters() {
-            return Err(PyRuntimeError::new_err(
-                "graph must be fitted before forward",
-            ));
-        }
-        let x_val = py_to_value(py, x)?;
-
-        // Streaming mode: remote via WS Binary, local via StreamExecutor
-        if stream {
-            if !self.workers.is_empty() {
-                // Release GIL during WS dispatch so worker thread can acquire
-                // it for Python execution.
-                let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
-                return value_to_py(py, &output);
-            }
-            // Local streaming: compile as Stream plan, execute via StreamExecutor
-            let catalog = self.rebuild_catalog(py)?;
-            let compile_result =
-                somatize_compiler::compile_stream(&self.graph, &catalog, chunk_size)
-                    .map_err(soma_err_to_py)?;
-
-            let graph_info = GraphInfo::from_graph(&self.graph);
-            let mut ctx = Context::new(
-                self.event_bus.clone(),
-                somatize_core::util::timestamp_id("stream_forward"),
-            )
-            .with_graph_info(graph_info)
-            .with_seed(seed);
-
-            let roots = self.graph.roots();
-            if roots.len() == 1 {
-                ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
-            }
-            ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
-
-            py.allow_threads(|| {
-                executor::execute(
-                    &compile_result.plan,
-                    &mut ctx,
-                    &catalog,
-                    self.cache.as_ref(),
-                )
-            })
-            .map_err(soma_err_to_py)?;
-
-            let leaves = self.graph.leaves();
-            let output = if let Some(leaf_id) = leaves.first() {
-                ctx.store
-                    .remove(*leaf_id)
-                    .and_then(|vv| vv.as_value().cloned())
-                    .unwrap_or(Value::Empty)
-            } else {
-                ctx.execution_order
-                    .last()
-                    .and_then(|id| ctx.store.remove(id))
-                    .and_then(|vv| vv.as_value().cloned())
-                    .unwrap_or(Value::Empty)
-            };
-
-            return value_to_py(py, &output);
-        }
-
-        // Dispatch entire plan remotely if workers registered and no node forces local
-        if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
-            let (output, _states) = py.allow_threads(|| {
-                self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)
-            })?;
-            return value_to_py(py, &output);
-        }
-
-        // Local execution (with optional remote executor for mixed graphs)
-        let catalog = self.rebuild_catalog(py)?;
-        let compile_result = somatize_compiler::compile(
-            &self.graph,
-            &catalog,
-            CompileMode::Inference,
-            Some(self.cache.as_ref()),
-        )
-        .map_err(soma_err_to_py)?;
-
-        let graph_info = GraphInfo::from_graph(&self.graph);
-        // A caller resuming a suspended run passes its id back. The
-        // journal keys an impure effect by `(run, node, turn, index)`, so
-        // a fresh id would replay nothing and the answer already recorded
-        // would never be found — which is why resuming did not work.
-        let run_id = run_id.unwrap_or_else(|| somatize_core::util::timestamp_id("graph_forward"));
-        let mut ctx = Context::new(self.event_bus.clone(), run_id)
-            .with_graph_info(graph_info)
-            .with_seed(seed);
-
-        if let Some(driver) = self.step_runtime(py, &catalog)? {
-            ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
-        }
-        if let Some(transport) = self.make_transport() {
-            ctx = ctx.with_transport(transport);
-        }
-
-        let roots = self.graph.roots();
-        if roots.len() == 1 {
-            ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
-        }
-        ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
-
-        // Release the GIL: Parallel plans run branches on scoped threads
-        // whose Python filters must acquire it — holding it here would
-        // deadlock the join.
-        py.allow_threads(|| {
-            executor::execute(
-                &compile_result.plan,
-                &mut ctx,
-                &catalog,
-                self.cache.as_ref(),
-            )
-        })
-        .map_err(soma_err_to_py)?;
-
-        // Which leaf is "the output" when there are several? Prefer one that
-        // actually ran. A branch makes every arm a leaf, so declaration
-        // order alone would return the arm that was *not* taken — an empty
-        // value, from a node that never executed.
+        // A graph whose filters carry torch modules is walked in Python,
+        // because autograd does not survive the `Value` boundary: a tensor
+        // that becomes a vector of f64 and back has lost the graph the
+        // optimiser needs.
         //
-        // Among leaves that did produce something, declaration order still
-        // decides, so a parallel fan-out answers the same as it always has.
-        let leaves = self.graph.leaves();
-        let produced = leaves
-            .iter()
-            .find(|id| ctx.store.contains_key(**id))
-            .or_else(|| leaves.first());
-
-        let output = if let Some(leaf_id) = produced {
-            ctx.store
-                .remove(*leaf_id)
-                .and_then(|vv| vv.as_value().cloned())
-                .unwrap_or(Value::Empty)
-        } else {
-            ctx.execution_order
-                .last()
-                .and_then(|id| ctx.store.remove(id))
-                .and_then(|vv| vv.as_value().cloned())
-                .unwrap_or(Value::Empty)
-        };
-
-        value_to_py(py, &output)
+        // That walk used to *replace* this method at import time, so which
+        // engine ran depended on which modules had been imported, two
+        // implementations answered to one name, and neither
+        // `help(Graph.forward)` nor any static analysis could see it. The
+        // dispatch belongs here, where the graph knows what it holds; the
+        // walk is a named function this calls.
+        if slf.has_differentiable_filters(py) {
+            let graph = Py::from(slf);
+            let walk = py.import("soma._orchestrator")?;
+            return walk
+                .call_method1("differentiable_forward", (graph, x))
+                .map(|v| v.unbind());
+        }
+        slf.forward_local(py, x, stream, chunk_size, seed, run_id)
     }
 
     /// Compile and execute, returning all node outputs as a dict.
