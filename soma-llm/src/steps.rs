@@ -145,7 +145,7 @@ impl ReactStep {
         response: &somatize_core::effect::LlmResponse,
         mut conversation: Messages,
     ) -> Result<Transition> {
-        Self::reject_non_answers(ctx, response)?;
+        response.reject_non_answers(ctx.node_id)?;
 
         if response.stop_reason == StopReason::ToolUse {
             let calls: Vec<Effect> = response
@@ -202,43 +202,6 @@ impl ReactStep {
             violations.join("; ")
         )));
         Ok(Transition::Await(vec![self.ask(conversation)]))
-    }
-
-    /// Two of the ways a turn can end are not answers.
-    ///
-    /// Returning them as one is how an empty string ends up in a report as
-    /// the agent's considered reply.
-    fn reject_non_answers(
-        ctx: &StepCtx<'_>,
-        response: &somatize_core::effect::LlmResponse,
-    ) -> Result<()> {
-        match &response.stop_reason {
-            StopReason::Refusal { category } => Err(SomaError::Execution {
-                node_id: ctx.node_id.to_string(),
-                message: format!(
-                    "the model declined to answer{}. Rephrasing the request or \
-                     changing model is the fix; there is no partial answer to \
-                     salvage",
-                    category
-                        .as_deref()
-                        .map(|c| format!(" ({c})"))
-                        .unwrap_or_default()
-                ),
-            }),
-            // The text so far may well be useful, so it goes in the
-            // message — but it is a cut-off thought, and passing it
-            // downstream as complete is a wrong answer nobody can see is
-            // wrong.
-            StopReason::MaxTokens => Err(SomaError::Execution {
-                node_id: ctx.node_id.to_string(),
-                message: format!(
-                    "the model ran out of tokens mid-answer. Raise `max_tokens` \
-                     (or shorten the task). Partial answer: {}",
-                    truncate(&response.message.text(), 300)
-                ),
-            }),
-            _ => Ok(()),
-        }
     }
 }
 
@@ -635,6 +598,12 @@ impl Step for JudgeStep {
                 ]))
             }
             Some(EffectResult::Llm(response)) => {
+                // A truncated verdict is not a verdict. Without this the
+                // cut-off text simply fails to parse, `parse` falls back to
+                // 0.0, and a token limit is reported as the artifact
+                // failing the grade — the same silent-wrong answer the
+                // arm below exists to prevent, arriving by a quieter route.
+                response.reject_non_answers(ctx.node_id)?;
                 let verdict = self.parse(&response.message.text());
                 Ok(Transition::Done(Value::json(serde_json::json!({
                     "score": verdict.score,
@@ -1046,6 +1015,41 @@ mod tests {
         let judge = JudgeStep::new("m", "r");
         assert_eq!(judge.parse(r#"{"score": 5}"#).score, 1.0);
         assert_eq!(judge.parse(r#"{"score": -2}"#).score, 0.0);
+    }
+
+    /// Running out of tokens is not a failing grade.
+    ///
+    /// The truncated JSON fails to parse, `parse` falls back to 0.0, and
+    /// the artifact gets marked as not meeting the criterion — a wrong
+    /// answer about the artifact caused by a setting on the request.
+    #[test]
+    fn a_truncated_verdict_is_an_error_not_a_zero() {
+        let judge = JudgeStep::new("m", "r");
+        let input = Value::text("x");
+        let results = [reply(
+            Message::assistant(r#"{"score": 0.9, "reason": "the price col"#),
+            StopReason::MaxTokens,
+        )];
+        let ctx = StepCtx::new("n", "r", &input, 1).with_results(&results);
+
+        let err = judge
+            .poll(&ctx)
+            .expect_err("a cut-off verdict must not be reported as a grade");
+        assert!(err.to_string().contains("max_tokens"), "{err}");
+    }
+
+    /// A refusal is not a failing grade either.
+    #[test]
+    fn a_refused_verdict_is_an_error_not_a_zero() {
+        let judge = JudgeStep::new("m", "r");
+        let input = Value::text("x");
+        let results = [reply(
+            Message::assistant("I can't help with that."),
+            StopReason::Refusal { category: None },
+        )];
+        let ctx = StepCtx::new("n", "r", &input, 1).with_results(&results);
+
+        assert!(judge.poll(&ctx).is_err());
     }
 
     /// A judge that could not reach a model must fail closed.

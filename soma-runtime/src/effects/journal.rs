@@ -88,9 +88,9 @@ impl EffectJournal {
     /// Pure effects key on content alone, so any run may reuse them. Impure
     /// effects additionally key on the site, which is what confines their
     /// reuse to a replay of the same run.
-    pub fn key(&self, site: EffectSite<'_>, effect: &Effect) -> CacheKey {
-        let effect_key = effect.cache_key();
-        if effect.is_pure() {
+    pub fn key(&self, site: EffectSite<'_>, effect: &Effect) -> Result<CacheKey> {
+        let effect_key = effect.cache_key()?;
+        Ok(if effect.is_pure() {
             CacheKey::from_parts(&[b"soma-journal-v1", b"pure", &effect_key.0])
         } else {
             CacheKey::from_parts(&[
@@ -102,7 +102,7 @@ impl EffectJournal {
                 &site.index.to_le_bytes(),
                 &effect_key.0,
             ])
-        }
+        })
     }
 
     /// Fetch a recorded result, if there is one.
@@ -115,7 +115,7 @@ impl EffectJournal {
         if !self.enabled {
             return Ok(None);
         }
-        let key = self.key(site, effect);
+        let key = self.key(site, effect)?;
         let Some(record) = self.actions.get_action(&key)? else {
             return Ok(None);
         };
@@ -158,7 +158,7 @@ impl EffectJournal {
 
         let now = chrono::Utc::now();
         let record = ActionResult {
-            key: self.key(site, effect),
+            key: self.key(site, effect)?,
             outputs: [("effect_result".to_string(), hash)].into_iter().collect(),
             output_bytes: bytes.len() as u64,
             compute_ms,

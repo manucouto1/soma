@@ -89,9 +89,18 @@ impl Effect {
     }
 
     /// Content hash, used as the journal key for this effect.
-    pub fn cache_key(&self) -> CacheKey {
-        let encoded = serde_json::to_vec(self).unwrap_or_default();
-        CacheKey::from_parts(&[b"soma-effect-v1", &encoded])
+    ///
+    /// Canonical CBOR, not raw serializer output: an effect carries
+    /// user-supplied JSON (`Tool { args }`, `Custom { payload }`), and two
+    /// encodings of the same object must not produce two journal keys.
+    ///
+    /// Fallible on purpose. The previous encoding fell back to empty bytes,
+    /// which gave *every* unserializable effect the same key — a replay
+    /// would then serve one effect's recorded result to another. A key that
+    /// cannot be computed has to mean "not journalable", never a guess.
+    pub fn cache_key(&self) -> crate::error::Result<CacheKey> {
+        let encoded = crate::canon::canonical_bytes(self)?;
+        Ok(CacheKey::from_parts(&[b"soma-effect-v2", &encoded]))
     }
 }
 
@@ -259,6 +268,49 @@ pub struct LlmResponse {
     pub model: Option<String>,
 }
 
+impl LlmResponse {
+    /// Fail unless this reply is actually an answer.
+    ///
+    /// Two ways a turn can end are not answers: the model was cut off
+    /// mid-sentence, or it declined. Both leave `message` populated with
+    /// something that reads like a reply, so a step that only parses the
+    /// text turns them into a *confident wrong result* — a truncated JSON
+    /// object that fails to parse and scores 0.0, a half-written plan
+    /// treated as the whole plan. Neither is recoverable by reading harder,
+    /// so every step calls this before it looks at the text.
+    ///
+    /// `node_id` names the failing node in the error.
+    pub fn reject_non_answers(&self, node_id: &str) -> crate::error::Result<()> {
+        match &self.stop_reason {
+            StopReason::Refusal { category } => Err(crate::error::SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!(
+                    "the model declined to answer{}. Rephrasing the request or \
+                     changing model is the fix; there is no partial answer to \
+                     salvage",
+                    category
+                        .as_deref()
+                        .map(|c| format!(" ({c})"))
+                        .unwrap_or_default()
+                ),
+            }),
+            // The text so far may well be useful, so it goes in the
+            // message — but it is a cut-off thought, and passing it
+            // downstream as complete is a wrong answer nobody can see is
+            // wrong.
+            StopReason::MaxTokens => Err(crate::error::SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!(
+                    "the model ran out of tokens mid-answer. Raise `max_tokens` \
+                     (or shorten the task). Partial answer: {}",
+                    crate::util::truncate(&self.message.text(), 300)
+                ),
+            }),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Why the model stopped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -404,8 +456,25 @@ mod tests {
             "claude-opus-5",
             vec![Message::user("something else")].into(),
         ));
-        assert_eq!(a.cache_key(), llm().cache_key());
-        assert_ne!(a.cache_key(), b.cache_key());
+        assert_eq!(a.cache_key().unwrap(), llm().cache_key().unwrap());
+        assert_ne!(a.cache_key().unwrap(), b.cache_key().unwrap());
+    }
+
+    /// A tool's arguments are user JSON, and a JSON object has no inherent
+    /// key order. Two spellings of the same call are the same call, so they
+    /// must journal under one key — this is why the encoding is canonical
+    /// CBOR and not raw serializer output.
+    #[test]
+    fn tool_args_key_is_independent_of_json_key_order() {
+        let one = Effect::Tool {
+            name: "search".into(),
+            args: Value::json(serde_json::json!({"q": "soma", "limit": 3})),
+        };
+        let other = Effect::Tool {
+            name: "search".into(),
+            args: Value::json(serde_json::json!({"limit": 3, "q": "soma"})),
+        };
+        assert_eq!(one.cache_key().unwrap(), other.cache_key().unwrap());
     }
 
     /// Changing any request knob must change the key — otherwise a replay at
@@ -414,10 +483,14 @@ mod tests {
     fn request_options_are_part_of_the_key() {
         let base = LlmRequest::new("claude-opus-5", vec![Message::user("hi")].into());
         let keys = [
-            Effect::Llm(base.clone()).cache_key(),
-            Effect::Llm(base.clone().with_system("be terse")).cache_key(),
-            Effect::Llm(base.clone().with_effort("high")).cache_key(),
-            Effect::Llm(base.with_max_tokens(10)).cache_key(),
+            Effect::Llm(base.clone()).cache_key().unwrap(),
+            Effect::Llm(base.clone().with_system("be terse"))
+                .cache_key()
+                .unwrap(),
+            Effect::Llm(base.clone().with_effort("high"))
+                .cache_key()
+                .unwrap(),
+            Effect::Llm(base.with_max_tokens(10)).cache_key().unwrap(),
         ];
         for (i, a) in keys.iter().enumerate() {
             for b in &keys[i + 1..] {

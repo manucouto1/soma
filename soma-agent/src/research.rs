@@ -270,6 +270,11 @@ impl Step for ResearchStep {
 
             // The model answered. Either run what it proposed, or stop.
             Some(EffectResult::Llm(response)) => {
+                // A cut-off proposal is not a proposal. Parsing it fails
+                // with "no JSON action found", which reads like the model
+                // misbehaving when it actually ran out of tokens — and the
+                // fix for each is different.
+                response.reject_non_answers(ctx.node_id)?;
                 let action = self.parse_action(&response.message.text())?;
                 let done = self.completed(ctx);
                 match &action {
