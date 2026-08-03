@@ -18,6 +18,41 @@ pub struct WsTransport {
     pub token: Option<String>,
 }
 
+/// Drive `fut` to completion from a synchronous caller.
+///
+/// On a thread of our own, with a runtime of its own, always. [`Transport`]
+/// is a synchronous trait — the effect driver calls it from
+/// `std::thread::scope` — but a caller may equally already be inside a
+/// tokio runtime: `soma.Worker.serve()` runs an axum server on a thread of
+/// the user's Python process, and the Python bindings dispatch plans from
+/// there. `block_on` inside a runtime is a *panic*, not an error.
+///
+/// This file used to hold two contradictory answers to that. `upload` and
+/// `resolve_output` paid for a thread and said why in a comment;
+/// `send_msg`, `notify` and `stream_plan` built a bare current-thread
+/// runtime and blocked on it, so they worked until they were called from
+/// the wrong place. One rule now: never assume you are outside a runtime.
+///
+/// Scoped rather than detached, so the future may borrow `self`.
+fn on_own_runtime<F, T>(fut: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>> + Send,
+    T: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| SomaError::Other(format!("tokio: {e}")))?
+                    .block_on(fut)
+            })
+            .join()
+            .map_err(|_| SomaError::Other("transport thread panicked".into()))?
+    })
+}
+
 impl WsTransport {
     pub fn new(address: impl Into<String>, token: Option<String>) -> Self {
         Self {
@@ -41,12 +76,7 @@ impl WsTransport {
     /// A second `connect_async` elsewhere is a second place to get the
     /// frame-size configuration wrong.
     pub fn send_msg(&self, msg: &CoordinatorToWorker) -> Result<WorkerToCoordinator> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| SomaError::Other(format!("tokio: {e}")))?;
-
-        rt.block_on(async {
+        on_own_runtime(async {
             let url = if let Some(t) = &self.token {
                 format!("{}/ws?token={t}", self.address)
             } else {
@@ -92,11 +122,6 @@ impl WsTransport {
     /// reply, so [`WsTransport::send_msg`] would block until the socket
     /// closed.
     pub fn notify(&self, msg: &CoordinatorToWorker) -> Result<()> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| SomaError::Other(format!("tokio: {e}")))?;
-
         let url = match &self.token {
             Some(t) => format!("{}/ws?token={t}", self.address),
             None => format!("{}/ws", self.address),
@@ -104,7 +129,7 @@ impl WsTransport {
         let json =
             serde_json::to_string(msg).map_err(|e| SomaError::Other(format!("serialize: {e}")))?;
 
-        rt.block_on(async move {
+        on_own_runtime(async move {
             use futures_util::SinkExt;
             use tokio_tungstenite::tungstenite::Message;
 
@@ -160,11 +185,6 @@ impl WsTransport {
     /// of the msgpack `StreamMessage` framing, a crate away from the enum
     /// that defines it.
     pub fn stream_plan(&self, plan: SerializedPlan, chunks: Vec<Value>) -> Result<Value> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| SomaError::Other(format!("tokio: {e}")))?;
-
         let stream_id = plan.plan_id.clone();
         let total_chunks = chunks.len();
         let url = match &self.token {
@@ -172,7 +192,7 @@ impl WsTransport {
             None => format!("{}/ws", self.address),
         };
 
-        rt.block_on(async move {
+        on_own_runtime(async move {
             use futures_util::StreamExt;
             use tokio_tungstenite::tungstenite::Message;
 
