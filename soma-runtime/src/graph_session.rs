@@ -14,6 +14,7 @@ use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
+use somatize_core::fingerprint::ArchitectureFingerprint;
 use somatize_core::graph::Graph;
 use somatize_core::store::{DataRef, DataStore};
 use somatize_core::util::timestamp_id;
@@ -242,7 +243,8 @@ impl GraphSession {
         }
 
         let states_value = Value::json(serde_json::Value::Object(states_map));
-        let key = CacheKey::from_parts(&[b"graph_states", self.graph_config_hash().as_bytes()]);
+        let fingerprint = self.graph_config_hash()?;
+        let key = CacheKey::from_parts(&[b"graph_states", fingerprint.as_bytes()]);
         store.put(&key, &states_value)
     }
 
@@ -308,9 +310,16 @@ impl GraphSession {
 
     // ── Private helpers ──
 
-    fn graph_config_hash(&self) -> String {
-        let node_ids: Vec<&str> = self.graph.nodes.iter().map(|n| n.id.as_str()).collect();
-        node_ids.join(",")
+    /// The address under which this graph's trained states are persisted.
+    ///
+    /// It has to follow the graph's *shape*, not just its node names. The
+    /// previous form was `node_ids.join(",")`, so two graphs that shared
+    /// node ids but wired them differently — or configured them
+    /// differently — persisted to one address and read back each other's
+    /// states. [`ArchitectureFingerprint`] already computes exactly this,
+    /// canonically, for the experiment pool.
+    fn graph_config_hash(&self) -> Result<String> {
+        Ok(ArchitectureFingerprint::of(&self.graph)?.digest)
     }
 }
 
@@ -665,5 +674,50 @@ mod tests {
         assert_eq!(registry.meta("a").unwrap().name, "Doubler");
         assert!(registry.config_hash("a").is_some());
         assert!(registry.meta("b").is_none());
+    }
+
+    fn session_of(graph: Graph) -> GraphSession {
+        let mut lib = NodeCatalog::new();
+        for node in &graph.nodes {
+            lib.register(&node.id, Box::new(DoublerFilter));
+        }
+        GraphSession::new(graph, lib)
+    }
+
+    /// The persisted-state address follows the wiring, not just the names.
+    /// It used to be `node_ids.join(",")`, so these two graphs shared one
+    /// address and each would load back the other's trained states.
+    #[test]
+    fn state_address_separates_graphs_that_share_node_ids() {
+        let chain = session_of(linear_graph(&["a", "b", "c"]));
+
+        // Same three nodes, different wiring: a fan-out from `a`.
+        let mut fan = Graph::new();
+        for id in ["a", "b", "c"] {
+            fan.nodes.push(Node::new(id, id, id));
+        }
+        fan.edges.push(Edge::data("e0", "a", "b"));
+        fan.edges.push(Edge::data("e1", "a", "c"));
+        let fan = session_of(fan);
+
+        assert_ne!(
+            chain.graph_config_hash().unwrap(),
+            fan.graph_config_hash().unwrap(),
+            "two differently wired graphs must not persist states to one address"
+        );
+    }
+
+    /// The same graph built twice is the same address — otherwise nothing
+    /// persisted could ever be loaded back.
+    #[test]
+    fn state_address_is_stable_for_the_same_graph() {
+        assert_eq!(
+            session_of(linear_graph(&["a", "b"]))
+                .graph_config_hash()
+                .unwrap(),
+            session_of(linear_graph(&["a", "b"]))
+                .graph_config_hash()
+                .unwrap()
+        );
     }
 }
