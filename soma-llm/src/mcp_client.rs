@@ -9,7 +9,7 @@
 //! stdin/stdout — the transport every MCP server supports, and the one that
 //! needs no ports, no TLS and no service to be running first.
 
-use somatize_core::error::{Result, SomaError};
+use crate::error::{LlmError, Result};
 use somatize_core::tool::ToolSpec;
 use somatize_core::value::Value;
 use std::io::{BufRead, BufReader, Write};
@@ -50,16 +50,16 @@ impl McpClient {
             // itself.
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| SomaError::Other(format!("starting MCP server `{command}`: {e}")))?;
+            .map_err(|e| LlmError::mcp(command, format!("starting the process: {e}")))?;
 
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| SomaError::Other(format!("MCP server `{command}` has no stdin")))?;
+            .ok_or_else(|| LlmError::mcp(command, "the process has no stdin"))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| SomaError::Other(format!("MCP server `{command}` has no stdout")))?;
+            .ok_or_else(|| LlmError::mcp(command, "the process has no stdout"))?;
 
         let client = Self {
             command: command.to_string(),
@@ -91,12 +91,8 @@ impl McpClient {
             .get("tools")
             .cloned()
             .unwrap_or(serde_json::json!([]));
-        serde_json::from_value(tools).map_err(|e| {
-            SomaError::Other(format!(
-                "MCP server `{}` returned an unreadable tool list: {e}",
-                self.command
-            ))
-        })
+        serde_json::from_value(tools)
+            .map_err(|e| LlmError::mcp(&self.command, format!("unreadable tool list: {e}")))
     }
 
     /// Call one.
@@ -134,7 +130,10 @@ impl McpClient {
     /// Send a request and wait for its response.
     fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
         let mut io = self.io.lock().map_err(|_| {
-            SomaError::Other(format!("MCP client for `{}` is poisoned", self.command))
+            LlmError::mcp(
+                &self.command,
+                "the client handle is poisoned by an earlier panic",
+            )
         })?;
 
         let id = io.next_id;
@@ -174,10 +173,10 @@ impl McpClient {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("unknown error");
-                return Err(SomaError::Other(format!(
-                    "MCP server `{}` refused `{method}`: {text}",
-                    self.command
-                )));
+                return Err(LlmError::mcp(
+                    &self.command,
+                    format!("refused `{method}`: {text}"),
+                ));
             }
             return Ok(message.get("result").cloned().unwrap_or_default());
         }
@@ -186,7 +185,10 @@ impl McpClient {
     /// Fire and forget — notifications carry no id and get no reply.
     fn notify(&self, method: &str, params: serde_json::Value) -> Result<()> {
         let mut io = self.io.lock().map_err(|_| {
-            SomaError::Other(format!("MCP client for `{}` is poisoned", self.command))
+            LlmError::mcp(
+                &self.command,
+                "the client handle is poisoned by an earlier panic",
+            )
         })?;
         let line = serde_json::json!({
             "jsonrpc": "2.0",
@@ -196,17 +198,17 @@ impl McpClient {
         .to_string();
         writeln!(io.stdin, "{line}")
             .and_then(|()| io.stdin.flush())
-            .map_err(|e| SomaError::Other(format!("MCP notify `{method}`: {e}")))?;
+            .map_err(|e| LlmError::mcp(&self.command, format!("notify `{method}`: {e}")))?;
         Ok(())
     }
 
     /// Report a broken pipe, including how the child died if it has.
-    fn dead(&self, io: &mut Pipe, what: String) -> SomaError {
+    fn dead(&self, io: &mut Pipe, what: String) -> LlmError {
         let status = match io.child.try_wait() {
             Ok(Some(status)) => format!(" (server exited: {status})"),
             _ => String::new(),
         };
-        SomaError::Other(format!("MCP server `{}` {what}{status}", self.command))
+        LlmError::mcp(&self.command, format!("{what}{status}"))
     }
 }
 

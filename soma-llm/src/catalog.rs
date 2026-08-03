@@ -22,7 +22,7 @@
 //! escape hatch, and it should stay rarely used.
 
 use serde::{Deserialize, Serialize};
-use somatize_core::error::{Result, SomaError};
+use somatize_core::error::Result;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
@@ -65,7 +65,7 @@ impl Auth {
             Self::Header { name, env } => (name.clone(), env),
         };
         let value = std::env::var(env).map_err(|_| {
-            SomaError::Other(format!(
+            crate::error::LlmError::Config(format!(
                 "provider `{provider}` needs the environment variable `{env}`, which is not set"
             ))
         })?;
@@ -451,7 +451,7 @@ impl Catalog {
         }
         let raw = std::fs::read_to_string(path)?;
         let extra: Catalog = toml::from_str(&raw).map_err(|e| {
-            SomaError::Other(format!(
+            crate::error::LlmError::Config(format!(
                 "provider catalog {}: {e}. Expected `[providers.<name>]` tables",
                 path.display()
             ))

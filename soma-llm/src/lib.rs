@@ -29,12 +29,14 @@
 //! ```
 
 pub mod catalog;
+pub mod error;
 pub mod mcp_client;
 pub mod openai_compat;
 pub mod steps;
 pub mod tools;
 
 pub use catalog::{Auth, Catalog, ProviderConfig, Quirks};
+pub use error::LlmError;
 pub use mcp_client::McpClient;
 pub use openai_compat::OpenAiCompatible;
 pub use steps::{JudgeStep, LlmStep, ReactStep, Verdict};
@@ -42,7 +44,7 @@ pub use tools::{FnTool, Tool, ToolOutcome, Toolbox};
 
 use somatize_core::effect::EffectHandler;
 use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse};
-use somatize_core::error::{Result, SomaError};
+use somatize_core::error::Result;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -135,7 +137,7 @@ impl Router {
         }
 
         let default = self.default.as_deref().ok_or_else(|| {
-            SomaError::Other(format!(
+            LlmError::Config(format!(
                 "model `{model}` names no provider and no default is set. \
                  Qualify it as `<provider>/{model}`, or set a default. \
                  Known providers: {}",
@@ -144,7 +146,7 @@ impl Router {
         })?;
 
         let provider = self.providers.get(default).ok_or_else(|| {
-            SomaError::Other(format!("default provider `{default}` is not registered"))
+            LlmError::Config(format!("default provider `{default}` is not registered"))
         })?;
         Ok((provider, model))
     }
@@ -193,7 +195,7 @@ impl EffectHandler for LlmHandler {
 
     fn perform(&self, effect: &Effect) -> Result<EffectResult> {
         let Effect::Llm(req) = effect else {
-            return Err(SomaError::Other("not an llm effect".into()));
+            return Err(LlmError::UnexpectedEffect("not an llm effect".into()).into());
         };
         // A provider being down is something the step can act on — retry,
         // fall back to another model, give up deliberately. Raising here
@@ -313,7 +315,9 @@ mod tests {
                 "broken"
             }
             fn complete(&self, _req: &LlmRequest) -> Result<LlmResponse> {
-                Err(SomaError::Other("connection reset".into()))
+                Err(somatize_core::error::SomaError::Other(
+                    "connection reset".into(),
+                ))
             }
         }
 

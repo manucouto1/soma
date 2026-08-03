@@ -16,7 +16,7 @@
 use crate::mcp_client::McpClient;
 use somatize_core::effect::EffectHandler;
 use somatize_core::effect::{Effect, EffectResult};
-use somatize_core::error::{Result, SomaError};
+use somatize_core::error::Result;
 use somatize_core::tool::ToolSpec;
 use somatize_core::value::Value;
 use std::collections::BTreeMap;
@@ -159,7 +159,9 @@ impl EffectHandler for Toolbox {
 
     fn perform(&self, effect: &Effect) -> Result<EffectResult> {
         let Effect::Tool { name, args } = effect else {
-            return Err(SomaError::Other("not a tool effect".into()));
+            return Err(
+                crate::error::LlmError::UnexpectedEffect("not a tool effect".into()).into(),
+            );
         };
 
         // A model asking for a tool that does not exist is a routine
@@ -198,8 +200,10 @@ impl Tool for McpTool {
     fn spec(&self) -> ToolSpec {
         self.spec.clone()
     }
+    /// The seam: `Tool` is a `soma-core` trait, so the MCP error becomes
+    /// a `SomaError` here, keeping the `mcp server \`name\`:` prefix.
     fn call(&self, args: &Value) -> Result<ToolOutcome> {
-        self.client.call_tool(&self.spec.name, args)
+        Ok(self.client.call_tool(&self.spec.name, args)?)
     }
 }
 
@@ -277,7 +281,9 @@ mod tests {
     fn a_failing_tool_reports_to_the_model() {
         let mut box_ = Toolbox::new();
         box_.add_fn(ToolSpec::no_args("boom", "always fails"), |_| {
-            Err(SomaError::Other("disk on fire".into()))
+            Err(somatize_core::error::SomaError::Other(
+                "disk on fire".into(),
+            ))
         });
 
         match box_

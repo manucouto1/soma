@@ -11,10 +11,10 @@
 //! keeping it in one file is the point.
 
 use crate::catalog::{ProviderConfig, RetryPolicy};
+use crate::error::{LlmError, Result};
 use crate::{LlmProvider, ModelInfo};
 use serde::{Deserialize, Serialize};
 use somatize_core::effect::{LlmRequest, LlmResponse, StopReason, ToolSpec, Usage};
-use somatize_core::error::{Result, SomaError};
 use somatize_core::message::{ContentBlock, Message, Role};
 use std::time::Duration;
 
@@ -124,11 +124,11 @@ fn retrying<T>(
     policy: &RetryPolicy,
     provider: &str,
     what: &str,
-    mut attempt: impl FnMut() -> std::result::Result<T, (Pushback, SomaError)>,
+    mut attempt: impl FnMut() -> std::result::Result<T, (Pushback, LlmError)>,
 ) -> Result<T> {
     let started = std::time::Instant::now();
     let mut first: Option<String> = None;
-    let mut last: Option<SomaError> = None;
+    let mut last: Option<LlmError> = None;
 
     for tries in 0..policy.max_attempts.max(1) {
         match attempt() {
@@ -175,10 +175,13 @@ fn retrying<T>(
         _ => String::new(),
     };
 
-    Err(SomaError::Other(format!(
-        "`{provider}` {what} failed after {} attempt(s): {last}{context}",
-        policy.max_attempts.max(1),
-    )))
+    Err(LlmError::provider(
+        provider,
+        format!(
+            "{what} failed after {} attempt(s): {last}{context}",
+            policy.max_attempts.max(1),
+        ),
+    ))
 }
 
 /// A provider reached over the OpenAI chat-completions shape.
@@ -193,7 +196,7 @@ impl OpenAiCompatible {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
             .build()
-            .map_err(|e| SomaError::Other(format!("building http client: {e}")))?;
+            .map_err(|e| LlmError::Config(format!("building the http client: {e}")))?;
         Ok(Self {
             id: id.into(),
             config,
@@ -306,9 +309,11 @@ impl OpenAiCompatible {
     }
 
     fn parse(&self, raw: WireResponse) -> Result<LlmResponse> {
-        let choice = raw.choices.into_iter().next().ok_or_else(|| {
-            SomaError::Other(format!("provider `{}` returned no choices", self.id))
-        })?;
+        let choice = raw
+            .choices
+            .into_iter()
+            .next()
+            .ok_or_else(|| LlmError::provider(&self.id, "the reply carried no choices"))?;
 
         let mut content: Vec<ContentBlock> = Vec::new();
         if let Some(text) = choice.message.content.filter(|t| !t.is_empty()) {
@@ -346,66 +351,74 @@ impl LlmProvider for OpenAiCompatible {
         &self.id
     }
 
-    fn complete(&self, req: &LlmRequest) -> Result<LlmResponse> {
+    /// The seam: [`LlmProvider`] is used through the effect driver, which
+    /// speaks `SomaError`. Everything behind this call is an [`LlmError`].
+    fn complete(&self, req: &LlmRequest) -> somatize_core::error::Result<LlmResponse> {
         let url = self.config.chat_url();
         let body = self.body(req);
 
-        retrying(&self.config.retry, &self.id, "completion", || {
-            let response = self
-                .request(reqwest::Method::POST, &url)
-                .map_err(|e| (Pushback::Fatal, e))?
-                .json(&body)
-                .send()
-                // A connection refused, reset or timed out says nothing
-                // about the request — only that this attempt did not land.
-                .map_err(|e| {
+        Ok(retrying(
+            &self.config.retry,
+            &self.id,
+            "completion",
+            || {
+                let response = self
+                    .request(reqwest::Method::POST, &url)
+                    .map_err(|e| (Pushback::Fatal, e))?
+                    .json(&body)
+                    .send()
+                    // A connection refused, reset or timed out says nothing
+                    // about the request — only that this attempt did not land.
+                    .map_err(|e| {
+                        (
+                            Pushback::Retryable(None),
+                            LlmError::provider(&self.id, format!("{url}: {e}")),
+                        )
+                    })?;
+
+                let status = response.status();
+                let pushback = classify(status, response.headers());
+                let text = response.text().map_err(|e| {
                     (
                         Pushback::Retryable(None),
-                        SomaError::Other(format!("`{}` at {url}: {e}", self.id)),
+                        LlmError::provider(&self.id, format!("reading response: {e}")),
                     )
                 })?;
 
-            let status = response.status();
-            let pushback = classify(status, response.headers());
-            let text = response.text().map_err(|e| {
-                (
-                    Pushback::Retryable(None),
-                    SomaError::Other(format!("`{}`: reading response: {e}", self.id)),
-                )
-            })?;
+                if !status.is_success() {
+                    // Endpoints bury the useful part in differently-shaped error
+                    // envelopes; show the body rather than guess at its schema.
+                    return Err((
+                        pushback,
+                        LlmError::provider(
+                            &self.id,
+                            format!("returned {status}: {}", truncate(text.trim(), 400)),
+                        ),
+                    ));
+                }
 
-            if !status.is_success() {
-                // Endpoints bury the useful part in differently-shaped error
-                // envelopes; show the body rather than guess at its schema.
-                return Err((
-                    pushback,
-                    SomaError::Other(format!(
-                        "`{}` returned {status}: {}",
-                        self.id,
-                        truncate(text.trim(), 400)
-                    )),
-                ));
-            }
+                // A 200 carrying something that is not a chat completion is a
+                // proxy or a captive portal answering for the endpoint. Worth
+                // one more try; it is not a request the caller can fix.
+                let raw: WireResponse = serde_json::from_str(&text).map_err(|e| {
+                    (
+                        Pushback::Retryable(None),
+                        LlmError::provider(
+                            &self.id,
+                            format!(
+                                "returned a body that is not a chat completion: {e}. Body: {}",
+                                truncate(&text, 400)
+                            ),
+                        ),
+                    )
+                })?;
 
-            // A 200 carrying something that is not a chat completion is a
-            // proxy or a captive portal answering for the endpoint. Worth
-            // one more try; it is not a request the caller can fix.
-            let raw: WireResponse = serde_json::from_str(&text).map_err(|e| {
-                (
-                    Pushback::Retryable(None),
-                    SomaError::Other(format!(
-                        "`{}` returned a body that is not a chat completion: {e}. Body: {}",
-                        self.id,
-                        truncate(&text, 400)
-                    )),
-                )
-            })?;
-
-            self.parse(raw).map_err(|e| (Pushback::Fatal, e))
-        })
+                self.parse(raw).map_err(|e| (Pushback::Fatal, e))
+            },
+        )?)
     }
 
-    fn models(&self) -> Result<Vec<ModelInfo>> {
+    fn models(&self) -> somatize_core::error::Result<Vec<ModelInfo>> {
         let url = self.config.models_url();
 
         let listing: WireModels = retrying(&self.config.retry, &self.id, "model listing", || {
@@ -416,7 +429,7 @@ impl LlmProvider for OpenAiCompatible {
                 .map_err(|e| {
                     (
                         Pushback::Retryable(None),
-                        SomaError::Other(format!("`{}` at {url}: {e}", self.id)),
+                        LlmError::provider(&self.id, format!("{url}: {e}")),
                     )
                 })?;
 
@@ -425,14 +438,14 @@ impl LlmProvider for OpenAiCompatible {
             if !status.is_success() {
                 return Err((
                     pushback,
-                    SomaError::Other(format!("`{}` model listing returned {status}", self.id)),
+                    LlmError::provider(&self.id, format!("model listing returned {status}")),
                 ));
             }
 
             response.json().map_err(|e| {
                 (
                     Pushback::Retryable(None),
-                    SomaError::Other(format!("`{}`: parsing model list: {e}", self.id)),
+                    LlmError::provider(&self.id, format!("parsing model list: {e}")),
                 )
             })
         })?;
