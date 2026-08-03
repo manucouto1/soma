@@ -50,8 +50,12 @@ markers = [
 source = ["python/soma"]
 
 [tool.mypy]
-python_version = "3.9"
 files = ["python/soma"]
+# No `python_version`: mypy 2.x refuses anything below 3.10, and pinning it
+# to 3.10 while `requires-python` says 3.9 would be a claim we do not check.
+# Left unset, mypy uses the interpreter it runs on. Runtime annotations are
+# all under `from __future__ import annotations`, so the 3.9 floor holds
+# regardless of what version the check itself assumes.
 # The package ships `py.typed`, so what it claims about itself is public.
 # Not `strict`: most of this layer moves user data through untyped
 # boundaries, and annotating that `Any` as `Any` is honest, not a gap.
@@ -67,6 +71,7 @@ module = [
     "jsonschema.*",
     "pandas.*",
     "plotly.*",
+    "rich.*",
     "torch.*",
     "tqdm.*",
 ]
