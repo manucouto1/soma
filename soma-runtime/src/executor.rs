@@ -120,13 +120,19 @@ pub struct Context {
     /// Fit or forward. See [`RunMode`].
     pub mode: RunMode,
     /// Node outputs as virtual values (may be lazy).
-    pub store: HashMap<String, VirtualValue>,
+    ///
+    /// Private, together with `execution_order`: the two are a pair.
+    /// `execute_parallel` works out what a branch contributed by diffing
+    /// `execution_order`, so a write that reached one and not the other
+    /// is silently dropped at the join. Going through [`Context::set`]
+    /// and [`Context::set_virtual`] is what keeps them in step.
+    store: HashMap<String, VirtualValue>,
     /// Event bus for emitting runtime events.
     pub event_bus: Arc<EventBus>,
     /// Current run ID.
     pub run_id: String,
-    /// Track execution order.
-    pub execution_order: Vec<String>,
+    /// Track execution order. Private for the reason above.
+    execution_order: Vec<String>,
     /// Graph topology for input resolution.
     pub graph_info: GraphInfo,
     /// Optional transport for distributed plans.
@@ -254,6 +260,25 @@ impl Context {
             }
         }
         VirtualValue::materialized(value)
+    }
+
+    /// The nodes that ran, in the order they ran.
+    ///
+    /// Includes the run's reserved keys (see [`somatize_core::keys`]);
+    /// filter them out with `keys::is_reserved` if you want node ids only.
+    pub fn execution_order(&self) -> &[String] {
+        &self.execution_order
+    }
+
+    /// Every materialized value this run produced, keyed by node id.
+    ///
+    /// Consumes the context, because the point of asking is that the run
+    /// is over. Lazy values that were never resolved are skipped.
+    pub fn into_outputs(self) -> HashMap<String, Value> {
+        self.store
+            .into_iter()
+            .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
+            .collect()
     }
 
     /// Get the materialized Value for a node, if present and materialized.
@@ -598,7 +623,7 @@ fn emit_control_completed(ctx: &Context, node_id: &str, summary: String) {
 
 /// Salt a cache key with the run's experiment seed, when set.
 /// `None` leaves the key untouched (and distinct from any seeded key).
-pub fn salt_with_seed(
+pub(crate) fn salt_with_seed(
     key: somatize_core::cache::CacheKey,
     seed: Option<i64>,
 ) -> somatize_core::cache::CacheKey {
@@ -613,7 +638,7 @@ pub fn salt_with_seed(
 /// `panic!("...")` with arguments produces a `String`; a bare literal
 /// produces a `&str`. Anything else — `panic_any` with a custom type —
 /// carries no message we can read.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     payload
         .downcast_ref::<String>()
         .map(|s| s.as_str())
@@ -1070,7 +1095,7 @@ fn resolve_value(vv: &VirtualValue, data_store: &Option<Arc<dyn DataStore>>) -> 
 
 /// Resolve the input for a node from the context store using graph topology.
 /// If a predecessor was spilled to DataStore, loads it back.
-pub fn resolve_input(node_id: &str, ctx: &Context) -> Value {
+pub(crate) fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     let preds = ctx.graph_info.predecessors(node_id);
 
     let resolve_node = |id: &str| -> Option<Value> {

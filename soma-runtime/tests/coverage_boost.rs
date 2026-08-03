@@ -375,7 +375,7 @@ fn executor_loop_terminates_on_done() {
     // (counts 0,1,2 continue; 3 stops), so the loop runs exactly 4 times —
     // not the 100 it would burn if the signal were ignored.
     let calls = ctx
-        .execution_order
+        .execution_order()
         .iter()
         .filter(|id| *id == "stopper")
         .count();
@@ -416,7 +416,7 @@ fn executor_loop_rejects_unreadable_signal() {
     );
     // It stopped on the first iteration rather than running to the cap.
     let calls = ctx
-        .execution_order
+        .execution_order()
         .iter()
         .filter(|id| *id == "doubler")
         .count();
@@ -449,7 +449,7 @@ fn executor_loop_exhaust_runs_full_count() {
 
     execute(&plan, &mut ctx, &lib, &cache).unwrap();
     let calls = ctx
-        .execution_order
+        .execution_order()
         .iter()
         .filter(|id| *id == "doubler")
         .count();

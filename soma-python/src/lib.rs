@@ -1535,18 +1535,20 @@ impl PyGraph {
             .map_err(soma_err_to_py)?;
 
             let leaves = self.graph.leaves();
-            let output = if let Some(leaf_id) = leaves.first() {
-                ctx.store
-                    .remove(*leaf_id)
-                    .and_then(|vv| vv.as_value().cloned())
-                    .unwrap_or(Value::Empty)
-            } else {
-                ctx.execution_order
-                    .last()
-                    .and_then(|id| ctx.store.remove(id))
-                    .and_then(|vv| vv.as_value().cloned())
-                    .unwrap_or(Value::Empty)
-            };
+            let output = leaves
+                .first()
+                .and_then(|leaf| ctx.get(leaf).cloned())
+                .or_else(|| {
+                    // The last node that actually ran — skipping the run's
+                    // own reserved entries, which `last()` alone would
+                    // happily return as though a node had produced them.
+                    ctx.execution_order()
+                        .iter()
+                        .rev()
+                        .find(|id| !somatize_core::keys::is_reserved(id))
+                        .and_then(|id| ctx.get(id).cloned())
+                })
+                .unwrap_or(Value::Empty);
 
             return value_to_py(py, &output);
         }
@@ -1613,23 +1615,21 @@ impl PyGraph {
         // Among leaves that did produce something, declaration order still
         // decides, so a parallel fan-out answers the same as it always has.
         let leaves = self.graph.leaves();
-        let produced = leaves
+        let output = leaves
             .iter()
-            .find(|id| ctx.store.contains_key(**id))
-            .or_else(|| leaves.first());
-
-        let output = if let Some(leaf_id) = produced {
-            ctx.store
-                .remove(*leaf_id)
-                .and_then(|vv| vv.as_value().cloned())
-                .unwrap_or(Value::Empty)
-        } else {
-            ctx.execution_order
-                .last()
-                .and_then(|id| ctx.store.remove(id))
-                .and_then(|vv| vv.as_value().cloned())
-                .unwrap_or(Value::Empty)
-        };
+            .find_map(|id| ctx.get(id).cloned())
+            .or_else(|| leaves.first().and_then(|id| ctx.get(id).cloned()))
+            .or_else(|| {
+                // The last node that actually ran — skipping the run's own
+                // reserved entries, which `last()` alone would happily
+                // return as though a node had produced them.
+                ctx.execution_order()
+                    .iter()
+                    .rev()
+                    .find(|id| !somatize_core::keys::is_reserved(id))
+                    .and_then(|id| ctx.get(id).cloned())
+            })
+            .unwrap_or(Value::Empty);
 
         value_to_py(py, &output)
     }
@@ -2940,10 +2940,8 @@ impl PyGraph {
         result.map_err(soma_err_to_py)?;
 
         let dict = PyDict::new(py);
-        for (k, vv) in &ctx.store {
-            if let Some(v) = vv.as_value() {
-                dict.set_item(k, value_to_py(py, v)?)?;
-            }
+        for (k, v) in ctx.into_outputs() {
+            dict.set_item(k, value_to_py(py, &v)?)?;
         }
         Ok(dict.into_any().unbind())
     }

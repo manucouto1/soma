@@ -148,11 +148,6 @@ impl NodeCatalog {
         }
     }
 
-    /// Is this node effectful?
-    pub fn is_step(&self, node_id: &str) -> bool {
-        matches!(self.nodes.get(node_id), Some(NodeImpl::Step(_)))
-    }
-
     /// Does the catalog hold any effectful node at all?
     ///
     /// The question a caller asks before building an effect driver, which
@@ -190,22 +185,6 @@ impl NodeCatalog {
     pub fn try_set_state(&self, node_id: impl Into<String>, state: Value) -> Result<()> {
         let id = node_id.into();
         self.states.set(&id, state)
-    }
-
-    /// Store a trained state, reporting a store failure through the log.
-    ///
-    /// Prefer [`NodeCatalog::try_set_state`]: a state that failed to
-    /// store is a state the next `forward` will not find, and only the
-    /// caller knows whether that is worth stopping for.
-    #[deprecated(
-        since = "0.3.2",
-        note = "use `try_set_state`, which reports a failing StateStore instead of swallowing it"
-    )]
-    pub fn set_state(&self, node_id: impl Into<String>, state: Value) {
-        let id = node_id.into();
-        if let Err(e) = self.states.set(&id, state) {
-            tracing::error!(node_id = %id, "StateStore::set failed: {e}");
-        }
     }
 
     /// Retrieve the trained state for a node. The returned `Arc<Value>`

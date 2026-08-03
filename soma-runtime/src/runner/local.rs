@@ -49,12 +49,11 @@ impl LocalRunner {
     ///
     /// On a branch only one arm runs, so plan order is the wrong question.
     fn last_output(exec: &Context) -> Option<Value> {
-        exec.execution_order
+        exec.execution_order()
             .iter()
             .rev()
             .find(|id| !somatize_core::keys::is_reserved(id))
-            .and_then(|id| exec.store.get(id))
-            .and_then(|vv| vv.as_value().cloned())
+            .and_then(|id| exec.get(id).cloned())
     }
 }
 
@@ -71,17 +70,12 @@ impl Runner for LocalRunner {
         // Node outputs plus the states that were learned. The `__state_*`
         // entries travel in the same map because that is what the session
         // and the worker already read out of it.
-        let mut produced: HashMap<String, Value> = HashMap::new();
-        for (id, vv) in &exec.store {
-            if somatize_core::keys::is_input_key(id) {
-                continue;
-            }
-            if let Some(v) = vv.as_value() {
-                produced.insert(id.clone(), v.clone());
-            }
-        }
+        let last = Self::last_output(&exec).unwrap_or(Value::Empty);
+        let mut produced = exec.into_outputs();
+        // The run's own inputs are not something a node produced.
+        produced.retain(|id, _| !somatize_core::keys::is_input_key(id));
 
-        Ok((Self::last_output(&exec).unwrap_or(Value::Empty), produced))
+        Ok((last, produced))
     }
 
     fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {

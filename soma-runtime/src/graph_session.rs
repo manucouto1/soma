@@ -125,11 +125,7 @@ impl GraphSession {
             duration: start.elapsed(),
         });
 
-        Ok(ctx
-            .store
-            .into_iter()
-            .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-            .collect())
+        Ok(ctx.into_outputs())
     }
 
     /// Fit all trainable filters in topological order.
@@ -521,11 +517,7 @@ mod tests {
         );
         executor::execute(&plan, &mut ctx, session.library(), &MemoryCache::default()).unwrap();
 
-        let outputs: HashMap<String, Value> = ctx
-            .store
-            .into_iter()
-            .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-            .collect();
+        let outputs: HashMap<String, Value> = ctx.into_outputs();
 
         let result = outputs.get("add").unwrap();
         let (data, _) = result.as_tensor().unwrap();
@@ -585,10 +577,7 @@ mod tests {
                 Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
             );
             executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();
-            ctx.store
-                .into_iter()
-                .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-                .collect::<HashMap<String, Value>>()
+            ctx.into_outputs()
         };
 
         let result = outputs.get("add").unwrap();

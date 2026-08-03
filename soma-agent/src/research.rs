@@ -111,6 +111,13 @@ impl ResearchStep {
             )]),
         )
         .with_system(self.system())
+        // The shape is declared once, as a schema. It used to be written
+        // out a second time as prose inside `system()` while
+        // `Action::response_schema` sat unused — two descriptions of one
+        // contract, and only the prose could drift. Declaring it here
+        // also lets an endpoint that supports constrained decoding
+        // *enforce* it rather than be asked nicely.
+        .with_schema(crate::action::Action::response_schema())
         .into_effect()
     }
 
@@ -118,13 +125,9 @@ impl ResearchStep {
         format!(
             "You are running an experimental campaign on a Soma pipeline.\n\n\
              Objective: {}\n\n\
-             Each turn, propose ONE experiment or conclude. Reply with JSON \
-             only, matching this shape:\n\
-             {{\"action\": \"run_experiment\", \"name\": \"...\", \
-             \"research_line\": \"...\", \"hypothesis\": \"...\", \
-             \"params\": {{\"<node>.<param>\": <value>}}}}\n\
-             or\n\
-             {{\"action\": \"conclude\", \"reason\": \"...\"}}\n\n\
+             Each turn, propose ONE experiment or conclude; the reply must \
+             match the declared schema. Use `params` keys of the form \
+             `<node>.<param>`.\n\n\
              Every experiment needs a falsifiable hypothesis — a result \
              nobody can interpret later is a result nobody will read. Vary \
              one thing at a time so the comparison means something, and \
