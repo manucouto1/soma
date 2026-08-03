@@ -30,7 +30,7 @@ from soma.builder import somatize as _somatize
 try:
     from soma._composite import DifferentiableFilter
 except ImportError:  # torch not installed — DifferentiableFilter is opt-in
-    DifferentiableFilter = None   # type: ignore[assignment]
+    DifferentiableFilter = None   # type: ignore[assignment,misc]
 
 
 
@@ -68,9 +68,9 @@ try:
         audit_modules,
     )
 except ImportError:  # torch not installed
-    Audit = AuditReport = AuditScope = FilterReport = None  # type: ignore[assignment]
-    ChannelConfig = StepRecord = None                # type: ignore[assignment]
-    GradientHealthError = Thresholds = None          # type: ignore[assignment]
+    Audit = AuditReport = AuditScope = FilterReport = None  # type: ignore[assignment,misc]
+    ChannelConfig = StepRecord = None                # type: ignore[assignment,misc]
+    GradientHealthError = Thresholds = None          # type: ignore[assignment,misc]
     audit_modules = None                             # type: ignore[assignment]
 
 __all__ = [

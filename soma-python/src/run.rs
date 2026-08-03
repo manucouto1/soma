@@ -27,7 +27,7 @@ impl PyRun {
         self.tracker.run_id().to_string()
     }
 
-    /// Absolute path of the run directory.
+    /// Path of the run directory — relative whenever the pool root was.
     #[getter]
     fn dir(&self) -> String {
         self.tracker.run_dir().display().to_string()

@@ -48,3 +48,26 @@ markers = [
 
 [tool.coverage.run]
 source = ["python/soma"]
+
+[tool.mypy]
+python_version = "3.9"
+files = ["python/soma"]
+# The package ships `py.typed`, so what it claims about itself is public.
+# Not `strict`: most of this layer moves user data through untyped
+# boundaries, and annotating that `Any` as `Any` is honest, not a gap.
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Optional extras and untyped dependencies. Missing stubs upstream is not
+# something this package can fix, and the noise would hide our own errors.
+[[tool.mypy.overrides]]
+module = [
+    "cloudpickle.*",
+    "ipywidgets.*",
+    "jsonschema.*",
+    "pandas.*",
+    "plotly.*",
+    "torch.*",
+    "tqdm.*",
+]
+ignore_missing_imports = true

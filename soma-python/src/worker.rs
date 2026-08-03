@@ -151,7 +151,7 @@ impl PyWorker {
         Ok(())
     }
 
-    /// Get the worker info as a dict.
+    /// A one-line summary of what this worker can run: cpus, memory, gpus.
     fn info(&self) -> PyResult<String> {
         let caps = somatize_worker::protocol::Capabilities::detect();
         Ok(caps.summary())

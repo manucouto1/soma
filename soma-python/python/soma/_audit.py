@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import io
 import math
 import sys
 from collections import defaultdict
@@ -305,7 +306,7 @@ def _act_record(t: "torch.Tensor", thr: Thresholds) -> dict[str, float]:
     finite_mask = torch.isfinite(f)
     finite = f[finite_mask] if not finite_mask.all() else f
     if finite.numel() == 0:
-        return {"nan": nan, "inf": inf}  # type: ignore[dict-item]
+        return {"nan": nan, "inf": inf}
     abs_f = finite.abs()
     return {
         "mean": float(finite.mean().item()),
@@ -315,8 +316,8 @@ def _act_record(t: "torch.Tensor", thr: Thresholds) -> dict[str, float]:
         "abs_mean": float(abs_f.mean().item()),
         "zero_frac": float((abs_f < thr.dead_eps).float().mean().item()),
         "sat_frac": float((abs_f > thr.activation_saturation).float().mean().item()),
-        "nan": nan,           # type: ignore[dict-item]
-        "inf": inf,           # type: ignore[dict-item]
+        "nan": nan,         
+        "inf": inf,         
     }
 
 
@@ -408,7 +409,7 @@ class Audit:
         self._chan_snapshots: dict[str, dict[str, Any]] = {}
         # Persistence (bound lazily when a tracked run is active).
         self._graph: "_RustGraph | None" = None
-        self._steps_file = None
+        self._steps_file: io.TextIOWrapper | None = None
 
     # ── Hook installation ──
 
@@ -486,6 +487,7 @@ class Audit:
             return
         cdim, other = axes
         cfg = self.channels
+        assert cfg is not None  # `_channel_axes` returned None otherwise
         f = t.detach().float()
         abs_f = f.abs()
         act_abs = abs_f.mean(dim=other) if other else abs_f
@@ -622,6 +624,7 @@ class Audit:
         if mat is None or mat.shape[0] < 2:
             return
         cfg = self.channels
+        assert cfg is not None  # nothing is pending unless channels are on
         snap: dict[str, Any] = {"step": self._step}
 
         # Channel × channel Pearson correlation.

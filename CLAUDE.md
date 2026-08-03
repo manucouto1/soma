@@ -81,7 +81,7 @@ notebooks/      → 14 executed tutorial notebooks (10-12 are one campaign, shar
 ## Tests
 
 ```bash
-# 943 Rust + 528 Python (11 deselected by default: slow + live)
+# 948 Rust + 673 Python (11 deselected by default: slow + live)
 # Property tests are Rust-side (soma-core/tests/proptests.rs); the Python
 # suite does not use hypothesis.
 cargo test --workspace                              # Rust tests
@@ -89,6 +89,7 @@ cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
 cd soma-python && SOMA_LIVE=1 pytest tests/ -m live # real endpoints: needs OLLAMA_HOST / NVIDIA_API_KEY
 cargo test -p somatize-memory --features chronos    # +ChronosVector tests
+cd soma-python && mypy                              # the package ships py.typed
 
 # Coverage (informational, no gate)
 cd soma-python && pytest tests/ --cov=soma --cov-report=term-missing
@@ -233,6 +234,16 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   times; `MajorityVote(mode="number"|"text")`).
 - **Not answers**: `finish_reason: length` and `content_filter` are ERRORS in ReactStep,
   not empty replies. `forward` picks the leaf that actually ran, not `leaves.first()`.
+- **Typing**: the package ships `py.typed`, so what it says about itself is public
+  API. The extension has a hand-written `soma/_soma.pyi`; the Python layer on top is
+  annotated in place and needs no stub. A hand-written stub can lie, so
+  `tests/test_stubs.py` checks it against the module that was *built* — same classes,
+  methods, attributes, parameter names and defaults, and no constructor for the three
+  classes that have no `#[new]`. What no test can check is whether a type is right.
+  Two consequences worth knowing: PyO3 puts a `#[new]`'s signature on the *type*
+  (`cls.__text_signature__`), not on `__new__`; and a method bound dynamically in a
+  class body is `Any` to a checker, which is why the `soma.viz` methods on `Study` and
+  `RunView` are written out one by one instead of built by a loop.
 - **Pipeline removed**: Graph is the ONLY user-facing API. No Pipeline class.
 
 ## MCP Server

@@ -28,9 +28,12 @@ experiment pool.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from soma.filter import Filter
+
+if TYPE_CHECKING:  # the runtime import would be circular; the annotation is not
+    from soma._graph import Graph
 
 __all__ = [
     "Revise",
@@ -449,7 +452,7 @@ def _is_type(expected: str, value: Any) -> bool:
         return True
     if python_type is not bool and isinstance(value, bool):
         return False
-    return isinstance(value, python_type)
+    return isinstance(value, python_type)  # type: ignore[arg-type]
 
 
 def _graph(provider: str | None, cache: str | None) -> Graph:

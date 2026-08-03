@@ -93,13 +93,22 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin pytest pytest-cov numpy cloudpickle safetensors pandas
+          pip install maturin pytest pytest-cov numpy cloudpickle safetensors pandas mypy
           pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Build and install soma
         run: |
           source .venv/bin/activate
           cd soma-python && maturin develop
+
+      # The package ships `py.typed`, so what it claims about itself is
+      # public API. `tests/test_stubs.py` checks the stub against the
+      # module that was just built; this checks the rest of the package
+      # against the stub.
+      - name: mypy
+        run: |
+          source .venv/bin/activate
+          cd soma-python && mypy
 
       - name: Run Python tests (with coverage)
         run: |

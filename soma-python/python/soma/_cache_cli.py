@@ -350,13 +350,13 @@ def main(argv: list[str] | None = None) -> int:
         _soma.cache_pin(args.name, args.key, path=args.dir)
         print(f"pinned {args.name} -> {args.key[:16]}...")
     elif args.action == "verify":
-        r = _soma.cache_verify(path=args.dir)
-        print(f"ok {r['ok']}, missing (evicted) {r['missing']}, corrupt {r['corrupt']}")
-        if r["corrupt"]:
+        v = _soma.cache_verify(path=args.dir)
+        print(f"ok {v['ok']}, missing (evicted) {v['missing']}, corrupt {v['corrupt']}")
+        if v["corrupt"]:
             return 1
     elif args.action == "purge-v1":
-        r = _soma.cache_purge_v1(path=args.dir)
-        print(f"removed {r['removed_files']} v1 files ({_fmt_size(r['removed_bytes'])})")
+        g = _soma.cache_purge_v1(path=args.dir)
+        print(f"removed {g['removed_files']} v1 files ({_fmt_size(g['removed_bytes'])})")
     return 0
 
 

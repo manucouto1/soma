@@ -20,6 +20,8 @@ time; a ``running`` run whose heartbeat went stale is reported as
 
 from __future__ import annotations
 
+from typing import Any
+
 import json
 
 from soma import _soma
@@ -272,32 +274,64 @@ class RunView:
     # nothing, and calling one without `somatize[viz]` still raises the
     # same helpful error.
 
-    def _viz(name):
-        """Bind a `soma.viz` function as a method, resolved on first use.
+    def plot_metrics(self, names: list[str] | None = None) -> Any:
+        """The metric series logged during the run."""
+        from soma import viz
 
-        Deferred only to keep `soma._runs` importable before `soma.viz`
-        exists in `sys.modules` during package start-up.
-        """
+        return viz.plot_metrics(self, names)
 
-        def method(self, *args, **kwargs):
-            from soma import viz
+    def plot_gantt(self) -> Any:
+        """When each node ran, and for how long."""
+        from soma import viz
 
-            return getattr(viz, name)(self, *args, **kwargs)
+        return viz.plot_gantt(self)
 
-        method.__name__ = name
-        return method
+    def plot_health(self) -> Any:
+        """The health flags raised during the run."""
+        from soma import viz
 
-    plot_metrics = _viz("plot_metrics")
-    plot_gantt = _viz("plot_gantt")
-    plot_health = _viz("plot_health")
-    plot_audit = _viz("plot_audit")
-    plot_module_flow = _viz("plot_module_flow")
-    plot_channels = _viz("plot_channels")
-    plot_channel_evolution = _viz("plot_channel_evolution")
-    metrics_dataframe = _viz("metrics_dataframe")
-    to_html = _viz("to_html")
+        return viz.plot_health(self)
 
-    del _viz
+    def plot_audit(
+        self,
+        metric: str = "out_grad.norm",
+        filters: list[str] | None = None,
+        node: str | None = None,
+    ) -> Any:
+        """A gradient-audit metric per step. Submodule series are hidden unless `node` names one."""
+        from soma import viz
+
+        return viz.plot_audit(self, metric, filters, node)
+
+    def plot_module_flow(self, node_id: str | None = None, metric: str = "out_grad.norm") -> Any:
+        """The same metric down one node's submodule tree."""
+        from soma import viz
+
+        return viz.plot_module_flow(self, node_id, metric)
+
+    def plot_channels(self, filter_id: str, step: int | None = None) -> Any:
+        """Per-channel diagnostics for one filter at one step."""
+        from soma import viz
+
+        return viz.plot_channels(self, filter_id, step)
+
+    def plot_channel_evolution(self, filter_id: str | None = None) -> Any:
+        """How the per-channel picture moved over training."""
+        from soma import viz
+
+        return viz.plot_channel_evolution(self, filter_id)
+
+    def metrics_dataframe(self, name: str | None = None) -> Any:
+        """The metric series as a pandas DataFrame."""
+        from soma import viz
+
+        return viz.metrics_dataframe(self, name)
+
+    def to_html(self, path: str | None = None, inline: bool = False) -> str:
+        """One self-contained HTML report for the run."""
+        from soma import viz
+
+        return viz.to_html(self, path, inline)
 
 
 _STATE_COLORS = {

@@ -21,6 +21,8 @@ auxiliary losses).
 
 from __future__ import annotations
 
+from typing import Any
+
 import base64
 import io
 
@@ -209,7 +211,10 @@ class DifferentiableFilter(Filter):
                 return f"{n / 1e3:.1f}k θ"
             return f"{n} θ"
 
-        nodes, edges, overlay = [], [], {}
+        # The shape soma-core's Graph deserializer expects.
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        overlay: dict[str, dict[str, str]] = {}
         prev = None
         for path, mod in children:
             nid = "m_" + _re.sub(r"[^0-9A-Za-z_]", "_", path)

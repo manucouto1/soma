@@ -31,9 +31,12 @@ import json
 import os
 import warnings
 import zipfile
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from soma._soma import Graph as _RustGraph
+
+if TYPE_CHECKING:  # the runtime import would be circular; the annotation is not
+    from soma._graph import Graph
 
 try:
     import torch
@@ -54,7 +57,7 @@ SOMA_CHECKPOINT_FORMAT_VERSION = 1
 # ── State-only API ───────────────────────────────────────────
 
 
-def state(self: _RustGraph) -> dict[str, Any]:
+def state(self: Graph) -> dict[str, Any]:
     """Snapshot every node's runtime state into a plain dict.
 
     Returns ``{node_id: state_value}``. Filters with no stored state are
@@ -69,7 +72,7 @@ def state(self: _RustGraph) -> dict[str, Any]:
     return out
 
 
-def load_state(self: _RustGraph, sd: dict[str, Any], strict: bool = True) -> None:
+def load_state(self: Graph, sd: dict[str, Any], strict: bool = True) -> None:
     """Apply a state dict produced by :meth:`state`.
 
     With ``strict=True`` (default), every key in ``sd`` must correspond
@@ -141,7 +144,7 @@ def _merge_state(tensors: dict[str, "torch.Tensor"], non_tensor: Any) -> Any:
     return out
 
 
-def _build_manifest(graph: _RustGraph) -> dict:
+def _build_manifest(graph: Graph) -> dict:
     nodes = []
     for nid, f in graph.filters():
         cls = type(f)
@@ -160,7 +163,7 @@ def _build_manifest(graph: _RustGraph) -> dict:
     }
 
 
-def save(self: _RustGraph, path: str, include_optimizer: bool = False) -> None:
+def save(self: Graph, path: str, include_optimizer: bool = False) -> None:
     """Save topology + state to ``path`` (a zip bundle).
 
     The graph should be ``freeze()``-d first so every diff filter's
@@ -218,7 +221,7 @@ def _import_class(class_path: str) -> type:
     return obj  # type: ignore[return-value]
 
 
-def load(cls: type, path: str, strict: bool = True) -> _RustGraph:
+def load(cls: type, path: str, strict: bool = True) -> Graph:
     """Rebuild a graph from a checkpoint produced by :meth:`save`.
 
     Reconstructs every filter via ``filter_class(**kwargs)`` then loads
@@ -296,7 +299,7 @@ def load(cls: type, path: str, strict: bool = True) -> _RustGraph:
     return graph
 
 
-def restore_optimizer(self: _RustGraph) -> bool:
+def restore_optimizer(self: Graph) -> bool:
     """Apply a pending optimiser state dict captured by :meth:`load`.
 
     Call after ``g.materialize(sample)`` + ``g.make_optimizer(...)`` (or

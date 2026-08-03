@@ -14,13 +14,16 @@ Installed onto the Rust ``Graph`` at import (same pattern as
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from soma._soma import Graph as _RustGraph
+
+if TYPE_CHECKING:  # the runtime import would be circular; the annotation is not
+    from soma._graph import Graph
 from soma._soma import Study as _Study
 
 
-def graph_search_space(self: _RustGraph) -> list[dict]:
+def graph_search_space(self: Graph) -> list[dict]:
     """Aggregate the searchable dimensions of every node, with names
     prefixed by the node id (``"<node_id>.<param>"``).
 
@@ -63,7 +66,7 @@ def _declared(node: Any) -> list[dict]:
     return getattr(type(node), "_soma_search_space", [])
 
 
-def apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
+def apply_params(self: Graph, params: dict[str, Any]) -> None:
     """Apply a sampled configuration to the live filter instances.
 
     Keys are ``"<node_id>.<attr>"`` (as produced by
@@ -104,7 +107,7 @@ def apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
         setattr(owners[0], key, value)
 
 
-def graph_study(self: _RustGraph, name: str, **kwargs: Any) -> _Study:
+def graph_study(self: Graph, name: str, **kwargs: Any) -> _Study:
     """Create a :class:`soma.Study` whose search space is aggregated
     from this graph's filters. Accepts every ``Study(...)`` keyword
     (strategy, n_trials, objective, objectives, direction, pruning,
@@ -193,24 +196,50 @@ class Study(_Study):
 
     run = _study_run
 
-    def _viz(name):
-        """Bind a `soma.viz` function as a method, resolved on first use."""
+    def plot_optimization_history(self, metric: str | None = None) -> Any:
+        """Best-so-far against trial number."""
+        from soma import viz
 
-        def method(self, *args, **kwargs):
-            from soma import viz
+        return viz.plot_optimization_history(self, metric)
 
-            return getattr(viz, name)(self, *args, **kwargs)
+    def plot_intermediate_values(self, metric: str | None = None) -> Any:
+        """Every trial's reported curve, so a pruner's cuts are visible."""
+        from soma import viz
 
-        method.__name__ = name
-        return method
+        return viz.plot_intermediate_values(self, metric)
 
-    plot_optimization_history = _viz("plot_optimization_history")
-    plot_intermediate_values = _viz("plot_intermediate_values")
-    plot_parallel_coordinate = _viz("plot_parallel_coordinate")
-    plot_param_importances = _viz("plot_param_importances")
-    plot_timeline = _viz("plot_timeline")
-    plot_pareto_front = _viz("plot_pareto_front")
-    trials_dataframe = _viz("trials_dataframe")
-    to_html = _viz("study_to_html")
+    def plot_parallel_coordinate(self, params: list[str] | None = None) -> Any:
+        """One line per trial across the search dimensions."""
+        from soma import viz
 
-    del _viz
+        return viz.plot_parallel_coordinate(self, params)
+
+    def plot_param_importances(self) -> Any:
+        """Which dimensions moved the objective."""
+        from soma import viz
+
+        return viz.plot_param_importances(self)
+
+    def plot_timeline(self) -> Any:
+        """When each trial ran, and for how long."""
+        from soma import viz
+
+        return viz.plot_timeline(self)
+
+    def plot_pareto_front(self) -> Any:
+        """The non-dominated trials, for a study with more than one objective."""
+        from soma import viz
+
+        return viz.plot_pareto_front(self)
+
+    def trials_dataframe(self) -> Any:
+        """Every trial as a pandas DataFrame."""
+        from soma import viz
+
+        return viz.trials_dataframe(self)
+
+    def to_html(self, path: str | None = None, inline: bool = False) -> str:
+        """One self-contained HTML report for the study."""
+        from soma import viz
+
+        return viz.study_to_html(self, path, inline)
