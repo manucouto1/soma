@@ -13,11 +13,11 @@
 use crate::registry::WorkerRegistry;
 use axum::Router;
 use axum::extract::{Json, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
-use somatize_worker::protocol::{Capabilities, LoadMetrics, SerializedPlan};
+use somatize_worker::protocol::{Capabilities, LoadMetrics};
 use std::sync::Arc;
 
 /// Shared coordinator server state.
@@ -33,8 +33,23 @@ struct AuthParams {
 }
 
 /// Build the coordinator router.
+///
+/// Also starts the reaper: without it a worker that dies leaves its entry
+/// in the registry forever, because nothing ever called `prune_stale`.
 pub fn coordinator_router(registry: WorkerRegistry, token: Option<String>) -> Router {
     let state = Arc::new(CoordinatorState { registry, token });
+
+    let reaping = state.registry.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            tick.tick().await;
+            for id in reaping.prune_stale() {
+                tracing::warn!("worker {id} stopped sending heartbeats; dropped");
+            }
+        }
+    });
+
     Router::new()
         .route("/health", get(health))
         .route("/workers", get(list_workers))
@@ -42,6 +57,7 @@ pub fn coordinator_router(registry: WorkerRegistry, token: Option<String>) -> Ro
         .route("/register", post(register_worker))
         .route("/heartbeat", post(heartbeat))
         .route("/submit", post(submit_plan))
+        .route("/complete", post(complete_plan))
         .with_state(state)
 }
 
@@ -60,16 +76,47 @@ pub async fn serve_coordinator(
     Ok(())
 }
 
-/// Validate token if required. Returns Err(401) on mismatch.
-fn check_auth(state: &CoordinatorState, params: &AuthParams) -> Result<(), StatusCode> {
-    if let Some(expected) = &state.token {
-        match &params.token {
-            Some(provided) if provided == expected => Ok(()),
-            _ => Err(StatusCode::UNAUTHORIZED),
-        }
-    } else {
-        Ok(())
+/// Validate the token if one is configured.
+///
+/// `Authorization: Bearer <token>` is the supported form. `?token=` is
+/// still accepted so existing workers keep working, but it is deprecated:
+/// a query string ends up in access logs, proxy logs and browser history,
+/// which is not where a credential belongs.
+///
+/// The comparison is constant-time. A byte-by-byte `==` leaks the length
+/// of the matching prefix through timing, which is enough to recover a
+/// token one character at a time.
+fn check_auth(
+    state: &CoordinatorState,
+    headers: &HeaderMap,
+    params: &AuthParams,
+) -> Result<(), StatusCode> {
+    let Some(expected) = &state.token else {
+        return Ok(());
+    };
+
+    let from_header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_string);
+
+    if from_header.is_none() && params.token.is_some() {
+        tracing::warn!("a client authenticated with ?token=; use `Authorization: Bearer` instead");
     }
+
+    match from_header.or_else(|| params.token.clone()) {
+        Some(provided) if constant_time_eq(provided.as_bytes(), expected.as_bytes()) => Ok(()),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+/// Compare without leaking where two secrets first differ.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // ── Handlers ──
@@ -105,9 +152,10 @@ struct RegisterResponse {
 async fn register_worker(
     Query(params): Query<AuthParams>,
     State(state): State<Arc<CoordinatorState>>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    check_auth(&state, &params)?;
+    check_auth(&state, &headers, &params)?;
 
     tracing::info!(
         "Worker registered: {} at {} ({})",
@@ -136,17 +184,33 @@ struct HeartbeatRequest {
 async fn heartbeat(
     Query(params): Query<AuthParams>,
     State(state): State<Arc<CoordinatorState>>,
+    headers: HeaderMap,
     Json(req): Json<HeartbeatRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    check_auth(&state, &params)?;
+    check_auth(&state, &headers, &params)?;
+    // An unknown worker is told to register rather than silently ignored:
+    // it may have been reaped while it was busy, and it has no other way
+    // to find out.
+    if state.registry.get(&req.worker_id).is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
     state.registry.heartbeat(&req.worker_id, req.load);
     Ok(StatusCode::OK)
 }
 
-/// Plan submission request body.
+/// A request to place a plan on a worker.
+///
+/// It used to carry the whole `SerializedPlan` — cloudpickled filters and
+/// inline input included — and then throw it away, returning only an
+/// address. That is a large upload parsed for nothing, and it made the
+/// endpoint look like it executed the plan when it does not.
+///
+/// The coordinator places work; the client then talks to the worker
+/// directly, which is what keeps tensor-sized payloads off this hop. All
+/// it needs to do that is the plan's id, to hold the lease under.
 #[derive(Deserialize)]
 struct SubmitRequest {
-    plan: SerializedPlan,
+    plan_id: String,
     /// Required tags for worker selection.
     #[serde(default)]
     required_tags: Vec<String>,
@@ -171,9 +235,10 @@ struct SubmitResponse {
 async fn submit_plan(
     Query(params): Query<AuthParams>,
     State(state): State<Arc<CoordinatorState>>,
+    headers: HeaderMap,
     Json(req): Json<SubmitRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    check_auth(&state, &params)?;
+    check_auth(&state, &headers, &params)?;
 
     // Find a suitable worker
     let candidates = state
@@ -196,20 +261,42 @@ async fn submit_plan(
         .unwrap();
 
     tracing::info!(
-        "Routing plan {} to worker {} ({})",
-        req.plan.plan_id,
+        "Placing plan {} on worker {} ({})",
+        req.plan_id,
         best.id,
         best.address
     );
 
-    // Return the worker address — client connects directly
-    // (In a full implementation, coordinator would forward via WS)
+    // Hold the lease before answering. Without it the next caller sees the
+    // same worker as equally idle and every plan lands on one machine.
+    state.registry.claim(&best.id, &req.plan_id);
+
     Ok(axum::Json(SubmitResponse {
         status: "routed".into(),
         worker_id: Some(best.id.clone()),
         worker_address: Some(best.address.clone()),
         error: None,
     }))
+}
+
+/// Release a placement, whether the plan finished or failed.
+#[derive(Deserialize)]
+struct CompleteRequest {
+    worker_id: String,
+    plan_id: String,
+}
+
+async fn complete_plan(
+    Query(params): Query<AuthParams>,
+    State(state): State<Arc<CoordinatorState>>,
+    headers: HeaderMap,
+    Json(req): Json<CompleteRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    check_auth(&state, &headers, &params)?;
+    if !state.registry.release(&req.worker_id, &req.plan_id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(StatusCode::OK)
 }
 
 #[cfg(test)]

@@ -65,6 +65,13 @@ pub use somatize_agent as agent;
 /// directly while `soma::` pretended the workspace ended at `agent`.
 pub use somatize_llm as llm;
 
+/// Worker registry and placement for a cluster of workers.
+///
+/// A workspace member the facade never reached, so a Rust caller wiring up
+/// a cluster had to depend on `somatize-coordinator` directly while
+/// `soma::` behaved as though the workspace ended at `worker`.
+pub use somatize_coordinator as coordinator;
+
 /// Derive macros (#[derive(SomaFilter)]).
 pub use somatize_macros as macros;
 

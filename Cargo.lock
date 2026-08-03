@@ -2796,6 +2796,7 @@ version = "0.4.0"
 dependencies = [
  "somatize-agent",
  "somatize-compiler",
+ "somatize-coordinator",
  "somatize-core",
  "somatize-llm",
  "somatize-macros",
@@ -2837,12 +2838,14 @@ version = "0.4.0"
 dependencies = [
  "axum",
  "chrono",
+ "clap",
  "serde",
  "serde_json",
  "somatize-worker",
  "tokio",
  "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

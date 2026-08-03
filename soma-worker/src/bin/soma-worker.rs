@@ -143,35 +143,41 @@ async fn main() {
     }
     let addr = format!("0.0.0.0:{}", args.port);
 
-    // Register with coordinator if configured
+    // Register with the coordinator, then keep saying so.
+    //
+    // Registration used to happen once and that was the end of it. The
+    // coordinator drops a worker it has not heard from in 30 seconds, so
+    // every worker vanished from `/workers`, `/summary` and routing half a
+    // minute after start-up while still running perfectly well.
     if let Some(coordinator_url) = &args.coordinator {
-        let url = format!("{coordinator_url}/register");
-        let body = serde_json::json!({
-            "worker_id": worker_id,
-            "address": format!("ws://{}:{}", local_ip(), args.port),
-            "capabilities": caps,
+        let address = format!("ws://{}:{}", local_ip(), args.port);
+        register_with(coordinator_url, &worker_id, &address, &caps, &args.token).await;
+
+        let url = coordinator_url.clone();
+        let id = worker_id.clone();
+        let token = args.token.clone();
+        let caps = caps.clone();
+        tokio::spawn(async move {
+            // Comfortably inside the coordinator's 30s window, so a single
+            // dropped request is not enough to be declared dead.
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                tick.tick().await;
+                match send_heartbeat(&url, &id, &token).await {
+                    HeartbeatOutcome::Ok => {}
+                    // The coordinator does not know us: it restarted, or
+                    // reaped us during a long plan. Registering again is
+                    // the only way back, and it is idempotent.
+                    HeartbeatOutcome::Unknown => {
+                        tracing::warn!("coordinator no longer knows this worker; re-registering");
+                        register_with(&url, &id, &address, &caps, &token).await;
+                    }
+                    HeartbeatOutcome::Unreachable(e) => {
+                        tracing::warn!("heartbeat to {url} failed: {e}");
+                    }
+                }
+            }
         });
-
-        let mut request = reqwest::Client::new().post(&url).json(&body);
-        if let Some(token) = &args.token {
-            request = request.query(&[("token", token.as_str())]);
-        }
-
-        match request.send().await {
-            Ok(resp) if resp.status().is_success() => {
-                tracing::info!("Registered with coordinator at {coordinator_url}");
-            }
-            Ok(resp) => {
-                tracing::warn!(
-                    "Coordinator registration failed: {} {}",
-                    resp.status(),
-                    resp.text().await.unwrap_or_default()
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Could not reach coordinator at {coordinator_url}: {e}");
-            }
-        }
     }
 
     if args.token.is_some() {
@@ -218,4 +224,80 @@ fn local_ip() -> String {
         })
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
+/// What a heartbeat attempt told us.
+enum HeartbeatOutcome {
+    Ok,
+    /// The coordinator has no record of this worker.
+    Unknown,
+    Unreachable(String),
+}
+
+/// Announce this worker to a coordinator. Idempotent.
+async fn register_with(
+    coordinator_url: &str,
+    worker_id: &str,
+    address: &str,
+    caps: &somatize_worker::protocol::Capabilities,
+    token: &Option<String>,
+) {
+    let url = format!("{coordinator_url}/register");
+    let body = serde_json::json!({
+        "worker_id": worker_id,
+        "address": address,
+        "capabilities": caps,
+    });
+
+    let mut request = reqwest::Client::new().post(&url).json(&body);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+
+    match request.send().await {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::info!("Registered with coordinator at {coordinator_url}");
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                "Coordinator registration failed: {} {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Could not reach coordinator at {coordinator_url}: {e}");
+        }
+    }
+}
+
+/// Tell the coordinator this worker is still here, and how loaded it is.
+async fn send_heartbeat(
+    coordinator_url: &str,
+    worker_id: &str,
+    token: &Option<String>,
+) -> HeartbeatOutcome {
+    let load = somatize_worker::protocol::LoadMetrics {
+        cpu_usage: 0.0,
+        memory_usage: 0.0,
+        gpu_usage: vec![],
+        active_plans: 0,
+        queue_depth: 0,
+        timestamp: chrono::Utc::now(),
+    };
+    let body = serde_json::json!({ "worker_id": worker_id, "load": load });
+
+    let mut request = reqwest::Client::new()
+        .post(format!("{coordinator_url}/heartbeat"))
+        .json(&body);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+
+    match request.send().await {
+        Ok(resp) if resp.status().is_success() => HeartbeatOutcome::Ok,
+        Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => HeartbeatOutcome::Unknown,
+        Ok(resp) => HeartbeatOutcome::Unreachable(resp.status().to_string()),
+        Err(e) => HeartbeatOutcome::Unreachable(e.to_string()),
+    }
 }

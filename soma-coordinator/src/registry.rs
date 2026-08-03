@@ -56,6 +56,21 @@ pub struct WorkerRegistry {
 }
 
 impl WorkerRegistry {
+    /// Read the registry, tolerating poisoning.
+    ///
+    /// Every access used `.unwrap()`, so one handler panicking anywhere
+    /// left the whole coordinator unable to answer about any worker for
+    /// the rest of the process. A `HashMap` of statuses has no invariant
+    /// that spans a lock acquisition, so the data behind a poisoned lock
+    /// is still sound. Same policy the worker already uses.
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<WorkerId, WorkerStatus>> {
+        self.workers.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<WorkerId, WorkerStatus>> {
+        self.workers.write().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn new() -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
@@ -76,7 +91,7 @@ impl WorkerRegistry {
         capabilities: Capabilities,
     ) {
         let id = id.into();
-        let mut workers = self.workers.write().unwrap();
+        let mut workers = self.write();
         workers.insert(
             id.clone(),
             WorkerStatus {
@@ -93,16 +108,48 @@ impl WorkerRegistry {
 
     /// Update a worker's heartbeat and load metrics.
     pub fn heartbeat(&self, worker_id: &str, load: LoadMetrics) {
-        let mut workers = self.workers.write().unwrap();
+        let mut workers = self.write();
         if let Some(w) = workers.get_mut(worker_id) {
             w.load = Some(load);
             w.last_heartbeat = Utc::now();
         }
     }
 
+    /// Record that `plan_id` has been placed on `worker_id`.
+    ///
+    /// `active_plans` was initialised to `vec![]` and never touched again,
+    /// so `has_capacity` and the "least loaded" tie-break both compared
+    /// zeroes: placement picked an arbitrary worker and called it balanced.
+    /// Returns false if the worker is unknown.
+    pub fn claim(&self, worker_id: &str, plan_id: impl Into<String>) -> bool {
+        let mut workers = self.write();
+        match workers.get_mut(worker_id) {
+            Some(w) => {
+                let plan_id = plan_id.into();
+                if !w.active_plans.contains(&plan_id) {
+                    w.active_plans.push(plan_id);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Release a plan, whether it finished or failed.
+    pub fn release(&self, worker_id: &str, plan_id: &str) -> bool {
+        let mut workers = self.write();
+        match workers.get_mut(worker_id) {
+            Some(w) => {
+                w.active_plans.retain(|p| p != plan_id);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Mark a worker as disconnected.
     pub fn disconnect(&self, worker_id: &str) {
-        let mut workers = self.workers.write().unwrap();
+        let mut workers = self.write();
         if let Some(w) = workers.get_mut(worker_id) {
             w.connected = false;
         }
@@ -110,13 +157,13 @@ impl WorkerRegistry {
 
     /// Remove a worker entirely.
     pub fn remove(&self, worker_id: &str) {
-        let mut workers = self.workers.write().unwrap();
+        let mut workers = self.write();
         workers.remove(worker_id);
     }
 
     /// Get all alive, connected workers.
     pub fn active_workers(&self) -> Vec<WorkerStatus> {
-        let workers = self.workers.read().unwrap();
+        let workers = self.read();
         workers
             .values()
             .filter(|w| w.is_alive(self.heartbeat_timeout_secs))
@@ -126,7 +173,7 @@ impl WorkerRegistry {
 
     /// Get a specific worker by ID.
     pub fn get(&self, worker_id: &str) -> Option<WorkerStatus> {
-        let workers = self.workers.read().unwrap();
+        let workers = self.read();
         workers.get(worker_id).cloned()
     }
 
@@ -140,7 +187,7 @@ impl WorkerRegistry {
 
     /// Total number of registered workers (including disconnected).
     pub fn total_count(&self) -> usize {
-        self.workers.read().unwrap().len()
+        self.read().len()
     }
 
     /// Number of alive, connected workers.
@@ -163,11 +210,27 @@ impl WorkerRegistry {
         )
     }
 
-    /// Prune workers that haven't sent a heartbeat within the timeout.
-    pub fn prune_stale(&self) {
-        let mut workers = self.workers.write().unwrap();
+    /// Drop workers that have stopped sending heartbeats.
+    ///
+    /// The predicate was `is_alive(timeout) || w.connected`, and
+    /// `is_alive` already requires `connected` — so it reduced to
+    /// `w.connected` and pruned nothing that was still marked connected,
+    /// however long ago it had last been heard from. Which is the only
+    /// case worth pruning. It also had no callers.
+    ///
+    /// Returns the ids that were dropped, so a caller can log them.
+    pub fn prune_stale(&self) -> Vec<WorkerId> {
         let timeout = self.heartbeat_timeout_secs;
-        workers.retain(|_, w| w.is_alive(timeout) || w.connected);
+        let mut workers = self.write();
+        let stale: Vec<WorkerId> = workers
+            .iter()
+            .filter(|(_, w)| !w.is_alive(timeout))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &stale {
+            workers.remove(id);
+        }
+        stale
     }
 }
 
@@ -257,6 +320,74 @@ mod tests {
         assert!(s.contains("2 workers"));
         assert!(s.contains("12 CPUs")); // 4 + 8
         assert!(s.contains("1 GPUs"));
+    }
+
+    /// A worker that stops beating is dropped, and one that keeps beating
+    /// is not.
+    ///
+    /// `prune_stale` had no callers and a predicate that reduced to
+    /// `w.connected`, so it removed nothing that mattered: a worker whose
+    /// process had died stayed in the registry forever.
+    #[test]
+    fn a_silent_worker_is_reaped_and_a_beating_one_is_not() {
+        // Zero-second timeout: everything registered in the past is stale.
+        let registry = WorkerRegistry::new().with_heartbeat_timeout(0);
+        registry.register("gone", "ws://h1:8080", test_caps(vec![]));
+        assert_eq!(registry.total_count(), 1);
+
+        let reaped = registry.prune_stale();
+        assert_eq!(reaped, vec!["gone".to_string()]);
+        assert_eq!(registry.total_count(), 0, "the dead worker is gone");
+
+        // A generous window: a freshly registered worker survives.
+        let registry = WorkerRegistry::new().with_heartbeat_timeout(3600);
+        registry.register("here", "ws://h1:8080", test_caps(vec![]));
+        assert!(registry.prune_stale().is_empty());
+        assert_eq!(registry.total_count(), 1);
+    }
+
+    /// Placement is only balanced if placements are recorded.
+    ///
+    /// `active_plans` was initialised empty and never touched, so
+    /// `has_capacity` and the least-loaded tie-break both compared zeroes.
+    #[test]
+    fn a_placed_plan_counts_against_the_worker_that_took_it() {
+        let registry = WorkerRegistry::new();
+        registry.register("w1", "ws://h1:8080", test_caps(vec![]));
+
+        assert!(registry.claim("w1", "plan-1"));
+        assert_eq!(registry.get("w1").unwrap().active_plans, vec!["plan-1"]);
+
+        // At a cap of one, the worker is now full.
+        assert!(registry.find_workers(&[], 1).is_empty());
+
+        // Claiming the same plan twice is not two plans.
+        registry.claim("w1", "plan-1");
+        assert_eq!(registry.get("w1").unwrap().active_plans.len(), 1);
+
+        assert!(registry.release("w1", "plan-1"));
+        assert_eq!(registry.find_workers(&[], 1).len(), 1, "capacity is back");
+
+        // An unknown worker is reported, not silently accepted.
+        assert!(!registry.claim("nobody", "plan-2"));
+        assert!(!registry.release("nobody", "plan-2"));
+    }
+
+    /// The least-loaded worker is the one with fewest placements.
+    #[test]
+    fn placement_prefers_the_less_loaded_worker() {
+        let registry = WorkerRegistry::new();
+        registry.register("busy", "ws://h1:8080", test_caps(vec![]));
+        registry.register("idle", "ws://h2:8080", test_caps(vec![]));
+        registry.claim("busy", "plan-1");
+        registry.claim("busy", "plan-2");
+
+        let best = registry
+            .find_workers(&[], 4)
+            .into_iter()
+            .min_by_key(|w| w.active_plans.len())
+            .expect("a candidate");
+        assert_eq!(best.id, "idle");
     }
 
     #[test]
