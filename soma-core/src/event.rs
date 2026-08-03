@@ -32,6 +32,11 @@ pub struct MetricRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanSummary {
     pub total_nodes: usize,
+    /// Always 0 from a compiled plan, and not a placeholder: cache keys are
+    /// resolved per node at run time (a node's key depends on its input's
+    /// content hash), so at `RunStarted` nothing is yet known about what
+    /// will be served from cache. The answer arrives as
+    /// [`Event::NodeCacheHit`] per node — count those, not this.
     pub cached_nodes: usize,
     pub parallel_branches: usize,
 }

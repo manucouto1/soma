@@ -576,9 +576,20 @@ impl<'a> Compiler<'a> {
                 }
             }
 
-            _ => ExecutionPlan::Execute {
-                node_id: node_id.to_string(),
-            },
+            // `NodeKind` is `#[non_exhaustive]` and lives in another crate,
+            // so this arm cannot be deleted — but it must not stay silent.
+            // Falling through to `Execute` compiled an unknown kind as a
+            // plain filter: a loop that never iterated, a step that was
+            // never driven, and no diagnostic anywhere. Refusing to plan
+            // what this compiler does not understand is the only safe
+            // answer, and it turns a future omission into a clear error.
+            other => {
+                return Err(SomaError::Compilation(format!(
+                    "node `{node_id}` has kind {other:?}, which this compiler \
+                     does not know how to plan; the runtime would have run it \
+                     as an ordinary filter"
+                )));
+            }
         })
     }
 

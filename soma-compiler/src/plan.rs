@@ -119,19 +119,46 @@ impl ExecutionPlan {
     /// handoffs while `node_ids` collected them, so an agentic plan
     /// reported fewer nodes than it had.
     pub fn children(&self) -> impl Iterator<Item = (Option<&str>, &ExecutionPlan)> {
+        // Spelled out rather than defaulted with `_ => &[]`. A wildcard here
+        // is how a variant that owns sub-plans became invisible to
+        // `node_count`/`node_ids` once already: the compiler cannot warn
+        // about a case that is already handled. Listing every variant means
+        // adding one breaks this walk at compile time, where the omission
+        // is cheap to see.
         let labelled: &[(String, ExecutionPlan)] = match self {
             Self::Step { handoffs, .. } => handoffs,
             Self::Branch { arms, .. } => arms,
-            _ => &[],
+            Self::Sequence(_)
+            | Self::Parallel(_)
+            | Self::Execute { .. }
+            | Self::Loop { .. }
+            | Self::Remote { .. }
+            | Self::Composite { .. }
+            | Self::Stream { .. }
+            | Self::Empty => &[],
         };
         let plain: &[ExecutionPlan] = match self {
             Self::Sequence(steps) | Self::Parallel(steps) => steps,
-            _ => &[],
+            Self::Execute { .. }
+            | Self::Step { .. }
+            | Self::Loop { .. }
+            | Self::Branch { .. }
+            | Self::Remote { .. }
+            | Self::Composite { .. }
+            | Self::Stream { .. }
+            | Self::Empty => &[],
         };
         let single: Option<&ExecutionPlan> = match self {
             Self::Loop { body, .. } => Some(body),
             Self::Remote { plan, .. } => Some(plan),
-            _ => None,
+            Self::Sequence(_)
+            | Self::Parallel(_)
+            | Self::Execute { .. }
+            | Self::Step { .. }
+            | Self::Branch { .. }
+            | Self::Composite { .. }
+            | Self::Stream { .. }
+            | Self::Empty => None,
         };
 
         labelled
