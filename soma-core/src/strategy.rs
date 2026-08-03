@@ -298,30 +298,37 @@ impl StrategyExecutor for TrainingStrategy {
     }
 }
 
+// Both aggregators used to answer with `first()` — one worker's gradients
+// presented as the average of all of them. That is not an unfinished
+// feature, it is a wrong number that trains a model and reports success.
+// Until the tensor arithmetic exists, refusing is the only honest answer,
+// which is what the unimplemented strategy arms above already do.
+
 impl GradientAggregator for GradientAggregation {
     fn aggregate(&self, gradients: &[HashMap<String, Value>]) -> Result<HashMap<String, Value>> {
-        match self {
-            GradientAggregation::AllReduce | GradientAggregation::ParameterServer => {
-                // TODO: proper tensor averaging
-                Ok(gradients.first().cloned().unwrap_or_default())
-            }
-            GradientAggregation::Decentralized { .. } => {
-                Ok(gradients.first().cloned().unwrap_or_default())
-            }
+        // A single worker needs no aggregation: its gradients *are* the
+        // result, so this case is exact rather than a stand-in.
+        if gradients.len() == 1 {
+            return Ok(gradients[0].clone());
         }
+        Err(crate::error::SomaError::Other(format!(
+            "{self:?} gradient aggregation over {} workers is not implemented yet; \
+             it would need element-wise tensor averaging",
+            gradients.len()
+        )))
     }
 }
 
 impl StateAggregator for FederatedAggregation {
     fn aggregate(&self, states: &[HashMap<String, Value>]) -> Result<HashMap<String, Value>> {
-        match self {
-            FederatedAggregation::FedAvg
-            | FederatedAggregation::FedProx { .. }
-            | FederatedAggregation::FedYogi { .. } => {
-                // TODO: proper tensor averaging
-                Ok(states.first().cloned().unwrap_or_default())
-            }
+        if states.len() == 1 {
+            return Ok(states[0].clone());
         }
+        Err(crate::error::SomaError::Other(format!(
+            "{self:?} state aggregation over {} clients is not implemented yet; \
+             it would need element-wise tensor averaging",
+            states.len()
+        )))
     }
 }
 
@@ -418,6 +425,35 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Aggregating several workers is not implemented. It must say so —
+    /// answering with the first worker's gradients looks like a trained
+    /// model and is arithmetically wrong.
+    #[test]
+    fn multi_worker_aggregation_refuses_instead_of_guessing() {
+        let grads = |v: f64| HashMap::from([("w".to_string(), Value::tensor(vec![v], vec![1]))]);
+
+        let err = GradientAggregation::AllReduce
+            .aggregate(&[grads(1.0), grads(3.0)])
+            .expect_err("aggregating two workers must not silently succeed");
+        assert!(err.to_string().contains("not implemented"), "{err}");
+
+        let err = FederatedAggregation::FedAvg
+            .aggregate(&[grads(1.0), grads(3.0)])
+            .expect_err("aggregating two clients must not silently succeed");
+        assert!(err.to_string().contains("not implemented"), "{err}");
+    }
+
+    /// One worker is the exact case, not a stand-in: there is nothing to
+    /// average, so it stays supported.
+    #[test]
+    fn single_worker_aggregation_is_the_identity() {
+        let only = HashMap::from([("w".to_string(), Value::tensor(vec![2.0], vec![1]))]);
+        let out = GradientAggregation::AllReduce
+            .aggregate(std::slice::from_ref(&only))
+            .unwrap();
+        assert_eq!(out, only);
     }
 
     #[test]
