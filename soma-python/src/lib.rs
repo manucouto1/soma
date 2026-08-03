@@ -1776,7 +1776,7 @@ impl PyGraph {
     /// touches an environment variable.
     /// The catalog as it stands *now* — filters and steps together.
     ///
-    /// A [`Step`] is immutable once built, so a study that samples a new
+    /// A `Step` is immutable once built, so a study that samples a new
     /// prompt or model has no way to change one in place — it writes to the
     /// live `Agent` instead, and the steps are rebuilt from those here,
     /// before every compile and every run. Cheap: rebuilding a step is
@@ -2422,7 +2422,7 @@ impl PyGraph {
     ///
     /// - a node id — that node's output carries the signal: a bool,
     ///   `"done"`/`"stop"`, or a mapping with a `done` key, which is exactly
-    ///   what [`Judge`] emits;
+    ///   what `Judge` emits;
     /// - unset (the default) — the body's single terminal node is used, and
     ///   a body with several terminals is a compile error rather than a race;
     /// - `False` — never stop early; run the full `max_iterations`.

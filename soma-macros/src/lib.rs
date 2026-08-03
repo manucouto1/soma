@@ -505,7 +505,10 @@ fn generate_from_sample(
     }
 }
 
-/// Derive `config_hash` for a [`Step`](somatize_core::step::Step).
+/// Derive `config_hash` for a `Step`.
+///
+/// Not linked: this is a proc-macro crate and cannot depend on
+/// `somatize-core`, so the path would not resolve.
 ///
 /// The mirror of [`macro@SomaFilter`]'s hash half, and it exists because
 /// hand-writing that hash goes wrong quietly. `ReactStep::config_hash`

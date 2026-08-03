@@ -82,7 +82,7 @@ impl GraphInfo {
 /// Fitting and forwarding differ in exactly one way — whether a trainable
 /// node learns its state before it computes — and in nothing else. They
 /// used to be two whole execution loops: `run`/`forward` walked the plan
-/// through [`run_node`], while `fit` had a second, filter-only walk that
+/// through `run_node`, while `fit` had a second, filter-only walk that
 /// flattened the plan and re-implemented input resolution, events, caching
 /// and panic handling. Making the difference a *value* is what lets both
 /// go through one site.
@@ -154,7 +154,7 @@ pub struct Context {
     /// contains a step; a purely computational graph leaves it unset.
     ///
     /// The steps themselves are not here: they live in the same
-    /// [`NodeCatalog`](crate::node_catalog::NodeCatalog) as the filters,
+    /// [`NodeCatalog`] as the filters,
     /// which the executor already receives. Keeping a second registry in
     /// the context is what let the branch arm decide a node's kind by
     /// asking whether it happened to be in it.
@@ -207,7 +207,7 @@ impl Context {
     ///
     /// Stored under the same `__state_{id}` key the worker and the session
     /// already read, and appended to `execution_order` like any other
-    /// write: that list is how [`execute_parallel`] works out what a branch
+    /// write: that list is how `execute_parallel` works out what a branch
     /// contributed, so a state written inside a branch that skipped it
     /// would be dropped at the join. Readers asking "which node ran last"
     /// filter reserved keys out — see [`somatize_core::keys::is_reserved`].

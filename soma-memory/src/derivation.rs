@@ -11,7 +11,7 @@
 //! can never end up orphaned by a crash between two writes, and the
 //! journal's append-only crash safety is not duplicated.
 //!
-//! [`derive`] is a pure function over two records, so the same code
+//! [`derive`](fn@derive) is a pure function over two records, so the same code
 //! serves both automatic capture and the on-demand `kb_diff` tool.
 //! When the parent carries no architecture — a legacy record, or one
 //! whose run directory is gone — the result is a single

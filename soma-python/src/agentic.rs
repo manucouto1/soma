@@ -186,7 +186,7 @@ impl PyTool {
     }
 }
 
-/// Presents a Python callable as a [`SomaTool`].
+/// Presents a Python callable as a `Tool` the runtime can call.
 ///
 /// The driver runs tools on scoped threads, so this acquires the GIL per
 /// call — the same discipline Python filters already follow in parallel
