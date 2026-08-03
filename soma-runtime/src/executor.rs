@@ -1138,9 +1138,23 @@ fn execute_stream(
     // Chunk the input along the first tensor dimension.
     let chunks = chunk_value(&input, chunk_size);
 
-    let mut executor = StreamExecutor::new(fitted);
+    let mut executor = StreamExecutor::new(fitted).with_seed(ctx.seed);
 
     let last_id = node_ids.last().unwrap();
+
+    // One bracket for the node that produces the stream's output.
+    //
+    // This used to emit a `NodeStarted` per chunk under a made-up id
+    // (`model#chunk_3`) and a single `NodeCompleted` under the real one,
+    // so nothing paired: a reader building node timings saw N starts that
+    // never finished and one completion that never began. Chunk progress
+    // is a log line, not an event about a node that does not exist.
+    ctx.event_bus.emit(Event::NodeStarted {
+        run_id: ctx.run_id.clone(),
+        node_id: last_id.clone(),
+        kind: somatize_core::filter::FilterKind::Stateless,
+        effectful: false,
+    });
 
     // Incrementally concatenate tensor outputs to avoid holding all chunks
     // in memory simultaneously. Each chunk is dropped after its data is
@@ -1166,12 +1180,7 @@ fn execute_stream(
     };
 
     for (i, chunk) in chunks.into_iter().enumerate() {
-        ctx.event_bus.emit(Event::NodeStarted {
-            run_id: ctx.run_id.clone(),
-            node_id: format!("{last_id}#chunk_{i}"),
-            kind: somatize_core::filter::FilterKind::Stateless,
-            effectful: false,
-        });
+        tracing::debug!(node_id = %last_id, chunk = i, "streaming chunk");
         if let Some(output) = executor.process_chunk_cached(chunk, Some(cache))? {
             append_output(output);
         }

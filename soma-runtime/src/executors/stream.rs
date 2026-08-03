@@ -37,6 +37,13 @@ pub struct StreamExecutor {
     cache: Option<Arc<dyn CacheStore>>,
     states: Vec<FilterStreamState>,
     chunk_count: usize,
+    /// The run's seed, folded into every chunk's cache key.
+    ///
+    /// Without it every seed of a study shares one cache line for the same
+    /// chunk, so the second seed reads back the first one's results and the
+    /// sweep measures one seed N times. The non-streaming path has salted
+    /// since `salt_with_seed` was introduced; this one never did.
+    seed: Option<i64>,
 }
 
 impl StreamExecutor {
@@ -52,7 +59,14 @@ impl StreamExecutor {
                 })
                 .collect(),
             chunk_count: 0,
+            seed: None,
         }
+    }
+
+    /// Fold the run's seed into every cache key.
+    pub fn with_seed(mut self, seed: Option<i64>) -> Self {
+        self.seed = seed;
+        self
     }
 
     pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
@@ -93,6 +107,7 @@ impl StreamExecutor {
                 &mut self.states[i],
                 cache,
                 self.chunk_count,
+                self.seed,
             )? {
                 ChunkResult::Output(val) => current = val,
                 ChunkResult::Buffered => return Ok(None),
@@ -160,10 +175,11 @@ fn process_by_mode(
     state: &mut FilterStreamState,
     cache: Option<&dyn CacheStore>,
     chunk_count: usize,
+    seed: Option<i64>,
 ) -> Result<ChunkResult> {
     match mode {
         StreamMode::FixedState => {
-            let result = forward_cached(fitted, input, cache)?;
+            let result = forward_cached(fitted, input, cache, seed)?;
             Ok(ChunkResult::Output(result))
         }
         StreamMode::Evolving { checkpoint_every } => {
@@ -191,7 +207,7 @@ fn process_by_mode(
         }
         _ => {
             // Default: treat as FixedState
-            let result = forward_cached(fitted, input, cache)?;
+            let result = forward_cached(fitted, input, cache, seed)?;
             Ok(ChunkResult::Output(result))
         }
     }
@@ -219,12 +235,20 @@ fn forward_cached(
     fitted: &FittedFilter,
     input: &Value,
     cache: Option<&dyn CacheStore>,
+    seed: Option<i64>,
 ) -> Result<Value> {
     if let Some(c) = cache {
-        let chunk_hash = CacheKey::for_value(input);
-        let state_hash = CacheKey::for_value(&fitted.state);
-        let cache_key =
-            CacheKey::for_output(&fitted.filter.config_hash(), &state_hash, &chunk_hash);
+        // The same derivation `run_node` uses, seed and all. It was
+        // spelled out again here and the salt was left off, so a study's
+        // seeds shared one cache line whenever it streamed.
+        let cache_key = crate::executor::salt_with_seed(
+            CacheKey::for_output(
+                &fitted.filter.config_hash(),
+                &CacheKey::for_value(&fitted.state),
+                &CacheKey::for_value(input),
+            ),
+            seed,
+        );
         if let Some(cached) = c.get(&cache_key)? {
             return Ok(cached);
         }
@@ -309,8 +333,8 @@ mod tests {
             other => panic!("expected a tensor, got {other:?}"),
         };
 
-        let out_nan = forward_cached(&fitted, &nan, Some(&cache)).unwrap();
-        let out_inf = forward_cached(&fitted, &inf, Some(&cache)).unwrap();
+        let out_nan = forward_cached(&fitted, &nan, Some(&cache), None).unwrap();
+        let out_inf = forward_cached(&fitted, &inf, Some(&cache), None).unwrap();
 
         assert!(first(&out_nan).is_nan(), "NaN doubled is still NaN");
         assert_eq!(
@@ -569,5 +593,35 @@ mod tests {
         let b = second.process_chunk_cached(chunk, Some(&cache)).unwrap();
         assert_eq!(a, b);
         assert!(!cache.is_empty(), "the chunk should have been cached");
+    }
+
+    /// Two seeds must not share a chunk's cache line.
+    ///
+    /// `salt_with_seed` exists so a 5-seed study is five independent
+    /// computations rather than one recorded five times. The streaming
+    /// path derived its key by hand and left the salt off, so the second
+    /// seed read back the first seed's chunk results.
+    #[test]
+    fn a_chunk_cache_key_follows_the_run_seed() {
+        let fitted = FittedFilter {
+            name: "f".into(),
+            filter: Arc::new(DoubleChunk),
+            state: Arc::new(Value::Empty),
+        };
+        let cache = crate::cache::memory::MemoryCache::default();
+        let chunk = Value::tensor(vec![1.0, 2.0], vec![2]);
+
+        let a = forward_cached(&fitted, &chunk, Some(&cache), Some(1)).unwrap();
+        let b = forward_cached(&fitted, &chunk, Some(&cache), Some(2)).unwrap();
+        assert_eq!(a, b, "the computation itself does not depend on the seed");
+
+        // Three distinct keys — two seeds and the unseeded case — for the
+        // same chunk. One shared entry would be the bug.
+        forward_cached(&fitted, &chunk, Some(&cache), None).unwrap();
+        assert_eq!(
+            cache.len(),
+            3,
+            "each seed must own its own cache line for the same chunk"
+        );
     }
 }
