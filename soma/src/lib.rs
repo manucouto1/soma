@@ -81,6 +81,14 @@ pub mod prelude {
     pub use somatize_core::value::Value;
     pub use somatize_core::virtual_value::VirtualValue;
 
+    // The effectful half. A `Step` sits beside a `Filter` and both are
+    // nodes in the same graph — so both belong in the same prelude. These
+    // were missing, which meant the one import line the docs recommend
+    // reached only the computational half of the model.
+    pub use somatize_core::effect::{Effect, EffectResult};
+    pub use somatize_core::node::{NodeMeta, NodeOutcome};
+    pub use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+
     // Compiler
     pub use somatize_compiler::{CompileMode, ExecutionPlan};
 
@@ -90,6 +98,6 @@ pub mod prelude {
     pub use somatize_runtime::node_catalog::NodeCatalog;
     pub use somatize_runtime::{EventBus, execute};
 
-    // Derive macro
-    pub use somatize_macros::SomaFilter;
+    // Derive macros
+    pub use somatize_macros::{SomaFilter, SomaStep};
 }
