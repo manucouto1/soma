@@ -32,8 +32,13 @@ cargo doc --workspace --open  # Rust API docs
 ## Workspace (12 crates)
 
 ```
-soma-macros     → proc macro (#[derive(SomaFilter)])
-soma-core       → types, traits, serialization ONLY (no execution logic):
+soma-macros     → proc macros: #[derive(SomaFilter)] and #[derive(SomaStep)]
+                  (the latter is what gives every step its journal key)
+soma-core       → types, traits, serialization ONLY (no execution logic) — the
+                  INTENT; ~2600 lines currently break it (TrainingStrategy's
+                  distributed loop, S3/Zarr stores that own a tokio runtime,
+                  Study file I/O, summary/svg/viz). Splitting it out is agreed
+                  and pending.
                   Filter, Step, Value, Graph, Event, Schema, VirtualValue, Search, Study,
                   Effect/Transition, Message/ContentBlock, ToolSpec, LoopCondition,
                   TrainingStrategy, DataStore (Local/S3/Zarr), StreamCache
@@ -54,7 +59,11 @@ soma-llm        → LlmProvider + OpenAI-compatible client (ollama/hf/nvidia/kim
 soma-agent      → ResearchStep: the research loop as a Step (propose → Effect::Graph →
                   read metrics → conclude). Action = RunExperiment | Conclude
 soma-mcp        → MCP server (20 tools: code, knowledge, project, 7 experiment-pool kb_*)
-soma-coordinator→ worker registry, routing, heartbeat monitoring
+soma-coordinator→ worker registry + placement, with a `soma-coordinator` binary.
+                  Workers beat every 10s; the coordinator reaps whoever goes
+                  quiet. `/submit` PLACES (returns a worker, takes a lease) —
+                  it does not proxy the plan, so tensor payloads go client→worker
+                  direct. `/complete` releases the lease.
 soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, Tool,
                   Study, Run, RunView, soma.viz, soma.agentic, soma.library
 soma/           → facade crate (`somatize`) re-exporting the workspace
@@ -69,7 +78,9 @@ notebooks/      → 14 executed tutorial notebooks (10-12 are one campaign, shar
 ## Tests
 
 ```bash
-# 906 Rust + 387 Python (incl. property tests and 4 robustness tests)
+# 943 Rust + 528 Python (11 deselected by default: slow + live)
+# Property tests are Rust-side (soma-core/tests/proptests.rs); the Python
+# suite does not use hypothesis.
 cargo test --workspace                              # Rust tests
 cd soma-python && maturin develop && pytest tests/  # Python tests (fast set)
 cd soma-python && pytest tests/ -m slow             # robustness: SIGKILL crash-sim, statistical TPE
