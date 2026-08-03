@@ -2839,8 +2839,6 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "somatize-compiler",
- "somatize-core",
  "somatize-worker",
  "tokio",
  "tower",
@@ -2897,13 +2895,10 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "somatize-agent",
- "somatize-compiler",
  "somatize-core",
  "somatize-memory",
  "somatize-runtime",
  "tempfile",
- "tokio",
  "tracing",
 ]
 
@@ -2963,7 +2958,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
- "tower",
  "tracing",
  "tracing-subscriber",
 ]

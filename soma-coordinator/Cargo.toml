@@ -7,8 +7,6 @@ repository.workspace = true
 description = "Coordinator service for Soma distributed workers"
 
 [dependencies]
-somatize-core = { workspace = true }
-somatize-compiler = { workspace = true }
 somatize-worker = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -16,4 +14,6 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 axum = { workspace = true }
+
+[dev-dependencies]
 tower = { workspace = true }

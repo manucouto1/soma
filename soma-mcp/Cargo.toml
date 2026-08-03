@@ -13,13 +13,10 @@ path = "src/main.rs"
 
 [dependencies]
 somatize-core = { workspace = true }
-somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
 somatize-memory = { workspace = true }
-somatize-agent = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 
