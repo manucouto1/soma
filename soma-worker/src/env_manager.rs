@@ -226,6 +226,17 @@ impl EnvManager {
         env_dir.join("bin").join("pip")
     }
 
+    /// A stable environment id for a set of requirements.
+    ///
+    /// Callers with no durable pipeline identity — a one-off plan, whose id
+    /// is a fresh timestamp — must key on this instead. Keying on the plan
+    /// id gave every plan its own venv and its own `pip install`, which is
+    /// unbounded: one short test suite left 17 GB of near-identical
+    /// environments behind.
+    pub fn env_id_for(requirements: &str) -> String {
+        format!("reqs-{}", &Self::hash_requirements(requirements)[..16])
+    }
+
     fn hash_requirements(requirements: &str) -> String {
         let mut hasher = Sha256::new();
         // Normalize: sort lines, trim whitespace, ignore comments
@@ -293,6 +304,21 @@ mod tests {
             EnvManager::hash_requirements(r1),
             EnvManager::hash_requirements(r2)
         );
+    }
+
+    /// Two plans with the same dependencies share one environment.
+    ///
+    /// The env id used to be the plan id, which is a fresh timestamp per
+    /// plan: nothing was ever reused, every plan paid a full pip install,
+    /// and the environments accumulated without bound.
+    #[test]
+    fn the_env_id_follows_the_requirements_not_the_caller() {
+        let a = EnvManager::env_id_for("numpy==1.26\nscikit-learn==1.4\n");
+        let b = EnvManager::env_id_for("scikit-learn==1.4\n numpy==1.26\n");
+        assert_eq!(a, b, "the same dependency set must reuse one environment");
+
+        let other = EnvManager::env_id_for("numpy==1.26\n");
+        assert_ne!(a, other, "a different dependency set needs its own");
     }
 
     #[test]

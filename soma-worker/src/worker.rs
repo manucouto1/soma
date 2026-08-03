@@ -193,9 +193,16 @@ impl Worker {
             self.python.clone()
         } else {
             let reqs_str = all_reqs.join("\n");
-            match self.env_manager.ensure_env(&plan.plan_id, &reqs_str) {
+            // Keyed by the requirements, not by the plan. A plan id is a
+            // fresh timestamp, so keying on it meant every plan built its
+            // own venv and pip-installed into it — never reusing anything,
+            // and never cleaning up. Plans that need the same packages now
+            // share one environment, which is what the lockfile inside it
+            // was already written to support.
+            let env_id = crate::env_manager::EnvManager::env_id_for(&reqs_str);
+            match self.env_manager.ensure_env(&env_id, &reqs_str) {
                 Ok(path) => {
-                    tracing::info!("Using venv for plan {}: {:?}", plan.plan_id, path);
+                    tracing::info!("Using venv {env_id} for plan {}: {:?}", plan.plan_id, path);
                     path.to_string_lossy().to_string()
                 }
                 Err(e) => {
@@ -382,7 +389,7 @@ impl Worker {
                             // Extract trained states (prefixed __state_) and store in library
                             let mut trained_states = std::collections::HashMap::new();
                             for (key, value) in &all_outputs {
-                                if let Some(node_id) = key.strip_prefix("__state_") {
+                                if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
                                     if let Err(e) =
                                         self.filters.try_set_state(node_id, value.clone())
                                     {
