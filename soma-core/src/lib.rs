@@ -57,10 +57,6 @@ pub use schema::{DataType, Dimension, Schema};
 pub use search::{Scale, SearchDimension, SearchSpace, Searchable};
 pub use state::{MemoryStateStore, StateStore};
 pub use step::{Step, StepCtx, StepMeta, Transition};
-#[cfg(feature = "s3")]
-pub use store::S3DataStore;
-#[cfg(feature = "zarr")]
-pub use store::ZarrStore;
 pub use store::{
     DataRef, DataStore, LocalDataStore, StorageConfig, StoreMeta, StreamCache, StreamFormat,
     slice_tensor_rows,

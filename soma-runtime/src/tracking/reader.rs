@@ -12,6 +12,7 @@
 //! timestamp. Unparseable lines — a torn tail from a crash, or an event
 //! kind written by a newer soma — are skipped, never an error.
 
+use crate::study_io::StudyIo;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use somatize_core::error::{Result, SomaError};

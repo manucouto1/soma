@@ -53,15 +53,24 @@ The test of the decision: a variant belongs in `SomaError` if
 | `store/s3.rs`, `store/zarr.rs` (1259 lines) | new `soma-store` | Each owns a `tokio::runtime::Runtime` and `block_on`s network I/O, so anything depending on `soma-core` inherits a runtime |
 | `Study::save` / `Study::load` | `soma-runtime` | `std::fs` |
 
-Staying, deliberately:
+The line is not "no I/O in `soma-core`" — it is **no runtime, no network,
+no optional heavy dependency**. What made the stores wrong was not that
+they touched a disk; it was that depending on the contract crate handed
+you a tokio runtime. So:
 
-- **`TrainingStrategy` the type.** It is a graph-level attribute — part of
-  what a graph *is* — so it is a contract. Only its `impl` is execution.
-  The type and its behaviour split; that is the whole point.
-- **`summary.rs`, `svg.rs`, `viz.rs`** (1106 lines). Pure `data → String`,
-  no I/O, no runtime. Rendering a graph to text is serialization in the
-  broad sense, and moving them would be churn in the name of purity: 24–29
-  external call sites, no problem being solved.
+- **`LocalDataStore` stays**, `std::fs` and all. It is the reference
+  implementation that makes `DataStore` usable out of the box, and it
+  costs a caller nothing.
+- **`TrainingStrategy` the type stays.** It is a graph-level attribute —
+  part of what a graph *is* — so it is a contract. Only its `impl` is
+  execution. The type and its behaviour split; that is the whole point.
+- **`summary.rs`, `svg.rs`, `viz.rs` stay** (1106 lines). Pure
+  `data → String`, no I/O, no runtime. Rendering a graph to text is
+  serialization in the broad sense, and moving them would be churn in the
+  name of purity: 24–29 external call sites, no problem being solved.
+
+The check that the split worked is one command: `cargo tree -p
+somatize-core` no longer mentions tokio.
 
 Rejected: **document the drift and move nothing**. The stores are the
 reason not to. `tokio` arriving transitively through a contract crate is

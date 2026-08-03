@@ -18,14 +18,14 @@
 //! soma-core = { path = "../soma-core", features = ["zarr"] }
 //! ```
 
-use crate::cache::CacheKey;
-use crate::error::{Result, SomaError};
-use crate::store::{DataRef, DataStore, StorageConfig, StoreMeta};
-use crate::value::Value;
 use object_store::ObjectStore as ObjStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
+use somatize_core::cache::CacheKey;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::store::{DataRef, DataStore, StorageConfig, StoreMeta};
+use somatize_core::value::Value;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -126,7 +126,7 @@ impl ZarrMeta {
     fn n_chunks(&self) -> usize {
         let total = self.shape.first().copied().unwrap_or(0);
         let cr = self.chunk_rows();
-        if cr == 0 { 0 } else { (total + cr - 1) / cr }
+        if cr == 0 { 0 } else { total.div_ceil(cr) }
     }
 
     fn cols(&self) -> usize {
@@ -600,8 +600,7 @@ impl ZarrStore {
         let remaining_elems = new_values.len() - cursor;
         let remaining_rows = remaining_elems / cols;
         let first_new_chunk =
-            (old_total + (chunk_rows - last_chunk_rows).min(append_rows) + chunk_rows - 1)
-                / chunk_rows;
+            (old_total + (chunk_rows - last_chunk_rows).min(append_rows)).div_ceil(chunk_rows);
 
         let mut chunk_idx = first_new_chunk;
         let mut rows_written = 0;
@@ -688,7 +687,7 @@ impl DataStore for ZarrStore {
             }
             _ => {
                 let value = self.get(data_ref)?;
-                crate::store::slice_tensor_rows(&value, start, len)
+                somatize_core::store::slice_tensor_rows(&value, start, len)
             }
         }
     }
@@ -908,9 +907,9 @@ mod tests {
         let path_c = dir.join("c");
 
         // Create real files so eviction can delete them
-        std::fs::write(&path_a, &[0u8; 100]).unwrap();
-        std::fs::write(&path_b, &[0u8; 100]).unwrap();
-        std::fs::write(&path_c, &[0u8; 100]).unwrap();
+        std::fs::write(&path_a, [0u8; 100]).unwrap();
+        std::fs::write(&path_b, [0u8; 100]).unwrap();
+        std::fs::write(&path_c, [0u8; 100]).unwrap();
 
         let mut lru = ChunkLru::new(250); // budget for ~2 entries
         lru.record(path_a.clone(), 100);
@@ -937,9 +936,9 @@ mod tests {
         let path_b = dir.join("b");
         let path_c = dir.join("c");
 
-        std::fs::write(&path_a, &[0u8; 100]).unwrap();
-        std::fs::write(&path_b, &[0u8; 100]).unwrap();
-        std::fs::write(&path_c, &[0u8; 100]).unwrap();
+        std::fs::write(&path_a, [0u8; 100]).unwrap();
+        std::fs::write(&path_b, [0u8; 100]).unwrap();
+        std::fs::write(&path_c, [0u8; 100]).unwrap();
 
         let mut lru = ChunkLru::new(250);
         lru.record(path_a.clone(), 100);

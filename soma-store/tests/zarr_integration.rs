@@ -3,13 +3,14 @@
 //! Requires environment variables:
 //! - BUCKET_NAME, BUCKET_ENDPOINT, BUCKET_KEY_ID, BUCKET_KEY_SECRET
 //!
-//! Run with: `cargo test -p soma-core --features zarr --test zarr_integration`
+//! Run with: `cargo test -p somatize-store --features zarr --test zarr_integration`
 
 #![cfg(feature = "zarr")]
 
 use somatize_core::cache::CacheKey;
-use somatize_core::store::{DataRef, DataStore, ZarrStore};
+use somatize_core::store::{DataRef, DataStore};
 use somatize_core::value::Value;
+use somatize_store::ZarrStore;
 
 fn store() -> Option<ZarrStore> {
     ZarrStore::from_env(

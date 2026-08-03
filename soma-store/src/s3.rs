@@ -9,12 +9,12 @@
 //! Uses the same `rust-s3` + `tokio-rustls-tls` setup as garras_video.
 //! Async operations are bridged to sync via a dedicated tokio runtime.
 
-use crate::cache::CacheKey;
-use crate::error::{Result, SomaError};
-use crate::store::{DataRef, DataStore, StorageConfig};
-use crate::value::Value;
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
+use somatize_core::cache::CacheKey;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::store::{DataRef, DataStore, StorageConfig};
+use somatize_core::value::Value;
 use std::path::PathBuf;
 
 /// S3-compatible data store with AWS Signature V4 authentication.

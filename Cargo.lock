@@ -2795,6 +2795,7 @@ dependencies = [
  "somatize-llm",
  "somatize-memory",
  "somatize-runtime",
+ "somatize-store",
  "somatize-worker",
  "tokio",
 ]
@@ -2811,6 +2812,7 @@ dependencies = [
  "somatize-macros",
  "somatize-memory",
  "somatize-runtime",
+ "somatize-store",
  "somatize-worker",
 ]
 
@@ -2864,16 +2866,12 @@ dependencies = [
  "blake3",
  "chrono",
  "ciborium",
- "object_store",
  "proptest",
- "rust-s3",
  "serde",
  "serde_json",
  "sha2",
  "somatize-macros",
  "thiserror 2.0.18",
- "tokio",
- "zstd",
 ]
 
 [[package]]
@@ -2946,6 +2944,20 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "somatize-store"
+version = "0.4.0"
+dependencies = [
+ "object_store",
+ "rust-s3",
+ "serde",
+ "serde_json",
+ "somatize-core",
+ "tempfile",
+ "tokio",
+ "zstd",
 ]
 
 [[package]]

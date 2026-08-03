@@ -7,17 +7,9 @@
 /// Payloads above this threshold are uploaded via HTTP bulk or DataStore.
 pub const INLINE_THRESHOLD_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 
-#[cfg(feature = "s3")]
-pub mod s3;
-
-#[cfg(feature = "s3")]
-pub use s3::S3DataStore;
-
-#[cfg(feature = "zarr")]
-pub mod zarr;
-
-#[cfg(feature = "zarr")]
-pub use zarr::ZarrStore;
+// The S3 and Zarr backends live in `somatize-store`. They each own a
+// tokio runtime, and a contract crate must not hand one to everything
+// that depends on it.
 
 use crate::cache::CacheKey;
 use crate::error::{Result, SomaError};

@@ -25,6 +25,7 @@ mod agentic;
 
 use agentic::{PyAgent, PyJudge, PyStepCtx, PyTool, PyToolAdapter, to_step_spec};
 use somatize_runtime::EventBus;
+use somatize_runtime::StudyIo;
 use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};
 use somatize_runtime::effects::{EffectDriver, EffectJournal};
 use somatize_runtime::executor::{self, Context, GraphInfo};
@@ -3304,7 +3305,7 @@ impl PyGraph {
                         .to_string()
                 });
                 let store =
-                    somatize_core::store::S3DataStore::new(bucket, prefix, endpoint, ak, sk, cache)
+                    somatize_store::S3DataStore::new(bucket, prefix, endpoint, ak, sk, cache)
                         .map_err(soma_err_to_py)?;
                 self.data_store = Some(Arc::new(store));
                 Ok(())

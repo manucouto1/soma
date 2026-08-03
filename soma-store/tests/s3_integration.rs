@@ -3,7 +3,7 @@
 //! Requires environment variables:
 //! - BUCKET_NAME, BUCKET_ENDPOINT, BUCKET_KEY_ID, BUCKET_KEY_SECRET
 //!
-//! Run with: `cargo test -p soma-core --features s3 --test s3_integration`
+//! Run with: `cargo test -p somatize-store --features s3 --test s3_integration`
 
 #![cfg(feature = "s3")]
 
@@ -11,9 +11,9 @@ use somatize_core::cache::CacheKey;
 use somatize_core::store::{DataRef, DataStore};
 use somatize_core::value::Value;
 
-fn store() -> Option<somatize_core::store::S3DataStore> {
+fn store() -> Option<somatize_store::S3DataStore> {
     // Skip if env vars not set (CI without credentials)
-    somatize_core::store::S3DataStore::from_env(
+    somatize_store::S3DataStore::from_env(
         "soma-test/",
         std::env::temp_dir().join("soma-s3-integration"),
     )

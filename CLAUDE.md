@@ -29,19 +29,21 @@ cd docs && npm run build   # production build
 cargo doc --workspace --open  # Rust API docs
 ```
 
-## Workspace (12 crates)
+## Workspace (13 crates)
 
 ```
 soma-macros     → proc macros: #[derive(SomaFilter)] and #[derive(SomaStep)]
                   (the latter is what gives every step its journal key)
-soma-core       → types, traits, serialization ONLY (no execution logic) — the
-                  INTENT; ~2600 lines currently break it (TrainingStrategy's
-                  distributed loop, S3/Zarr stores that own a tokio runtime,
-                  Study file I/O, summary/svg/viz). Splitting it out is agreed
-                  and pending.
+soma-core       → types, traits, serialization. The rule is no runtime, no
+                  network, no optional heavy dep — NOT "no I/O": LocalDataStore
+                  and its std::fs stay, because they cost a caller nothing.
+                  Verify with `cargo tree -p somatize-core | grep tokio` (empty).
                   Filter, Step, Value, Graph, Event, Schema, VirtualValue, Search, Study,
                   Effect/Transition, Message/ContentBlock, ToolSpec, LoopCondition,
                   TrainingStrategy, DataStore (Local/S3/Zarr), StreamCache
+soma-store      → remote DataStore backends (S3, Zarr), feature-gated and off
+                  by default. Split out of soma-core because each owns a tokio
+                  runtime; see docs design/decisions.
 soma-compiler   → Graph → ExecutionPlan (cache resolution, schema validation, distribution)
                   Scheduler (distribute plan across workers), ExecutionPlan visualization
 soma-runtime    → GraphSession (primary orchestrator), parallel executor (threads),

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 somatize-core = { workspace = true }
+somatize-store = { workspace = true, optional = true }
 somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
 somatize-llm = { workspace = true }
@@ -31,4 +32,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "blo
 # Declared rather than hardcoded, so a local build can drop rust-s3,
 # tokio and rustls with `--no-default-features`.
 default = ["s3"]
-s3 = ["somatize-core/s3"]
+s3 = ["dep:somatize-store", "somatize-store/s3"]

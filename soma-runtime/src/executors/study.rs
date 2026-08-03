@@ -438,6 +438,7 @@ fn normalized_histories(study: &Study, direction: Direction) -> Vec<TrialMetricH
 mod tests {
     use super::*;
     use crate::sampler::{BayesianSampler, GridSampler, RandomSampler};
+    use crate::study_io::StudyIo;
     use chrono::Utc;
     use somatize_core::error::SomaError;
     use somatize_core::search::{Scale, SearchDimension, SearchSpace};

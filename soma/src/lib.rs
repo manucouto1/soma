@@ -65,6 +65,16 @@ pub use somatize_agent as agent;
 /// directly while `soma::` pretended the workspace ended at `agent`.
 pub use somatize_llm as llm;
 
+/// Remote DataStore backends (S3, Zarr). Feature-gated, off by default.
+///
+/// They are a separate crate because each owns a tokio runtime: while
+/// they lived in `soma-core`, everything depending on the contract crate
+/// inherited one. See design/decisions.
+#[cfg(feature = "s3")]
+pub use somatize_store as store;
+#[cfg(all(feature = "zarr", not(feature = "s3")))]
+pub use somatize_store as store;
+
 /// Worker registry and placement for a cluster of workers.
 ///
 /// A workspace member the facade never reached, so a Rust caller wiring up

@@ -21,6 +21,7 @@ pub mod pruner;
 pub mod runner;
 pub mod sampler;
 pub mod strategy;
+pub mod study_io;
 pub mod tracking;
 
 pub use cache::{LocalCache, MemoryCache, TieredCache};
@@ -37,6 +38,7 @@ pub use node_catalog::{NodeCatalog, NodeImpl};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
 pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
+pub use study_io::StudyIo;
 pub use tracking::{
     JsonlEventSink, LocalTracker, RunInfo, RunReader, collect_git_info, list_runs, load_manifest,
     load_status,

@@ -4,13 +4,11 @@
 //! objectives, and tracks trials. The `StudyRunner` in soma-runtime
 //! orchestrates execution.
 
-use crate::error::{Result, SomaError};
 use crate::event::MetricRecord;
 use crate::search::SearchSpace;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Direction of optimization for an objective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -364,22 +362,12 @@ impl Study {
             _ => 0.0,
         }
     }
-
-    /// Serialize to pretty JSON at `path`.
-    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
-        let json =
-            serde_json::to_vec_pretty(self).map_err(|e| SomaError::Serialization(e.to_string()))?;
-        std::fs::write(path, json)?;
-        Ok(())
-    }
-
-    /// Load a study previously written by [`save`](Self::save) (or by a
-    /// tracker's `study.json`).
-    pub fn load(path: impl AsRef<Path>) -> Result<Study> {
-        let bytes = std::fs::read(path)?;
-        serde_json::from_slice(&bytes).map_err(|e| SomaError::Serialization(e.to_string()))
-    }
 }
+
+// Reading and writing a study to disk is I/O, so it lives in the runtime
+// as `somatize_runtime::study_io::StudyIo`. Import that trait and
+// `study.save(path)` / `Study::load(path)` read the same as they always
+// did. See design/decisions.
 
 fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -392,6 +380,33 @@ fn uuid_v4() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn pre_composite_study_json_still_loads() {
+        // A study serialized before composite/timestamps/tags existed.
+        let old = serde_json::json!({
+            "id": "study_abc",
+            "name": "legacy",
+            "search_space": {"dimensions": [], "frozen": {}},
+            "strategy": {"strategy_type": "Random", "n_trials": 5, "seed": null},
+            "pruning": {"pruning_type": "None"},
+            "objectives": [{"metric": "f1", "direction": "Maximize"}],
+            "trials": [{
+                "id": "t1",
+                "params": {"lr": 0.01},
+                "state": {"trial_state": "Completed"},
+                "metrics": [],
+                "duration_ms": 12
+            }],
+            "frozen": {}
+        });
+        let study: Study = serde_json::from_value(old).unwrap();
+        assert_eq!(study.name, "legacy");
+        assert!(study.composite.is_none());
+        assert!(study.created_at.is_none());
+        assert!(study.trials[0].started_at.is_none());
+        assert!(study.planned_trials.is_none());
+    }
     use super::*;
     use crate::search::{Scale, SearchDimension};
     use chrono::Utc;
@@ -644,60 +659,6 @@ mod tests {
         let balanced = multi_metric_trial("b", 0.5, 0.5);
         let lopsided = multi_metric_trial("l", 0.9, 0.1);
         assert!(composite.evaluate(&balanced).unwrap() > composite.evaluate(&lopsided).unwrap());
-    }
-
-    #[test]
-    fn study_save_load_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("soma_study_test_{}", uuid_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("study.json");
-
-        let mut study = Study::new(
-            "persisted",
-            sample_search_space(),
-            SearchStrategy::Grid { points_per_dim: 3 },
-            vec![Objective {
-                metric: "f1".into(),
-                direction: Direction::Maximize,
-            }],
-        );
-        study.tags = vec!["mos".into()];
-        study.trials.push(make_trial("t1", 0.8));
-        study.save(&path).unwrap();
-
-        let back = Study::load(&path).unwrap();
-        assert_eq!(back.name, "persisted");
-        assert_eq!(back.trials.len(), 1);
-        assert_eq!(back.tags, vec!["mos"]);
-        assert!(back.created_at.is_some());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn pre_composite_study_json_still_loads() {
-        // A study serialized before composite/timestamps/tags existed.
-        let old = serde_json::json!({
-            "id": "study_abc",
-            "name": "legacy",
-            "search_space": {"dimensions": [], "frozen": {}},
-            "strategy": {"strategy_type": "Random", "n_trials": 5, "seed": null},
-            "pruning": {"pruning_type": "None"},
-            "objectives": [{"metric": "f1", "direction": "Maximize"}],
-            "trials": [{
-                "id": "t1",
-                "params": {"lr": 0.01},
-                "state": {"trial_state": "Completed"},
-                "metrics": [],
-                "duration_ms": 12
-            }],
-            "frozen": {}
-        });
-        let study: Study = serde_json::from_value(old).unwrap();
-        assert_eq!(study.name, "legacy");
-        assert!(study.composite.is_none());
-        assert!(study.created_at.is_none());
-        assert!(study.trials[0].started_at.is_none());
-        assert!(study.planned_trials.is_none());
     }
 
     #[test]
@@ -997,63 +958,6 @@ mod tests {
         study.trials.push(make_trial("t3", 0.5));
         assert_eq!(study.total_trials(), Some(6));
         assert!((study.progress() - 0.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn save_load_fully_populated_study() {
-        let dir = std::env::temp_dir().join(format!("soma_study_full_{}", uuid_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("study.json");
-
-        let mut study = Study::new(
-            "full",
-            sample_search_space(),
-            SearchStrategy::Grid { points_per_dim: 3 },
-            vec![],
-        )
-        .with_composite(CompositeObjective {
-            terms: vec![("f1".into(), 0.7), ("gap".into(), -0.3)],
-            direction: Direction::Maximize,
-            scalarizer: Scalarizer::AugmentedTchebycheff { rho: 0.05 },
-        })
-        .with_pruning(PruningStrategy::Percentile {
-            percentile: 25.0,
-            n_warmup_steps: 2,
-        });
-        study.tags = vec!["mos".into(), "π-study".into()];
-        study.planned_trials = Some(6);
-        study.git_sha = Some("abc123".into());
-        let mut trial = multi_metric_trial("t1", 0.8, 0.1);
-        trial.started_at = Some(Utc::now());
-        trial.finished_at = Some(Utc::now());
-        study.trials.push(trial);
-        study.save(&path).unwrap();
-
-        let back = Study::load(&path).unwrap();
-        assert_eq!(back.tags, study.tags);
-        assert_eq!(back.planned_trials, Some(6));
-        assert_eq!(back.git_sha.as_deref(), Some("abc123"));
-        assert!(back.trials[0].started_at.is_some());
-        assert!(matches!(back.pruning, PruningStrategy::Percentile { .. }));
-        assert_eq!(back.best_value(), study.best_value());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn load_errors_are_typed() {
-        let missing = Study::load("/nonexistent/dir/study.json");
-        assert!(matches!(missing, Err(crate::error::SomaError::Io(_))));
-
-        let dir = std::env::temp_dir().join(format!("soma_study_corrupt_{}", uuid_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("study.json");
-        std::fs::write(&path, "{not json").unwrap();
-        let corrupt = Study::load(&path);
-        assert!(matches!(
-            corrupt,
-            Err(crate::error::SomaError::Serialization(_))
-        ));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
