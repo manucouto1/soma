@@ -57,14 +57,8 @@ impl EventBus {
     /// Returns the number of broadcast receivers that received the event.
     /// If there are no subscribers, the broadcast is silently dropped.
     pub fn emit(&self, event: Event) -> usize {
-        {
-            let sinks = match self.sinks.read() {
-                Ok(s) => s,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            for sink in sinks.iter() {
-                sink.record(&event);
-            }
+        for sink in self.snapshot_sinks() {
+            sink.record(&event);
         }
         self.sender.send(event).unwrap_or(0)
     }
@@ -81,12 +75,21 @@ impl EventBus {
 
     /// Flush all registered sinks.
     pub fn flush_sinks(&self) {
-        let sinks = match self.sinks.read() {
-            Ok(s) => s,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        for sink in sinks.iter() {
+        for sink in self.snapshot_sinks() {
             sink.flush();
+        }
+    }
+
+    /// Copy the sink list out from under the lock.
+    ///
+    /// A sink is user code, and calling it with the read guard alive means a
+    /// sink that registers or removes another one deadlocks: `RwLock` is not
+    /// reentrant. Cloning is an atomic increment per sink, paid once per
+    /// event — cheaper than the class of hang it removes.
+    fn snapshot_sinks(&self) -> Vec<Arc<dyn EventSink>> {
+        match self.sinks.read() {
+            Ok(s) => s.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
 }
@@ -184,6 +187,44 @@ mod tests {
             run_id: id.into(),
             duration: Duration::from_millis(1),
         }
+    }
+
+    /// A sink that touches the bus from inside `record`.
+    ///
+    /// `RwLock` is not reentrant, so this used to deadlock: `emit` held the
+    /// read guard while calling user code, and the user code asked for the
+    /// write guard.
+    struct ReentrantSink {
+        bus: std::sync::Weak<EventBus>,
+        added: AtomicUsize,
+    }
+
+    impl somatize_core::tracking::EventSink for ReentrantSink {
+        fn record(&self, _event: &Event) {
+            // Only once, or the bus would grow a sink per event.
+            if self.added.fetch_add(1, Ordering::SeqCst) == 0
+                && let Some(bus) = self.bus.upgrade()
+            {
+                bus.add_sink(Arc::new(CountingSink::default()));
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn a_sink_may_touch_the_bus_from_inside_record() {
+        let bus = Arc::new(EventBus::new(16));
+        bus.add_sink(Arc::new(ReentrantSink {
+            bus: Arc::downgrade(&bus),
+            added: AtomicUsize::new(0),
+        }));
+
+        // Deadlocking here hangs the test binary rather than failing it,
+        // which is the loudest signal available without a watchdog thread.
+        bus.emit(run_completed("r1"));
+        bus.emit(run_completed("r2"));
+
+        bus.flush_sinks();
     }
 
     #[test]
