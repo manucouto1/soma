@@ -21,19 +21,37 @@ use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};
 #[proc_macro_derive(SomaFilter, attributes(soma))]
 pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    // A malformed input is a compile error pointing at the offending
+    // token, not a `proc macro panicked` pointing at the derive.
+    derive_soma_filter_impl(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn derive_soma_filter_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let name_str = name.to_string();
 
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
-            _ => panic!("SomaFilter only supports structs with named fields"),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "SomaFilter needs named fields: it hashes each one by name",
+                ));
+            }
         },
-        _ => panic!("SomaFilter only supports structs"),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &input.ident,
+                "SomaFilter can only be derived for a struct",
+            ));
+        }
     };
 
     // Parse struct-level attributes
-    let struct_attrs = parse_struct_attrs(&input.attrs);
+    let struct_attrs = parse_struct_attrs(&input.attrs)?;
 
     // Separate fields into hash fields and search fields
     let mut hash_parts = Vec::new();
@@ -45,7 +63,7 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let field_ty = &field.ty;
-        let field_attrs = parse_field_attrs(&field.attrs);
+        let field_attrs = parse_field_attrs(&field.attrs)?;
 
         // config_hash: include unless skip_hash. Canonical CBOR, never
         // raw serializer output (HashMap iteration order is random) and
@@ -168,7 +186,7 @@ pub fn derive_soma_filter(input: TokenStream) -> TokenStream {
         }
     };
 
-    TokenStream::from(expanded)
+    Ok(expanded)
 }
 
 // ── Attribute parsing ──
@@ -195,11 +213,19 @@ struct SearchAttrs {
     auto: bool, // #[soma(search)] with no args
 }
 
-fn parse_struct_attrs(attrs: &[syn::Attribute]) -> StructAttrs {
+/// Parse `#[soma(...)]` on the struct.
+///
+/// Fallible, and strict about names. Every branch below used to be
+/// wrapped in `let _ = attr.parse_nested_meta(..)`, which threw the
+/// result away, and an unrecognised key simply fell through to `Ok(())`.
+/// So `#[soma(serach(low = 1, high = 2))]` compiled cleanly and produced
+/// a filter with no search dimension — the sweep then explored nothing
+/// and reported a best trial, which is a wrong answer with no symptom.
+fn parse_struct_attrs(attrs: &[syn::Attribute]) -> syn::Result<StructAttrs> {
     let mut result = StructAttrs {
         kind: None,
         cacheable: true,
-        differentiable: true,
+        differentiable: false,
         stream: None,
         cache_version: None,
         deterministic: true,
@@ -209,7 +235,7 @@ fn parse_struct_attrs(attrs: &[syn::Attribute]) -> StructAttrs {
         if !attr.path().is_ident("soma") {
             continue;
         }
-        let _ = attr.parse_nested_meta(|meta| {
+        attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("kind") {
                 let value = meta.value()?;
                 let lit: Lit = value.parse()?;
@@ -243,23 +269,29 @@ fn parse_struct_attrs(attrs: &[syn::Attribute]) -> StructAttrs {
                 if let Lit::Str(s) = lit {
                     result.cache_version = Some(s.value());
                 }
-            } else if meta.path.is_ident("deterministic")
-                && let Ok(value) = meta.value()
-            {
+            } else if meta.path.is_ident("deterministic") {
                 // bare #[soma(deterministic)] (no value) means true
-                let lit: Lit = value.parse()?;
-                if let Lit::Bool(b) = lit {
-                    result.deterministic = b.value;
+                if let Ok(value) = meta.value() {
+                    let lit: Lit = value.parse()?;
+                    if let Lit::Bool(b) = lit {
+                        result.deterministic = b.value;
+                    }
                 }
+            } else {
+                return Err(meta.error(
+                    "unknown `soma` attribute; expected one of: kind, cacheable, \
+                     differentiable, stream, cache_version, deterministic",
+                ));
             }
             Ok(())
-        });
+        })?;
     }
 
-    result
+    Ok(result)
 }
 
-fn parse_field_attrs(attrs: &[syn::Attribute]) -> FieldAttrs {
+/// Parse `#[soma(...)]` on a field. Strict, for the reason above.
+fn parse_field_attrs(attrs: &[syn::Attribute]) -> syn::Result<FieldAttrs> {
     let mut result = FieldAttrs {
         skip_hash: false,
         search: None,
@@ -269,7 +301,7 @@ fn parse_field_attrs(attrs: &[syn::Attribute]) -> FieldAttrs {
         if !attr.path().is_ident("soma") {
             continue;
         }
-        let _ = attr.parse_nested_meta(|meta| {
+        attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("skip_hash") {
                 result.skip_hash = true;
             } else if meta.path.is_ident("search") {
@@ -282,15 +314,15 @@ fn parse_field_attrs(attrs: &[syn::Attribute]) -> FieldAttrs {
                 };
 
                 if meta.input.peek(syn::token::Paren) {
-                    let _ = meta.parse_nested_meta(|inner| {
+                    meta.parse_nested_meta(|inner| {
                         if inner.path.is_ident("low") {
                             let value = inner.value()?;
                             let expr: Expr = value.parse()?;
-                            search.low = Some(expr_to_f64(&expr));
+                            search.low = Some(expr_to_f64(&expr)?);
                         } else if inner.path.is_ident("high") {
                             let value = inner.value()?;
                             let expr: Expr = value.parse()?;
-                            search.high = Some(expr_to_f64(&expr));
+                            search.high = Some(expr_to_f64(&expr)?);
                         } else if inner.path.is_ident("scale") {
                             let value = inner.value()?;
                             let lit: Lit = value.parse()?;
@@ -307,41 +339,55 @@ fn parse_field_attrs(attrs: &[syn::Attribute]) -> FieldAttrs {
                                         Lit::Int(i) => search.choices.push(i.to_string()),
                                         Lit::Float(f) => search.choices.push(f.to_string()),
                                         Lit::Bool(b) => search.choices.push(b.value.to_string()),
-                                        _ => {}
+                                        other => {
+                                            return Err(syn::Error::new_spanned(
+                                                other,
+                                                "search choices must be string, integer, \
+                                                 float or bool literals",
+                                            ));
+                                        }
                                     }
                                 }
                             }
+                        } else {
+                            return Err(inner.error(
+                                "unknown `search` argument; expected one of: \
+                                 low, high, scale, choices",
+                            ));
                         }
                         Ok(())
-                    });
+                    })?;
                 } else {
                     search.auto = true;
                 }
 
                 result.search = Some(search);
+            } else {
+                return Err(meta.error(
+                    "unknown `soma` attribute on a field; expected `skip_hash` or `search`",
+                ));
             }
             Ok(())
-        });
+        })?;
     }
 
-    result
+    Ok(result)
 }
 
-fn expr_to_f64(expr: &Expr) -> f64 {
+fn expr_to_f64(expr: &Expr) -> syn::Result<f64> {
     match expr {
         Expr::Lit(lit) => match &lit.lit {
-            Lit::Float(f) => f.base10_parse().unwrap(),
-            Lit::Int(i) => i.base10_parse::<i64>().unwrap() as f64,
-            _ => panic!("expected numeric literal"),
+            Lit::Float(f) => f.base10_parse(),
+            Lit::Int(i) => Ok(i.base10_parse::<i64>()? as f64),
+            other => Err(syn::Error::new_spanned(other, "expected a numeric literal")),
         },
-        Expr::Unary(unary) => {
-            if matches!(unary.op, syn::UnOp::Neg(_)) {
-                -expr_to_f64(&unary.expr)
-            } else {
-                panic!("unsupported unary op")
-            }
+        Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)) => {
+            Ok(-expr_to_f64(&unary.expr)?)
         }
-        _ => panic!("expected numeric literal, got {:?}", expr),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "expected a numeric literal (optionally negated)",
+        )),
     }
 }
 
@@ -477,18 +523,36 @@ fn generate_from_sample(
 #[proc_macro_derive(SomaStep, attributes(soma))]
 pub fn derive_soma_step(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    // A malformed input is a compile error pointing at the offending
+    // token, not a `proc macro panicked` pointing at the derive.
+    derive_soma_step_impl(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn derive_soma_step_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let name_str = name.to_string();
 
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
-            _ => panic!("SomaStep only supports structs with named fields"),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "SomaStep needs named fields: it hashes each one by name",
+                ));
+            }
         },
-        _ => panic!("SomaStep only supports structs"),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &input.ident,
+                "SomaStep can only be derived for a struct",
+            ));
+        }
     };
 
-    let struct_attrs = parse_struct_attrs(&input.attrs);
+    let struct_attrs = parse_struct_attrs(&input.attrs)?;
     let cache_version_part = match &struct_attrs.cache_version {
         Some(v) => quote! { parts.push(#v.as_bytes().to_vec()); },
         None => quote! {},
@@ -496,7 +560,7 @@ pub fn derive_soma_step(input: TokenStream) -> TokenStream {
 
     let hash_parts: Vec<_> = fields
         .iter()
-        .filter(|f| !parse_field_attrs(&f.attrs).skip_hash)
+        .filter(|f| parse_field_attrs(&f.attrs).is_ok_and(|a| !a.skip_hash))
         .map(|f| {
             let field_name = f.ident.as_ref().unwrap();
             let field_name_str = field_name.to_string();
@@ -514,7 +578,7 @@ pub fn derive_soma_step(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    quote! {
+    Ok(quote! {
         impl #name {
             /// Content-addressable hash of this step's configuration.
             ///
@@ -529,6 +593,5 @@ pub fn derive_soma_step(input: TokenStream) -> TokenStream {
                 somatize_core::cache::CacheKey::from_parts(&refs)
             }
         }
-    }
-    .into()
+    })
 }

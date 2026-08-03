@@ -217,3 +217,25 @@ fn deterministic_flag_flows_to_meta() {
     assert!(!RandomAugment::default().soma_meta().deterministic);
     assert!(TestOpaque::default().soma_meta().deterministic);
 }
+
+/// A filter is not differentiable unless it says so.
+///
+/// The derive defaulted to `true` while the Python bridge defaulted to
+/// `false`, so the same concept had opposite meanings on the two sides of
+/// the boundary — and `differentiable` is what makes the compiler group
+/// nodes into a composite block for autograd. Opting in is the safe
+/// direction: a filter that does not carry a module gains nothing from
+/// being grouped, and one that does can say so.
+#[test]
+fn differentiable_defaults_to_false_on_both_sides_of_the_boundary() {
+    #[derive(somatize_core::SomaFilter, serde::Serialize)]
+    struct Plain {
+        scale: f64,
+    }
+
+    let plain = Plain { scale: 1.0 };
+    assert!(
+        !plain.soma_meta().differentiable,
+        "the derive must agree with soma-python's `_differentiable` default"
+    );
+}

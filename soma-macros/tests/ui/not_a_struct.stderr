@@ -1,0 +1,5 @@
+error: SomaFilter can only be derived for a struct
+ --> tests/ui/not_a_struct.rs:5:6
+  |
+5 | enum Mode {
+  |      ^^^^
