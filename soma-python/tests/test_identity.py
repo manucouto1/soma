@@ -196,3 +196,68 @@ def test_graph_node_uses_new_identity(tmp_path, monkeypatch):
         g.fit([1.0, 2.0, 3.0])
 
     assert counters.read_text().count("fit") == 1
+
+
+# ── Environment as part of identity ──────────────────────────────
+
+MODULE_WITH_DEP = textwrap.dedent(
+    """
+    import numpy as np
+    from soma import Filter
+
+    class Dep(Filter):
+        _cache_version = 1
+
+        def fit(self, x, y=None):
+            return {}
+
+        def forward(self, x, state):
+            return x
+    """
+)
+
+MODULE_WITHOUT_DEP = MODULE_WITH_DEP.replace("import numpy as np\n", "")
+
+
+def _module(name: str, source: str):
+    """Import `source` as a module named `name` and return it."""
+    import types
+
+    mod = types.ModuleType(name)
+    exec(compile(source, f"{name}.py", "exec"), mod.__dict__)
+    sys.modules[name] = mod
+    return mod
+
+
+def test_third_party_imports_are_detected_as_requirements():
+    """A remote worker has to install what the filter imports.
+
+    This was silently broken: the detection script bound `_reqs` in a
+    temporary globals dict and then read it back from `__main__`, so
+    every filter reported an empty requirement set and every remote plan
+    told the worker it needed nothing.
+    """
+    g = Graph()
+    g.node("dep", _module("t_ident_dep", MODULE_WITH_DEP).Dep())
+    assert g.filter_requirements("dep") == ["numpy"]
+
+
+def test_pure_stdlib_filters_require_nothing():
+    """Only third-party distributions count — not stdlib, not soma."""
+    g = Graph()
+    g.node("plain", _module("t_ident_plain", MODULE_WITHOUT_DEP).Dep())
+    assert g.filter_requirements("plain") == []
+
+
+def test_soma_itself_is_never_a_requirement():
+    """A worker running this code already has soma.
+
+    Listing it would make the worker's EnvManager try to pip install a
+    package under the wrong name (the distribution is `somatize`), fail,
+    and fall back to the system interpreter with a warning — turning a
+    detection bug into a confusing install error.
+    """
+    g = Graph()
+    g.node("dep", _module("t_ident_self", MODULE_WITH_DEP).Dep())
+    reqs = g.filter_requirements("dep")
+    assert not {"soma", "_soma", "somatize"} & set(reqs), reqs

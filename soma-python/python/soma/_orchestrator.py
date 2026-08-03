@@ -152,6 +152,58 @@ def _parameters(self: _RustGraph) -> Iterable[Any]:
 _RUST_FORWARD = _RustGraph.forward
 
 
+def _require_chain(graph: _RustGraph, node_ids: list[str]) -> None:
+    """Refuse a topology this walk cannot execute.
+
+    The training walk below threads one filter's output into the next, so
+    it only describes a graph that *is* a chain. On a fork it silently
+    feeds one branch's output to the other; on a join it drops every
+    predecessor but the last. Both produce a number, and neither produces
+    the number the graph says.
+
+    The Rust path (``run``/``forward`` through the compiler) handles the
+    general case. Until the differentiable path delegates its topology
+    there too, saying so is better than answering wrongly.
+    """
+    live = set(node_ids)
+    succ: dict[str, int] = {}
+    pred: dict[str, int] = {}
+    internal = 0
+    for source, target in graph.edges():
+        if source not in live or target not in live:
+            continue
+        internal += 1
+        succ[source] = succ.get(source, 0) + 1
+        pred[target] = pred.get(target, 0) + 1
+
+    forks = sorted(n for n in node_ids if succ.get(n, 0) > 1)
+    joins = sorted(n for n in node_ids if pred.get(n, 0) > 1)
+    if forks or joins:
+        detail = ", ".join(
+            part
+            for part in (
+                f"fan-out at {forks}" if forks else "",
+                f"fan-in at {joins}" if joins else "",
+            )
+            if part
+        )
+        raise NotImplementedError(
+            f"differentiable forward supports linear graphs only ({detail}). "
+            "The Python training walk chains filters one after another, so it "
+            "cannot execute this topology correctly. Train the linear part "
+            "separately, or run inference through the Rust path with "
+            "g.eval() on a graph whose filters are not differentiable."
+        )
+    # Degrees alone allow two disjoint chains, which the walk would splice
+    # into one. A single chain over n nodes has exactly n-1 internal edges.
+    if node_ids and internal != len(node_ids) - 1:
+        raise NotImplementedError(
+            f"differentiable forward supports a single connected chain only; "
+            f"got {len(node_ids)} filters joined by {internal} edges. "
+            "Disconnected components would be spliced into one chain."
+        )
+
+
 def _forward(self: _RustGraph, x: Any, *args, **kwargs):
     """Polymorphic forward.
 
@@ -181,6 +233,8 @@ def _forward(self: _RustGraph, x: Any, *args, **kwargs):
         for _, f in pairs
     ):
         return _RUST_FORWARD(self, x, *args, **kwargs)
+
+    _require_chain(self, [node_id for node_id, _ in pairs])
 
     target_device = self.py_state.get("device")
     target_dtype = self.py_state.get("dtype")

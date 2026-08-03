@@ -327,7 +327,12 @@ impl PyFilterBridge {
         let inspect = py.import("inspect")?;
         let module = inspect.call_method1("getmodule", (obj.get_type(),))?;
         // Python helper: walk module globals, find all non-stdlib imported modules,
-        // register them for by-value serialization (transitive).
+        // register them for by-value serialization (transitive), and collect
+        // the third-party distributions the worker will have to install.
+        //
+        // The globals dict is named rather than built inline because the
+        // script's results are read back out of it below.
+        let helper_globals = [("_soma_module", &module)].into_py_dict(py)?;
         py.run(
             c"
 import sys, types, sysconfig, site, os, cloudpickle as _cp
@@ -391,8 +396,45 @@ def _register_transitive(mod, visited=None):
 
 if _soma_module is not None:
     _register_transitive(_soma_module)
+
+# ── pip requirements ─────────────────────────────────────────
+# What the worker must install to unpickle and run this filter:
+# third-party distributions it imports. Deliberately the complement
+# of the check above rather than a second heuristic — this used to be
+# a separate script with its own `'site-packages' in f` substring
+# test, which disagreed with this one on conda and lib64 layouts.
+# Soma itself is excluded: a worker that is running this code has it.
+_SELF = {'soma', '_soma', 'somatize'}
+
+def _distribution_of(mod):
+    name = getattr(mod, '__name__', '') or ''
+    top = name.split('.')[0]
+    if not top or top in _STDLIB or top in _BUILTINS or top in _SELF:
+        return None
+    f = getattr(mod, '__file__', None)
+    if not f or f.startswith('<'):
+        return None
+    rf = os.path.realpath(f)
+    if _SITE_PREFIXES and rf.startswith(_SITE_PREFIXES):
+        return top
+    if 'site-packages' in rf or 'dist-packages' in rf:
+        return top
+    return None
+
+_reqs = set()
+if _soma_module is not None:
+    for _v in vars(_soma_module).values():
+        if isinstance(_v, types.ModuleType):
+            _d = _distribution_of(_v)
+        elif isinstance(_v, type):
+            _d = _distribution_of(sys.modules.get(_v.__module__))
+        else:
+            continue
+        if _d:
+            _reqs.add(_d)
+_reqs = sorted(_reqs)
 ",
-            Some(&[("_soma_module", &module)].into_py_dict(py)?),
+            Some(&helper_globals),
             None,
         )?;
         let pickled = cloudpickle.call_method1("dumps", (obj,))?;
@@ -409,35 +451,22 @@ if _soma_module is not None:
                 .unwrap_or_default()
         };
 
-        // Detect pip requirements from the filter module's imports.
-        // Collects top-level package names of all site-packages imports.
-        let reqs_result = py.run(
-            c"
-import types, sys
-_reqs = set()
-if _mod is not None:
-    for v in vars(_mod).values():
-        if isinstance(v, types.ModuleType):
-            f = getattr(v, '__file__', '') or ''
-            if 'site-packages' in f:
-                _reqs.add(v.__name__.split('.')[0])
-        elif isinstance(v, type):
-            m = sys.modules.get(v.__module__)
-            if m:
-                f = getattr(m, '__file__', '') or ''
-                if 'site-packages' in f:
-                    _reqs.add(m.__name__.split('.')[0])
-_reqs = sorted(_reqs)
-",
-            Some(&[("_mod", &module)].into_py_dict(py)?),
-            None,
-        );
-        let requirements: Vec<String> = if reqs_result.is_ok() {
-            py.eval(c"_reqs", None, None)
-                .and_then(|r| r.extract())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
+        // Read back what the helper collected.
+        //
+        // This used to run a second script and then read `_reqs` with
+        // `py.eval(c"_reqs", None, None)`. Passing `None` for globals means
+        // `__main__`, where the script never bound anything — so it raised
+        // `NameError` on every call, `unwrap_or_default()` swallowed it, and
+        // `requirements` was empty for every filter ever built. The
+        // environment silently left the cache key below, and every remote
+        // plan told the worker it needed nothing installed.
+        let requirements: Vec<String> = match helper_globals.get_item("_reqs")? {
+            Some(value) => value.extract()?,
+            None => {
+                return Err(PyRuntimeError::new_err(
+                    "internal: the filter-identity helper did not produce `_reqs`",
+                ));
+            }
         };
 
         // Detect if the filter is trainable (has _kind = "trainable")
@@ -3318,6 +3347,19 @@ impl PyGraph {
         self.filter_sources.get(&node_id).cloned()
     }
 
+    /// Third-party distributions the worker must install to run `node_id`.
+    ///
+    /// Detected from the filter module's imports when the node was added.
+    /// This is what a remote plan ships to the worker's ``EnvManager``, and
+    /// it is part of the filter's cache identity — the same code under a
+    /// different dependency set can produce different results. Returns
+    /// ``None`` for a node with no live Python filter.
+    fn filter_requirements(&self, node_id: String) -> Option<Vec<String>> {
+        self.pickled_filters
+            .get(&node_id)
+            .map(|(_, reqs)| reqs.clone())
+    }
+
     /// Get all filter sources as a dict: {node_id: source_code}.
     fn filter_sources_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
         let dict = PyDict::new(py);
@@ -3353,7 +3395,17 @@ impl PyGraph {
                 .filter(|id| self.live_filters.contains_key(*id))
                 .map(|id| id.to_string())
                 .collect(),
-            Err(_) => self.live_filters.keys().cloned().collect(),
+            // Graph order, which is insertion order — `live_filters` is a
+            // `HashMap`, so returning its keys made the fallback
+            // nondeterministic, and the training walk that consumes this
+            // list chains filters in whatever order the hash landed in.
+            Err(_) => self
+                .graph
+                .nodes
+                .iter()
+                .map(|n| n.id.clone())
+                .filter(|id| self.live_filters.contains_key(id))
+                .collect(),
         }
     }
 

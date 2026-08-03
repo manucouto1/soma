@@ -359,3 +359,64 @@ def test_legacy_filter_with_plain_forward_still_works_in_eval():
     g.fit({"x": [[1.0, 2.0], [3.0, 4.0]]})
     out = g.forward([[1.0, 2.0], [3.0, 4.0]])
     assert out == [[1.0, 2.0], [3.0, 4.0]]
+
+
+# ── Topologies the Python walk cannot execute ────────────────
+
+
+def test_a_fan_out_is_refused_rather_than_silently_linearised():
+    """The differentiable walk chains filters, so a fork has no meaning.
+
+    It used to thread one branch's output into the other and return a
+    number — a wrong answer with no symptom. The Rust path handles the
+    general case; until this one delegates to it, refusing is the only
+    honest behaviour.
+    """
+    g = Graph()
+    g.node("root", Dense(4))
+    g.node("left", Dense(2))
+    g.node("right", Dense(2))
+    g.edge("root", "left")
+    g.edge("root", "right")
+
+    with pytest.raises(NotImplementedError, match="fan-out"):
+        g.forward(torch.randn(3, 8))
+
+
+def test_a_fan_in_is_refused_rather_than_dropping_a_predecessor():
+    g = Graph()
+    g.node("a", Dense(4))
+    g.node("b", Dense(4))
+    g.node("join", Dense(2))
+    g.edge("a", "join")
+    g.edge("b", "join")
+
+    with pytest.raises(NotImplementedError, match="fan-in"):
+        g.forward(torch.randn(3, 8))
+
+
+def test_disconnected_chains_are_refused():
+    """Degrees alone would allow two separate chains; splicing them into
+    one is exactly the silent mis-composition this guard exists for."""
+    g = Graph()
+    g.node("a1", Dense(4))
+    g.node("a2", Dense(2))
+    g.edge("a1", "a2")
+    g.node("b1", Dense(4))
+
+    with pytest.raises(NotImplementedError, match="single connected chain"):
+        g.forward(torch.randn(3, 8))
+
+
+def test_a_linear_chain_still_trains():
+    """The guard must not cost the case it was protecting."""
+    g = Graph()
+    g.node("h", Dense(4))
+    g.node("out", Dense(2))
+    g.edge("h", "out")
+    g.train()
+
+    result = g.forward(torch.randn(3, 8))
+    out, aux = result
+    assert out.shape == (3, 2)
+    assert isinstance(aux, dict)
