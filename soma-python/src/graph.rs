@@ -24,7 +24,7 @@ impl Behaviour {
     }
 }
 
-#[pyclass(name = "Graph")]
+#[pyclass(name = "Graph", subclass)]
 pub(crate) struct PyGraph {
     graph: Graph,
     library: NodeCatalog,

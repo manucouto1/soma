@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Mapping
 
-from soma._soma import Graph
 from soma.filter import Filter
 
 __all__ = [
@@ -454,6 +453,11 @@ def _is_type(expected: str, value: Any) -> bool:
 
 
 def _graph(provider: str | None, cache: str | None) -> Graph:
+    # The Python subclass, not the Rust base: a graph handed back from
+    # `board`/`react`/… must have the same methods as one the user built,
+    # or `g.search_space()` exists on one and not the other.
+    from soma._graph import Graph
+
     g = Graph() if cache is None else Graph(cache=cache)
     if provider is not None:
         g.use_provider(provider)

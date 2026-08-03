@@ -1205,7 +1205,7 @@ def _emit_health_flags(
 
 
 @contextlib.contextmanager
-def _gradient_audit(
+def gradient_audit(
     self: _RustGraph,
     thresholds: Thresholds | None = None,
     channels: "ChannelConfig | bool | None" = None,
@@ -1333,13 +1333,3 @@ def _gradient_audit(
                 )
             )
             _emit_health_flags(self, run, report, audit._children)
-
-
-# ── Install on Graph ─────────────────────────────────────────
-
-
-def _install() -> None:
-    _RustGraph.gradient_audit = _gradient_audit
-
-
-_install()

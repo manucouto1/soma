@@ -82,9 +82,8 @@ class CompileInfo(dict):
 _rust_compile = _RustGraph.compile
 
 
-def _compile(self, mode: str = "inference") -> CompileInfo:
+def compile_with_repr(self, mode: str = "inference") -> CompileInfo:
     return CompileInfo(_rust_compile(self, mode=mode))
 
 
-_compile.__doc__ = _rust_compile.__doc__
-_RustGraph.compile = _compile
+compile_with_repr.__doc__ = _rust_compile.__doc__

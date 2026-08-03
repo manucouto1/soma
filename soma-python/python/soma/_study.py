@@ -20,7 +20,7 @@ from soma._soma import Graph as _RustGraph
 from soma._soma import Study as _Study
 
 
-def _graph_search_space(self: _RustGraph) -> list[dict]:
+def graph_search_space(self: _RustGraph) -> list[dict]:
     """Aggregate the searchable dimensions of every node, with names
     prefixed by the node id (``"<node_id>.<param>"``).
 
@@ -63,11 +63,11 @@ def _declared(node: Any) -> list[dict]:
     return getattr(type(node), "_soma_search_space", [])
 
 
-def _apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
+def apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
     """Apply a sampled configuration to the live filter instances.
 
     Keys are ``"<node_id>.<attr>"`` (as produced by
-    :func:`_graph_search_space`); a bare ``"<attr>"`` is accepted when
+    :func:`graph_search_space`); a bare ``"<attr>"`` is accepted when
     exactly one node declares that attribute. Unknown keys raise.
 
     Writing to a live agent is enough: the immutable step behind it is
@@ -104,7 +104,7 @@ def _apply_params(self: _RustGraph, params: dict[str, Any]) -> None:
         setattr(owners[0], key, value)
 
 
-def _graph_study(self: _RustGraph, name: str, **kwargs: Any) -> _Study:
+def graph_study(self: _RustGraph, name: str, **kwargs: Any) -> _Study:
     """Create a :class:`soma.Study` whose search space is aggregated
     from this graph's filters. Accepts every ``Study(...)`` keyword
     (strategy, n_trials, objective, objectives, direction, pruning,
@@ -117,9 +117,6 @@ def _graph_study(self: _RustGraph, name: str, **kwargs: Any) -> _Study:
     return _Study(name, search_space=self.search_space(), **kwargs)
 
 
-_RustGraph.search_space = _graph_search_space
-_RustGraph.apply_params = _apply_params
-_RustGraph.study = _graph_study
 
 
 # ── Study.run with an optional progress bar ──────────────────
@@ -182,4 +179,38 @@ def _study_run(self, executor, on_event=None, resume=False, progress=False):
         bar.close()
 
 
-_Study.run = _study_run
+
+# ── Study: the Rust class plus what is written in Python ─────
+
+
+class Study(_Study):
+    """A hyperparameter search.
+
+    `run` wraps the Rust one to add the optional progress bar; the
+    figures come from `soma.viz`. Both used to be assigned onto the Rust
+    class at import time, so `help(Study)` showed neither.
+    """
+
+    run = _study_run
+
+    def _viz(name):
+        """Bind a `soma.viz` function as a method, resolved on first use."""
+
+        def method(self, *args, **kwargs):
+            from soma import viz
+
+            return getattr(viz, name)(self, *args, **kwargs)
+
+        method.__name__ = name
+        return method
+
+    plot_optimization_history = _viz("plot_optimization_history")
+    plot_intermediate_values = _viz("plot_intermediate_values")
+    plot_parallel_coordinate = _viz("plot_parallel_coordinate")
+    plot_param_importances = _viz("plot_param_importances")
+    plot_timeline = _viz("plot_timeline")
+    plot_pareto_front = _viz("plot_pareto_front")
+    trials_dataframe = _viz("trials_dataframe")
+    to_html = _viz("study_to_html")
+
+    del _viz

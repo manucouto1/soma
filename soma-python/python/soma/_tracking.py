@@ -33,7 +33,7 @@ from soma._soma import Graph as _RustGraph
 
 
 @contextlib.contextmanager
-def _track_run(
+def track_run(
     self: _RustGraph,
     name: str,
     *,
@@ -65,6 +65,3 @@ def _track_run(
     finally:
         self.py_state.pop("active_run", None)
         self.py_state.pop("train_step", None)
-
-
-_RustGraph.track_run = _track_run

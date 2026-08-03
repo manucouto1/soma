@@ -25,7 +25,11 @@ def somatize(topology):
     Returns:
         Graph: A materialized, executable graph.
     """
-    g = _RustGraph()
+    # Imported here, not at module scope: `soma._graph` imports this
+    # module for `somatize`, so a top-level import would be a cycle.
+    from soma._graph import Graph
+
+    g = Graph()
     _walk(g, topology)
     return g
 

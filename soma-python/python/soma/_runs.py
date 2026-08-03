@@ -262,6 +262,43 @@ class RunView:
             f"<table style='border-collapse:collapse;margin-top:4px'>{rows}</table></div>"
         )
 
+    # ── Figures and tables (soma.viz) ──
+    #
+    # Declared here rather than assigned onto the class from
+    # `soma.viz._install()` at import time, which meant `help(RunView)`
+    # and every IDE showed a class without them. `soma.viz` imports
+    # cleanly without plotly or pandas — each figure imports its backend
+    # inside the call — so naming them here costs the base install
+    # nothing, and calling one without `somatize[viz]` still raises the
+    # same helpful error.
+
+    def _viz(name):
+        """Bind a `soma.viz` function as a method, resolved on first use.
+
+        Deferred only to keep `soma._runs` importable before `soma.viz`
+        exists in `sys.modules` during package start-up.
+        """
+
+        def method(self, *args, **kwargs):
+            from soma import viz
+
+            return getattr(viz, name)(self, *args, **kwargs)
+
+        method.__name__ = name
+        return method
+
+    plot_metrics = _viz("plot_metrics")
+    plot_gantt = _viz("plot_gantt")
+    plot_health = _viz("plot_health")
+    plot_audit = _viz("plot_audit")
+    plot_module_flow = _viz("plot_module_flow")
+    plot_channels = _viz("plot_channels")
+    plot_channel_evolution = _viz("plot_channel_evolution")
+    metrics_dataframe = _viz("metrics_dataframe")
+    to_html = _viz("to_html")
+
+    del _viz
+
 
 _STATE_COLORS = {
     "completed": "#0ca30c",

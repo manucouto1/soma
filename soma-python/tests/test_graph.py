@@ -146,3 +146,50 @@ class TestCompileInfo:
         rendered = evil._repr_html_()
         assert "<script>" not in rendered
         assert "&lt;script&gt;" in rendered
+
+
+# ── The surface of Graph is readable ─────────────────────────
+
+
+def test_graph_methods_are_declared_on_the_class():
+    """They used to be assigned onto the Rust class at import time.
+
+    Nothing could see them — not `help`, not an IDE, not mypy, not a
+    reader of the class — and which ones existed depended on what had
+    been imported.
+    """
+    import soma
+
+    for name in ("train", "eval", "save", "study", "track_run", "gradient_audit"):
+        assert name in vars(soma.Graph), f"`{name}` is not declared on Graph"
+
+
+def test_graph_is_the_rust_class_plus_python():
+    import soma
+
+    assert issubclass(soma.Graph, soma._soma.Graph)
+    # Inherited, not redeclared: the runtime surface stays in Rust.
+    assert "node" not in vars(soma.Graph)
+    assert soma.Graph().node is not None
+
+
+def test_every_graph_a_user_receives_has_the_same_surface():
+    """A graph from a pattern must not be a different class.
+
+    `soma.agentic.board(...)` built the Rust class directly, so
+    `g.search_space()` existed on a graph you made and not on one the
+    library handed you.
+    """
+    import soma
+    from soma.agentic import board
+
+    built = soma.Graph()
+    from_pattern = board(
+        [soma.Agent(model="mock/x", system="be terse") for _ in range(2)],
+        rounds=1,
+    )
+    from_builder = soma.Graph.somatize(soma.chain.Chain([]))
+
+    for g in (built, from_pattern, from_builder):
+        assert isinstance(g, soma.Graph), type(g)
+        assert hasattr(g, "search_space")

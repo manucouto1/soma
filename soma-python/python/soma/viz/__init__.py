@@ -59,30 +59,3 @@ __all__ = [
     "to_html",
     "study_to_html",
 ]
-
-
-def _install() -> None:
-    """Attach the plotting/table methods to Study and RunView. Called
-    from ``soma/__init__`` — imports here stay lazy so the core install
-    works without plotly/pandas."""
-    from soma._runs import RunView
-    from soma._soma import Study
-
-    Study.plot_optimization_history = plot_optimization_history
-    Study.plot_intermediate_values = plot_intermediate_values
-    Study.plot_parallel_coordinate = plot_parallel_coordinate
-    Study.plot_param_importances = plot_param_importances
-    Study.plot_timeline = plot_timeline
-    Study.plot_pareto_front = plot_pareto_front
-    Study.trials_dataframe = trials_dataframe
-    Study.to_html = study_to_html
-
-    RunView.plot_metrics = plot_metrics
-    RunView.plot_gantt = plot_gantt
-    RunView.metrics_dataframe = metrics_dataframe
-    RunView.plot_health = plot_health
-    RunView.plot_audit = plot_audit
-    RunView.plot_module_flow = plot_module_flow
-    RunView.plot_channels = plot_channels
-    RunView.plot_channel_evolution = plot_channel_evolution
-    RunView.to_html = to_html

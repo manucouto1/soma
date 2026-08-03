@@ -54,7 +54,7 @@ SOMA_CHECKPOINT_FORMAT_VERSION = 1
 # ── State-only API ───────────────────────────────────────────
 
 
-def _state(self: _RustGraph) -> dict[str, Any]:
+def state(self: _RustGraph) -> dict[str, Any]:
     """Snapshot every node's runtime state into a plain dict.
 
     Returns ``{node_id: state_value}``. Filters with no stored state are
@@ -69,7 +69,7 @@ def _state(self: _RustGraph) -> dict[str, Any]:
     return out
 
 
-def _load_state(self: _RustGraph, sd: dict[str, Any], strict: bool = True) -> None:
+def load_state(self: _RustGraph, sd: dict[str, Any], strict: bool = True) -> None:
     """Apply a state dict produced by :meth:`state`.
 
     With ``strict=True`` (default), every key in ``sd`` must correspond
@@ -160,7 +160,7 @@ def _build_manifest(graph: _RustGraph) -> dict:
     }
 
 
-def _save(self: _RustGraph, path: str, include_optimizer: bool = False) -> None:
+def save(self: _RustGraph, path: str, include_optimizer: bool = False) -> None:
     """Save topology + state to ``path`` (a zip bundle).
 
     The graph should be ``freeze()``-d first so every diff filter's
@@ -218,7 +218,7 @@ def _import_class(class_path: str) -> type:
     return obj  # type: ignore[return-value]
 
 
-def _load(cls: type, path: str, strict: bool = True) -> _RustGraph:
+def load(cls: type, path: str, strict: bool = True) -> _RustGraph:
     """Rebuild a graph from a checkpoint produced by :meth:`save`.
 
     Reconstructs every filter via ``filter_class(**kwargs)`` then loads
@@ -296,7 +296,7 @@ def _load(cls: type, path: str, strict: bool = True) -> _RustGraph:
     return graph
 
 
-def _restore_optimizer(self: _RustGraph) -> bool:
+def restore_optimizer(self: _RustGraph) -> bool:
     """Apply a pending optimiser state dict captured by :meth:`load`.
 
     Call after ``g.materialize(sample)`` + ``g.make_optimizer(...)`` (or
@@ -319,17 +319,3 @@ def _restore_optimizer(self: _RustGraph) -> bool:
     opt.load_state_dict(sd)
     del self.py_state["optimizer_state_dict_pending"]
     return True
-
-
-# ── Install on Graph ─────────────────────────────────────────
-
-
-def _install() -> None:
-    _RustGraph.state = _state
-    _RustGraph.load_state = _load_state
-    _RustGraph.save = _save
-    _RustGraph.load = classmethod(_load)
-    _RustGraph.restore_optimizer = _restore_optimizer
-
-
-_install()

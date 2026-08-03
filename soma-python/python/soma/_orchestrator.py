@@ -58,7 +58,7 @@ def _any_training(graph: _RustGraph) -> bool:
 # ── Lifecycle ─────────────────────────────────────────────────
 
 
-def _materialize(self: _RustGraph, sample_input: Any) -> None:
+def materialize(self: _RustGraph, sample_input: Any) -> None:
     """Walk topology, build each ``DifferentiableFilter._module`` once.
 
     ``sample_input`` is a representative batch; its trailing shape (without
@@ -100,7 +100,7 @@ def _materialize(self: _RustGraph, sample_input: Any) -> None:
             shape = None
 
 
-def _train(self: _RustGraph, mode: bool = True) -> _RustGraph:
+def train(self: _RustGraph, mode: bool = True) -> _RustGraph:
     """Set ``training=mode`` on every live filter (and its ``_module``)."""
     for _, f in self.filters():
         f.training = mode
@@ -110,11 +110,11 @@ def _train(self: _RustGraph, mode: bool = True) -> _RustGraph:
     return self
 
 
-def _eval(self: _RustGraph) -> _RustGraph:
-    return _train(self, mode=False)
+def eval(self: _RustGraph) -> _RustGraph:
+    return train(self, mode=False)
 
 
-def _to(self: _RustGraph, device: Any, *, dtype: Any = None) -> _RustGraph:
+def to(self: _RustGraph, device: Any, *, dtype: Any = None) -> _RustGraph:
     """Move every materialised filter ``_module`` to ``device`` (and ``dtype``).
 
     Stores the target on ``py_state`` so modules built lazily by a later
@@ -136,7 +136,7 @@ def _to(self: _RustGraph, device: Any, *, dtype: Any = None) -> _RustGraph:
     return self
 
 
-def _parameters(self: _RustGraph) -> Iterable[Any]:
+def parameters(self: _RustGraph) -> Iterable[Any]:
     """Yield ``nn.Parameter`` objects from every diff filter's ``_module``.
 
     Order follows the topological order of the graph. Filters whose
@@ -293,7 +293,7 @@ def differentiable_forward(self: _RustGraph, x: Any):
 # ── Training-loop primitives (RPC-ready signatures) ──────────
 
 
-def _set_optimizer(self: _RustGraph, optimizer: Any) -> Any:
+def set_optimizer(self: _RustGraph, optimizer: Any) -> Any:
     """Register an externally-built optimiser on this graph.
 
     Stored under ``graph.py_state['optimizer']`` (PyGraph has no
@@ -303,7 +303,7 @@ def _set_optimizer(self: _RustGraph, optimizer: Any) -> Any:
     return optimizer
 
 
-def _make_optimizer(self: _RustGraph, optim_cls: Any = None, **kwargs: Any) -> Any:
+def make_optimizer(self: _RustGraph, optim_cls: Any = None, **kwargs: Any) -> Any:
     """Build and register an optimiser over ``self.parameters()``.
 
     Default class is ``torch.optim.Adam``. Equivalent under RPC will swap
@@ -320,10 +320,10 @@ def _make_optimizer(self: _RustGraph, optim_cls: Any = None, **kwargs: Any) -> A
             "graph.make_optimizer(): no parameters found. Did you call "
             "graph.materialize(sample_input) first?"
         )
-    return _set_optimizer(self, optim_cls(params, **kwargs))
+    return set_optimizer(self, optim_cls(params, **kwargs))
 
 
-def _optimizer(self: _RustGraph) -> Any:
+def optimizer(self: _RustGraph) -> Any:
     """Return the registered optimiser, or raise if none has been set."""
     opt = self.py_state.get("optimizer")
     if opt is None:
@@ -335,7 +335,7 @@ def _optimizer(self: _RustGraph) -> Any:
 
 
 @contextlib.contextmanager
-def _context(self: _RustGraph):
+def context(self: _RustGraph):
     """Autograd context for the training step.
 
     Locally a no-op that yields a sentinel. In the RPC future this becomes
@@ -345,7 +345,7 @@ def _context(self: _RustGraph):
     yield _LOCAL_CTX
 
 
-def _backward(self: _RustGraph, ctx: Any, loss: Any) -> None:
+def backward(self: _RustGraph, ctx: Any, loss: Any) -> None:
     """Run backward over ``loss``.
 
     Locally: ``loss.backward()`` and ignore ``ctx``. Under RPC: switches
@@ -371,17 +371,17 @@ def _backward(self: _RustGraph, ctx: Any, loss: Any) -> None:
         self.py_state["train_step"] = step + 1
 
 
-def _step(self: _RustGraph, ctx: Any = None) -> None:
+def step(self: _RustGraph, ctx: Any = None) -> None:
     """Take an optimiser step.
 
     Locally: ``opt.step()`` and ignore ``ctx``. Under RPC:
     ``DistributedOptimizer.step(ctx)`` uses ``ctx`` to gather grads from
     every worker before applying.
     """
-    _optimizer(self).step()
+    optimizer(self).step()
 
 
-def _zero_grad(self: _RustGraph, set_to_none: bool = True) -> None:
+def zero_grad(self: _RustGraph, set_to_none: bool = True) -> None:
     """Zero the optimiser's gradient buffers."""
     opt = self.py_state.get("optimizer")
     if opt is None:
@@ -393,7 +393,7 @@ def _zero_grad(self: _RustGraph, set_to_none: bool = True) -> None:
 # ── Freeze (training → inference) ────────────────────────────
 
 
-def _freeze(self: _RustGraph) -> _RustGraph:
+def freeze(self: _RustGraph) -> _RustGraph:
     """Snapshot live ``_module`` weights into each filter's runtime state.
 
     After ``freeze()``, ``graph.eval()`` followed by ``graph.forward(x)``
@@ -417,25 +417,3 @@ def _freeze(self: _RustGraph) -> _RustGraph:
     self.mark_fitted()
     self.eval()
     return self
-
-
-# ── Install on Graph ─────────────────────────────────────────
-
-
-def _install() -> None:
-    _RustGraph.materialize = _materialize
-    _RustGraph.train = _train
-    _RustGraph.eval = _eval
-    _RustGraph.to = _to
-    _RustGraph.parameters = _parameters
-    _RustGraph.set_optimizer = _set_optimizer
-    _RustGraph.make_optimizer = _make_optimizer
-    _RustGraph.optimizer = _optimizer
-    _RustGraph.context = _context
-    _RustGraph.backward = _backward
-    _RustGraph.step = _step
-    _RustGraph.zero_grad = _zero_grad
-    _RustGraph.freeze = _freeze
-
-
-_install()

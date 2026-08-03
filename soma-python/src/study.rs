@@ -166,7 +166,7 @@ impl PyTrial {
 
 // ── PyStudy ──
 
-#[pyclass(name = "Study")]
+#[pyclass(name = "Study", subclass)]
 pub(crate) struct PyStudy {
     study: Study,
     /// Python callable metrics-dict -> float; recorded as metric "score".
