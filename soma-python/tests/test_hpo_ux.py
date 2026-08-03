@@ -816,3 +816,47 @@ def test_on_event_fires_during_the_run_and_swallows_callback_errors(tmp_path):
     assert min(callback_times) < executor_entries[-1], (
         "events must be delivered while the study is still running"
     )
+
+
+# ── A malformed search space is reported, not fatal ──────────
+
+
+def test_a_search_dimension_missing_a_bound_raises_instead_of_panicking():
+    """`low`/`high`/`choices` used to be `.unwrap()` in the binding.
+
+    A `PanicException` does not inherit `Exception`, so `except Exception`
+    does not catch it: a typo in a search space took the interpreter down
+    instead of reporting a bad argument. The two keys immediately above
+    them — `type` and `name` — were already reported properly, which is
+    what made the asymmetry a bug rather than a policy.
+    """
+    import soma
+
+    with pytest.raises(ValueError, match="needs `high`"):
+        soma.Study(
+            "bad-space",
+            search_space=[{"type": "float", "name": "lr", "low": 0.1}],
+            n_trials=1,
+            tracking=False,
+        )
+
+
+def test_the_error_names_the_dimension_and_what_it_needs():
+    import soma
+
+    with pytest.raises(ValueError) as excinfo:
+        soma.Study(
+            "bad-space",
+            search_space=[{"type": "categorical", "name": "kernel"}],
+            n_trials=1,
+            tracking=False,
+        )
+    message = str(excinfo.value)
+    assert "kernel" in message and "choices" in message, message
+
+
+def test_a_dimension_without_a_type_is_reported():
+    import soma
+
+    with pytest.raises(ValueError, match="needs `type`"):
+        soma.Study("bad-space", search_space=[{"name": "lr"}], n_trials=1, tracking=False)

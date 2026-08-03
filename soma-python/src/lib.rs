@@ -5,6 +5,7 @@
 //! for hyperparameter optimization from Python.
 
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList};
 use std::collections::HashMap;
@@ -720,21 +721,44 @@ impl Filter for PyFilterBridge {
 
 // ── Search dimension parsing ──
 
+/// Read one search dimension out of a Python dict.
+///
+/// Every required key is reported, none is unwrapped. `low`, `high` and
+/// `choices` used to be `.unwrap()` while `type` and `name` — two lines
+/// above them — used `ok_or_else`. So a plausible typo produced a
+/// `PanicException`, which does not inherit `Exception` and is therefore
+/// not caught by `except Exception`: a study builder would take the
+/// interpreter down instead of reporting a bad search space.
 fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<SearchDimension> {
     let dict = item.downcast::<PyDict>()?;
+
+    /// The key, or a message naming the dimension and what it needs.
+    fn required<'a>(
+        dict: &Bound<'a, PyDict>,
+        key: &str,
+        name: &str,
+        dtype: &str,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        dict.get_item(key)?.ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "search dimension `{name}` of type `{dtype}` needs `{key}`"
+            ))
+        })
+    }
+
     let dtype: String = dict
         .get_item("type")?
-        .ok_or_else(|| PyRuntimeError::new_err("missing 'type'"))?
+        .ok_or_else(|| PyValueError::new_err("a search dimension needs `type`"))?
         .extract()?;
     let name: String = dict
         .get_item("name")?
-        .ok_or_else(|| PyRuntimeError::new_err("missing 'name'"))?
+        .ok_or_else(|| PyValueError::new_err("a search dimension needs `name`"))?
         .extract()?;
 
     match dtype.as_str() {
         "float" => {
-            let low: f64 = dict.get_item("low")?.unwrap().extract()?;
-            let high: f64 = dict.get_item("high")?.unwrap().extract()?;
+            let low: f64 = required(dict, "low", &name, "float")?.extract()?;
+            let high: f64 = required(dict, "high", &name, "float")?.extract()?;
             let scale_str: String = dict
                 .get_item("scale")?
                 .map(|s| s.extract().unwrap_or_default())
@@ -753,8 +777,8 @@ fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<Sea
             })
         }
         "int" => {
-            let low: i64 = dict.get_item("low")?.unwrap().extract()?;
-            let high: i64 = dict.get_item("high")?.unwrap().extract()?;
+            let low: i64 = required(dict, "low", &name, "int")?.extract()?;
+            let high: i64 = required(dict, "high", &name, "int")?.extract()?;
             Ok(SearchDimension::Int {
                 name,
                 low,
@@ -763,7 +787,7 @@ fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<Sea
             })
         }
         "categorical" => {
-            let choices_py = dict.get_item("choices")?.unwrap();
+            let choices_py = required(dict, "choices", &name, "categorical")?;
             let choices_list = choices_py.downcast::<PyList>()?;
             let choices: Vec<serde_json::Value> = choices_list
                 .iter()
@@ -2986,8 +3010,13 @@ impl PyGraph {
             )
         })?;
 
-        driver
-            .resume_with(run_id, node_id, turn, &reason, py_to_value(py, answer)?)
+        // Release the GIL, like every sibling entry point. Resuming
+        // drives the effect journal forward, which can perform a model
+        // call — holding the GIL across that blocks every other Python
+        // thread in the process for the length of an HTTP request. `fit`,
+        // `forward` and `run` all release it; this one did not.
+        let answer = py_to_value(py, answer)?;
+        py.allow_threads(|| driver.resume_with(run_id, node_id, turn, &reason, answer))
             .map_err(soma_err_to_py)
     }
 
