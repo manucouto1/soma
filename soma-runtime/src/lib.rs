@@ -20,6 +20,7 @@ pub mod node_catalog;
 pub mod pruner;
 pub mod runner;
 pub mod sampler;
+pub mod strategy;
 pub mod tracking;
 
 pub use cache::{LocalCache, MemoryCache, TieredCache};
