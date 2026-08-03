@@ -40,7 +40,8 @@ soma-core       → types, traits, serialization. The rule is no runtime, no
                   Verify with `cargo tree -p somatize-core | grep tokio` (empty).
                   Filter, Step, Value, Graph, Event, Schema, VirtualValue, Search, Study,
                   Effect/Transition, Message/ContentBlock, ToolSpec, LoopCondition,
-                  TrainingStrategy, DataStore (Local/S3/Zarr), StreamCache
+                  TrainingStrategy (the type; running one is in soma-runtime),
+                  DataStore trait + LocalDataStore, StreamCache
 soma-store      → remote DataStore backends (S3, Zarr), feature-gated and off
                   by default. Split out of soma-core because each owns a tokio
                   runtime; see docs design/decisions.
