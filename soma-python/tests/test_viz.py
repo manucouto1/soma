@@ -12,6 +12,14 @@ from soma import Filter, Graph, Study
 
 
 class _Plain(Filter):
+    # `tag` gives each node its own identity. Two nodes of the same class
+    # with the same config learn the same state and — `forward` being the
+    # identity — see the same input, so the second one's output key equals
+    # the first one's and it is served from cache. Correct behaviour, but
+    # it turns a two-node run into one node timing.
+    def __init__(self, tag="x"):
+        super().__init__(tag=tag)
+
     def fit(self, x, y=None):
         return {}
 
@@ -20,9 +28,11 @@ class _Plain(Filter):
 
 
 def _tracked_fit(tmp_path, name="viz-run"):
-    g = Graph()
-    g.node("a", _Plain())
-    g.node("b", _Plain())
+    # In-memory cache so each test's run is cold: fitting consults the
+    # output cache now, and these tests share one session SOMA_CACHE_DIR.
+    g = Graph(cache="memory")
+    g.node("a", _Plain("a"))
+    g.node("b", _Plain("b"))
     g.connect("a", "b")
     with g.track_run(name, root=str(tmp_path), kind="fit") as run:
         g.fit([1.0, 2.0])

@@ -224,7 +224,15 @@ class TestVisualization:
 # ── Event Tests ──
 
 class TestEvents:
-    def test_fit_emits_events(self):
+    def test_fit_emits_events(self, tmp_path, monkeypatch):
+        # A cold cache, on purpose. Fitting now goes through the same
+        # execution site as running, so it consults the output cache like
+        # everything else: a fit whose result is already cached reports a
+        # NodeCacheHit and never starts the node. Sharing the session
+        # cache dir made this test depend on whether some earlier test
+        # had already fitted this graph.
+        monkeypatch.setenv("SOMA_CACHE_DIR", str(tmp_path / "cache"))
+
         events = []
         g = Graph.somatize(Doubler() >> Adder())
         g.on_event(lambda e: events.append(e))
@@ -234,6 +242,27 @@ class TestEvents:
         event_types = [e["event_type"] for e in events]
         assert "NodeStarted" in event_types
         assert "NodeCompleted" in event_types
+
+    def test_a_second_identical_fit_is_served_from_cache(self, tmp_path, monkeypatch):
+        """Fitting caches like running does.
+
+        The old fit path had its own walk that never consulted the output
+        cache, so refitting recomputed every node in silence. Now the
+        second fit reports hits — which is also what makes a resumed
+        study skip work it has already done.
+        """
+        monkeypatch.setenv("SOMA_CACHE_DIR", str(tmp_path / "cache"))
+
+        def fit_once():
+            events = []
+            g = Graph.somatize(Doubler() >> Adder())
+            g.on_event(lambda e: events.append(e))
+            g.fit([1.0, 2.0])
+            time.sleep(0.2)
+            return [e["event_type"] for e in events]
+
+        assert "NodeCacheMiss" in fit_once()
+        assert "NodeCacheHit" in fit_once()
 
     def test_forward_emits_events(self):
         events = []

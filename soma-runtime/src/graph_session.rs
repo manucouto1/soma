@@ -182,13 +182,13 @@ impl GraphSession {
 
         // Store trained states from __state_ keys into NodeCatalog
         for (key, value) in &all_outputs {
-            if let Some(node_id) = key.strip_prefix("__state_") {
+            if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
                 self.library.try_set_state(node_id, value.clone())?;
             }
         }
 
         // Remove __state_ keys from returned outputs (callers expect node IDs only)
-        all_outputs.retain(|k, _| !k.starts_with("__state_"));
+        all_outputs.retain(|k, _| somatize_core::keys::node_of_state_key(k).is_none());
 
         self.fitted = true;
         Ok(all_outputs)
@@ -515,7 +515,10 @@ mod tests {
         let bus = Arc::new(EventBus::new(64));
         let mut ctx =
             Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(session.graph()));
-        ctx.set("__input__", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
+        ctx.set(
+            somatize_core::keys::GRAPH_INPUT,
+            Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
+        );
         executor::execute(&plan, &mut ctx, session.library(), &MemoryCache::default()).unwrap();
 
         let outputs: HashMap<String, Value> = ctx
@@ -577,7 +580,10 @@ mod tests {
                 compile(&graph, &lib, CompileMode::NoCache, None).unwrap();
             let bus = Arc::new(EventBus::new(64));
             let mut ctx = Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(&graph));
-            ctx.set("__input__", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
+            ctx.set(
+                somatize_core::keys::GRAPH_INPUT,
+                Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
+            );
             executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();
             ctx.store
                 .into_iter()
@@ -635,7 +641,10 @@ mod tests {
 
         let bus = Arc::new(EventBus::new(64));
         let mut ctx = Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(&graph));
-        ctx.set("__input__", Value::tensor(vec![5.0], vec![1]));
+        ctx.set(
+            somatize_core::keys::GRAPH_INPUT,
+            Value::tensor(vec![5.0], vec![1]),
+        );
         executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();
 
         let merge_output = ctx.get("merge").unwrap();

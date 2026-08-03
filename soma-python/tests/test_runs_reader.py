@@ -14,6 +14,16 @@ from soma._cache_cli import main as cli_main
 
 
 class _Plain(Filter):
+    # `tag` exists only to give each node its own identity. Without it the
+    # two nodes below are the same class with the same config, learn the
+    # same (empty) state, and — since `forward` is the identity — see the
+    # same input, so the second one's output key equals the first one's
+    # and it is legitimately served from cache. That is the content-
+    # addressed "early cutoff" working, but it leaves a two-node run with
+    # one node timing, which is not what these tests are about.
+    def __init__(self, tag="x"):
+        super().__init__(tag=tag)
+
     def fit(self, x, y=None):
         return {}
 
@@ -30,9 +40,15 @@ class _Boom(Filter):
 
 
 def _graph():
-    g = Graph()
-    g.node("a", _Plain())
-    g.node("b", _Plain())
+    # An in-memory cache, so each test's run is cold. Fitting goes through
+    # the same execution site as running now, which means it consults the
+    # output cache — and these tests share one session-scoped
+    # SOMA_CACHE_DIR, so with the persistent default the second test to
+    # fit this graph would read the first one's results and record cache
+    # hits instead of the node timings it is here to inspect.
+    g = Graph(cache="memory")
+    g.node("a", _Plain("a"))
+    g.node("b", _Plain("b"))
     g.connect("a", "b")
     return g
 
@@ -135,9 +151,13 @@ def test_runview_aggregations(tmp_path):
     assert all(s["started_ts"] is not None for s in spans)
     assert all(s["duration_ms"] is not None for s in spans)
 
-    # no cache events in this run
+    # A cold fit is all misses, one per node. Fitting used to have an
+    # execution walk of its own that never consulted the output cache, so
+    # a training run reported no cache activity at all and the report's
+    # cache panel was blank for exactly the runs that take longest.
     activity = view.cache_activity()
-    assert activity["hits"] == 0 and activity["misses"] == 0
+    assert activity["hits"] == 0
+    assert activity["misses"] == 2
 
     # no health flags, no trials
     assert view.health_flags() == []

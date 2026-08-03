@@ -44,6 +44,13 @@ pub struct RunContext<'a> {
     /// trains on the first one's recorded state and the sweep measures
     /// one seed N times. Only the Python fit path used to salt.
     pub seed: Option<i64>,
+    /// Performs and journals step effects.
+    ///
+    /// Needed only when the plan contains a step. It lives here rather than
+    /// being built inside the runner because a driver carries the journal —
+    /// which is what makes a resumed run replay instead of re-calling a
+    /// model — and only the caller knows where that journal lives.
+    pub driver: Option<crate::effects::EffectDriver>,
 }
 
 impl<'a> RunContext<'a> {
@@ -61,12 +68,22 @@ impl<'a> RunContext<'a> {
             run_id,
             graph_info,
             seed: None,
+            driver: None,
         }
     }
 
     /// Fold this run's seed into the cache keys.
     pub fn with_seed(mut self, seed: Option<i64>) -> Self {
         self.seed = seed;
+        self
+    }
+
+    /// Register the effect driver a plan containing steps needs.
+    ///
+    /// The catalog is attached here so a step that fans out dynamically can
+    /// reach the nodes it names.
+    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+        self.driver = Some(driver.with_catalog(Arc::new(self.catalog.clone())));
         self
     }
 
@@ -84,6 +101,11 @@ impl<'a> RunContext<'a> {
     ) -> Self {
         let ids = plan.node_ids();
         Self::new(catalog, cache, events, run_id, GraphInfo::for_linear(&ids))
+    }
+
+    /// Clone the driver for a run's own context.
+    pub(crate) fn driver(&self) -> Option<crate::effects::EffectDriver> {
+        self.driver.clone()
     }
 }
 

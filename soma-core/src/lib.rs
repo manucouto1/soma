@@ -21,6 +21,7 @@ pub mod event;
 pub mod filter;
 pub mod fingerprint;
 pub mod graph;
+pub mod keys;
 pub mod message;
 pub mod node;
 pub mod schema;

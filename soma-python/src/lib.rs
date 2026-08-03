@@ -2536,7 +2536,9 @@ impl PyGraph {
             // LocalRunner tags composite-produced states with "__state_{id}".
             // Regular sequential states appear under the bare node_id.
             for (key, state) in states {
-                let node_id = key.strip_prefix("__state_").unwrap_or(&key).to_string();
+                let node_id = somatize_core::keys::node_of_state_key(&key)
+                    .unwrap_or(&key)
+                    .to_string();
                 if let Err(e) = self.library.try_set_state(node_id, state) {
                     return Err(soma_err_to_py(e));
                 }
@@ -2611,7 +2613,7 @@ impl PyGraph {
             });
         let run_start = std::time::Instant::now();
 
-        let run_ctx = somatize_runtime::runner::RunContext::new(
+        let mut run_ctx = somatize_runtime::runner::RunContext::new(
             &catalog,
             self.cache.as_ref(),
             &self.event_bus,
@@ -2619,6 +2621,14 @@ impl PyGraph {
             GraphInfo::from_graph(&self.graph),
         )
         .with_seed(seed);
+
+        // A fit reaches steps now, so it has to be able to drive them —
+        // `forward` has always attached this. Without it a graph mixing
+        // filters and steps fitted the filters and then stopped at the
+        // first step for want of a driver.
+        if let Some(driver) = self.step_runtime(py, &catalog)? {
+            run_ctx = run_ctx.with_driver(driver);
+        }
 
         // Release the GIL: a Parallel plan runs branches on scoped threads
         // whose Python filters must acquire it.
@@ -2650,7 +2660,7 @@ impl PyGraph {
         // on `HashMap` order, so a scaler ends up with no learned mean
         // roughly half the time.
         for (key, state) in states {
-            if let Some(node_id) = key.strip_prefix("__state_") {
+            if let Some(node_id) = somatize_core::keys::node_of_state_key(&key) {
                 self.library
                     .try_set_state(node_id, state)
                     .map_err(soma_err_to_py)?;
@@ -2713,9 +2723,9 @@ impl PyGraph {
 
             let roots = self.graph.roots();
             if roots.len() == 1 {
-                ctx.set(format!("__input_{}", roots[0]), x_val.clone());
+                ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
             }
-            ctx.set("__input__", x_val);
+            ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
 
             py.allow_threads(|| {
                 executor::execute(
@@ -2781,9 +2791,9 @@ impl PyGraph {
 
         let roots = self.graph.roots();
         if roots.len() == 1 {
-            ctx.set(format!("__input_{}", roots[0]), x_val.clone());
+            ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
         }
-        ctx.set("__input__", x_val);
+        ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
 
         // Release the GIL: Parallel plans run branches on scoped threads
         // whose Python filters must acquire it — holding it here would

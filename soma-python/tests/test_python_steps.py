@@ -300,3 +300,49 @@ def test_a_python_step_can_sleep_and_the_journal_remembers():
     # which is the contract, and is reached only because the effect parses.
     with pytest.raises(RuntimeError, match="soma.test.echo"):
         g2.forward("go")
+
+
+# ── Fitting a graph that contains a step ──
+
+
+class Centre:
+    """A trainable filter: learns a mean, subtracts it."""
+
+    _cache_version = "1"
+    _kind = "trainable"
+
+    def fit(self, x, y=None):
+        return {"mean": sum(x) / len(x)}
+
+    def forward(self, x, state):
+        return [v - state["mean"] for v in x]
+
+
+class Total:
+    """A step that reduces whatever reaches it."""
+
+    _cache_version = "1"
+
+    def poll(self, ctx):
+        return Done(sum(ctx.input))
+
+
+def test_a_graph_mixing_a_filter_and_a_step_can_be_fitted():
+    """Fit used to be a separate, filter-only walk.
+
+    It resolved every node id against the filter half of the catalog, so a
+    step id came back as `NodeNotFound` and the whole fit failed — a graph
+    you could `run` was a graph you could not `fit`. Fit and forward go
+    through the same execution site now, so a step is simply a node.
+    """
+    g = soma.Graph(cache="memory")
+    g.node("centre", Centre())
+    g.node("total", Total())
+    g.edge("centre", "total")
+
+    g.fit([1.0, 2.0, 3.0])
+
+    # The filter learned, and the step ran on what it produced:
+    # centre([1,2,3]) = [-1,0,1], summing to 0.
+    assert g.get_node_state("centre") == {"mean": 2.0}
+    assert g.forward([1.0, 2.0, 3.0]) == 0.0

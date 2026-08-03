@@ -77,12 +77,48 @@ impl GraphInfo {
     }
 }
 
+/// What a run does to the nodes it visits.
+///
+/// Fitting and forwarding differ in exactly one way — whether a trainable
+/// node learns its state before it computes — and in nothing else. They
+/// used to be two whole execution loops: `run`/`forward` walked the plan
+/// through [`run_node`], while `fit` had a second, filter-only walk that
+/// flattened the plan and re-implemented input resolution, events, caching
+/// and panic handling. Making the difference a *value* is what lets both
+/// go through one site.
+#[derive(Clone, Debug, Default)]
+pub enum RunMode {
+    /// Every node computes with the state it already has.
+    #[default]
+    Forward,
+    /// A trainable node learns its state from its resolved input and these
+    /// labels, then computes with it. Labels are shared by the whole run;
+    /// `None` means unsupervised.
+    Fit { y: Option<Value> },
+}
+
+impl RunMode {
+    /// The labels, if this is a fit.
+    fn labels(&self) -> Option<&Value> {
+        match self {
+            Self::Forward => None,
+            Self::Fit { y } => y.as_ref(),
+        }
+    }
+
+    fn is_fit(&self) -> bool {
+        matches!(self, Self::Fit { .. })
+    }
+}
+
 /// Execution context passed to filters during runtime.
 ///
 /// Node outputs are stored as [`VirtualValue`]s — they may be materialized
 /// in memory, cached on disk, or deferred (not yet computed). The executor
 /// resolves them on demand when a downstream node needs the data.
 pub struct Context {
+    /// Fit or forward. See [`RunMode`].
+    pub mode: RunMode,
     /// Node outputs as virtual values (may be lazy).
     pub store: HashMap<String, VirtualValue>,
     /// Event bus for emitting runtime events.
@@ -122,6 +158,7 @@ pub struct Context {
 impl Context {
     pub fn new(event_bus: Arc<EventBus>, run_id: impl Into<String>) -> Self {
         Self {
+            mode: RunMode::Forward,
             store: HashMap::new(),
             event_bus,
             run_id: run_id.into(),
@@ -152,6 +189,24 @@ impl Context {
     pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
         self.graph_info = info;
         self
+    }
+
+    /// Make this a fit: trainable nodes learn from `y` before computing.
+    pub fn fitting(mut self, y: Option<Value>) -> Self {
+        self.mode = RunMode::Fit { y };
+        self
+    }
+
+    /// Record a state a node just learned.
+    ///
+    /// Stored under the same `__state_{id}` key the worker and the session
+    /// already read, and appended to `execution_order` like any other
+    /// write: that list is how [`execute_parallel`] works out what a branch
+    /// contributed, so a state written inside a branch that skipped it
+    /// would be dropped at the join. Readers asking "which node ran last"
+    /// filter reserved keys out — see [`somatize_core::keys::is_reserved`].
+    pub fn record_state(&mut self, node_id: &str, state: Value) {
+        self.set(somatize_core::keys::state_key(node_id), state);
     }
 
     /// Set the experiment seed (hashed into every cache key).
@@ -255,6 +310,7 @@ impl Context {
 
     fn snapshot(&self) -> Self {
         Self {
+            mode: self.mode.clone(),
             store: self.store.clone(),
             event_bus: self.event_bus.clone(),
             run_id: self.run_id.clone(),
@@ -328,8 +384,15 @@ pub fn execute(
         } => execute_remote(node_id, plan, ctx, catalog, cache),
 
         ExecutionPlan::Composite { node_ids } => {
-            // Sequential fallback — execute each node in order.
-            // A future Python-aware executor will pass tensors directly.
+            // A composite block exists so that a set of differentiable
+            // filters can be fitted together in one process, with tensors
+            // passed directly and autograd intact. That is a property of
+            // the *block*, not of any node in it, which is why it is
+            // handled here and not inside `run_node`.
+            if ctx.mode.is_fit() && composite_fit(node_ids, ctx, catalog)? {
+                return Ok(());
+            }
+            // Otherwise, and always when forwarding: each node in order.
             for nid in node_ids {
                 execute_node(nid, &[], ctx, catalog, cache)?;
             }
@@ -656,11 +719,20 @@ fn run_node(
     let _span = tracing::info_span!("run_node", %node_id).entered();
 
     let input = resolve_input(node_id, ctx);
+
+    // In a fit, a trainable node learns before it computes. Everything
+    // after this point is identical to a forward — which is the whole
+    // reason fit no longer needs a walk of its own.
+    let fitted = fit_state_if_needed(node_id, &node, &meta, &input, ctx, cache)?;
+
     // Borrow state via Arc — cloning the inner Value here would deep-copy
     // potentially huge tensors (encoder outputs, model weights) on every
     // forward call. Arc::clone is a cheap atomic increment.
     let state = catalog.get_state(node_id);
-    let state_ref: &Value = state.as_deref().unwrap_or(&Value::Empty);
+    let state_ref: &Value = fitted
+        .as_ref()
+        .or(state.as_deref())
+        .unwrap_or(&Value::Empty);
 
     // Nondeterministic forwards (declared via `deterministic = false`) are
     // excluded: serving a recorded result would silently freeze what the
@@ -784,6 +856,102 @@ fn run_node(
     }
 
     Ok(outcome)
+}
+
+/// Fit a whole composite block through the first filter's `composite_fit`.
+///
+/// `Ok(false)` means the block was not fitted as a block — a node is
+/// missing, or the filter declined — and the caller runs the nodes one by
+/// one instead. `Ok(true)` means the results are already stored.
+fn composite_fit(node_ids: &[String], ctx: &mut Context, catalog: &NodeCatalog) -> Result<bool> {
+    let Some(first) = node_ids.first() else {
+        return Ok(false);
+    };
+    let peers: Option<Vec<(String, Arc<dyn somatize_core::filter::Filter>)>> = node_ids
+        .iter()
+        .map(|id| catalog.get(id).map(|f| (id.clone(), f)))
+        .collect();
+    let (Some(peers), Some(filter)) = (peers, catalog.get(first)) else {
+        return Ok(false);
+    };
+
+    let input = resolve_input(first, ctx);
+    let y = ctx.mode.labels().cloned();
+    let Some(result) = filter.composite_fit(&peers, &input, y.as_ref()) else {
+        return Ok(false);
+    };
+    let (output, states) = result?;
+
+    for (id, state) in states {
+        ctx.record_state(&id, state);
+    }
+    if let Some(last) = node_ids.last() {
+        ctx.set(last.clone(), output);
+    }
+    Ok(true)
+}
+
+/// Learn this node's state, if the run is a fit and the node is trainable.
+///
+/// Returns the fitted state, or `None` when there is nothing to fit — a
+/// forward run, a stateless or library-state filter, or a step (a step's
+/// re-run semantics belong to the journal, not to a state cache).
+///
+/// The state cache key includes the labels on purpose: the same features
+/// trained against different labels must not collide, and it is salted with
+/// the run seed so a 5-seed study is five independent computations rather
+/// than one recorded five times.
+fn fit_state_if_needed(
+    node_id: &str,
+    node: &NodeImpl,
+    meta: &somatize_core::node::NodeMeta,
+    input: &Value,
+    ctx: &mut Context,
+    cache: &dyn CacheStore,
+) -> Result<Option<Value>> {
+    if !ctx.mode.is_fit() || meta.kind != somatize_core::filter::FilterKind::Trainable {
+        return Ok(None);
+    }
+    let NodeImpl::Filter(filter) = node else {
+        return Ok(None);
+    };
+
+    let y = ctx.mode.labels().cloned();
+    let key = salt_with_seed(
+        somatize_core::cache::CacheKey::for_state(
+            &filter.config_hash(),
+            &somatize_core::cache::CacheKey::for_value(input),
+            y.as_ref()
+                .map(somatize_core::cache::CacheKey::for_value)
+                .as_ref(),
+        ),
+        ctx.seed,
+    );
+
+    let state = match cache.get(&key)? {
+        Some(cached) => cached,
+        None => {
+            let start = Instant::now();
+            let learned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                filter.fit(input, y.as_ref())
+            }))
+            .map_err(|panic| SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!("fit panicked: {}", panic_message(&*panic)),
+            })??;
+            let origin = somatize_core::cache::Origin::Computed {
+                node_id: node_id.to_string(),
+                run_id: ctx.run_id.clone(),
+            };
+            if let Err(e) = cache.put_computed(&key, &learned, &origin, start.elapsed(), true) {
+                tracing::warn!(node_id, error = %e, "failed to cache fitted state");
+            }
+            learned
+        }
+    };
+
+    ctx.record_state(node_id, state.clone());
+    Ok(Some(state))
 }
 
 /// The only place in the runtime that knows a filter from a step.
