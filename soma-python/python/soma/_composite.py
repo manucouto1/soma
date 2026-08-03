@@ -78,6 +78,24 @@ class DifferentiableFilter(Filter):
     routing weights, auxiliary losses) that the user combines with the
     main loss in the training loop.
 
+    **Several predecessors.** A node that reads more than one upstream
+    node sets ``_multi_input = True`` and receives a dict keyed by
+    predecessor node id — keyed by *name*, so it does not depend on the
+    order the edges were declared in. Combining them is the filter's job,
+    because concatenating, adding and attending are different models and
+    the framework cannot pick::
+
+        class Fuse(DifferentiableFilter):
+            _multi_input = True
+
+            def forward(self, xs, state=None):
+                z = torch.cat([xs["enc"], xs["ctx"]], dim=-1)
+                return self._module(z), {}
+
+    Such a filter also builds its own module: eager ``materialize``
+    threads a single shape forward, which only describes a chain, so a
+    multi-input filter is left to build lazily on its first forward.
+
     Driving training from a graph::
 
         g = Graph.somatize(MyLayer(8) >> MyLayer(2))

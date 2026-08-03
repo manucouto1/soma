@@ -81,6 +81,14 @@ def _materialize(self: _RustGraph, sample_input: Any) -> None:
             return
     shape: tuple[int, ...] | None = tuple(x.shape[1:])
     for _, f in self.filters():
+        # Eager materialisation threads one shape forward, so it only
+        # describes a chain. A filter that reads several predecessors
+        # owns its own construction — it is the only thing that knows how
+        # it combines them — and is left to build lazily on first
+        # forward, which is the same fallback a non-diff filter gets.
+        if getattr(f, "_multi_input", False):
+            shape = None
+            continue
         if shape is not None and hasattr(f, "materialize") and hasattr(f, "output_shape"):
             f.materialize(shape)
             try:
@@ -149,56 +157,54 @@ def _parameters(self: _RustGraph) -> Iterable[Any]:
 # ── Forward (polymorphic on training state) ──────────────────
 
 
-def _require_chain(graph: _RustGraph, node_ids: list[str]) -> None:
-    """Refuse a topology this walk cannot execute.
+def _predecessors(graph: _RustGraph, node_ids: list[str]) -> dict[str, list[str]]:
+    """Live predecessors of each node, in edge order.
 
-    The training walk below threads one filter's output into the next, so
-    it only describes a graph that *is* a chain. On a fork it silently
-    feeds one branch's output to the other; on a join it drops every
-    predecessor but the last. Both produce a number, and neither produces
-    the number the graph says.
-
-    The Rust path (``run``/``forward`` through the compiler) handles the
-    general case. Until the differentiable path delegates its topology
-    there too, saying so is better than answering wrongly.
+    The walk used to thread one filter's output into the next and refuse
+    anything that was not a chain, because a chain is all it could
+    describe. Resolving each node's input from its own predecessors is
+    what lets it execute the graph the user actually drew: a fan-out is
+    two consumers reading one output, and a fan-in is a node that reads
+    two.
     """
     live = set(node_ids)
-    succ: dict[str, int] = {}
-    pred: dict[str, int] = {}
-    internal = 0
+    preds: dict[str, list[str]] = {}
     for source, target in graph.edges():
-        if source not in live or target not in live:
-            continue
-        internal += 1
-        succ[source] = succ.get(source, 0) + 1
-        pred[target] = pred.get(target, 0) + 1
+        if source in live and target in live:
+            preds.setdefault(target, []).append(source)
+    return preds
 
-    forks = sorted(n for n in node_ids if succ.get(n, 0) > 1)
-    joins = sorted(n for n in node_ids if pred.get(n, 0) > 1)
-    if forks or joins:
-        detail = ", ".join(
-            part
-            for part in (
-                f"fan-out at {forks}" if forks else "",
-                f"fan-in at {joins}" if joins else "",
-            )
-            if part
-        )
+
+def _input_for(
+    node_id: str,
+    node: Any,
+    preds: list[str],
+    outputs: dict[str, Any],
+    graph_input: Any,
+) -> Any:
+    """What this node receives: the graph's input, one output, or several.
+
+    Several arrive as a dict keyed by predecessor node id — the same
+    shape the Rust path uses for a fan-in, and independent of the order
+    the edges happened to be declared in. A filter has to say it accepts
+    that (`_multi_input = True`), because a dict handed to a `forward`
+    written for one tensor is a confusing failure deep inside torch
+    rather than a clear one here.
+    """
+    if not preds:
+        return graph_input
+    if len(preds) == 1:
+        return outputs[preds[0]]
+    if not getattr(node, "_multi_input", False):
         raise NotImplementedError(
-            f"differentiable forward supports linear graphs only ({detail}). "
-            "The Python training walk chains filters one after another, so it "
-            "cannot execute this topology correctly. Train the linear part "
-            "separately, or run inference through the Rust path with "
-            "g.eval() on a graph whose filters are not differentiable."
+            f"node `{node_id}` has {len(preds)} predecessors ({', '.join(sorted(preds))}) "
+            f"but {type(node).__name__} does not declare `_multi_input = True`. "
+            "A multi-input filter receives a dict keyed by predecessor node id "
+            "and owns how it combines them (concatenate, add, attend); the "
+            "framework cannot pick for you. Set `_multi_input = True` and "
+            "accept a dict in `forward`."
         )
-    # Degrees alone allow two disjoint chains, which the walk would splice
-    # into one. A single chain over n nodes has exactly n-1 internal edges.
-    if node_ids and internal != len(node_ids) - 1:
-        raise NotImplementedError(
-            f"differentiable forward supports a single connected chain only; "
-            f"got {len(node_ids)} filters joined by {internal} edges. "
-            "Disconnected components would be spliced into one chain."
-        )
+    return {pid: outputs[pid] for pid in preds}
 
 
 def differentiable_forward(self: _RustGraph, x: Any):
@@ -206,11 +212,16 @@ def differentiable_forward(self: _RustGraph, x: Any):
 
     Called by ``Graph.forward`` when the graph holds torch modules —
     autograd does not survive the ``Value`` boundary, so the Rust path
-    cannot be used for these. Every filter's output threads into the
-    next. ``DifferentiableFilter`` forwards branch on ``self.training``
-    (autograd live in train, ``no_grad`` in eval); ordinary filters get
-    their state from the runtime library so a non-trainable node can sit
-    in the same chain.
+    cannot be used for these. Each node reads its own predecessors: one
+    predecessor hands its output straight over, several arrive as a dict
+    keyed by node id (see :func:`_input_for`), and a root gets the
+    graph's input. ``DifferentiableFilter`` forwards branch on
+    ``self.training`` (autograd live in train, ``no_grad`` in eval);
+    ordinary filters get their state from the runtime library so a
+    non-trainable node can sit in the same graph.
+
+    The value returned is the last node in topological order — the same
+    rule the chain version used, and still deterministic.
 
     Returns ``(out, aux_by_node)`` while training and bare ``out`` in
     eval, matching what the Rust path produces.
@@ -221,14 +232,17 @@ def differentiable_forward(self: _RustGraph, x: Any):
     in ``Graph.forward`` now; this is the branch it names.
     """
     pairs = list(self.filters())
-    _require_chain(self, [node_id for node_id, _ in pairs])
+    preds = _predecessors(self, [node_id for node_id, _ in pairs])
 
     target_device = self.py_state.get("device")
     target_dtype = self.py_state.get("dtype")
 
+    outputs: dict[str, Any] = {}
     out = x
     aux_by_node: dict[str, dict] = {}
     for node_id, f in pairs:
+        # `pairs` is topological, so every predecessor has already run.
+        out = _input_for(node_id, f, preds.get(node_id, []), outputs, x)
         # Idempotent: ``Module.to(device)`` is a no-op when already on
         # that device. Catches both warm-up materialisation and
         # lazy-built modules created on first forward.
@@ -264,6 +278,7 @@ def differentiable_forward(self: _RustGraph, x: Any):
                 aux_by_node[node_id] = aux
         else:
             out = result
+        outputs[node_id] = out
     # Return shape matches the user's mode:
     #   training (any filter has training=True) → (out, aux_by_node) so
     #     callers can fold aux into the loss;

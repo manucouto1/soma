@@ -361,63 +361,100 @@ def test_legacy_filter_with_plain_forward_still_works_in_eval():
     assert out == [[1.0, 2.0], [3.0, 4.0]]
 
 
-# ── Topologies the Python walk cannot execute ────────────────
+# ── Topology the walk executes ───────────────────────────────
 
 
-def test_a_fan_out_is_refused_rather_than_silently_linearised():
-    """The differentiable walk chains filters, so a fork has no meaning.
+class Fuse(DifferentiableFilter):
+    """Reads two predecessors and concatenates them."""
 
-    It used to thread one branch's output into the other and return a
-    number — a wrong answer with no symptom. The Rust path handles the
-    general case; until this one delegates to it, refusing is the only
-    honest behaviour.
+    _multi_input = True
+
+    def __init__(self, out_dim: int):
+        super().__init__(out_dim=out_dim)
+
+    def forward(self, xs, state=None):
+        # `xs` is a dict keyed by predecessor node id.
+        z = torch.cat([xs[k] for k in sorted(xs)], dim=-1)
+        if self._module is None:
+            self._module = nn.Linear(z.shape[-1], self.out_dim)
+        if self.training:
+            return self._module(z), {}
+        with torch.no_grad():
+            return self._module(z), {}
+
+
+def test_a_fan_out_feeds_both_consumers_from_the_same_output():
+    """Both branches read `root`, not each other.
+
+    The walk used to thread one filter's output into the next and so fed
+    `left`'s output to `right`. It resolves each node's input from its
+    own predecessors now.
     """
     g = Graph()
     g.node("root", Dense(4))
     g.node("left", Dense(2))
-    g.node("right", Dense(2))
+    g.node("right", Dense(3))
     g.edge("root", "left")
     g.edge("root", "right")
+    g.train()
 
-    with pytest.raises(NotImplementedError, match="fan-out"):
-        g.forward(torch.randn(3, 8))
+    out, _aux = g.forward(torch.randn(3, 8))
+    # `right` is last in topological order and reads root's 4 features,
+    # so it produces its own 3 — not something shaped by `left`.
+    assert out.shape == (3, 3)
 
 
-def test_a_fan_in_is_refused_rather_than_dropping_a_predecessor():
+def test_a_fan_in_receives_a_dict_keyed_by_predecessor():
+    g = Graph()
+    g.node("enc", Dense(4))
+    g.node("ctx", Dense(5))
+    g.node("fuse", Fuse(2))
+    g.edge("enc", "fuse")
+    g.edge("ctx", "fuse")
+    g.train()
+
+    out, _aux = g.forward(torch.randn(3, 8))
+    assert out.shape == (3, 2)
+    assert out.requires_grad, "autograd survives the join"
+
+
+def test_a_fan_in_into_a_single_input_filter_says_so():
+    """A dict handed to a `forward` written for one tensor fails deep
+    inside torch; this fails here, naming the node and the fix."""
     g = Graph()
     g.node("a", Dense(4))
     g.node("b", Dense(4))
     g.node("join", Dense(2))
     g.edge("a", "join")
     g.edge("b", "join")
+    g.train()
 
-    with pytest.raises(NotImplementedError, match="fan-in"):
+    with pytest.raises(NotImplementedError, match="_multi_input"):
         g.forward(torch.randn(3, 8))
 
 
-def test_disconnected_chains_are_refused():
-    """Degrees alone would allow two separate chains; splicing them into
-    one is exactly the silent mis-composition this guard exists for."""
+def test_disconnected_components_each_get_the_graph_input():
+    """Two roots are two roots, not one spliced chain."""
     g = Graph()
     g.node("a1", Dense(4))
     g.node("a2", Dense(2))
     g.edge("a1", "a2")
-    g.node("b1", Dense(4))
+    g.node("b1", Dense(6))
+    g.train()
 
-    with pytest.raises(NotImplementedError, match="single connected chain"):
-        g.forward(torch.randn(3, 8))
+    out, _aux = g.forward(torch.randn(3, 8))
+    assert out.shape in {(3, 2), (3, 6)}
 
 
 def test_a_linear_chain_still_trains():
-    """The guard must not cost the case it was protecting."""
+    """The general path must not cost the case it replaced."""
     g = Graph()
     g.node("h", Dense(4))
     g.node("out", Dense(2))
     g.edge("h", "out")
     g.train()
 
-    result = g.forward(torch.randn(3, 8))
-    out, aux = result
+    out, aux = g.forward(torch.randn(3, 8))
     assert out.shape == (3, 2)
     assert isinstance(aux, dict)
 
