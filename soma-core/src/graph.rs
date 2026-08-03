@@ -12,7 +12,8 @@ use std::collections::{HashMap, HashSet};
 /// Unique identifier for a node in a graph.
 ///
 /// Currently a type alias. Will be promoted to a newtype in a future version
-/// for stronger type safety (tracked in architecture-review.md).
+/// for stronger type safety. Deliberately deferred — see the
+/// "NodeId stays a String" entry in docs design/decisions.
 pub type NodeId = String;
 
 /// Unique identifier for an edge in a graph.

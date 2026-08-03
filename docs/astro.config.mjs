@@ -64,6 +64,7 @@ export default defineConfig({
 				{
 					label: 'Design',
 					items: [
+						{ label: 'Architecture Decisions', slug: 'design/decisions' },
 						{ label: 'Filter Model', slug: 'design/filter-model' },
 						{ label: 'Caching System', slug: 'design/caching' },
 						{ label: 'Streaming', slug: 'design/streaming' },
