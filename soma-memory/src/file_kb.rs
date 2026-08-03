@@ -126,14 +126,34 @@ impl FileKnowledgeBase {
 
 impl KnowledgeBase for FileKnowledgeBase {
     fn record(&mut self, experiment: ExperimentRecord) -> Result<()> {
-        let line = serde_json::to_string(&experiment)
+        let mut line = serde_json::to_string(&experiment)
             .map_err(|e| SomaError::Serialization(e.to_string()))?;
-        let mut file = OpenOptions::new()
+        line.push('\n');
+
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(file, "{line}")?;
+
+        // One line, one write, under an exclusive advisory lock.
+        //
+        // `writeln!` was two writes (payload, then newline), and nothing
+        // serialised concurrent writers. Two processes recording at once
+        // could therefore interleave *inside* a record — and a torn line in
+        // the middle of the file is the one corruption `load_from_offset`
+        // cannot treat as a racing tail, so it fails the whole open. The
+        // lock removes the interleaving; a single `write_all` keeps the
+        // record whole even against a writer that ignores the lock.
+        file.lock()?;
+        let write = (&file).write_all(line.as_bytes());
+        // `sync_data`, not just a flush: the pool is meant to survive the
+        // crash of the run that was appending to it, and buffered bytes in
+        // the page cache do not.
+        let sync = write.and_then(|()| file.sync_data());
+        let unlock = file.unlock();
         drop(file);
+        sync?;
+        unlock?;
         // Fold the log back in rather than pushing `experiment`
         // straight into memory. The log is then the single source of
         // what this handle holds: our own line and anything another
@@ -187,6 +207,52 @@ mod tests {
         assert_eq!(kb.len(), 2);
         assert!(kb.get("e1").unwrap().is_some());
         assert_eq!(kb.experiments_in_line("mos").unwrap().len(), 2);
+    }
+
+    /// Several writers on one pool must not shred each other's records.
+    ///
+    /// Records are deliberately large: a small line slips through a
+    /// racy append by luck, a 64 KiB one does not. Without the exclusive
+    /// lock the interleaving lands *mid-file*, which
+    /// `corrupt_middle_line_is_an_error` (below) shows is fatal to the
+    /// whole pool — not just to the record that lost the race.
+    #[test]
+    fn concurrent_writers_do_not_tear_each_others_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("experiments.jsonl");
+
+        const WRITERS: usize = 8;
+        const EACH: usize = 6;
+        let bulk = "x".repeat(64 * 1024);
+
+        std::thread::scope(|scope| {
+            for w in 0..WRITERS {
+                let path = &path;
+                let bulk = &bulk;
+                scope.spawn(move || {
+                    let mut kb = FileKnowledgeBase::open(path).unwrap();
+                    for i in 0..EACH {
+                        let id = format!("w{w}-{i}");
+                        kb.record(
+                            ExperimentRecord::new(&id, format!("{bulk}-{id}"))
+                                .with_research_line("mos"),
+                        )
+                        .unwrap();
+                    }
+                });
+            }
+        });
+
+        // A torn line in the middle makes `open` fail outright, so simply
+        // getting a handle back is already half the assertion.
+        let kb = FileKnowledgeBase::open(&path).unwrap();
+        assert_eq!(kb.len(), WRITERS * EACH);
+        for w in 0..WRITERS {
+            for i in 0..EACH {
+                let id = format!("w{w}-{i}");
+                assert!(kb.get(&id).unwrap().is_some(), "{id} was lost");
+            }
+        }
     }
 
     #[test]
