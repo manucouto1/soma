@@ -1850,6 +1850,7 @@ impl PyGraph {
         let transport = somatize_worker::WsTransport::new(&addr, token.clone());
         let input_source = self.resolve_transport(x, &transport)?;
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: somatize_core::util::timestamp_id("remote_plan"),
             plan: compile_result.plan,
             input: Some(input_source),
@@ -1935,6 +1936,7 @@ impl PyGraph {
         let stream_id = somatize_core::util::timestamp_id("stream");
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: stream_id,
             plan: compile_result.plan,
             input: None, // input comes via chunks

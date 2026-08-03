@@ -165,6 +165,17 @@ impl Worker {
     /// In **Forward** mode: executes the compiled plan directly.
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
+
+        // Before anything else. A plan this build only partly understands
+        // must be refused, not executed with the parts it recognised.
+        if let Err(message) = plan.check_version() {
+            tracing::error!("{message}");
+            return PlanResult::Failed {
+                error: message,
+                duration_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+
         let _span = tracing::info_span!(
             "execute_plan",
             plan_id = %plan.plan_id,
@@ -625,6 +636,7 @@ mod tests {
         worker.register_filter("doubler", Box::new(TestDoubler));
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_001".into(),
             plan: ExecutionPlan::Execute {
                 node_id: "doubler".into(),
@@ -663,6 +675,7 @@ mod tests {
         // Don't register any filters
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_002".into(),
             plan: ExecutionPlan::Execute {
                 node_id: "nonexistent".into(),
@@ -707,6 +720,7 @@ mod tests {
         worker.register_filter("d2", Box::new(TestDoubler));
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_003".into(),
             plan: ExecutionPlan::Sequence(vec![
                 ExecutionPlan::Execute {
@@ -744,6 +758,7 @@ mod tests {
         let mut rx = worker.subscribe();
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_004".into(),
             plan: ExecutionPlan::Execute {
                 node_id: "doubler".into(),

@@ -428,25 +428,47 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                 }
             }
             Some(Ok(Message::Binary(bytes))) => {
-                if let Ok(stream_msg) = rmp_serde::from_slice::<StreamMessage>(&bytes) {
-                    // Chunk processing drives the same Python subprocess as
-                    // a plan does, so it belongs off the reactor too.
-                    let st = state.clone();
-                    let reply =
-                        tokio::task::spawn_blocking(move || handle_stream_message(stream_msg, &st))
-                            .await
-                            .unwrap_or_else(|e| {
-                                tracing::error!("stream message handler panicked: {e}");
-                                None
-                            });
-                    if let Some(reply_msg) = reply {
-                        let reply_bytes = rmp_serde::to_vec(&reply_msg).unwrap_or_default();
-                        if socket
-                            .send(Message::Binary(reply_bytes.into()))
-                            .await
-                            .is_err()
-                        {
-                            break;
+                // A frame that will not decode is reported, not dropped.
+                // Swallowing it behind `if let Ok(..)` is what let a
+                // months-old encoding bug look like a chunk that simply
+                // never arrived.
+                let stream_msg = match crate::protocol::decode_frame(&bytes) {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        tracing::error!("{e}");
+                        let _ = socket
+                            .send(Message::Text(error_reply(&e.to_string()).into()))
+                            .await;
+                        continue;
+                    }
+                };
+
+                // Chunk processing drives the same Python subprocess as
+                // a plan does, so it belongs off the reactor too.
+                let st = state.clone();
+                let reply =
+                    tokio::task::spawn_blocking(move || handle_stream_message(stream_msg, &st))
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::error!("stream message handler panicked: {e}");
+                            None
+                        });
+                if let Some(reply_msg) = reply {
+                    match crate::protocol::encode_frame(&reply_msg) {
+                        Ok(reply_bytes) => {
+                            if socket
+                                .send(Message::Binary(reply_bytes.into()))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("{e}");
+                            let _ = socket
+                                .send(Message::Text(error_reply(&e.to_string()).into()))
+                                .await;
                         }
                     }
                 }

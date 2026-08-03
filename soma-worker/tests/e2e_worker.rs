@@ -79,6 +79,7 @@ async fn worker_ws_execute_plan() {
     // Send a plan
     use futures_util::{SinkExt, StreamExt};
     let plan = SerializedPlan {
+        protocol_version: PROTOCOL_VERSION,
         plan_id: "test_001".into(),
         plan: ExecutionPlan::Execute {
             node_id: "doubler".into(),
@@ -152,6 +153,7 @@ async fn worker_ws_sequence_plan() {
 
     use futures_util::{SinkExt, StreamExt};
     let plan = SerializedPlan {
+        protocol_version: PROTOCOL_VERSION,
         plan_id: "seq_001".into(),
         plan: ExecutionPlan::Sequence(vec![
             ExecutionPlan::Execute {

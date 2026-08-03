@@ -6,6 +6,7 @@
 use somatize_compiler::ExecutionPlan;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::value::Value;
+use somatize_runtime::executor::RunMode;
 use somatize_runtime::node_catalog::NodeCatalog;
 use somatize_runtime::runner::Transport;
 use std::collections::HashMap;
@@ -230,7 +231,7 @@ impl WsTransport {
                     tokio::time::timeout(std::time::Duration::from_millis(1), ws.next()).await
                 {
                     if let Ok(StreamMessage::ChunkResult { value, .. }) =
-                        rmp_serde::from_slice(&resp)
+                        crate::protocol::decode_frame(&resp)
                     {
                         results.push(value);
                     }
@@ -248,7 +249,7 @@ impl WsTransport {
             // Whatever is left, then the barrier filters' flush.
             let mut flushed: Option<Value> = None;
             while let Some(Ok(Message::Binary(resp))) = ws.next().await {
-                match rmp_serde::from_slice::<StreamMessage>(&resp) {
+                match crate::protocol::decode_frame(&resp) {
                     Ok(StreamMessage::ChunkResult { value, .. }) => results.push(value),
                     Ok(StreamMessage::StreamComplete { result, .. }) => match result {
                         PlanResult::Success { output, .. } => {
@@ -316,7 +317,7 @@ where
     S::Error: std::fmt::Display,
 {
     use futures_util::SinkExt;
-    let bytes = rmp_serde::to_vec(&msg).map_err(|e| SomaError::Other(format!("msgpack: {e}")))?;
+    let bytes = crate::protocol::encode_frame(&msg)?;
     ws.send(tokio_tungstenite::tungstenite::Message::Binary(
         bytes.into(),
     ))
@@ -330,23 +331,22 @@ impl Transport for WsTransport {
         plan: &ExecutionPlan,
         _filters: &NodeCatalog,
         input: &Value,
-        y: Option<&Value>,
-        fit_mode: bool,
+        mode: &RunMode,
     ) -> Result<(Value, HashMap<String, Value>)> {
         let serialized = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: somatize_core::util::timestamp_id("remote"),
             plan: plan.clone(),
             input: Some(InputSource::Inline {
                 value: input.clone(),
             }),
             filters: vec![], // TODO: serialize from NodeCatalog if needed
-            mode: if fit_mode {
-                ExecutionMode::Fit {
-                    y: y.cloned(),
+            mode: match mode {
+                RunMode::Fit { y } => ExecutionMode::Fit {
+                    y: y.clone(),
                     batch_size: None,
-                }
-            } else {
-                ExecutionMode::Forward
+                },
+                RunMode::Forward => ExecutionMode::Forward,
             },
             metadata: serde_json::json!({}),
         };

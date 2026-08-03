@@ -16,6 +16,28 @@ pub type WorkerId = String;
 /// Unique plan execution identifier.
 pub type PlanId = String;
 
+/// What this build speaks.
+///
+/// The wire had no version at all, while the two other formats this
+/// workspace persists — tracking records and experiment records — both
+/// carry one. A driver and a worker from different builds simply
+/// exchanged JSON and hoped: a field the receiver did not know was
+/// dropped by `#[serde(default)]`, so a plan compiled by a newer
+/// coordinator ran with pieces of it silently missing, and the failure
+/// surfaced as a wrong result rather than as a refusal.
+///
+/// Bump it whenever a change alters what a peer must understand to
+/// execute a plan correctly — not for a purely additive field that an
+/// older peer can safely ignore.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Version carried by a payload written before the field existed.
+///
+/// Distinct from 1 so a peer can tell "did not say" from "said 1".
+fn unversioned() -> u32 {
+    0
+}
+
 /// Hardware and software capabilities of a worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capabilities {
@@ -148,6 +170,9 @@ pub enum ExecutionMode {
 /// A serialized plan ready for remote execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedPlan {
+    /// What the sender speaks. See [`PROTOCOL_VERSION`].
+    #[serde(default = "unversioned")]
+    pub protocol_version: u32,
     pub plan_id: PlanId,
     pub plan: ExecutionPlan,
     /// Input data — inline for small values, DataRef for large ones.
@@ -159,6 +184,92 @@ pub struct SerializedPlan {
     #[serde(default)]
     pub mode: ExecutionMode,
     pub metadata: serde_json::Value,
+}
+
+/// Encode a streaming frame.
+///
+/// `to_vec_named`, not `to_vec`. msgpack can write a struct either as a map
+/// of named fields or as a bare array of values, and `rmp_serde::to_vec`
+/// chooses the array. `Value` is an adjacently-tagged enum, which can only
+/// be *read back* from named fields — so every frame carrying a tensor
+/// encoded fine and then failed to decode with "invalid type: sequence,
+/// expected struct variant Value::Tensor".
+///
+/// Nobody saw it because both receivers dropped the error: one behind
+/// `if let Ok(..)`, the other behind `unwrap_or_default()`, which sent an
+/// empty frame. The chunk simply never arrived.
+pub fn encode_frame(msg: &StreamMessage) -> somatize_core::error::Result<Vec<u8>> {
+    rmp_serde::to_vec_named(msg).map_err(|e| {
+        somatize_core::error::SomaError::Other(format!("encoding a stream frame: {e}"))
+    })
+}
+
+/// Decode a streaming frame.
+pub fn decode_frame(bytes: &[u8]) -> somatize_core::error::Result<StreamMessage> {
+    rmp_serde::from_slice(bytes).map_err(|e| {
+        somatize_core::error::SomaError::Other(format!("decoding a stream frame: {e}"))
+    })
+}
+
+impl SerializedPlan {
+    /// A plan tagged with the version this build speaks.
+    ///
+    /// Callers build plans through this rather than the literal, so the
+    /// version cannot be forgotten at one of the six construction sites.
+    pub fn new(plan_id: impl Into<PlanId>, plan: ExecutionPlan) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            plan_id: plan_id.into(),
+            plan,
+            input: None,
+            filters: Vec::new(),
+            mode: ExecutionMode::Forward,
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    pub fn with_input(mut self, input: InputSource) -> Self {
+        self.input = Some(input);
+        self
+    }
+
+    pub fn with_filters(mut self, filters: Vec<SerializedFilter>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    pub fn with_mode(mut self, mode: ExecutionMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Can this build execute the plan as its sender meant it?
+    ///
+    /// Refusing is the point. Executing a plan you only partly understand
+    /// produces a number, and nothing downstream can tell it apart from a
+    /// correct one.
+    pub fn check_version(&self) -> std::result::Result<(), String> {
+        if self.protocol_version == PROTOCOL_VERSION {
+            return Ok(());
+        }
+        Err(format!(
+            "protocol mismatch: this worker speaks version {PROTOCOL_VERSION}, \
+             the plan was sent as version {} ({}). Upgrade whichever side is older",
+            self.protocol_version,
+            if self.protocol_version == 0 {
+                "a build from before the wire was versioned"
+            } else if self.protocol_version < PROTOCOL_VERSION {
+                "older"
+            } else {
+                "newer"
+            }
+        ))
+    }
 }
 
 /// Messages from Worker → Coordinator.
@@ -386,6 +497,132 @@ mod tests {
     use super::*;
     use somatize_core::event::PlanSummary;
 
+    fn sample_plan() -> SerializedPlan {
+        SerializedPlan::new(
+            "p1",
+            ExecutionPlan::Execute {
+                node_id: "a".into(),
+            },
+        )
+        .with_input(InputSource::Inline {
+            value: Value::tensor(vec![1.0, 2.0], vec![2]),
+        })
+    }
+
+    /// Every `StreamMessage` variant survives the encoding it actually
+    /// travels in.
+    ///
+    /// The streaming half of the protocol goes over WebSocket *binary*
+    /// frames as msgpack, and had no round-trip test at all — every
+    /// existing test covered the JSON path, which these messages never
+    /// take. `rmp_serde` and `serde_json` disagree about enough
+    /// (integer widths, `Option` in adjacently-tagged enums) that passing
+    /// one proves nothing about the other.
+    #[test]
+    fn every_stream_message_survives_msgpack() {
+        let messages = vec![
+            StreamMessage::StreamBegin {
+                stream_id: "s1".into(),
+                plan_id: "p1".into(),
+                total_chunks: Some(3),
+                plan: Box::new(sample_plan()),
+            },
+            StreamMessage::StreamBegin {
+                stream_id: "s1".into(),
+                plan_id: "p1".into(),
+                total_chunks: None,
+                plan: Box::new(sample_plan()),
+            },
+            StreamMessage::ChunkData {
+                stream_id: "s1".into(),
+                chunk_index: 2,
+                value: Value::tensor(vec![1.0, 2.0], vec![2]),
+            },
+            StreamMessage::StreamEnd {
+                stream_id: "s1".into(),
+            },
+            StreamMessage::ChunkResult {
+                stream_id: "s1".into(),
+                chunk_index: 2,
+                value: Value::text("done"),
+            },
+            StreamMessage::StreamComplete {
+                stream_id: "s1".into(),
+                result: PlanResult::Success {
+                    output: OutputDelivery::Inline {
+                        value: Value::text("out"),
+                    },
+                    duration_ms: 12,
+                    states: Default::default(),
+                },
+            },
+            StreamMessage::StreamComplete {
+                stream_id: "s1".into(),
+                result: PlanResult::Failed {
+                    error: "boom".into(),
+                    duration_ms: 3,
+                },
+            },
+        ];
+
+        for msg in messages {
+            let bytes = encode_frame(&msg).expect("encode");
+            let back = decode_frame(&bytes)
+                .unwrap_or_else(|e| panic!("msgpack round-trip failed for {msg:?}: {e}"));
+            assert_eq!(format!("{msg:?}"), format!("{back:?}"));
+        }
+    }
+
+    /// A `SerializedFilter` carries cloudpickle bytes, which JSON cannot
+    /// hold — hence the base64 helper, which nothing tested.
+    #[test]
+    fn pickled_filter_bytes_survive_json() {
+        let filter = SerializedFilter {
+            node_id: "clf".into(),
+            pickled_filter: vec![0x80, 0x05, 0x00, 0xff, 0xfe],
+            state: None,
+            requirements: vec!["numpy".into()],
+            trainable: true,
+            config_hash: None,
+        };
+        let json = serde_json::to_string(&filter).unwrap();
+        let back: SerializedFilter = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pickled_filter, filter.pickled_filter);
+        assert_eq!(back.requirements, filter.requirements);
+    }
+
+    /// A plan from a build that speaks a different version is refused.
+    #[test]
+    fn a_version_mismatch_is_refused_not_executed() {
+        let mut plan = sample_plan();
+        assert!(plan.check_version().is_ok());
+
+        plan.protocol_version = PROTOCOL_VERSION + 1;
+        let err = plan.check_version().expect_err("newer must be refused");
+        assert!(err.contains("newer"), "{err}");
+
+        plan.protocol_version = 0;
+        let err = plan
+            .check_version()
+            .expect_err("unversioned must be refused");
+        assert!(err.contains("before the wire was versioned"), "{err}");
+    }
+
+    /// A payload written before the field existed reads as version 0, not
+    /// as "this build's version".
+    #[test]
+    fn a_plan_without_a_version_field_does_not_claim_ours() {
+        let json = serde_json::json!({
+            "plan_id": "old",
+            "plan": {"Execute": {"node_id": "a"}},
+            "input": null,
+            "metadata": {}
+        });
+        let plan: SerializedPlan = serde_json::from_value(json).expect("decodes");
+        assert_eq!(plan.protocol_version, 0);
+        assert!(plan.check_version().is_err());
+    }
+
     #[test]
     fn capabilities_serde() {
         let caps = Capabilities {
@@ -431,6 +668,7 @@ mod tests {
     fn coordinator_message_serde() {
         let msg = CoordinatorToWorker::AssignPlan {
             plan: SerializedPlan {
+                protocol_version: PROTOCOL_VERSION,
                 plan_id: "plan_001".into(),
                 plan: ExecutionPlan::Execute {
                     node_id: "train".into(),
