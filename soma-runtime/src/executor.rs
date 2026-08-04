@@ -644,6 +644,84 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic")
 }
 
+// ── The primitives every execution path shares ──
+//
+// `run_node` composes these for the topological walk; the stream driver
+// composes the same three per chunk. Anything that must be true of every
+// node execution — the memoization guard, the one key derivation, panic
+// containment, provenance on writes — lives here and nowhere else.
+
+/// The node's output key, or `None` when it must not be memoized.
+///
+/// The single owner of the `cacheable && deterministic` guard and of the
+/// derivation `hash(config + state + input)`, salted with the run seed.
+/// Nondeterministic forwards are excluded because serving a recorded
+/// result would silently freeze what the user expects to vary.
+pub(crate) fn output_key(
+    node: &NodeImpl,
+    meta: &somatize_core::node::NodeMeta,
+    state: &Value,
+    input_key: &somatize_core::cache::CacheKey,
+    seed: Option<i64>,
+) -> Option<somatize_core::cache::CacheKey> {
+    if !(meta.cacheable && meta.deterministic) {
+        return None;
+    }
+    let key = somatize_core::cache::CacheKey::for_output(
+        &node.config_hash(),
+        &somatize_core::cache::CacheKey::for_value(state),
+        input_key,
+    );
+    Some(salt_with_seed(key, seed))
+}
+
+/// Run the node's own computation, containing any panic.
+///
+/// The `catch_unwind` around [`run_node_inner`] — a panic in user code
+/// (a Python filter or step alike) must not crash the process.
+pub(crate) fn compute_node(
+    node: &NodeImpl,
+    node_id: &str,
+    ctx: &Context,
+    input: &Value,
+    state: &Value,
+) -> Result<NodeOutcome> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_node_inner(node, node_id, ctx, input, state)
+    }));
+    match result {
+        Ok(inner) => inner,
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            tracing::error!(node_id, "node panicked: {msg}");
+            Err(SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!("node panicked: {msg}"),
+            })
+        }
+    }
+}
+
+/// Store a computed output with its provenance. Best-effort: a full
+/// cache disk must never fail the run.
+pub(crate) fn store_output(
+    cache: &dyn CacheStore,
+    key: &somatize_core::cache::CacheKey,
+    output: &Value,
+    node_id: &str,
+    run_id: &str,
+    duration: std::time::Duration,
+    deterministic: bool,
+) {
+    let origin = somatize_core::cache::Origin::Computed {
+        node_id: node_id.to_string(),
+        run_id: run_id.to_string(),
+    };
+    if let Err(e) = cache.put_computed(key, output, &origin, duration, deterministic) {
+        tracing::warn!(node_id, error = %e, "failed to cache node output");
+    }
+}
+
 /// Run one node and act on how it finished.
 ///
 /// The single entry point for both kinds. Everything that does not depend
@@ -757,20 +835,16 @@ fn run_node(
         .or(state.as_deref())
         .unwrap_or(&Value::Empty);
 
-    // Nondeterministic forwards (declared via `deterministic = false`) are
-    // excluded: serving a recorded result would silently freeze what the
-    // user expects to vary. (Their fit STATES still cache — any recorded
-    // training result is acceptable, constructive-trace semantics.)
-    let out_key = if meta.cacheable && meta.deterministic {
-        let key = somatize_core::cache::CacheKey::for_output(
-            &node.config_hash(),
-            &somatize_core::cache::CacheKey::for_value(state_ref),
-            &ctx.input_hash(node_id, &input),
-        );
-        Some(salt_with_seed(key, ctx.seed))
-    } else {
-        None
-    };
+    // Nondeterministic forwards are excluded by `output_key` — their fit
+    // STATES still cache: any recorded training result is acceptable,
+    // constructive-trace semantics.
+    let out_key = output_key(
+        &node,
+        &meta,
+        state_ref,
+        &ctx.input_hash(node_id, &input),
+        ctx.seed,
+    );
 
     // `get_located`, not `get`: which tier served the value is the whole
     // content of this event, and hardcoding `Memory` made every per-tier
@@ -804,26 +878,7 @@ fn run_node(
         effectful: meta.effectful,
     });
 
-    // catch_unwind: a panic in user code must not crash the process. It
-    // wraps the step branch too — a Python step is user code by the same
-    // argument a Python filter is, and it used to take the process down.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_node_inner(&node, node_id, ctx, &input, state_ref)
-    }));
-
-    let result = match result {
-        Ok(inner) => inner,
-        Err(panic) => {
-            let msg = panic_message(&*panic);
-            tracing::error!(node_id, "node panicked: {msg}");
-            Err(SomaError::Execution {
-                node_id: node_id.to_string(),
-                message: format!("node panicked: {msg}"),
-            })
-        }
-    };
-
-    let outcome = match result {
+    let outcome = match compute_node(&node, node_id, ctx, &input, state_ref) {
         Ok(outcome) => outcome,
         Err(e) => {
             tracing::error!(node_id, error = %e, "node execution failed");
@@ -841,16 +896,15 @@ fn run_node(
         NodeOutcome::Produced(output) => {
             let summary = format!("{output}");
             if let Some(key) = &out_key {
-                // Best-effort: a full cache disk must never fail the run.
-                let origin = somatize_core::cache::Origin::Computed {
-                    node_id: node_id.to_string(),
-                    run_id: ctx.run_id.clone(),
-                };
-                if let Err(e) =
-                    cache.put_computed(key, output, &origin, duration, meta.deterministic)
-                {
-                    tracing::warn!(node_id, error = %e, "failed to cache node output");
-                }
+                store_output(
+                    cache,
+                    key,
+                    output,
+                    node_id,
+                    &ctx.run_id,
+                    duration,
+                    meta.deterministic,
+                );
             }
             let vv = ctx.maybe_spill(node_id, output.clone());
             ctx.set_virtual(node_id, vv);
