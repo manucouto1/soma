@@ -75,6 +75,14 @@ jobs:
       - name: cargo test (with chronos feature)
         run: cargo test -p somatize-memory --features chronos
 
+      # `cargo test --workspace` builds default features only, so a type
+      # change can pass everything above and still break code behind a
+      # feature gate — which is exactly how the chronos build broke once.
+      - name: cargo check (every feature-gated path)
+        run: |
+          cargo check -p somatize-store --all-features
+          cargo check -p somatize --features full
+
   test-python:
     name: Python Tests
     runs-on: ubuntu-latest

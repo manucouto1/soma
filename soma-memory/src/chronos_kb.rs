@@ -211,10 +211,10 @@ fn simple_hash(s: &str) -> u64 {
 mod tests {
     use super::*;
     use crate::record::Trend;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn make_exp(id: &str, line: &str, f1: f64) -> ExperimentRecord {
-        let mut metrics = HashMap::new();
+        let mut metrics = BTreeMap::new();
         metrics.insert("f1".to_string(), f1);
         ExperimentRecord::new(id, format!("Experiment {id}"))
             .with_research_line(line)
