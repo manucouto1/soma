@@ -116,79 +116,38 @@ impl PyGraph {
         }
         let x_val = py_to_value(py, x)?;
 
-        // Streaming mode: remote via WS Binary, local via StreamExecutor
-        if stream {
-            if !self.workers.is_empty() {
-                // Release GIL during WS dispatch so worker thread can acquire
-                // it for Python execution.
-                let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
-                return value_to_py(py, &output);
-            }
-            // Local streaming: compile as Stream plan, execute via StreamExecutor
-            let catalog = self.rebuild_catalog(py)?;
-            let compile_result =
-                somatize_compiler::compile_stream(&self.graph, &catalog, chunk_size)
-                    .map_err(soma_err_to_py)?;
-
-            let graph_info = GraphInfo::from_graph(&self.graph);
-            let mut ctx = Context::new(
-                self.event_bus.clone(),
-                somatize_core::util::timestamp_id("stream_forward"),
-            )
-            .with_graph_info(graph_info)
-            .with_seed(seed);
-
-            let roots = self.graph.roots();
-            if roots.len() == 1 {
-                ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
-            }
-            ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
-
-            py.allow_threads(|| {
-                executor::execute(
-                    &compile_result.plan,
-                    &mut ctx,
-                    &catalog,
-                    self.cache.as_ref(),
-                )
-            })
-            .map_err(soma_err_to_py)?;
-
-            let leaves = self.graph.leaves();
-            let output = leaves
-                .first()
-                .and_then(|leaf| ctx.get(leaf).cloned())
-                .or_else(|| {
-                    // The last node that actually ran — skipping the run's
-                    // own reserved entries, which `last()` alone would
-                    // happily return as though a node had produced them.
-                    ctx.execution_order()
-                        .iter()
-                        .rev()
-                        .find(|id| !somatize_core::keys::is_reserved(id))
-                        .and_then(|id| ctx.get(id).cloned())
-                })
-                .unwrap_or(Value::Empty);
-
+        // Remote streaming: chunks over WS Binary to the worker.
+        if stream && !self.workers.is_empty() {
+            // Release GIL during WS dispatch so worker thread can acquire
+            // it for Python execution.
+            let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
             return value_to_py(py, &output);
         }
 
         // Dispatch entire plan remotely if workers registered and no node forces local
-        if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
+        if !stream && !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
             let (output, _states) = py.allow_threads(|| {
                 self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)
             })?;
             return value_to_py(py, &output);
         }
 
-        // Local execution (with optional remote executor for mixed graphs)
+        // Local execution — one path whether chunked or not. Streaming
+        // used to be a hand-rolled sibling that attached no driver, no
+        // transport, ignored a resumed run's id and picked its output
+        // differently; now the ONLY difference is which compiler entry
+        // produced the plan.
         let catalog = self.rebuild_catalog(py)?;
-        let compile_result = somatize_compiler::compile(
-            &self.graph,
-            &catalog,
-            CompileMode::Inference,
-            Some(self.cache.as_ref()),
-        )
+        let compile_result = if stream {
+            somatize_compiler::compile_stream(&self.graph, &catalog, chunk_size)
+        } else {
+            somatize_compiler::compile(
+                &self.graph,
+                &catalog,
+                CompileMode::Inference,
+                Some(self.cache.as_ref()),
+            )
+        }
         .map_err(soma_err_to_py)?;
 
         let graph_info = GraphInfo::from_graph(&self.graph);

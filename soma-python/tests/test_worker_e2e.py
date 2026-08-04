@@ -287,10 +287,11 @@ class TestDataStore:
 
 
 class TestStreaming:
-    """Streaming forward: chunked execution through StreamExecutor."""
+    """Streaming forward: the normal local path with a Stream plan —
+    chunks run through run_node's primitives."""
 
     def test_stream_forward_local(self):
-        """Local streaming (no workers): chunks processed by StreamExecutor."""
+        """Local streaming (no workers): chunked, same result."""
         g = Graph()
         g.node("doubler", DoubleFilter())
         g.fit([1.0])
@@ -312,6 +313,55 @@ class TestStreaming:
         normal = g.forward([1.0, 2.0, 3.0])
         streamed = g.forward([1.0, 2.0, 3.0], stream=True, chunk_size=1024)
         assert normal == streamed
+
+
+    def test_stream_events_reach_the_run_dir(self, tmp_path):
+        """The stream branch shares the local path: a tracked stream
+        forward lands per-node events in events.jsonl like any other
+        run, with the chunk aggregate in the completion summary."""
+        import soma
+
+        g = Graph()
+        g.node("doubler", DoubleFilter())
+        g.fit([1.0])
+        with g.track_run("streamed", root=str(tmp_path), kind="forward") as run:
+            g.forward([1.0, 2.0, 3.0, 4.0], stream=True, chunk_size=2)
+
+        events = soma.RunView(run.dir).events()
+        started = [e for e in events if e["event_type"] == "NodeStarted"]
+        assert [e["node_id"] for e in started] == ["doubler"]
+        completed = [e for e in events if e["event_type"] == "NodeCompleted"]
+        assert len(completed) == 1
+        assert "chunks" in completed[0]["output_summary"]
+
+    def test_a_step_cannot_stream(self):
+        """Effect journaling has no per-chunk semantics; the compiler
+        says so by name instead of running something undefined."""
+        from soma.agentic import Done
+
+        class Echo:
+            _cache_version = "1"
+
+            def poll(self, ctx):
+                return Done(ctx.input)
+
+        g = Graph(cache="memory")
+        g.node("echo", Echo())
+        with pytest.raises(Exception, match="cannot be streamed"):
+            g.forward("hi", stream=True, chunk_size=2)
+
+    def test_a_diamond_cannot_stream(self):
+        """Streaming executes a single linear chain; a DAG used to be
+        silently run as one, which for a diamond is the wrong answer."""
+        g = Graph(cache="memory")
+        for node_id in ["a", "b", "c", "d"]:
+            g.node(node_id, DoubleFilter())
+        g.connect("a", "b")
+        g.connect("a", "c")
+        g.connect("b", "d")
+        g.connect("c", "d")
+        with pytest.raises(Exception, match="linear chain"):
+            g.forward([1.0, 2.0], stream=True, chunk_size=1)
 
     @pytest.mark.skip(reason="Remote streaming requires PythonProcess to support Value::Tensor round-trip in SubprocessFilter — tracked for next iteration")
     def test_stream_forward_remote(self):
