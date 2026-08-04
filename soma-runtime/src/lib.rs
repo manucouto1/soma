@@ -45,7 +45,7 @@ pub use event_bus::EventBus;
 pub use executor::{Context, GraphInfo, execute};
 pub use executors::{
     FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember,
-    StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
+    StreamOutput, StreamRun, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
 };
 pub use forward::{Batched, ForwardStrategy, Standard, Stream};
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};

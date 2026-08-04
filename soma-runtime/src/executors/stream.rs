@@ -25,10 +25,10 @@
 //! `step(chunk, state) -> (out, state)` API on filters, which is a
 //! user-facing change this driver deliberately does not smuggle in.
 //!
-//! The worker's remote streaming (`soma-worker/src/stream_exec.rs`)
-//! still runs the pre-unification executor and is the pending half of
-//! this work: unifying it needs a `Context` that survives between WS
-//! messages.
+//! The worker's remote streaming holds a [`StreamRun`] (plus its
+//! `Context`) alive between WebSocket messages — which is why the type
+//! is public and why the state that must survive between chunks lives
+//! here rather than in the plan walk.
 
 use crate::executor::{Context, compute_node, output_key, store_output};
 use crate::node_catalog::{NodeCatalog, NodeImpl};
@@ -66,17 +66,17 @@ struct StreamNode {
 /// Drives one stream plan: chunks in, one concatenated output out.
 ///
 /// Built from the [`NodeCatalog`] — a node the catalog does not know is
-/// an error, never a silent skip. The chunk loop lives in the caller
-/// ([`execute_stream`](crate::executor)); this type owns the per-node
-/// flow so the state that must survive between chunks (and, in the
-/// worker's future, between RPC messages) has a single home.
-pub(crate) struct StreamRun {
+/// an error, never a silent skip. The chunk loop lives in the caller —
+/// the plan executor locally, the worker's WS/DataStore loops remotely —
+/// and this type owns the per-node flow, so the state that must survive
+/// between chunks (and between RPC messages) has a single home.
+pub struct StreamRun {
     nodes: Vec<StreamNode>,
     chunk_count: usize,
 }
 
 impl StreamRun {
-    pub(crate) fn new(node_ids: &[String], catalog: &NodeCatalog) -> Result<Self> {
+    pub fn new(node_ids: &[String], catalog: &NodeCatalog) -> Result<Self> {
         let nodes = node_ids
             .iter()
             .map(|id| {
@@ -123,7 +123,7 @@ impl StreamRun {
 
     /// Push one chunk through the chain. `None` means a barrier swallowed
     /// it — the nodes past the barrier see nothing until [`Self::flush`].
-    pub(crate) fn process_chunk(
+    pub fn process_chunk(
         &mut self,
         chunk: Value,
         ctx: &mut Context,
@@ -145,11 +145,7 @@ impl StreamRun {
     /// Materialize every barrier buffer and cascade the result through the
     /// rest of the chain — a second barrier downstream receives the whole
     /// materialized value as one "chunk", which at flush time it is.
-    pub(crate) fn flush(
-        &mut self,
-        ctx: &mut Context,
-        cache: &dyn CacheStore,
-    ) -> Result<Option<Value>> {
+    pub fn flush(&mut self, ctx: &mut Context, cache: &dyn CacheStore) -> Result<Option<Value>> {
         let mut current: Option<Value> = None;
         for i in 0..self.nodes.len() {
             if !self.nodes[i].barrier.is_empty() {
@@ -164,7 +160,7 @@ impl StreamRun {
     }
 
     /// Close each started node's event bracket with its aggregate.
-    pub(crate) fn finish(&mut self, ctx: &Context) {
+    pub fn finish(&mut self, ctx: &Context) {
         for node in &mut self.nodes {
             if !node.started {
                 continue;
@@ -182,7 +178,7 @@ impl StreamRun {
         }
     }
 
-    pub(crate) fn chunks_processed(&self) -> usize {
+    pub fn chunks_processed(&self) -> usize {
         self.chunk_count
     }
 
@@ -267,6 +263,50 @@ impl StreamRun {
                 Err(e)
             }
         }
+    }
+}
+
+/// Incremental concatenation of chunk outputs.
+///
+/// Each chunk's data is folded in and the chunk dropped, keeping peak
+/// memory proportional to the final output rather than
+/// `O(n_chunks x chunk_size)`. Non-tensor outputs do not concatenate;
+/// the last one wins (a chain ending in an aggregate produces exactly
+/// one).
+#[derive(Default)]
+pub struct StreamOutput {
+    all_data: Vec<f64>,
+    result_shape: Option<Vec<usize>>,
+    non_tensor: Option<Value>,
+}
+
+impl StreamOutput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fold one chunk's output in.
+    pub fn push(&mut self, output: Value) {
+        match output {
+            Value::Tensor { values, shape } => {
+                if self.result_shape.is_none() {
+                    self.result_shape = Some(shape);
+                }
+                self.all_data.extend_from_slice(values.as_slice());
+            }
+            other => self.non_tensor = Some(other),
+        }
+    }
+
+    /// The concatenated result, its first dimension corrected to the
+    /// total number of rows. `Value::Empty` if nothing was pushed.
+    pub fn finish(self) -> Value {
+        if let Some(mut shape) = self.result_shape {
+            let row_size: usize = shape.iter().skip(1).product::<usize>().max(1);
+            shape[0] = self.all_data.len() / row_size;
+            return Value::tensor(self.all_data, shape);
+        }
+        self.non_tensor.unwrap_or(Value::Empty)
     }
 }
 

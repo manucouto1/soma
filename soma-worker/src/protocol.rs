@@ -183,6 +183,12 @@ pub struct SerializedPlan {
     /// Fit or Forward.
     #[serde(default)]
     pub mode: ExecutionMode,
+    /// The run's experiment seed, folded into every cache key on the
+    /// worker exactly as it is locally. Absent (the pre-seed wire
+    /// format) means unseeded — which shares cache lines across a
+    /// sweep's seeds, the bug this field exists to close.
+    #[serde(default)]
+    pub seed: Option<i64>,
     pub metadata: serde_json::Value,
 }
 
@@ -224,6 +230,7 @@ impl SerializedPlan {
             input: None,
             filters: Vec::new(),
             mode: ExecutionMode::Forward,
+            seed: None,
             metadata: serde_json::json!({}),
         }
     }
@@ -678,6 +685,7 @@ mod tests {
                 }),
                 filters: vec![],
                 mode: ExecutionMode::default(),
+                seed: None,
                 metadata: serde_json::json!({"experiment": "test"}),
             },
         };

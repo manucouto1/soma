@@ -89,6 +89,7 @@ async fn worker_ws_execute_plan() {
         }),
         filters: vec![],
         mode: somatize_worker::protocol::ExecutionMode::default(),
+        seed: None,
         metadata: serde_json::json!({}),
     };
 
@@ -168,6 +169,7 @@ async fn worker_ws_sequence_plan() {
         }),
         filters: vec![],
         mode: somatize_worker::protocol::ExecutionMode::default(),
+        seed: None,
         metadata: serde_json::json!({}),
     };
 

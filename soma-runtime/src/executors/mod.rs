@@ -5,14 +5,14 @@
 //!
 //! - [`StudyRunner`] — hyperparameter optimization loop
 //! - [`PbtRunner`] — population-based training (evolutionary)
-//! - [`stream`] — the stream driver, chunked execution through
-//!   `run_node`'s primitives (crate-internal; dispatched by the plan
-//!   executor)
+//! - [`stream`] — the stream driver: [`StreamRun`] runs every chunk
+//!   through `run_node`'s primitives; the plan executor drives it
+//!   locally and the worker holds one alive between RPC messages
 
 pub mod pbt;
 pub mod stream;
 pub mod study;
 
 pub use pbt::{FnPbtExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember};
-pub use stream::materialize_buffer;
+pub use stream::{StreamOutput, StreamRun, materialize_buffer};
 pub use study::{FnTrialExecutor, StudyRunner, TrialContext, TrialExecutor, TrialOutcome};

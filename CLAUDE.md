@@ -55,10 +55,10 @@ soma-runtime    → GraphSession (primary orchestrator), parallel executor (thre
 soma-memory     → Experiment pool: ExperimentRecord (experiments.jsonl), DerivationMove,
                   BM25+structural retrieval, KnowledgeBase trait + MemoryKB/FileKB/ChronosKB
 soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
-                  (isolated venv/conda per pipeline), Axum HTTP/WS server,
-                  stream_exec.rs (LEGACY remote chunk executor, pending
-                  unification with StreamRun — needs a Context that
-                  survives between WS messages)
+                  (isolated venv/conda per pipeline), Axum HTTP/WS server.
+                  Remote streaming drives the runtime's StreamRun, held
+                  (with its Context) in active_streams between WS messages;
+                  SerializedPlan carries the run seed
 soma-llm        → LlmProvider + OpenAI-compatible client (ollama/hf/nvidia/kimi/glm/
                   deepseek/groq/vllm...), provider catalog as TOML data (incl.
                   RetryPolicy + Quirks), Toolbox, MCP client, ReactStep/JudgeStep
@@ -145,7 +145,9 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   aggregated, never emitted. FixedState keys are IDENTICAL to the batch path's
   (single-chunk stream and plain forward share one cache line). compile_stream
   refuses DAGs, steps, chunk 0. Stream + fit = error. The worker's remote
-  streaming is the pending half (see soma-worker above).
+  streaming drives the SAME StreamRun (sessions in active_streams keep driver +
+  Context alive between WS messages; the DataStore auto-stream concatenates via
+  StreamOutput), and SerializedPlan.seed salts remote keys.
 - **RunContext**: what a runner needs besides the plan — catalog, cache, events, run id, and
   the *real* `GraphInfo`. `RunContext::linear` is the explicit fallback for a caller that
   has only a plan (the worker); the runner no longer invents a topology.

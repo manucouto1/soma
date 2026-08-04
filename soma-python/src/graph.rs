@@ -120,14 +120,18 @@ impl PyGraph {
         if stream && !self.workers.is_empty() {
             // Release GIL during WS dispatch so worker thread can acquire
             // it for Python execution.
-            let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size))?;
+            let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size, seed))?;
             return value_to_py(py, &output);
         }
 
         // Dispatch entire plan remotely if workers registered and no node forces local
         if !stream && !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
             let (output, _states) = py.allow_threads(|| {
-                self.dispatch_to_worker(&x_val, somatize_worker::protocol::ExecutionMode::Forward)
+                self.dispatch_to_worker(
+                    &x_val,
+                    somatize_worker::protocol::ExecutionMode::Forward,
+                    seed,
+                )
             })?;
             return value_to_py(py, &output);
         }
@@ -562,6 +566,7 @@ impl PyGraph {
         &self,
         x: &Value,
         mode: somatize_worker::protocol::ExecutionMode,
+        seed: Option<i64>,
     ) -> Result<(Value, std::collections::HashMap<String, Value>), PyErr> {
         use somatize_worker::protocol::*;
 
@@ -627,6 +632,7 @@ impl PyGraph {
             input: Some(input_source),
             filters,
             mode,
+            seed,
             metadata: serde_json::json!({}),
         };
 
@@ -656,17 +662,21 @@ impl PyGraph {
     }
 
     /// Stream data to a worker in chunks via WebSocket Binary frames.
-    /// Chunks are processed by StreamExecutor on the worker — no full materialization.
-    fn dispatch_streamed(&self, x: &Value, chunk_size: usize) -> Result<Value, PyErr> {
+    /// The worker drives a `StreamRun` — no full materialization.
+    fn dispatch_streamed(
+        &self,
+        x: &Value,
+        chunk_size: usize,
+        seed: Option<i64>,
+    ) -> Result<Value, PyErr> {
         use somatize_worker::protocol::*;
 
-        let compile_result = somatize_compiler::compile(
-            &self.graph,
-            &self.library,
-            CompileMode::Inference,
-            Some(self.cache.as_ref()),
-        )
-        .map_err(soma_err_to_py)?;
+        // compile_stream, not compile: the remote chunk loop honours the
+        // same contract as the local one, so a diamond or a step is
+        // refused here, by name, before anything crosses the wire.
+        let compile_result =
+            somatize_compiler::compile_stream(&self.graph, &self.library, chunk_size)
+                .map_err(soma_err_to_py)?;
 
         let first_target = self
             .graph
@@ -715,6 +725,7 @@ impl PyGraph {
             input: None, // input comes via chunks
             filters,
             mode: ExecutionMode::Forward,
+            seed,
             metadata: serde_json::json!({}),
         };
 
@@ -1371,7 +1382,7 @@ impl PyGraph {
                     y: y_val.clone(),
                     batch_size: Some(bs),
                 };
-                let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
+                let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode, seed));
                 let (_output, states) = result?;
                 for (node_id, state) in states {
                     if let Err(e) = self.library.try_set_state(&node_id, state) {
@@ -1386,7 +1397,7 @@ impl PyGraph {
                 y: y_val.clone(),
                 batch_size: None,
             };
-            let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode));
+            let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode, seed));
             let (_output, states) = result?;
             for (node_id, state) in states {
                 if let Err(e) = self.library.try_set_state(&node_id, state) {

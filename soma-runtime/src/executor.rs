@@ -1228,55 +1228,25 @@ fn execute_stream(
     let last_id = node_ids.last().unwrap().clone();
     let mut run = StreamRun::new(node_ids, catalog)?;
 
-    // Incrementally concatenate tensor outputs to avoid holding all chunks
-    // in memory simultaneously. Each chunk is dropped after its data is
-    // extracted, keeping peak memory proportional to the final output size
-    // rather than O(n_chunks × chunk_size).
-    let mut all_data: Vec<f64> = Vec::new();
-    let mut result_shape: Option<Vec<usize>> = None;
-    let mut non_tensor_output: Option<Value> = None;
-
-    let mut append_output = |output: Value| {
-        match &output {
-            Value::Tensor { values, shape } => {
-                if result_shape.is_none() {
-                    result_shape = Some(shape.clone());
-                }
-                all_data.extend_from_slice(values.as_slice());
-                // `output` is dropped here, freeing the chunk's allocation
-            }
-            _ => {
-                non_tensor_output = Some(output);
-            }
-        }
-    };
+    // Incremental concatenation — bounded memory, see `StreamOutput`.
+    let mut output = crate::executors::StreamOutput::new();
 
     for (i, chunk) in chunks.into_iter().enumerate() {
         tracing::debug!(node_id = %last_id, chunk = i, "streaming chunk");
-        if let Some(output) = run.process_chunk(chunk, ctx, cache)? {
-            append_output(output);
+        if let Some(out) = run.process_chunk(chunk, ctx, cache)? {
+            output.push(out);
         }
     }
 
     // Flush barrier filters.
     if let Some(flushed) = run.flush(ctx, cache)? {
-        append_output(flushed);
+        output.push(flushed);
     }
 
     tracing::debug!(node_id = %last_id, chunks = run.chunks_processed(), "stream done");
     run.finish(ctx);
 
-    // Build the final result.
-    let result = if let Some(mut shape) = result_shape {
-        // Tensor output: fix the first dimension to reflect total rows.
-        let row_size: usize = shape.iter().skip(1).product::<usize>().max(1);
-        shape[0] = all_data.len() / row_size;
-        Value::tensor(all_data, shape)
-    } else {
-        non_tensor_output.unwrap_or(Value::Empty)
-    };
-
-    ctx.set(last_id, result);
+    ctx.set(last_id, output.finish());
     Ok(())
 }
 

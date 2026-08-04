@@ -142,17 +142,22 @@ into the result and dropped, keeping peak memory proportional to the
 final output rather than `O(n_chunks × chunk_size)`. Pinned by the
 tests in `soma-runtime/tests/memory_usage.rs`.
 
-## What remains unfinished
+## Remote streaming
 
-The **worker's remote streaming** (`soma-worker/src/stream_exec.rs`)
-still runs the pre-unification executor — it keeps executors alive
-between WebSocket messages (`StreamBegin`/`ChunkData`), and unifying it
-over `StreamRun` needs an execution context that survives across RPCs.
-Until then, remote chunk caching ignores the cacheable guard, carries
-no provenance, emits no per-node events, and — since the worker
-protocol carries no run seed — shares cache lines across seeds. An
-unknown node in a remote stream plan is at least an explicit failure
-now, not a silently shorter chain.
+The worker's two remote entry points drive the **same `StreamRun`** the
+local path uses — the driver and its execution context are held alive
+between WebSocket messages (`StreamBegin` builds the session,
+`ChunkData` advances it, `StreamEnd` flushes and closes the event
+brackets), and the DataStore auto-stream path (inputs above 1024 rows)
+loops over `get_rows` into the same driver, concatenating the output
+incrementally. A node the worker cannot resolve fails the plan by name.
+The client compiles remote streams with `compile_stream`, so a diamond
+or a step is refused before anything crosses the wire.
+
+`SerializedPlan` carries the run's `seed`, and the worker folds it into
+every cache key — remote runs, streamed or not, no longer share cache
+lines across a sweep's seeds. Plans from older senders simply arrive
+unseeded.
 
 There is no checkpoint/recovery mechanism and no async backpressure:
 earlier versions of this page described both, but neither existed —

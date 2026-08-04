@@ -66,8 +66,8 @@ that filters and steps used to live in are one), `RunMode` instead of a
 `fit: bool` flag on the remote path, and `KnowledgeBase` returning owned
 values.
 
-**Local streaming runs through the one execution site.** Consequences,
-in decreasing order of how likely they are to reach you:
+**Streaming — local AND remote — runs through the one execution site.**
+Consequences, in decreasing order of how likely they are to reach you:
 
 - *Stream runs' events changed shape*: one `NodeStarted`/`NodeCompleted`
   bracket per node (the completion summary aggregates chunk and
@@ -87,8 +87,18 @@ in decreasing order of how likely they are to reach you:
   exhaustive now (no `#[non_exhaustive]`): a new mode should break
   every stream driver, not fall through to `FixedState`.
 - *`StreamCache` and `StreamExecutor` left the public API* — the former
-  was dead code, the latter lives on only inside `soma-worker` as the
-  legacy remote path, pending its own unification.
+  was dead code; the latter is gone entirely. The worker's remote
+  streaming (WS sessions and the DataStore auto-stream) drives the same
+  `StreamRun` as the local path, holding the driver and its context
+  alive between messages. Two remote behavior changes ride along: the
+  DataStore auto-stream returns the CONCATENATED output (it used to
+  return only the last chunk's), and remote streams are compiled with
+  `compile_stream`, so a non-linear graph or a step is refused
+  client-side by name.
+- *`SerializedPlan` gains `seed`*, and the worker folds it into every
+  cache key — remote runs (streamed or not) no longer share cache lines
+  across a sweep's seeds. Additive field: older peers' plans arrive
+  unseeded and behave as before.
 
 `FixedState` chunk cache keys did **not** move: a single-chunk stream
 and a plain forward of the same input share one cache line, pinned by

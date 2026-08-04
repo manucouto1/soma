@@ -356,6 +356,7 @@ impl Transport for WsTransport {
                 },
                 RunMode::Forward => ExecutionMode::Forward,
             },
+            seed: None,
             metadata: serde_json::json!({}),
         };
 
