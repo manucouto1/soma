@@ -78,7 +78,7 @@ Each phase produces a **usable, releasable product**. Later phases build on earl
 | Bayesian sampler | TPE implementation | P2 |
 | Median pruner | Median stopping rule | P2 |
 | Hyperband | Successive halving | P2 |
-| Stream executor | Chunk processing with modes | P2 |
+| Stream driver | Chunk processing with modes, through run_node's primitives | Done |
 
 ### 1.4 soma-python: Python Bindings
 

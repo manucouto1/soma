@@ -270,7 +270,7 @@ fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
 |---|---|---|
 | `DataFlow` trait | Abstract input resolution from graph topology | GraphInfo added (partial) |
 | `CachePolicy` | LRU, TTL, size-based eviction | Not implemented |
-| `StreamingFilter` | Chunk processing with state checkpoints | StreamMode enum exists, no execution |
+| `StreamingFilter` | Chunk processing with stream modes | Done locally (`StreamRun`); worker remote path pending |
 | `Scheduler` | Distribute trials/plans across workers | Not implemented |
 | `MetricsCollector` | Pluggable observability backends | EventBus only |
 | `DataSchema` | Type-safe input/output validation | Not implemented |

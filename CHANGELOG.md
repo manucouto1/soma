@@ -66,6 +66,34 @@ that filters and steps used to live in are one), `RunMode` instead of a
 `fit: bool` flag on the remote path, and `KnowledgeBase` returning owned
 values.
 
+**Local streaming runs through the one execution site.** Consequences,
+in decreasing order of how likely they are to reach you:
+
+- *Stream runs' events changed shape*: one `NodeStarted`/`NodeCompleted`
+  bracket per node (the completion summary aggregates chunk and
+  hit/miss counts) and a real `NodeFailed` naming the chunk — instead of
+  a single bracket for the whole plan under the last node's id. Anything
+  parsing stream summaries of the form "N chunks through M filters"
+  must read "stream: N chunks, H hits, M misses" per node now.
+- *Streaming a non-linear graph or a step is a compile error* that
+  names the node. It used to run a DAG as a chain silently — for a
+  diamond, a wrong answer with no warning.
+- *Filters declaring `cacheable: false` or `deterministic: false` are
+  no longer cached per chunk* (they always should not have been). Their
+  stale entries become dead weight; `soma cache gc` reclaims them.
+- *`StreamMode::Evolving` lost its `checkpoint_every` field* — it wrote
+  checkpoints under a colliding key that nothing ever read, and only
+  two hardcoded constructors ever set it. `StreamMode` is also
+  exhaustive now (no `#[non_exhaustive]`): a new mode should break
+  every stream driver, not fall through to `FixedState`.
+- *`StreamCache` and `StreamExecutor` left the public API* — the former
+  was dead code, the latter lives on only inside `soma-worker` as the
+  legacy remote path, pending its own unification.
+
+`FixedState` chunk cache keys did **not** move: a single-chunk stream
+and a plain forward of the same input share one cache line, pinned by
+test.
+
 ### Added
 
 - **An agentic layer.** `Step` sits beside `Filter`: sync `poll` returning
@@ -78,6 +106,15 @@ values.
   Steps can be written in Python — any object with `poll(ctx)`.
 - **Suspend and resume.** A run can stop to wait for a human or an
   external event and pick up where it left off, replaying its journal.
+- **Agent telemetry reaches the reader.** `RunView.agentic_activity()`
+  (per-node turns, tokens, effects by label, tools, replays,
+  suspensions), `RunView.agentic_timeline()` and `plot_agentic()` (an
+  effect gantt), an "Agent activity" report section with a
+  `soma-data-agentic` blob, and `RunSummary.conclusion.agent_cost` in
+  the headline — so the experiment pool sees what a run spent. The
+  emitters grew to match: `Suspended` carries cost-so-far,
+  `AgentStepCompleted` fires on error exits too (marked `failed`), and
+  `Spawn` emits `AgentSpawned` with its hierarchical child ids.
 - **`soma-llm`**: one OpenAI-compatible client and a provider catalog as
   TOML data, covering ollama, HuggingFace, NVIDIA, Kimi, GLM, DeepSeek,
   Groq, vLLM and others. Retries live in the client, not the step — a 429
