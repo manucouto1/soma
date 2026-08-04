@@ -23,7 +23,9 @@ pub trait Pruner: Send + Sync {
 
 /// A completed trial's metric history (for comparing against).
 pub struct TrialMetricHistory {
+    /// Trial the history belongs to.
     pub trial_id: String,
+    /// Intermediate objective values the trial reported, in step order.
     pub metrics: Vec<MetricRecord>,
 }
 
@@ -36,6 +38,8 @@ pub struct MedianPruner {
 }
 
 impl MedianPruner {
+    /// A median pruner that holds off for `n_warmup_steps` steps and
+    /// starts pruning as soon as one completed trial exists.
     pub fn new(n_warmup_steps: usize) -> Self {
         Self {
             n_warmup_steps,
@@ -43,6 +47,8 @@ impl MedianPruner {
         }
     }
 
+    /// Require at least `min_trials` completed trials before pruning —
+    /// a median over one trial is that trial.
     pub fn with_min_trials(mut self, min_trials: usize) -> Self {
         self.min_trials = min_trials;
         self
@@ -98,12 +104,17 @@ impl Pruner for MedianPruner {
 
 /// Prune if current value is below the given percentile.
 pub struct PercentilePruner {
+    /// Cutoff percentile in `[0, 100]` — e.g. 25.0 prunes anything below
+    /// the 25th percentile of completed trials at the same step.
     pub percentile: f64,
+    /// Don't prune before this many steps.
     pub n_warmup_steps: usize,
+    /// Minimum completed trials needed before pruning starts.
     pub min_trials: usize,
 }
 
 impl PercentilePruner {
+    /// A percentile pruner with `min_trials = 1`.
     pub fn new(percentile: f64, n_warmup_steps: usize) -> Self {
         Self {
             percentile,

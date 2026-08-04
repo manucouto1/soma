@@ -29,61 +29,94 @@ use std::collections::{BTreeMap, BTreeSet};
 #[serde(tag = "change")]
 #[non_exhaustive]
 pub enum Change {
+    /// A node the parent's graph did not have.
     NodeAdded {
+        /// The new node's id.
         node: String,
+        /// The filter type behind it.
         filter: String,
     },
+    /// A node the child's graph no longer has.
     NodeRemoved {
+        /// The removed node's id.
         node: String,
+        /// The filter type it carried.
         filter: String,
     },
     /// Same node id, different filter behind it.
     NodeReplaced {
+        /// The node id both graphs share.
         node: String,
+        /// The parent's filter type.
         from: String,
+        /// The child's filter type.
         to: String,
     },
     /// Same filter, different configuration (the node's config hash
     /// moved). The *values* are not recoverable from a fingerprint —
     /// only the fact that they differ.
     NodeReconfigured {
+        /// The node whose configuration moved.
         node: String,
+        /// The parent's config hash.
         from_hash: String,
+        /// The child's config hash.
         to_hash: String,
     },
+    /// A data edge only the child's graph has.
     EdgeAdded {
+        /// The edge's source node.
         source: String,
+        /// The edge's target node.
         target: String,
     },
+    /// A data edge only the parent's graph had.
     EdgeRemoved {
+        /// The edge's source node.
         source: String,
+        /// The edge's target node.
         target: String,
     },
+    /// The same parameter key, set to a different value.
     ParamChanged {
+        /// The parameter key.
         key: String,
+        /// The parent's value.
         from: serde_json::Value,
+        /// The child's value.
         to: serde_json::Value,
     },
+    /// A parameter only the child sets.
     ParamAdded {
+        /// The parameter key.
         key: String,
+        /// The value the child sets it to.
         value: serde_json::Value,
     },
+    /// A parameter only the parent set.
     ParamRemoved {
+        /// The parameter key.
         key: String,
+        /// The value the parent had set.
         value: serde_json::Value,
     },
     /// A study's search space moved (different dimensions searched).
     SearchSpaceChanged {
+        /// Dimensions only the child searches.
         added: Vec<String>,
+        /// Dimensions only the parent searched.
         removed: Vec<String>,
     },
     /// The code changed underneath: different git commit.
     CodeChanged {
+        /// The parent's commit sha, when it recorded one.
         from_sha: Option<String>,
+        /// The child's commit sha, when it recorded one.
         to_sha: Option<String>,
     },
     /// There was a move, but the evidence to describe it is gone.
     Unspecified {
+        /// Why the diff could not be computed.
         reason: String,
     },
 }
@@ -126,7 +159,9 @@ impl Change {
 /// How one metric moved between parent and child.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MetricDelta {
+    /// The parent's value.
     pub before: f64,
+    /// The child's value.
     pub after: f64,
     /// `after - before`. Signed on purpose: whether that is good news
     /// depends on the objective's direction, which the move does not
@@ -142,6 +177,9 @@ pub struct DerivationMove {
     pub from: String,
     /// Child experiment id (this record).
     pub to: String,
+    /// The atomic differences, in the deterministic order
+    /// [`derive`](fn@derive) emits them. Never empty from [`derive`](fn@derive):
+    /// when nothing is visible it holds one [`Change::Unspecified`].
     pub changes: Vec<Change>,
     /// Per-metric movement, for metrics both runs reported.
     #[serde(default)]

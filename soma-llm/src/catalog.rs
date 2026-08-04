@@ -35,12 +35,21 @@ pub enum Auth {
     /// No credentials — a local Ollama, vLLM or llama.cpp.
     None,
     /// `Authorization: Bearer <value of env var>`. The common case.
-    Bearer { env: String },
+    Bearer {
+        /// Environment variable holding the key, e.g. `NVIDIA_API_KEY`.
+        env: String,
+    },
     /// A custom header, for endpoints that do not use `Authorization`.
-    Header { name: String, env: String },
+    Header {
+        /// Header name to send the credential under.
+        name: String,
+        /// Environment variable holding the credential.
+        env: String,
+    },
 }
 
 impl Auth {
+    /// Shorthand for [`Auth::Bearer`] reading the given variable.
     pub fn bearer(env: impl Into<String>) -> Self {
         Self::Bearer { env: env.into() }
     }
@@ -227,6 +236,8 @@ pub struct ProviderConfig {
     /// hostname with `/v1` bolted on.
     pub base_url: String,
 
+    /// How credentials are presented. Defaults to [`Auth::None`], which is
+    /// right for the local servers and wrong for everything hosted.
     #[serde(default = "default_auth")]
     pub auth: Auth,
 
@@ -240,6 +251,8 @@ pub struct ProviderConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
 
+    /// Where this endpoint departs from the common shape. The defaults
+    /// describe a fully compliant endpoint; see [`Quirks`].
     #[serde(default)]
     pub quirks: Quirks,
 
@@ -280,6 +293,7 @@ impl ProviderConfig {
         }
     }
 
+    /// Replace the [`RetryPolicy`] for this endpoint.
     pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
@@ -311,21 +325,26 @@ impl ProviderConfig {
         }
     }
 
+    /// Attach a human-readable note, surfaced in listings.
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
         self.note = Some(note.into());
         self
     }
 
+    /// Replace the [`Quirks`] for this endpoint.
     pub fn with_quirks(mut self, quirks: Quirks) -> Self {
         self.quirks = quirks;
         self
     }
 
+    /// Set the prefix prepended to model names on the wire — see
+    /// [`Self::wire_model`].
     pub fn with_model_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.model_prefix = Some(prefix.into());
         self
     }
 
+    /// Add a header sent with every request to this endpoint.
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(name.into(), value.into());
         self
@@ -353,6 +372,8 @@ impl ProviderConfig {
 /// The providers known to a process.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Catalog {
+    /// Provider id → configuration. A `BTreeMap` so listings and
+    /// serialization come out in a stable order.
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
 }
@@ -487,10 +508,12 @@ impl Catalog {
         Self::with_overrides_from(path)
     }
 
+    /// The configuration registered under `id`, if any.
     pub fn get(&self, id: &str) -> Option<&ProviderConfig> {
         self.providers.get(id)
     }
 
+    /// Add or replace a provider under `id`.
     pub fn insert(&mut self, id: impl Into<String>, config: ProviderConfig) {
         self.providers.insert(id.into(), config);
     }

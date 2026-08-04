@@ -12,17 +12,25 @@ use std::process::Command;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvType {
+    /// Standard-library `python -m venv` (the default — no extra tooling).
     #[default]
     Venv,
+    /// A conda environment, for pipelines whose dependencies need conda's
+    /// binary packages.
     Conda,
 }
 
 /// Lockfile: tracks what's installed in an environment.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EnvLockfile {
-    pub packages: HashMap<String, String>, // name → version
+    /// Installed packages, name → version.
+    pub packages: HashMap<String, String>,
+    /// SHA-256 of the normalized requirements the environment was built
+    /// from — a matching hash means the env can be reused as is.
     pub requirements_hash: String,
+    /// How the environment was created (venv or conda).
     pub env_type: EnvType,
+    /// The interpreter version the environment was created with.
     pub python_version: String,
 }
 
@@ -33,6 +41,9 @@ pub struct EnvManager {
 }
 
 impl EnvManager {
+    /// A manager that keeps its environments under `base_dir`, one per
+    /// pipeline. The directory is created eagerly; if that fails,
+    /// [`EnvManager::ensure_env`] reports the real error at first use.
     pub fn new(base_dir: impl Into<PathBuf>, env_type: EnvType) -> Self {
         let base = base_dir.into();
         std::fs::create_dir_all(&base).ok();

@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! Proc macros for Soma filters: `#[derive(SomaFilter)]` (config hash,
 //! metadata, `Searchable`) and `#[derive(SomaStep)]` (a step's journal
 //! identity). The attributes each derive understands are documented on

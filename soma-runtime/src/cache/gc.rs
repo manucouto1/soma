@@ -23,6 +23,8 @@ use somatize_core::action::{BlobStore, ContentHash};
 use somatize_core::error::Result;
 use std::collections::{HashMap, HashSet};
 
+/// When to evict and how much to keep. Defaults: 20 GiB ceiling,
+/// one-hour minimum age.
 #[derive(Debug, Clone)]
 pub struct GcPolicy {
     /// Target ceiling for total CAS bytes.
@@ -41,12 +43,18 @@ impl Default for GcPolicy {
     }
 }
 
+/// What one [`collect`] pass did, for `soma cache gc` output.
 #[derive(Debug, Clone, Default)]
 pub struct GcReport {
+    /// Total CAS bytes before the pass.
     pub bytes_before: u64,
+    /// Total CAS bytes after the pass.
     pub bytes_after: u64,
+    /// Blobs deleted by this pass.
     pub blobs_evicted: usize,
+    /// Blobs that survived (including roots).
     pub blobs_kept: usize,
+    /// Blobs protected as outputs of pinned actions.
     pub pinned_blobs: usize,
 }
 

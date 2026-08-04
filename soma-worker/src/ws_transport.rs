@@ -15,7 +15,11 @@ use crate::protocol::*;
 
 /// Transport implementation using WebSocket.
 pub struct WsTransport {
+    /// The worker's base address (`ws://host:port`); rewritten to
+    /// `http(s)://` for the bulk upload/download endpoints.
     pub address: String,
+    /// Bearer token appended to every connection when the worker
+    /// requires authentication.
     pub token: Option<String>,
 }
 
@@ -55,6 +59,8 @@ where
 }
 
 impl WsTransport {
+    /// A transport to the worker at `address`, authenticating with
+    /// `token` if given. Connections are opened per call, not held.
     pub fn new(address: impl Into<String>, token: Option<String>) -> Self {
         Self {
             address: address.into(),

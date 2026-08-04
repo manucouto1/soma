@@ -20,12 +20,32 @@ use std::sync::{Arc, RwLock};
 /// Status of a registered worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerStatus {
+    /// The worker's unique id, as it registered itself.
     pub id: WorkerId,
+    /// Where clients reach the worker (e.g. `ws://host:8080`). The
+    /// coordinator hands this out on `/submit` and steps aside — the
+    /// plan and its tensor payloads travel client→worker direct, never
+    /// through the coordinator.
     pub address: String,
+    /// What the worker offers: CPUs, RAM, GPUs, Python envs, tags.
+    /// Placement matches required tags against these via
+    /// [`matches_tags`](Self::matches_tags).
     pub capabilities: Capabilities,
+    /// Load reported with the latest heartbeat; `None` until the first
+    /// one arrives after registration.
     pub load: Option<LoadMetrics>,
+    /// The plans currently leased to this worker. `/submit` takes a
+    /// lease ([`WorkerRegistry::claim`]), `/complete` releases it
+    /// ([`WorkerRegistry::release`]) — this list is what makes
+    /// [`has_capacity`](Self::has_capacity) and the least-loaded
+    /// tie-break mean anything.
     pub active_plans: Vec<String>,
+    /// When the worker last beat (workers beat every 10s). What
+    /// [`is_alive`](Self::is_alive) and the reaper compare against.
     pub last_heartbeat: DateTime<Utc>,
+    /// False after an explicit [`WorkerRegistry::disconnect`];
+    /// re-registering sets it back. A disconnected worker is never
+    /// alive, however fresh its heartbeat.
     pub connected: bool,
 }
 
@@ -71,6 +91,9 @@ impl WorkerRegistry {
         self.workers.write().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// An empty registry with a 30-second heartbeat timeout — three
+    /// missed beats at the workers' 10-second cadence before a worker
+    /// counts as dead.
     pub fn new() -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
@@ -78,6 +101,8 @@ impl WorkerRegistry {
         }
     }
 
+    /// Override the heartbeat timeout (builder-style). Tests use 0 to
+    /// make everything instantly stale and 3600 to make nothing stale.
     pub fn with_heartbeat_timeout(mut self, secs: i64) -> Self {
         self.heartbeat_timeout_secs = secs;
         self

@@ -1,3 +1,5 @@
+//! [`BayesianSampler`] — simplified TPE (Tree-Parzen Estimator).
+
 use crate::sampler::{Sampler, hash_u64, pseudo_random, sample_float};
 use somatize_core::error::Result;
 use somatize_core::search::{SearchDimension, SearchSpace};
@@ -22,6 +24,9 @@ pub struct BayesianSampler {
 }
 
 impl BayesianSampler {
+    /// A TPE sampler producing `n_trials` configurations, the first
+    /// `n_startup` (floored at 2 — TPE needs history to split) sampled
+    /// randomly. `None` seed defaults to 42, keeping runs reproducible.
     pub fn new(n_trials: usize, n_startup: usize, seed: Option<u64>) -> Self {
         Self {
             n_trials,

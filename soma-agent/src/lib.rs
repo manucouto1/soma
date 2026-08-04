@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! Autonomous research over Soma pipelines.
 //!
 //! One thing lives here: [`ResearchStep`], a [`Step`](somatize_core::step::Step)

@@ -1,3 +1,5 @@
+//! Compiler edge cases: empty graphs, cycles, unregistered nodes.
+
 use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta};
 use somatize_core::error::Result;

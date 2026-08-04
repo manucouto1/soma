@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! Execution engine for Soma computational graphs.
 //!
 //! Two decisions shape this crate. [`NodeCatalog`] is THE registry — every

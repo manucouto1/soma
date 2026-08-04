@@ -25,7 +25,12 @@ pub enum TrialOutcome {
     /// Trial completed successfully with final metrics.
     Completed(Vec<MetricRecord>),
     /// Trial was pruned (stopped early) at the given step.
-    Pruned { step: usize, reason: String },
+    Pruned {
+        /// Step at which the pruner stopped the trial.
+        step: usize,
+        /// The pruner's explanation, recorded on the trial.
+        reason: String,
+    },
 }
 
 /// Handle passed to a trial: reports intermediate metrics and asks
@@ -126,6 +131,8 @@ impl TrialContext {
 /// Returns `Ok(TrialOutcome)` for normal completion or pruning,
 /// `Err(SomaError)` only for unexpected failures.
 pub trait TrialExecutor: Send + Sync {
+    /// Run one trial with the sampled `params`, reporting intermediate
+    /// metrics through `ctx` and honouring its pruning verdicts.
     fn execute_trial(
         &self,
         params: &HashMap<String, serde_json::Value>,
@@ -156,6 +163,8 @@ pub struct StudyRunner {
 }
 
 impl StudyRunner {
+    /// A runner emitting trial events on `event_bus`, with no persistence
+    /// until [`Self::with_tracker`] adds it.
     pub fn new(event_bus: Arc<EventBus>) -> Self {
         Self {
             event_bus,

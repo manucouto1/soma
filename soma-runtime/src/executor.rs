@@ -31,6 +31,8 @@ pub struct GraphInfo {
 }
 
 impl GraphInfo {
+    /// An empty topology; every node resolves to no predecessors until
+    /// [`Self::set_predecessors`] says otherwise.
     pub fn new() -> Self {
         Self::default()
     }
@@ -94,7 +96,10 @@ pub enum RunMode {
     /// A trainable node learns its state from its resolved input and these
     /// labels, then computes with it. Labels are shared by the whole run;
     /// `None` means unsupervised.
-    Fit { y: Option<Value> },
+    Fit {
+        /// The run's labels; `None` means unsupervised.
+        y: Option<Value>,
+    },
 }
 
 impl RunMode {
@@ -162,6 +167,8 @@ pub struct Context {
 }
 
 impl Context {
+    /// A forward-mode context with empty topology and no optional
+    /// components; the `with_*` builders add what the run needs.
     pub fn new(event_bus: Arc<EventBus>, run_id: impl Into<String>) -> Self {
         Self {
             mode: RunMode::Forward,
@@ -190,6 +197,7 @@ impl Context {
         self
     }
 
+    /// Set the topology used for input resolution.
     pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
         self.graph_info = info;
         self
@@ -219,11 +227,13 @@ impl Context {
         self
     }
 
+    /// Set the transport a plan with `Remote` nodes executes through.
     pub fn with_transport(mut self, transport: Arc<dyn crate::runner::Transport>) -> Self {
         self.transport = Some(transport);
         self
     }
 
+    /// Set the data store used for spilling and remote data movement.
     pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
         self.data_store = Some(store);
         self

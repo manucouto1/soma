@@ -26,21 +26,32 @@ pub enum CompileMode {
 /// Diagnostic message emitted during compilation.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
+    /// The node the diagnostic is about.
     pub node_id: NodeId,
+    /// How seriously to take it.
     pub level: DiagnosticLevel,
+    /// Human-readable description of what the compiler noticed.
     pub message: String,
 }
 
+/// Severity of a [`Diagnostic`]. Nothing here fails compilation — a
+/// condition worth stopping for is returned as an error, not collected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticLevel {
+    /// Probably not what the author intended (e.g. a gradient path broken
+    /// by a non-differentiable node); the plan still compiles.
     Warning,
+    /// Worth knowing, nothing to fix.
     Info,
 }
 
 /// Compiled result: the plan plus any diagnostics.
 #[derive(Debug)]
 pub struct CompileResult {
+    /// The executable plan the runtime walks.
     pub plan: ExecutionPlan,
+    /// What the compiler noticed along the way; never fatal (see
+    /// [`DiagnosticLevel`]).
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -82,6 +93,9 @@ pub struct SimpleNodeRegistry {
 }
 
 impl SimpleNodeRegistry {
+    /// An empty registry; populate it with [`register`](Self::register),
+    /// [`register_meta`](Self::register_meta) or
+    /// [`register_step_meta`](Self::register_step_meta).
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -102,12 +116,16 @@ impl SimpleNodeRegistry {
         self.entries.insert(id, (meta.into(), hash));
     }
 
+    /// Register a filter, taking metadata and config hash from the
+    /// instance itself.
     pub fn register(&mut self, node_id: impl Into<String>, filter: &dyn Filter) {
         let id = node_id.into();
         self.entries
             .insert(id, (filter.meta().into(), filter.config_hash()));
     }
 
+    /// Register filter metadata directly, for callers that have no filter
+    /// instance to hand — a plan received over the wire, a test.
     pub fn register_meta(
         &mut self,
         node_id: impl Into<String>,
@@ -189,6 +207,8 @@ pub struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
+    /// A compiler over `graph`, reading node contracts from `registry`.
+    /// Nothing happens until [`compile`](Self::compile) is called.
     pub fn new(graph: &'a Graph, registry: &'a dyn NodeRegistry, mode: CompileMode) -> Self {
         Self {
             graph,

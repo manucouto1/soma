@@ -76,6 +76,10 @@ pub struct StreamRun {
 }
 
 impl StreamRun {
+    /// Build the per-node stream state for `node_ids`, resolved against
+    /// the catalog. Errors on an unknown node or a step — the compiler
+    /// already refuses steps in stream plans; this is the driver's own
+    /// line of defense.
     pub fn new(node_ids: &[String], catalog: &NodeCatalog) -> Result<Self> {
         let nodes = node_ids
             .iter()
@@ -178,6 +182,8 @@ impl StreamRun {
         }
     }
 
+    /// How many chunks have been pushed so far (including ones a barrier
+    /// swallowed).
     pub fn chunks_processed(&self) -> usize {
         self.chunk_count
     }
@@ -281,6 +287,7 @@ pub struct StreamOutput {
 }
 
 impl StreamOutput {
+    /// An empty accumulator; equivalent to `Default::default()`.
     pub fn new() -> Self {
         Self::default()
     }

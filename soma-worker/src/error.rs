@@ -50,6 +50,8 @@ pub enum WorkerError {
     #[error("remote worker: {0}")]
     Remote(String),
 
+    /// Filesystem or process I/O, kept as the original `io::Error` so
+    /// callers can still match on its kind.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

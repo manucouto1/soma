@@ -40,16 +40,21 @@ pub struct RunReader {
 /// Listing entry for one run: manifest identity plus derived liveness.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunInfo {
+    /// Run identifier from the manifest; also tags every event of the run.
     pub run_id: String,
     /// Manifest `kind` as its snake_case string (`fit`, `train`, `study`, …).
     pub kind: String,
+    /// Human-readable name from the manifest.
     pub name: String,
     /// `running` | `completed` | `failed` | `crashed`.
     pub state: String,
+    /// When the run directory was created.
     pub created_at: DateTime<Utc>,
+    /// When the run finalized, if it did.
     pub finished_at: Option<DateTime<Utc>>,
     /// Wall time from creation to finish, when finished.
     pub duration_ms: Option<u64>,
+    /// Free-form tags from the manifest.
     pub tags: Vec<String>,
     /// Absolute path of the run directory.
     pub dir: String,
@@ -59,16 +64,19 @@ pub struct RunInfo {
 /// per execution (re-runs and stream chunks produce separate spans).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeSpan {
+    /// Graph node this span belongs to.
     pub node_id: String,
     /// Envelope timestamp of the opening event.
     pub started_ts: Option<DateTime<Utc>>,
     /// Envelope timestamp of the closing event.
     pub finished_ts: Option<DateTime<Utc>>,
+    /// Wall time between the two envelope timestamps.
     pub duration_ms: Option<u64>,
     /// `completed` | `failed` | `cache_hit` | `running`.
     pub outcome: String,
     /// Cache tier that served a hit (`memory`, `local`, …).
     pub cache_tier: Option<String>,
+    /// Failure message when `outcome` is `failed`.
     pub error: Option<String>,
     /// The node was a step (from `NodeStarted`); defaults for spans
     /// reconstructed from logs that predate the field.
@@ -79,27 +87,40 @@ pub struct NodeSpan {
 /// Per-run cache effectiveness, reconstructed from hit/miss events.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheActivity {
+    /// Cache hits across the whole run.
     pub hits: u64,
+    /// Cache misses across the whole run.
     pub misses: u64,
+    /// Per-node breakdown, keyed by node id.
     pub by_node: BTreeMap<String, NodeCacheCounts>,
 }
 
+/// One node's share of [`CacheActivity`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeCacheCounts {
+    /// Hits recorded for this node.
     pub hits: u64,
+    /// Misses recorded for this node.
     pub misses: u64,
+    /// Tier that served the most recent hit (`memory`, `local`, …).
     pub last_tier: Option<String>,
 }
 
 /// One line of `metrics.jsonl` (also derivable from events).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricPoint {
+    /// Wall time the point was logged.
     pub ts: DateTime<Utc>,
+    /// Metric name (`loss`, `accuracy`, …).
     pub name: String,
+    /// The recorded scalar.
     pub value: f64,
+    /// Logger-supplied step index within the run.
     pub step: u64,
+    /// Owning trial, when logged inside a study.
     #[serde(default)]
     pub trial_id: Option<String>,
+    /// Emitting node, when the metric came from inside a node.
     #[serde(default)]
     pub node_id: Option<String>,
 }
@@ -107,10 +128,16 @@ pub struct MetricPoint {
 /// One `HealthFlag` event with its wall time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthFlagRecord {
+    /// Wall time the flag was raised.
     pub ts: DateTime<Utc>,
+    /// Node the flag fired on — hierarchical (`node/module.path`) when it
+    /// came from an intra-node audit hook.
     pub node_id: String,
+    /// Training step at which the flag fired.
     pub step: usize,
+    /// Flag family name, as emitted by the audit.
     pub flag: String,
+    /// Human-readable description of what was detected.
     pub detail: String,
 }
 
@@ -120,17 +147,26 @@ pub struct HealthFlagRecord {
 /// steps — or predates their telemetry.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgenticActivity {
+    /// Agent turns across all step nodes.
     pub turns: u64,
+    /// Prompt tokens consumed across all step nodes.
     pub input_tokens: u64,
+    /// Completion tokens produced across all step nodes.
     pub output_tokens: u64,
+    /// Effects performed or replayed across all step nodes.
     pub effects: u64,
     /// Of `effects`, how many were served from the journal (a resumed
     /// or replayed run should be nearly all replays).
     pub replayed: u64,
+    /// Tool invocations across all step nodes.
     pub tool_calls: u64,
+    /// Step nodes that completed successfully.
     pub steps_completed: u64,
+    /// Step nodes that completed failed.
     pub steps_failed: u64,
+    /// `Suspended` transitions observed across the run.
     pub suspensions: u64,
+    /// Per-step-node breakdown, keyed by node id.
     pub by_node: BTreeMap<String, AgentNodeActivity>,
 }
 
@@ -143,23 +179,35 @@ pub struct AgenticActivity {
 /// summing both, which would double-count a resumed run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentNodeActivity {
+    /// Agent turns this node ran.
     pub turns: u64,
+    /// Prompt tokens this node consumed.
     pub input_tokens: u64,
+    /// Completion tokens this node produced.
     pub output_tokens: u64,
+    /// Wall time from the accounting events (see the type docs).
     pub duration_ms: u64,
+    /// Effects this node performed or replayed.
     pub effects: u64,
     /// Effect counts by label (`llm:<model>`, `tool:<name>`, …).
     pub effects_by_label: BTreeMap<String, u64>,
+    /// Effects that completed carrying an error result.
     pub effect_errors: u64,
+    /// Of `effects`, how many were served from the journal.
     pub replayed: u64,
+    /// Tool invocations this node made.
     pub tool_calls: u64,
+    /// Tool invocations that returned an error.
     pub tool_errors: u64,
+    /// Control handoffs this node emitted to other nodes.
     pub handoffs_out: u64,
+    /// Times this node suspended awaiting external input.
     pub suspensions: u64,
     /// Instances this node fanned out (sum over its `AgentSpawned`s).
     pub spawned: u64,
     /// `AgentStepCompleted` events with `failed: false` / `true`.
     pub completions: u64,
+    /// Completions that reported `failed: true`.
     pub failures: u64,
 }
 
@@ -168,14 +216,21 @@ pub struct AgentNodeActivity {
 /// span (`outcome: "running"`) means the run died mid-effect.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EffectSpan {
+    /// Step node the effect ran inside.
     pub node_id: String,
+    /// Turn index within the step's loop.
     pub turn: usize,
     /// `Effect::label()` — e.g. `llm:qwen2.5:14b`, `tool:search`.
     pub effect: String,
+    /// Envelope timestamp of the opening event.
     pub started_ts: Option<DateTime<Utc>>,
+    /// Envelope timestamp of the closing event.
     pub finished_ts: Option<DateTime<Utc>>,
+    /// Wall time between the two envelope timestamps.
     pub duration_ms: Option<u64>,
+    /// Served from the journal instead of being performed.
     pub replayed: bool,
+    /// The effect completed carrying an error result.
     pub is_error: bool,
     /// `completed` | `running`.
     pub outcome: String,
@@ -184,11 +239,15 @@ pub struct EffectSpan {
 /// One trial's lifetime, from `study.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrialSpan {
+    /// Trial identifier from `study.json`.
     pub trial_id: String,
     /// `completed` | `pruned` | `failed` | `running` | `pending`.
     pub state: String,
+    /// When the trial started, if it did.
     pub started_at: Option<DateTime<Utc>>,
+    /// When the trial finished, if it did.
     pub finished_at: Option<DateTime<Utc>>,
+    /// Wall time between the two, when both are known.
     pub duration_ms: Option<u64>,
 }
 
@@ -201,14 +260,17 @@ impl RunReader {
         Ok(Self { dir })
     }
 
+    /// The run directory this reader was opened on.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
+    /// Parse `manifest.json` — the run's immutable identity record.
     pub fn manifest(&self) -> Result<RunManifest> {
         load_manifest(&self.dir)
     }
 
+    /// Parse `status.json` — the latest state + heartbeat snapshot.
     pub fn status(&self) -> Result<RunStatus> {
         load_status(&self.dir)
     }

@@ -1,3 +1,6 @@
+//! [`MemoryCache`] — in-memory LRU [`CacheStore`] with byte-bounded
+//! eviction.
+
 use chrono::Utc;
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta, Origin};
 use somatize_core::error::Result;

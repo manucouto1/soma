@@ -526,6 +526,8 @@ impl PythonProcess {
 
     // ── Public API ──
 
+    /// Fit the filter loaded under `node_id` on `data` (and optional
+    /// labels `y`), returning what its `fit` returned — the trained state.
     pub fn fit(&mut self, node_id: &str, data: &Value, y: Option<&Value>) -> Result<Value> {
         let mut cmd = serde_json::json!({
             "cmd": "FIT",
@@ -539,6 +541,8 @@ impl PythonProcess {
         Self::response_to_value(&resp)
     }
 
+    /// Run the filter's `forward` on `data` with a previously trained
+    /// `state`, returning its output.
     pub fn forward(&mut self, node_id: &str, data: &Value, state: &Value) -> Result<Value> {
         let resp = self.send(serde_json::json!({
             "cmd": "FORWARD",
@@ -549,6 +553,13 @@ impl PythonProcess {
         Self::response_to_value(&resp)
     }
 
+    /// Fit a chain of filters in one command: each trainable filter fits,
+    /// then forwards to feed the next; if torch is importable the daemon
+    /// follows with one autograd forward/backward pass over the chain.
+    /// Returns the chain's output plus each node's serialized state
+    /// (torch `state_dict` bytes when available, cloudpickle otherwise).
+    /// One round-trip — intermediate values never cross the process
+    /// boundary, and the autograd graph stays whole.
     pub fn composite_fit(
         &mut self,
         node_ids: &[String],
@@ -612,6 +623,8 @@ impl PythonProcess {
         Ok((output, states))
     }
 
+    /// Forward `data` through a chain of filters, in order, inside one
+    /// command — the composite counterpart of [`PythonProcess::forward`].
     pub fn composite_forward(&mut self, node_ids: &[String], data: &Value) -> Result<Value> {
         let resp = self.send(serde_json::json!({
             "cmd": "COMPOSITE_FORWARD",
@@ -621,6 +634,8 @@ impl PythonProcess {
         Self::response_to_value(&resp)
     }
 
+    /// Extract one filter's state as opaque bytes — a torch `state_dict`
+    /// when the filter has one, the cloudpickled filter otherwise.
     pub fn get_state(&mut self, node_id: &str) -> Result<Value> {
         let resp = self.send(serde_json::json!({"cmd": "GET_STATE", "node_id": node_id}))?;
         if let Some(b64) = resp.get("state_b64").and_then(|s| s.as_str()) {
@@ -633,6 +648,9 @@ impl PythonProcess {
         }
     }
 
+    /// Load bytes produced by [`PythonProcess::get_state`] back into the
+    /// filter — how FedAvg-style aggregated states reach a worker.
+    /// Anything but `Value::Bytes` is an encoding error.
     pub fn set_state(&mut self, node_id: &str, state: &Value) -> Result<()> {
         let b64 = match state {
             Value::Bytes(b) => STANDARD.encode(b.as_slice()),
@@ -651,6 +669,9 @@ impl PythonProcess {
         Ok(())
     }
 
+    /// Collect the filter's current gradients as torch-saved bytes, for
+    /// AllReduce aggregation. `Value::Empty` when the filter has no
+    /// parameters (or torch is absent) — nothing to aggregate, not an error.
     pub fn get_gradients(&mut self, node_id: &str) -> Result<Value> {
         let resp = self.send(serde_json::json!({"cmd": "GET_GRADIENTS", "node_id": node_id}))?;
         if let Some(b64) = resp.get("gradients_b64").and_then(|s| s.as_str()) {
@@ -663,6 +684,10 @@ impl PythonProcess {
         }
     }
 
+    /// Hand aggregated gradients (bytes from
+    /// [`PythonProcess::get_gradients`], post-AllReduce) to the filter:
+    /// the daemon writes them onto the matching parameters and steps the
+    /// filter's optimizer if it has one.
     pub fn apply_gradients(&mut self, node_id: &str, gradients: &Value) -> Result<()> {
         let b64 = match gradients {
             Value::Bytes(b) => STANDARD.encode(b.as_slice()),
@@ -678,10 +703,13 @@ impl PythonProcess {
         Ok(())
     }
 
+    /// Ask the daemon to exit its command loop. Best-effort — the reply
+    /// is ignored, and [`Drop`] kills the child regardless.
     pub fn shutdown(&mut self) {
         let _ = self.send(serde_json::json!({"cmd": "SHUTDOWN"}));
     }
 
+    /// The node ids of the filters loaded into this process, in load order.
     pub fn node_ids(&self) -> &[String] {
         &self.node_ids
     }
@@ -710,6 +738,9 @@ pub struct SubprocessFilter {
 }
 
 impl SubprocessFilter {
+    /// A proxy for the filter loaded under `node_id` in `process` —
+    /// shared, so every sibling filter of one plan talks to the same
+    /// interpreter.
     pub fn new(
         process: Arc<Mutex<PythonProcess>>,
         node_id: String,

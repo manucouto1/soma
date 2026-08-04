@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! Provider-agnostic model access.
 //!
 //! Two ideas carry this crate:
@@ -51,7 +55,9 @@ use std::sync::Arc;
 /// A model offered by a provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelInfo {
+    /// The model name as the provider knows it, without any routing prefix.
     pub id: String,
+    /// The provider that listed it — a routing prefix, not a vendor name.
     pub provider: String,
 }
 
@@ -90,6 +96,8 @@ pub struct Router {
 }
 
 impl Router {
+    /// An empty router. Routes nothing until providers are
+    /// [registered](Self::register).
     pub fn new() -> Self {
         Self {
             providers: BTreeMap::new(),
@@ -109,6 +117,8 @@ impl Router {
         Ok(router)
     }
 
+    /// Add a provider under its own [`LlmProvider::id`], replacing any
+    /// previous provider of the same id.
     pub fn register(&mut self, provider: Arc<dyn LlmProvider>) {
         self.providers.insert(provider.id().to_string(), provider);
     }
@@ -119,10 +129,12 @@ impl Router {
         self
     }
 
+    /// The provider registered under `id`, if any.
     pub fn get(&self, id: &str) -> Option<&Arc<dyn LlmProvider>> {
         self.providers.get(id)
     }
 
+    /// Registered provider ids, sorted.
     pub fn ids(&self) -> Vec<&str> {
         self.providers.keys().map(String::as_str).collect()
     }
@@ -173,6 +185,7 @@ pub struct LlmHandler {
 }
 
 impl LlmHandler {
+    /// Serve [`Effect::Llm`] from the given router.
     pub fn new(router: Router) -> Self {
         Self { router }
     }
@@ -183,6 +196,7 @@ impl LlmHandler {
         Ok(Self::new(Router::from_catalog(Catalog::load()?)?))
     }
 
+    /// The router this handler answers from.
     pub fn router(&self) -> &Router {
         &self.router
     }

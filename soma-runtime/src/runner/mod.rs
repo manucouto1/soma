@@ -30,13 +30,18 @@ use std::sync::Arc;
 /// The caller supplies the real topology now. A caller that genuinely has
 /// only a plan can still pass `GraphInfo::for_linear`, but it has to say so.
 pub struct RunContext<'a> {
+    /// Implementations and trained states for every node in the plan.
     pub catalog: &'a NodeCatalog,
+    /// Output cache consulted and filled by `run_node`.
     pub cache: &'a dyn CacheStore,
+    /// Bus the run emits its node events on.
     pub events: &'a Arc<EventBus>,
     /// Tags every node event of this run — callers that emit a
     /// `RunStarted`/`RunCompleted` bracket pass the same id so readers can
     /// group a run's events.
     pub run_id: &'a str,
+    /// The real topology for input resolution — the reason this struct
+    /// exists; see the type docs.
     pub graph_info: GraphInfo,
     /// The run's experiment seed, folded into every cache key.
     ///

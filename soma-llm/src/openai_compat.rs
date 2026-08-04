@@ -192,6 +192,8 @@ pub struct OpenAiCompatible {
 }
 
 impl OpenAiCompatible {
+    /// A client for one endpoint. Builds the HTTP client with the config's
+    /// timeout; nothing is contacted until a request is made.
     pub fn new(id: impl Into<String>, config: ProviderConfig) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
@@ -204,6 +206,7 @@ impl OpenAiCompatible {
         })
     }
 
+    /// The configuration this client was built from.
     pub fn config(&self) -> &ProviderConfig {
         &self.config
     }

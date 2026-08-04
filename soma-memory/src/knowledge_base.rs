@@ -22,6 +22,7 @@ use std::collections::HashMap;
 /// One node of a lineage tree, with its distance from the focus.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LineageNode {
+    /// The descendant record itself.
     pub record: ExperimentRecord,
     /// Generations below the focus (1 = direct child).
     pub depth: usize,
@@ -30,6 +31,7 @@ pub struct LineageNode {
 /// An experiment in context: where it came from and what came of it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Lineage {
+    /// The experiment the lineage was asked about.
     pub focus: ExperimentRecord,
     /// Ancestors from the root down to the direct parent.
     pub ancestors: Vec<ExperimentRecord>,
@@ -65,6 +67,7 @@ pub trait KnowledgeBase: Send + Sync {
         Ok(0)
     }
 
+    /// Whether the base holds no records at all.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -318,6 +321,7 @@ pub struct MemoryKnowledgeBase {
 }
 
 impl MemoryKnowledgeBase {
+    /// An empty base.
     pub fn new() -> Self {
         Self::default()
     }

@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! PyO3 bindings for Soma — exposes Graph, Study, and Filter to Python.
 //!
 //! Bridges Python Filter classes to the Rust Filter trait, converts

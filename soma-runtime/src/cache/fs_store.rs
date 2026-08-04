@@ -30,13 +30,23 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// On-disk layout version, recorded in `format.json`. A mismatched dir is
+/// refused with a pointer to `soma cache purge-v1` — silently reading an
+/// old layout would corrupt it.
 pub const FORMAT_VERSION: u32 = 2;
 
+/// The persistent two-table store: action records + CAS blobs. See the
+/// module docs for the layout and the crash-safe commit protocol.
 pub struct FsActionStore {
     root: PathBuf,
 }
 
 impl FsActionStore {
+    /// Open (or initialize) a store rooted at `root`.
+    ///
+    /// Creates the directory skeleton and stamps `format.json` on first
+    /// use; refuses a root whose recorded version is not
+    /// [`FORMAT_VERSION`].
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root)?;
@@ -68,6 +78,7 @@ impl FsActionStore {
         Ok(Self { root })
     }
 
+    /// The store's root directory.
     pub fn root(&self) -> &Path {
         &self.root
     }

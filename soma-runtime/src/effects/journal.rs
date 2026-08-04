@@ -34,8 +34,11 @@ use std::sync::Arc;
 /// Where an effect happened, for keying its record.
 #[derive(Debug, Clone, Copy)]
 pub struct EffectSite<'a> {
+    /// Run the effect belongs to — the scope a replay is confined to.
     pub run_id: &'a str,
+    /// Step node that awaited the effect.
     pub node_id: &'a str,
+    /// Turn of the step's loop the effect was awaited in.
     pub turn: usize,
     /// Position within the turn, since one turn may await several effects.
     pub index: usize,
@@ -75,6 +78,7 @@ impl EffectJournal {
         }
     }
 
+    /// Whether this journal records and replays at all.
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }

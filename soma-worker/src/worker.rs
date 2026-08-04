@@ -12,7 +12,10 @@ use std::time::Instant;
 
 /// Worker state: manages execution of plans received from a coordinator.
 pub struct Worker {
+    /// The identity this worker registers and reports under.
     pub id: WorkerId,
+    /// What this worker can run, announced to the coordinator at
+    /// registration.
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
@@ -48,6 +51,10 @@ fn default_python() -> String {
 }
 
 impl Worker {
+    /// A worker with an in-memory cache, an empty catalog, and per-worker
+    /// temp/env directories derived from `id`. Filters arrive later, with
+    /// the plans; the interpreter defaults to `$SOMA_PYTHON`, then
+    /// `python3` — see [`Worker::with_python`] for why that matters.
     pub fn new(id: impl Into<String>, capabilities: Capabilities) -> Self {
         let worker_id: String = id.into();
         let temp_path = std::env::temp_dir().join(format!("soma-uploads-{worker_id}"));

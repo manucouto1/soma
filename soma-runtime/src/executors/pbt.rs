@@ -20,20 +20,34 @@ use std::sync::Arc;
 /// Configuration for a PBT run.
 #[derive(Debug, Clone)]
 pub struct PbtConfig {
+    /// Number of members evolved together.
     pub population_size: usize,
+    /// Train → evaluate → exploit/explore cycles to run.
     pub generations: usize,
+    /// How underperformers copy top performers (truncation, binary tournament).
     pub exploit: ExploitStrategy,
+    /// How copied hyperparameters are mutated afterwards.
     pub explore: ExploreStrategy,
+    /// Dimensions the initial population and `Resample` mutations draw from.
     pub search_space: SearchSpace,
+    /// Advisory length of one generation's training phase. The runner calls
+    /// [`PbtExecutor::train`] once per member per generation; what a "step"
+    /// means is the executor's to interpret.
     pub train_steps_per_generation: usize,
 }
 
 /// A single member of the population.
 #[derive(Debug, Clone)]
 pub struct PopulationMember {
+    /// Stable member identifier (`member_<i>`).
     pub id: String,
+    /// Current hyperparameters — copied on exploit, mutated on explore.
     pub params: HashMap<String, serde_json::Value>,
+    /// Trained state, updated after each generation's training phase and
+    /// copied along with `params` when a top performer is exploited.
     pub state: Value,
+    /// Latest evaluation score, higher is better; `None` before the first
+    /// evaluation (a failed evaluation records `f64::NEG_INFINITY`).
     pub fitness: Option<f64>,
 }
 
@@ -47,7 +61,9 @@ pub trait PbtExecutor: Send + Sync {
 
 /// Function-based PBT executor for convenience.
 pub struct FnPbtExecutor<T, E> {
+    /// Closure backing [`PbtExecutor::train`].
     pub train_fn: T,
+    /// Closure backing [`PbtExecutor::evaluate`].
     pub eval_fn: E,
 }
 
@@ -70,6 +86,7 @@ pub struct PbtRunner {
 }
 
 impl PbtRunner {
+    /// A runner emitting generation and exploit events on `event_bus`.
     pub fn new(event_bus: Arc<EventBus>) -> Self {
         Self { event_bus }
     }

@@ -62,6 +62,7 @@ pub struct RemoteRunner {
 }
 
 impl RemoteRunner {
+    /// A runner sending every fit/forward through `transport`.
     pub fn new(transport: impl Transport + 'static) -> Self {
         Self {
             transport: Box::new(transport),

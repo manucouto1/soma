@@ -2,7 +2,7 @@
 //!
 //! Each strategy defines HOW input data flows through a compiled graph:
 //! - [`Standard`] — full input at once, with inference caching
-//! - [`Stream`] — chunked input through [`crate::StreamExecutor`], respecting StreamMode
+//! - [`Stream`] — chunked input through [`crate::StreamRun`], respecting StreamMode
 //! - [`Batched`] — rows from a [`DataStore`], batch by batch (memory-bounded)
 
 use crate::event_bus::EventBus;
@@ -23,9 +23,13 @@ use std::sync::Arc;
 /// forgetting one of six positional arguments is a bug the compiler cannot
 /// name.
 pub struct ForwardEnv<'a> {
+    /// Implementations and trained states for every node in the graph.
     pub catalog: &'a NodeCatalog,
+    /// Output cache consulted and filled during the pass.
     pub cache: &'a dyn CacheStore,
+    /// Bus the pass emits its node events on.
     pub event_bus: &'a Arc<EventBus>,
+    /// Row source [`Batched`] reads from; the other strategies ignore it.
     pub data_store: Option<&'a Arc<dyn DataStore>>,
     /// Performs and journals step effects; a graph without steps ignores
     /// it, which is why it is an `Option` and not a requirement.
@@ -49,9 +53,10 @@ impl ForwardStrategy for Standard {
     }
 }
 
-/// Chunked input through [`crate::StreamExecutor`], respecting each
+/// Chunked input through [`crate::StreamRun`], respecting each
 /// filter's `StreamMode`.
 pub struct Stream {
+    /// Rows per chunk fed through the stream plan.
     pub chunk_size: usize,
 }
 
@@ -92,7 +97,9 @@ fn run_forward(
 /// Batched forward: read rows from a DataStore in fixed-size batches.
 /// Keeps memory bounded — only one batch is materialized at a time.
 pub struct Batched<'a> {
+    /// Which dataset to read from the [`ForwardEnv::data_store`].
     pub data_ref: &'a DataRef,
+    /// Rows materialized per batch — the memory bound.
     pub batch_size: usize,
 }
 

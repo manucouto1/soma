@@ -31,12 +31,22 @@ pub enum LlmError {
     /// answered something that was not a completion. Already past the
     /// retry policy — this is what was left after it gave up.
     #[error("provider `{provider}`: {message}")]
-    Provider { provider: String, message: String },
+    Provider {
+        /// Which provider failed — the catalog id, e.g. `nvidia`.
+        provider: String,
+        /// What happened, including how many attempts the retry policy spent.
+        message: String,
+    },
 
     /// An MCP server: would not start, would not answer, or its client
     /// handle was poisoned by an earlier panic.
     #[error("mcp server `{server}`: {message}")]
-    Mcp { server: String, message: String },
+    Mcp {
+        /// Which server failed, as it was registered.
+        server: String,
+        /// What happened.
+        message: String,
+    },
 
     /// The provider catalog or the router: a name that resolves to
     /// nothing. A configuration fix, not a runtime failure.
@@ -48,6 +58,8 @@ pub enum LlmError {
     #[error("routing: {0}")]
     UnexpectedEffect(String),
 
+    /// An I/O failure — spawning an MCP server process, reading the
+    /// provider catalog file. Transparent: the io error says it best.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
