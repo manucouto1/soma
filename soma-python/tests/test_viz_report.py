@@ -25,6 +25,7 @@ DATA_BLOB_IDS = [
     "soma-data-metrics",
     "soma-data-health-flags",
     "soma-data-trial-timeline",
+    "soma-data-agentic",
 ]
 
 
@@ -79,6 +80,43 @@ def test_report_embeds_all_data_blobs(tmp_path):
     # Figure specs parse as plotly JSON.
     gantt = _blob(doc, "soma-fig-gantt")
     assert gantt["data"], "gantt has traces"
+
+
+def _tracked_agent_run(tmp_path):
+    from soma.agentic import Done
+
+    class Shout:
+        _cache_version = "1"
+
+        def poll(self, ctx):
+            return Done(str(ctx.input).upper())
+
+    g = Graph(cache="memory")
+    g.node("shout", Shout())
+    with g.track_run("agent-run", root=str(tmp_path), kind="forward") as run:
+        g.forward("hi")
+    return soma.RunView(run.dir)
+
+
+def test_report_agent_activity_section(tmp_path):
+    view = _tracked_agent_run(tmp_path)
+
+    activity = view.agentic_activity()
+    assert activity["by_node"]["shout"]["turns"] == 1
+    assert activity["by_node"]["shout"]["completions"] == 1
+
+    doc = view.to_html()
+    assert "<h2>Agent activity</h2>" in doc
+    blob = _blob(doc, "soma-data-agentic")
+    assert blob["turns"] == 1
+    assert "shout" in blob["by_node"]
+
+    # A run with no agent steps embeds the (empty) blob for the
+    # front-end contract, but renders no section.
+    plain = _tracked_fit(tmp_path)
+    plain_doc = plain.to_html()
+    assert "<h2>Agent activity</h2>" not in plain_doc
+    assert _blob(plain_doc, "soma-data-agentic")["by_node"] == {}
 
 
 def _external_refs(doc: str) -> list[str]:

@@ -188,6 +188,7 @@ def build_report(run_view, inline: bool = False) -> str:
     metrics = run_view.metric_series()
     flags = run_view.health_flags()
     trials = run_view.trial_timeline()
+    agentic = run_view.agentic_activity()
 
     study = None
     if (pathlib.Path(run_view.dir) / "study.json").exists():
@@ -205,6 +206,7 @@ def build_report(run_view, inline: bool = False) -> str:
         _data_blob("metrics", metrics),
         _data_blob("health-flags", flags),
         _data_blob("trial-timeline", trials),
+        _data_blob("agentic", agentic),
     ]
 
     # ── header ──
@@ -269,6 +271,51 @@ def build_report(run_view, inline: bool = False) -> str:
     gantt = _try_fig(_figures.plot_gantt, run_view)
     if gantt:
         sections.append(_fig_block("gantt", gantt))
+
+    # ── agent activity ──
+    if agentic["by_node"]:
+        replay_pct = (
+            f"{100 * agentic['replayed'] / agentic['effects']:.0f}%"
+            if agentic["effects"]
+            else "—"
+        )
+        agent_tiles = [
+            ("agent turns", agentic["turns"]),
+            ("tokens in → out", f"{agentic['input_tokens']} → {agentic['output_tokens']}"),
+            ("tool calls", agentic["tool_calls"]),
+            ("replayed", replay_pct),
+        ]
+        if agentic["steps_failed"]:
+            agent_tiles.append(("steps failed", agentic["steps_failed"]))
+        if agentic["suspensions"]:
+            agent_tiles.append(("suspensions", agentic["suspensions"]))
+        sections.append(
+            "<h2>Agent activity</h2><div class='tiles'>"
+            + "".join(
+                f"<div class='tile'><div class='k'>{_esc(k)}</div><div class='v'>{_esc(v)}</div></div>"
+                for k, v in agent_tiles
+            )
+            + "</div>"
+        )
+        agent_fig = _try_fig(_figures.plot_agentic, run_view)
+        if agent_fig:
+            sections.append(_fig_block("agentic", agent_fig))
+        head = (
+            "<tr><th>node</th><th>turns</th><th>effects</th><th>tools</th>"
+            "<th>tokens in</th><th>tokens out</th><th>duration</th></tr>"
+        )
+        rows = "".join(
+            "<tr>"
+            f"<td>{_esc(node)}</td><td>{_esc(n['turns'])}</td>"
+            f"<td>{_esc(n['effects'])}</td><td>{_esc(n['tool_calls'])}</td>"
+            f"<td>{_esc(n['input_tokens'])}</td><td>{_esc(n['output_tokens'])}</td>"
+            f"<td>{_esc(_fmt_ms(n['duration_ms']))}</td>"
+            "</tr>"
+            for node, n in agentic["by_node"].items()
+        )
+        sections.append(
+            f"<div class='card table-wrap'><table>{head}{rows}</table></div>"
+        )
 
     # ── metrics ──
     if metrics:

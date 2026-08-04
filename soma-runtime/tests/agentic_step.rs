@@ -1149,17 +1149,32 @@ fn a_suspension_emits_suspended_and_resuming_emits_resumed() {
 
     run(driver.clone()).expect_err("the run should pause");
     let mut suspended = false;
+    let mut completed_during_pause = false;
     while let Ok(event) = rx.try_recv() {
-        if let Event::Suspended {
-            node_id, reason, ..
-        } = event
-        {
-            assert_eq!(node_id, "approve");
-            assert_eq!(reason, "human");
-            suspended = true;
+        match event {
+            Event::Suspended {
+                node_id,
+                reason,
+                turns,
+                ..
+            } => {
+                assert_eq!(node_id, "approve");
+                assert_eq!(reason, "human");
+                assert_eq!(turns, 1, "the suspension should carry the cost so far");
+                suspended = true;
+            }
+            // A suspended step has not finished; its final completion event
+            // carries cumulative totals, so an extra one here would make a
+            // reader that sums per node double-count.
+            Event::AgentStepCompleted { .. } => completed_during_pause = true,
+            _ => {}
         }
     }
     assert!(suspended, "no Suspended event was emitted");
+    assert!(
+        !completed_during_pause,
+        "a suspension must not emit AgentStepCompleted"
+    );
 
     driver
         .resume_with(

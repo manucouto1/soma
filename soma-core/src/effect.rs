@@ -409,6 +409,17 @@ pub enum JoinPolicy {
     First,
 }
 
+impl JoinPolicy {
+    /// A label for telemetry, in the spirit of [`Effect::label`].
+    pub fn label(&self) -> &'static str {
+        match self {
+            JoinPolicy::All => "all",
+            JoinPolicy::AllSettled => "all-settled",
+            JoinPolicy::First => "first",
+        }
+    }
+}
+
 /// Why a run stopped and what would restart it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

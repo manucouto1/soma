@@ -74,9 +74,10 @@ use crate::prelude::*;
 use crate::readers::{
     checkout_run, clear_head_run, graph_json_to_mermaid, graph_json_to_svg, kb_diff_json,
     kb_find_similar_json, kb_lineage_json, kb_record_conclusion, kb_reindex, list_runs_json,
-    read_head_run, run_cache_activity_json, run_events_json, run_health_flags_json, run_info_json,
-    run_manifest_json, run_metric_series_json, run_node_timings_json, run_overlay_json,
-    run_summary_json, run_to_graphviz, run_to_mermaid, run_to_svg, run_trial_timeline_json,
+    read_head_run, run_agentic_activity_json, run_agentic_timeline_json, run_cache_activity_json,
+    run_events_json, run_health_flags_json, run_info_json, run_manifest_json,
+    run_metric_series_json, run_node_timings_json, run_overlay_json, run_summary_json,
+    run_to_graphviz, run_to_mermaid, run_to_svg, run_trial_timeline_json,
 };
 use crate::run::PyRun;
 use crate::study::{PyStudy, PyTrial};
@@ -205,6 +206,8 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_cache_activity_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_health_flags_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_trial_timeline_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_agentic_activity_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_agentic_timeline_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_overlay_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_graphviz, m)?)?;

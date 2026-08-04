@@ -238,13 +238,25 @@ pub enum Event {
     /// Control passed from one node to another (a step's `Goto`)
     Handoff { run_id: RunId, from: NodeId, to: NodeId },
 
-    /// The run stopped, pending something outside it
-    Suspended { run_id: RunId, node_id: NodeId, reason: String },
+    /// The run stopped, pending something outside it. Carries the cost
+    /// *so far* — a suspended step emits no AgentStepCompleted, and the
+    /// resumed run's final totals supersede these (they are cumulative)
+    Suspended {
+        run_id: RunId,
+        node_id: NodeId,
+        reason: String,
+        turns: usize,
+        duration: Duration,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
 
     /// A suspended run picked up again
     Resumed { run_id: RunId, node_id: NodeId, turn: usize },
 
-    /// A step finished, with what it cost
+    /// A step finished, with what it cost — however it finished.
+    /// `failed: true` marks error exits (turn exhaustion, a failed poll
+    /// or effect): the cost was paid either way
     AgentStepCompleted {
         run_id: RunId,
         node_id: NodeId,
@@ -252,6 +264,17 @@ pub enum Event {
         duration: Duration,
         input_tokens: u64,
         output_tokens: u64,
+        failed: bool,
+    },
+
+    /// A step fanned work out; `children` are the hierarchical ids
+    /// (`parent/label`) the spawned instances run and journal under
+    AgentSpawned {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        children: Vec<NodeId>,
+        join: String,
     },
 }
 ```
@@ -272,10 +295,17 @@ path:
 - **`ToolCalled`** additionally, whenever the completed effect was a tool.
 - **`Handoff`** when a step returns `Goto`, before control moves.
 - **`Suspended`** when a step returns `Suspend` and the journal holds no
-  answer for that site; **`Resumed`** when a later run of the same id
-  replays to that site and finds the answer `Graph.resume(...)` recorded.
-- **`AgentStepCompleted`** when the step finishes (via `Done` or `Goto`),
-  carrying turn count, wall time and token usage summed over its effects.
+  answer for that site, carrying the cost accumulated up to the pause;
+  **`Resumed`** when a later run of the same id replays to that site and
+  finds the answer `Graph.resume(...)` recorded.
+- **`AgentSpawned`** when a `Transition::Spawn` fans out, naming the
+  hierarchical child ids before they run.
+- **`AgentStepCompleted`** when the step finishes — `Done`, `Goto`, a
+  failed poll or effect, or turn exhaustion (`failed: true` on the error
+  exits) — carrying turn count, wall time and token usage summed over
+  its effects. Suspension is the one exit that does not emit it; its
+  cost travels on `Suspended`, superseded by the resumed run's
+  cumulative totals.
 
 ## Event Bus
 

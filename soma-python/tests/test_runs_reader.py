@@ -439,3 +439,54 @@ def test_runview_to_svg(tmp_path):
 
     with pytest.raises(ValueError, match="no inner-architecture"):
         view.to_svg(node="ghost")
+
+
+# ── Agent activity aggregates ──
+
+
+def test_runview_agentic_activity_and_timeline(tmp_path):
+    """A tracked run of a step graph lands its agent events in
+    events.jsonl, and RunView aggregates them: per-node activity and the
+    per-effect timeline (the read side of the agentic layer)."""
+    from soma.agentic import Await, Done, Sleep
+
+    class Napper:
+        _cache_version = "1"
+
+        def poll(self, ctx):
+            if ctx.turn == 0:
+                return Await([Sleep(0.001)])
+            return Done("rested")
+
+    g = Graph(cache="memory")
+    g.node("napper", Napper())
+    with g.track_run("agentic-run", root=str(tmp_path), kind="forward") as run:
+        assert g.forward("x") == "rested"
+
+    view = soma.RunView(run.dir)
+
+    activity = view.agentic_activity()
+    napper = activity["by_node"]["napper"]
+    assert napper["turns"] == 2
+    assert napper["effects"] == 1
+    assert list(napper["effects_by_label"]) == ["sleep:1ms"]
+    assert napper["completions"] == 1
+    assert activity["turns"] == 2
+    assert activity["steps_completed"] == 1
+
+    timeline = view.agentic_timeline()
+    assert len(timeline) == 1
+    span = timeline[0]
+    assert span["node_id"] == "napper"
+    assert span["effect"] == "sleep:1ms"
+    assert span["outcome"] == "completed"
+    assert not span["replayed"]
+
+    # The step's node span knows it was a step.
+    napper_span = next(s for s in view.node_timings() if s["node_id"] == "napper")
+    assert napper_span["effectful"] is True
+
+    # And a filter-only run reports no agent activity at all.
+    plain = soma.RunView(_tracked_fit(tmp_path, name="no-agents").dir)
+    assert plain.agentic_activity()["by_node"] == {}
+    assert plain.agentic_timeline() == []

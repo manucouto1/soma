@@ -106,6 +106,22 @@ impl FlagCount {
     }
 }
 
+/// What a run's agent steps cost, absent for runs that had none.
+///
+/// Totals across every step node (spawned instances included). Token
+/// counts are what the providers reported; a mock provider reports
+/// whatever it likes, so zeros here mean "nothing reported", not free.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCost {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub tool_calls: u64,
+    /// Steps that ended in an error — their cost is included above.
+    pub steps_failed: u64,
+    pub suspensions: u64,
+}
+
 /// Trial statistics for a study run.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrialSummary {
@@ -144,6 +160,9 @@ pub struct RunConclusion {
     pub audit_flags: Vec<FlagCount>,
     #[serde(default)]
     pub trials: Option<TrialSummary>,
+    /// What the run's agent steps cost, `None` for runs with none.
+    #[serde(default)]
+    pub agent_cost: Option<AgentCost>,
     /// What the summarizer could not read, in the summarizer's words.
     /// Never an error — a half-written run is still worth recording.
     #[serde(default)]
@@ -162,6 +181,7 @@ impl RunConclusion {
             && self.health_flags.is_empty()
             && self.audit_flags.is_empty()
             && self.trials.is_none()
+            && self.agent_cost.is_none()
     }
 
     /// Render this conclusion as one deterministic line.
@@ -242,6 +262,28 @@ impl RunConclusion {
             parts.push(format!("cache {}% hits", (ratio * 100.0).round() as i64));
         }
 
+        if let Some(agent) = &self.agent_cost {
+            let mut line = format!("agent {} turns", agent.turns);
+            if agent.input_tokens + agent.output_tokens > 0 {
+                let _ = write!(
+                    line,
+                    ", {}→{} tokens",
+                    human_count(agent.input_tokens),
+                    human_count(agent.output_tokens)
+                );
+            }
+            if agent.tool_calls > 0 {
+                let _ = write!(line, ", {} tool calls", agent.tool_calls);
+            }
+            if agent.steps_failed > 0 {
+                let _ = write!(line, ", {} steps failed", agent.steps_failed);
+            }
+            if agent.suspensions > 0 {
+                let _ = write!(line, ", {} suspended", agent.suspensions);
+            }
+            parts.push(line);
+        }
+
         let flags = FlagCount::merge_all(&self.health_flags, &self.audit_flags);
         if !flags.is_empty() {
             let rendered: Vec<String> = flags
@@ -305,6 +347,17 @@ pub struct RunSummary {
     pub metrics: BTreeMap<String, f64>,
     #[serde(default)]
     pub conclusion: RunConclusion,
+}
+
+/// Compact count rendering: `842`, `12.3k`, `1.2M`.
+pub fn human_count(n: u64) -> String {
+    if n < 1_000 {
+        return n.to_string();
+    }
+    if n < 1_000_000 {
+        return format!("{:.1}k", n as f64 / 1_000.0);
+    }
+    format!("{:.1}M", n as f64 / 1_000_000.0)
 }
 
 /// Compact wall-clock rendering: `840ms`, `2.4s`, `3m 07s`, `1h 12m`.

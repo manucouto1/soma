@@ -19,6 +19,7 @@ methods are always installed; only calling them needs plotly/pandas.
 from __future__ import annotations
 
 from soma.viz._figures import (
+    plot_agentic,
     plot_gantt,
     plot_intermediate_values,
     plot_metrics,
@@ -52,6 +53,7 @@ __all__ = [
     "plot_pareto_front",
     "plot_metrics",
     "plot_gantt",
+    "plot_agentic",
     "trials_dataframe",
     "metrics_dataframe",
     "experiments_dataframe",

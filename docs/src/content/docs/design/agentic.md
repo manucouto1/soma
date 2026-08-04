@@ -360,7 +360,7 @@ study = g.study("shape-and-prompt", strategy="bayesian", n_trials=40,
 
 An agent's constructor arguments are its hyperparameters, so the space is declared where the value goes. A filter declares its space as a class attribute; both land in the same `search_space()`, and a `Study` cannot tell them apart. Cutting an edge sets it aside whole, so restoring it restores the graph byte-identically — a trial that changes the topology must leave the next trial starting from the same place.
 
-Median pruning is not optional here. A study over an agentic graph spends real money, and the report shows tokens per trial next to the metric.
+Median pruning is not optional here: a study over an agentic graph spends real money. The spend is visible — every tracked run's report carries an "Agent activity" section (turns, tokens in→out, tool calls, % replayed) aggregated from the step events, the same totals `RunSummary.conclusion.agent_cost` records for the experiment pool.
 
 ## The serialization contract
 

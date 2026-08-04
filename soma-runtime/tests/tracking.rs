@@ -679,6 +679,235 @@ fn run_reader_aggregates_a_tracked_run() {
     assert!(reader.study().unwrap().is_none());
 }
 
+/// The agent-level events a driver emits reach the reader as aggregates:
+/// per-node activity with the suspend/complete accounting rules, and the
+/// per-effect timeline. This is the read side of what
+/// `agentic_step.rs::a_step_emits_agent_events` proves about emission.
+#[test]
+fn run_reader_aggregates_agent_events() {
+    use somatize_runtime::tracking::RunReader;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Other, "agentic").unwrap();
+    let sink = tracker.sink();
+    let rid = tracker.run_id().to_string();
+
+    // "planner": a full step — one LLM effect, one tool, a fan-out, done.
+    sink.record(&Event::NodeStarted {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        kind: somatize_core::filter::FilterKind::Opaque,
+        effectful: true,
+    });
+    sink.record(&Event::AgentTurnStarted {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        turn: 0,
+    });
+    sink.record(&Event::EffectRequested {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        turn: 0,
+        effect: "llm:m".into(),
+    });
+    sink.record(&Event::EffectCompleted {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        turn: 0,
+        effect: "llm:m".into(),
+        duration: Duration::from_millis(800),
+        replayed: false,
+        is_error: false,
+    });
+    sink.record(&Event::ToolCalled {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        tool: "search".into(),
+        is_error: false,
+    });
+    sink.record(&Event::AgentSpawned {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        turn: 1,
+        children: vec!["planner/w0".into(), "planner/w1".into()],
+        join: "all".into(),
+    });
+    sink.record(&Event::AgentStepCompleted {
+        run_id: rid.clone(),
+        node_id: "planner/w0".into(),
+        turns: 1,
+        duration: Duration::from_millis(200),
+        input_tokens: 10,
+        output_tokens: 5,
+        failed: false,
+    });
+    sink.record(&Event::AgentStepCompleted {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        turns: 2,
+        duration: Duration::from_millis(1200),
+        input_tokens: 100,
+        output_tokens: 40,
+        failed: false,
+    });
+    sink.record(&Event::NodeCompleted {
+        run_id: rid.clone(),
+        node_id: "planner".into(),
+        duration: Duration::from_millis(1300),
+        output_summary: "plan".into(),
+    });
+
+    // "approve": suspended and never resumed — its cost stands.
+    sink.record(&Event::AgentTurnStarted {
+        run_id: rid.clone(),
+        node_id: "approve".into(),
+        turn: 0,
+    });
+    sink.record(&Event::Suspended {
+        run_id: rid.clone(),
+        node_id: "approve".into(),
+        reason: "human".into(),
+        turns: 1,
+        duration: Duration::from_millis(300),
+        input_tokens: 7,
+        output_tokens: 2,
+    });
+
+    // "zombie": died mid-effect — no accounting event at all, so its
+    // turn count falls back to what was seen on the wire.
+    sink.record(&Event::AgentTurnStarted {
+        run_id: rid.clone(),
+        node_id: "zombie".into(),
+        turn: 0,
+    });
+    sink.record(&Event::AgentTurnStarted {
+        run_id: rid.clone(),
+        node_id: "zombie".into(),
+        turn: 1,
+    });
+    sink.record(&Event::EffectRequested {
+        run_id: rid.clone(),
+        node_id: "zombie".into(),
+        turn: 1,
+        effect: "llm:m".into(),
+    });
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let reader = RunReader::open(tracker.run_dir()).unwrap();
+
+    let activity = reader.agentic_activity().unwrap();
+    let planner = &activity.by_node["planner"];
+    assert_eq!(planner.turns, 2);
+    assert_eq!(planner.effects, 1);
+    assert_eq!(planner.effects_by_label["llm:m"], 1);
+    assert_eq!(planner.tool_calls, 1);
+    assert_eq!(planner.spawned, 2);
+    assert_eq!(planner.completions, 1);
+    assert_eq!((planner.input_tokens, planner.output_tokens), (100, 40));
+    assert_eq!(planner.duration_ms, 1200);
+
+    let approve = &activity.by_node["approve"];
+    assert_eq!(approve.suspensions, 1);
+    assert_eq!(
+        (approve.turns, approve.input_tokens, approve.output_tokens),
+        (1, 7, 2),
+        "an unresumed suspension's cost must stand"
+    );
+
+    let zombie = &activity.by_node["zombie"];
+    assert_eq!(
+        zombie.turns, 2,
+        "wire-observed turns are the fallback when nothing accounted"
+    );
+    assert_eq!(zombie.effects, 0);
+
+    assert_eq!(activity.turns, 2 + 1 + 1 + 2);
+    assert_eq!(activity.input_tokens, 100 + 10 + 7);
+    assert_eq!(activity.steps_completed, 2);
+    assert_eq!(activity.suspensions, 1);
+    assert_eq!(activity.tool_calls, 1);
+
+    let timeline = reader.agentic_timeline().unwrap();
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0].node_id, "planner");
+    assert_eq!(timeline[0].outcome, "completed");
+    assert_eq!(timeline[0].duration_ms, Some(800));
+    assert!(!timeline[0].replayed);
+    assert_eq!(timeline[1].node_id, "zombie");
+    assert_eq!(
+        timeline[1].outcome, "running",
+        "an unclosed effect span means the run died mid-effect"
+    );
+
+    // The step's node span knows it was a step.
+    let spans = reader.node_timings().unwrap();
+    let planner_span = spans.iter().find(|s| s.node_id == "planner").unwrap();
+    assert!(planner_span.effectful);
+
+    // And the summary rolls the cost up for the pool and the headline.
+    let summary = somatize_runtime::tracking::summarize(&reader).unwrap();
+    let cost = summary.conclusion.agent_cost.as_ref().unwrap();
+    assert_eq!(cost.turns, 6);
+    assert_eq!(cost.input_tokens, 117);
+    assert_eq!(cost.suspensions, 1);
+    assert!(
+        summary.conclusion.headline.contains("agent 6 turns"),
+        "{}",
+        summary.conclusion.headline
+    );
+}
+
+/// A resumed run's final totals are cumulative; the earlier suspension
+/// cost must be superseded, not added.
+#[test]
+fn a_resumed_completion_supersedes_the_suspension_cost() {
+    use somatize_runtime::tracking::RunReader;
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Other, "resumed").unwrap();
+    let sink = tracker.sink();
+    let rid = tracker.run_id().to_string();
+
+    sink.record(&Event::Suspended {
+        run_id: rid.clone(),
+        node_id: "approve".into(),
+        reason: "human".into(),
+        turns: 1,
+        duration: Duration::from_millis(300),
+        input_tokens: 7,
+        output_tokens: 2,
+    });
+    sink.record(&Event::Resumed {
+        run_id: rid.clone(),
+        node_id: "approve".into(),
+        turn: 0,
+    });
+    sink.record(&Event::AgentStepCompleted {
+        run_id: rid.clone(),
+        node_id: "approve".into(),
+        turns: 2,
+        duration: Duration::from_millis(900),
+        input_tokens: 15, // cumulative: replayed effects re-count
+        output_tokens: 6,
+        failed: false,
+    });
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let activity = RunReader::open(tracker.run_dir())
+        .unwrap()
+        .agentic_activity()
+        .unwrap();
+    let approve = &activity.by_node["approve"];
+    assert_eq!(
+        (approve.turns, approve.input_tokens, approve.output_tokens),
+        (2, 15, 6),
+        "the cumulative completion must supersede the suspension, not stack on it"
+    );
+    assert_eq!(approve.suspensions, 1, "the suspension itself still counts");
+}
+
 #[test]
 fn run_reader_skips_torn_and_unknown_lines() {
     use somatize_runtime::tracking::RunReader;

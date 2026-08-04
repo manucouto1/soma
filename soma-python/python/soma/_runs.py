@@ -104,6 +104,21 @@ class RunView:
         """Trial lifetimes from ``study.json`` (empty for non-study runs)."""
         return json.loads(_soma.run_trial_timeline_json(self._dir))
 
+    def agentic_activity(self) -> dict:
+        """Agent-step activity: run totals (``turns``, ``input_tokens``,
+        ``output_tokens``, ``effects``, ``replayed``, ``tool_calls``,
+        ``steps_completed``, ``steps_failed``, ``suspensions``) plus
+        ``by_node`` with the same breakdown per step node. Empty
+        ``by_node`` means the run had no agent steps."""
+        return json.loads(_soma.run_agentic_activity_json(self._dir))
+
+    def agentic_timeline(self) -> list[dict]:
+        """Per-effect execution spans ``{node_id, turn, effect,
+        started_ts, finished_ts, duration_ms, replayed, is_error,
+        outcome}`` in event order — the gantt substrate for agent runs.
+        An unclosed span means the run died mid-effect."""
+        return json.loads(_soma.run_agentic_timeline_json(self._dir))
+
     # ── architecture rendering ──
 
     def _module_trees(self) -> list[dict]:
@@ -285,6 +300,13 @@ class RunView:
         from soma import viz
 
         return viz.plot_gantt(self)
+
+    def plot_agentic(self) -> Any:
+        """When each agent effect ran (model calls, tools, sub-graphs),
+        with replays hatched and errors outlined."""
+        from soma import viz
+
+        return viz.plot_agentic(self)
 
     def plot_health(self) -> Any:
         """The health flags raised during the run."""

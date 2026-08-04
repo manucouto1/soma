@@ -70,6 +70,10 @@ pub struct NodeSpan {
     /// Cache tier that served a hit (`memory`, `local`, …).
     pub cache_tier: Option<String>,
     pub error: Option<String>,
+    /// The node was a step (from `NodeStarted`); defaults for spans
+    /// reconstructed from logs that predate the field.
+    #[serde(default)]
+    pub effectful: bool,
 }
 
 /// Per-run cache effectiveness, reconstructed from hit/miss events.
@@ -108,6 +112,73 @@ pub struct HealthFlagRecord {
     pub step: usize,
     pub flag: String,
     pub detail: String,
+}
+
+/// Agent-level activity for one run, aggregated from the step events
+/// (`AgentTurnStarted`, `EffectCompleted`, `ToolCalled`, `Suspended`,
+/// `AgentStepCompleted`, …). Empty `by_node` means the run had no agent
+/// steps — or predates their telemetry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgenticActivity {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub effects: u64,
+    /// Of `effects`, how many were served from the journal (a resumed
+    /// or replayed run should be nearly all replays).
+    pub replayed: u64,
+    pub tool_calls: u64,
+    pub steps_completed: u64,
+    pub steps_failed: u64,
+    pub suspensions: u64,
+    pub by_node: BTreeMap<String, AgentNodeActivity>,
+}
+
+/// One step node's share of the run's agentic work. Spawned instances
+/// appear under their own hierarchical ids (`parent/label`).
+///
+/// Token, turn and duration totals come from the accounting events
+/// (`AgentStepCompleted`, whose totals are cumulative, or the cost a
+/// `Suspended` carries when nothing completed after it) — never by
+/// summing both, which would double-count a resumed run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentNodeActivity {
+    pub turns: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub duration_ms: u64,
+    pub effects: u64,
+    /// Effect counts by label (`llm:<model>`, `tool:<name>`, …).
+    pub effects_by_label: BTreeMap<String, u64>,
+    pub effect_errors: u64,
+    pub replayed: u64,
+    pub tool_calls: u64,
+    pub tool_errors: u64,
+    pub handoffs_out: u64,
+    pub suspensions: u64,
+    /// Instances this node fanned out (sum over its `AgentSpawned`s).
+    pub spawned: u64,
+    /// `AgentStepCompleted` events with `failed: false` / `true`.
+    pub completions: u64,
+    pub failures: u64,
+}
+
+/// One effect's execution inside a step — the gantt substrate for
+/// agent runs, the per-effect analogue of [`NodeSpan`]. An unclosed
+/// span (`outcome: "running"`) means the run died mid-effect.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EffectSpan {
+    pub node_id: String,
+    pub turn: usize,
+    /// `Effect::label()` — e.g. `llm:qwen2.5:14b`, `tool:search`.
+    pub effect: String,
+    pub started_ts: Option<DateTime<Utc>>,
+    pub finished_ts: Option<DateTime<Utc>>,
+    pub duration_ms: Option<u64>,
+    pub replayed: bool,
+    pub is_error: bool,
+    /// `completed` | `running`.
+    pub outcome: String,
 }
 
 /// One trial's lifetime, from `study.json`.
@@ -182,7 +253,9 @@ impl RunReader {
         let mut open: BTreeMap<String, usize> = BTreeMap::new();
         for env in self.events()? {
             match env.event {
-                Event::NodeStarted { node_id, .. } => {
+                Event::NodeStarted {
+                    node_id, effectful, ..
+                } => {
                     open.insert(node_id.clone(), spans.len());
                     spans.push(NodeSpan {
                         node_id,
@@ -192,6 +265,7 @@ impl RunReader {
                         outcome: "running".into(),
                         cache_tier: None,
                         error: None,
+                        effectful,
                     });
                 }
                 Event::NodeCacheHit {
@@ -208,6 +282,7 @@ impl RunReader {
                         outcome: "cache_hit".into(),
                         cache_tier: Some(format!("{tier:?}").to_lowercase()),
                         error: None,
+                        effectful: false,
                     });
                 }
                 Event::NodeCompleted {
@@ -225,6 +300,7 @@ impl RunReader {
                                 outcome: String::new(),
                                 cache_tier: None,
                                 error: None,
+                                effectful: false,
                             });
                             spans.last_mut().expect("just pushed")
                         }
@@ -246,6 +322,7 @@ impl RunReader {
                                 outcome: String::new(),
                                 cache_tier: None,
                                 error: None,
+                                effectful: false,
                             });
                             spans.last_mut().expect("just pushed")
                         }
@@ -355,6 +432,213 @@ impl RunReader {
             }
         }
         Ok(flags)
+    }
+
+    /// Agent-level activity, aggregated per step node.
+    ///
+    /// Accounting rule: `AgentStepCompleted` totals are authoritative
+    /// (they are cumulative — a resumed run re-counts its replayed
+    /// effects). A `Suspended` cost stands in only until a later
+    /// completion for the same node supersedes it, and turn counts seen
+    /// on the wire (`AgentTurnStarted`) are used only for nodes that
+    /// died without any accounting event at all.
+    pub fn agentic_activity(&self) -> Result<AgenticActivity> {
+        #[derive(Default)]
+        struct Pending {
+            turns: u64,
+            input_tokens: u64,
+            output_tokens: u64,
+            duration_ms: u64,
+        }
+        let mut by_node: BTreeMap<String, AgentNodeActivity> = BTreeMap::new();
+        let mut pending: BTreeMap<String, Pending> = BTreeMap::new();
+        let mut observed_turns: BTreeMap<String, u64> = BTreeMap::new();
+
+        for env in self.events()? {
+            match env.event {
+                Event::AgentTurnStarted { node_id, turn, .. } => {
+                    let seen = observed_turns.entry(node_id).or_default();
+                    *seen = (*seen).max(turn as u64 + 1);
+                }
+                Event::EffectCompleted {
+                    node_id,
+                    effect,
+                    replayed,
+                    is_error,
+                    ..
+                } => {
+                    let node = by_node.entry(node_id).or_default();
+                    node.effects += 1;
+                    *node.effects_by_label.entry(effect).or_default() += 1;
+                    if replayed {
+                        node.replayed += 1;
+                    }
+                    if is_error {
+                        node.effect_errors += 1;
+                    }
+                }
+                Event::ToolCalled {
+                    node_id, is_error, ..
+                } => {
+                    let node = by_node.entry(node_id).or_default();
+                    node.tool_calls += 1;
+                    if is_error {
+                        node.tool_errors += 1;
+                    }
+                }
+                Event::Handoff { from, .. } => {
+                    by_node.entry(from).or_default().handoffs_out += 1;
+                }
+                Event::Suspended {
+                    node_id,
+                    turns,
+                    duration,
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } => {
+                    by_node.entry(node_id.clone()).or_default().suspensions += 1;
+                    pending.insert(
+                        node_id,
+                        Pending {
+                            turns: turns as u64,
+                            input_tokens,
+                            output_tokens,
+                            duration_ms: duration.as_millis() as u64,
+                        },
+                    );
+                }
+                Event::AgentSpawned {
+                    node_id, children, ..
+                } => {
+                    by_node.entry(node_id).or_default().spawned += children.len() as u64;
+                }
+                Event::AgentStepCompleted {
+                    node_id,
+                    turns,
+                    duration,
+                    input_tokens,
+                    output_tokens,
+                    failed,
+                    ..
+                } => {
+                    let node = by_node.entry(node_id.clone()).or_default();
+                    node.turns += turns as u64;
+                    node.input_tokens += input_tokens;
+                    node.output_tokens += output_tokens;
+                    node.duration_ms += duration.as_millis() as u64;
+                    if failed {
+                        node.failures += 1;
+                    } else {
+                        node.completions += 1;
+                    }
+                    pending.remove(&node_id);
+                }
+                _ => {}
+            }
+        }
+
+        for (node_id, p) in pending {
+            let node = by_node.entry(node_id).or_default();
+            node.turns += p.turns;
+            node.input_tokens += p.input_tokens;
+            node.output_tokens += p.output_tokens;
+            node.duration_ms += p.duration_ms;
+        }
+        for (node_id, seen) in observed_turns {
+            let node = by_node.entry(node_id).or_default();
+            if node.turns == 0 {
+                node.turns = seen;
+            }
+        }
+
+        let mut totals = AgenticActivity::default();
+        for node in by_node.values() {
+            totals.turns += node.turns;
+            totals.input_tokens += node.input_tokens;
+            totals.output_tokens += node.output_tokens;
+            totals.effects += node.effects;
+            totals.replayed += node.replayed;
+            totals.tool_calls += node.tool_calls;
+            totals.steps_completed += node.completions;
+            totals.steps_failed += node.failures;
+            totals.suspensions += node.suspensions;
+        }
+        totals.by_node = by_node;
+        Ok(totals)
+    }
+
+    /// Per-effect execution spans in event order — the gantt substrate
+    /// for agent runs. Concurrent same-label effects within a turn are
+    /// matched first-in-first-out, which is the order the driver
+    /// reports completions in.
+    pub fn agentic_timeline(&self) -> Result<Vec<EffectSpan>> {
+        let mut spans: Vec<EffectSpan> = Vec::new();
+        let mut open: BTreeMap<(String, usize, String), Vec<usize>> = BTreeMap::new();
+        for env in self.events()? {
+            match env.event {
+                Event::EffectRequested {
+                    node_id,
+                    turn,
+                    effect,
+                    ..
+                } => {
+                    open.entry((node_id.clone(), turn, effect.clone()))
+                        .or_default()
+                        .push(spans.len());
+                    spans.push(EffectSpan {
+                        node_id,
+                        turn,
+                        effect,
+                        started_ts: Some(env.ts),
+                        finished_ts: None,
+                        duration_ms: None,
+                        replayed: false,
+                        is_error: false,
+                        outcome: "running".into(),
+                    });
+                }
+                Event::EffectCompleted {
+                    node_id,
+                    turn,
+                    effect,
+                    duration,
+                    replayed,
+                    is_error,
+                    ..
+                } => {
+                    let key = (node_id.clone(), turn, effect.clone());
+                    let idx = open
+                        .get_mut(&key)
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.remove(0));
+                    let span = match idx {
+                        Some(i) => &mut spans[i],
+                        None => {
+                            spans.push(EffectSpan {
+                                node_id,
+                                turn,
+                                effect,
+                                started_ts: None,
+                                finished_ts: None,
+                                duration_ms: None,
+                                replayed: false,
+                                is_error: false,
+                                outcome: String::new(),
+                            });
+                            spans.last_mut().expect("just pushed")
+                        }
+                    };
+                    span.finished_ts = Some(env.ts);
+                    span.duration_ms = Some(duration.as_millis() as u64);
+                    span.replayed = replayed;
+                    span.is_error = is_error;
+                    span.outcome = "completed".into();
+                }
+                _ => {}
+            }
+        }
+        Ok(spans)
     }
 
     /// The graph this run executed (`graph.json`), if snapshotted.

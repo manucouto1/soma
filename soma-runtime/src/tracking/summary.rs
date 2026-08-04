@@ -19,7 +19,7 @@ use serde::Deserialize;
 use somatize_core::error::Result;
 use somatize_core::fingerprint::{ArchitectureFingerprint, pipeline_summary};
 use somatize_core::summary::{
-    FlagCount, NodeCost, RunConclusion, RunOutcome, RunSummary, TrialSummary,
+    AgentCost, FlagCount, NodeCost, RunConclusion, RunOutcome, RunSummary, TrialSummary,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -52,6 +52,7 @@ pub fn summarize(reader: &RunReader) -> Result<RunSummary> {
     let audit_flags = audit_flags(reader, &mut warnings);
     let metrics = final_metrics(reader, &mut warnings);
     let trials = trial_summary(reader, &mut warnings);
+    let agent_cost = agent_cost(reader, &mut warnings);
 
     // A study run has no graph to describe, but it is not shapeless:
     // the sweep itself is the pipeline.
@@ -72,6 +73,7 @@ pub fn summarize(reader: &RunReader) -> Result<RunSummary> {
         health_flags,
         audit_flags,
         trials,
+        agent_cost,
         warnings,
     };
     conclusion.headline =
@@ -254,6 +256,28 @@ fn final_metrics(reader: &RunReader, warnings: &mut Vec<String>) -> BTreeMap<Str
         .into_iter()
         .map(|(name, (_, value))| (name, value))
         .collect()
+}
+
+/// Totals from the agent-step telemetry; `None` for runs with none.
+fn agent_cost(reader: &RunReader, warnings: &mut Vec<String>) -> Option<AgentCost> {
+    let activity = match reader.agentic_activity() {
+        Ok(a) => a,
+        Err(e) => {
+            warnings.push(format!("agent activity is unreadable: {e}"));
+            return None;
+        }
+    };
+    if activity.by_node.is_empty() {
+        return None;
+    }
+    Some(AgentCost {
+        turns: activity.turns,
+        input_tokens: activity.input_tokens,
+        output_tokens: activity.output_tokens,
+        tool_calls: activity.tool_calls,
+        steps_failed: activity.steps_failed,
+        suspensions: activity.suspensions,
+    })
 }
 
 fn trial_summary(reader: &RunReader, warnings: &mut Vec<String>) -> Option<TrialSummary> {

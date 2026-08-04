@@ -132,11 +132,21 @@ impl EffectDriver {
             });
 
             let ctx = StepCtx::new(node_id, run_id, input, turn).with_history(&history);
-            let transition = step.poll(&ctx)?;
+            // A failed poll or effect still spent every prior turn's tokens;
+            // the completion event goes out (marked failed) before the error
+            // does, so the cost stays countable.
+            let transition = match step.poll(&ctx) {
+                Ok(transition) => transition,
+                Err(e) => {
+                    self.finish(run_id, node_id, turn + 1, started, usage, true);
+                    return Err(e);
+                }
+            };
 
             match transition {
                 Transition::Await(effects) => {
                     if effects.is_empty() {
+                        self.finish(run_id, node_id, turn + 1, started, usage, true);
                         return Err(SomaError::Execution {
                             node_id: node_id.to_string(),
                             message: format!(
@@ -145,13 +155,17 @@ impl EffectDriver {
                             ),
                         });
                     }
-                    history.push(
-                        self.perform_all(&journal, run_id, node_id, turn, &effects, &mut usage)?,
-                    );
+                    match self.perform_all(&journal, run_id, node_id, turn, &effects, &mut usage) {
+                        Ok(results) => history.push(results),
+                        Err(e) => {
+                            self.finish(run_id, node_id, turn + 1, started, usage, true);
+                            return Err(e);
+                        }
+                    }
                 }
 
                 Transition::Done(value) => {
-                    self.finish(run_id, node_id, turn + 1, started, usage);
+                    self.finish(run_id, node_id, turn + 1, started, usage, false);
                     return Ok(NodeOutcome::Produced(value));
                 }
 
@@ -161,7 +175,7 @@ impl EffectDriver {
                         from: node_id.to_string(),
                         to: target.clone(),
                     });
-                    self.finish(run_id, node_id, turn + 1, started, usage);
+                    self.finish(run_id, node_id, turn + 1, started, usage, false);
                     return Ok(NodeOutcome::HandOff { target, carry });
                 }
 
@@ -193,12 +207,17 @@ impl EffectDriver {
                         run_id: run_id.to_string(),
                         node_id: node_id.to_string(),
                         reason: reason.kind().to_string(),
+                        turns: turn + 1,
+                        duration: started.elapsed(),
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
                     });
                     return Ok(NodeOutcome::Paused { turn, reason });
                 }
 
                 Transition::Spawn { specs, join } => {
                     if specs.is_empty() {
+                        self.finish(run_id, node_id, turn + 1, started, usage, true);
                         return Err(SomaError::Execution {
                             node_id: node_id.to_string(),
                             message: format!(
@@ -207,11 +226,18 @@ impl EffectDriver {
                             ),
                         });
                     }
-                    history.push(self.spawn_all(run_id, node_id, turn, &specs, join)?);
+                    match self.spawn_all(run_id, node_id, turn, &specs, join) {
+                        Ok(results) => history.push(results),
+                        Err(e) => {
+                            self.finish(run_id, node_id, turn + 1, started, usage, true);
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
 
+        self.finish(run_id, node_id, meta.max_turns, started, usage, true);
         Err(SomaError::Execution {
             node_id: node_id.to_string(),
             message: format!(
@@ -222,7 +248,15 @@ impl EffectDriver {
         })
     }
 
-    fn finish(&self, run_id: &str, node_id: &str, turns: usize, started: Instant, usage: Usage) {
+    fn finish(
+        &self,
+        run_id: &str,
+        node_id: &str,
+        turns: usize,
+        started: Instant,
+        usage: Usage,
+        failed: bool,
+    ) {
         self.emit(Event::AgentStepCompleted {
             run_id: run_id.to_string(),
             node_id: node_id.to_string(),
@@ -230,6 +264,7 @@ impl EffectDriver {
             duration: started.elapsed(),
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            failed,
         });
     }
 
@@ -295,16 +330,34 @@ impl EffectDriver {
                 .into(),
         })?;
 
+        // The instance id doubles as its journal-key prefix, so it is derived
+        // once, up front — the event below and the threads must agree on it.
+        let child_ids: Vec<String> = specs
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| {
+                let label = spec
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| format!("{turn}.{index}"));
+                format!("{node_id}/{label}")
+            })
+            .collect();
+
+        self.emit(Event::AgentSpawned {
+            run_id: run_id.to_string(),
+            node_id: node_id.to_string(),
+            turn,
+            children: child_ids.clone(),
+            join: join.label().to_string(),
+        });
+
         let outcomes: Vec<Result<EffectResult>> = std::thread::scope(|scope| {
             let handles: Vec<_> = specs
                 .iter()
-                .enumerate()
-                .map(|(index, spec)| {
-                    let label = spec
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| format!("{turn}.{index}"));
-                    let child_id = format!("{node_id}/{label}");
+                .zip(&child_ids)
+                .map(|(spec, child_id)| {
+                    let child_id = child_id.clone();
                     scope.spawn(move || {
                         let step = catalog
                             .step(&spec.runs)
@@ -720,6 +773,53 @@ mod tests {
         assert_eq!(llm.calls.load(Ordering::SeqCst), 3, "ran past the cap");
     }
 
+    /// A capped step spent three turns of tokens; the completion event goes
+    /// out anyway, marked failed, or the rollup undercounts exactly the runs
+    /// worth studying.
+    #[test]
+    fn a_capped_step_still_reports_its_cost() {
+        struct Forever;
+        impl Step for Forever {
+            fn config_hash(&self) -> CacheKey {
+                CacheKey::from_parts(&[b"Forever"])
+            }
+            fn meta(&self) -> StepMeta {
+                StepMeta::new("Forever").with_max_turns(3)
+            }
+            fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
+                Ok(Transition::Await(vec![Effect::Llm(LlmRequest::new(
+                    "claude-opus-5",
+                    vec![Message::user(format!("{}", ctx.turn))].into(),
+                ))]))
+            }
+        }
+
+        let bus = Arc::new(EventBus::new(64));
+        let mut rx = bus.subscribe();
+        let (d, _dir) = driver(CountingLlm::new("x"));
+        let d = d.with_event_bus(bus);
+
+        d.run(&Forever, "r", "n", &Value::Empty).unwrap_err();
+
+        let mut completed = None;
+        while let Ok(event) = rx.try_recv() {
+            if let Event::AgentStepCompleted {
+                turns,
+                output_tokens,
+                failed,
+                ..
+            } = event
+            {
+                completed = Some((turns, output_tokens, failed));
+            }
+        }
+        let (turns, output_tokens, failed) =
+            completed.expect("no AgentStepCompleted for the capped step");
+        assert!(failed, "turn exhaustion is a failure, not a completion");
+        assert_eq!(turns, 3);
+        assert!(output_tokens > 0, "the tokens it burned went uncounted");
+    }
+
     /// An unhandled effect names itself, rather than failing obscurely.
     #[test]
     fn an_unhandled_effect_says_so() {
@@ -865,6 +965,47 @@ mod tests {
             NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("ALPHA|BETA|GAMMA")),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The fan-out itself is an event: which children, under which ids,
+    /// joined how. The children's own costs arrive under those ids.
+    #[test]
+    fn spawning_emits_the_fan_out() {
+        use somatize_core::effect::JoinPolicy;
+
+        let bus = Arc::new(EventBus::new(64));
+        let mut rx = bus.subscribe();
+        let (d, _dir) = spawning_driver(JoinPolicy::All);
+        let d = d.with_event_bus(bus);
+
+        d.run(
+            &Orchestrator {
+                join: JoinPolicy::All,
+            },
+            "r",
+            "orch",
+            &Value::text("alpha,beta"),
+        )
+        .unwrap();
+
+        let mut spawned = None;
+        let mut child_completions = 0;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::AgentSpawned { children, join, .. } => spawned = Some((children, join)),
+                Event::AgentStepCompleted { node_id, .. } if node_id.contains('/') => {
+                    child_completions += 1;
+                }
+                _ => {}
+            }
+        }
+        let (children, join) = spawned.expect("no AgentSpawned event");
+        assert_eq!(children, vec!["orch/w0".to_string(), "orch/w1".to_string()]);
+        assert_eq!(join, "all");
+        assert_eq!(
+            child_completions, 2,
+            "each spawned child should report its own completion under its hierarchical id"
+        );
     }
 
     /// Siblings get distinct journal keys via their hierarchical ids, so

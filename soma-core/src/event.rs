@@ -315,10 +315,26 @@ pub enum Event {
     },
 
     /// The run stopped, pending something outside it.
+    ///
+    /// Carries what the step has cost *so far*: a suspended step has not
+    /// finished, so no [`Event::AgentStepCompleted`] fires for it. When the
+    /// run resumes and finishes, that final event's totals are cumulative
+    /// (replayed effects re-count their recorded usage), superseding these.
+    /// The fields default to zero so run dirs written before they existed
+    /// still deserialize.
     Suspended {
         run_id: RunId,
         node_id: NodeId,
         reason: String,
+        /// Turns taken up to and including the one that suspended.
+        #[serde(default)]
+        turns: usize,
+        #[serde(default, with = "duration_millis")]
+        duration: Duration,
+        #[serde(default)]
+        input_tokens: u64,
+        #[serde(default)]
+        output_tokens: u64,
     },
 
     /// A suspended run picked up again.
@@ -328,7 +344,12 @@ pub enum Event {
         turn: usize,
     },
 
-    /// A step finished, with what it cost.
+    /// A step finished, with what it cost — however it finished.
+    ///
+    /// `Done`, a handoff, a failed poll or effect, and turn exhaustion all
+    /// emit this: the cost was paid either way, and telemetry that loses
+    /// the expensive failures undercounts exactly the runs worth studying.
+    /// Suspension is the one exit that does not — see [`Event::Suspended`].
     AgentStepCompleted {
         run_id: RunId,
         node_id: NodeId,
@@ -337,6 +358,25 @@ pub enum Event {
         duration: Duration,
         input_tokens: u64,
         output_tokens: u64,
+        /// The step ended in an error (the node will also emit
+        /// [`Event::NodeFailed`]). Defaults to `false` so run dirs written
+        /// before the field existed still deserialize.
+        #[serde(default)]
+        failed: bool,
+    },
+
+    /// A step fanned work out to spawned instances.
+    ///
+    /// `children` are the hierarchical ids (`parent/label`) the instances
+    /// run under; their own turn and completion events appear under those
+    /// ids, which is how a reader ties the sub-tree together.
+    AgentSpawned {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        children: Vec<NodeId>,
+        /// The join policy, as a label (`all`, `all-settled`, `first`).
+        join: String,
     },
 }
 
@@ -431,6 +471,10 @@ mod tests {
                 run_id: "r".into(),
                 node_id: "approve".into(),
                 reason: "human".into(),
+                turns: 2,
+                duration: Duration::from_millis(3400),
+                input_tokens: 600,
+                output_tokens: 120,
             },
             Event::Resumed {
                 run_id: "r".into(),
@@ -444,6 +488,14 @@ mod tests {
                 duration: Duration::from_millis(8000),
                 input_tokens: 1200,
                 output_tokens: 340,
+                failed: false,
+            },
+            Event::AgentSpawned {
+                run_id: "r".into(),
+                node_id: "orchestrator".into(),
+                turn: 1,
+                children: vec!["orchestrator/web".into(), "orchestrator/code".into()],
+                join: "all".into(),
             },
         ];
 
@@ -456,6 +508,36 @@ mod tests {
                 "agent event did not survive a round trip"
             );
         }
+    }
+
+    /// Run dirs written before `Suspended` carried cost and
+    /// `AgentStepCompleted` carried `failed` must still read back — the
+    /// fields default rather than fail the whole line.
+    #[test]
+    fn agent_events_read_back_without_the_newer_fields() {
+        let suspended: Event = serde_json::from_str(
+            r#"{"event_type":"Suspended","run_id":"r","node_id":"approve","reason":"human"}"#,
+        )
+        .unwrap();
+        let Event::Suspended {
+            turns,
+            input_tokens,
+            ..
+        } = suspended
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!((turns, input_tokens), (0, 0));
+
+        let completed: Event = serde_json::from_str(
+            r#"{"event_type":"AgentStepCompleted","run_id":"r","node_id":"n","turns":2,
+                "duration":100,"input_tokens":10,"output_tokens":5}"#,
+        )
+        .unwrap();
+        let Event::AgentStepCompleted { failed, .. } = completed else {
+            panic!("wrong variant");
+        };
+        assert!(!failed);
     }
 
     /// Telemetry must never carry the conversation. A prompt belongs in the
