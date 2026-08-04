@@ -41,7 +41,7 @@ soma-core       → types, traits, serialization. The rule is no runtime, no
                   Filter, Step, Value, Graph, Event, Schema, VirtualValue, Search, Study,
                   Effect/Transition, Message/ContentBlock, ToolSpec, LoopCondition,
                   TrainingStrategy (the type; running one is in soma-runtime),
-                  DataStore trait + LocalDataStore, StreamCache
+                  DataStore trait + LocalDataStore
 soma-store      → remote DataStore backends (S3, Zarr), feature-gated and off
                   by default. Split out of soma-core because each owns a tokio
                   runtime; see docs design/decisions.
@@ -142,12 +142,12 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **VirtualValue**: Lazy references (Materialized | Cached | Deferred | Stream).
 - **Schema**: dtype + shape for compile-time type checking between connected filters.
 - **TrialOutcome**: Separates control flow (Completed | Pruned) from errors.
-- **StreamMode**: FixedState | Evolving (checkpoints) | Barrier (materializes).
+- **StreamMode**: FixedState | Evolving (output doubles as next state) | Barrier (materializes).
+  Exhaustive on purpose (control-flow enum, no wildcard arms).
 - **Distribution**: Local | Remote(WorkerId | Tag) — compiler wraps in ExecutionPlan::Remote.
 - **GraphInfo**: Topology-aware input resolution (predecessors, not "last executed").
 - **LRU Cache**: Enforces max_bytes with eviction. No unbounded growth.
 - **DataStore**: Abstraction for data movement between workers (Local, S3, Cached, Stream, Inline).
-- **StreamCache**: Inference optimization — caches filter states and chunk results by content hash.
 - **Scheduler**: Analyzes ExecutionPlan topology, assigns to workers (sequential→same worker,
   parallel→distribute, differentiable→group together). Produces DistributionPlan.
 - **TrainingStrategy**: Graph-level attribute (inherited by subgraphs): Local, DataParallel, ModelParallel, Federated, PopulationBased, Custom.

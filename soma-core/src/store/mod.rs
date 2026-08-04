@@ -280,83 +280,6 @@ impl DataStore for LocalDataStore {
     }
 }
 
-/// Stream-aware cache for inference pipelines.
-///
-/// Key insight: during inference, the filter STATE is fixed (from training).
-/// Only the DATA changes. So we cache:
-/// 1. Filter states (from training) — keyed by config_hash + training_data_hash
-/// 2. Chunk results — keyed by config_hash + state_hash + chunk_hash
-///
-/// This means: if the same chunk passes through the same filter with the
-/// same trained state, the result is returned from cache instantly.
-pub struct StreamCache {
-    /// State cache: filter_id → (state_key, cached state)
-    states: std::collections::HashMap<String, (CacheKey, Value)>,
-    /// Chunk result cache: LRU of chunk results
-    chunk_cache: std::collections::HashMap<CacheKey, Value>,
-    /// Max cached chunks (LRU eviction)
-    max_chunks: usize,
-    /// Stats
-    pub hits: u64,
-    pub misses: u64,
-}
-
-impl StreamCache {
-    pub fn new(max_chunks: usize) -> Self {
-        Self {
-            states: std::collections::HashMap::new(),
-            chunk_cache: std::collections::HashMap::new(),
-            max_chunks,
-            hits: 0,
-            misses: 0,
-        }
-    }
-
-    /// Load a filter's trained state into the stream cache.
-    pub fn load_state(&mut self, filter_id: &str, state_key: CacheKey, state: Value) {
-        self.states
-            .insert(filter_id.to_string(), (state_key, state));
-    }
-
-    /// Get a filter's cached state (for forward() during inference).
-    pub fn get_state(&self, filter_id: &str) -> Option<&Value> {
-        self.states.get(filter_id).map(|(_, v)| v)
-    }
-
-    /// Try to get a cached chunk result.
-    /// chunk_key = hash(config_hash + state_hash + chunk_data_hash)
-    pub fn get_chunk(&mut self, chunk_key: &CacheKey) -> Option<&Value> {
-        if let Some(v) = self.chunk_cache.get(chunk_key) {
-            self.hits += 1;
-            Some(v)
-        } else {
-            self.misses += 1;
-            None
-        }
-    }
-
-    /// Cache a chunk result.
-    pub fn put_chunk(&mut self, chunk_key: CacheKey, value: Value) {
-        if self.chunk_cache.len() >= self.max_chunks {
-            // Simple eviction: remove first entry (not true LRU, but fast)
-            if let Some(k) = self.chunk_cache.keys().next().cloned() {
-                self.chunk_cache.remove(&k);
-            }
-        }
-        self.chunk_cache.insert(chunk_key, value);
-    }
-
-    /// Cache hit rate.
-    pub fn hit_rate(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f64 / total as f64
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,44 +320,6 @@ mod tests {
         assert_eq!(data, &[42.0]);
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn stream_cache_basics() {
-        let mut cache = StreamCache::new(100);
-
-        let state = Value::tensor(vec![0.0, 1.0], vec![2]);
-        let state_key = CacheKey::hash_data(b"state_001");
-        cache.load_state("normalize", state_key, state.clone());
-
-        assert!(cache.get_state("normalize").is_some());
-        assert!(cache.get_state("unknown").is_none());
-    }
-
-    #[test]
-    fn stream_cache_chunks() {
-        let mut cache = StreamCache::new(3);
-
-        let k1 = CacheKey::hash_data(b"chunk_1");
-        let k2 = CacheKey::hash_data(b"chunk_2");
-        let k3 = CacheKey::hash_data(b"chunk_3");
-        let k4 = CacheKey::hash_data(b"chunk_4");
-
-        cache.put_chunk(k1.clone(), Value::tensor(vec![1.0], vec![1]));
-        cache.put_chunk(k2.clone(), Value::tensor(vec![2.0], vec![1]));
-        cache.put_chunk(k3.clone(), Value::tensor(vec![3.0], vec![1]));
-
-        // All 3 should be cached
-        assert!(cache.get_chunk(&k1).is_some());
-        assert!(cache.get_chunk(&k2).is_some());
-        assert!(cache.get_chunk(&k3).is_some());
-        assert_eq!(cache.hits, 3);
-
-        // Adding k4 should evict one (max_chunks = 3)
-        cache.put_chunk(k4.clone(), Value::tensor(vec![4.0], vec![1]));
-        assert!(cache.get_chunk(&k4).is_some());
-
-        assert!(cache.hit_rate() > 0.0);
     }
 
     #[test]

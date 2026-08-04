@@ -106,7 +106,6 @@ impl StreamExecutor {
                 &current,
                 &mut self.states[i],
                 cache,
-                self.chunk_count,
                 self.seed,
             )? {
                 ChunkResult::Output(val) => current = val,
@@ -174,7 +173,6 @@ fn process_by_mode(
     input: &Value,
     state: &mut FilterStreamState,
     cache: Option<&dyn CacheStore>,
-    chunk_count: usize,
     seed: Option<i64>,
 ) -> Result<ChunkResult> {
     match mode {
@@ -182,33 +180,16 @@ fn process_by_mode(
             let result = forward_cached(fitted, input, cache, seed)?;
             Ok(ChunkResult::Output(result))
         }
-        StreamMode::Evolving { checkpoint_every } => {
+        StreamMode::Evolving => {
             let default_state: &Value = &fitted.state;
             let filter_state = state.evolving_state.as_ref().unwrap_or(default_state);
             let result = fitted.filter.forward(input, filter_state)?;
             state.evolving_state = Some(result.clone());
-
-            if *checkpoint_every > 0
-                && chunk_count.is_multiple_of(*checkpoint_every)
-                && let Some(c) = cache
-            {
-                let key = CacheKey::from_parts(&[
-                    b"checkpoint",
-                    fitted.name.as_bytes(),
-                    &(chunk_count as u64).to_le_bytes(),
-                ]);
-                let _ = c.put(&key, &result);
-            }
             Ok(ChunkResult::Output(result))
         }
         StreamMode::Barrier => {
             state.barrier_buffer.push(input.clone());
             Ok(ChunkResult::Buffered)
-        }
-        _ => {
-            // Default: treat as FixedState
-            let result = forward_cached(fitted, input, cache, seed)?;
-            Ok(ChunkResult::Output(result))
         }
     }
 }
@@ -430,9 +411,7 @@ mod tests {
                 cacheable: false,
                 differentiable: false,
                 deterministic: true,
-                stream_mode: StreamMode::Evolving {
-                    checkpoint_every: 2,
-                },
+                stream_mode: StreamMode::Evolving,
                 distribution: Distribution::Local,
                 input_schema: None,
                 output_schema: None,

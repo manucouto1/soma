@@ -69,8 +69,7 @@ pub use search::{Scale, SearchDimension, SearchSpace, Searchable};
 pub use state::{MemoryStateStore, StateStore};
 pub use step::{Step, StepCtx, StepMeta, Transition};
 pub use store::{
-    DataRef, DataStore, LocalDataStore, StorageConfig, StoreMeta, StreamCache, StreamFormat,
-    slice_tensor_rows,
+    DataRef, DataStore, LocalDataStore, StorageConfig, StoreMeta, StreamFormat, slice_tensor_rows,
 };
 pub use strategy::{
     ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy, FederatedAggregation,

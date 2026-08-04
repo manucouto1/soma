@@ -308,9 +308,7 @@ impl Filter for PyFilterBridge {
                     .getattr("_stream_mode")
                     .and_then(|v| v.extract::<String>())
                     .map(|s| match s.as_str() {
-                        "evolving" => StreamMode::Evolving {
-                            checkpoint_every: 100,
-                        },
+                        "evolving" => StreamMode::Evolving,
                         "barrier" => StreamMode::Barrier,
                         _ => StreamMode::FixedState,
                     })

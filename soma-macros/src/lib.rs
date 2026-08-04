@@ -127,9 +127,7 @@ fn derive_soma_filter_impl(input: DeriveInput) -> syn::Result<proc_macro2::Token
 
     let stream_mode = match struct_attrs.stream.as_deref() {
         Some("Barrier") => quote! { somatize_core::filter::StreamMode::Barrier },
-        Some("Evolving") => {
-            quote! { somatize_core::filter::StreamMode::Evolving { checkpoint_every: 100 } }
-        }
+        Some("Evolving") => quote! { somatize_core::filter::StreamMode::Evolving },
         _ => quote! { somatize_core::filter::StreamMode::FixedState },
     };
 
