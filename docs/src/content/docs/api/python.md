@@ -190,9 +190,22 @@ g = Graph.somatize(
 | `track_run` | `(name, *, root=".soma", kind="train", tags=(), params=None, parent=None, hypothesis=None) -> ctx[Run]` | Context manager: create a run directory, snapshot the graph into it, finalize on exit (even on exception). `params` are the hyperparameters that live outside the graph; `parent` overrides the run this one descends from; `hypothesis` records what you expected *before* seeing the result |
 | `begin_run` | `(name, root=".soma", kind="train", tags=None) -> Run` | Lower-level: start a run without the context manager (you call `run.finish()`) |
 | `emit_event` | `(dict)` | Emit a custom event onto the bus (must match an `Event` variant) |
-| `search_space` | `() -> list[dict]` | Aggregate every filter's `search()` descriptors, prefixed with the node id (`"encoder.lr"`) |
-| `apply_params` | `(params)` | Write a sampled configuration back onto the live filters |
+| `search_space` | `() -> list[dict]` | Aggregate every searchable dimension — filters' `search()` descriptors, agents'/judges' `search()`-valued constructor args, and each `optional()` edge as a boolean dimension — prefixed with the node id (`"encoder.lr"`, `"edge:a->b"`) |
+| `apply_params` | `(params)` | Write a sampled configuration back onto the live filters/agents, and keep or cut optional edges |
 | `study` | `(name, **kwargs) -> Study` | A `Study` over this graph's search space |
+| `optional` | `(source, target)` | Make an existing edge part of the search space: a study may keep it or cut it |
+| `optional_edges` | `() -> list[(src, tgt)]` | The edges a study is allowed to cut |
+| `set_edge` | `(source, target, enabled)` | Keep or cut one optional edge, restoring it whole and in place |
+| `branch` | `(node_id, condition, arms, target=None) -> str` | Add a routing node: runs `condition` and executes only the arm its output names |
+| `loop` | `(node_id, body, until=None, max_iterations=None) -> str` | Repeat a body until it signals completion; `until=False` runs the full count |
+| `handoff` | `(source, target)` | Declare that `source` may hand control to `target` — what a step's `Goto` needs |
+| `register_step` | `(step_id, obj) -> str` | Register a spawn target *without* adding a node (see [the agentic layer](#the-agentic-layer)) |
+| `register_graph` | `(sub)` | Make `sub`'s node implementations runnable by this graph's steps (`soma.agentic.RunGraph`) |
+| `resume` | `(run_id, node_id, turn, reason, answer)` | Answer what a suspended run was waiting for; every argument comes off `SomaSuspended` |
+| `use_provider` | `(provider)` | Set the provider that serves model names given without a prefix |
+| `add_tool` | `(tool)` | Register a tool without attaching it to a particular agent |
+| `add_mcp_server` | `(command, args=None) -> list[str]` | Start an MCP server and make its tools callable; returns the tool names found |
+| `steps` | `() -> list[(node_id, obj)]` | The live object behind each step node, sorted by id |
 | `filters` | `() -> list[(node_id, filter)]` | Live filter instances in topological order |
 | `filter` / `filter_ids` | `(node_id)` / `()` | One filter instance / all node ids |
 | `graph_json` | `() -> str` | Serialized topology (what `graph.json` holds in a run directory) |
@@ -236,6 +249,240 @@ g.set_coordinator("http://coord:9090", token="sk-xxx")
 for w in g.workers():
     print(w["address"], w["tags"])
 ```
+
+## The agentic layer
+
+An agentic flow is an ordinary `Graph` whose nodes are *effectful steps*
+instead of (or alongside) filters. There is no second engine: the same
+compiler, cache, events, search spaces and tracking apply. This section
+is the reference; the rationale is in
+[Agentic Graphs](/soma/design/agentic/), and there are two task-shaped
+guides: the [agentic quickstart](/soma/guides/agentic-quickstart/) and
+[writing a step](/soma/guides/writing-a-step/).
+
+### Agent
+
+A ReAct agent: ask a model, run the tools it asks for, repeat. Used as a
+graph node like any filter.
+
+```python
+soma.Agent(
+    model,                 # "provider/name", or bare with g.use_provider()
+    system=None,           # system prompt
+    tools=None,            # list[soma.Tool]
+    max_turns=None,        # turn budget for the reason-act loop
+    max_tokens=None,
+    effort=None,           # reasoning depth, in the provider's terms
+    text_only=True,        # reply must be prose (tool calls still allowed)
+    schema=None,           # JSON Schema the reply must satisfy
+    max_repairs=1,         # violations that buy a correction round
+)
+```
+
+`model`, `system`, `max_turns`, `max_tokens` and `effort` all accept a
+`search()` descriptor: an agent's constructor arguments are its
+hyperparameters, so the space is declared where the value goes and lands
+in the same `g.search_space()` a filter contributes to.
+
+```python
+g.node("writer", soma.Agent(
+    model=soma.search(choices=["ollama/qwen2.5", "kimi/kimi-k2"]),
+    system=soma.search(choices=["be terse", "be detailed"]),
+))
+```
+
+`schema=` asks the endpoint to enforce the shape when it supports
+constrained decoding (`response_format`) and asks in the system prompt
+when it does not; either way the reply is checked structurally, and one
+violation buys one correction with the violation quoted back
+(`max_repairs=` raises the ceiling). Truncated (`finish_reason: length`)
+and refused replies are **errors**, never returned as answers.
+
+Attributes: `model`, `system`, `max_turns`, `max_tokens`, `effort`,
+`schema`, `tools` (a fresh list each time), plus
+`search_space() -> list[dict]`.
+
+### Judge
+
+Grade something with a model against a rubric. Returns a mapping with a
+`done` key, which is what `Graph.loop(until=...)` and `refine()` read.
+
+```python
+soma.Judge(model, rubric, threshold=None)
+```
+
+All three arguments accept `search()` — how strictly to grade is a real
+thing to tune, and so is the wording of the rubric.
+
+### Tool and `@soma.tool`
+
+A tool backed by a Python callable. Without an explicit `schema`, one is
+derived from the function's signature; a lambda with neither name nor
+description raises `ValueError` at construction.
+
+```python
+soma.Tool(func, description=None, name=None, schema=None)
+
+@soma.tool                       # or @soma.tool(description=...)
+def lookup(city: str) -> str:
+    """Current weather for a city."""
+    ...
+
+g.node("agent", soma.Agent(model="ollama/qwen2.5", tools=[lookup]))
+g.add_tool(lookup)               # or: graph-wide, not bound to one agent
+g.add_mcp_server("uvx", ["some-mcp-server"])   # MCP tools, by command
+```
+
+### Writing a step
+
+A step is any object with `poll(ctx)`, duck-typed exactly like a
+filter's `forward`. Each `poll` advances one turn and returns one of five
+transitions — plain dicts built by helpers from `soma.agentic`:
+
+```python
+from soma.agentic import Done, Await, Spawn, Goto, Suspend, Llm, ToolCall, Run
+
+class Fanout:
+    _cache_version = "1"          # steps need a code identity, like filters
+
+    def poll(self, ctx):
+        if ctx.turn == 0:
+            return Spawn([Run("worker", task) for task in ctx.input])
+        return Done([r["output"] for r in ctx.results])
+```
+
+| Transition | Signature | Meaning |
+|---|---|---|
+| `Done` | `(value=None)` | Finished, with this output |
+| `Await` | `(*effects)` | Perform these effects concurrently, then poll again with the results in `ctx.results`, in order |
+| `Spawn` | `(specs, join="all")` | Run these nodes now (`Run(runs, input, label)` each), then poll again with their outputs. `join` is `"all"` \| `"all_settled"` \| `"first"` |
+| `Goto` | `(target, carry=None)` | Hand control to another node (needs `g.handoff(source, target)` declared) |
+| `Suspend` | `(reason="waiting")` | Stop and persist the run; resuming replays to here |
+
+Effects to `Await`: `Llm(model, prompt, system=None)`,
+`ToolCall(name, args=None)`, `RunGraph(graph, input=None, mode="forward")`,
+`Sleep(seconds)`, `Custom(kind, payload=None)`. Results arrive as dicts
+with a `"kind"` key (`"llm"` carries `text`; `"tool"`, `"graph"`,
+`"node"` and `"custom"` carry `output`; `"failed"` carries `message`;
+all carry `is_error`).
+
+`poll` must be **deterministic given the same context**: the journal
+records each effect's result once and replays it on resume, so a
+deterministic step retakes the identical path. Put anything that is not
+deterministic in an effect. Accordingly a step keeps no state of its
+own — it rebuilds what it has accumulated from `ctx.history`.
+
+#### StepCtx
+
+What `poll` is handed. Read-only.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `node_id` / `run_id` | `str` | Where and in which run this is happening |
+| `input` | `Any` | Input resolved from predecessors |
+| `turn` | `int` | Which turn, counting from 0 |
+| `results` | `list[dict]` | What last turn's effects returned, in request order |
+| `history` | `list[list[dict]]` | Every turn's results, oldest first |
+| `result()` | `dict \| None` | The single result of a one-effect turn; `None` on turn 0 |
+
+#### `register_step` and `handoff`
+
+`g.register_step(step_id, obj)` registers a spawn target **without**
+adding a node — a node with no incoming edges is a root and would also
+run once on the graph's own input. `g.handoff(a, b)` declares the
+control edge a `Goto` needs; handing control somewhere the graph never
+said it could is an error, not a silent jump.
+
+#### A pipeline as a tool: `RunGraph` + `register_graph`
+
+```python
+sub = soma.Graph()
+sub.node("featurize", Featurize())
+
+class Planner:
+    _cache_version = "1"
+    def __init__(self, sub):
+        self._sub = sub           # underscored — see below
+    def poll(self, ctx):
+        if ctx.turn == 0:
+            return Await(RunGraph(self._sub, input=ctx.input))
+        return Done(ctx.result()["output"])
+
+g.node("planner", Planner(sub))
+g.register_graph(sub)             # make sub's implementations runnable here
+```
+
+The effect carries the sub-graph's structure; `g.register_graph(sub)`
+merges its implementations into the outer graph (same id under a
+different implementation is a `ValueError`). `mode="fit"` fits the
+sub-graph instead of running forward. A pipeline that fails comes back as
+`{"kind": "failed", "message": ...}` — a finding for the step to read,
+not a crash. Sub-graphs may themselves contain steps
+(agent → pipeline → agent), capped at nesting depth 8.
+
+One trap: store a live `Graph` (or any unhashable object) on a step
+under an **underscored** attribute. Public attributes enter the step's
+config identity, and a live graph cannot be hashed into it — the journal
+keys the effect by the graph's own content, so nothing is lost.
+
+#### Suspend and resume
+
+A `Suspend` transition raises `soma.SomaSuspended` from
+`fit`/`forward` — a pause, not a failure. The exception carries
+`run_id`, `node_id`, `turn`, `kind` and `reason`, which is exactly what
+`Graph.resume(...)` takes; after `resume`, re-running under the same
+`run_id` replays the journal to the suspension point and continues with
+the answer.
+
+```python
+try:
+    g.forward(x, run_id="review-1")
+except soma.SomaSuspended as s:
+    answer = input(s.reason["prompt"])
+    g.resume(s.run_id, s.node_id, s.turn, s.reason, answer)
+    result = g.forward(x, run_id="review-1")   # replays, then continues
+```
+
+#### Schemas on Python nodes
+
+Python filters and steps may declare `_input_schema` / `_output_schema`
+class attributes — the shorthand strings `"text"`, `"json"`,
+`"messages"`, `"bytes"`, or a `{dtype, shape}` mapping. Declared schemas
+make the compiler's edge check fire from Python: two connected nodes
+that disagree raise `soma.SomaSchemaMismatch` at `compile()`, not
+mid-run.
+
+```python
+class Summarize:
+    _cache_version = "1"
+    _input_schema = "text"
+    _output_schema = "json"
+    def poll(self, ctx): ...
+```
+
+### `soma.agentic`: the patterns
+
+Every pattern is a function returning an ordinary `Graph` — searchable,
+cacheable, trackable. All take `provider=` and `cache=` keywords.
+
+| Function | Signature | Shape |
+|---|---|---|
+| `react` | `(model, tools=(), *, system=None, max_turns=None)` | One agent that thinks, calls tools, and answers |
+| `route` | `(classifier, arms)` | Send each request to exactly one handler; the chosen arm receives the original request, not the label |
+| `refine` | `(worker, judge, *, max_rounds=3, revise=None)` | Draft, grade, redraft until the judge reports `done` |
+| `debate` | `(agents, *, rounds=2, judge=None)` | Agents answer in turn, each seeing what came before |
+| `board` | `(members, chair=None, *, rounds=2, brief=None)` | Du et al. multi-agent debate: panel answers, chair moderates, panel answers again; unanimity stops early |
+| `parallel_vote` | `(agents, aggregator)` | Several agents at once, then reconcile |
+| `self_consistency` | `(agent, *, n=5, aggregator=None)` | One agent sampled `n` times; majority wins |
+| `orchestrate` | `(planner, worker, synthesizer, *, max_workers=16)` | Planner → dynamic fan-out (`Spawn`) → synthesizer; the pool is sized from the plan |
+
+Plus the filters the patterns are made of: `Validate(schema, strict=False)`
+(a JSON-Schema verdict a `branch` routes on — note it lives in
+`soma.agentic`, not `soma.library`), `Revise`, `Brief`,
+`MajorityVote(brief_node="brief", mode="number"|"text")`, `Fanout`.
+
+`soma.library` holds the evaluation side: `Eval`, `Accumulator`,
+`Retriever`, `Compact` (see the [design page](/soma/design/agentic/#the-library-the-patterns-are-made-of)).
 
 ### DifferentiableFilter
 

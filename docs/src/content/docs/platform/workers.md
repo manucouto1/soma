@@ -55,6 +55,8 @@ pub struct Worker {
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
+    /// The node catalog — every implementation a plan may name, filters
+    /// and steps alike. (The field keeps its pre-refactor name.)
     filters: NodeCatalog,
     /// Optional persistent DataStore (S3, Zarr, …), configured by the user.
     data_store: Option<Arc<dyn DataStore>>,

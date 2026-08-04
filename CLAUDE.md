@@ -71,17 +71,19 @@ soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, To
                   Study, Run, RunView, soma.viz, soma.agentic, soma.library
 soma/           → facade crate (`somatize`) re-exporting the workspace
 docs/           → 35 Starlight pages (sidebar guard: `cd docs && npm run check`)
-notebooks/      → 14 executed tutorial notebooks (10-12 are one campaign, sharing
+notebooks/      → 15 executed tutorial notebooks (10-12 are one campaign, sharing
                   campaign.py; 13 is agentic, with an embedded mock provider so it
                   runs with no key; 14 replicates Du et al. multi-agent debate on
                   GSM8K and NEEDS a real model — no mock can measure an accuracy
-                  gap); re-run with `python notebooks/execute.py`
+                  gap; 15 is the seam both ways: Agent in a pipeline, RunGraph
+                  from a step, schemas, journal replay, Suspend/resume — mock,
+                  no key); re-run with `python notebooks/execute.py`
 ```
 
 ## Tests
 
 ```bash
-# 948 Rust + 673 Python (11 deselected by default: slow + live)
+# 984 Rust + 699 Python (14 deselected by default: slow + live)
 # Property tests are Rust-side (soma-core/tests/proptests.rs); the Python
 # suite does not use hypothesis.
 cargo test --workspace                              # Rust tests
@@ -113,7 +115,8 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **Filter identity**: Rust = canonical CBOR of fields (+`#[soma(cache_version)]`); Python = qualname + canonical config + source-hash ladder (`_cache_version` → `inspect.getsource` → cloudpickle+warning). Unhashable ⇒ `CacheConfigError`, never a silent key.
 - **GraphSession**: Primary orchestrator — binds Graph + NodeCatalog + cache + events. Methods: fit, forward, compile, run.
 - **NodeCatalog**: THE registry — every node, filter or step, plus the trained states.
-  Implements `NodeRegistry` (the compiler's port, one required `node_meta`) and is what the
+  Implements `NodeRegistry` (the compiler's port, two required methods: `node_meta` +
+  `config_hash`) and is what the
   executor reads. Filters and steps used to live in two registries joined by an adapter a
   caller had to remember to build, which is how `.compile()` came to skip every step's
   schema while `.run()` checked them.
@@ -125,11 +128,13 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   wildcard arm there is a silent wrong answer.
 - **run_node**: the one execution site. Input resolution, the output cache, `catch_unwind`,
   and the start/complete/fail events happen once for filters and steps alike;
-  `run_node_inner` is the only `match` in the runtime that tells them apart.
+  `run_node_inner` is the only `match` on the execution hot path that tells them apart
+  (`fit_state_if_needed` and `composite_fit` also discriminate, on the fit side).
 - **RunContext**: what a runner needs besides the plan — catalog, cache, events, run id, and
   the *real* `GraphInfo`. `RunContext::linear` is the explicit fallback for a caller that
   has only a plan (the worker); the runner no longer invents a topology.
-- **ExecutionPlan**: Compiled from Graph. Variants: Sequence, Parallel, Execute, Cached, Loop, Branch, Remote.
+- **ExecutionPlan**: Compiled from Graph. Variants: Sequence, Parallel, Execute,
+  Step (with handoffs), Composite, Loop (with `until` + `carry_from`), Branch, Stream, Remote, Empty.
 - **VirtualValue**: Lazy references (Materialized | Cached | Deferred | Stream).
 - **Schema**: dtype + shape for compile-time type checking between connected filters.
 - **TrialOutcome**: Separates control flow (Completed | Pruned) from errors.
@@ -193,7 +198,7 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   `Step` (sync `poll` → `Transition`; a driver performs the effects) sits beside `Filter`.
   A filter memoizes by content; a step *journals* — pure effects keyed by content, impure
   ones by `(run, node, turn, index)`: record once, replay on resume, never re-run.
-  Six structural NodeKinds; every behaviour (LLM, tool, judge, router) is library, and
+  Five structural NodeKinds; every behaviour (LLM, tool, judge, router) is library, and
   every pattern is a function in `soma.agentic` returning a Graph — `react`, `route`,
   `refine`, `debate`, `board`, `parallel_vote`, `orchestrate`. `board` is Du et al.
   multi-agent debate (ICML 2024): `brief → members → chair`, the chair also reads the
@@ -211,7 +216,20 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   `BodyTerminal` → `WhenSignaled(node)`, and `ExecutionPlan::Loop` carries `carry_from`
   separately from `until` (what a loop carries ≠ what stops it). A branch passes its
   *input* to the chosen arm — the selector is control, not data.
-  `Effect::Graph` + `GraphHandler` make a pipeline a first-class tool for an agent.
+  `Effect::Graph` + `GraphHandler` make a pipeline a first-class tool for an agent —
+  from Python: `soma.agentic.RunGraph(sub, input=, mode=)` + `g.register_graph(sub)`
+  (structure travels in the effect; implementations are merged once, same id +
+  different config = error). Sub-graphs may contain steps (`GraphHandler::
+  with_step_runtime`, nesting capped at `MAX_GRAPH_DEPTH = 8`); `Effect::Graph`
+  is pure ONLY for filter-only Forward graphs — a step-containing or Fit sub-graph
+  is journaled by site, never reused by content (`Graph::contains_steps`).
+  Rust callers: `GraphSession::with_driver(driver)` makes the session drive steps
+  (tests: soma-runtime/tests/session_steps.rs); the driver carries its own catalog
+  via `EffectDriver::with_catalog` — Context/RunContext::with_driver only store.
+  Python nodes declare edge contracts with `_input_schema`/`_output_schema`
+  ("text"|"json"|"messages"|"bytes" or a {dtype, shape} mapping); a typo fails at
+  registration, an impossible edge at compile. A step holding a live Graph stores
+  it underscored — a Graph cannot enter the JSON identity, and need not.
   Searchable: `soma.Agent(model=search(...), system=search(...))` and `g.optional(a, b)`
   (topology as a dimension) fold into the same `search_space()` a filter graph produces.
 - **Provider resilience**: retries live in the HTTP client, not the step — a 429 is

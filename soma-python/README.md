@@ -17,7 +17,8 @@ Part of the **Nous-Soma-Chronos** ecosystem:
 | **TrainingStrategy** | Graph-level attribute: Local, DataParallel, ModelParallel, Federated, PopulationBased. |
 | **Study** | Hyperparameter optimization: Grid, Random, or Bayesian (TPE) search with median/percentile pruning. |
 | **PBT** | Population-Based Training: evolutionary train→evaluate→exploit/explore cycles. |
-| **ExecutionPlan** | Compiled from graph. Variants: Sequence, Parallel, Execute, Cached, Remote, Loop, Branch. |
+| **Agentic layer** | `soma.Agent`, `soma.Judge` and Python steps (any object with `poll(ctx)`) are nodes like any filter; a pipeline is a tool an agent can run (`soma.agentic.RunGraph`) and an agent is a node in a pipeline. Patterns (`react`, `refine`, `board`, …) live in `soma.agentic` and return ordinary graphs — searchable, cached, tracked. |
+| **ExecutionPlan** | Compiled from graph. Variants: Sequence, Parallel, Execute, Step, Loop, Branch, Remote, Composite, Stream, Empty. |
 | **DataStore** | Abstraction for data movement: Local, S3, Zarr (chunked tensors), Cached, Stream. |
 | **Worker** | Remote execution daemon. Auto-detects hardware, Slurm-style resource limits, token auth. |
 | **Coordinator** | Lightweight gateway: worker registration, routing, health monitoring. |
@@ -30,8 +31,9 @@ soma-core       → types + traits: Filter, Value, Graph, TrainingStrategy, Sche
                   DataStore (Local/S3/Zarr), VirtualValue, StreamCache
 soma-compiler   → Graph → ExecutionPlan (caching, parallelism, distribution)
                   Scheduler, plan visualization (Mermaid/Graphviz)
-soma-runtime    → GraphSession, executor, FilterLibrary, caches, samplers, pruners
-                  StudyRunner, PbtRunner, stream executor
+soma-runtime    → GraphSession, executor, NodeCatalog (filters AND steps), caches,
+                  samplers, pruners, EffectDriver + journal, StudyRunner, PbtRunner,
+                  stream executor
 soma-memory     → KnowledgeBase trait + MemoryKB + ChronosKB
 soma-worker     → Worker, Coordinator, Protocol, EnvManager, token auth
                   Auto-detect capabilities, resource limits, CLI binary

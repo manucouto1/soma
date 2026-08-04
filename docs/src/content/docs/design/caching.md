@@ -80,6 +80,23 @@ def train(trial):
 
 Nondeterministic filters (`_deterministic = False` / `#[soma(deterministic = false)]`) are excluded from forward-output caching **unless** a seed is set — with a seed in the key, results vary across seeds but stay stable within one.
 
+## The effect journal
+
+Effectful nodes ([steps](/soma/design/agentic/)) do not use the output cache at all — a step's output is not a function of its input, the model is on the other end of it, so serving a recorded one would be a lie. What a step gets instead is a **journal** over the *effects* it performs, and the journal lives in the same two-table `FsActionStore` as everything above: effect results are action records pointing at CAS blobs, sharing the store, the commit protocol and the GC.
+
+What the journal adds is the keying, and a distinction the filter cache cannot express:
+
+| Effect kind | Key includes | Reused |
+|---|---|---|
+| Pure (a filter-only graph run) | the effect's content | across every run, like a filter |
+| Impure (a model call, a tool) | run, node, turn, index, effect | only when replaying *that* run |
+
+The second row is the point. Asking a model the same question twice is genuinely two events, so memoizing by content would freeze the first answer forever — the `_deterministic = False` foot-gun wearing a hat. Scoping the key to `(run, node, turn, index)` means a resumed run sees exactly what the original saw, while a fresh run asks afresh. Failures are never recorded: a transport error is not a result, and a replay retries it.
+
+`Effect::Graph` — a step running a pipeline — sits on whichever side its content dictates: a **filter-only `forward`** is pure, because its nodes are deterministic and content-cached already; a sub-graph that **contains a step**, or any run in **`fit` mode**, is impure (the step calls a model; a replayed fit must re-write states, not serve a summary). This is decided by `Effect::is_pure()` in `soma-core/src/effect.rs`.
+
+Two practical consequences: prompts land on disk under `$SOMA_CACHE_DIR` (set `journal = false` on a step's `StepMeta` for anything that must not persist), and GC marks impure blobs as expensive so a replay's record outlives an intermediate tensor of the same size — an evicted pure blob merely recomputes, an evicted impure one would make a replay diverge.
+
 ## Events
 
 The executor emits `NodeCacheHit` / `NodeCacheMiss` (with the key) on the graph's event bus; tracking sinks persist them to `events.jsonl`, so a run directory shows exactly what was reused.

@@ -29,7 +29,7 @@ A Rust/SvelteKit platform for LLM agent orchestration with a visual graph editor
 - **Graph compilation**: Converting DAGs into structured `ExecutionPlan` trees (Sequence, Parallel, Loop, Branch)
 - **Event system**: Real-time streaming of execution progress (NodeStarted, NodeToken, NodeCompleted)
 - **Parallel execution**: Tokio JoinSet with context store snapshots for fork-join patterns
-- **Agent model**: OpenFang-based autonomous agents with skills, hands, and memory
+- **The lesson learned**: its closed catalog of agent node types is why Soma has none — in Soma an agentic flow is an ordinary graph whose nodes are effectful [steps](/soma/design/agentic/), and every behaviour is library
 
 ### ChronosVector
 
@@ -52,7 +52,7 @@ implemented.
 | **Gradient Propagation** | Differentiable filters enable end-to-end backpropagation through the pipeline |
 | **Hyperparameter Optimization** | Search spaces defined at the filter level; grid, random and Bayesian (TPE) search, multi-objective, median/percentile pruning |
 | **Remote Execution** | Serialize and send graphs to workers for distributed computation |
-| **Agent Integration** | Agents build, execute, and analyze graphs autonomously |
+| **Agentic Flows** | Flows are graphs whose nodes are effectful steps: a pipeline is a tool an agent can run (`Effect::Graph`), and an agent is a node a pipeline can contain — same cache, schema checks, search spaces and lineage |
 | **Experiment Pool** | Every run records its conclusion, architecture fingerprint and the change from its parent; ranked retrieval over the lot |
 
 ## Who is Soma for?

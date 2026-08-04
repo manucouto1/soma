@@ -52,7 +52,15 @@ pub struct CompileResult {
 /// `meta` is how half the schema validation came to be skipped by
 /// whichever registry forgot to override it.
 pub trait NodeRegistry: Send + Sync {
+    /// A node's contract — schemas, cacheability, effectfulness — whichever
+    /// kind it is. `None` means the graph names a node nobody registered,
+    /// which the compiler reports rather than guesses around.
     fn node_meta(&self, node_id: &str) -> Option<NodeMeta>;
+
+    /// The node's configuration identity, folded into cache keys. Required
+    /// rather than derived because only the registry knows how a node's
+    /// configuration is canonicalized (Rust: canonical CBOR of fields;
+    /// Python: qualname + config + source hash).
     fn config_hash(&self, node_id: &str) -> Option<CacheKey>;
 
     /// The computational view, for the phases that only make sense for a

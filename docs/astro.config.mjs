@@ -59,6 +59,8 @@ export default defineConfig({
 						{ label: 'Execution Modes & Data Transport', slug: 'guides/execution-modes' },
 						{ label: 'Gradient Health Audit', slug: 'guides/gradient-audit' },
 						{ label: 'Checkpoints', slug: 'guides/checkpoints' },
+						{ label: 'Agentic Quickstart', slug: 'guides/agentic-quickstart' },
+						{ label: 'Writing a Step', slug: 'guides/writing-a-step' },
 					],
 				},
 				{

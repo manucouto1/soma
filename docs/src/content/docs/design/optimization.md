@@ -147,13 +147,25 @@ pub trait Searchable {
 ## Graph Search Space Aggregation
 
 Aggregation happens **Python-side**, not in `soma-core`: a Rust `Node`
-stores only the filter *name* (`NodeKind::Filter { filter_name }`) —
-live filter instances exist in Python (`graph.filters()`) or in the
-runtime's `NodeCatalog`, so the core graph cannot reach their search
-spaces. `graph.search_space()` (installed by `soma/_study.py`) collects
-every filter's `search()` descriptors and prefixes dimension names with
-the node id to avoid collisions; `graph.apply_params()` writes a
-sampled configuration back onto the live instances:
+stores only the implementation *name* (`NodeKind::Filter { filter_name }`)
+— live instances exist in Python (`graph.filters()`, `graph.steps()`) or
+in the runtime's `NodeCatalog`, so the core graph cannot reach their
+search spaces. `graph.search_space()` (installed by `soma/_study.py`)
+aggregates three sources, prefixing dimension names with the node id to
+avoid collisions:
+
+- **Filters** declare theirs as class attributes (`lr = search(...)`).
+- **Agents and judges** declare theirs at the call site
+  (`Agent(model=search(choices=[...]))`), because an agent's
+  hyperparameters *are* its constructor arguments. Both land as the same
+  kind of dimension, so a study cannot tell them apart.
+- **Optional edges** (`g.optional(a, b)`) each contribute a categorical
+  `edge:<source>-><target>: [True, False]` — whether a connection should
+  exist at all is a dimension like any other, the edge optimization that
+  agentic-graph search papers (GPTSwarm, AFlow) do by hand.
+
+`graph.apply_params()` writes a sampled configuration back onto the live
+instances, and keeps or cuts the optional edges:
 
 ```python
 g = Graph.somatize(MyScaler(scale=2.0) >> MySVM(kernel="rbf", C=1.0))
@@ -169,9 +181,10 @@ study = g.study("tune", strategy="grid", n_trials=4,
                 objectives=[("f1", "maximize")])
 ```
 
-(Rust-side, `SearchSpace::merge_with_prefix` exists for the same
-purpose once `NodeCatalog`-level aggregation lands; the `Searchable`
-trait below is derived today but not yet invoked by any runner.)
+(Rust-side, `SearchSpace::merge_with_prefix` exists for the same purpose
+should catalog-level aggregation ever be needed in Rust; today it has no
+production caller, and the `Searchable` trait below is derived but not
+yet invoked by any runner.)
 
 ## Search Strategies
 

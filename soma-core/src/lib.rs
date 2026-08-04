@@ -1,12 +1,23 @@
 //! Core types and traits for the Soma computational graph runtime.
 //!
-//! This crate defines the contracts that all other crates depend on:
+//! A graph holds two kinds of node, and this crate defines both sides of
+//! that split. A [`Filter`] *computes* — deterministic, content-cacheable,
+//! `fit`/`forward`. A [`Step`] *decides* — it polls, asks the
+//! runtime to perform [`Effect`]s (a model, a tool, another
+//! graph), and returns a [`Transition`]. One
+//! [`NodeMeta`](node::NodeMeta) describes either kind; one
+//! [`NodeOutcome`](node::NodeOutcome) says how either kind finished.
+//! Everything downstream reads the metadata, never the kind.
+//!
+//! The contracts every other crate depends on:
 //! - [`Filter`] — the computation unit (fit/forward)
-//! - [`Value`] — typed data flowing between filters (Tensor, JSON, Bytes)
-//! - [`Graph`] — DAG of filter nodes and edges
+//! - [`Step`] / [`Effect`] — the decision unit
+//!   and what it asks for; effects are journaled, filters are cached
+//! - [`Value`] — typed data flowing between nodes (Tensor, JSON, Bytes)
+//! - [`Graph`] — DAG of nodes and edges, computational and effectful alike
 //! - [`CacheKey`] / [`CacheStore`] — content-addressable caching
 //! - [`DataStore`] — abstraction for moving data between workers
-//! - [`Schema`] — dtype + shape for compile-time validation
+//! - [`Schema`] — dtype + shape for compile-time validation, on every edge
 //! - [`Event`] — runtime lifecycle events
 
 pub mod action;

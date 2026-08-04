@@ -123,10 +123,56 @@ A pure effect (a deterministic tool) memoizes like a filter. An impure one (a mo
 
 This is the durable-execution discipline Temporal and Restate established, over the two-table `ActionStore` Soma already had. It is what makes a nondeterministic run reproducible, and therefore comparable to its parent in the experiment pool.
 
+### A pipeline as a tool, and how deep that goes
+
+`Effect::Graph` is the bridge in the other direction: a step hands the
+runtime a graph and gets its output back, with the graph's own compiler,
+cache, schema checks and events all applying as usual. From Python:
+
+```python
+from soma.agentic import Await, Done, RunGraph
+
+class CallsPipeline:
+    _cache_version = "1"
+    def __init__(self, sub):
+        self._sub = sub          # underscored: a live Graph is not config
+    def poll(self, ctx):
+        if ctx.turn == 0:
+            return Await(RunGraph(self._sub, input=ctx.input))
+        return Done(ctx.result()["output"])
+
+g.node("planner", CallsPipeline(sub))
+g.register_graph(sub)            # make sub's implementations runnable here
+```
+
+The effect carries the sub-graph's *structure*; `g.register_graph(sub)`
+merges its implementations into the outer graph's catalog (the same id
+behind a different implementation is an error, because whichever one lost
+would answer for the other's cache entries). A pipeline that fails comes
+back as `{"kind": "failed", "message": ...}` for the step to read.
+
+The sub-graph may itself contain steps — agent → pipeline → agent — and
+the nesting is capped at depth 8, because a flow that reaches eight levels
+is almost certainly recursing on itself, and a readable failure naming the
+cap beats a stack that grows until the OS ends the process. In Rust the
+same wiring is `GraphSession::with_driver(driver)` for a mixed graph and
+`GraphHandler::with_step_runtime(handlers, journal)` for the recursion.
+
+Which journal row an `Effect::Graph` lands in follows from its content: a
+**filter-only `forward`** is pure — it inherits Soma's own determinism
+guarantees, since its nodes are content-cached already — and memoizes
+across runs like a filter. A sub-graph that **contains a step** is impure:
+the step calls a model, so the same question asked twice is a different
+event, and serving the first answer forever by content key would be the
+`Llm` mistake with extra steps. **`fit` mode** is impure for a second
+reason: replaying it must re-write the fitted states, and serving the
+recorded summary alone would leave the graph unfitted for the effects
+after it.
+
 ### The patterns are functions
 
 ```python
-from soma.agentic import react, route, refine, debate, board, parallel_vote, orchestrate
+from soma.agentic import react, route, refine, debate, board, parallel_vote, self_consistency, orchestrate
 
 refine(worker=Draft(), judge=soma.Judge(model="ollama/qwen2.5", rubric="..."), max_rounds=4)
 route(classifier, {"billing": BillingAgent(), "tech": TechAgent(), "default": Escalate()})
@@ -138,7 +184,7 @@ Each returns an ordinary `Graph`, built from the same `node`, `connect`, `branch
 
 `board` is the one worth reading as an argument rather than a convenience. It is the multi-agent debate of [Du et al. (ICML 2024)](https://arxiv.org/abs/2305.14325): a panel answers independently, a chair reads every answer and records a decision, and the next round shows the panel what the chair recorded — the summarizer variant that paper introduces for larger panels, which is what makes the chair a moderator rather than a tallying clerk. The loop is `brief → members → chair`, the chair also reads the brief so the round after it still knows the question, and the chair's `done` is the exit condition: a panel that has converged stops instead of buying the rounds it was allowed.
 
-The default chair, `MajorityVote`, is a stateless filter rather than a model — the aggregator the paper actually closes a debate with, costing no tokens and keeping the model as the only stochastic part of the flow. Pass a `Judge` or an agent instead to have a model moderate. And because the result is a graph, "five members or three, two rounds or four" is a `search_space()` dimension rather than an opinion; notebook 14 replicates the paper's GSM8K ordering and then searches that space.
+The default chair, `MajorityVote`, is a stateless filter rather than a model — the aggregator the paper actually closes a debate with, costing no tokens and keeping the model as the only stochastic part of the flow. Pass a `Judge` or an agent instead to have a model moderate. And because the result is a graph, "five members or three, two rounds or four" is a `search_space()` dimension rather than an opinion — notebook 13 is the one that actually runs a `Study` over an agentic space; notebook 14 replicates the paper's GSM8K ordering with a plain grid sweep over panel size and rounds.
 
 ### The library the patterns are made of
 
@@ -151,7 +197,11 @@ project, each subtly differently, right up until two results are compared:
 | `Accumulator` | every value a loop passed through, not just the last |
 | `Retriever` | what the experiment pool already knows that bears on this |
 | `Compact` | a transcript that would otherwise outgrow the context window |
-| `Validate` | a value against a JSON Schema, as a verdict a `branch` can route on |
+
+One more of the same species lives next door: `Validate` — a value
+against a JSON Schema, as a verdict a `branch` can route on — is imported
+from `soma.agentic`, beside the patterns that route on its verdict, not
+from `soma.library`.
 
 `Eval` is the counterpart to `Judge`, and the choice between them is not
 stylistic: a judge asks a model whether the work is good, which costs tokens
@@ -304,7 +354,7 @@ g.node("writer", soma.Agent(
 ))
 g.optional("retriever", "critic")        # the edge is a dimension too
 
-study = g.study("shape-and-prompt", strategy="tpe", n_trials=40,
+study = g.study("shape-and-prompt", strategy="bayesian", n_trials=40,
                 objectives=[("score", "maximize")])
 ```
 

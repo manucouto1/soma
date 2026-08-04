@@ -19,8 +19,8 @@
 //!     .with_history(kb.all()?)      // start from what is already known
 //!     .with_max_iterations(10);
 //!
-//! let mut steps = StepLibrary::new();
-//! steps.register("researcher", Box::new(agent));
+//! let mut catalog = NodeCatalog::new();
+//! catalog.register_step("researcher", Box::new(agent));
 //! ```
 
 pub mod action;

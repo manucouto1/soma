@@ -30,7 +30,8 @@ Part of the **Nous-Soma-Chronos** ecosystem:
 | **TrainingStrategy** | Graph-level attribute: Local, DataParallel, ModelParallel, Federated, PopulationBased. |
 | **Study** | Hyperparameter optimization: Grid, Random, or Bayesian (TPE) search with median/percentile pruning. |
 | **PBT** | Population-Based Training: evolutionary train→evaluate→exploit/explore cycles. |
-| **ExecutionPlan** | Compiled from graph. Variants: Sequence, Parallel, Execute, Cached, Remote, Loop, Branch. |
+| **Agentic layer** | An agentic flow is a graph whose nodes are effectful *steps* (`soma.Agent`, `soma.Judge`, or any object with `poll(ctx)`). Steps journal their effects (record once, replay on resume); a pipeline is a tool an agent can run and an agent is a node a pipeline can contain. Patterns (`react`, `refine`, `board`, …) are functions in `soma.agentic` returning ordinary graphs. |
+| **ExecutionPlan** | Compiled from graph. Variants: Sequence, Parallel, Execute, Step, Loop, Branch, Remote, Composite, Stream, Empty. |
 | **DataStore** | Abstraction for data movement: Local, S3, Zarr (chunked tensors), Cached, Stream. |
 | **Worker** | Remote execution daemon. Auto-detects hardware, Slurm-style resource limits, token auth. |
 | **Coordinator** | Lightweight gateway: worker registration, routing, health monitoring. |
@@ -43,7 +44,8 @@ soma-core        → types + traits: Filter, Value, Graph, Event, Schema, Study,
                    DataStore (Local/S3/Zarr), VirtualValue, tracking schema, GraphOverlay
 soma-compiler    → Graph → ExecutionPlan (caching, parallelism, distribution)
                    Scheduler, plan visualization
-soma-runtime     → GraphSession, executor, FilterLibrary, caches, samplers, pruners
+soma-runtime     → GraphSession, executor, NodeCatalog (filters AND steps), caches,
+                   samplers, pruners, EffectDriver + journal,
                    StudyRunner, PbtRunner, LocalTracker + RunReader (run directories)
 soma-memory      → KnowledgeBase trait + MemoryKB + ChronosKB
 soma-worker      → Worker, Protocol, EnvManager, token auth, CLI binary

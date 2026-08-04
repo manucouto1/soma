@@ -119,3 +119,111 @@ would be a poor trade.
 Combining the inputs stays the filter's job. Concatenating, adding and
 attending are different models, and a framework that picks for you is
 picking wrong for someone.
+
+## One `NodeCatalog`, not two registries and an adapter
+
+**Decided.** Every node a graph can execute — filter or step — lives in
+one registry, `NodeCatalog`, which also holds the trained states. It
+implements the compiler's `NodeRegistry` port, and the executor reads it
+directly.
+
+Rejected: **separate filter and step registries joined by a borrow-pair
+adapter a caller had to remember to build.** That was the previous shape,
+and it meant three ways to answer "what is this node". The concrete bug
+it caused is the reason for the entry: a caller passing the filter half
+alone got the graph compiled with every step edge unchecked — which is
+how `.compile()` came to skip schemas that `.run()` then enforced, the
+worst ordering possible.
+
+The test of the decision: there is exactly one place to ask
+`node_meta(id)`, and it answers for both kinds.
+
+## `Step` beside `Filter`, not a second engine
+
+**Decided.** An effectful node is a peer node kind in the same graph,
+executed through the same single site (`run_node`), scheduled by the same
+compiler, reported on the same event bus. The difference survives as
+*data* — `NodeMeta { effectful, cacheable, deterministic }`, where
+`From<StepMeta>` sets `cacheable: false` — so the executor's existing
+cache guard skips a step without any `if is_step`.
+
+Rejected: **a separate agent runtime beside the pipeline runtime.** Every
+framework that built one ended up with two schedulers, two caches, two
+event systems and a bridge; meanwhile everything agentic flows are
+missing everywhere else — schema validation, content caching, search
+spaces, lineage — is exactly what the existing runtime already does.
+Also rejected: **a catalog of agent node types** (the production engine
+examined for the agentic design carries 24 closed-enum node variants,
+three of which are unimplemented but still documented). Soma keeps five
+*structural* kinds; every behaviour is library.
+
+## `poll` is synchronous; the driver owns the concurrency
+
+**Decided.** `Step::poll(ctx) -> Transition` is a cheap, synchronous
+decision. It describes what it needs (an `Effect`); a driver performs it.
+
+Rejected: **`async fn poll`**, which every other Rust agent framework
+chooses. An async trait colours the whole runtime and complicates the GIL
+story; a sync one buys three things at once: the Python bridge stays a
+plain call (Python decides, Rust performs, no GIL held across I/O), the
+journal is trivial (a step is a pure function of its inputs and the
+recorded results, so feeding it the journal replays the identical path),
+and steps compose with filters because both are just nodes.
+
+The corollary is that a step holds no state of its own: `StepCtx` carries
+`results` and `history`, and anything a step accumulates it rebuilds from
+those — a field on `self` would drift from what replay feeds back.
+
+## Transitions cross the Python bridge as dicts
+
+**Decided.** A Python step returns plain dicts built by helpers —
+`Done(v)` is `{"transition": "done", "value": v}` — and `soma.agentic`
+exports the five constructors.
+
+Rejected: **a class hierarchy mirrored on both sides.** What crosses into
+Rust should be data: the Rust side gets one thing to parse
+(`parse_transition`), Python keeps ordinary values that print, compare
+and pickle like anything else, and a step can be written without
+importing anything but five names. A hierarchy would also need versioning
+in lockstep with the extension module; a dict shape is checked where it
+is read, with an error message that names the helper to use.
+
+## Patterns are functions returning graphs
+
+**Decided.** `react`, `route`, `refine`, `debate`, `board`,
+`parallel_vote`, `self_consistency` and `orchestrate` are functions in
+`soma.agentic`, each returning an ordinary `Graph` built from the same
+`node`, `connect`, `branch` and `loop` anyone can call.
+
+Rejected: **patterns as engine variants or node types.** A framework
+whose patterns are enum variants has to grow its core for every idea
+anyone has; the dead node types in every such framework are the
+evidence. A pattern that is a function costs nothing to add and nothing
+to keep — and because the result is a plain graph, schema checking, the
+persistent cache, `search()` and the experiment pool apply to it
+unchanged, which is the entire value proposition.
+
+## `Effect::Graph` purity follows the graph's content, and nesting stops at 8
+
+**Decided.** Whether a sub-graph run may be memoized by content is
+decided by what the graph *contains* and the mode it runs in:
+`is_pure()` is true only for a filter-only `forward`. A sub-graph
+containing a step, or any `fit`-mode run, is journaled per
+`(run, node, turn, index)` like a model call. And agent → pipeline →
+agent nesting is capped at `MAX_GRAPH_DEPTH = 8`, failing with a message
+that names the cap.
+
+Rejected: **treating every graph effect as pure**, which was the original
+behaviour. A filter-only forward genuinely inherits Soma's determinism —
+its nodes are content-cached already — but a step-containing sub-graph
+calls a model, so content-keying it would replay the first answer
+forever: the `_deterministic = False` foot-gun one level removed. `Fit`
+is impure for a second reason: a replay must re-write the fitted states,
+and serving the recorded summary alone would leave the graph unfitted
+for the effects after it.
+
+Rejected: **unbounded recursion.** Each nesting level is a step whose
+sub-graph contains another step; real flows are one or two levels deep,
+and a graph that reaches eight is almost certainly recursing on itself.
+Stopping with a readable failure beats a stack that grows until the OS
+ends the process.

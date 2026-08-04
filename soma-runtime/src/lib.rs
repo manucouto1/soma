@@ -1,9 +1,24 @@
 //! Execution engine for Soma computational graphs.
 //!
-//! Provides the runtime components that execute compiled plans:
+//! Two decisions shape this crate. [`NodeCatalog`] is THE registry — every
+//! node, filter or step, plus the trained states; the compiler and the
+//! executor read the same value, which is what keeps "what compiles" and
+//! "what runs" from drifting apart. And `run_node` (in [`executor`]) is the
+//! one execution site: input resolution, the output cache, panic
+//! containment and the start/complete/fail events happen once, for both
+//! kinds — whether a node is cacheable is *data* on its
+//! [`NodeMeta`](somatize_core::node::NodeMeta), not a branch on its kind.
+//!
+//! The pieces:
 //! - [`runner`] — trait-based execution: LocalRunner, StreamExecutor, StudyRunner, PbtRunner
-//! - [`executor`] — walks `ExecutionPlan` trees (sequence, parallel, cached, remote)
-//! - [`GraphSession`] — the primary orchestrator: Graph + filters → compile → execute
+//! - [`executor`] — walks `ExecutionPlan` trees (sequence, parallel, step, loop, remote)
+//! - [`GraphSession`] — the primary orchestrator: Graph + catalog → compile → execute;
+//!   give it an [`EffectDriver`] via `with_driver`
+//!   and it drives steps too
+//! - [`effects`] — [`EffectDriver`] performs what steps
+//!   ask for; [`EffectJournal`] records once and
+//!   replays on resume; [`GraphHandler`](effects::GraphHandler) runs a
+//!   pipeline on an agent's behalf
 //! - [`cache`] — LRU memory cache, local disk cache, tiered cache
 //! - [`sampler`] — hyperparameter samplers (Grid, Random, Bayesian/TPE)
 //! - [`pruner`] — early stopping strategies (Median, Percentile)

@@ -1,6 +1,6 @@
 ---
 title: Tutorials
-description: Twelve runnable notebooks, from your first filter to a research campaign that uses its own recorded history.
+description: Fifteen runnable notebooks, from your first filter to a research campaign that uses its own recorded history — and a panel of agents that debate.
 ---
 
 The notebooks in [`notebooks/`](https://github.com/manucouto1/soma/tree/main/notebooks)
@@ -49,10 +49,18 @@ argument for keeping a lineage at all: two plausible fixes each buy
 nothing on their own (+0.008 and −0.016), and together they are worth
 +0.305. One-variable-at-a-time would have reported that neither helps.
 
-Notebooks 06–12 need PyTorch (`pip install torch`); 01–05 run on the
-core install alone. Notebooks 10–12 share `notebooks/campaign.py`, which
-holds the data generator and the model — a module rather than a cell,
-because `Graph.load` resolves filters by import path.
+### Agentic flows
+
+| # | Notebook | What you learn |
+|---|---|---|
+| 13 | [Tuning an agentic flow](https://github.com/manucouto1/soma/blob/main/notebooks/13_agentic_flows.ipynb) | `soma.Agent` and `soma.Judge` as graph nodes, a `refine()` loop, tools, and a `Study` where the prompt and the topology are hyperparameters. Ships with an embedded mock provider, so it runs with **no API key and no local model** |
+| 14 | [A panel of agents](https://github.com/manucouto1/soma/blob/main/notebooks/14_a_panel_of_agents.ipynb) | `board()` — the multi-agent debate of Du et al. (ICML 2024) — replicated on GSM8K, sweeping panel size and rounds with a grid. **Needs a live model** (Ollama): no mock can measure an accuracy gap |
+| 15 | [Pipelines and agents, each calling the other](https://github.com/manucouto1/soma/blob/main/notebooks/15_pipelines_and_agents.ipynb) | The seam itself, both directions: an `Agent` inside a compute pipeline scored by `Eval`, schema contracts refused at compile, a step running a pipeline with `RunGraph`, the journal replaying a run with zero model calls, `orchestrate`, and `Suspend`/`resume`. Embedded mock — **no key needed** |
+
+Notebooks 06–12 need PyTorch (`pip install torch`); 01–05 and 13–15 run
+on the core install alone. Notebooks 10–12 share `notebooks/campaign.py`,
+which holds the data generator and the model — a module rather than a
+cell, because `Graph.load` resolves filters by import path.
 
 ## Suggested routes
 
@@ -61,8 +69,9 @@ because `Graph.load` resolves filters by import path.
 - **"My model trains badly and I don't know why"** → 06 → 08 → 09
 - **"I want to show results to someone"** → 07 (report + figures)
 - **"I want to run a research campaign"** → 10 → 11 → 12
+- **"I want to build and tune an agentic flow"** → 01 → 13 → 15 → 14
 
-Notebooks 01–05 and 10–12 are in English; 06–09 are in Spanish, and
+Notebooks 01–05 and 10–15 are in English; 06–09 are in Spanish, and
 translating them is outstanding.
 
 Re-execute them with `python notebooks/execute.py` (all of them) or

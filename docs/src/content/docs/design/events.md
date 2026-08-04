@@ -203,8 +203,79 @@ pub enum Event {
         flag: String,
         detail: String,
     },
+
+    // ══════════════════════════════════════════
+    // Level 6: Effectful steps (agentic execution)
+    // ══════════════════════════════════════════
+    // Payloads carry *labels*, never prompts or completions: the
+    // conversation itself belongs in the journal (subject to
+    // `StepMeta::journal`), not in a telemetry stream.
+
+    /// A step began a turn (one `poll`)
+    AgentTurnStarted { run_id: RunId, node_id: NodeId, turn: usize },
+
+    /// A step asked for an effect; `effect` is `Effect::label()`,
+    /// e.g. "llm:qwen2.5" or "tool:search"
+    EffectRequested { run_id: RunId, node_id: NodeId, turn: usize, effect: String },
+
+    /// An effect finished. `replayed` says it was served from the
+    /// journal rather than performed — a replay is nearly all `true`
+    EffectCompleted {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        effect: String,
+        duration: Duration,
+        replayed: bool,
+        is_error: bool,
+    },
+
+    /// A tool ran. Separate from EffectCompleted because tool usage is
+    /// the thing worth counting per run, and what a permission or audit
+    /// layer hooks into
+    ToolCalled { run_id: RunId, node_id: NodeId, tool: String, is_error: bool },
+
+    /// Control passed from one node to another (a step's `Goto`)
+    Handoff { run_id: RunId, from: NodeId, to: NodeId },
+
+    /// The run stopped, pending something outside it
+    Suspended { run_id: RunId, node_id: NodeId, reason: String },
+
+    /// A suspended run picked up again
+    Resumed { run_id: RunId, node_id: NodeId, turn: usize },
+
+    /// A step finished, with what it cost
+    AgentStepCompleted {
+        run_id: RunId,
+        node_id: NodeId,
+        turns: usize,
+        duration: Duration,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
 }
 ```
+
+### When the agent events fire
+
+All of these are emitted by the `EffectDriver`
+(`soma-runtime/src/effects/mod.rs`), riding the same bus and envelope as
+everything else — that is the point of not building a second telemetry
+path:
+
+- **`AgentTurnStarted`** at the top of every turn, immediately before the
+  step's `poll`.
+- **`EffectRequested`** when a `Transition::Await` hands the driver an
+  effect; **`EffectCompleted`** when that effect resolves — from the
+  journal (`replayed: true`) or by actually performing it. Provider-level
+  retries never reach the bus; they are the HTTP client's business.
+- **`ToolCalled`** additionally, whenever the completed effect was a tool.
+- **`Handoff`** when a step returns `Goto`, before control moves.
+- **`Suspended`** when a step returns `Suspend` and the journal holds no
+  answer for that site; **`Resumed`** when a later run of the same id
+  replays to that site and finds the answer `Graph.resume(...)` recorded.
+- **`AgentStepCompleted`** when the step finishes (via `Done` or `Goto`),
+  carrying turn count, wall time and token usage summed over its effects.
 
 ## Event Bus
 
@@ -337,6 +408,10 @@ orchestration layer:
 - **Training telemetry (level 5)** — emitted from the Python native
   training loop via the `Graph.emit_event` binding (epoch/step markers,
   `MetricReported`, `HealthFlag` from the gradient audit).
+- **Agent events (level 6)** — emitted by the `EffectDriver` as it runs
+  a step's turn loop (see above). A step node also gets the ordinary
+  level-1 bracket — `NodeStarted`/`NodeCompleted`/`NodeFailed` — from
+  the executor's single execution site, `run_node`, the same as a filter.
 
 ## Event Serialization
 
