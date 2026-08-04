@@ -9,8 +9,10 @@ description: The Rust workspace organization and crate responsibilities.
 soma/
 ├── Cargo.toml              # workspace definition
 ├── soma/                   # facade crate (`somatize`) re-exporting the workspace
+├── soma/                   # facade crate (`somatize`), re-exports the rest
 ├── soma-core/              # types, traits, serialization, tracking schema,
 │                           #   graph rendering (mermaid/dot/SVG + overlays)
+├── soma-store/             # remote DataStore backends (S3, Zarr), off by default
 ├── soma-macros/            # #[derive(SomaFilter)] proc macro
 ├── soma-compiler/          # graph → execution plan, scheduler
 ├── soma-runtime/           # plan executor, events, cache, optimization,
@@ -22,32 +24,40 @@ soma/
 ├── soma-llm/               # providers (OpenAI-compatible), tools, MCP client
 ├── soma-mcp/               # MCP server for agent integration
 ├── soma-python/            # PyO3 bindings (pip install somatize)
-├── notebooks/              # nine executed tutorial notebooks
+├── notebooks/              # fourteen executed tutorial notebooks
 └── docs/                   # Starlight documentation (this site)
 ```
 
-Eleven crates. Note the published names are prefixed `somatize-`
+Thirteen crates. Note the published names are prefixed `somatize-`
 (`somatize-core`, `somatize-runtime`, …) — the directory names drop the
 prefix.
 
 ## Dependency Graph
 
-```
-soma-python (PyO3)
-    ├── soma-agent
-    │     ├── soma-compiler
-    │     │     └── soma-core
-    │     ├── soma-runtime
-    │     │     └── soma-core
-    │     └── soma-memory
-    │           └── chronos-vector (external)
-    └── soma-worker
-          ├── soma-runtime
-          └── soma-memory
+Acyclic, and read top to bottom — nothing below depends on anything
+above it.
 
-soma-coordinator
-    └── soma-worker (protocol types)
 ```
+soma-macros                        proc macros; no internal dependencies
+    │
+soma-core                          types, traits, serialization
+    ├── soma-store                 S3 / Zarr backends (feature-gated)
+    ├── soma-compiler              graph → execution plan
+    │     └── soma-runtime         the executor, cache, effects
+    │           ├── soma-llm       providers, tools, MCP client
+    │           ├── soma-worker    remote execution daemon
+    │           │     └── soma-coordinator
+    │           ├── soma-agent     ┐ both also on soma-memory
+    │           └── soma-mcp       ┘
+    └── soma-memory                experiment pool, KnowledgeBase
+
+soma-python   → core, compiler, runtime, llm, memory, store, worker
+soma          → the facade; re-exports all of the above
+```
+
+`soma-macros` takes `soma-core` as a *dev*-dependency, so its `trybuild`
+cases have the traits to derive against. That is not a cycle: no normal
+edge points back up.
 
 ## Crate Responsibilities
 
@@ -80,6 +90,28 @@ The foundation. Defines all shared types, traits, and enums. Has no heavy depend
 | Macro | Generates |
 |---|---|
 | `#[derive(SomaFilter)]` | `Filter` + `Searchable` impls from struct fields |
+
+### `soma-macros`
+
+The proc macros: `#[derive(SomaFilter)]` and `#[derive(SomaStep)]`. The
+latter is what gives every step its journal key, so two structurally
+identical steps with different configuration do not share journal
+entries.
+
+A misspelled attribute is a compile error rather than a silent no-op —
+`#[soma(serach(...))]` used to compile and do nothing. Errors carry spans,
+so the message points at the attribute rather than the whole derive.
+
+### `soma-store`
+
+Remote `DataStore` backends: S3 and Zarr, each behind a feature and off by
+default.
+
+Split out of `soma-core` because each owns a `tokio::runtime::Runtime` and
+`block_on`s network I/O, so anything depending on `soma-core` inherited a
+runtime it never asked for. `soma-core` keeps `LocalDataStore` and its
+`std::fs`, which costs a caller nothing. See
+[Design Decisions](/soma/design/decisions/).
 
 ### `soma-compiler`
 
@@ -176,6 +208,50 @@ It owns no loop, no journal and no record type: those are the effect
 driver's, the journal's and `somatize-memory`'s. See
 [Agents & Memory](/soma/platform/agents/).
 
+### `soma-llm`
+
+Model providers and tools. One OpenAI-compatible client serves ollama,
+HuggingFace, NVIDIA, Kimi, GLM, DeepSeek, Groq, vLLM and the rest; the
+catalog is TOML data, not code, so adding a provider is not a patch. Each
+entry carries its `RetryPolicy` and its `Quirks`, which is why there is no
+`if id == "openai"` anywhere.
+
+Retries live in the client rather than in the step: a 429 is transport,
+not domain. `Retry-After` is honoured in both RFC forms, the wall-clock
+budget is checked *before* sleeping, and giving up reports the last
+failure plus the first when they differ. Retries never reach the EventBus.
+
+Also holds `Toolbox`, the MCP client, `ReactStep` and `JudgeStep`. The
+crate is entirely blocking by decision — the effect driver runs it on
+threads — which is why no lock is ever held across an await in the core.
+
+### `soma-mcp`
+
+An MCP server exposing the project to an agent: 20 tools over code,
+knowledge, project state and the experiment pool. The rendered text *is*
+the API, so every result ends with a `next:` line and a `run_dir:`.
+
+Four of the declared tools (`run_pipeline`, `run_study`) are not
+implemented because they cannot load user code; their descriptions say so
+rather than failing at call time.
+
+### `soma-coordinator`
+
+Worker registry and placement, with a `soma-coordinator` binary. Workers
+heartbeat every 10 seconds and the coordinator reaps whoever goes quiet.
+
+`POST /submit` **places**: it returns a worker and takes a lease rather
+than proxying the plan, so tensor payloads travel client→worker directly
+instead of through the coordinator twice. `/complete` releases the lease.
+Authentication is a bearer header compared in constant time.
+
+### `soma` (the facade)
+
+Published as `somatize`. Re-exports the workspace so a Rust caller adds
+one dependency instead of eight, and carries the prelude — which reaches
+the effectful half too: `Step`, `Transition`, `Effect`, `NodeOutcome`,
+`SomaStep`.
+
 ### `soma-python`
 
 PyO3 bindings. Exposes the full API to Python.
@@ -184,19 +260,31 @@ PyO3 bindings. Exposes the full API to Python.
 
 ```
 soma-python/
-├── src/lib.rs              # the whole PyO3 module: PyGraph, PyStudy, PyRun, PyWorker,
-│                           #   the filter bridge, and the cache/runs/kb pyfunctions
+├── src/                    # one module per area, not one file
+│   ├── lib.rs              # the module definition and its exports
+│   ├── graph.rs            # PyGraph — the bulk of the surface
+│   ├── agentic.rs          # Agent, Judge, Tool, StepCtx, the step bridge
+│   ├── study.rs            # PyStudy, PyTrial
+│   ├── readers.rs          # run directories and the experiment pool
+│   ├── bridge.rs           # the Python filter as a Rust Filter
+│   ├── convert.rs          # Value ↔ Python, natively (no JSON round-trip)
+│   ├── run.rs, cache.rs, worker.rs
 ├── python/soma/
-│   ├── __init__.py         # re-exports; imports the modules below for their side effects
+│   ├── __init__.py         # re-exports
+│   ├── _soma.pyi           # the extension's surface, checked against the build
+│   ├── py.typed            # the package means what it says about itself
+│   ├── _graph.py           # class Graph(_RustGraph) — where its methods are declared
 │   ├── filter.py           # Filter base class, >> and | operators
 │   ├── search.py           # search() descriptor and FilterMeta
 │   ├── chain.py            # Chain/Fork lazy builder types
 │   ├── builder.py          # Graph materialization (_walk algorithm)
-│   ├── _orchestrator.py    # installs train/eval/forward/backward/step/materialize on Graph
+│   ├── agentic.py          # patterns as functions returning a Graph
+│   ├── library.py          # Eval, Accumulator, Retriever, Compact
+│   ├── _orchestrator.py    # train/eval/forward/backward/step/materialize
 │   ├── _composite.py       # DifferentiableFilter (torch)
 │   ├── _audit.py           # gradient_audit(), AuditScope, ChannelConfig, the flags
-│   ├── _study.py           # installs search_space/apply_params/study on Graph
-│   ├── _tracking.py        # installs track_run on Graph
+│   ├── _study.py           # class Study(_Study); search_space/apply_params
+│   ├── _tracking.py        # track_run
 │   ├── _checkpoint.py      # state/load_state/save/load, the .somack bundle
 │   ├── _compile.py         # CompileInfo (dict + notebook repr)
 │   ├── _identity.py        # cache identity: the code-fingerprint ladder
@@ -211,6 +299,14 @@ soma-python/
 └── Cargo.toml
 ```
 
-Most of the Python layer works by monkeypatching the Rust `Graph` at import
-time, which is why `soma/__init__.py` imports several modules purely for their
-side effects.
+`soma.Graph` and `soma.Study` are Python subclasses of the extension
+classes, and their methods are declared in the class body — the
+implementations still live in `_orchestrator`, `_checkpoint` and the rest,
+but which methods exist is one list you can read. They used to be assigned
+onto the Rust class at import time from seven modules, which meant the
+surface of a graph depended on what had been imported.
+
+The package ships `py.typed` and a hand-written `_soma.pyi` for the
+extension; the Python layer above it is annotated in place. Because a
+hand-written stub rots silently, `tests/test_stubs.py` compares it against
+the module that was actually compiled.

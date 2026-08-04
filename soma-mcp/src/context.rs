@@ -3,7 +3,6 @@
 use crate::protocol::ToolCallResult;
 use serde_json::json;
 use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase, MemoryKnowledgeBase};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Server-side state for the Soma MCP server.
@@ -233,14 +232,14 @@ impl SomaContext {
             record = record.with_tags(tags);
         }
         if let Some(metrics) = params.get("metrics").and_then(|v| v.as_object()) {
-            let m: HashMap<String, f64> = metrics
+            let m: std::collections::BTreeMap<String, f64> = metrics
                 .iter()
                 .filter_map(|(k, v)| v.as_f64().map(|val| (k.clone(), val)))
                 .collect();
             record = record.with_metrics(m);
         }
         if let Some(p) = params.get("params").and_then(|v| v.as_object()) {
-            let params_map: HashMap<String, serde_json::Value> =
+            let params_map: std::collections::BTreeMap<String, serde_json::Value> =
                 p.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             record = record.with_params(params_map);
         }

@@ -183,12 +183,12 @@ impl KnowledgeBase for FileKnowledgeBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn record(id: &str, f1: f64) -> ExperimentRecord {
         ExperimentRecord::new(id, format!("experiment {id}"))
             .with_research_line("mos")
-            .with_metrics(HashMap::from([("f1".to_string(), f1)]))
+            .with_metrics(BTreeMap::from([("f1".to_string(), f1)]))
     }
 
     #[test]

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use somatize_core::fingerprint::ArchitectureFingerprint;
 use somatize_core::summary::{RunConclusion, RunSummary};
 use somatize_core::tracking::GitInfo;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// Current `ExperimentRecord` schema version.
@@ -52,8 +52,8 @@ pub struct ExperimentRecord {
     pub name: String,
     pub hypothesis: Option<String>,
     pub pipeline_summary: String,
-    pub params: HashMap<String, serde_json::Value>,
-    pub metrics: HashMap<String, f64>,
+    pub params: BTreeMap<String, serde_json::Value>,
+    pub metrics: BTreeMap<String, f64>,
     pub timestamp: DateTime<Utc>,
     pub duration: Duration,
     pub parent: Option<String>,
@@ -104,8 +104,8 @@ impl ExperimentRecord {
             name: name.into(),
             hypothesis: None,
             pipeline_summary: String::new(),
-            params: HashMap::new(),
-            metrics: HashMap::new(),
+            params: BTreeMap::new(),
+            metrics: BTreeMap::new(),
             timestamp: Utc::now(),
             duration: Duration::ZERO,
             parent: None,
@@ -232,12 +232,12 @@ impl ExperimentRecord {
         self
     }
 
-    pub fn with_params(mut self, params: HashMap<String, serde_json::Value>) -> Self {
+    pub fn with_params(mut self, params: BTreeMap<String, serde_json::Value>) -> Self {
         self.params = params;
         self
     }
 
-    pub fn with_metrics(mut self, metrics: HashMap<String, f64>) -> Self {
+    pub fn with_metrics(mut self, metrics: BTreeMap<String, f64>) -> Self {
         self.metrics = metrics;
         self
     }

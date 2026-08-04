@@ -6,7 +6,7 @@
 //! thinking does not need a protocol.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// An action the agent decided to take.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub enum Action {
         /// exists to be read later.
         hypothesis: String,
         /// Parameters to apply to the pipeline, as `"<node>.<param>"`.
-        params: HashMap<String, serde_json::Value>,
+        params: BTreeMap<String, serde_json::Value>,
         /// The run this refines, when it refines one.
         #[serde(default)]
         parent: Option<String>,

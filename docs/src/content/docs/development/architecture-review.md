@@ -1,18 +1,26 @@
 ---
 title: Architecture Review
-description: Analysis of current architecture, identified issues, and improvement roadmap.
+description: A record of the first architecture review and the reasoning behind what changed.
 ---
 
-This document captures the findings from a comprehensive architecture review performed after the initial implementation of all crates. It serves as a living reference for what to improve and why.
+This document captures the findings from a comprehensive architecture
+review performed after the initial implementation of all crates. It is
+kept for the reasoning, not as a description of the tree.
 
-## Current State
+## The tree as it was
 
 :::caution[Historical document]
-This review was written after the initial implementation of all crates.
-Several findings below have since been addressed (notably: `Pipeline`
-was removed — `Graph` is the only user-facing API — and cache
-resolution moved from compile time to runtime). Treat it as a record of
-the reasoning, not as a description of the current tree.
+Everything in this section describes the workspace at the time of the
+review, including the test counts and the crate list — there are thirteen
+crates now, and `soma-store` and `soma-llm` did not exist. Several
+findings below have since been addressed: `Pipeline` was removed (`Graph`
+is the only user-facing API), cache resolution moved from compile time to
+runtime, filters and steps were unified under one registry and one
+execution site, and errors became typed at the crate edges.
+
+For decisions taken since, and what each was chosen *over*, see
+[Design Decisions](/soma/design/decisions/). For the current tree, see
+[Crates](/soma/architecture/crates/).
 :::
 
 ```

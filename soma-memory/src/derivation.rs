@@ -273,8 +273,8 @@ fn architecture_changes(
 }
 
 fn param_changes(
-    before: &std::collections::HashMap<String, serde_json::Value>,
-    after: &std::collections::HashMap<String, serde_json::Value>,
+    before: &std::collections::BTreeMap<String, serde_json::Value>,
+    after: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> Vec<Change> {
     let keys: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
     keys.into_iter()

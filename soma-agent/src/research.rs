@@ -303,7 +303,7 @@ impl Step for ResearchStep {
 }
 
 fn to_object(
-    params: &std::collections::HashMap<String, serde_json::Value>,
+    params: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> serde_json::Map<String, serde_json::Value> {
     params.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
@@ -314,8 +314,8 @@ fn to_object(
 /// `{"classifier": {"f1": 0.9}}` gives `classifier.f1`. Qualifying by node
 /// is what keeps two nodes reporting `loss` from being the same series when
 /// they are compared across experiments later.
-fn read_metrics(value: &Value) -> std::collections::HashMap<String, f64> {
-    let mut metrics = std::collections::HashMap::new();
+fn read_metrics(value: &Value) -> std::collections::BTreeMap<String, f64> {
+    let mut metrics = std::collections::BTreeMap::new();
     collect_numbers(&value.to_plain_json(), "", &mut metrics);
     metrics
 }
@@ -323,7 +323,7 @@ fn read_metrics(value: &Value) -> std::collections::HashMap<String, f64> {
 fn collect_numbers(
     json: &serde_json::Value,
     path: &str,
-    out: &mut std::collections::HashMap<String, f64>,
+    out: &mut std::collections::BTreeMap<String, f64>,
 ) {
     match json {
         serde_json::Value::Number(n) => {

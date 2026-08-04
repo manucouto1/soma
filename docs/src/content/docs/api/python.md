@@ -582,6 +582,43 @@ lab.health()        # "ok"
 lab.info()          # Worker capabilities dict
 ```
 
+## Type checking
+
+The package ships `py.typed`, so a type checker will use what it says
+about itself. No configuration is needed — install it and mypy or pyright
+picks up the annotations.
+
+```python
+from soma import Graph, Study, Trial
+
+g = Graph(cache="memory")
+g.edge("a")                  # error: missing positional argument "target"
+g.node("x", f, targt="gpu")  # error: did you mean "target"?
+
+def objective(t: Trial) -> str:      # error: expected metrics, a number, or None
+    return "not a metric"
+Study("s").run(objective)
+```
+
+The extension module is a compiled `.so`, so its surface lives in a
+hand-written stub, `soma/_soma.pyi`; everything above it is annotated in
+its own source. A hand-written stub can drift from the binary silently —
+it keeps type-checking, it just stops describing anything — so the test
+suite compares the stub against the module that was actually built: the
+same classes, methods, getters, parameter names and defaults, and no
+constructor for the three classes that have none.
+
+What that cannot check is whether a type is *correct*. If you hit one that
+is wrong, it is a bug worth reporting.
+
+Two notes for contributors touching the bindings:
+
+- PyO3 puts a `#[new]`'s signature on the **type** (`cls.__text_signature__`),
+  not on `__new__`, which reports an unhelpful `(*args, **kwargs)`.
+- A method bound dynamically in a class body is `Any` to a checker. Write
+  them out; that is why the `soma.viz` methods on `Study` and `RunView` are
+  seventeen separate definitions rather than a loop.
+
 ## Rust API
 
 The full Rust API documentation is auto-generated from source code:

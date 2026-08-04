@@ -355,10 +355,10 @@ impl KnowledgeBase for MemoryKnowledgeBase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn make_experiment(id: &str, line: &str, metric_val: f64) -> ExperimentRecord {
-        let mut metrics = HashMap::new();
+        let mut metrics = BTreeMap::new();
         metrics.insert("f1".to_string(), metric_val);
         ExperimentRecord::new(id, format!("Experiment {id}"))
             .with_research_line(line)
