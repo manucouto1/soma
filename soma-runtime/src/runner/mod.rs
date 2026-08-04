@@ -80,10 +80,13 @@ impl<'a> RunContext<'a> {
 
     /// Register the effect driver a plan containing steps needs.
     ///
-    /// The catalog is attached here so a step that fans out dynamically can
-    /// reach the nodes it names.
+    /// The driver should already carry its catalog
+    /// ([`crate::effects::EffectDriver::with_catalog`]) if a step may fan
+    /// out dynamically — the same rule as
+    /// [`crate::executor::Context::with_driver`], so the two entry points
+    /// cannot drift apart on who attaches it.
     pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
-        self.driver = Some(driver.with_catalog(Arc::new(self.catalog.clone())));
+        self.driver = Some(driver);
         self
     }
 

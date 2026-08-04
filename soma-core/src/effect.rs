@@ -81,9 +81,16 @@ impl Effect {
     pub fn is_pure(&self) -> bool {
         match self {
             Self::Llm(_) | Self::Sleep(_) => false,
-            // A graph effect inherits Soma's own determinism guarantees:
-            // its nodes are cached by content already.
-            Self::Graph { .. } => true,
+            // A filter-only forward inherits Soma's own determinism
+            // guarantees: its nodes are cached by content already. A graph
+            // that contains a step does not — the step calls a model, so the
+            // same question asked twice is a different event, like `Llm`
+            // itself. `Fit` is impure for a second reason: replaying it must
+            // re-write the fitted states, and serving the recorded summary
+            // alone would leave the graph unfitted for the effects after it.
+            Self::Graph { graph, mode, .. } => {
+                matches!(mode, GraphEffectMode::Forward) && !graph.contains_steps()
+            }
             Self::Tool { .. } | Self::Custom { .. } => false,
         }
     }
@@ -513,6 +520,51 @@ mod tests {
             }
             .is_pure()
         );
+    }
+
+    /// A filter-only forward is the one graph effect safe to memoize by
+    /// content: its nodes are deterministic and content-cached already.
+    #[test]
+    fn a_filter_only_forward_graph_stays_pure() {
+        let mut graph = crate::graph::Graph::new();
+        graph.add_node(crate::graph::Node::filter("scale"));
+        let effect = Effect::Graph {
+            graph: Box::new(graph),
+            input: Value::Empty,
+            mode: GraphEffectMode::Forward,
+        };
+        assert!(effect.is_pure());
+    }
+
+    /// A sub-graph with a step calls a model; reusing its first answer
+    /// forever by content key would be the `Llm` mistake with extra steps —
+    /// even when the step hides one sub-graph down.
+    #[test]
+    fn a_step_containing_graph_effect_is_impure() {
+        let mut inner = crate::graph::Graph::new();
+        inner.add_node(crate::graph::Node::step("agent", "ReactStep"));
+        let mut graph = crate::graph::Graph::new();
+        graph.add_node(crate::graph::Node::subgraph("nested", inner));
+        let effect = Effect::Graph {
+            graph: Box::new(graph),
+            input: Value::Empty,
+            mode: GraphEffectMode::Forward,
+        };
+        assert!(!effect.is_pure());
+    }
+
+    /// Fit writes states as a side effect; replaying the recorded summary
+    /// without re-fitting would leave the graph unfitted for what follows.
+    #[test]
+    fn a_fit_mode_graph_effect_is_impure() {
+        let mut graph = crate::graph::Graph::new();
+        graph.add_node(crate::graph::Node::filter("scale"));
+        let effect = Effect::Graph {
+            graph: Box::new(graph),
+            input: Value::Empty,
+            mode: GraphEffectMode::Fit,
+        };
+        assert!(!effect.is_pure());
     }
 
     #[test]

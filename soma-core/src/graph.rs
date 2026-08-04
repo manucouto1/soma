@@ -459,6 +459,19 @@ impl Graph {
 
         Ok(())
     }
+
+    /// Does this graph — or any sub-graph nested inside it — contain a step?
+    ///
+    /// A step calls models and tools, so a graph that contains one is not a
+    /// deterministic function of its input. [`crate::effect::Effect::is_pure`]
+    /// asks this before memoizing a graph effect by content.
+    pub fn contains_steps(&self) -> bool {
+        self.nodes.iter().any(|node| match &node.kind {
+            NodeKind::Step { .. } => true,
+            NodeKind::SubGraph { graph } => graph.contains_steps(),
+            _ => false,
+        })
+    }
 }
 
 // ── Visualization ──

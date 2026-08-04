@@ -84,6 +84,12 @@ pub(crate) struct PyGraph {
 }
 
 impl PyGraph {
+    /// The core graph, for the effect parser: `RunGraph` names a sub-graph
+    /// by passing the live object.
+    pub(crate) fn core_graph(&self) -> &Graph {
+        &self.graph
+    }
+
     /// Does anything in this graph need fitting before it can run?
     fn has_trainable_filters(&self) -> bool {
         self.filter_trainable.values().any(|t| *t)
@@ -196,7 +202,7 @@ impl PyGraph {
             .with_seed(seed);
 
         if let Some(driver) = self.step_runtime(py, &catalog)? {
-            ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
+            ctx = ctx.with_driver(driver);
         }
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);
@@ -392,6 +398,8 @@ impl PyGraph {
         if !catalog.has_steps() {
             return Ok(None);
         }
+        // Captured before `somatize_llm::Catalog` shadows the name below.
+        let node_catalog = Arc::new(catalog.clone());
 
         // Python tools and MCP tools land in one toolbox: to a model they
         // are the same thing, and a step names them the same way. Tools
@@ -427,11 +435,28 @@ impl PyGraph {
         let store = Arc::new(FsActionStore::new(cache_dir).map_err(soma_err_to_py)?);
         let journal = EffectJournal::new(store.clone(), store);
 
-        let driver = EffectDriver::new(journal)
+        // The base handlers, shared with the graph handler below so a
+        // sub-pipeline's own agents reach the same providers, tools and
+        // journal — that is what makes agent → pipeline → agent one run.
+        let base: Vec<Arc<dyn somatize_core::effect::EffectHandler>> = vec![
+            Arc::new(somatize_llm::LlmHandler::new(router)),
+            Arc::new(toolbox),
+            Arc::new(somatize_runtime::effects::SleepHandler),
+        ];
+        let graph_handler = somatize_runtime::effects::GraphHandler::new((*node_catalog).clone())
+            .with_cache(self.cache.clone())
+            .with_step_runtime(base.clone(), journal.clone())
+            .with_event_bus(self.event_bus.clone());
+
+        let mut driver = EffectDriver::new(journal)
             .with_event_bus(self.event_bus.clone())
-            .with_handler(Arc::new(somatize_llm::LlmHandler::new(router)))
-            .with_handler(Arc::new(toolbox))
-            .with_handler(Arc::new(somatize_runtime::effects::SleepHandler));
+            .with_handler(Arc::new(graph_handler))
+            // The driver carries its own catalog: this is where a
+            // `Spawn` transition finds the nodes it names.
+            .with_catalog(node_catalog);
+        for handler in base {
+            driver = driver.with_handler(handler);
+        }
 
         Ok(Some(driver))
     }
@@ -904,6 +929,41 @@ impl PyGraph {
         self.graph.add_node(node);
 
         Ok(actual_id)
+    }
+
+    /// Make `sub`'s node implementations runnable by this graph's steps.
+    ///
+    /// A step invokes a pipeline with `soma.agentic.RunGraph(sub, ...)`. The
+    /// effect carries the *structure* — that is what the journal keys on —
+    /// but a graph names its nodes rather than carrying their code, so the
+    /// implementations have to live somewhere the runtime can find them:
+    /// here. Filters, steps and tools are merged; the same node id behind a
+    /// different configuration is an error, because whichever one lost would
+    /// silently answer for the other's cache entries.
+    ///
+    /// ```python
+    /// pipeline = soma.Graph()
+    /// pipeline.node("scale", Scaler())
+    ///
+    /// g = soma.Graph()
+    /// g.node("planner", PlannerStep())   # awaits RunGraph(pipeline, ...)
+    /// g.register_graph(pipeline)
+    /// ```
+    ///
+    /// Register after the sub-graph is fully built; nodes added to it later
+    /// are not seen until it is registered again.
+    fn register_graph(&mut self, py: Python<'_>, sub: PyRef<'_, PyGraph>) -> PyResult<()> {
+        let sub_catalog = sub.rebuild_catalog(py)?;
+        self.library
+            .merge_from(&sub_catalog)
+            .map_err(soma_err_to_py)?;
+        for (node_id, obj) in &sub.live_steps {
+            self.live_steps.insert(node_id.clone(), obj.clone_ref(py));
+        }
+        for (name, tool) in &sub.tools {
+            self.tools.insert(name.clone(), tool.clone());
+        }
+        Ok(())
     }
 
     /// Register a step that can be *spawned* but is not a node in the graph.
@@ -1517,7 +1577,7 @@ impl PyGraph {
             Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
 
         if let Some(driver) = self.step_runtime(py, &catalog)? {
-            ctx = ctx.with_driver(driver, Arc::new(catalog.clone()));
+            ctx = ctx.with_driver(driver);
         }
         if let Some(transport) = self.make_transport() {
             ctx = ctx.with_transport(transport);

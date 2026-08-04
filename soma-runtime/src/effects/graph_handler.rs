@@ -10,13 +10,35 @@
 //! three from the journal instead of paying for them again.
 
 use crate::cache::MemoryCache;
-use crate::effects::EffectHandler;
+use crate::effects::{EffectDriver, EffectHandler, EffectJournal};
+use crate::event_bus::EventBus;
 use crate::graph_session::GraphSession;
 use crate::node_catalog::NodeCatalog;
 use somatize_core::cache::CacheStore;
 use somatize_core::effect::{Effect, EffectResult, GraphEffectMode};
 use somatize_core::error::{Result, SomaError};
 use std::sync::Arc;
+
+/// How deep agent → pipeline → agent nesting may go.
+///
+/// Each level is a step whose sub-graph contains another step. Real flows
+/// are one or two levels; a graph that reaches eight is almost certainly
+/// recursing on itself, and stopping with a readable failure beats a stack
+/// that grows until the OS ends the process.
+pub const MAX_GRAPH_DEPTH: usize = 8;
+
+/// Everything needed to drive steps inside a sub-graph.
+///
+/// `handlers` are the *sibling* handlers (llm, tools, sleep, custom) — never
+/// a `GraphHandler`. The recursion is rebuilt one level deeper instead, so
+/// each level carries its own depth and the nesting can be capped.
+#[derive(Clone)]
+struct StepRuntime {
+    handlers: Vec<Arc<dyn EffectHandler>>,
+    journal: EffectJournal,
+    event_bus: Option<Arc<EventBus>>,
+    depth: usize,
+}
 
 /// Runs graphs on behalf of a step.
 ///
@@ -25,14 +47,20 @@ use std::sync::Arc;
 pub struct GraphHandler {
     library: NodeCatalog,
     cache: Arc<dyn CacheStore>,
+    step_runtime: Option<StepRuntime>,
 }
 
 impl GraphHandler {
     /// A handler over `library`, with an in-memory cache.
+    ///
+    /// Without [`Self::with_step_runtime`] the sub-graphs it runs must be
+    /// purely computational; one that contains a step fails as an
+    /// [`EffectResult::Failed`] naming the missing runtime.
     pub fn new(library: NodeCatalog) -> Self {
         Self {
             library,
             cache: Arc::new(MemoryCache::new(64 * 1024 * 1024)),
+            step_runtime: None,
         }
     }
 
@@ -43,9 +71,65 @@ impl GraphHandler {
         self
     }
 
+    /// Let sub-graphs contain steps of their own: agent → pipeline → agent.
+    ///
+    /// `handlers` are the sibling handlers the parent driver carries (llm,
+    /// tools, sleep — everything except graph handlers), and `journal` is
+    /// the parent's journal, so an inner model call is journaled in the same
+    /// store as an outer one. Nesting is capped at [`MAX_GRAPH_DEPTH`].
+    pub fn with_step_runtime(
+        mut self,
+        handlers: Vec<Arc<dyn EffectHandler>>,
+        journal: EffectJournal,
+    ) -> Self {
+        self.step_runtime = Some(StepRuntime {
+            handlers,
+            journal,
+            event_bus: None,
+            depth: 0,
+        });
+        self
+    }
+
+    /// Forward the sub-graphs' step events to this bus.
+    ///
+    /// Only meaningful together with [`Self::with_step_runtime`]; without
+    /// one there is no inner driver to emit anything.
+    pub fn with_event_bus(mut self, bus: Arc<EventBus>) -> Self {
+        if let Some(rt) = &mut self.step_runtime {
+            rt.event_bus = Some(bus);
+        }
+        self
+    }
+
     /// The filters available to graphs run through this handler.
     pub fn library(&self) -> &NodeCatalog {
         &self.library
+    }
+
+    /// The driver a step-containing sub-graph gets: the sibling handlers,
+    /// plus a `GraphHandler` one level deeper. `None` past the depth cap.
+    fn child_driver(&self) -> Option<EffectDriver> {
+        let rt = self.step_runtime.as_ref()?;
+        if rt.depth + 1 >= MAX_GRAPH_DEPTH {
+            return None;
+        }
+        let mut child_rt = rt.clone();
+        child_rt.depth += 1;
+        let mut driver = EffectDriver::new(rt.journal.clone())
+            .with_catalog(Arc::new(self.library.clone()))
+            .with_handler(Arc::new(GraphHandler {
+                library: self.library.clone(),
+                cache: self.cache.clone(),
+                step_runtime: Some(child_rt),
+            }));
+        for handler in &rt.handlers {
+            driver = driver.with_handler(handler.clone());
+        }
+        if let Some(bus) = &rt.event_bus {
+            driver = driver.with_event_bus(bus.clone());
+        }
+        Some(driver)
     }
 }
 
@@ -63,6 +147,31 @@ impl EffectHandler for GraphHandler {
         // is fitted for the next one.
         let mut session = GraphSession::new((**graph).clone(), self.library.clone())
             .with_cache(self.cache.clone());
+
+        if graph.contains_steps() {
+            match self.child_driver() {
+                Some(driver) => session = session.with_driver(driver),
+                // The executor's own "no effect driver" error is accurate
+                // but does not say *why* there is none here; the reason —
+                // no runtime, or too deep — is information the agent needs.
+                None => {
+                    return Ok(EffectResult::Failed {
+                        message: match &self.step_runtime {
+                            None => "the sub-graph contains a step, but this graph handler \
+                                     was built without a step runtime; build it with \
+                                     `GraphHandler::with_step_runtime(...)`"
+                                .into(),
+                            Some(rt) => format!(
+                                "the sub-graph contains a step, but nesting agents inside \
+                                 pipelines inside agents stops at depth {MAX_GRAPH_DEPTH} \
+                                 (this call is at depth {})",
+                                rt.depth + 1
+                            ),
+                        },
+                    });
+                }
+            }
+        }
 
         let outcome = match mode {
             GraphEffectMode::Fit => session
@@ -220,6 +329,177 @@ mod tests {
             .unwrap();
 
         assert!(matches!(result, EffectResult::Failed { .. }));
+    }
+
+    use somatize_core::effect::{LlmRequest, LlmResponse, StopReason};
+    use somatize_core::message::Message;
+    use somatize_core::step::{StepCtx, StepMeta, Transition};
+
+    /// Answers every model call with a fixed string.
+    struct CannedLlm(&'static str);
+
+    impl EffectHandler for CannedLlm {
+        fn handles(&self, effect: &Effect) -> bool {
+            matches!(effect, Effect::Llm(_))
+        }
+        fn perform(&self, _effect: &Effect) -> Result<EffectResult> {
+            Ok(EffectResult::Llm(LlmResponse {
+                message: Message::assistant(self.0),
+                stop_reason: StopReason::EndTurn,
+                usage: Default::default(),
+                model: None,
+            }))
+        }
+    }
+
+    /// Asks the model once, then hands back what it said.
+    struct AskOnce;
+
+    impl somatize_core::step::Step for AskOnce {
+        fn config_hash(&self) -> somatize_core::cache::CacheKey {
+            somatize_core::cache::CacheKey::from_parts(&[b"AskOnce"])
+        }
+        fn meta(&self) -> StepMeta {
+            StepMeta::new("AskOnce")
+        }
+        fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
+            if ctx.turn == 0 {
+                return Ok(Transition::Await(vec![Effect::Llm(LlmRequest::new(
+                    "claude-opus-5",
+                    vec![Message::user("inner question")].into(),
+                ))]));
+            }
+            let text = match ctx.result() {
+                Some(EffectResult::Llm(r)) => r.message.text(),
+                other => format!("unexpected result: {other:?}"),
+            };
+            Ok(Transition::Done(Value::text(text)))
+        }
+    }
+
+    fn journal() -> EffectJournal {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(crate::cache::FsActionStore::new(dir.keep()).unwrap());
+        EffectJournal::new(store.clone(), store)
+    }
+
+    /// Agent → pipeline → agent: a graph effect whose sub-graph itself
+    /// contains a step. The handler builds the inner step a driver of its
+    /// own, sharing the sibling handlers and the journal.
+    #[test]
+    fn a_sub_graph_containing_a_step_runs() {
+        let mut library = NodeCatalog::new();
+        library.register_step("ask", Box::new(AskOnce));
+
+        let llm: Arc<dyn EffectHandler> = Arc::new(CannedLlm("the inner answer"));
+        let handler = GraphHandler::new(library).with_step_runtime(vec![llm], journal());
+
+        let mut graph = Graph::new();
+        graph.add_node(Node::step("ask", "AskOnce"));
+
+        let result = handler
+            .perform(&Effect::Graph {
+                graph: Box::new(graph),
+                input: Value::text("outer input"),
+                mode: GraphEffectMode::Forward,
+            })
+            .unwrap();
+
+        match result {
+            EffectResult::Graph(value) => {
+                assert_eq!(value.as_text(), Some("the inner answer"));
+            }
+            other => panic!("expected the inner step's output, got {other:?}"),
+        }
+    }
+
+    /// Without a step runtime, a step-containing sub-graph is a readable
+    /// failure that names the fix, not the executor's generic error.
+    #[test]
+    fn a_step_sub_graph_without_a_runtime_names_the_fix() {
+        let mut library = NodeCatalog::new();
+        library.register_step("ask", Box::new(AskOnce));
+
+        let mut graph = Graph::new();
+        graph.add_node(Node::step("ask", "AskOnce"));
+
+        let result = GraphHandler::new(library)
+            .perform(&Effect::Graph {
+                graph: Box::new(graph),
+                input: Value::Empty,
+                mode: GraphEffectMode::Forward,
+            })
+            .unwrap();
+
+        match result {
+            EffectResult::Failed { message } => {
+                assert!(message.contains("with_step_runtime"), "{message}");
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    /// A step that keeps running its own graph again. The recursion must
+    /// end at the depth cap with a failure the agent can read — not a stack
+    /// overflow.
+    struct Recurse;
+
+    impl somatize_core::step::Step for Recurse {
+        fn config_hash(&self) -> somatize_core::cache::CacheKey {
+            somatize_core::cache::CacheKey::from_parts(&[b"Recurse"])
+        }
+        fn meta(&self) -> StepMeta {
+            StepMeta::new("Recurse")
+        }
+        fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
+            if ctx.turn == 0 {
+                let mut graph = Graph::new();
+                graph.add_node(Node::step("recurse", "Recurse"));
+                return Ok(Transition::Await(vec![Effect::Graph {
+                    graph: Box::new(graph),
+                    input: Value::text("again"),
+                    mode: GraphEffectMode::Forward,
+                }]));
+            }
+            let text = match ctx.result() {
+                Some(EffectResult::Graph(v)) => v.as_text().unwrap_or_default().to_string(),
+                Some(EffectResult::Failed { message }) => message.clone(),
+                other => format!("unexpected: {other:?}"),
+            };
+            Ok(Transition::Done(Value::text(text)))
+        }
+    }
+
+    #[test]
+    fn nesting_stops_at_the_depth_cap() {
+        let mut library = NodeCatalog::new();
+        library.register_step("recurse", Box::new(Recurse));
+
+        let handler = GraphHandler::new(library).with_step_runtime(Vec::new(), journal());
+
+        let mut graph = Graph::new();
+        graph.add_node(Node::step("recurse", "Recurse"));
+
+        let result = handler
+            .perform(&Effect::Graph {
+                graph: Box::new(graph),
+                input: Value::text("go"),
+                mode: GraphEffectMode::Forward,
+            })
+            .unwrap();
+
+        // The innermost level fails at the cap; every level above hands the
+        // message outward as its own output.
+        match result {
+            EffectResult::Graph(value) => {
+                let text = value.as_text().unwrap_or_default();
+                assert!(
+                    text.contains(&format!("depth {MAX_GRAPH_DEPTH}")),
+                    "the failure should name the cap, got: {text}"
+                );
+            }
+            other => panic!("expected the propagated cap message, got {other:?}"),
+        }
     }
 
     #[test]

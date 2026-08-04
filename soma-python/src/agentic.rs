@@ -25,7 +25,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use somatize_core::cache::CacheKey;
 use somatize_core::effect::{
-    Effect, EffectResult, JoinPolicy, LlmRequest, NodeSpec, SuspendReason,
+    Effect, EffectResult, GraphEffectMode, JoinPolicy, LlmRequest, NodeSpec, SuspendReason,
 };
 use somatize_core::error::{Result as SomaResult, SomaError};
 use somatize_core::message::Message;
@@ -587,7 +587,7 @@ fn effect_result_to_py(py: Python<'_>, result: &EffectResult) -> PyResult<PyObje
 fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transition> {
     let dict = obj.downcast::<PyDict>().map_err(|_| {
         PyValueError::new_err(format!(
-            "poll() must return one of soma.Done / Await / Spawn / Goto / Suspend \
+            "poll() must return one of soma.agentic.Done / Await / Spawn / Goto / Suspend \
              (a dict with a `transition` key), got {}",
             obj.get_type()
                 .name()
@@ -600,8 +600,8 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
         .get_item("transition")?
         .ok_or_else(|| {
             PyValueError::new_err(
-                "poll() returned a dict with no `transition` key. Use soma.Done(value), \
-                 soma.Spawn(...), soma.Await(...), soma.Goto(...) or soma.Suspend(...)",
+                "poll() returned a dict with no `transition` key. Use soma.agentic.Done(value), \
+                 soma.agentic.Spawn(...), soma.agentic.Await(...), soma.agentic.Goto(...) or soma.agentic.Suspend(...)",
             )
         })?
         .extract()?;
@@ -619,13 +619,15 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
 
         "spawn" => {
             let specs_obj = get("specs")?.ok_or_else(|| {
-                PyValueError::new_err("soma.Spawn needs `specs`, a list of soma.Run(...)")
+                PyValueError::new_err(
+                    "soma.agentic.Spawn needs `specs`, a list of soma.agentic.Run(...)",
+                )
             })?;
             let mut specs = Vec::new();
             for item in specs_obj.try_iter()? {
                 let item = item?;
                 let spec = item.downcast::<PyDict>().map_err(|_| {
-                    PyValueError::new_err("each spawn spec must be a soma.Run(...) mapping")
+                    PyValueError::new_err("each spawn spec must be a soma.agentic.Run(...) mapping")
                 })?;
                 let runs: String = spec
                     .get_item("runs")?
@@ -668,15 +670,15 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
 
         "await" => {
             let effects_obj = get("effects")?
-                .ok_or_else(|| PyValueError::new_err("soma.Await needs `effects`"))?;
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.Await needs `effects`"))?;
             let mut effects = Vec::new();
             for item in effects_obj.try_iter()? {
                 effects.push(parse_effect(py, &item?)?);
             }
             if effects.is_empty() {
                 return Err(PyValueError::new_err(
-                    "soma.Await with no effects would poll again unchanged, forever. \
-                     Return soma.Done(...) instead",
+                    "soma.agentic.Await with no effects would poll again unchanged, forever. \
+                     Return soma.agentic.Done(...) instead",
                 ));
             }
             Ok(Transition::Await(effects))
@@ -684,7 +686,7 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
 
         "goto" => {
             let target: String = get("target")?
-                .ok_or_else(|| PyValueError::new_err("soma.Goto needs `target`"))?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.Goto needs `target`"))?
                 .extract()?;
             let carry = match get("carry")? {
                 Some(v) => py_to_value(py, &v)?,
@@ -695,7 +697,7 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
 
         "suspend" => {
             // A suspension from Python is a question for a person: that is
-            // what `soma.Suspend("...")` reads as, and `resume_with` answers.
+            // what `soma.agentic.Suspend("...")` reads as, and `resume_with` answers.
             let reason = match get("reason")? {
                 Some(r) if !r.is_none() => SuspendReason::Human {
                     prompt: r.extract::<String>()?,
@@ -715,11 +717,45 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
     }
 }
 
+/// Read an optional `_input_schema` / `_output_schema` attribute off a
+/// Python node (filter or step).
+///
+/// Accepts the shorthand strings `"text"`, `"json"`, `"messages"`,
+/// `"bytes"`, or a mapping in the [`somatize_core::schema::Schema`] serde
+/// shape. This is what makes the compiler's edge check reachable from
+/// Python: without a declared schema an edge is unchecked, silently.
+pub(crate) fn parse_schema_attr(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    attr: &str,
+) -> PyResult<Option<somatize_core::schema::Schema>> {
+    use somatize_core::schema::Schema;
+    let value = match obj.getattr(attr) {
+        Ok(v) if !v.is_none() => v,
+        _ => return Ok(None),
+    };
+    if let Ok(name) = value.extract::<String>() {
+        return match name.as_str() {
+            "text" => Ok(Some(Schema::text())),
+            "json" => Ok(Some(Schema::json())),
+            "messages" => Ok(Some(Schema::messages())),
+            "bytes" => Ok(Some(Schema::bytes())),
+            other => Err(PyValueError::new_err(format!(
+                "unknown schema shorthand {other:?} in `{attr}`; expected \
+                 \"text\", \"json\", \"messages\", \"bytes\", or a schema mapping"
+            ))),
+        };
+    }
+    serde_json::from_value(py_to_json(py, &value)?)
+        .map(Some)
+        .map_err(|e| PyValueError::new_err(format!("`{attr}` is not a valid schema: {e}")))
+}
+
 /// Read one `{"effect": ...}` mapping into an `Effect`.
 fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
-    let dict = obj
-        .downcast::<PyDict>()
-        .map_err(|_| PyValueError::new_err("an effect must be a mapping, e.g. soma.Llm(...)"))?;
+    let dict = obj.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("an effect must be a mapping, e.g. soma.agentic.Llm(...)")
+    })?;
     let kind: String = dict
         .get_item("effect")?
         .ok_or_else(|| PyValueError::new_err("an effect needs an `effect` key"))?
@@ -729,11 +765,11 @@ fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
         "llm" => {
             let model: String = dict
                 .get_item("model")?
-                .ok_or_else(|| PyValueError::new_err("soma.Llm needs `model`"))?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.Llm needs `model`"))?
                 .extract()?;
             let prompt: String = dict
                 .get_item("prompt")?
-                .ok_or_else(|| PyValueError::new_err("soma.Llm needs `prompt`"))?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.Llm needs `prompt`"))?
                 .extract()?;
             let mut request = LlmRequest::new(model, vec![Message::user(prompt)].into());
             if let Some(system) = dict.get_item("system")?
@@ -746,7 +782,7 @@ fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
         "tool" => {
             let name: String = dict
                 .get_item("name")?
-                .ok_or_else(|| PyValueError::new_err("soma.ToolCall needs `name`"))?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.ToolCall needs `name`"))?
                 .extract()?;
             let args = match dict.get_item("args")? {
                 Some(a) => py_to_value(py, &a)?,
@@ -757,11 +793,11 @@ fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
         "sleep" => {
             let secs: f64 = dict
                 .get_item("seconds")?
-                .ok_or_else(|| PyValueError::new_err("soma.Sleep needs `seconds`"))?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.Sleep needs `seconds`"))?
                 .extract()?;
             if !secs.is_finite() || secs < 0.0 {
                 return Err(PyValueError::new_err(
-                    "soma.Sleep needs a finite, non-negative number of seconds",
+                    "soma.agentic.Sleep needs a finite, non-negative number of seconds",
                 ));
             }
             Ok(Effect::Sleep(std::time::Duration::from_secs_f64(secs)))
@@ -769,7 +805,7 @@ fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
         "custom" => {
             let kind: String = dict
                 .get_item("kind")?
-                .ok_or_else(|| PyValueError::new_err("soma.Custom needs `kind`"))?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.Custom needs `kind`"))?
                 .extract()?;
             let payload = match dict.get_item("payload")? {
                 Some(p) => py_to_value(py, &p)?,
@@ -777,8 +813,49 @@ fn parse_effect(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Effect> {
             };
             Ok(Effect::Custom { kind, payload })
         }
+        "graph" => {
+            let graph_obj = dict
+                .get_item("graph")?
+                .ok_or_else(|| PyValueError::new_err("soma.agentic.RunGraph needs `graph`"))?;
+            // The live object is the normal form; the serialized structure
+            // (the `graph.json` shape) is accepted so a step can replay a
+            // topology it read from a run directory.
+            let graph: somatize_core::graph::Graph =
+                if let Ok(pygraph) = graph_obj.downcast::<crate::graph::PyGraph>() {
+                    pygraph.borrow().core_graph().clone()
+                } else {
+                    serde_json::from_value(py_to_json(py, &graph_obj)?).map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "`graph` must be a soma.Graph or its graph.json structure \
+                             ({e}); remember to register its implementations on the \
+                             outer graph with register_graph(...)"
+                        ))
+                    })?
+                };
+            let input = match dict.get_item("input")? {
+                Some(i) if !i.is_none() => py_to_value(py, &i)?,
+                _ => Value::Empty,
+            };
+            let mode = match dict.get_item("mode")? {
+                Some(m) if !m.is_none() => match m.extract::<String>()?.as_str() {
+                    "forward" => GraphEffectMode::Forward,
+                    "fit" => GraphEffectMode::Fit,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "unknown graph mode {other:?}; expected forward or fit"
+                        )));
+                    }
+                },
+                _ => GraphEffectMode::Forward,
+            };
+            Ok(Effect::Graph {
+                graph: Box::new(graph),
+                input,
+                mode,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect {other:?}; expected llm, tool, sleep or custom"
+            "unknown effect {other:?}; expected llm, tool, sleep, custom or graph"
         ))),
     }
 }
@@ -797,6 +874,10 @@ struct PyStepBridge {
     name: String,
     config_hash_val: CacheKey,
     max_turns: usize,
+    /// Declared via the `_input_schema` / `_output_schema` class attributes;
+    /// parsed once at registration so a typo fails at build time, not here.
+    input_schema: Option<somatize_core::schema::Schema>,
+    output_schema: Option<somatize_core::schema::Schema>,
 }
 
 impl Step for PyStepBridge {
@@ -805,7 +886,14 @@ impl Step for PyStepBridge {
     }
 
     fn meta(&self) -> StepMeta {
-        StepMeta::new(&self.name).with_max_turns(self.max_turns)
+        let mut meta = StepMeta::new(&self.name).with_max_turns(self.max_turns);
+        if let Some(schema) = &self.input_schema {
+            meta = meta.with_input_schema(schema.clone());
+        }
+        if let Some(schema) = &self.output_schema {
+            meta = meta.with_output_schema(schema.clone());
+        }
+        meta
     }
 
     fn poll(&self, ctx: &somatize_core::step::StepCtx<'_>) -> SomaResult<Transition> {
@@ -957,6 +1045,8 @@ pub(crate) fn to_step_spec(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<S
                     code_fp.as_bytes(),
                 ]),
                 max_turns,
+                input_schema: parse_schema_attr(py, obj, "_input_schema")?,
+                output_schema: parse_schema_attr(py, obj, "_output_schema")?,
             }),
             name,
         });

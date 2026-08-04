@@ -202,7 +202,7 @@ fn a_step_reads_from_and_writes_to_its_neighbours() {
     let g = mixed_graph();
     let mut ctx = Context::new(bus, "run-1")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_driver(h.driver.clone(), Arc::new(filters.clone()));
+        .with_driver(h.driver.clone().with_catalog(Arc::new(filters.clone())));
     ctx.set("prep", Value::text("what is soma?"));
 
     let mut reg = SimpleNodeRegistry::new();
@@ -247,7 +247,7 @@ fn re_running_the_same_run_replays_instead_of_calling() {
         let bus = Arc::new(EventBus::new(256));
         let mut ctx = Context::new(bus, "run-same")
             .with_graph_info(GraphInfo::from_graph(&g))
-            .with_driver(h.driver.clone(), Arc::new(filters.clone()));
+            .with_driver(h.driver.clone().with_catalog(Arc::new(filters.clone())));
         ctx.set("prep", Value::text("hello"));
         execute(&plan, &mut ctx, &filters, &cache).unwrap();
         outputs.push(ctx.get("shout").and_then(|v| v.as_text()).map(String::from));
@@ -338,7 +338,7 @@ fn a_handoff_runs_only_the_chosen_target() {
 
     let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-handoff")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_driver(driver, Arc::new(filters.clone()));
+        .with_driver(driver.with_catalog(Arc::new(filters.clone())));
     ctx.set("router", Value::text("tech"));
 
     execute(&plan, &mut ctx, &filters, &cache).unwrap();
@@ -385,7 +385,7 @@ fn an_undeclared_handoff_target_is_reported() {
 
     let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-bad-handoff")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_driver(driver, Arc::new(filters.clone()));
+        .with_driver(driver.with_catalog(Arc::new(filters.clone())));
     ctx.set("router", Value::text("legal"));
 
     let err = execute(&plan, &mut ctx, &filters, &cache).unwrap_err();
@@ -454,7 +454,7 @@ fn a_suspended_run_halts_the_plan_and_then_resumes() {
     let run = |driver: EffectDriver| {
         let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-approve")
             .with_graph_info(GraphInfo::from_graph(&g))
-            .with_driver(driver, Arc::new(filters.clone()));
+            .with_driver(driver.with_catalog(Arc::new(filters.clone())));
         let outcome = execute(&plan, &mut ctx, &filters, &cache);
         (outcome, ctx)
     };
@@ -504,8 +504,10 @@ fn a_step_emits_agent_events() {
     let filters = h.catalog.clone();
 
     let mut ctx = Context::new(bus.clone(), "run-events").with_driver(
-        h.driver.clone().with_event_bus(bus.clone()),
-        Arc::new(filters.clone()),
+        h.driver
+            .clone()
+            .with_event_bus(bus.clone())
+            .with_catalog(Arc::new(filters.clone())),
     );
     ctx.set("ask", Value::text("hi"));
 
@@ -718,7 +720,7 @@ fn a_step_can_decide_a_branch_by_handing_off() {
     let cache = MemoryCache::default();
     let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-branch-step")
         .with_graph_info(GraphInfo::from_graph(&g))
-        .with_driver(driver, Arc::new(catalog.clone()));
+        .with_driver(driver.with_catalog(Arc::new(catalog.clone())));
     ctx.set("__input__", Value::text("tech"));
     ctx.set("router", Value::text("tech"));
 
@@ -763,7 +765,7 @@ fn a_panicking_step_is_contained_like_a_panicking_filter() {
 
     let cache = MemoryCache::default();
     let mut ctx = Context::new(Arc::new(EventBus::new(64)), "run-panic-step")
-        .with_driver(driver, Arc::new(catalog.clone()));
+        .with_driver(driver.with_catalog(Arc::new(catalog.clone())));
     ctx.set("boom", Value::text("go"));
 
     let plan = somatize_compiler::ExecutionPlan::Step {

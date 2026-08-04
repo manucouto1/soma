@@ -16,36 +16,36 @@ use somatize_core::store::{DataRef, DataStore};
 use somatize_core::value::Value;
 use std::sync::Arc;
 
+/// What a forward pass runs against, besides the graph and the data.
+///
+/// A struct rather than six parameters, for the same reason as
+/// [`RunContext`]: every strategy takes exactly this set, and a caller
+/// forgetting one of six positional arguments is a bug the compiler cannot
+/// name.
+pub struct ForwardEnv<'a> {
+    pub library: &'a NodeCatalog,
+    pub cache: &'a dyn CacheStore,
+    pub event_bus: &'a Arc<EventBus>,
+    pub data_store: Option<&'a Arc<dyn DataStore>>,
+    /// Performs and journals step effects; a graph without steps ignores
+    /// it, which is why it is an `Option` and not a requirement.
+    pub driver: Option<&'a crate::effects::EffectDriver>,
+}
+
 /// How a forward pass feeds data through the compiled graph.
 pub trait ForwardStrategy {
     /// Execute a forward pass, returning the final output.
-    fn forward(
-        &self,
-        graph: &Graph,
-        library: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        data_store: Option<&Arc<dyn DataStore>>,
-        x: &Value,
-    ) -> Result<Value>;
+    fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, x: &Value) -> Result<Value>;
 }
 
 /// Full input at once, with inference caching.
 pub struct Standard;
 
 impl ForwardStrategy for Standard {
-    fn forward(
-        &self,
-        graph: &Graph,
-        library: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        _data_store: Option<&Arc<dyn DataStore>>,
-        x: &Value,
-    ) -> Result<Value> {
+    fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, x: &Value) -> Result<Value> {
         let CompileResult { plan, .. } =
-            compile(graph, library, CompileMode::Inference, Some(cache))?;
-        run_forward(graph, &plan, library, cache, event_bus, x)
+            compile(graph, env.library, CompileMode::Inference, Some(env.cache))?;
+        run_forward(graph, &plan, env, x)
     }
 }
 
@@ -56,17 +56,9 @@ pub struct Stream {
 }
 
 impl ForwardStrategy for Stream {
-    fn forward(
-        &self,
-        graph: &Graph,
-        library: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        _data_store: Option<&Arc<dyn DataStore>>,
-        x: &Value,
-    ) -> Result<Value> {
-        let CompileResult { plan, .. } = compile_stream(graph, library, self.chunk_size)?;
-        run_forward(graph, &plan, library, cache, event_bus, x)
+    fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, x: &Value) -> Result<Value> {
+        let CompileResult { plan, .. } = compile_stream(graph, env.library, self.chunk_size)?;
+        run_forward(graph, &plan, env, x)
     }
 }
 
@@ -80,19 +72,20 @@ impl ForwardStrategy for Stream {
 fn run_forward(
     graph: &Graph,
     plan: &somatize_compiler::ExecutionPlan,
-    library: &NodeCatalog,
-    cache: &dyn CacheStore,
-    event_bus: &Arc<EventBus>,
+    env: &ForwardEnv<'_>,
     x: &Value,
 ) -> Result<Value> {
     let run_id = somatize_core::util::timestamp_id("forward");
-    let ctx = RunContext::new(
-        library,
-        cache,
-        event_bus,
+    let mut ctx = RunContext::new(
+        env.library,
+        env.cache,
+        env.event_bus,
         &run_id,
         crate::executor::GraphInfo::from_graph(graph),
     );
+    if let Some(driver) = env.driver {
+        ctx = ctx.with_driver(driver.clone());
+    }
     crate::runner::LocalRunner.forward(plan, &ctx, x)
 }
 
@@ -104,16 +97,8 @@ pub struct Batched<'a> {
 }
 
 impl ForwardStrategy for Batched<'_> {
-    fn forward(
-        &self,
-        graph: &Graph,
-        library: &NodeCatalog,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        data_store: Option<&Arc<dyn DataStore>>,
-        _x: &Value,
-    ) -> Result<Value> {
-        let store = data_store.ok_or_else(|| SomaError::Execution {
+    fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, _x: &Value) -> Result<Value> {
+        let store = env.data_store.ok_or_else(|| SomaError::Execution {
             node_id: "session".into(),
             message: "Batched strategy requires a data store (use with_data_store)".into(),
         })?;
@@ -126,7 +111,7 @@ impl ForwardStrategy for Batched<'_> {
 
         // Compile once, reuse for each batch.
         let CompileResult { plan, .. } =
-            compile(graph, library, CompileMode::Inference, Some(cache))?;
+            compile(graph, env.library, CompileMode::Inference, Some(env.cache))?;
 
         let mut all_values: Vec<f64> = Vec::new();
         let mut result_shape: Option<Vec<usize>> = None;
@@ -135,7 +120,7 @@ impl ForwardStrategy for Batched<'_> {
         while rows_processed < total_rows {
             let batch_len = self.batch_size.min(total_rows - rows_processed);
             let batch = store.get_rows(self.data_ref, rows_processed, batch_len)?;
-            let output = run_forward(graph, &plan, library, cache, event_bus, &batch)?;
+            let output = run_forward(graph, &plan, env, &batch)?;
 
             if let Value::Tensor { values, shape } = &output {
                 if result_shape.is_none() {
@@ -213,13 +198,27 @@ mod tests {
         (graph, library, cache, bus)
     }
 
+    fn env<'a>(
+        library: &'a NodeCatalog,
+        cache: &'a dyn CacheStore,
+        event_bus: &'a Arc<EventBus>,
+    ) -> ForwardEnv<'a> {
+        ForwardEnv {
+            library,
+            cache,
+            event_bus,
+            data_store: None,
+            driver: None,
+        }
+    }
+
     #[test]
     fn standard_forward() {
         let (graph, library, cache, bus) = make_session();
         let input = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
 
         let result = Standard
-            .forward(&graph, &library, cache.as_ref(), &bus, None, &input)
+            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
             .unwrap();
         let (data, _) = result.as_tensor().unwrap();
         assert_eq!(data, &[2.0, 4.0, 6.0]);
@@ -231,7 +230,7 @@ mod tests {
         let input = Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![6]);
 
         let result = Stream { chunk_size: 2 }
-            .forward(&graph, &library, cache.as_ref(), &bus, None, &input)
+            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
             .unwrap();
         let (data, shape) = result.as_tensor().unwrap();
         assert_eq!(data, &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
@@ -244,10 +243,10 @@ mod tests {
         let input = Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
 
         let standard = Standard
-            .forward(&graph, &library, cache.as_ref(), &bus, None, &input)
+            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
             .unwrap();
         let streamed = Stream { chunk_size: 2 }
-            .forward(&graph, &library, cache.as_ref(), &bus, None, &input)
+            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
             .unwrap();
         assert_eq!(standard, streamed);
     }

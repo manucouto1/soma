@@ -16,6 +16,11 @@ pub(crate) struct PyFilterBridge {
     pub(crate) requirements: Vec<String>,
     /// Whether this filter is trainable (has meaningful fit()).
     pub(crate) trainable: bool,
+    /// Declared via `_input_schema` / `_output_schema`; parsed once at
+    /// registration so a typo fails at build time, and `meta()` — which
+    /// cannot fail — just clones.
+    input_schema: Option<somatize_core::schema::Schema>,
+    output_schema: Option<somatize_core::schema::Schema>,
 }
 
 impl PyFilterBridge {
@@ -210,6 +215,8 @@ _reqs = sorted(_reqs)
             source,
             requirements,
             trainable,
+            input_schema: crate::agentic::parse_schema_attr(py, obj, "_input_schema")?,
+            output_schema: crate::agentic::parse_schema_attr(py, obj, "_output_schema")?,
         })
     }
 }
@@ -320,8 +327,8 @@ impl Filter for PyFilterBridge {
             deterministic,
             stream_mode,
             distribution: somatize_core::filter::Distribution::Local,
-            input_schema: None,
-            output_schema: None,
+            input_schema: self.input_schema.clone(),
+            output_schema: self.output_schema.clone(),
         }
     }
 

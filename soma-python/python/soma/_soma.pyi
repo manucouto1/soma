@@ -199,6 +199,9 @@ class Graph:
     def optional_edges(self) -> list[tuple[str, str]]:
         """The edges a study is allowed to cut."""
 
+    def register_graph(self, sub: Graph) -> None:
+        """Make `sub`'s node implementations runnable by this graph's steps (soma.agentic.RunGraph)."""
+
     def register_step(self, step_id: str, obj: Any) -> str:
         """Register a spawn target without adding a node. Returns the id `Spawn` should name."""
 

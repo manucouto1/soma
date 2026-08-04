@@ -156,6 +156,27 @@ impl NodeCatalog {
         self.nodes.values().any(|n| matches!(n, NodeImpl::Step(_)))
     }
 
+    /// Copy every node of `other` into this catalog.
+    ///
+    /// Registering the same id twice with the same configuration is a no-op;
+    /// the same id behind a *different* configuration is an error, because
+    /// whichever one lost would silently answer for the other's cache
+    /// entries. States are not merged — they follow this catalog's store.
+    pub fn merge_from(&mut self, other: &NodeCatalog) -> somatize_core::error::Result<()> {
+        for (id, node) in &other.nodes {
+            if let Some(existing) = self.nodes.get(id)
+                && existing.config_hash() != node.config_hash()
+            {
+                return Err(somatize_core::error::SomaError::Other(format!(
+                    "node {id:?} is already registered with a different \
+                     configuration; rename one of the two"
+                )));
+            }
+            self.nodes.insert(id.clone(), node.clone());
+        }
+        Ok(())
+    }
+
     /// Registered node ids, sorted, so listings are stable.
     pub fn node_ids(&self) -> Vec<&str> {
         let mut ids: Vec<&str> = self.nodes.keys().map(String::as_str).collect();

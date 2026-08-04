@@ -90,7 +90,9 @@ def test_poll_must_return_a_transition():
 
     g = soma.Graph(cache="memory")
     g.node("bad", Bad())
-    with pytest.raises(RuntimeError, match="soma.Done"):
+    # The message must name a path that actually imports — it used to say
+    # `soma.Done`, which does not exist at the top level.
+    with pytest.raises(RuntimeError, match=r"soma\.agentic\.Done"):
         g.forward("x")
 
 
@@ -215,7 +217,7 @@ def test_await_rejects_an_empty_effect_list():
 
     g = soma.Graph(cache="memory")
     g.node("nothing", Nothing())
-    with pytest.raises(RuntimeError, match="soma.Done"):
+    with pytest.raises(RuntimeError, match=r"soma\.agentic\.Done"):
         g.forward("x")
 
 
@@ -414,3 +416,81 @@ def test_a_bool_is_not_an_int():
     out = _round_trip({"flag": True, "count": 1})
     assert out["flag"] is True
     assert out["count"] == 1
+
+
+# ── Declared schemas ─────────────────────────────────────────────
+
+
+def test_compile_reports_step_schema_mismatch():
+    """The compiler's edge check is reachable from Python.
+
+    A tensor feeding a node that expects a conversation has no possible
+    reading — this used to be silently unchecked because Python nodes
+    carried no schemas at all, so ``SomaSchemaMismatch`` could never fire
+    for a Python-built graph.
+    """
+
+    class Numbers(soma.Filter):
+        _cache_version = "1"
+        _kind = "stateless"
+        _output_schema = {"dtype": "Float64", "shape": None}
+
+        def forward(self, x, state):
+            return [1.0, 2.0]
+
+    class Chat:
+        _cache_version = "1"
+        _input_schema = "messages"
+
+        def poll(self, ctx):
+            return Done("never reached")
+
+    g = soma.Graph(cache="memory")
+    g.node("numbers", Numbers())
+    g.node("chat", Chat())
+    g.connect("numbers", "chat")
+    with pytest.raises(Exception, match="no conversion"):
+        g.compile("no_cache")
+
+
+def test_filter_schema_attrs_flow():
+    """The same declaration works on a filter→filter edge."""
+
+    class Text(soma.Filter):
+        _cache_version = "1"
+        _kind = "stateless"
+        _output_schema = "text"
+
+        def forward(self, x, state):
+            return "words"
+
+    class WantsTensor(soma.Filter):
+        _cache_version = "1"
+        _kind = "stateless"
+        _input_schema = {"dtype": "Float64", "shape": None}
+
+        def forward(self, x, state):
+            return x
+
+    g = soma.Graph(cache="memory")
+    g.node("text", Text())
+    g.node("tensor", WantsTensor())
+    g.connect("text", "tensor")
+    with pytest.raises(Exception, match="no conversion"):
+        g.compile("no_cache")
+
+
+def test_a_schema_typo_fails_at_registration():
+    """An invalid shorthand is an error when the node is added, not a
+    silently unchecked edge."""
+
+    class Typo(soma.Filter):
+        _cache_version = "1"
+        _input_schema = "mesages"
+
+        def forward(self, x, state):
+            return x
+
+    g = soma.Graph(cache="memory")
+    with pytest.raises(Exception, match="mesages"):
+        g.node("typo", Typo())

@@ -15,7 +15,10 @@ unchanged — schema checking on the edges, the persistent cache, ``search()``
 over a node's attributes, ``Study`` with pruning, the run tracker and the
 experiment pool.
 
-    from soma.agentic import react, route, refine, debate, board, parallel_vote
+    from soma.agentic import (
+        react, route, refine, debate, board, parallel_vote,
+        self_consistency, orchestrate, Validate,
+    )
 
     g = refine(
         worker=soma.Agent(model="ollama/qwen2.5", system="Write a haiku."),
@@ -49,6 +52,7 @@ __all__ = [
     "Sleep",
     "Custom",
     "Run",
+    "RunGraph",
     "Llm",
     "ToolCall",
     "react",
@@ -163,6 +167,19 @@ def Custom(kind, payload=None):  # noqa: N802
 def Run(runs, input=None, label=None):  # noqa: A002, N802
     """One spawned node: which registered step to run, and on what."""
     return {"runs": runs, "input": input, "label": label}
+
+
+def RunGraph(graph, input=None, mode="forward"):  # noqa: A002, N802
+    """Run a Soma graph as an effect — a pipeline as a tool for a step.
+
+    ``graph`` is the :class:`soma.Graph` to run (its node implementations
+    must be known to the *outer* graph: call ``g.register_graph(graph)``
+    once when building). ``mode`` is ``"forward"`` (default) or ``"fit"``.
+    The result arrives as ``{"kind": "graph", "output": ...}``; a pipeline
+    that fails arrives as ``{"kind": "failed", "message": ...}`` for the
+    step to read — an unfittable configuration is information, not a crash.
+    """
+    return {"effect": "graph", "graph": graph, "input": input, "mode": mode}
 
 
 def Llm(model, prompt, system=None):  # noqa: N802

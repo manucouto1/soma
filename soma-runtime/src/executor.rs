@@ -181,14 +181,12 @@ impl Context {
 
     /// Register the effect driver an effectful plan needs.
     ///
-    /// The driver is given the catalog too, so a step that fans out
-    /// dynamically can reach the nodes it names.
-    pub fn with_driver(
-        mut self,
-        driver: crate::effects::EffectDriver,
-        catalog: Arc<crate::node_catalog::NodeCatalog>,
-    ) -> Self {
-        self.driver = Some(driver.with_catalog(catalog));
+    /// The driver should already carry its catalog
+    /// ([`crate::effects::EffectDriver::with_catalog`]) if a step may fan
+    /// out dynamically — whoever builds the driver knows which catalog it
+    /// serves; the context does not.
+    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+        self.driver = Some(driver);
         self
     }
 

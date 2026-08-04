@@ -40,6 +40,10 @@ pub struct GraphSession {
     event_bus: Arc<EventBus>,
     data_store: Option<Arc<dyn DataStore>>,
     transport: Option<Arc<dyn Transport>>,
+    /// Performs and journals step effects. Only needed when the graph
+    /// contains a step; a purely computational graph leaves it unset and
+    /// keeps exactly the old behaviour.
+    driver: Option<crate::effects::EffectDriver>,
     fitted: bool,
 }
 
@@ -52,6 +56,7 @@ impl GraphSession {
             event_bus: Arc::new(EventBus::new(256)),
             data_store: None,
             transport: None,
+            driver: None,
             fitted: false,
         }
     }
@@ -74,6 +79,24 @@ impl GraphSession {
     pub fn with_transport(mut self, transport: Arc<dyn Transport>) -> Self {
         self.transport = Some(transport);
         self
+    }
+
+    /// Attach the effect driver a graph containing steps needs.
+    ///
+    /// The session clones the driver per run and hands it the catalog *at
+    /// that moment*, so filters or steps registered through
+    /// [`Self::library_mut`] after this call still count. Without a driver,
+    /// executing a step keeps failing with the executor's own explanation.
+    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+        self.driver = Some(driver);
+        self
+    }
+
+    /// The stored driver, armed with the catalog as it stands right now.
+    fn run_driver(&self) -> Option<crate::effects::EffectDriver> {
+        self.driver
+            .as_ref()
+            .map(|d| d.clone().with_catalog(Arc::new(self.library.clone())))
     }
 
     // ── Core operations ──
@@ -106,6 +129,9 @@ impl GraphSession {
         }
         if let Some(transport) = &self.transport {
             ctx = ctx.with_transport(transport.clone());
+        }
+        if let Some(driver) = self.run_driver() {
+            ctx = ctx.with_driver(driver);
         }
 
         self.event_bus.emit(Event::RunStarted {
@@ -151,13 +177,16 @@ impl GraphSession {
         let start = std::time::Instant::now();
 
         let runner = crate::runner::LocalRunner;
-        let ctx = crate::runner::RunContext::new(
+        let mut ctx = crate::runner::RunContext::new(
             &self.library,
             self.cache.as_ref(),
             &self.event_bus,
             &run_id,
             GraphInfo::from_graph(&self.graph),
         );
+        if let Some(driver) = self.run_driver() {
+            ctx = ctx.with_driver(driver);
+        }
         let result = runner.fit(&plan, &ctx, x, y);
         let (_last_output, mut all_outputs) = match result {
             Ok(out) => {
@@ -201,12 +230,16 @@ impl GraphSession {
         x: &Value,
         strategy: &dyn crate::forward::ForwardStrategy,
     ) -> Result<Value> {
+        let driver = self.run_driver();
         strategy.forward(
             &self.graph,
-            &self.library,
-            self.cache.as_ref(),
-            &self.event_bus,
-            self.data_store.as_ref(),
+            &crate::forward::ForwardEnv {
+                library: &self.library,
+                cache: self.cache.as_ref(),
+                event_bus: &self.event_bus,
+                data_store: self.data_store.as_ref(),
+                driver: driver.as_ref(),
+            },
             x,
         )
     }
