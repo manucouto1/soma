@@ -25,7 +25,9 @@ use std::fmt::Write as _;
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RunOutcome {
+    /// Finished successfully.
     Completed,
+    /// Finished with an error.
     Failed,
     /// Marked running, but the heartbeat went stale: the process died.
     Crashed,
@@ -61,7 +63,9 @@ impl RunOutcome {
 /// The node that dominated wall time, and by how much.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeCost {
+    /// The dominant node's id.
     pub node_id: String,
+    /// Its total wall time in milliseconds.
     pub duration_ms: u64,
     /// This node's share of all node compute time, in `[0, 1]`.
     pub share: f64,
@@ -70,7 +74,9 @@ pub struct NodeCost {
 /// One flag family and where it fired.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FlagCount {
+    /// Flag family name (e.g. `LEAKAGE`).
     pub flag: String,
+    /// How many times it fired, duplicates included.
     pub count: usize,
     /// Node (or `node/module.path`) ids that raised it, sorted, deduped.
     pub nodes: Vec<String>,
@@ -113,23 +119,34 @@ impl FlagCount {
 /// whatever it likes, so zeros here mean "nothing reported", not free.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCost {
+    /// Total step turns taken.
     pub turns: u64,
+    /// Prompt tokens, as reported by the providers.
     pub input_tokens: u64,
+    /// Completion tokens, as reported by the providers.
     pub output_tokens: u64,
+    /// Tool invocations across all steps.
     pub tool_calls: u64,
     /// Steps that ended in an error — their cost is included above.
     pub steps_failed: u64,
+    /// Times a step suspended for external input.
     pub suspensions: u64,
 }
 
 /// Trial statistics for a study run.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrialSummary {
+    /// Trials the study ran, in any terminal state.
     pub total: usize,
+    /// Trials that ran to completion.
     pub completed: usize,
+    /// Trials a pruner stopped early — control flow, not failure.
     pub pruned: usize,
+    /// Trials that ended in an error.
     pub failed: usize,
+    /// Id of the best-scoring trial, `None` when none scored.
     pub best_trial_id: Option<String>,
+    /// Objective value of the best trial.
     pub best_value: Option<f64>,
     /// Metric the study optimized, when it declares one.
     pub objective: Option<String>,
@@ -141,6 +158,7 @@ pub struct RunConclusion {
     /// Deterministic one-line rendering of everything below.
     #[serde(default)]
     pub headline: String,
+    /// How the run ended, `None` when the status file was unreadable.
     #[serde(default)]
     pub outcome: Option<RunOutcome>,
     /// The slowest node, when node timings exist.
@@ -158,6 +176,7 @@ pub struct RunConclusion {
     /// truncated event log and carries the audited filter ids.
     #[serde(default)]
     pub audit_flags: Vec<FlagCount>,
+    /// Trial statistics, `None` for non-study runs.
     #[serde(default)]
     pub trials: Option<TrialSummary>,
     /// What the run's agent steps cost, `None` for runs with none.
@@ -310,21 +329,29 @@ impl RunConclusion {
 /// five files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSummary {
+    /// The run's unique identifier.
     pub run_id: String,
     /// Absolute path, so a consumer can go read raw artifacts.
     pub run_dir: String,
+    /// Human-readable run name, from the manifest.
     pub name: String,
     /// Manifest kind as its snake_case string (`fit`, `train`, `study`).
     pub kind: String,
+    /// When the run started.
     pub created_at: DateTime<Utc>,
+    /// When the run reached a terminal state, `None` while running.
     #[serde(default)]
     pub finished_at: Option<DateTime<Utc>>,
+    /// Wall time from start to finish, when both ends are known.
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// Free-form labels, from the manifest.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Git context captured at run start.
     #[serde(default)]
     pub git: GitInfo,
+    /// Named seeds declared at run start (e.g. `{"torch": 42}`).
     #[serde(default)]
     pub seeds: BTreeMap<String, i64>,
     /// Hyperparameters declared at run start (`manifest.params`).
@@ -333,6 +360,7 @@ pub struct RunSummary {
     /// What the run was expected to show, declared before it ran.
     #[serde(default)]
     pub hypothesis: Option<String>,
+    /// Run this one derives from, as recorded in the manifest.
     #[serde(default)]
     pub parent_run_id: Option<String>,
     /// From `fingerprint.json`, absent for runs started before it
@@ -345,6 +373,7 @@ pub struct RunSummary {
     /// Last recorded value per metric name.
     #[serde(default)]
     pub metrics: BTreeMap<String, f64>,
+    /// The derived facts and their [`RunConclusion::headline`].
     #[serde(default)]
     pub conclusion: RunConclusion,
 }

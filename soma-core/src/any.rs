@@ -11,6 +11,7 @@ use std::any::Any;
 /// workspace, and one more required of anyone writing a filter of their
 /// own — to serve two downcasts in the whole codebase.
 pub trait AsAny {
+    /// The receiver as `&dyn Any`, ready for `downcast_ref`.
     fn as_any(&self) -> &dyn Any;
 }
 

@@ -1,3 +1,8 @@
+//! Proc macros for Soma filters: `#[derive(SomaFilter)]` (config hash,
+//! metadata, `Searchable`) and `#[derive(SomaStep)]` (a step's journal
+//! identity). The attributes each derive understands are documented on
+//! the derive itself.
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};

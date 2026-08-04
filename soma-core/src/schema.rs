@@ -68,6 +68,8 @@ impl DataType {
         matches!((self, target), (Utf8, Messages) | (Messages, Utf8))
     }
 
+    /// Numeric in the sense [`Self::can_coerce_to`] uses: `Float64`,
+    /// `Float32`, `Int64` — and `Bool`, which tensors carry as 0/1.
     pub fn is_numeric(&self) -> bool {
         matches!(
             self,

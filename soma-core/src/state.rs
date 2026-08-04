@@ -48,6 +48,7 @@ pub struct MemoryStateStore {
 }
 
 impl MemoryStateStore {
+    /// Create an empty store.
     pub fn new() -> Self {
         Self::default()
     }

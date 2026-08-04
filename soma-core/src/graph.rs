@@ -25,12 +25,20 @@ pub type EdgeId = String;
 #[non_exhaustive]
 pub enum NodeKind {
     /// A single filter (the common case).
-    Filter { filter_name: String },
+    Filter {
+        /// Name the filter is registered under in the `NodeCatalog`.
+        filter_name: String,
+    },
     /// A nested sub-graph (compiled recursively).
-    SubGraph { graph: Box<Graph> },
+    SubGraph {
+        /// The inner graph, boxed to keep `NodeKind` a fixed size.
+        graph: Box<Graph>,
+    },
     /// A loop node. Its body is the sub-graph reached through its *control*
     /// edges; `until` names what decides to stop.
     Loop {
+        /// Hard cap on iterations; `None` means the body runs until `until`
+        /// signals stop.
         max_iterations: Option<usize>,
         /// Defaults to [`LoopCondition::BodyTerminal`], resolved by the
         /// compiler. Never inferred at runtime from execution order.
@@ -49,14 +57,21 @@ pub enum NodeKind {
     },
     /// An effectful node: calls models, tools, or other graphs, and decides
     /// what happens next. See [`crate::step::Step`].
-    Step { step_name: String },
+    Step {
+        /// Name the step is registered under in the `NodeCatalog`.
+        step_name: String,
+    },
 }
 
 /// A node in the computational graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
+    /// Unique id within the graph; edges and trained states refer to it.
     pub id: NodeId,
+    /// Human-readable name shown in diagrams; cosmetic, excluded from the
+    /// architecture fingerprint.
     pub label: String,
+    /// What kind of computation this node represents.
     pub kind: NodeKind,
     /// Execution target: "local" (reserved, always local), or a worker tag.
     /// None means: use default (remote if workers available, else local).
@@ -212,14 +227,25 @@ pub enum EdgeKind {
 /// A directed edge connecting two nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
+    /// Unique id within the graph; cosmetic — excluded from the
+    /// architecture fingerprint.
     pub id: EdgeId,
+    /// The node this edge leaves.
     pub source: NodeId,
+    /// The node this edge enters.
     pub target: NodeId,
+    /// Whether the edge carries data or control.
     pub kind: EdgeKind,
+    /// Optional label; on an edge leaving a `Branch` node it names the arm.
     pub label: Option<String>,
 }
 
 impl Edge {
+    /// Create a data edge: `source`'s output becomes an input of `target`.
+    ///
+    /// This is what `Graph::connect` builds, and what input resolution
+    /// follows — a node's inputs are the outputs of its data predecessors,
+    /// not "whatever ran last".
     pub fn data(
         id: impl Into<String>,
         source: impl Into<String>,
@@ -234,6 +260,12 @@ impl Edge {
         }
     }
 
+    /// Create a control edge: `source` decides whether `target` runs, but
+    /// hands it no data.
+    ///
+    /// Control edges are how the compiler claims loop bodies and branch
+    /// arms (by dominance); a branch passes its *input* to the chosen arm,
+    /// not the selector's output.
     pub fn control(
         id: impl Into<String>,
         source: impl Into<String>,
@@ -259,7 +291,9 @@ impl Edge {
 /// A directed graph of computational nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Graph {
+    /// The nodes, in insertion order (execution order comes from the edges).
     pub nodes: Vec<Node>,
+    /// The directed edges connecting them.
     pub edges: Vec<Edge>,
     /// Training strategy for distributed execution.
     /// Inherited by subgraphs unless overridden.
@@ -268,6 +302,7 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Create an empty graph with no training strategy set.
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
@@ -293,6 +328,8 @@ impl Graph {
         self.training_strategy.as_ref().unwrap_or(&LOCAL)
     }
 
+    /// Add a node. Duplicate ids are not checked here; [`Self::validate`]
+    /// rejects them at compile time.
     pub fn add_node(&mut self, node: Node) {
         self.nodes.push(node);
     }
@@ -317,6 +354,8 @@ impl Graph {
         &self.nodes.last().unwrap().id
     }
 
+    /// Add an edge. Endpoints are not checked here; [`Self::validate`]
+    /// rejects edges to unknown nodes at compile time.
     pub fn add_edge(&mut self, edge: Edge) {
         self.edges.push(edge);
     }

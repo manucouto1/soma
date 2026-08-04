@@ -31,6 +31,7 @@ pub enum NodeStatus {
 /// Per-node annotation folded into the rendered label and style.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeOverlay {
+    /// How the node finished, driving the status color.
     #[serde(default)]
     pub status: Option<NodeStatus>,
     /// Total compute time across this node's executions.
@@ -50,11 +51,14 @@ pub struct NodeOverlay {
 /// Per-node annotations for one rendering, keyed by node id.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GraphOverlay {
+    /// Annotations keyed by node id; nodes absent here render plain.
     #[serde(default)]
     pub nodes: BTreeMap<String, NodeOverlay>,
 }
 
 impl GraphOverlay {
+    /// No annotations at all — renderers then emit byte-identical plain
+    /// output, so an empty overlay is indistinguishable from none.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }

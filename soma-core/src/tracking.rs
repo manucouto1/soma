@@ -44,18 +44,26 @@ pub enum RunKind {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RunState {
+    /// The run's process claims to be alive; trust it only while
+    /// [`RunStatus::heartbeat_at`] is fresh.
     Running,
+    /// Finished successfully.
     Completed,
+    /// Finished with an error.
     Failed,
 }
 
 /// Best-effort git context captured at run start.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GitInfo {
+    /// Commit hash of `HEAD`.
     #[serde(default)]
     pub sha: Option<String>,
+    /// Checked-out branch name, `None` on a detached head.
     #[serde(default)]
     pub branch: Option<String>,
+    /// Whether the working tree had uncommitted changes — a dirty run
+    /// is one the recorded `sha` cannot fully reproduce.
     #[serde(default)]
     pub dirty: Option<bool>,
 }
@@ -64,7 +72,9 @@ pub struct GitInfo {
 /// the full topology files inside the run directory.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GraphSummaryInfo {
+    /// Number of nodes in the executed graph.
     pub n_nodes: usize,
+    /// Node ids, in the graph's insertion order.
     pub node_ids: Vec<String>,
     /// Relative path to the serialized graph (e.g. `graph.json`).
     #[serde(default)]
@@ -81,23 +91,36 @@ pub struct GraphSummaryInfo {
 /// rewriting after creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunManifest {
+    /// On-disk layout version this run was written with
+    /// (see [`RUN_SCHEMA_VERSION`]).
     pub schema_version: u32,
+    /// Unique run identifier — also the run directory's name.
     pub run_id: String,
+    /// What kind of work this run tracks.
     pub kind: RunKind,
+    /// Human-readable run name (not required to be unique).
     pub name: String,
+    /// When the run started.
     pub created_at: DateTime<Utc>,
+    /// Version of soma that wrote this run.
     #[serde(default)]
     pub soma_version: Option<String>,
+    /// Python interpreter version, for runs started from the bindings.
     #[serde(default)]
     pub python_version: Option<String>,
+    /// Host the run executed on.
     #[serde(default)]
     pub hostname: Option<String>,
+    /// Best-effort git context captured at run start.
     #[serde(default)]
     pub git: GitInfo,
+    /// Script or module that started the run.
     #[serde(default)]
     pub entrypoint: Option<String>,
+    /// Command-line arguments of the launching process.
     #[serde(default)]
     pub argv: Vec<String>,
+    /// Working directory the run was started from.
     #[serde(default)]
     pub cwd: Option<String>,
     /// Named seeds, e.g. `{"torch": 42}`.
@@ -114,12 +137,18 @@ pub struct RunManifest {
     /// after seeing the result is a conclusion.
     #[serde(default)]
     pub hypothesis: Option<String>,
+    /// Free-form labels for filtering run listings.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Free-form notes attached at run start.
     #[serde(default)]
     pub notes: Option<String>,
+    /// Run this one derives from — the edge the experiment pool's
+    /// lineage is built on. Set explicitly, never inferred.
     #[serde(default)]
     pub parent_run_id: Option<String>,
+    /// Compact description of the executed graph, absent for
+    /// graph-less runs (e.g. a study run).
     #[serde(default)]
     pub graph: Option<GraphSummaryInfo>,
     /// Relative path to `study.json` for study runs.
@@ -162,15 +191,22 @@ impl RunManifest {
 /// `heartbeat_at` means the process died.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunStatus {
+    /// Current lifecycle state.
     pub state: RunState,
+    /// When this status file was last rewritten, for any reason.
     pub updated_at: DateTime<Utc>,
+    /// Last liveness ping. Stale while `state` is
+    /// [`RunState::Running`] means the process died.
     #[serde(default)]
     pub heartbeat_at: Option<DateTime<Utc>>,
+    /// When the run reached a terminal state, `None` while running.
     #[serde(default)]
     pub finished_at: Option<DateTime<Utc>>,
 }
 
 impl RunStatus {
+    /// Fresh status for a run that just started: state
+    /// [`RunState::Running`] with the heartbeat stamped now.
     pub fn running() -> Self {
         let now = Utc::now();
         Self {
@@ -187,8 +223,12 @@ impl RunStatus {
 /// `event_type` tag flattened into the same object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
+    /// Monotonic sequence number within the run — the order events were
+    /// recorded in, which timestamps alone cannot guarantee.
     pub seq: u64,
+    /// Wall-clock time the event was recorded.
     pub ts: DateTime<Utc>,
+    /// The event itself, flattened into the envelope's JSON object.
     #[serde(flatten)]
     pub event: Event,
 }
@@ -213,6 +253,7 @@ pub trait EventSink: Send + Sync {
 /// The local implementation writes a run directory; a remote backend
 /// can implement the same contract over HTTP.
 pub trait Tracker: Send + Sync {
+    /// Identifier of the run this tracker is bound to.
     fn run_id(&self) -> &str;
 
     /// Root directory of the run (for file-based backends).

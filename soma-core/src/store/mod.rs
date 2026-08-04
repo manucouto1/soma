@@ -97,27 +97,43 @@ pub fn slice_tensor_rows(value: &Value, start: usize, len: usize) -> Result<Valu
 #[non_exhaustive]
 pub enum DataRef {
     /// Data in local filesystem
-    Local { path: String },
+    Local {
+        /// Absolute path to the file holding the serialized value.
+        path: String,
+    },
     /// Data in S3-compatible object storage
     S3 {
+        /// Bucket the object lives in.
         bucket: String,
+        /// Object key within the bucket.
         key: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
     },
     /// Data in Soma cache (content-addressable)
-    Cached { cache_key: CacheKey },
+    Cached {
+        /// Key the value is cached under.
+        cache_key: CacheKey,
+    },
     /// Data available as a stream endpoint
     Stream {
+        /// URL the stream can be read from.
         endpoint: String,
+        /// Wire format of the streamed records.
         format: StreamFormat,
     },
     /// Data materialized inline (small values only)
-    Inline { value: Value },
+    Inline {
+        /// The value itself, carried in the reference.
+        value: Value,
+    },
     /// Data stored as a Zarr v3 array in object storage (chunked tensors).
     Zarr {
+        /// Bucket the array lives in.
         bucket: String,
         /// Root path of the Zarr array (contains zarr.json + chunk objects).
         array_path: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
     },
 }
@@ -127,10 +143,14 @@ pub enum DataRef {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StreamFormat {
+    /// Newline-delimited JSON, one record per line (the default).
     #[default]
     JsonLines,
+    /// Comma-separated values.
     Csv,
+    /// Apache Arrow IPC stream.
     Arrow,
+    /// Length-prefixed protobuf messages.
     Protobuf,
 }
 
@@ -141,21 +161,32 @@ pub enum StreamFormat {
 pub enum StorageConfig {
     /// Local filesystem (NFS, mounted volume)
     #[serde(rename = "local")]
-    Local { base_path: String },
+    Local {
+        /// Directory values are written under.
+        base_path: String,
+    },
     /// S3-compatible object storage
     #[serde(rename = "s3")]
     S3 {
+        /// Bucket to store objects in.
         bucket: String,
+        /// Key prefix all objects are written under.
         prefix: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
+        /// Custom endpoint URL for non-AWS backends (MinIO, Ceph).
         endpoint: Option<String>,
     },
     /// Zarr v3 chunked storage on S3-compatible backend.
     #[serde(rename = "zarr")]
     Zarr {
+        /// Bucket to store arrays in.
         bucket: String,
+        /// Key prefix all arrays are written under.
         prefix: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
+        /// Custom endpoint URL for non-AWS backends (MinIO, Ceph).
         endpoint: Option<String>,
         /// Rows per chunk (first dimension).
         chunk_rows: usize,
@@ -213,6 +244,9 @@ pub struct LocalDataStore {
 }
 
 impl LocalDataStore {
+    /// Create a store rooted at `base_path`, creating the directory if
+    /// needed. Creation failure is deliberately ignored here — the
+    /// first `put` will surface it as a [`SomaError::DataStore`].
     pub fn new(base_path: impl Into<std::path::PathBuf>) -> Self {
         let base = base_path.into();
         std::fs::create_dir_all(&base).ok();
