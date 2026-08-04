@@ -347,6 +347,112 @@ mod tests {
         assert!(err.to_string().contains("disk full"), "got: {err}");
     }
 
+    struct DummyStep {
+        name: String,
+    }
+
+    impl Step for DummyStep {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[self.name.as_bytes()])
+        }
+        fn meta(&self) -> somatize_core::step::StepMeta {
+            somatize_core::step::StepMeta::new(&self.name)
+        }
+        fn poll(
+            &self,
+            _ctx: &somatize_core::step::StepCtx<'_>,
+        ) -> Result<somatize_core::step::Transition> {
+            Ok(somatize_core::step::Transition::Done(Value::Empty))
+        }
+    }
+
+    /// `get()` and `step()` are typed views of one map: each answers only
+    /// for its own kind, so a caller can never run a step as a filter (or
+    /// the reverse) by holding the wrong accessor.
+    #[test]
+    fn a_step_registers_beside_filters_not_as_one() {
+        let mut lib = NodeCatalog::new();
+        lib.register("f", Box::new(DummyFilter { name: "F".into() }));
+        lib.register_step("s", Box::new(DummyStep { name: "S".into() }));
+
+        assert_eq!(lib.len(), 2);
+        assert!(lib.step("s").is_some());
+        assert!(lib.get("s").is_none(), "a step must not answer as a filter");
+        assert!(
+            lib.step("f").is_none(),
+            "a filter must not answer as a step"
+        );
+        assert!(lib.step("missing").is_none());
+    }
+
+    /// The executor's output-cache guard reads `cacheable && deterministic`
+    /// straight off `NodeMeta` — there is no `if is_step` anywhere. A step
+    /// whose meta said anything but `false/false` would be silently
+    /// memoized by content, freezing its first model answer forever.
+    #[test]
+    fn a_steps_node_meta_declares_it_effectful_and_uncacheable() {
+        let mut lib = NodeCatalog::new();
+        lib.register("f", Box::new(DummyFilter { name: "F".into() }));
+        lib.register_step("s", Box::new(DummyStep { name: "S".into() }));
+
+        let step_meta = lib.node_meta("s").unwrap();
+        assert!(step_meta.effectful);
+        assert!(!step_meta.cacheable);
+        assert!(!step_meta.deterministic);
+
+        let filter_meta = lib.node_meta("f").unwrap();
+        assert!(!filter_meta.effectful);
+        assert!(filter_meta.cacheable);
+    }
+
+    /// `has_steps` decides whether a session pays for an effect driver — a
+    /// provider catalog read and a journal directory. Answering `true` for
+    /// a filter-only catalog would charge every plain pipeline that cost.
+    #[test]
+    fn has_steps_flips_when_the_first_step_arrives() {
+        let mut lib = NodeCatalog::new();
+        assert!(!lib.has_steps());
+
+        lib.register("f", Box::new(DummyFilter { name: "F".into() }));
+        assert!(!lib.has_steps(), "a filter is not a step");
+
+        lib.register_step("s", Box::new(DummyStep { name: "S".into() }));
+        assert!(lib.has_steps());
+    }
+
+    /// `merge_from` copies both kinds; the same id under the same config is
+    /// a no-op, and the same id under a *different* config is refused —
+    /// whichever implementation lost would silently answer for the other's
+    /// cache entries.
+    #[test]
+    fn merge_from_merges_and_rejects_a_config_collision() {
+        let mut lib = NodeCatalog::new();
+        lib.register("x", Box::new(DummyFilter { name: "X".into() }));
+
+        let mut other = NodeCatalog::new();
+        // Same id, same config: allowed. Plus one of each kind to copy in.
+        other.register("x", Box::new(DummyFilter { name: "X".into() }));
+        other.register("y", Box::new(DummyFilter { name: "Y".into() }));
+        other.register_step("s", Box::new(DummyStep { name: "S".into() }));
+
+        lib.merge_from(&other).unwrap();
+        assert_eq!(lib.len(), 3);
+        assert!(lib.get("y").is_some());
+        assert!(lib.step("s").is_some(), "steps must merge too");
+
+        let mut clashing = NodeCatalog::new();
+        clashing.register(
+            "x",
+            Box::new(DummyFilter {
+                name: "DIFFERENT".into(),
+            }),
+        );
+        let err = lib.merge_from(&clashing).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("x"), "should name the colliding id: {msg}");
+        assert!(msg.contains("different"), "should say why: {msg}");
+    }
+
     #[test]
     fn state_management() {
         let mut lib = NodeCatalog::new();

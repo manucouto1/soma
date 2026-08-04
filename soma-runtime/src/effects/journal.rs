@@ -337,6 +337,42 @@ mod tests {
         assert!(j.lookup(site("r", "n", 0), &effect).unwrap().is_none());
     }
 
+    /// Delete every file under `dir`, keeping the directory tree — what GC
+    /// eviction does to CAS blobs (records are retained, blobs go).
+    fn delete_files_under(dir: &std::path::Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                delete_files_under(&path);
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+
+    /// An action record whose blob was evicted must read as *absent*, so
+    /// the effect is performed again — not as an error, and never as a
+    /// half-answer. This is the fallback in `lookup`; without it a GC pass
+    /// over the shared store would turn every replay into a decode failure.
+    #[test]
+    fn an_evicted_blob_reads_as_absent() {
+        let (s, dir) = store();
+        let j = journal(s);
+        let effect = llm("hello");
+
+        j.record(site("r", "n", 0), &effect, &reply("hi"), 1)
+            .unwrap();
+        assert!(j.lookup(site("r", "n", 0), &effect).unwrap().is_some());
+
+        // Evict the blob; the action record stays where it is.
+        delete_files_under(&dir.path().join("cas"));
+
+        assert!(
+            j.lookup(site("r", "n", 0), &effect).unwrap().is_none(),
+            "a record without its blob must be treated as a miss"
+        );
+    }
+
     /// Failures are retried on replay, not faithfully reproduced.
     #[test]
     fn failures_are_not_recorded() {
@@ -355,5 +391,107 @@ mod tests {
         .unwrap();
 
         assert!(j.lookup(site("r", "n", 0), &effect).unwrap().is_none());
+    }
+
+    // ── Keying properties ──
+    //
+    // The key is the whole safety story: a pure record shared where it must
+    // not be, or two sites colliding, silently serves one run another run's
+    // model answer. These pin the key function itself, over arbitrary sites.
+    mod keying {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn pure_effect() -> Effect {
+            Effect::Graph {
+                graph: Box::new(somatize_core::graph::Graph::new()),
+                input: Value::tensor(vec![1.0], vec![1]),
+                mode: somatize_core::effect::GraphEffectMode::Forward,
+            }
+        }
+
+        fn journal() -> (EffectJournal, tempfile::TempDir) {
+            let (s, d) = store();
+            (super::journal(s), d)
+        }
+
+        proptest! {
+            /// The `pure`/`sited` namespaces are disjoint: whatever the
+            /// site, a content-keyed record can never shadow a site-keyed
+            /// one, or vice versa.
+            #[test]
+            fn pure_and_sited_keys_never_collide(
+                run in "[a-z0-9]{0,8}",
+                node in "[a-z0-9/]{0,8}",
+                turn in 0usize..64,
+                index in 0usize..8,
+            ) {
+                let (j, _d) = journal();
+                let s = EffectSite { run_id: &run, node_id: &node, turn, index };
+                prop_assert_ne!(j.key(s, &llm("q")).unwrap(), j.key(s, &pure_effect()).unwrap());
+            }
+
+            /// A sited key is a function of exactly (site, effect): change
+            /// any site component and the key changes; change nothing and
+            /// it is bit-identical. The first half is what confines an
+            /// impure record to its own run/node/turn/index; the second is
+            /// what lets a replay find it at all.
+            #[test]
+            fn a_sited_key_is_exactly_its_site_and_effect(
+                a in ("[a-z]{0,4}", "[a-z]{0,4}", 0usize..4, 0usize..4),
+                b in ("[a-z]{0,4}", "[a-z]{0,4}", 0usize..4, 0usize..4),
+            ) {
+                let (j, _d) = journal();
+                let sa = EffectSite { run_id: &a.0, node_id: &a.1, turn: a.2, index: a.3 };
+                let sb = EffectSite { run_id: &b.0, node_id: &b.1, turn: b.2, index: b.3 };
+                let effect = llm("same question");
+
+                prop_assert_eq!(j.key(sa, &effect).unwrap(), j.key(sa, &effect).unwrap());
+                if a == b {
+                    prop_assert_eq!(j.key(sa, &effect).unwrap(), j.key(sb, &effect).unwrap());
+                } else {
+                    prop_assert_ne!(j.key(sa, &effect).unwrap(), j.key(sb, &effect).unwrap());
+                }
+            }
+
+            /// Same site, different questions: distinct keys, always.
+            #[test]
+            fn a_sited_key_separates_effects(
+                run in "[a-z]{0,6}",
+                node in "[a-z]{0,6}",
+                turn in 0usize..8,
+            ) {
+                let (j, _d) = journal();
+                let s = EffectSite { run_id: &run, node_id: &node, turn, index: 0 };
+                prop_assert_ne!(j.key(s, &llm("one")).unwrap(), j.key(s, &llm("two")).unwrap());
+            }
+        }
+
+        /// The classic concatenation collision: `("ab", "c")` and
+        /// `("a", "bc")` flatten to the same bytes unless each part is
+        /// length-prefixed. `CacheKey::from_parts` prefixes; this is the
+        /// regression test that notices if that ever changes.
+        #[test]
+        fn adjacent_site_fields_do_not_blur_together() {
+            let (j, _d) = journal();
+            let effect = llm("q");
+            let key = |run: &str, node: &str| {
+                j.key(
+                    EffectSite {
+                        run_id: run,
+                        node_id: node,
+                        turn: 0,
+                        index: 0,
+                    },
+                    &effect,
+                )
+                .unwrap()
+            };
+            assert_ne!(
+                key("ab", "c"),
+                key("a", "bc"),
+                "site fields concatenated without length prefixes"
+            );
+        }
     }
 }

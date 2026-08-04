@@ -502,6 +502,214 @@ mod tests {
         }
     }
 
+    use crate::effects::NodeOutcome;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Doubles, counting how often the graph actually runs it.
+    ///
+    /// `cacheable: false`, deliberately: the sub-graph's own output cache
+    /// must not be able to spare the second run, so the only thing that
+    /// can is the journal — which is what the test is about.
+    struct CountingDoubler {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Filter for CountingDoubler {
+        fn config_hash(&self) -> somatize_core::cache::CacheKey {
+            somatize_core::cache::CacheKey::from_parts(&[b"CountingDoubler"])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let (data, shape) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("not a tensor".into()))?;
+            Ok(Value::tensor(
+                data.iter().map(|v| v * 2.0).collect(),
+                shape.to_vec(),
+            ))
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "counting".into(),
+                kind: FilterKind::Stateless,
+                cacheable: false,
+                differentiable: false,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+    }
+
+    /// Awaits one filter-only Forward graph effect, then reports its output.
+    struct RunsPipeline;
+
+    impl somatize_core::step::Step for RunsPipeline {
+        fn config_hash(&self) -> somatize_core::cache::CacheKey {
+            somatize_core::cache::CacheKey::from_parts(&[b"RunsPipeline"])
+        }
+        fn meta(&self) -> StepMeta {
+            StepMeta::new("RunsPipeline")
+        }
+        fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
+            if ctx.turn == 0 {
+                let mut graph = Graph::new();
+                graph.add_node(Node::filter_with_id("count", "counting"));
+                return Ok(Transition::Await(vec![Effect::Graph {
+                    graph: Box::new(graph),
+                    input: Value::tensor(vec![3.0], vec![1]),
+                    mode: GraphEffectMode::Forward,
+                }]));
+            }
+            match ctx.result() {
+                Some(EffectResult::Graph(v)) => Ok(Transition::Done(v.clone())),
+                other => Ok(Transition::Done(Value::text(format!(
+                    "unexpected: {other:?}"
+                )))),
+            }
+        }
+    }
+
+    /// A filter-only Forward graph effect is *pure*: it keys on content, so
+    /// the journal serves it to any run, like the filter cache it rides on.
+    /// Two different runs asking for the identical pipeline must cost one
+    /// execution — the second is a journal hit, not a re-run. This is the
+    /// property that makes a crashed research loop replay its finished
+    /// experiments instead of paying for them again.
+    #[test]
+    fn an_identical_pure_graph_effect_is_served_from_the_journal() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut library = NodeCatalog::new();
+        library.register(
+            "count",
+            Box::new(CountingDoubler {
+                calls: calls.clone(),
+            }),
+        );
+
+        let d = EffectDriver::new(journal()).with_handler(Arc::new(GraphHandler::new(library)));
+
+        // Different run ids on purpose: an *impure* effect would re-perform
+        // for run-B, a pure one must not.
+        let first = d
+            .run(&RunsPipeline, "run-A", "agent", &Value::Empty)
+            .unwrap();
+        let second = d
+            .run(&RunsPipeline, "run-B", "agent", &Value::Empty)
+            .unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "an identical pure graph effect re-ran the pipeline"
+        );
+        match (first, second) {
+            (NodeOutcome::Produced(a), NodeOutcome::Produced(b)) => {
+                assert_eq!(a.as_tensor().map(|(d, _)| d.to_vec()), Some(vec![6.0]));
+                assert_eq!(a, b, "the journal served a different answer");
+            }
+            other => panic!("expected two Done outcomes, got {other:?}"),
+        }
+    }
+
+    /// Learns the mean, then subtracts it — a filter whose fitted state has
+    /// a visible effect on a later forward.
+    struct MeanFilter;
+    impl Filter for MeanFilter {
+        fn config_hash(&self) -> somatize_core::cache::CacheKey {
+            somatize_core::cache::CacheKey::from_parts(&[b"Mean"])
+        }
+        fn fit(&self, x: &Value, _y: Option<&Value>) -> Result<Value> {
+            let (data, _) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("need tensor".into()))?;
+            let mean = data.iter().sum::<f64>() / data.len() as f64;
+            Ok(Value::json(serde_json::json!({ "mean": mean })))
+        }
+        fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
+            let (data, shape) = x
+                .as_tensor()
+                .ok_or(SomaError::Other("need tensor".into()))?;
+            let mean = state
+                .as_json()
+                .and_then(|j| j["mean"].as_f64())
+                .unwrap_or(0.0);
+            Ok(Value::tensor(
+                data.iter().map(|v| v - mean).collect(),
+                shape.to_vec(),
+            ))
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "mean".into(),
+                kind: FilterKind::Trainable,
+                cacheable: true,
+                differentiable: false,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+    }
+
+    /// `Fit` mode answers with a JSON summary an agent can read — never the
+    /// bulk outputs, which would sit in the journal forever — and the fitted
+    /// states land in the handler's shared state store, so the *next*
+    /// Forward through the same handler runs fitted. That second half is the
+    /// claim the handler's session-clone comment makes; this is the test
+    /// that would catch a session that stopped sharing states.
+    #[test]
+    fn fit_mode_fits_and_summarizes() {
+        let mut library = NodeCatalog::new();
+        library.register("mean", Box::new(MeanFilter));
+        let handler = GraphHandler::new(library);
+
+        let mut graph = Graph::new();
+        graph.add_node(Node::filter_with_id("mean", "mean"));
+        let input = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
+
+        let fitted = handler
+            .perform(&Effect::Graph {
+                graph: Box::new(graph.clone()),
+                input: input.clone(),
+                mode: GraphEffectMode::Fit,
+            })
+            .unwrap();
+        let EffectResult::Graph(summary) = fitted else {
+            panic!("expected a graph result, got {fitted:?}");
+        };
+        let json = summary
+            .as_json()
+            .expect("a fit answers with a JSON summary, not bulk output");
+        assert!(json.get("mean").is_some(), "no entry for the node: {json}");
+
+        // mean = 20 was learned above: forward must subtract it. An
+        // unfitted graph would fall back to 0 and echo the input.
+        let forwarded = handler
+            .perform(&Effect::Graph {
+                graph: Box::new(graph),
+                input,
+                mode: GraphEffectMode::Forward,
+            })
+            .unwrap();
+        let EffectResult::Graph(out) = forwarded else {
+            panic!("expected a graph result, got {forwarded:?}");
+        };
+        let (data, _) = out.as_tensor().expect("a tensor");
+        assert_eq!(
+            data,
+            &[-10.0, 0.0, 10.0],
+            "the forward did not see the state the fit just learned"
+        );
+    }
+
     #[test]
     fn the_handler_claims_only_graph_effects() {
         let h = handler();

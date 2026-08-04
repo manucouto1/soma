@@ -456,6 +456,76 @@ fn executor_loop_exhaust_runs_full_count() {
     assert_eq!(calls, 5);
 }
 
+/// Appends a mark each pass, so growth across iterations is visible.
+struct Grow;
+impl Filter for Grow {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"Grow"])
+    }
+    fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+        Ok(Value::Empty)
+    }
+    fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+        Ok(Value::text(format!("{}!", x.as_text().unwrap_or_default())))
+    }
+    fn meta(&self) -> FilterMeta {
+        FilterMeta {
+            name: "Grow".into(),
+            kind: FilterKind::Stateless,
+            cacheable: false,
+            differentiable: false,
+            deterministic: true,
+            stream_mode: StreamMode::FixedState,
+            distribution: somatize_core::filter::Distribution::Local,
+            input_schema: None,
+            output_schema: None,
+        }
+    }
+}
+
+/// `carry_from` is what makes a refine loop refine: iteration N's terminal
+/// output becomes iteration N+1's body input. Without it every pass reads
+/// the original seed and the loop redrafts the same thing N times — which
+/// is exactly what the contrast plan at the end shows.
+#[test]
+fn executor_loop_carry_feeds_each_iteration_the_last_output() {
+    let cache = MemoryCache::default();
+    let mut lib = NodeCatalog::new();
+    lib.register("grow", Box::new(Grow));
+
+    let plan_with = |carry_from: Option<String>| ExecutionPlan::Loop {
+        node_id: "loop".into(),
+        body: Box::new(ExecutionPlan::Execute {
+            node_id: "grow".into(),
+        }),
+        max_iterations: Some(3),
+        until: LoopCondition::Exhaust,
+        carry_from,
+    };
+    let run = |plan: &ExecutionPlan| {
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "loop_carry");
+        ctx.set("input", Value::text("go"));
+        ctx.graph_info
+            .set_predecessors("loop", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("grow", vec!["loop".into()]);
+        execute(plan, &mut ctx, &lib, &cache).unwrap();
+        ctx.get("grow").and_then(|v| v.as_text()).map(String::from)
+    };
+
+    assert_eq!(
+        run(&plan_with(Some("grow".into()))).as_deref(),
+        Some("go!!!"),
+        "three passes over the carry should have accumulated three marks"
+    );
+    assert_eq!(
+        run(&plan_with(None)).as_deref(),
+        Some("go!"),
+        "without a carry every pass redrafts from the seed — the behavior \
+         `carry_from` exists to fix"
+    );
+}
+
 // ── Executor coverage: Branch ──
 
 #[test]

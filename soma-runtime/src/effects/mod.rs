@@ -974,6 +974,209 @@ mod tests {
         assert!(err.to_string().contains("spawned nothing"), "{err}");
     }
 
+    // ── Join policies ──
+
+    /// Uppercases, unless told to fail — the flaky sibling the non-`All`
+    /// join policies exist for.
+    struct FlakyWorker;
+    impl Step for FlakyWorker {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"FlakyWorker"])
+        }
+        fn meta(&self) -> StepMeta {
+            StepMeta::new("FlakyWorker")
+        }
+        fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
+            let text = ctx.input.as_text().unwrap_or_default();
+            if text == "bad" {
+                return Err(SomaError::Execution {
+                    node_id: ctx.node_id.to_string(),
+                    message: "worker refused".into(),
+                });
+            }
+            Ok(Transition::Done(Value::text(text.to_uppercase())))
+        }
+    }
+
+    /// A driver whose spawn target is flaky, for exercising join policies.
+    fn flaky_driver(join: somatize_core::effect::JoinPolicy) -> (EffectDriver, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
+        let journal = EffectJournal::new(store.clone(), store);
+
+        let mut steps = crate::node_catalog::NodeCatalog::new();
+        steps.register_step("worker", Box::new(FlakyWorker));
+        steps.register_step("orchestrator", Box::new(Orchestrator { join }));
+
+        (
+            EffectDriver::new(journal).with_catalog(Arc::new(steps)),
+            dir,
+        )
+    }
+
+    /// `AllSettled` is the "keep what worked" contract: one failed sibling
+    /// becomes a result the step reads and decides about, and the join
+    /// itself succeeds. If a failure failed the join, a ten-way fan-out
+    /// would lose nine good answers to one flaky worker.
+    #[test]
+    fn all_settled_keeps_what_succeeded() {
+        use somatize_core::effect::JoinPolicy;
+
+        let (d, _dir) = flaky_driver(JoinPolicy::AllSettled);
+        let out = d
+            .run(
+                &Orchestrator {
+                    join: JoinPolicy::AllSettled,
+                },
+                "r",
+                "orch",
+                &Value::text("ok,bad,fine"),
+            )
+            .expect("a failed sibling must not fail the join");
+
+        let NodeOutcome::Produced(v) = out else {
+            panic!("expected Done, got {out:?}");
+        };
+        let text = v.as_text().unwrap();
+        assert!(text.starts_with("OK|"), "first success lost: {text}");
+        assert!(text.ends_with("|FINE"), "last success lost: {text}");
+        assert!(
+            text.contains("worker refused"),
+            "the failure should be reported in place, not dropped: {text}"
+        );
+    }
+
+    /// `First` hands back exactly one answer — the earliest *in spec
+    /// order*, since answers must line up with questions — and a losing
+    /// sibling's failure does not poison the join.
+    #[test]
+    fn first_returns_the_first_answer() {
+        use somatize_core::effect::JoinPolicy;
+
+        let (d, _dir) = flaky_driver(JoinPolicy::First);
+        let orch = Orchestrator {
+            join: JoinPolicy::First,
+        };
+
+        match d
+            .run(&orch, "r1", "orch", &Value::text("alpha,beta"))
+            .unwrap()
+        {
+            NodeOutcome::Produced(v) => assert_eq!(
+                v.as_text(),
+                Some("ALPHA"),
+                "exactly the first answer, alone"
+            ),
+            other => panic!("{other:?}"),
+        }
+
+        // A failing first sibling is skipped, not fatal.
+        match d
+            .run(&orch, "r2", "orch", &Value::text("bad,good"))
+            .unwrap()
+        {
+            NodeOutcome::Produced(v) => assert_eq!(v.as_text(), Some("GOOD")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Hands control away instead of finishing — meaningless for spawned
+    /// work, which has no place in the graph to hand control to.
+    struct Defector;
+    impl Step for Defector {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Defector"])
+        }
+        fn meta(&self) -> StepMeta {
+            StepMeta::new("Defector")
+        }
+        fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
+            Ok(Transition::Goto {
+                target: "elsewhere".into(),
+                carry: Value::Empty,
+            })
+        }
+    }
+
+    /// A spawned child's `Goto` is refused with the reason spelled out.
+    #[test]
+    fn a_spawned_child_that_hands_off_is_an_error() {
+        use somatize_core::effect::JoinPolicy;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
+        let mut steps = crate::node_catalog::NodeCatalog::new();
+        steps.register_step("worker", Box::new(Defector));
+        steps.register_step(
+            "orchestrator",
+            Box::new(Orchestrator {
+                join: JoinPolicy::All,
+            }),
+        );
+        let d = EffectDriver::new(EffectJournal::new(store.clone(), store))
+            .with_catalog(Arc::new(steps));
+
+        let err = d
+            .run(
+                &Orchestrator {
+                    join: JoinPolicy::All,
+                },
+                "r",
+                "orch",
+                &Value::text("x"),
+            )
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("elsewhere"), "should name the target: {msg}");
+        assert!(
+            msg.contains("must finish with `Done`"),
+            "should state the contract: {msg}"
+        );
+    }
+
+    /// Panics in `poll`, the way a spawned Python step with a bug does.
+    struct PanickingWorker;
+    impl Step for PanickingWorker {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"PanickingWorker"])
+        }
+        fn meta(&self) -> StepMeta {
+            StepMeta::new("PanickingWorker")
+        }
+        fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
+            panic!("the worker fell over");
+        }
+    }
+
+    /// A spawned child panicking is a contained, named error — not a dead
+    /// scoped thread taking the whole join (and process) with it.
+    #[test]
+    fn a_spawned_child_that_panics_is_contained() {
+        use somatize_core::effect::JoinPolicy;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
+        let mut steps = crate::node_catalog::NodeCatalog::new();
+        steps.register_step("worker", Box::new(PanickingWorker));
+        let d = EffectDriver::new(EffectJournal::new(store.clone(), store))
+            .with_catalog(Arc::new(steps));
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = d.run(
+            &Orchestrator {
+                join: JoinPolicy::All,
+            },
+            "r",
+            "orch",
+            &Value::text("x"),
+        );
+        std::panic::set_hook(previous);
+
+        let err = result.expect_err("a panicking child must surface as an error");
+        assert!(err.to_string().contains("a spawned step panicked"), "{err}");
+    }
+
     // ── Suspension and resume ──
 
     /// Asks a person to approve, then reports what they said.

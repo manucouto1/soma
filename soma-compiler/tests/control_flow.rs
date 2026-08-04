@@ -244,6 +244,64 @@ fn explicit_condition_resolves_ambiguity() {
     assert_eq!(*until, LoopCondition::WhenSignaled("left".into()));
 }
 
+/// `carry_from` is populated from the body's single terminal — what one
+/// iteration produced is what the next one reads. The executor applies it,
+/// but only the compiler writes it: dropping these three lines would
+/// compile a refine loop that redrafts from the original input every pass,
+/// and until now nothing asserted they exist.
+#[test]
+fn the_compiler_carries_the_body_terminal_back() {
+    let mut g = Graph::new();
+    g.add_node(Node::loop_node("refine", Some(4)));
+    g.add_node(Node::filter_with_id("draft", "draft"));
+    g.add_node(Node::filter_with_id("judge", "judge"));
+    g.add_edge(Edge::control("e1", "refine", "draft"));
+    g.add_edge(Edge::data("e2", "draft", "judge"));
+
+    let reg = registry(&["draft", "judge"]);
+    let result = compile(&g, &reg, CompileMode::Inference, None).expect("compiles");
+
+    let ExecutionPlan::Loop { carry_from, .. } = find_loop(&result.plan).expect("a Loop") else {
+        unreachable!()
+    };
+    assert_eq!(
+        carry_from.as_deref(),
+        Some("judge"),
+        "the single terminal is what the next iteration must read"
+    );
+}
+
+/// Two terminals mean there is no single thing to hand to the next pass;
+/// the compiler must leave `carry_from` empty rather than pick one, even
+/// when an explicit stop condition makes the loop itself compilable.
+#[test]
+fn an_ambiguous_body_carries_nothing() {
+    let mut g = Graph::new();
+    g.add_node(Node::loop_until(
+        "refine",
+        Some(4),
+        LoopCondition::WhenSignaled("left".into()),
+    ));
+    g.add_node(Node::filter_with_id("head", "head"));
+    g.add_node(Node::filter_with_id("left", "left"));
+    g.add_node(Node::filter_with_id("right", "right"));
+    g.add_edge(Edge::control("e1", "refine", "head"));
+    g.add_edge(Edge::data("e2", "head", "left"));
+    g.add_edge(Edge::data("e3", "head", "right"));
+
+    let reg = registry(&["head", "left", "right"]);
+    let result = compile(&g, &reg, CompileMode::Inference, None).expect("compiles");
+
+    let ExecutionPlan::Loop { carry_from, .. } = find_loop(&result.plan).expect("a Loop") else {
+        unreachable!()
+    };
+    assert_eq!(
+        carry_from, &None,
+        "with two terminals, guessing a carry would silently feed the \
+         loop one branch's output"
+    );
+}
+
 /// Waiting on a node outside the body would hang: it is never re-evaluated.
 #[test]
 fn condition_outside_the_body_is_a_compile_error() {
