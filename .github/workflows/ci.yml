@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "feature/**"]
   pull_request:
     branches: [main, develop]
 
@@ -35,12 +35,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Test
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
@@ -48,6 +49,16 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # PyO3 0.24 supports up to Python 3.13; runner defaults (e.g.
+      # macos-latest) may already ship 3.14.
+      - name: Setup Python for PyO3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Point PyO3 at the pinned interpreter
+        run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -62,7 +73,15 @@ jobs:
         run: cargo test --workspace
 
       - name: cargo test (with chronos feature)
-        run: cargo test -p soma-memory --features chronos
+        run: cargo test -p somatize-memory --features chronos
+
+      # `cargo test --workspace` builds default features only, so a type
+      # change can pass everything above and still break code behind a
+      # feature gate — which is exactly how the chronos build broke once.
+      - name: cargo check (every feature-gated path)
+        run: |
+          cargo check -p somatize-store --all-features
+          cargo check -p somatize --features full
 
   test-python:
     name: Python Tests
@@ -82,17 +101,32 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install maturin pytest numpy
+          pip install maturin pytest pytest-cov numpy cloudpickle safetensors pandas mypy
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Build and install soma
         run: |
           source .venv/bin/activate
           cd soma-python && maturin develop
 
-      - name: Run Python tests
+      # The package ships `py.typed`, so what it claims about itself is
+      # public API. `tests/test_stubs.py` checks the stub against the
+      # module that was just built; this checks the rest of the package
+      # against the stub.
+      - name: mypy
         run: |
           source .venv/bin/activate
-          cd soma-python && pytest tests/ -v
+          cd soma-python && mypy
+
+      - name: Run Python tests (with coverage)
+        run: |
+          source .venv/bin/activate
+          cd soma-python && pytest tests/ -v --cov=soma --cov-report=term
+
+      - name: Run slow robustness tests
+        run: |
+          source .venv/bin/activate
+          cd soma-python && pytest tests/ -v -m slow
 
   doc:
     name: Documentation
@@ -107,3 +141,53 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+      # Build the Starlight site here too: without this, a broken docs
+      # build (or a sidebar entry pointing at a deleted page) is only
+      # discovered by the deploy workflow on main.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Build docs site
+        run: |
+          cd docs
+          npm ci
+          npm run check    # sidebar reachability + astro build
+
+  coverage-rust:
+    name: Rust Coverage (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Setup Python for PyO3
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Point PyO3 at the pinned interpreter
+        run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --workspace --no-fail-fast --summary-only

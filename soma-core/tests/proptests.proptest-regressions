@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8292681bf243f911535480fc1f1ecfac2243456b00e0ebd3832a8a5ae490cd63 # shrinks to event = EpochCompleted { run_id: "0", epoch: 0, metrics: [MetricRecord { name: "_", value: 2.4994952798370446e234, step: 0, timestamp: 1970-01-01T00:00:00Z }] }
+cc c6bdf2a0ccd64756e6c899719efa28f1cb56559e46f38884eeb61cbc60e217d3 # shrinks to event = MetricReported { run_id: "0", metric: MetricRecord { name: "a", value: 990804971179035.1, step: 0, timestamp: 1970-01-01T00:00:00Z }, node_id: None, trial_id: None }
+cc 9e5dbf6305d7718167a125882bb5d962a03ee2023929496baf89c834ec4256a4 # shrinks to weights = [4.192554169964793], k = 0.5, trial = Trial { id: "t", params: {}, state: Completed, metrics: [MetricRecord { name: "m0", value: 1.3851791386463456e308, step: 0, timestamp: 2026-07-26T14:09:36.629403250Z }, MetricRecord { name: "m1", value: 1.7160262792009378e-162, step: 0, timestamp: 2026-07-26T14:09:36.629404445Z }, MetricRecord { name: "m2", value: 1.822727663477452e-97, step: 0, timestamp: 2026-07-26T14:09:36.629405325Z }], duration_ms: None, started_at: None, finished_at: None }

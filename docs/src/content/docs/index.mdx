@@ -6,7 +6,7 @@ hero:
   tagline: If an agent decides what to do, Soma defines how it's done.
   actions:
     - text: Get Started
-      link: /getting-started/introduction/
+      link: /soma/getting-started/introduction/
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/manucouto1/soma
@@ -26,9 +26,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     Every intermediate result is a virtual reference materialized on demand. Like Denodo, but for computation.
   </Card>
   <Card title="Hyperparameter Optimization" icon="setting">
-    Search spaces co-located with filters. Bayesian, Hyperband, and multi-objective optimization built in.
+    Search spaces co-located with filters. Grid, random and Bayesian (TPE) search, with median and percentile pruning.
   </Card>
-  <Card title="Agent Integration" icon="star">
-    Agents construct, execute, and analyze pipelines autonomously. Temporal knowledge base tracks all experiments.
+  <Card title="Agentic Flows" icon="star">
+    An agentic flow is just a graph whose nodes are effectful. A pipeline is a tool for an agent; an agent is a node in a pipeline — with the same caching, schema checks and search spaces.
   </Card>
 </CardGrid>

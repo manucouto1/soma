@@ -35,7 +35,7 @@ Soma provides a single execution model where:
 ┌──────────────────────────────────────────────────────────┐
 │                         SOMA                              │
 │                                                           │
-│  Pipelines    ──┐                                         │
+│  Graphs       ──┐                                         │
 │  Caching      ──┤                                         │
 │  Streaming    ──┼──► Unified computational graph runtime  │
 │  Optimization ──┤                                         │
@@ -65,23 +65,29 @@ VirtualValue::Stream    → materializes chunk by chunk
 
 This enables lazy evaluation, deferred execution, and working with virtual datasets without immediate materialization -- like Denodo's data virtualization, but for computation rather than SQL queries.
 
-### Solution 3: Cache-Aware Compilation
+### Solution 3: content-addressed caching, resolved as it runs
 
-The compiler resolves caching **before execution**:
+Every node's identity is a hash of its configuration, its state and its
+*input content*:
 
-1. Analyze the graph topology
-2. Compute cache keys for each node: `hash(filter_config + input_data_hash)`
-3. Replace cached nodes with `ExecutionPlan::Cached`
-4. The resulting plan already knows what to execute and what to reuse
+1. `state = hash(config + x + y)`
+2. `output = hash(config + state + input)`
 
-This is more powerful than post-hoc caching because it can **optimize the entire plan** before running anything.
+Because a downstream key depends on the upstream **content** rather than on
+the upstream node, an early node that recomputes to the same value stops the
+invalidation right there — change a parameter that turns out not to matter and
+the rest of the graph is still a hit.
+
+Keys are resolved per node at runtime rather than at compile time, for the
+reason that makes the scheme work at all: the key needs the materialized input,
+which does not exist until the previous node has run.
 
 ### Solution 4: Filter-Level Search Spaces
 
 Hyperparameter search spaces are defined where the parameters live -- in the filter itself:
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MyClassifier {
     #[soma(search(low = 0.001, high = 100.0, scale = "log"))]
     C: f64,

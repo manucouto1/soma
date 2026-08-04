@@ -7,17 +7,9 @@
 /// Payloads above this threshold are uploaded via HTTP bulk or DataStore.
 pub const INLINE_THRESHOLD_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 
-#[cfg(feature = "s3")]
-pub mod s3;
-
-#[cfg(feature = "s3")]
-pub use s3::S3DataStore;
-
-#[cfg(feature = "zarr")]
-pub mod zarr;
-
-#[cfg(feature = "zarr")]
-pub use zarr::ZarrStore;
+// The S3 and Zarr backends live in `somatize-store`. They each own a
+// tokio runtime, and a contract crate must not hand one to everything
+// that depends on it.
 
 use crate::cache::CacheKey;
 use crate::error::{Result, SomaError};
@@ -27,11 +19,11 @@ use serde::{Deserialize, Serialize};
 /// Metadata about a stored value, queryable without loading data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreMeta {
-    /// Total number of rows (shape[0] for tensors, 1 for scalar types).
+    /// Total number of rows (`shape[0]` for tensors, 1 for scalar types).
     pub total_rows: usize,
     /// Remaining shape dimensions after the row axis (shape[1..] for tensors).
     pub shape_tail: Vec<usize>,
-    /// Type tag: "tensor", "json", "bytes", or "empty".
+    /// Type tag: "tensor", "text", "json", "bytes", or "empty".
     pub dtype: String,
 }
 
@@ -43,6 +35,11 @@ impl StoreMeta {
                 total_rows: shape.first().copied().unwrap_or(0),
                 shape_tail: shape.get(1..).unwrap_or_default().to_vec(),
                 dtype: "tensor".into(),
+            },
+            Value::Text(_) => Self {
+                total_rows: 1,
+                shape_tail: vec![],
+                dtype: "text".into(),
             },
             Value::Json(_) => Self {
                 total_rows: 1,

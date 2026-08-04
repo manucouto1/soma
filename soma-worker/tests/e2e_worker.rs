@@ -35,15 +35,12 @@ impl Filter for TestDoubler {
             kind: FilterKind::Stateless,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -82,6 +79,7 @@ async fn worker_ws_execute_plan() {
     // Send a plan
     use futures_util::{SinkExt, StreamExt};
     let plan = SerializedPlan {
+        protocol_version: PROTOCOL_VERSION,
         plan_id: "test_001".into(),
         plan: ExecutionPlan::Execute {
             node_id: "doubler".into(),
@@ -155,6 +153,7 @@ async fn worker_ws_sequence_plan() {
 
     use futures_util::{SinkExt, StreamExt};
     let plan = SerializedPlan {
+        protocol_version: PROTOCOL_VERSION,
         plan_id: "seq_001".into(),
         plan: ExecutionPlan::Sequence(vec![
             ExecutionPlan::Execute {
@@ -260,4 +259,94 @@ async fn worker_health_and_info() {
     assert_eq!(json["worker_id"], "e2e_worker");
 
     server.abort();
+}
+
+/// A `Shutdown` message must stop the *server*, not the process.
+///
+/// This test could not exist before: the handler called
+/// `std::process::exit(0)`, which would have taken the test binary down
+/// mid-run. The same call also killed the user's interpreter, because
+/// `soma.Worker.serve()` runs this server on a thread inside their Python
+/// process.
+#[tokio::test]
+async fn a_shutdown_message_stops_the_server_and_not_the_process() {
+    use futures_util::{SinkExt, StreamExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (router, shutdown) = somatize_worker::worker_router_with_shutdown(
+        make_worker(),
+        "/tmp/soma-envs-test",
+        "/tmp/soma-work-test",
+        None,
+    );
+
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move { shutdown.wait().await })
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let url = format!("ws://{addr}/ws");
+    let (mut ws, _) = connect_async(&url).await.expect("WS connect failed");
+    let msg = CoordinatorToWorker::Shutdown {
+        reason: "test".into(),
+    };
+    ws.send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+        .await
+        .unwrap();
+
+    let ack = ws.next().await.expect("no ack").expect("ws error");
+    assert!(ack.to_text().unwrap().contains("ShutdownAck"));
+
+    // The server task finishes on its own; reaching this line at all means
+    // the process survived.
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("server did not shut down within 5s")
+        .expect("server task panicked");
+}
+
+/// The transport works when the caller is already inside a runtime.
+///
+/// `send_msg`, `notify` and `stream_plan` used to build a current-thread
+/// runtime and `block_on` it. Inside an existing runtime that is a panic,
+/// not an error — and this is not a hypothetical caller:
+/// `soma.Worker.serve()` runs an axum server on a thread of the user's
+/// Python process, and the bindings dispatch plans from there.
+///
+/// Multi-threaded on purpose, and called directly rather than through
+/// `spawn_blocking`: `spawn_blocking` moves the work off the runtime's
+/// worker threads, which is exactly what hides the bug.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_transport_does_not_panic_when_called_from_inside_a_runtime() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (router, shutdown) = somatize_worker::worker_router_with_shutdown(
+        make_worker(),
+        "/tmp/soma-envs-rt-test",
+        "/tmp/soma-work-rt-test",
+        None,
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move { shutdown.wait().await })
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let transport = somatize_worker::WsTransport::new(format!("ws://{addr}"), None);
+    let status = transport.send_msg(&CoordinatorToWorker::StatusRequest);
+    assert!(status.is_ok(), "send_msg from inside a runtime: {status:?}");
+
+    transport
+        .notify(&CoordinatorToWorker::Shutdown {
+            reason: "done".into(),
+        })
+        .expect("notify from inside a runtime");
+
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
 }

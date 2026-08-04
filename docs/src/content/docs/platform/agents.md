@@ -1,240 +1,171 @@
 ---
 title: Agents & Memory
-description: Autonomous research agents that build, execute, and analyze pipelines.
+description: The research loop as a Step, and the experiment pool it remembers with.
 ---
 
 ## Overview
 
-Soma's agent layer enables autonomous research workflows. An agent can:
+An autonomous researcher in Soma is a node, not a runtime. `ResearchStep`
+(crate `somatize-agent`) is a [`Step`](/soma/design/agentic/) that proposes
+an experiment, runs it, reads the metrics, and decides whether to keep
+going. Everything around it already existed and is not reimplemented: the
+loop is the effect driver's, the durability is the journal's, the record is
+`somatize-memory`'s, and running a pipeline is `GraphHandler`'s.
 
-- Generate hypotheses and translate them into pipelines
-- Execute pipelines (locally or remotely)
-- Analyze results using temporal knowledge
-- Decide which research lines to pursue
-- Document findings automatically
+What is left is the reasoning, and the reasoning is the model's.
 
-The agent interacts with Soma through the **same API** as a human user. It is not embedded in the runtime -- it sits above it.
+## The loop
 
-## Agent Structure
+One turn:
 
-Inspired by the OpenFang model from Chatty the Lab:
-
-```rust
-pub struct Agent {
-    /// Identity and personality (system prompt)
-    pub soul: String,
-
-    /// Capabilities: domain knowledge, reasoning templates
-    pub skills: Vec<Skill>,
-
-    /// Tools: shell, web, file system, Soma API
-    pub hands: Vec<Hand>,
-
-    /// Temporal memory (ChronosVector)
-    pub memory: SomaMemory,
-
-    /// LLM driver for reasoning
-    pub driver: Box<dyn LlmDriver>,
-}
-```
-
-### Soul
-
-The agent's identity. Defines its role, expertise, and behavior:
-
-```markdown
-You are a research agent specializing in time series classification.
-Your goal is to systematically explore normalization techniques
-and their impact on classification accuracy across the UCR archive.
-
-When results are inconclusive, prefer exploring a new technique
-over repeating experiments with minor parameter changes.
-```
-
-### Skills
-
-Prompt-based capabilities that guide the agent's reasoning:
+1. **Ask** the model what to try next, given the objective and what the pool
+   already knows.
+2. **Read an `Action`** out of the reply — a constrained schema, not prose.
+3. `RunExperiment` → **`Effect::Graph`**, which runs the pipeline with the
+   proposed parameters and hands back its metrics.
+4. `Conclude` → **done**, with every experiment behind it.
 
 ```rust
-pub struct Skill {
-    pub name: String,
-    pub description: String,
-    pub prompt: String,          // instructions injected into context
-    pub tools_provided: Vec<String>, // tools this skill unlocks
-}
+use somatize_agent::ResearchStep;
+
+let agent = ResearchStep::new("ollama/qwen2.5", "beat 0.8 held-out F1", pipeline)
+    .with_history(kb.all()?)        // start from what is already known
+    .with_max_iterations(10);
+
+let mut catalog = NodeCatalog::new();
+catalog.register_step("researcher", Box::new(agent));
 ```
 
-Examples:
-- **Hypothesis generation**: Templates for formulating testable hypotheses
-- **Experiment design**: Best practices for pipeline construction
-- **Result analysis**: Statistical analysis and interpretation patterns
-- **Report writing**: Documentation templates and formatting
-
-### Hands
-
-Actual tools the agent can execute:
+The driver needs two handlers: one that serves `Effect::Llm` (from
+`somatize-llm`) and a `GraphHandler` holding the filters the pipeline is
+built from.
 
 ```rust
-pub struct Hand {
-    pub name: String,
-    pub tools: Vec<ToolDefinition>,
-}
+let driver = EffectDriver::new(journal)
+    .with_handler(Arc::new(LlmHandler::new(router)))
+    .with_handler(Arc::new(GraphHandler::new(library)));
 ```
 
-Examples:
-- **soma_pipeline**: Create, compile, and run pipelines
-- **soma_study**: Launch hyperparameter optimization studies
-- **soma_knowledge**: Query the knowledge base
-- **file_io**: Read and write files (datasets, reports)
-- **web_search**: Search for papers and related work
+### The two actions
 
-## Agent Loop
-
+```json
+{"action": "run_experiment", "name": "exp_0007",
+ "research_line": "regularization",
+ "hypothesis": "C=4 lifts held-out F1 above 0.8",
+ "params": {"classifier.C": 4.0}}
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    AGENT RESEARCH LOOP                    │
-│                                                          │
-│  1. Receive objective (from user or self-generated)      │
-│     "Investigate impact of normalization on TS classif." │
-│                                                          │
-│  2. Consult knowledge base                               │
-│     "What have I tried before? What worked?"             │
-│     → ChronosVector: trajectory, change points           │
-│                                                          │
-│  3. Generate hypothesis                                  │
-│     "Z-norm may outperform min-max on short series"      │
-│                                                          │
-│  4. Build pipeline                                       │
-│     Pipeline([ZNorm(), TSClassifier(model="rocket")])    │
-│                                                          │
-│  5. Execute (local or remote)                            │
-│     study = Study(pipeline, Bayesian(n=50))              │
-│     lab.run(study, data)                                 │
-│                                                          │
-│  6. Analyze results                                      │
-│     Compare with previous experiments                    │
-│     Detect change points, trends                         │
-│                                                          │
-│  7. Decide next action                                   │
-│     a) New hypothesis → go to 3                          │
-│     b) Refine current → modify pipeline, go to 5         │
-│     c) Conclude → generate report                        │
-│                                                          │
-│  8. Document                                             │
-│     Index experiment in knowledge base                   │
-│     Generate report with findings                        │
-└─────────────────────────────────────────────────────────┘
+```json
+{"action": "conclude", "reason": "the line plateaued at 0.79"}
 ```
 
-## Memory: ChronosVector Integration
+Two, and deliberately no more. An agent that can run an experiment and an
+agent that can stop covers the whole loop; every other verb people reach for
+("analyze", "compare", "summarize") is the model thinking, and thinking does
+not need a protocol.
 
-The agent's memory is powered by ChronosVector, providing temporal-aware recall:
+### What the contract refuses
+
+- **Prose instead of an action ends the run.** Guessing would mean launching
+  an experiment nobody asked for, on a budget somebody is paying.
+- **An experiment without a falsifiable hypothesis does not deserialize.** A
+  result nobody can interpret later is a result nobody will read, and the
+  pool exists to be read later.
+- **The iteration budget stops a model that will not stop itself.**
+
+### A failed experiment is a finding
+
+`Effect::Graph` returns `EffectResult::Failed` rather than erroring, and the
+step records it with the failure in its notes. A configuration that will not
+run is information — often the valuable kind — and it is what stops the
+agent proposing the same broken thing next turn. Ending the run instead
+would discard everything learned before it.
+
+### The step keeps no state
+
+The history is rebuilt from `ctx.history` each turn, by pairing each model
+reply with the result that followed it. That is not a style preference: a
+replay reconstructs exactly the history the original run had, because it
+replays exactly the same results. Kept in a field, the two can drift.
+
+### Metrics
+
+A pipeline reports its metrics as a node's output, the same way a `Study`
+objective reads them. Every number in the result becomes a metric named by
+where it sits — `{"classifier": {"f1": 0.9}}` gives `classifier.f1` — so two
+nodes both reporting `loss` stay two series when experiments are compared
+months later. Arrays are data, not metrics.
+
+## Memory: the experiment pool
+
+The agent's memory is the [experiment pool](/soma/design/experiment-pool/) —
+the same `.soma/experiments.jsonl` a human's runs write to. There is no
+separate agent memory store: an agent remembers what was run because
+running it recorded it.
+
+The interface is the `KnowledgeBase` trait
+([Knowledge Base](/soma/platform/knowledge-base/)):
 
 ```rust
-pub struct SomaMemory {
-    vector_store: ChronosVector,
-}
+use chrono::Utc;
+use somatize_memory::{FileKnowledgeBase, KnowledgeBase, RetrievalQuery};
 
-impl SomaMemory {
-    /// Episodic recall: "What did I try recently?"
-    pub async fn recall(
-        &self,
-        context: &[f32],         // embedding of current situation
-        temporal_weight: f64,     // how much to weight recency
-    ) -> Vec<Episode> { .. }
+let mut kb = FileKnowledgeBase::open(".soma/experiments.jsonl")?;
+kb.refresh()?;   // pick up runs that finished elsewhere
 
-    /// Trajectory: "How has F1 evolved across my experiments?"
-    pub async fn trajectory(
-        &self,
-        experiment_line: &str,
-    ) -> Trajectory { .. }
+// "What have I tried that bears on this?" — ranked by text relevance,
+// architectural resemblance, recency and importance.
+let hits = kb.retrieve(&RetrievalQuery::new("z-norm on short series", Utc::now()))?;
 
-    /// Change points: "When did results change significantly?"
-    pub async fn change_points(
-        &self,
-        metric: &str,
-    ) -> Vec<ChangePoint> { .. }
+// "What came of that starting point?" — the tree, with the change
+// applied to the parent labelling every edge.
+let lineage = kb.lineage(&hits[0].record.id)?;
 
-    /// Drift: "Is my approach converging or diverging?"
-    pub async fn drift(
-        &self,
-        line: &str,
-        window: TimeRange,
-    ) -> DriftMetrics { .. }
-
-    /// Store a new experiment
-    pub async fn record_experiment(
-        &self,
-        record: ExperimentRecord,
-    ) -> Result<()> { .. }
-}
+// "How has this line moved?"
+kb.trajectory("rocket-znorm", "val_f1")?;
+kb.change_points("rocket-znorm", "val_f1", 0.05)?;
+kb.promising_lines("val_f1")?;
 ```
 
-### ChronosVector Capabilities Used
+Over MCP the same capabilities are `kb_find_similar`, `kb_lineage`,
+`kb_diff`, `kb_record_conclusion`, `kb_branch_from`, `kb_summarize_run`
+and `kb_stats`.
 
-| ChronosVector Feature | Agent Use Case |
-|---|---|
-| Snapshot kNN | "Find experiments similar to this hypothesis" |
-| Evolutionary Path | "How has this research line evolved?" |
-| Vector Velocity | "Is improvement accelerating or slowing?" |
-| Change Point Detection | "When did a breakthrough happen?" |
-| Drift Quantification | "Is this line converging?" |
-| Temporal Analogy | "What worked 2 weeks ago may apply now" |
-| Tiered Storage | Hot: current session, Warm: recent, Cold: archive |
+Dead ends are retrievable on purpose: `importance` puts a floor under
+any run that failed, crashed or regressed and carries a conclusion.
+Not repeating a failed idea saves an agent as much time as repeating a
+successful one.
 
 ## Python API
 
-```python
-from soma.agent import Researcher
+:::caution[Rust only, for now]
+`ResearchStep` has no Python binding yet. From Python, the agentic surface
+is `soma.Agent`, `soma.Judge`, `soma.agentic` and `soma.library` — see
+[Agentic Graphs](/soma/design/agentic/) — and the memory half above, which
+works today from either language.
 
-# Create a research agent
-agent = Researcher(
-    lab=lab,
-    plan="""
-    Investigate the impact of different normalization techniques
-    on time series classification accuracy.
+`soma.library.Retriever` is the same retrieval this page describes, as a
+node: point it at the pool and it attaches what it found to whatever passes
+through, which is how an agent reads its own memory without any of the
+plumbing below.
+:::
 
-    Datasets: UCR archive subset (GunPoint, ECG200, Coffee)
-    Techniques: z-normalization, min-max, robust scaling, none
-    Classifiers: ROCKET, 1-NN DTW, InceptionTime
-    Metrics: accuracy, F1-weighted, training time
-    """,
-)
+## Events
 
-# Let the agent run autonomously
-report = agent.investigate(max_iterations=20)
-
-# The agent:
-# 1. Downloads/loads datasets
-# 2. Creates pipelines for each combination
-# 3. Runs studies with hyperparameter optimization
-# 4. Records results in knowledge base
-# 5. Analyzes trajectories to find promising lines
-# 6. Generates a final report with findings
-
-# Interactive: ask the agent about its findings
-agent.ask("Which normalization worked best for short series?")
-agent.ask("Show me the trajectory for the ROCKET experiments")
-```
-
-## Events from Agent Execution
-
-The agent loop produces its own events layered on top of Study/Trial/Run events:
+The research loop emits the ordinary step events, so its trace nests inside
+whatever else is running:
 
 ```
-AgentStarted { objective }
-  HypothesisGenerated { hypothesis, confidence }
-  PipelineBuilt { pipeline_summary }
-  StudyStarted { ... }
-    TrialStarted { ... }
-      RunStarted { ... }
-        NodeStarted { ... }
-        NodeCompleted { ... }
-      RunCompleted { ... }
-    TrialCompleted { ... }
-  StudyCompleted { ... }
-  AnalysisCompleted { findings }
-  DecisionMade { action: "new_hypothesis" | "refine" | "conclude" }
-  ExperimentRecorded { id, summary }
-AgentCompleted { report }
+AgentTurnStarted { node_id, turn }
+  EffectRequested  { label: "llm:ollama/qwen2.5" }
+  EffectCompleted  { .. }
+  EffectRequested  { label: "graph" }
+    RunStarted     { .. }        # the pipeline it launched
+      NodeStarted  { .. }
+      NodeCompleted{ .. }
+    RunCompleted   { .. }
+  EffectCompleted  { .. }
+AgentStepCompleted { node_id, turns }
 ```
+
+There is no separate agent event level. An agent's experiment is a run like
+any other, which is exactly why it lands in the pool like any other.

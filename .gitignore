@@ -11,3 +11,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 .env
+
+# Local experiment tracking (runs, journals) — never committed
+.soma/
+.nfs*

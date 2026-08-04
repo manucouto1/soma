@@ -2,12 +2,36 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
+// GitHub Pages project site: https://manucouto1.github.io/soma/
+// `base` must be set or every internal link resolves to the domain
+// root and 404s once deployed. `astro dev` also serves under the base,
+// so links that include it work identically in dev and in production.
+const SITE = 'https://manucouto1.github.io';
+const BASE = '/soma';
+
 // https://astro.build/config
 export default defineConfig({
+	site: SITE,
+	base: BASE,
 	integrations: [
 		starlight({
 			title: 'Soma',
 			description: 'A computational graph runtime for research pipelines, agent orchestration, and data virtualization.',
+			// Two files rather than one with a `prefers-color-scheme`
+			// block: Starlight renders the logo as an <img>, so a media
+			// query inside the SVG would follow the OS and ignore the
+			// site's own theme toggle. Starlight swaps these with CSS.
+			logo: {
+				light: './src/assets/logo-light.svg',
+				dark: './src/assets/logo-dark.svg',
+			},
+			favicon: '/favicon.svg',
+			head: [
+				// Rasterized: X and several others refuse SVG previews.
+				{ tag: 'meta', attrs: { property: 'og:image', content: `${SITE}${BASE}/og-card.png` } },
+				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: `${SITE}${BASE}/og-card.png` } },
+			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/manucouto1/soma' }],
 			defaultLocale: 'en',
 			sidebar: [
@@ -15,6 +39,8 @@ export default defineConfig({
 					label: 'Getting Started',
 					items: [
 						{ label: 'Introduction', slug: 'getting-started/introduction' },
+						{ label: 'Quickstart', slug: 'getting-started/quickstart' },
+						{ label: 'Tutorials (notebooks)', slug: 'getting-started/notebooks' },
 						{ label: 'Problem & Solution', slug: 'getting-started/problem-solution' },
 						{ label: 'Philosophy', slug: 'getting-started/philosophy' },
 					],
@@ -31,17 +57,26 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Execution Modes & Data Transport', slug: 'guides/execution-modes' },
+						{ label: 'Gradient Health Audit', slug: 'guides/gradient-audit' },
+						{ label: 'Checkpoints', slug: 'guides/checkpoints' },
+						{ label: 'Agentic Quickstart', slug: 'guides/agentic-quickstart' },
+						{ label: 'Writing a Step', slug: 'guides/writing-a-step' },
 					],
 				},
 				{
 					label: 'Design',
 					items: [
+						{ label: 'Architecture Decisions', slug: 'design/decisions' },
 						{ label: 'Filter Model', slug: 'design/filter-model' },
 						{ label: 'Caching System', slug: 'design/caching' },
 						{ label: 'Streaming', slug: 'design/streaming' },
 						{ label: 'Gradient Propagation', slug: 'design/gradients' },
 						{ label: 'Compiler & Execution Plans', slug: 'design/compiler' },
+						{ label: 'Agentic Graphs', slug: 'design/agentic' },
 						{ label: 'Event System', slug: 'design/events' },
+						{ label: 'Experiment Tracking', slug: 'design/tracking' },
+						{ label: 'Experiment Pool', slug: 'design/experiment-pool' },
+						{ label: 'Visualization', slug: 'design/visualization' },
 						{ label: 'Hyperparameter Optimization', slug: 'design/optimization' },
 						{ label: 'DataStore & S3', slug: 'design/data-store' },
 						{ label: 'Scheduler', slug: 'design/scheduler' },
@@ -61,8 +96,11 @@ export default defineConfig({
 					label: 'API Reference',
 					items: [
 						{
+							// cargo-doc output, copied into dist/api/ by the
+							// deploy workflow — a raw link, so it carries the
+							// base explicitly (slug: entries get it for free).
 							label: 'Rust API (cargo doc)',
-							link: '/api/soma_core/',
+							link: `${BASE}/api/somatize_core/`,
 							attrs: { target: '_blank' },
 						},
 						{ label: 'Python API', slug: 'api/python' },

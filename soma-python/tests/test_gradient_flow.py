@@ -164,28 +164,17 @@ def worker_server():
     global WORKER_PORT
     WORKER_PORT = find_free_port()
 
-    def run_worker():
-        w = Worker(
+    from conftest import start_worker_and_wait
+
+    start_worker_and_wait(
+        lambda: Worker(
             port=WORKER_PORT,
             tags=["test"],
             token=WORKER_TOKEN,
             worker_id="grad-test-worker",
-        )
-        w.serve()
-
-    thread = threading.Thread(target=run_worker, daemon=True)
-    thread.start()
-
-    for _ in range(50):
-        try:
-            url = f"http://127.0.0.1:{WORKER_PORT}/health"
-            resp = urllib.request.urlopen(url, timeout=1)
-            if resp.read() == b"ok":
-                break
-        except Exception:
-            time.sleep(0.1)
-    else:
-        pytest.fail("Worker did not start in time")
+        ),
+        WORKER_PORT,
+    )
 
     yield
 

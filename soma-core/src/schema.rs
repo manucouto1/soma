@@ -24,6 +24,56 @@ pub enum DataType {
     Bytes,
     /// Structured JSON (any shape).
     Json,
+    /// A conversation: a list of [`crate::message::Message`].
+    ///
+    /// Distinct from `Json` so the compiler can reject an edge that hands a
+    /// tensor, or an arbitrary document, to a node expecting a conversation.
+    Messages,
+}
+
+impl DataType {
+    /// Could a value of this type ever be read as `target`?
+    ///
+    /// This is coarser than equality on purpose. `is_compatible_with`
+    /// demands an exact dtype match, which makes every mismatch equally
+    /// suspicious — `f32` meeting `f64` and a conversation meeting a tensor
+    /// both come out as "not compatible", so neither can be more than a
+    /// warning without breaking the first case.
+    ///
+    /// This answers the stronger question: is there *any* reading under
+    /// which this connection makes sense? Numeric widths differ but describe
+    /// the same thing; a tensor and a conversation do not. The second kind
+    /// is what fails a multi-agent handoff, and it is worth refusing to
+    /// compile rather than warning about.
+    ///
+    /// The permitted coercions are exactly the ones the runtime performs:
+    /// - anything → `Json` (every `Value` has a `to_plain_json`)
+    /// - `Json` → anything (it is the dynamic type; the reader checks)
+    /// - `Utf8` → `Messages` (a bare prompt becomes a user turn)
+    /// - `Messages` → `Utf8` (a conversation's prose)
+    /// - numeric ↔ numeric (widths differ; meaning does not)
+    pub fn can_coerce_to(&self, target: &DataType) -> bool {
+        use DataType::*;
+
+        if self == target {
+            return true;
+        }
+        // Json is the dynamic type: it absorbs and yields anything.
+        if matches!(self, Json) || matches!(target, Json) {
+            return true;
+        }
+        if self.is_numeric() && target.is_numeric() {
+            return true;
+        }
+        matches!((self, target), (Utf8, Messages) | (Messages, Utf8))
+    }
+
+    pub fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            Self::Float64 | Self::Float32 | Self::Int64 | Self::Bool
+        )
+    }
 }
 
 impl fmt::Display for DataType {
@@ -36,6 +86,7 @@ impl fmt::Display for DataType {
             Self::Utf8 => write!(f, "str"),
             Self::Bytes => write!(f, "bytes"),
             Self::Json => write!(f, "json"),
+            Self::Messages => write!(f, "messages"),
         }
     }
 }
@@ -52,7 +103,7 @@ pub struct Schema {
     /// The primitive data type.
     pub dtype: DataType,
 
-    /// Shape dimensions. Empty for scalars, [n] for vectors, [r,c] for matrices, etc.
+    /// Shape dimensions. Empty for scalars, `[n]` for vectors, `[r,c]` for matrices, etc.
     /// `None` means shape is dynamic/unknown.
     pub shape: Option<Vec<Dimension>>,
 }
@@ -118,6 +169,26 @@ impl Schema {
         }
     }
 
+    /// Create a schema for UTF-8 text (shape is irrelevant).
+    ///
+    /// This is what a prompt or a completion carries. An edge typed `text`
+    /// will not accept a tensor, which is how a mis-wired handoff between two
+    /// agent nodes becomes a compile error rather than a runtime surprise.
+    pub fn text() -> Self {
+        Self {
+            dtype: DataType::Utf8,
+            shape: None,
+        }
+    }
+
+    /// Create a schema for a conversation.
+    pub fn messages() -> Self {
+        Self {
+            dtype: DataType::Messages,
+            shape: None,
+        }
+    }
+
     /// Create a schema for raw bytes.
     pub fn bytes() -> Self {
         Self {
@@ -129,6 +200,16 @@ impl Schema {
     /// Create a schema with fully dynamic (unknown) shape.
     pub fn dynamic(dtype: DataType) -> Self {
         Self { dtype, shape: None }
+    }
+
+    /// Is connecting these two definitely a mistake?
+    ///
+    /// True when no reading of `self` could satisfy `other` — a tensor
+    /// arriving where a conversation is expected, say. The compiler refuses
+    /// to build such a graph, rather than warning and letting it fail
+    /// mid-run once tokens have been spent.
+    pub fn is_incompatible_with(&self, other: &Schema) -> bool {
+        !self.dtype.can_coerce_to(&other.dtype)
     }
 
     /// Check if this schema is compatible with another (can be connected in a pipeline).

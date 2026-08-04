@@ -1,8 +1,9 @@
 //! Computational graph — DAG of filter nodes connected by edges.
 //!
 //! The graph is the user-facing representation of a pipeline topology.
-//! It gets compiled into an [`ExecutionPlan`] by the compiler.
+//! It gets compiled into an `ExecutionPlan` by the compiler.
 
+use crate::control::LoopCondition;
 use crate::error::{Result, SomaError};
 use crate::strategy::TrainingStrategy;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,8 @@ use std::collections::{HashMap, HashSet};
 /// Unique identifier for a node in a graph.
 ///
 /// Currently a type alias. Will be promoted to a newtype in a future version
-/// for stronger type safety (tracked in architecture-review.md).
+/// for stronger type safety. Deliberately deferred — see the
+/// "NodeId stays a String" entry in docs design/decisions.
 pub type NodeId = String;
 
 /// Unique identifier for an edge in a graph.
@@ -26,10 +28,28 @@ pub enum NodeKind {
     Filter { filter_name: String },
     /// A nested sub-graph (compiled recursively).
     SubGraph { graph: Box<Graph> },
-    /// A loop node — body is the sub-graph of successors.
-    Loop { max_iterations: Option<usize> },
-    /// A branch/conditional node — arms determined by control edges.
-    Branch,
+    /// A loop node. Its body is the sub-graph reached through its *control*
+    /// edges; `until` names what decides to stop.
+    Loop {
+        max_iterations: Option<usize>,
+        /// Defaults to [`LoopCondition::BodyTerminal`], resolved by the
+        /// compiler. Never inferred at runtime from execution order.
+        #[serde(default)]
+        until: LoopCondition,
+    },
+    /// A branch/conditional node. Arms are the labelled control edges
+    /// leaving it; `arms` optionally declares the complete set of labels the
+    /// condition may produce, so the compiler can catch a mislabelled edge
+    /// before the run rather than at the moment the branch is taken.
+    Branch {
+        /// Declared labels. Empty means "infer from the edges" — the
+        /// backwards-compatible default.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arms: Vec<String>,
+    },
+    /// An effectful node: calls models, tools, or other graphs, and decides
+    /// what happens next. See [`crate::step::Step`].
+    Step { step_name: String },
 }
 
 /// A node in the computational graph.
@@ -98,24 +118,64 @@ impl Node {
         }
     }
 
-    /// Create a loop node.
+    /// Create a loop node whose stop condition is its body's terminal node.
     pub fn loop_node(id: impl Into<String>, max_iterations: Option<usize>) -> Self {
+        Self::loop_until(id, max_iterations, LoopCondition::BodyTerminal)
+    }
+
+    /// Create a loop node with an explicit stop condition.
+    pub fn loop_until(
+        id: impl Into<String>,
+        max_iterations: Option<usize>,
+        until: LoopCondition,
+    ) -> Self {
         let id = id.into();
         Self {
             id: id.clone(),
             label: id,
-            kind: NodeKind::Loop { max_iterations },
+            kind: NodeKind::Loop {
+                max_iterations,
+                until,
+            },
             target: None,
         }
     }
 
-    /// Create a branch/conditional node.
+    /// Create an effectful step node.
+    pub fn step(id: impl Into<String>, step_name: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            label: id.clone(),
+            id,
+            kind: NodeKind::Step {
+                step_name: step_name.into(),
+            },
+            target: None,
+        }
+    }
+
+    /// Create a branch node whose arms are inferred from its control edges.
     pub fn branch(id: impl Into<String>) -> Self {
+        Self::branch_over(id, Vec::<String>::new())
+    }
+
+    /// Create a branch node declaring the labels its condition may produce.
+    ///
+    /// The compiler then checks the edges against this list in both
+    /// directions: a declared arm with no edge, or an edge labelling an arm
+    /// that was never declared, is a compile error rather than a branch that
+    /// silently never fires.
+    pub fn branch_over(
+        id: impl Into<String>,
+        arms: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         let id = id.into();
         Self {
             id: id.clone(),
             label: id,
-            kind: NodeKind::Branch,
+            kind: NodeKind::Branch {
+                arms: arms.into_iter().map(Into::into).collect(),
+            },
             target: None,
         }
     }
@@ -186,6 +246,13 @@ impl Edge {
             kind: EdgeKind::Control,
             label: None,
         }
+    }
+
+    /// Attach a label. On an edge leaving a `Branch` node the label names the
+    /// arm; the branch condition's value is matched against it.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 }
 
@@ -392,6 +459,19 @@ impl Graph {
 
         Ok(())
     }
+
+    /// Does this graph — or any sub-graph nested inside it — contain a step?
+    ///
+    /// A step calls models and tools, so a graph that contains one is not a
+    /// deterministic function of its input. [`crate::effect::Effect::is_pure`]
+    /// asks this before memoizing a graph effect by content.
+    pub fn contains_steps(&self) -> bool {
+        self.nodes.iter().any(|node| match &node.kind {
+            NodeKind::Step { .. } => true,
+            NodeKind::SubGraph { graph } => graph.contains_steps(),
+            _ => false,
+        })
+    }
 }
 
 // ── Visualization ──
@@ -406,20 +486,47 @@ impl Graph {
     ///     scaler --> model
     /// ```
     pub fn to_mermaid(&self) -> String {
+        self.to_mermaid_with(&crate::viz::GraphOverlay::default())
+    }
+
+    /// Render as a Mermaid diagram with per-node execution annotations.
+    ///
+    /// Each annotated node gets a second label line (duration, cache
+    /// tier, health flags — see [`crate::viz::NodeOverlay::sublabel_text`])
+    /// and a status `classDef` for coloring. An empty overlay produces
+    /// exactly [`Graph::to_mermaid`]'s output.
+    pub fn to_mermaid_with(&self, overlay: &crate::viz::GraphOverlay) -> String {
         use std::fmt::Write;
         let mut out = String::from("graph LR\n");
         for node in &self.nodes {
+            let ov = overlay.nodes.get(&node.id);
+            // A sublabel needs a quoted label to allow `<br/>`.
+            let label_with = |base: &str| match ov.and_then(|o| o.sublabel_text()) {
+                Some(sub) => format!("\"{base}<br/>{sub}\""),
+                None => base.to_string(),
+            };
             let shape = match &node.kind {
-                NodeKind::Filter { .. } => format!("    {}[{}]", node.id, node.label),
-                NodeKind::SubGraph { .. } => format!("    {}[[{}]]", node.id, node.label),
-                NodeKind::Loop { max_iterations } => {
+                NodeKind::Filter { .. } => {
+                    format!("    {}[{}]", node.id, label_with(&node.label))
+                }
+                NodeKind::SubGraph { .. } => {
+                    format!("    {}[[{}]]", node.id, label_with(&node.label))
+                }
+                NodeKind::Loop { max_iterations, .. } => {
                     let label = match max_iterations {
                         Some(n) => format!("{} (max {})", node.label, n),
                         None => node.label.clone(),
                     };
-                    format!("    {}(({}))", node.id, label)
+                    format!("    {}(({}))", node.id, label_with(&label))
                 }
-                NodeKind::Branch => format!("    {}{{{{{}}}}}", node.id, node.label),
+                NodeKind::Branch { .. } => {
+                    format!("    {}{{{{{}}}}}", node.id, label_with(&node.label))
+                }
+                // Parallelogram: the I/O shape, which is what an effectful
+                // node is — it reaches outside the graph.
+                NodeKind::Step { .. } => {
+                    format!("    {}[/{}/]", node.id, label_with(&node.label))
+                }
             };
             let _ = writeln!(out, "{shape}");
         }
@@ -438,11 +545,44 @@ impl Graph {
                 let _ = writeln!(out, "    {} {} {}", edge.source, arrow, edge.target);
             }
         }
+        let assignments: Vec<(&str, &'static str)> = self
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                overlay
+                    .nodes
+                    .get(&n.id)
+                    .and_then(|o| o.style_class())
+                    .map(|class| (n.id.as_str(), class))
+            })
+            .collect();
+        if !assignments.is_empty() {
+            let mut used: Vec<&'static str> = assignments.iter().map(|(_, c)| *c).collect();
+            used.sort_unstable();
+            used.dedup();
+            for class in used {
+                let _ = writeln!(
+                    out,
+                    "    classDef {class} {}",
+                    crate::viz::mermaid_class_style(class)
+                );
+            }
+            for (id, class) in assignments {
+                let _ = writeln!(out, "    class {id} {class}");
+            }
+        }
         out
     }
 
     /// Render as Graphviz DOT format.
     pub fn to_graphviz(&self) -> String {
+        self.to_graphviz_with(&crate::viz::GraphOverlay::default())
+    }
+
+    /// Render as Graphviz DOT with per-node execution annotations:
+    /// a second label line plus fill/border status colors. An empty
+    /// overlay produces exactly [`Graph::to_graphviz`]'s output.
+    pub fn to_graphviz_with(&self, overlay: &crate::viz::GraphOverlay) -> String {
         use std::fmt::Write;
         let mut out = String::from("digraph G {\n    rankdir=LR;\n");
         for node in &self.nodes {
@@ -450,12 +590,22 @@ impl Graph {
                 NodeKind::Filter { .. } => "box",
                 NodeKind::SubGraph { .. } => "doubleoctagon",
                 NodeKind::Loop { .. } => "ellipse",
-                NodeKind::Branch => "diamond",
+                NodeKind::Branch { .. } => "diamond",
+                NodeKind::Step { .. } => "parallelogram",
             };
+            let ov = overlay.nodes.get(&node.id);
+            let label = match ov.and_then(|o| o.sublabel_text()) {
+                Some(sub) => format!("{}\\n{}", node.label, sub),
+                None => node.label.clone(),
+            };
+            let style = ov
+                .and_then(|o| o.style_class())
+                .map(crate::viz::dot_class_style)
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
-                "    \"{}\" [label=\"{}\" shape={}];",
-                node.id, node.label, shape
+                "    \"{}\" [label=\"{}\" shape={}{}];",
+                node.id, label, shape, style
             );
         }
         for edge in &self.edges {
@@ -512,11 +662,12 @@ impl Graph {
                 NodeKind::SubGraph { graph } => {
                     format!(" [subgraph: {} nodes]", graph.nodes.len())
                 }
-                NodeKind::Loop { max_iterations } => match max_iterations {
+                NodeKind::Loop { max_iterations, .. } => match max_iterations {
                     Some(n) => format!(" [loop max={n}]"),
                     None => " [loop]".into(),
                 },
-                NodeKind::Branch => " [branch]".into(),
+                NodeKind::Branch { .. } => " [branch]".into(),
+                NodeKind::Step { step_name } => format!(" [step: {step_name}]"),
             };
             let preds = self.predecessors(node_id);
             let pred_info = if preds.is_empty() {
@@ -747,12 +898,13 @@ mod tests {
         assert!(matches!(
             g.node("train_loop").unwrap().kind,
             NodeKind::Loop {
-                max_iterations: Some(100)
+                max_iterations: Some(100),
+                ..
             }
         ));
         assert!(matches!(
             g.node("check_convergence").unwrap().kind,
-            NodeKind::Branch
+            NodeKind::Branch { .. }
         ));
     }
 
@@ -792,6 +944,111 @@ mod tests {
         assert!(dot.contains("\"a\" [label=\"Scaler\" shape=box]"));
         assert!(dot.contains("\"a\" -> \"b\""));
         assert!(dot.ends_with("}\n"));
+    }
+
+    #[test]
+    fn overlay_empty_is_identical_to_plain_rendering() {
+        use crate::viz::GraphOverlay;
+        let g = sample_linear_graph();
+        assert_eq!(g.to_mermaid(), g.to_mermaid_with(&GraphOverlay::default()));
+        assert_eq!(
+            g.to_graphviz(),
+            g.to_graphviz_with(&GraphOverlay::default())
+        );
+        // No classDef/style leaks into the plain rendering.
+        assert!(!g.to_mermaid().contains("classDef"));
+        assert!(!g.to_graphviz().contains("fillcolor"));
+    }
+
+    #[test]
+    fn to_mermaid_with_overlay_annotates_and_styles() {
+        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
+        let g = sample_linear_graph();
+        let mut ov = GraphOverlay::default();
+        ov.nodes.insert(
+            "a".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Completed),
+                duration_ms: Some(1_200),
+                ..Default::default()
+            },
+        );
+        ov.nodes.insert(
+            "b".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Cached),
+                duration_ms: Some(3),
+                cache_tier: Some("memory".into()),
+                ..Default::default()
+            },
+        );
+        ov.nodes.insert(
+            "c".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Completed),
+                flags: vec!["LEAKAGE".into()],
+                ..Default::default()
+            },
+        );
+
+        let m = g.to_mermaid_with(&ov);
+        assert!(m.contains("a[\"Scaler<br/>1.2s\"]"), "{m}");
+        assert!(m.contains("b[\"PCA<br/>3ms · mem hit\"]"), "{m}");
+        assert!(m.contains("c[\"SVM<br/>⚠ LEAKAGE\"]"), "{m}");
+        assert!(m.contains("classDef soma_completed"));
+        assert!(m.contains("classDef soma_cached"));
+        assert!(m.contains("classDef soma_flagged"));
+        assert!(m.contains("class a soma_completed"));
+        assert!(m.contains("class b soma_cached"));
+        assert!(m.contains("class c soma_flagged"), "flags win over status");
+        // Edges unchanged.
+        assert!(m.contains("a --> b"));
+    }
+
+    #[test]
+    fn to_mermaid_with_overlay_ignores_unknown_nodes() {
+        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
+        let g = sample_linear_graph();
+        let mut ov = GraphOverlay::default();
+        ov.nodes.insert(
+            "ghost".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Failed),
+                ..Default::default()
+            },
+        );
+        let m = g.to_mermaid_with(&ov);
+        assert_eq!(m, g.to_mermaid(), "unknown node ids change nothing");
+    }
+
+    #[test]
+    fn to_graphviz_with_overlay_annotates_and_styles() {
+        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
+        let g = sample_linear_graph();
+        let mut ov = GraphOverlay::default();
+        ov.nodes.insert(
+            "a".into(),
+            NodeOverlay {
+                status: Some(NodeStatus::Failed),
+                ..Default::default()
+            },
+        );
+        ov.nodes.insert(
+            "b".into(),
+            NodeOverlay {
+                flags: vec!["DEAD_CHANNELS".into()],
+                ..Default::default()
+            },
+        );
+        let dot = g.to_graphviz_with(&ov);
+        assert!(
+            dot.contains("\"a\" [label=\"Scaler\\nfailed\" shape=box"),
+            "{dot}"
+        );
+        assert!(dot.contains("fillcolor=\"#ffebee\""), "failed fill: {dot}");
+        assert!(dot.contains("penwidth=3"), "flagged border: {dot}");
+        // Unannotated node keeps the plain attribute set.
+        assert!(dot.contains("\"c\" [label=\"SVM\" shape=box];"));
     }
 
     #[test]

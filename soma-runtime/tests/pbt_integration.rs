@@ -11,8 +11,8 @@ use somatize_core::value::Value;
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::executors::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
-use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::node_catalog::NodeCatalog;
 use std::sync::Arc;
 
 /// Trainable scaler that learns mean from data.
@@ -48,23 +48,20 @@ impl Filter for TrainableScaler {
             kind: FilterKind::Trainable,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
-fn make_graph_and_library(scale: f64) -> (Graph, FilterLibrary) {
+fn make_graph_and_library(scale: f64) -> (Graph, NodeCatalog) {
     let mut g = Graph::new();
     g.nodes
         .push(Node::new("scaler", "Scaler", "TrainableScaler"));
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("scaler", Box::new(TrainableScaler { scale }));
     (g, lib)
 }
@@ -202,7 +199,7 @@ fn graph_session_fit_forward_roundtrip() {
         .push(Node::new("scaler2", "Scaler2", "TrainableScaler"));
     graph.edges.push(Edge::data("e1", "scaler", "scaler2"));
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("scaler", Box::new(TrainableScaler { scale: 2.0 }));
     lib.register("scaler2", Box::new(TrainableScaler { scale: 1.0 }));
 

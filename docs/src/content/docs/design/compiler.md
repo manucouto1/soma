@@ -8,7 +8,7 @@ description: How Soma compiles graphs into optimized, cache-aware execution plan
 The Soma compiler is the intelligence layer between the user's graph definition and the runtime execution. It performs:
 
 1. **Validation**: Cycle detection, schema compatibility
-2. **Cache resolution**: Replace cached nodes before execution
+2. **Validation**: Reject cycles and incompatible schemas before anything runs
 3. **Gradient analysis**: Detect and warn about gradient flow interruptions
 4. **Parallelism detection**: Identify independent branches for concurrent execution
 5. **Cost estimation**: Estimate execution time from cache metadata
@@ -16,50 +16,87 @@ The Soma compiler is the intelligence layer between the user's graph definition 
 
 ## The ExecutionPlan
 
-The compiler's output is a recursive `ExecutionPlan` tree:
+The compiler's output is a recursive `ExecutionPlan` tree
+(`soma-compiler/src/plan.rs`):
 
 ```rust
 #[derive(Serialize, Deserialize, Clone)]
 pub enum ExecutionPlan {
-    /// Execute steps sequentially
+    /// Execute sub-plans sequentially, one after another
     Sequence(Vec<ExecutionPlan>),
 
     /// Execute branches concurrently (fork-join)
     Parallel(Vec<ExecutionPlan>),
 
-    /// Execute a single filter
-    Execute {
-        id: NodeId,
-        filter: Arc<dyn Filter>,
+    /// Execute a single filter node
+    Execute { node_id: NodeId },
+
+    /// Run an effectful step to completion: poll, perform its
+    /// effects, repeat. `handoffs` lists where it may pass control.
+    Step {
+        node_id: NodeId,
+        handoffs: Vec<(NodeId, ExecutionPlan)>,
     },
 
-    /// Load result from cache (resolved at compile time)
-    Cached {
-        id: NodeId,
-        key: CacheKey,
-    },
-
-    /// Iterate over a collection or repeat until condition
+    /// Iterate: run `body` until `until` says stop, or the cap is hit
     Loop {
-        id: NodeId,
+        node_id: NodeId,
         body: Box<ExecutionPlan>,
-        config: LoopConfig,
+        max_iterations: Option<usize>,
+        until: LoopCondition,          // resolved — never BodyTerminal here
+        carry_from: Option<NodeId>,    // what each pass hands the next
     },
 
-    /// Conditional branching
+    /// Conditional branching: evaluate condition, pick an arm
     Branch {
-        id: NodeId,
-        arms: Vec<(Predicate, ExecutionPlan)>,
+        node_id: NodeId,
+        arms: Vec<(String, ExecutionPlan)>,
     },
 
-    /// Execute on a remote worker
+    /// Execute a sub-plan on a remote worker
     Remote {
-        id: NodeId,
+        node_id: NodeId,
         target: RemoteTarget,
         plan: Box<ExecutionPlan>,
     },
+
+    /// Execute multiple differentiable nodes as one block, passing
+    /// tensors directly so autograd survives the node boundaries
+    Composite { node_ids: Vec<NodeId> },
+
+    /// Streaming execution: chunks through a filter chain, each
+    /// filter's StreamMode defining its per-chunk contract
+    Stream { node_ids: Vec<NodeId>, chunk_size: usize },
+
+    /// Nothing to execute (e.g. empty graph)
+    Empty,
 }
 ```
+
+Three variants deserve a word beyond their comment.
+
+**`Step` is not `Execute` with a flag.** The runtime has to drive a turn
+loop — poll the step, perform the effects it asks for, journal what was
+performed, poll again — rather than call a function once. Its `handoffs`
+are the branch the *step* decides instead of a condition value, so they
+compile the same way a branch's arms do: each target is claimed by the
+step and appears exactly once, inside it. A `Goto` naming a target not
+listed there is an error, not a jump into the dark.
+
+**`Loop` separates what it carries from what stops it.** `until` says
+when to stop; `carry_from` names the node whose output each pass hands to
+the next one. They are different questions: a fixed-round debate has no
+stop signal at all, but every round still has to start from what the last
+one said — otherwise the loop just repeats its first iteration. A
+`LoopCondition::BodyTerminal` declared on the graph is resolved to
+`WhenSignaled(node)` at compile time, so the executor reads the signal
+from exactly one node; a body with several terminals is a compile error,
+not a race.
+
+**Ownership is decided by dominance.** A loop owns its body-entry nodes
+and everything they dominate; a branch owns each arm's entry and its
+dominated subgraph. Without that exclusion the body would be emitted
+twice — once inside the loop, once after it.
 
 ## Compilation Process
 
@@ -85,14 +122,6 @@ pub enum ExecutionPlan {
 │  - Fork-join points      │
 │  - Loop bodies           │
 │  - Conditional arms      │
-└──────────┬──────────────┘
-           │
-           ▼
-┌─── resolve_cache() ────┐
-│  - Compute cache keys    │
-│  - Check existence       │
-│  - Replace with Cached   │
-│  - Cascade invalidation  │
 └──────────┬──────────────┘
            │
            ▼
@@ -179,22 +208,35 @@ Sequence([
 
 ### Loop Bodies
 
-A node marked as a loop with identified body nodes:
+A loop node claims its body by dominance and compiles with a resolved
+stop condition and a carry:
 
 ```
-[ForEach dataset] → [Train] → [Evaluate] → [Collect]
+[revise] → [worker] → [judge]     loop("refine", body=revise, until=judge)
 
 Compiled plan:
 Loop {
-    id: ForEach,
-    body: Sequence([Execute(Train), Execute(Evaluate)]),
-    config: LoopConfig { collection: "datasets", flatten: true },
+    node_id: refine,
+    body: Sequence([Execute(revise), Execute(worker), Execute(judge)]),
+    max_iterations: Some(4),
+    until: WhenSignaled(judge),     // was BodyTerminal on the graph
+    carry_from: Some(judge),        // the verdict the next pass reads
 }
 ```
 
+## Cache resolution happens at runtime, not here
+
+The compiler never sees the dataset, so it cannot decide cache hits: any
+compile-time key would be independent of the input data, and the same
+graph run on two datasets would collide. Instead the **executor**
+computes `hash(config + state + input)` per node with the materialized
+input in hand and skips execution on a hit (see the
+[caching design](/soma/design/caching/)). There is no `Cached` plan
+variant: a hit is a runtime outcome, not a compile-time decision.
+
 ## Compile Modes
 
-The compiler accepts a mode that affects cache resolution:
+The compiler accepts a mode that affects runtime caching behavior:
 
 ```rust
 pub enum CompileMode {
@@ -219,12 +261,6 @@ The compiler can estimate execution cost without running anything:
 impl Compiler {
     pub fn estimate_cost(&self, plan: &ExecutionPlan, cache: &dyn CacheStore) -> Cost {
         match plan {
-            ExecutionPlan::Cached { key, .. } => {
-                // Cost = cache load time (from metadata)
-                cache.metadata(key)
-                    .map(|m| Cost::from_latency(m.tier.latency()))
-                    .unwrap_or(Cost::unknown())
-            }
             ExecutionPlan::Execute { filter, .. } => {
                 // Cost = estimated compute time (from filter metadata)
                 filter.meta().estimated_cost()
@@ -281,7 +317,7 @@ worker.send(bytes).await?;
 // Pretty-print for debugging
 println!("{}", plan.display());
 // Sequence:
-//   Cached(scaler, key=abc123)
+//   Execute(scaler)
 //   Execute(classifier)
 //   Execute(evaluator)
 ```

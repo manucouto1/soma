@@ -8,7 +8,7 @@ description: Search spaces co-located with filters, with Bayesian, Hyperband, an
 Unlike external optimization frameworks where you define search spaces separately, Soma's search spaces are **co-located with the parameters they describe**:
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MyClassifier {
     #[soma(search(low = 0.001, high = 100.0, scale = "log"))]
     C: f64,
@@ -83,7 +83,7 @@ The derive macro infers the dimension type from the field's Rust type:
 | `i8`..`i64`, `u8`..`u64`, `usize` | `Int` | `low`, `high` (required) |
 | `bool` | `Categorical { [true, false] }` | None (automatic) |
 | `String` + `choices` | `Categorical` | `choices` (required) |
-| `enum` (with `#[derive(SomaEnum)]`) | `Categorical` | None (variants become choices) |
+| `enum` | `Categorical` | Declare the variants explicitly as choices |
 
 ### Compile-Time Validation
 
@@ -106,29 +106,29 @@ n_layers: usize,
 // compile_error!("Log scale not supported for integer fields. Use f64 or remove scale.")
 ```
 
-### Enums as Categories
+### Categorical choices
+
+List the choices explicitly. `#[soma(search)]` with no arguments auto-detects
+only `bool` (→ `Categorical[true, false]`); there is no derive that turns enum
+variants into choices.
 
 ```rust
-#[derive(Serialize, Deserialize, Clone, SomaEnum)]
-pub enum Kernel {
-    Linear,
-    Rbf,
-    Polynomial,
-}
-
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MySVM {
-    #[soma(search)]  // no args needed: enum variants become choices
-    kernel: Kernel,
+    #[soma(search(choices = ["linear", "rbf", "polynomial"]))]
+    kernel: String,
 
     #[soma(search(low = 0.001, high = 100.0, scale = "log"))]
     C: f64,
+
+    #[soma(search)]  // bool: becomes Categorical[true, false]
+    shrinking: bool,
 }
 ```
 
 ## The Searchable Trait
 
-Generated automatically by `#[derive(Filter)]`:
+Generated automatically by `#[derive(SomaFilter)]`:
 
 ```rust
 pub trait Searchable {
@@ -146,31 +146,45 @@ pub trait Searchable {
 
 ## Graph Search Space Aggregation
 
-The graph automatically collects all search spaces:
+Aggregation happens **Python-side**, not in `soma-core`: a Rust `Node`
+stores only the implementation *name* (`NodeKind::Filter { filter_name }`)
+— live instances exist in Python (`graph.filters()`, `graph.steps()`) or
+in the runtime's `NodeCatalog`, so the core graph cannot reach their
+search spaces. `graph.search_space()` (installed by `soma/_study.py`)
+aggregates three sources, prefixing dimension names with the node id to
+avoid collisions:
 
-```rust
-impl Graph {
-    pub fn search_space(&self) -> SearchSpace {
-        let mut combined = SearchSpace::new();
-        for node in &self.nodes {
-            let space = node.filter.search_space();
-            // Prefix with filter label to avoid collisions:
-            // "MyScaler.scale" vs "MyClassifier.scale"
-            combined.merge_with_prefix(&node.label, space);
-        }
-        combined
-    }
-}
+- **Filters** declare theirs as class attributes (`lr = search(...)`).
+- **Agents and judges** declare theirs at the call site
+  (`Agent(model=search(choices=[...]))`), because an agent's
+  hyperparameters *are* its constructor arguments. Both land as the same
+  kind of dimension, so a study cannot tell them apart.
+- **Optional edges** (`g.optional(a, b)`) each contribute a categorical
+  `edge:<source>-><target>: [True, False]` — whether a connection should
+  exist at all is a dimension like any other, the edge optimization that
+  agentic-graph search papers (GPTSwarm, AFlow) do by hand.
+
+`graph.apply_params()` writes a sampled configuration back onto the live
+instances, and keeps or cuts the optional edges:
+
+```python
+g = Graph.somatize(MyScaler(scale=2.0) >> MySVM(kernel="rbf", C=1.0))
+
+g.search_space()
+#  scaler.scale: Float[0.1, 10.0] log
+#  svm.kernel:   Categorical[linear, rbf, poly]
+#  svm.C:        Float[0.001, 100.0] log
+
+g.apply_params({"svm.C": 3.2, "scaler.scale": 0.7})
+
+study = g.study("tune", strategy="grid", n_trials=4,
+                objectives=[("f1", "maximize")])
 ```
 
-```
-Graph.somatize(MyScaler(scale=2.0) >> MySVM(kernel=Rbf, C=1.0))
-
-search_space():
-  MyScaler.scale:  Float[0.1, 10.0] log
-  MySVM.kernel:    Categorical[Linear, Rbf, Polynomial]
-  MySVM.C:         Float[0.001, 100.0] log
-```
+(Rust-side, `SearchSpace::merge_with_prefix` exists for the same purpose
+should catalog-level aggregation ever be needed in Rust; today it has no
+production caller, and the `Searchable` trait below is derived but not
+yet invoked by any runner.)
 
 ## Search Strategies
 
@@ -338,8 +352,13 @@ print(study.best_trial)
 print(study.best_trial.params)
 # {'MyScaler.scale': 1.23, 'MySVM.kernel': 'rbf', 'MySVM.C': 12.5}
 
-# Visualization (events-driven)
-study.plot()  # parallel coordinates, learning curves, importance
+# Visualization (see design/visualization.md; needs `somatize[viz]`)
+study.plot_optimization_history()
+study.plot_parallel_coordinate()
+study.plot_param_importances()
+study.plot_intermediate_values()   # learning curves, pruned dashed
+study.plot_timeline()              # trial gantt
+study.trials_dataframe()           # pandas projection
 ```
 
 ## Events Produced

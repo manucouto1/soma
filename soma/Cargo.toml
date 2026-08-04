@@ -11,16 +11,19 @@ categories = ["science", "algorithms"]
 
 [dependencies]
 somatize-core = { workspace = true }
+somatize-store = { workspace = true, optional = true }
 somatize-compiler = { workspace = true }
 somatize-runtime = { workspace = true }
 somatize-memory = { workspace = true }
 somatize-worker = { workspace = true }
+somatize-coordinator = { workspace = true }
 somatize-agent = { workspace = true }
+somatize-llm = { workspace = true }
 somatize-macros = { workspace = true }
 
 [features]
 default = []
-s3 = ["somatize-core/s3"]
-zarr = ["somatize-core/zarr"]
+s3 = ["dep:somatize-store", "somatize-store/s3"]
+zarr = ["dep:somatize-store", "somatize-store/zarr"]
 chronos = ["somatize-memory/chronos"]
 full = ["s3", "zarr", "chronos"]

@@ -12,7 +12,7 @@ The Scheduler analyzes an ExecutionPlan's topology and distributes nodes across 
 1. **Sequential phases** → single worker (avoids data transfer)
 2. **Parallel branches** → round-robin across workers by capability
 3. **Differentiable connected nodes** → same worker (gradient flow must be preserved)
-4. **Cached nodes** → assigned but skip execution
+4. **Cache hits** → resolved at runtime on the assigned worker (the plan itself carries no cached nodes)
 5. **Loop/Branch bodies** → same worker as controller
 
 ## DistributionPlan
@@ -29,7 +29,7 @@ The scheduler produces a `DistributionPlan` containing:
 ## Example
 
 ```
-Pipeline: [Load] → [Normalize] → [Train SVM]
+Graph: [Load] → [Normalize] → [Train SVM]
                                 → [Train KNN]
 
 Scheduler with 2 workers:
@@ -42,7 +42,7 @@ Scheduler with 2 workers:
 ## Usage
 
 ```rust
-use soma_compiler::{schedule, WorkerInfo};
+use somatize_compiler::{schedule, WorkerInfo};
 
 let workers = vec![
     WorkerInfo { id: "gpu-1", gpu: true, cpu_cores: 16, ... },

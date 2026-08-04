@@ -114,6 +114,15 @@ g.node("model", MyModel())
 g.fit(data)  # runs locally, no workers needed
 ```
 
+:::caution[Strategy selection is Rust-side today]
+The `g.set_strategy(...)` calls in this section describe the Rust API
+(`Graph::set_strategy` / `Graph::with_strategy` in `soma-core`). They
+are **not yet exposed through the Python bindings** — calling
+`set_strategy` on a Python `Graph` raises `AttributeError`. Everything
+else on this page (`add_worker`, `set_coordinator`, `fit`, streaming)
+is available from Python today.
+:::
+
 ### Data Parallel
 
 Replicates the model on N workers, each trains on a shard of the data.

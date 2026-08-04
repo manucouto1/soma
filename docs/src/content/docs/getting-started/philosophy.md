@@ -47,7 +47,7 @@ This reduces the distance between "what a filter does" and "how it's configured"
 Soma's compiler does more than convert graphs to execution plans. It:
 
 1. **Validates** type compatibility between connected filters
-2. **Resolves caching** by computing keys and checking the store
+2. **Plans distribution** by assigning nodes to workers
 3. **Detects gradient flow** and warns about interruptions
 4. **Plans parallelism** by identifying independent branches
 5. **Schedules distribution** by matching filters to available workers
@@ -103,14 +103,27 @@ Every execution produces a stream of structured events at three levels:
 
 These events enable real-time visualization, monitoring, logging, and agent decision-making without coupling the runtime to any specific UI or tracking system.
 
-### The Agent is a User, Not a Component
+### One Substrate, Two Profiles
 
-Soma doesn't embed agent logic into the runtime. Instead, agents interact with Soma the same way a human user does:
+Soma used to say the agent was a user of the runtime and not a part of it. That was a way of saying the runtime should stay clean — a good instinct with the wrong conclusion, because it left agentic work outside everything the runtime is good at. An agent that talks to Soma from the outside gets no cache, no schema checking on its handoffs, no search space over its prompts, and no lineage on what it tried.
 
-- Define a graph (or ask the agent to generate one)
-- Submit it for execution (local or remote)
-- Receive events and results
-- Query the knowledge base
-- Decide next steps
+So the line moved. It now runs between *structure* and *behaviour*, not between *computation* and *agency*:
 
-The difference is that agents can do this programmatically, in a loop, and at scale. But the API is the same. This keeps the runtime clean and the agent layer independent.
+- **The substrate** — the runtime — understands a small set of structural things: sequence, parallel, branch, loop, subgraph, and one effectful node. Six shapes, and it has to understand them because it has to schedule them.
+- **The profiles** — everything above — are libraries. An LLM call, a tool, a judge, a router, a retriever, a debate: none of these are node types the runtime knows. They are filters and steps registered like any other, and the named patterns are functions that build graphs.
+
+Concretely, adding "debate between three agents, judged, up to four rounds" is a function in `soma.agentic`. It costs nothing in the core and nothing to maintain. The frameworks that made each pattern an enum variant all ended up with dead variants in their catalog, still documented, still shipped, no longer working.
+
+The dividend is that everything Soma already does applies unchanged. An agentic graph is content-addressed and cached. Its edges are schema-checked, which turns the largest documented category of multi-agent failure — incompatible handoffs — into a compile error. Its prompts and models are search-space dimensions, its topology too. Its runs land in the experiment pool with lineage, so "which of these two flows was better" is a question with a recorded answer.
+
+### Two Kinds of Node, Because There Are Two Kinds of Work
+
+A `Filter` is deterministic: given the same configuration, state and input, it produces the same output, so it can be memoized by content and shared across runs forever.
+
+A `Step` is effectful: it calls a model, runs a tool, sleeps, waits for a person. Memoizing it by content would be wrong — the second call is supposed to be able to differ. So its effects are journaled instead, the way durable-execution systems do it: recorded once, replayed on resume, never re-run. That is what makes a nondeterministic run reproducible, which is what makes it comparable to its parent in the pool.
+
+Both are nodes in the same graph, on the same edges, under the same compiler.
+
+### Suspension is a Feature, Not a Failure
+
+A step that needs a human, an approval, or a result that will not exist for an hour does not block a thread. It suspends, and its position is a journal entry like everything else. Resuming is replaying to that point and continuing — in a new process if need be.

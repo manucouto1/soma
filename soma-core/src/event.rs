@@ -1,7 +1,7 @@
 //! Runtime lifecycle events — emitted during plan execution.
 //!
 //! Events track run/node/study/trial state transitions and are
-//! broadcast via the [`EventBus`] for observability and debugging.
+//! broadcast via the runtime's `EventBus` for observability and debugging.
 
 use crate::cache::{CacheKey, CacheTier};
 use crate::filter::FilterKind;
@@ -32,6 +32,11 @@ pub struct MetricRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanSummary {
     pub total_nodes: usize,
+    /// Always 0 from a compiled plan, and not a placeholder: cache keys are
+    /// resolved per node at run time (a node's key depends on its input's
+    /// content hash), so at `RunStarted` nothing is yet known about what
+    /// will be served from cache. The answer arrives as
+    /// [`Event::NodeCacheHit`] per node — count those, not this.
     pub cached_nodes: usize,
     pub parallel_branches: usize,
 }
@@ -53,6 +58,15 @@ pub enum Event {
         run_id: RunId,
         node_id: NodeId,
         kind: FilterKind,
+        /// Does this node reach outside the graph — a model, a tool, a
+        /// person?
+        ///
+        /// An effectful node has no honest [`FilterKind`], and reporting
+        /// it as `Opaque` made every consumer see an agent as a filter it
+        /// could not look inside. Defaulted so run logs written before
+        /// this field existed still parse.
+        #[serde(default)]
+        effectful: bool,
     },
 
     /// A filter node reports progress (0.0 to 1.0).
@@ -70,6 +84,14 @@ pub enum Event {
         tier: CacheTier,
         #[serde(with = "duration_millis")]
         load_time: Duration,
+    },
+
+    /// A cacheable node's key was computed but not found — the filter
+    /// executes and (on success) fills this key.
+    NodeCacheMiss {
+        run_id: RunId,
+        node_id: NodeId,
+        key: CacheKey,
     },
 
     /// A filter node completed successfully.
@@ -195,6 +217,127 @@ pub enum Event {
         replaced_id: String,
         donor_id: String,
     },
+
+    // ── Level 5: Training telemetry (native training loop) ──
+    /// A training epoch started.
+    EpochStarted {
+        run_id: RunId,
+        epoch: usize,
+        total_epochs: Option<usize>,
+    },
+
+    /// A training epoch completed with its summary metrics.
+    EpochCompleted {
+        run_id: RunId,
+        epoch: usize,
+        metrics: Vec<MetricRecord>,
+    },
+
+    /// One optimizer step completed (coarse liveness marker).
+    StepCompleted {
+        run_id: RunId,
+        step: usize,
+        epoch: Option<usize>,
+    },
+
+    /// A user- or node-scoped metric reported outside a trial.
+    MetricReported {
+        run_id: RunId,
+        metric: MetricRecord,
+        node_id: Option<NodeId>,
+        trial_id: Option<TrialId>,
+    },
+
+    /// A training-health diagnostic fired for a node (e.g.
+    /// `DEAD_CHANNELS`, `IGNORED_CHANNELS`, `LEAKAGE`, `NONFINITE`).
+    HealthFlag {
+        run_id: RunId,
+        node_id: NodeId,
+        step: usize,
+        flag: String,
+        detail: String,
+    },
+
+    // ── Level 6: Effectful steps (agentic execution) ──
+    //
+    // Payloads carry *labels*, never prompts or completions. These events
+    // land in `.soma/runs/<id>/events.jsonl` and are rendered into reports;
+    // the conversation itself belongs in the journal, which is subject to
+    // `StepMeta::journal`, not in a telemetry stream.
+    //
+    // Naming note: `AgentTurnStarted`/`AgentStepCompleted` are spelled out
+    // because `StepCompleted` above already means "one optimizer step".
+    /// A step began a turn (one `poll`).
+    AgentTurnStarted {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+    },
+
+    /// A step asked for an effect to be performed.
+    EffectRequested {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        /// `Effect::label()` — e.g. `llm:claude-opus-5`, `tool:search`.
+        effect: String,
+    },
+
+    /// An effect finished.
+    EffectCompleted {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+        effect: String,
+        #[serde(with = "duration_millis")]
+        duration: Duration,
+        /// Served from the journal rather than actually performed.
+        /// A replay should be nearly all `true`.
+        replayed: bool,
+        is_error: bool,
+    },
+
+    /// A tool ran. Separate from `EffectCompleted` because tool usage is the
+    /// thing worth counting per run, and it is what a permission or audit
+    /// layer hooks into.
+    ToolCalled {
+        run_id: RunId,
+        node_id: NodeId,
+        tool: String,
+        is_error: bool,
+    },
+
+    /// Control passed from one node to another.
+    Handoff {
+        run_id: RunId,
+        from: NodeId,
+        to: NodeId,
+    },
+
+    /// The run stopped, pending something outside it.
+    Suspended {
+        run_id: RunId,
+        node_id: NodeId,
+        reason: String,
+    },
+
+    /// A suspended run picked up again.
+    Resumed {
+        run_id: RunId,
+        node_id: NodeId,
+        turn: usize,
+    },
+
+    /// A step finished, with what it cost.
+    AgentStepCompleted {
+        run_id: RunId,
+        node_id: NodeId,
+        turns: usize,
+        #[serde(with = "duration_millis")]
+        duration: Duration,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
 }
 
 /// Serde helper: Duration as milliseconds (u64).
@@ -245,6 +388,96 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+
+    /// Agent-level events ride the same envelope as everything else — that
+    /// is the point of putting them on the existing bus rather than building
+    /// a second telemetry path.
+    #[test]
+    fn agent_events_roundtrip() {
+        let events = vec![
+            Event::AgentTurnStarted {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turn: 0,
+            },
+            Event::EffectRequested {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turn: 0,
+                effect: "llm:claude-opus-5".into(),
+            },
+            Event::EffectCompleted {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turn: 0,
+                effect: "llm:claude-opus-5".into(),
+                duration: Duration::from_millis(1200),
+                replayed: false,
+                is_error: false,
+            },
+            Event::ToolCalled {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                tool: "search".into(),
+                is_error: false,
+            },
+            Event::Handoff {
+                run_id: "r".into(),
+                from: "router".into(),
+                to: "billing".into(),
+            },
+            Event::Suspended {
+                run_id: "r".into(),
+                node_id: "approve".into(),
+                reason: "human".into(),
+            },
+            Event::Resumed {
+                run_id: "r".into(),
+                node_id: "approve".into(),
+                turn: 3,
+            },
+            Event::AgentStepCompleted {
+                run_id: "r".into(),
+                node_id: "researcher".into(),
+                turns: 4,
+                duration: Duration::from_millis(8000),
+                input_tokens: 1200,
+                output_tokens: 340,
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                serde_json::to_string(&back).unwrap(),
+                json,
+                "agent event did not survive a round trip"
+            );
+        }
+    }
+
+    /// Telemetry must never carry the conversation. A prompt belongs in the
+    /// journal, which honours `StepMeta::journal`; an event stream does not.
+    #[test]
+    fn effect_events_carry_labels_not_payloads() {
+        let effect = crate::effect::Effect::Llm(crate::effect::LlmRequest::new(
+            "claude-opus-5",
+            vec![crate::message::Message::user("my secret prompt")].into(),
+        ));
+        let event = Event::EffectRequested {
+            run_id: "r".into(),
+            node_id: "n".into(),
+            turn: 0,
+            effect: effect.label(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("claude-opus-5"));
+        assert!(
+            !json.contains("secret"),
+            "the prompt leaked into telemetry: {json}"
+        );
     }
 
     #[test]
@@ -311,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn all_three_event_levels_serialize() {
+    fn all_event_levels_serialize() {
         let events: Vec<Event> = vec![
             // Level 1
             Event::RunStarted {
@@ -350,11 +583,97 @@ mod tests {
                 value: 0.95,
                 params: serde_json::json!({"C": 1.0}),
             },
+            // Level 4
+            Event::GenerationCompleted {
+                study_id: "s".into(),
+                generation: 2,
+                best_fitness: 0.9,
+                mean_fitness: 0.7,
+            },
+            // Level 5
+            Event::EpochStarted {
+                run_id: "r".into(),
+                epoch: 0,
+                total_epochs: Some(30),
+            },
+            Event::EpochStarted {
+                run_id: "r".into(),
+                epoch: 1,
+                total_epochs: None,
+            },
+            Event::EpochCompleted {
+                run_id: "r".into(),
+                epoch: 0,
+                metrics: vec![MetricRecord {
+                    name: "loss".into(),
+                    value: 0.4,
+                    step: 12,
+                    timestamp: chrono::Utc::now(),
+                }],
+            },
+            Event::StepCompleted {
+                run_id: "r".into(),
+                step: 7,
+                epoch: Some(1),
+            },
+            Event::StepCompleted {
+                run_id: "r".into(),
+                step: 8,
+                epoch: None,
+            },
+            Event::MetricReported {
+                run_id: "r".into(),
+                metric: MetricRecord {
+                    name: "val_f1".into(),
+                    value: 0.8,
+                    step: 3,
+                    timestamp: chrono::Utc::now(),
+                },
+                node_id: Some("encoder".into()),
+                trial_id: Some("trial_0001".into()),
+            },
+            Event::HealthFlag {
+                run_id: "r".into(),
+                node_id: "encoder".into(),
+                step: 50,
+                flag: "DEAD_CHANNELS(3)".into(),
+                detail: "zero_frac=0.98".into(),
+            },
         ];
 
         for event in events {
             let json = serde_json::to_string(&event).unwrap();
-            let _: Event = serde_json::from_str(&json).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            // Typed roundtrip must preserve the variant and its Options.
+            assert_eq!(
+                serde_json::to_value(&back).unwrap(),
+                serde_json::from_str::<serde_json::Value>(&json).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn documented_health_flags_roundtrip() {
+        for flag in [
+            "DEAD_CHANNELS(2)",
+            "IGNORED_CHANNELS(1)",
+            "LEAKAGE",
+            "NONFINITE",
+        ] {
+            let event = Event::HealthFlag {
+                run_id: "r".into(),
+                node_id: "n".into(),
+                step: 0,
+                flag: flag.into(),
+                detail: String::new(),
+            };
+            let json = serde_json::to_string(&event).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            if let Event::HealthFlag { flag: f, .. } = back {
+                assert_eq!(f, flag);
+            } else {
+                panic!("wrong variant");
+            }
         }
     }
 }

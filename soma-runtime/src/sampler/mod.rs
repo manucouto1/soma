@@ -13,7 +13,19 @@ use somatize_core::search::{Scale, SearchDimension, SearchSpace};
 use std::collections::HashMap;
 
 /// A sampler produces hyperparameter configurations from a search space.
+///
+/// The contract is ask/tell: the runner calls [`prepare`](Self::prepare)
+/// once before the loop, [`sample`](Self::sample) to ask for the next
+/// configuration, and [`record_result`](Self::record_result) to tell
+/// the sampler each completed trial's objective value — the feedback
+/// that model-based samplers (TPE, future BO backends) require.
 pub trait Sampler: Send + Sync {
+    /// Called once before the trial loop with the resolved search
+    /// space. Lets samplers precompute state — e.g. [`GridSampler`]
+    /// resolves its dimension grid here so `n_trials` is correct
+    /// before the first sample.
+    fn prepare(&mut self, _space: &SearchSpace) {}
+
     /// Sample the next set of parameters. Returns None when exhausted.
     fn sample(
         &mut self,
@@ -23,6 +35,11 @@ pub trait Sampler: Send + Sync {
 
     /// Total number of trials this sampler will produce (if known).
     fn n_trials(&self) -> Option<usize>;
+
+    /// Feedback for a completed trial. `value` is normalized so that
+    /// higher is always better (the runner negates for `Minimize`).
+    /// Default: no-op (stateless samplers ignore feedback).
+    fn record_result(&mut self, _params: &HashMap<String, serde_json::Value>, _value: f64) {}
 }
 
 // ──────────────────────────────────────────────
@@ -130,6 +147,10 @@ impl GridSampler {
 }
 
 impl Sampler for GridSampler {
+    fn prepare(&mut self, space: &SearchSpace) {
+        self.ensure_dims(space);
+    }
+
     fn sample(
         &mut self,
         space: &SearchSpace,
@@ -378,6 +399,35 @@ mod tests {
             }
         }
         assert_eq!(values, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn grid_prepare_resolves_total_before_first_sample() {
+        // The whole point of Sampler::prepare — without it, grid
+        // studies reported total_trials = 0 in StudyStarted.
+        let mut sampler = GridSampler::new(3);
+        assert_eq!(sampler.n_trials(), None, "unknown before prepare");
+        sampler.prepare(&sample_space());
+        assert_eq!(sampler.n_trials(), Some(9), "3 lr points × 3 kernels");
+    }
+
+    #[test]
+    fn record_result_is_a_noop_for_stateless_samplers() {
+        let space = sample_space();
+        let mut with_feedback = RandomSampler::new(5, Some(42));
+        let mut without = RandomSampler::new(5, Some(42));
+
+        for i in 0..3 {
+            let params = with_feedback.sample(&space, i).unwrap().unwrap();
+            with_feedback.record_result(&params, 0.9);
+        }
+        // Same sequence regardless of feedback.
+        for i in 3..5 {
+            assert_eq!(
+                with_feedback.sample(&space, i).unwrap(),
+                without.sample(&space, i).unwrap()
+            );
+        }
     }
 
     #[test]

@@ -1,21 +1,42 @@
 ---
 title: Architecture Review
-description: Analysis of current architecture, identified issues, and improvement roadmap.
+description: A record of the first architecture review and the reasoning behind what changed.
 ---
 
-This document captures the findings from a comprehensive architecture review performed after the initial implementation of all crates. It serves as a living reference for what to improve and why.
+This document captures the findings from a comprehensive architecture
+review performed after the initial implementation of all crates. It is
+kept for the reasoning, not as a description of the tree.
 
-## Current State
+## The tree as it was
+
+:::caution[Historical document]
+Everything in this section describes the workspace at the time of the
+review, including the test counts and the crate list — there are thirteen
+crates now, and `soma-store` and `soma-llm` did not exist. Several
+findings below have since been addressed: `Pipeline` was removed (`Graph`
+is the only user-facing API), cache resolution moved from compile time to
+runtime, filters and steps were unified under one registry and one
+execution site, and errors became typed at the crate edges.
+
+For decisions taken since, and what each was chosen *over*, see
+[Design Decisions](/soma/design/decisions/). For the current tree, see
+[Crates](/soma/architecture/crates/).
+:::
 
 ```
-200 tests (186 Rust + 14 Python), all passing, clippy clean.
+907 tests (582 Rust + 325 Python), all passing, clippy clean.
 
-soma-core       (67+9+19 tests)  Foundation types
-soma-macros                      #[derive(SomaFilter)] proc macro
-soma-compiler   (26+6 tests)     Graph → ExecutionPlan compiler
-soma-runtime    (55 tests)       Executor, Pipeline, Samplers, StudyRunner
-soma-worker     (13 tests)       Worker protocol and daemon
-soma-python     (14 tests)       PyO3 bindings
+soma-core        Foundation types, tracking schema, graph rendering
+soma-macros      #[derive(SomaFilter)] proc macro
+soma-compiler    Graph → ExecutionPlan compiler, scheduler
+soma-runtime     Executor, caches, samplers, StudyRunner, run tracking
+soma-coordinator Worker registry, routing, heartbeat monitoring
+soma-worker      Worker protocol and daemon
+soma-memory      KnowledgeBase (+ ChronosVector)
+soma-agent       Research agent loop
+soma-mcp         MCP server
+soma-python      PyO3 bindings
+soma             Facade crate re-exporting the workspace
 ```
 
 ## Identified Issues

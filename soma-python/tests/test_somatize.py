@@ -94,6 +94,17 @@ class TestMixedAPI:
         assert len(g) == 1
 
 
+class Collector(Filter):
+    """Fan-in head: a multi-predecessor node receives a dict keyed by
+    upstream node id (CONTRACT — pinned by the tests below)."""
+
+    _kind = "stateless"
+
+    def forward(self, x, state):
+        assert isinstance(x, dict), f"collector expected dict, got {type(x)}"
+        return [sum(sum(branch) for branch in x.values())]
+
+
 class TestExecution:
     def test_linear_fit_forward(self):
         g = Graph.somatize(Doubler() >> Adder(amount=5.0))
@@ -102,6 +113,56 @@ class TestExecution:
         assert len(result) == 1
         # doubler: [10] → [20], adder: [20] → [25]
         assert result[0] == 25.0
+
+    def test_fork_executes_both_branches(self):
+        """Parallel branches execute concurrently on executor threads —
+        this used to deadlock on the GIL and no test caught it because
+        forks were only ever checked structurally."""
+        g = Graph.somatize(
+            Doubler() >> (Adder(amount=1.0) | Adder(amount=100.0)) >> Collector()
+        )
+        g.fit([1.0, 2.0])
+        result = g.forward([10.0])
+        # doubler: [20]; branch A: [21]; branch B: [120]; collector: 141
+        assert result == [141.0]
+
+    def test_collect_receives_all_branches_keyed_by_node(self):
+        seen = {}
+
+        class Probe(Filter):
+            _kind = "stateless"
+
+            def forward(self, x, state):
+                seen.update(x)
+                return [0.0]
+
+        g = Graph.somatize(Doubler() >> (Adder(amount=1.0) | Adder(amount=2.0)) >> Probe())
+        g.fit([1.0])
+        g.forward([5.0])
+        assert sorted(seen.keys()) == ["adder", "adder_2"]
+        assert seen["adder"] == [11.0]  # 5*2 + 1
+        assert seen["adder_2"] == [12.0]  # 5*2 + 2
+
+    def test_dsl_graphs_share_the_cache(self, tmp_path, monkeypatch):
+        """Two graphs built with the fluent DSL and identical filters
+        hit the same persistent cache entries."""
+        monkeypatch.setenv("SOMA_CACHE_DIR", str(tmp_path))
+        calls = {"n": 0}
+
+        class CountingFit(Filter):
+            _cache_version = "dsl-cache-v1"
+
+            def fit(self, x, y=None):
+                calls["n"] += 1
+                return {"m": sum(x)}
+
+            def forward(self, x, state):
+                return [v + state["m"] for v in x]
+
+        for _ in range(2):
+            g = Graph.somatize(CountingFit() >> Doubler())
+            g.fit([1.0, 2.0])
+        assert calls["n"] == 1, "identical DSL pipelines must share fit work"
 
     def test_mermaid_output(self):
         g = Graph.somatize(

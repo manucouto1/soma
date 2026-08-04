@@ -177,6 +177,7 @@ impl VirtualValue {
                         .collect(),
                 ),
             },
+            Value::Text(_) => Schema::text(),
             Value::Json(_) => Schema::json(),
             Value::Bytes(_) | Value::Object(_) => Schema::bytes(),
             Value::Empty => Schema::dynamic(crate::schema::DataType::Float64),

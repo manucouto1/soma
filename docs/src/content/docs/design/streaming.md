@@ -133,27 +133,6 @@ Recovery flow:
 3. Replay chunks from checkpoint to failure point
 4. Resume normal processing
 
-### ChronosVector Integration
-
-For streams, ChronosVector adds temporal awareness to the cache:
-
-```rust
-pub struct StreamCacheEntry {
-    pub key: CacheKey,
-    pub window: TimeRange,            // [t0, t1]
-    pub process_config_hash: u64,
-    pub state_hash: Option<u64>,
-    pub value: Value,
-    pub embedding: Vec<f32>,          // for semantic cache
-}
-```
-
-This enables temporal queries on cached stream data:
-
-- "Do I have cached results for MyScaler between 14:00 and 14:05?"
-- "What's the most recent checkpoint for MyOnlineModel before 15:00?"
-- "How did this filter's output distribution change over the last 2 hours?"
-
 ## Graph Streaming
 
 When a graph runs in streaming mode:

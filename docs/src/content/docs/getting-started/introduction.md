@@ -29,16 +29,16 @@ A Rust/SvelteKit platform for LLM agent orchestration with a visual graph editor
 - **Graph compilation**: Converting DAGs into structured `ExecutionPlan` trees (Sequence, Parallel, Loop, Branch)
 - **Event system**: Real-time streaming of execution progress (NodeStarted, NodeToken, NodeCompleted)
 - **Parallel execution**: Tokio JoinSet with context store snapshots for fork-join patterns
-- **Agent model**: OpenFang-based autonomous agents with skills, hands, and memory
+- **The lesson learned**: its closed catalog of agent node types is why Soma has none — in Soma an agentic flow is an ordinary graph whose nodes are effectful [steps](/soma/design/agentic/), and every behaviour is library
 
 ### ChronosVector
 
-A temporal vector database that indexes embeddings by both semantic proximity and time. Key contributions to Soma:
-
-- **Temporal knowledge base**: Track how experiments evolve over time
-- **Trajectory analysis**: Velocity, acceleration, and change point detection on embedding sequences
-- **Tiered storage**: Hot (RocksDB), Warm (Parquet), Cold (S3) with automatic promotion/demotion
-- **Semantic cache**: Find "sufficiently similar" cached results, not just exact hash matches
+A temporal vector database that indexes embeddings by both semantic proximity
+and time. Soma can use it as an experiment backend behind the `chronos` feature
+flag, but **does not by default** — the shipped knowledge base is an append-only
+JSONL journal with BM25 + structural ranking, and Soma has no embedding model.
+See [Knowledge Base](/soma/platform/knowledge-base/) for what is and is not
+implemented.
 
 ## Key Capabilities
 
@@ -46,14 +46,14 @@ A temporal vector database that indexes embeddings by both semantic proximity an
 |---|---|
 | **Computational Graphs** | Executable, optionally differentiable graphs |
 | **Two-Phase Filters** | `fit()` learns state, `forward()` transforms data -- both cacheable independently |
-| **Content-Addressable Caching** | Automatic deduplication with cascade invalidation, resolved at compile time |
+| **Content-Addressable Caching** | Automatic deduplication with cascade invalidation, resolved per node at runtime |
 | **Data Virtualization** | Every value is a lazy reference materialized on demand |
 | **Batch + Stream Unification** | Same filters work on complete datasets or chunked streams |
 | **Gradient Propagation** | Differentiable filters enable end-to-end backpropagation through the pipeline |
-| **Hyperparameter Optimization** | Search spaces defined at the filter level with Bayesian, Hyperband, and multi-objective strategies |
+| **Hyperparameter Optimization** | Search spaces defined at the filter level; grid, random and Bayesian (TPE) search, multi-objective, median/percentile pruning |
 | **Remote Execution** | Serialize and send graphs to workers for distributed computation |
-| **Agent Integration** | Agents build, execute, and analyze graphs autonomously |
-| **Temporal Knowledge Base** | ChronosVector-powered experiment tracking with trajectory analysis |
+| **Agentic Flows** | Flows are graphs whose nodes are effectful steps: a pipeline is a tool an agent can run (`Effect::Graph`), and an agent is a node a pipeline can contain — same cache, schema checks, search spaces and lineage |
+| **Experiment Pool** | Every run records its conclusion, architecture fingerprint and the change from its parent; ranked retrieval over the lot |
 
 ## Who is Soma for?
 

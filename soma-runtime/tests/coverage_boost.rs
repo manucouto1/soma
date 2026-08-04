@@ -2,6 +2,7 @@
 
 use somatize_compiler::{CompileMode, ExecutionPlan};
 use somatize_core::cache::CacheKey;
+use somatize_core::control::LoopCondition;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
@@ -9,8 +10,8 @@ use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::executor::Context;
-use somatize_runtime::filter_library::FilterLibrary;
 use somatize_runtime::graph_session::GraphSession;
+use somatize_runtime::node_catalog::NodeCatalog;
 use somatize_runtime::runner::Transport;
 use somatize_runtime::*;
 use std::sync::Arc;
@@ -40,15 +41,12 @@ impl Filter for Doubler {
             kind: FilterKind::Stateless,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -83,15 +81,12 @@ impl Filter for MeanFilter {
             kind: FilterKind::Trainable,
             cacheable: true,
             differentiable: true,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -113,19 +108,17 @@ impl Filter for BranchCondition {
             kind: FilterKind::Stateless,
             cacheable: false,
             differentiable: false,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
-/// Filter that returns "done" to stop loops.
+/// A loop condition filter: speaks the termination protocol on every call,
+/// signalling `continue` until the `stop_at`-th invocation.
 struct StopFilter {
     call_count: std::sync::atomic::AtomicUsize,
     stop_at: usize,
@@ -137,15 +130,13 @@ impl Filter for StopFilter {
     fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
         Ok(Value::Empty)
     }
-    fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+    fn forward(&self, _x: &Value, _state: &Value) -> Result<Value> {
         let count = self
             .call_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if count >= self.stop_at {
-            Ok(Value::json(serde_json::json!({"done": true})))
-        } else {
-            Ok(x.clone())
-        }
+        Ok(Value::json(
+            serde_json::json!({"done": count >= self.stop_at}),
+        ))
     }
     fn meta(&self) -> FilterMeta {
         FilterMeta {
@@ -153,15 +144,12 @@ impl Filter for StopFilter {
             kind: FilterKind::Stateless,
             cacheable: false,
             differentiable: false,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -181,7 +169,7 @@ fn linear_graph(ids: &[&str]) -> Graph {
 #[test]
 fn session_run_returns_all_outputs() {
     let graph = linear_graph(&["doubler", "doubler2"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
     lib.register("doubler2", Box::new(Doubler));
 
@@ -196,7 +184,7 @@ fn session_run_returns_all_outputs() {
 #[test]
 fn session_forward_after_fit() {
     let graph = linear_graph(&["mean", "doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
     lib.register("doubler", Box::new(Doubler));
 
@@ -217,7 +205,7 @@ fn session_forward_after_fit() {
 #[test]
 fn session_compile_all_modes() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let session = GraphSession::new(graph, lib);
@@ -235,7 +223,7 @@ fn session_compile_all_modes() {
 #[test]
 fn session_with_data_store() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let tmp = tempfile::tempdir().unwrap();
@@ -254,10 +242,9 @@ fn session_with_transport() {
         fn execute(
             &self,
             _plan: &ExecutionPlan,
-            _filters: &FilterLibrary,
+            _filters: &NodeCatalog,
             _input: &Value,
-            _y: Option<&Value>,
-            _fit_mode: bool,
+            _mode: &somatize_runtime::executor::RunMode,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             Ok((
                 Value::tensor(vec![42.0], vec![1]),
@@ -288,7 +275,7 @@ fn session_with_transport() {
     }
 
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let session = GraphSession::new(graph, lib).with_transport(Arc::new(DummyTransport));
@@ -300,23 +287,23 @@ fn session_with_transport() {
 #[test]
 fn session_graph_and_library_accessors() {
     let graph = linear_graph(&["a"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("a", Box::new(Doubler));
 
     let mut session = GraphSession::new(graph, lib);
 
     assert_eq!(session.graph().nodes.len(), 1);
-    assert!(session.library().get("a").is_some());
+    assert!(session.catalog().get("a").is_some());
 
     // Mutable access
-    session.library_mut().register("b", Box::new(Doubler));
-    assert!(session.library().get("b").is_some());
+    session.catalog_mut().register("b", Box::new(Doubler));
+    assert!(session.catalog().get("b").is_some());
 }
 
 #[test]
 fn session_persist_and_load_states() {
     let graph = linear_graph(&["mean"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
 
     let tmp = tempfile::tempdir().unwrap();
@@ -332,7 +319,7 @@ fn session_persist_and_load_states() {
     let data_ref = session.persist_states().unwrap();
 
     // New session, load states
-    let mut lib2 = FilterLibrary::new();
+    let mut lib2 = NodeCatalog::new();
     lib2.register("mean", Box::new(MeanFilter));
     let mut session2 = GraphSession::new(graph, lib2).with_data_store(store);
 
@@ -343,7 +330,7 @@ fn session_persist_and_load_states() {
 #[test]
 fn session_persist_without_datastore_errors() {
     let graph = linear_graph(&["mean"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
 
     let session = GraphSession::new(graph, lib);
@@ -363,7 +350,7 @@ fn executor_loop_terminates_on_done() {
     ctx.graph_info
         .set_predecessors("stopper", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register(
         "stopper",
         Box::new(StopFilter {
@@ -378,10 +365,165 @@ fn executor_loop_terminates_on_done() {
             node_id: "stopper".into(),
         }),
         max_iterations: Some(100),
+        until: LoopCondition::WhenSignaled("stopper".into()),
+        carry_from: None,
     };
 
     execute(&plan, &mut ctx, &lib, &cache).unwrap();
-    // Loop should have stopped after ~3 iterations, not 100
+
+    // `stop_at: 3` means the filter returns `{"done": true}` on its 4th call
+    // (counts 0,1,2 continue; 3 stops), so the loop runs exactly 4 times —
+    // not the 100 it would burn if the signal were ignored.
+    let calls = ctx
+        .execution_order()
+        .iter()
+        .filter(|id| *id == "stopper")
+        .count();
+    assert_eq!(calls, 4, "loop ran {calls} times, expected 4");
+}
+
+/// A body whose designated condition node yields a tensor cannot express
+/// termination. The old executor read `_ => false` and silently burned every
+/// iteration; now it says so.
+#[test]
+fn executor_loop_rejects_unreadable_signal() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "loop_bad_signal");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("doubler", vec!["input".into()]);
+
+    let mut lib = NodeCatalog::new();
+    lib.register("doubler", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Loop {
+        node_id: "loop".into(),
+        body: Box::new(ExecutionPlan::Execute {
+            node_id: "doubler".into(),
+        }),
+        max_iterations: Some(100),
+        until: LoopCondition::WhenSignaled("doubler".into()),
+        carry_from: None,
+    };
+
+    let err = execute(&plan, &mut ctx, &lib, &cache).expect_err("must not silently loop 100x");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("termination signal") && msg.contains("doubler"),
+        "unhelpful error: {msg}"
+    );
+    // It stopped on the first iteration rather than running to the cap.
+    let calls = ctx
+        .execution_order()
+        .iter()
+        .filter(|id| *id == "doubler")
+        .count();
+    assert_eq!(calls, 1, "should fail on the first iteration, ran {calls}");
+}
+
+/// `Exhaust` opts out of signals entirely and runs the full count.
+#[test]
+fn executor_loop_exhaust_runs_full_count() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "loop_exhaust");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("doubler", vec!["input".into()]);
+
+    let mut lib = NodeCatalog::new();
+    lib.register("doubler", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Loop {
+        node_id: "loop".into(),
+        body: Box::new(ExecutionPlan::Execute {
+            node_id: "doubler".into(),
+        }),
+        max_iterations: Some(5),
+        until: LoopCondition::Exhaust,
+        carry_from: None,
+    };
+
+    execute(&plan, &mut ctx, &lib, &cache).unwrap();
+    let calls = ctx
+        .execution_order()
+        .iter()
+        .filter(|id| *id == "doubler")
+        .count();
+    assert_eq!(calls, 5);
+}
+
+/// Appends a mark each pass, so growth across iterations is visible.
+struct Grow;
+impl Filter for Grow {
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"Grow"])
+    }
+    fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+        Ok(Value::Empty)
+    }
+    fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+        Ok(Value::text(format!("{}!", x.as_text().unwrap_or_default())))
+    }
+    fn meta(&self) -> FilterMeta {
+        FilterMeta {
+            name: "Grow".into(),
+            kind: FilterKind::Stateless,
+            cacheable: false,
+            differentiable: false,
+            deterministic: true,
+            stream_mode: StreamMode::FixedState,
+            distribution: somatize_core::filter::Distribution::Local,
+            input_schema: None,
+            output_schema: None,
+        }
+    }
+}
+
+/// `carry_from` is what makes a refine loop refine: iteration N's terminal
+/// output becomes iteration N+1's body input. Without it every pass reads
+/// the original seed and the loop redrafts the same thing N times — which
+/// is exactly what the contrast plan at the end shows.
+#[test]
+fn executor_loop_carry_feeds_each_iteration_the_last_output() {
+    let cache = MemoryCache::default();
+    let mut lib = NodeCatalog::new();
+    lib.register("grow", Box::new(Grow));
+
+    let plan_with = |carry_from: Option<String>| ExecutionPlan::Loop {
+        node_id: "loop".into(),
+        body: Box::new(ExecutionPlan::Execute {
+            node_id: "grow".into(),
+        }),
+        max_iterations: Some(3),
+        until: LoopCondition::Exhaust,
+        carry_from,
+    };
+    let run = |plan: &ExecutionPlan| {
+        let bus = Arc::new(EventBus::new(64));
+        let mut ctx = Context::new(bus, "loop_carry");
+        ctx.set("input", Value::text("go"));
+        ctx.graph_info
+            .set_predecessors("loop", vec!["input".into()]);
+        ctx.graph_info.set_predecessors("grow", vec!["loop".into()]);
+        execute(plan, &mut ctx, &lib, &cache).unwrap();
+        ctx.get("grow").and_then(|v| v.as_text()).map(String::from)
+    };
+
+    assert_eq!(
+        run(&plan_with(Some("grow".into()))).as_deref(),
+        Some("go!!!"),
+        "three passes over the carry should have accumulated three marks"
+    );
+    assert_eq!(
+        run(&plan_with(None)).as_deref(),
+        Some("go!"),
+        "without a carry every pass redrafts from the seed — the behavior \
+         `carry_from` exists to fix"
+    );
 }
 
 // ── Executor coverage: Branch ──
@@ -400,7 +542,7 @@ fn executor_branch_selects_arm() {
     ctx.graph_info
         .set_predecessors("right_doubler", vec!["cond".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("cond", Box::new(BranchCondition));
     lib.register("left_doubler", Box::new(Doubler));
     lib.register("right_doubler", Box::new(Doubler));
@@ -427,6 +569,111 @@ fn executor_branch_selects_arm() {
 
     // BranchCondition returns "left", so left_doubler should have executed
     assert!(ctx.get("left_doubler").is_some(), "left arm should execute");
+    assert!(
+        ctx.get("right_doubler").is_none(),
+        "the unselected arm must not run"
+    );
+}
+
+/// A condition that names no arm must fail loudly. Falling back to `arms[0]`
+/// turns a typo into a wrong answer that only surfaces downstream.
+#[test]
+fn executor_branch_rejects_unmatched_selector() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "branch_unmatched");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("cond", vec!["input".into()]);
+
+    let mut lib = NodeCatalog::new();
+    lib.register("cond", Box::new(BranchCondition)); // returns "left"
+    lib.register("up", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Branch {
+        node_id: "cond".into(),
+        arms: vec![(
+            "billing".into(), // no arm named "left"
+            ExecutionPlan::Execute {
+                node_id: "up".into(),
+            },
+        )],
+    };
+
+    let err = execute(&plan, &mut ctx, &lib, &cache).expect_err("must not fall back to arm zero");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("left"),
+        "error should name the selector: {msg}"
+    );
+    assert!(
+        msg.contains("billing"),
+        "error should list the available arms: {msg}"
+    );
+    assert!(ctx.get("up").is_none(), "no arm should have run");
+}
+
+/// A `default` arm is the sanctioned way to accept anything unmatched.
+#[test]
+fn executor_branch_falls_back_to_default_arm() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "branch_default");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("cond", vec!["input".into()]);
+    ctx.graph_info
+        .set_predecessors("fallback", vec!["cond".into()]);
+
+    let mut lib = NodeCatalog::new();
+    lib.register("cond", Box::new(BranchCondition)); // returns "left"
+    lib.register("fallback", Box::new(Doubler));
+
+    let plan = ExecutionPlan::Branch {
+        node_id: "cond".into(),
+        arms: vec![(
+            "default".into(),
+            ExecutionPlan::Execute {
+                node_id: "fallback".into(),
+            },
+        )],
+    };
+
+    execute(&plan, &mut ctx, &lib, &cache).unwrap();
+    assert!(ctx.get("fallback").is_some(), "default arm should run");
+}
+
+/// A condition producing a tensor names no arm at all.
+#[test]
+fn executor_branch_rejects_unreadable_condition() {
+    let bus = Arc::new(EventBus::new(64));
+    let cache = MemoryCache::default();
+
+    let mut ctx = Context::new(bus, "branch_unreadable");
+    ctx.set("input", Value::tensor(vec![1.0], vec![1]));
+    ctx.graph_info
+        .set_predecessors("cond", vec!["input".into()]);
+
+    let mut lib = NodeCatalog::new();
+    lib.register("cond", Box::new(Doubler)); // yields a Tensor, not a label
+
+    let plan = ExecutionPlan::Branch {
+        node_id: "cond".into(),
+        arms: vec![(
+            "a".into(),
+            ExecutionPlan::Execute {
+                node_id: "cond".into(),
+            },
+        )],
+    };
+
+    let err = execute(&plan, &mut ctx, &lib, &cache).expect_err("must not guess an arm");
+    assert!(
+        err.to_string().contains("names no arm"),
+        "unhelpful error: {err}"
+    );
 }
 
 // ── Executor coverage: Remote fallback ──
@@ -441,7 +688,7 @@ fn executor_remote_falls_back_to_local() {
     ctx.graph_info
         .set_predecessors("doubler", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     // No remote executor set → should fall back to local
@@ -469,10 +716,9 @@ fn executor_remote_with_transport() {
         fn execute(
             &self,
             _plan: &ExecutionPlan,
-            _filters: &FilterLibrary,
+            _filters: &NodeCatalog,
             input: &Value,
-            _y: Option<&Value>,
-            _fit_mode: bool,
+            _mode: &somatize_runtime::executor::RunMode,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             // Remote "doubles" the input
             match input {
@@ -517,7 +763,7 @@ fn executor_remote_with_transport() {
     ctx.graph_info
         .set_predecessors("remote_node", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("remote_node", Box::new(Doubler));
 
     let plan = ExecutionPlan::Remote {
@@ -556,7 +802,7 @@ fn executor_spills_large_values_to_datastore() {
     ctx.graph_info
         .set_predecessors("doubler", vec!["input".into()]);
 
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let plan = ExecutionPlan::Execute {
@@ -575,23 +821,29 @@ fn executor_spills_large_values_to_datastore() {
 #[test]
 fn graph_run_free_function() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let cache = MemoryCache::default();
-    let result = somatize_runtime::graph_run(&graph, &lib, CompileMode::NoCache, &cache);
+    let result = somatize_runtime::graph_run(
+        &graph,
+        &lib,
+        CompileMode::NoCache,
+        std::sync::Arc::new(cache),
+    );
     assert!(result.is_ok());
 }
 
 #[test]
 fn graph_fit_free_function_trainable() {
     let graph = linear_graph(&["mean"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("mean", Box::new(MeanFilter));
 
     let cache = MemoryCache::default();
     let x = Value::tensor(vec![10.0, 20.0], vec![2]);
-    let outputs = somatize_runtime::graph_fit(&graph, &lib, &x, None, &cache).unwrap();
+    let outputs =
+        somatize_runtime::graph_fit(&graph, &lib, &x, None, std::sync::Arc::new(cache)).unwrap();
 
     assert!(outputs.contains_key("mean"));
     let (data, _) = outputs["mean"].as_tensor().unwrap();
@@ -602,12 +854,12 @@ fn graph_fit_free_function_trainable() {
 #[test]
 fn graph_predict_free_function() {
     let graph = linear_graph(&["doubler"]);
-    let mut lib = FilterLibrary::new();
+    let mut lib = NodeCatalog::new();
     lib.register("doubler", Box::new(Doubler));
 
     let cache = MemoryCache::default();
     let x = Value::tensor(vec![3.0], vec![1]);
-    let result = somatize_runtime::graph_predict(&graph, &lib, &x, &cache);
+    let result = somatize_runtime::graph_predict(&graph, &lib, &x, std::sync::Arc::new(cache));
     // May or may not work depending on cache state, but the path is exercised
     let _ = result;
 }

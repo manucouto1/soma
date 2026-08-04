@@ -101,31 +101,18 @@ def worker_server():
     WORKER_TEMP = tempfile.mkdtemp(prefix="soma-e2e-")
 
     # Start worker in background thread
-    def run_worker():
-        w = Worker(
+    from conftest import start_worker_and_wait
+
+    start_worker_and_wait(
+        lambda: Worker(
             port=WORKER_PORT,
             tags=["test", "e2e"],
             token=WORKER_TOKEN,
             max_concurrent=2,
             worker_id="e2e-test-worker",
-        )
-        w.serve()
-
-    thread = threading.Thread(target=run_worker, daemon=True)
-    thread.start()
-
-    # Wait for worker to be ready
-    import urllib.request
-    for _ in range(50):
-        try:
-            url = f"http://127.0.0.1:{WORKER_PORT}/health"
-            resp = urllib.request.urlopen(url, timeout=1)
-            if resp.read() == b"ok":
-                break
-        except Exception:
-            time.sleep(0.1)
-    else:
-        pytest.fail("Worker did not start in time")
+        ),
+        WORKER_PORT,
+    )
 
     yield
 
@@ -361,9 +348,16 @@ class TestEdgeCases:
 
     def test_forward_without_fit_fails(self):
         g = make_graph()
-        g.node("doubler", DoubleFilter())
+        # A *trainable* filter has state to learn, so forward without fit is
+        # an error. (A stateless graph has nothing to fit and runs as-is.)
+        g.node("scale", ScaleFilter())
         with pytest.raises(RuntimeError, match="fitted"):
             g.forward([1.0])
+
+    def test_a_stateless_graph_needs_no_fit(self):
+        g = make_graph()
+        g.node("doubler", DoubleFilter())
+        assert g.forward([1.0, 2.0]) == [2.0, 4.0]
 
     def test_json_value_through_worker(self):
         g = make_graph()

@@ -1,4 +1,9 @@
-# Soma
+<p align="center">
+  <img src="docs/src/assets/logo-light.svg#gh-light-mode-only" alt="Soma" width="180">
+  <img src="docs/src/assets/logo-dark.svg#gh-dark-mode-only" alt="Soma" width="180">
+</p>
+
+<h1 align="center">Soma</h1>
 
 **Soma** (σῶμα — *body*) is a computational graph runtime for research pipelines, agent orchestration, and data virtualization. Written in Rust with Python bindings.
 
@@ -7,6 +12,11 @@ Part of the **Nous-Soma-Chronos** ecosystem:
 - **Soma** (this project): Executes, materializes — graphs, optimization, distributed workers
 - **[ChronosVector](https://github.com/manucouto1/chronos-vector)**: Remembers — temporal vector database
 
+**Docs**: [manucouto1.github.io/soma](https://manucouto1.github.io/soma/) —
+[quickstart](https://manucouto1.github.io/soma/getting-started/quickstart/),
+[tutorial notebooks](https://manucouto1.github.io/soma/getting-started/notebooks/),
+[Python API](https://manucouto1.github.io/soma/api/python/).
+
 ## Key Concepts
 
 | Concept | Description |
@@ -14,48 +24,54 @@ Part of the **Nous-Soma-Chronos** ecosystem:
 | **Filter** | Data transformation with `fit()` (learn state) and `forward()` (transform). Independently cacheable. |
 | **Graph** | Computational DAG of filters. Build with `.node()`/`.connect()` or `>>` / `\|` operators. |
 | **Graph.somatize()** | *"You think it. Soma somatizes it."* — Materialize a chain/fork topology into an executable graph. |
+| **Persistent cache** | Crash-safe cache-by-default: content-addressed action store, `soma cache stats\|gc\|pin\|verify`. |
+| **Run tracking** | Every `track_run`/`Study` writes a run directory (`.soma/runs/<id>/`): manifest, lossless event log, metrics, diagnostics. Crash-safe resume; readers never block training. |
+| **Visualization** | Annotated architecture diagrams, Optuna-style HPO charts, gradient-health views, and one-file HTML reports — all read from run directories. |
 | **TrainingStrategy** | Graph-level attribute: Local, DataParallel, ModelParallel, Federated, PopulationBased. |
 | **Study** | Hyperparameter optimization: Grid, Random, or Bayesian (TPE) search with median/percentile pruning. |
 | **PBT** | Population-Based Training: evolutionary train→evaluate→exploit/explore cycles. |
-| **ExecutionPlan** | Compiled from graph. Variants: Sequence, Parallel, Execute, Cached, Remote, Loop, Branch. |
+| **Agentic layer** | An agentic flow is a graph whose nodes are effectful *steps* (`soma.Agent`, `soma.Judge`, or any object with `poll(ctx)`). Steps journal their effects (record once, replay on resume); a pipeline is a tool an agent can run and an agent is a node a pipeline can contain. Patterns (`react`, `refine`, `board`, …) are functions in `soma.agentic` returning ordinary graphs. |
+| **ExecutionPlan** | Compiled from graph. Variants: Sequence, Parallel, Execute, Step, Loop, Branch, Remote, Composite, Stream, Empty. |
 | **DataStore** | Abstraction for data movement: Local, S3, Zarr (chunked tensors), Cached, Stream. |
 | **Worker** | Remote execution daemon. Auto-detects hardware, Slurm-style resource limits, token auth. |
 | **Coordinator** | Lightweight gateway: worker registration, routing, health monitoring. |
 
-## Workspace (10 crates)
+## Workspace (11 crates)
 
 ```
-soma-macros     → proc macro (#[derive(SomaFilter)])
-soma-core       → types + traits: Filter, Value, Graph, TrainingStrategy, Schema, Event
-                  DataStore (Local/S3/Zarr), VirtualValue, StreamCache
-soma-compiler   → Graph → ExecutionPlan (caching, parallelism, distribution)
-                  Scheduler, plan visualization (Mermaid/Graphviz)
-soma-runtime    → GraphSession, executor, FilterLibrary, caches, samplers, pruners
-                  StudyRunner, PbtRunner, stream executor
-soma-memory     → KnowledgeBase trait + MemoryKB + ChronosKB
-soma-worker     → Worker, Coordinator, Protocol, EnvManager, token auth
-                  Auto-detect capabilities, resource limits, CLI binary
-soma-agent      → Research agent loop (observe → hypothesize → experiment → conclude)
-soma-mcp        → MCP server (13 tools for code, execution, knowledge)
-soma-python     → PyO3 bindings: Graph, Filter, Study, Lab, Chain/Fork operators
+soma-macros      → proc macro (#[derive(SomaFilter)])
+soma-core        → types + traits: Filter, Value, Graph, Event, Schema, Study,
+                   DataStore (Local/S3/Zarr), VirtualValue, tracking schema, GraphOverlay
+soma-compiler    → Graph → ExecutionPlan (caching, parallelism, distribution)
+                   Scheduler, plan visualization
+soma-runtime     → GraphSession, executor, NodeCatalog (filters AND steps), caches,
+                   samplers, pruners, EffectDriver + journal,
+                   StudyRunner, PbtRunner, LocalTracker + RunReader (run directories)
+soma-memory      → KnowledgeBase trait + MemoryKB + ChronosKB
+soma-worker      → Worker, Protocol, EnvManager, token auth, CLI binary
+soma-coordinator → worker registry, routing, heartbeat monitoring
+soma-agent       → Research agent loop (observe → hypothesize → experiment → conclude)
+soma-mcp         → MCP server (13 tools for code, execution, knowledge)
+soma-python      → PyO3 bindings: Graph, Study, Run, RunView, soma.viz, Chain/Fork operators
+somatize (soma/) → facade crate re-exporting the workspace
 ```
 
 ## Quick Start
 
 ```bash
-# Run all tests (355 Rust + 29 Python)
+# Run all tests (900+: 582 Rust + 325 Python)
 cargo test --workspace
 cd soma-python && maturin develop && pytest tests/ -v
 
 # With S3/Zarr DataStore
-cargo test -p soma-core --features s3
-cargo test -p soma-core --features zarr
+cargo test -p somatize-core --features s3
+cargo test -p somatize-core --features zarr
 
 # With ChronosVector
-cargo test -p soma-memory --features chronos
+cargo test -p somatize-memory --features chronos
 
 # MCP server
-cargo run -p soma-mcp -- /path/to/project
+cargo run -p somatize-mcp -- /path/to/project
 ```
 
 ## Python Usage
@@ -86,10 +102,6 @@ g = Graph.somatize(Scaler() >> Model())
 g.fit(train_data)
 result = g.forward(test_data)
 
-# Visualize
-print(g.to_mermaid())
-print(g.to_text())
-
 # Complex topologies
 g = Graph.somatize(
     (LoadA() >> NormA() | LoadB() >> NormB())
@@ -98,13 +110,74 @@ g = Graph.somatize(
     >> (HeadA() | HeadB())
 )
 
-# Events
-g.on_event(lambda e: print(e["event_type"], e.get("node_id", "")))
-
-# Distributed training
-g.set_strategy(DataParallel(num_replicas=4))
-g.set_coordinator("http://coord:9090", token="sk-xxx")
+# Distributed execution
+g.add_worker("http://gpu-box:8080", token="sk-xxx", tags=["gpu"])
+g.set_coordinator("http://coord:9090", token="sk-xxx")   # or auto-discovery
 ```
+
+## See your experiments
+
+Everything a run produces lands in a run directory; everything below
+just reads it back.
+
+```python
+# Track a run — architecture snapshot + lossless event log + metrics
+with g.track_run("mos-baseline", tags=["mos"]) as run:
+    g.fit(train_data)
+    run.log("val_f1", evaluate(g), step=0)
+
+# List and inspect runs (crashed runs are detected via stale heartbeat)
+for run in soma.runs():
+    print(run.id, run.state, run.name)
+
+view = soma.runs()[0]
+view.node_timings()         # per-node wall times, durations, cache hits
+print(view.to_mermaid())    # architecture annotated with timing/cache/health
+```
+
+In a notebook, evaluating `g` draws the architecture as an inline SVG
+diagram (a materialized differentiable filter draws its inner layers,
+parameter counts included) — no JavaScript, renders anywhere.
+
+```text
+graph LR
+    scaler["scaler<br/>26ms"]
+    model["model<br/>27ms · ⚠ DEAD_CHANNELS(2)"]
+    scaler --> model
+    class scaler soma_completed
+    class model soma_flagged
+```
+
+With the `viz` extra (`pip install 'somatize[viz]'`) you get interactive
+Plotly figures and pandas projections:
+
+```python
+study.plot_optimization_history()   # objective per trial + best-so-far
+study.plot_parallel_coordinate()    # params → objective
+study.plot_param_importances()      # Spearman rank correlation
+study.plot_timeline()               # trial gantt
+study.trials_dataframe()            # pandas table
+
+view.plot_metrics()                 # logged metric curves
+view.plot_gantt()                   # where the run's wall time went
+view.plot_health()                  # gradient-audit health flags
+view.plot_channels("encoder")      # channel-correlation heatmap
+```
+
+And from the shell:
+
+```bash
+soma runs                            # list tracked runs
+soma graph <run_id>                  # annotated mermaid/dot diagram
+soma report <run_id> -o report.html  # self-contained HTML report
+soma report <run_id> --inline        # fully offline (embeds plotly.js)
+```
+
+`soma report` packages the annotated DAG, efficiency tiles, metric
+curves, the full HPO section with trial table, and the health section
+into one shareable file. A future live GUI reads the same run-directory
+files and the same embedded JSON shapes — see
+the [Visualization](https://manucouto1.github.io/soma/design/visualization/) page.
 
 ## Workers
 
@@ -122,11 +195,12 @@ soma-worker --coordinator http://coord:9090 --token sk-xxx --tags gpu
 Workers auto-detect CPU cores, RAM, GPUs (nvidia-smi), and Python environments.
 Each worker creates isolated venv/conda environments per job with incremental dependency updates.
 
-## Feature Flags
+## Feature Flags & Extras
 
-- `soma-core/s3` — S3-compatible DataStore (AWS, Backblaze B2, MinIO)
-- `soma-core/zarr` — Zarr v3 chunked tensor storage with compression
-- `soma-memory/chronos` — ChronosVector-backed KnowledgeBase
+- `somatize-core/s3` — S3-compatible DataStore (AWS, Backblaze B2, MinIO)
+- `somatize-core/zarr` — Zarr v3 chunked tensor storage with compression
+- `somatize-memory/chronos` — ChronosVector-backed KnowledgeBase
+- `somatize[viz]` (pip) — Plotly figures, DataFrames, HTML reports, rich tables, tqdm progress
 
 ## License
 

@@ -51,35 +51,41 @@ impl MemoryStateStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Lock the map, tolerating poisoning.
+    ///
+    /// The runtime catches panics from user code and keeps going, so a
+    /// recovered panic must not leave the store permanently unusable —
+    /// which is exactly what propagating the poison would do. The map's
+    /// invariants do not span a lock acquisition, so the data behind a
+    /// poisoned lock is still sound. Same policy as the LRU cache.
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Value>>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 impl StateStore for MemoryStateStore {
     fn get(&self, node_id: &str) -> Result<Option<Arc<Value>>> {
-        let guard = self.inner.lock().expect("MemoryStateStore poisoned");
-        Ok(guard.get(node_id).cloned())
+        Ok(self.lock().get(node_id).cloned())
     }
 
     fn set(&self, node_id: &str, state: Value) -> Result<()> {
-        let mut guard = self.inner.lock().expect("MemoryStateStore poisoned");
-        guard.insert(node_id.to_string(), Arc::new(state));
+        self.lock().insert(node_id.to_string(), Arc::new(state));
         Ok(())
     }
 
     fn remove(&self, node_id: &str) -> Result<()> {
-        let mut guard = self.inner.lock().expect("MemoryStateStore poisoned");
-        guard.remove(node_id);
+        self.lock().remove(node_id);
         Ok(())
     }
 
     fn clear(&self) -> Result<()> {
-        let mut guard = self.inner.lock().expect("MemoryStateStore poisoned");
-        guard.clear();
+        self.lock().clear();
         Ok(())
     }
 
     fn keys(&self) -> Result<Vec<String>> {
-        let guard = self.inner.lock().expect("MemoryStateStore poisoned");
-        Ok(guard.keys().cloned().collect())
+        Ok(self.lock().keys().cloned().collect())
     }
 }
 

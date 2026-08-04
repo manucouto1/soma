@@ -102,7 +102,7 @@ perf(runtime): use arena allocator for context store
 ### Opening a PR
 
 1. Create a feature branch from `develop`
-2. Implement with TDD (see [TDD Strategy](/development/tdd/))
+2. Implement with TDD (see [TDD Strategy](/soma/development/tdd/))
 3. Ensure all tests pass: `cargo test --workspace`
 4. Ensure clippy is clean: `cargo clippy --workspace`
 5. Ensure formatting: `cargo fmt --check`

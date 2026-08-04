@@ -26,7 +26,7 @@ class Filter(metaclass=FilterMeta):
 
     1. **Parameters** (constructor args / search spaces):
        - Passed via constructor: ``KNN(n_neighbors=5)``
-       - Or defined as search spaces: ``n_neighbors = search.int(1, 15)``
+       - Or defined as search spaces: ``n_neighbors = search(1, 15)``
        - Live on ``self`` — used in both ``fit()`` and ``forward()``
        - Cached by config_hash (change params → new cache key)
 
@@ -45,8 +45,8 @@ class Filter(metaclass=FilterMeta):
 
         class KNN(Filter):
             # Search space parameters (optimizable)
-            n_neighbors = search.int(1, 15)
-            weights = search.categorical(["uniform", "distance"])
+            n_neighbors = search(1, 15)
+            weights = search(choices=["uniform", "distance"])
 
             # Fixed parameter (not in search space)
             metric: str = "euclidean"
@@ -72,17 +72,57 @@ class Filter(metaclass=FilterMeta):
         _stream_mode = "fixed"   # "fixed" (default), "evolving", or "barrier"
     """
 
+    #: Schema version of this filter class. Bump in subclasses when
+    #: constructor kwargs or saved-state layout changes; ``Graph.load``
+    #: reads it from the manifest and warns on mismatch so users can
+    #: plug a migration hook.
+    class_version: int = 1
+
     def __init__(self, **kwargs):
+        # Remember the constructor kwargs verbatim so checkpoints can
+        # rebuild the filter via ``cls(**self.kwargs())``. Stored as a
+        # plain dict on the instance — subclasses that need to keep a
+        # different surface should override :meth:`kwargs`.
+        self._init_kwargs: dict = dict(kwargs)
+
         # Set all kwargs as attributes (parameters)
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-        # Set defaults from search descriptors (if not already set via kwargs)
-        for dim in self.__class__._soma_search_space:
-            name = dim["name"]
-            if not hasattr(self, name) or isinstance(getattr(self.__class__, name, None), SearchDescriptor):
-                if name not in kwargs and "default" in dim:
-                    setattr(self, name, dim["default"])
+        # Materialize search-descriptor defaults into __dict__ so they
+        # behave like explicitly-passed kwargs everywhere — including in
+        # the cache identity (an unset searchable param still shapes
+        # behavior through its default).
+        for klass in type(self).__mro__:
+            for name, attr in vars(klass).items():
+                if (
+                    isinstance(attr, SearchDescriptor)
+                    and name not in self.__dict__
+                    and attr.default is not None
+                ):
+                    self.__dict__[name] = attr.default
+
+    # ── Introspection (used by Graph.save / Graph.load) ──
+
+    def kwargs(self) -> dict:
+        """Return the constructor kwargs needed to rebuild this filter.
+
+        Default: the dict captured by ``__init__``. Subclasses with
+        non-serialisable runtime objects should override and return only
+        the JSON-serialisable subset (everything else must be
+        reconstructed inside the new instance, e.g. in ``build_module``).
+        """
+        return dict(getattr(self, "_init_kwargs", {}))
+
+    @classmethod
+    def class_path(cls) -> str:
+        """Fully-qualified import path: ``"module.submodule.Class"``.
+
+        ``Graph.load`` uses it to rebuild filter instances without the
+        original Python objects in scope. The class must therefore be
+        importable by name from a stable module path.
+        """
+        return f"{cls.__module__}.{cls.__qualname__}"
 
     def fit(self, x, y=None):
         """Learn state from training data.

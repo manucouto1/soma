@@ -21,6 +21,7 @@ class TestStudy:
             n_trials=10,
             objectives=[("f1", "maximize")],
             seed=42,
+            tracking=False,
         )
         assert study.n_trials == 0  # no trials run yet
 
@@ -34,6 +35,7 @@ class TestStudy:
             n_trials=20,
             objectives=[("f1", "maximize")],
             seed=42,
+            tracking=False,
         )
         study.run(simple_executor)
 
@@ -55,6 +57,7 @@ class TestStudy:
             strategy="grid",
             n_trials=5,  # 5 points per dim
             objectives=[("f1", "maximize")],
+            tracking=False,
         )
         study.run(simple_executor)
 
@@ -73,6 +76,7 @@ class TestStudy:
             strategy="grid",
             n_trials=3,
             objectives=[("score", "maximize")],
+            tracking=False,
         )
         study.run(executor)
 
@@ -90,6 +94,7 @@ class TestStudy:
             n_trials=15,
             objectives=[("f1", "maximize")],
             seed=42,
+            tracking=False,
         )
         study.run(simple_executor)
 

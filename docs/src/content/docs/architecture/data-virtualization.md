@@ -94,7 +94,7 @@ All cached data lives in a unified K/V store with tiered access:
 │                                          │
 │   1. Memory     HashMap         <1ms     │
 │      ↓ miss                              │
-│   2. Local      RocksDB/sled    ~1ms     │
+│   2. Local      FsActionStore  ~1ms     │
 │      ↓ miss                              │
 │   3. Remote     S3/shared       ~50ms    │
 │      ↓ miss                              │
@@ -151,23 +151,25 @@ pub enum Origin {
 | **Virtualization unit** | Table / View | `VirtualValue` (any tensor, dataframe, JSON) |
 | **Materialization trigger** | SQL query | `.materialize()` call or pipeline execution |
 | **Query optimizer** | SQL query planner | Soma compiler (cache-aware plan) |
-| **Tiered storage** | Not built-in | Memory → RocksDB → S3 |
+| **Tiered storage** | Not built-in | Memory LRU → filesystem CAS |
 | **Identity** | Table name / query hash | `hash(filter_config + input_hash)` -- content-addressable |
 | **Cascade invalidation** | Manual refresh | Automatic: if input changes, downstream keys change |
 
 ## How the Compiler Uses Virtualization
 
-When the compiler builds an execution plan, it treats every node's output as a VirtualValue and checks its status:
+At execution time each node's output is a VirtualValue, and the
+**executor** resolves reuse per node with the materialized input in hand:
 
 ```
-Pipeline: [A] → [B] → [C]
+Graph: [A] → [B] → [C]
 
-Compiler resolves:
-  A.output → VirtualValue::Cached { key: abc }     → plan: Cached(A)
-  B.output → VirtualValue::Deferred { key: def }   → plan: Execute(B)
-  C.output → VirtualValue::Deferred { key: ghi }   → plan: Execute(C)
+Executor resolves (runtime):
+  A: key = hash(config_A + state + input)   → cache HIT  → skip, load
+  B: key = hash(config_B + state + A.out)   → miss       → execute
+  C: key = hash(config_C + state + B.out)   → miss       → execute
 
-Only B and C actually run. A's result is loaded from cache.
+Only B and C actually run. A's result is loaded from the persistent cache.
 ```
 
-This means the compiler can inspect the entire graph, determine what's already available, estimate costs, and produce a minimal execution plan -- all before any filter runs.
+Keys derive from input *content*, so an upstream re-run that produces
+identical bytes leaves downstream keys unchanged (early cutoff).

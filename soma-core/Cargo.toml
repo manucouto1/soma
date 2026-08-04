@@ -11,32 +11,11 @@ description = "Core types and traits for the Soma computational graph runtime"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { workspace = true }
+ciborium = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 somatize-macros = { workspace = true }
-
-[features]
-s3 = ["dep:rust-s3", "dep:tokio"]
-zarr = ["dep:object_store", "dep:tokio", "dep:zstd"]
-
-[dependencies.rust-s3]
-version = "0.35"
-optional = true
-default-features = false
-features = ["tokio-rustls-tls"]
-
-[dependencies.tokio]
-version = "1"
-optional = true
-features = ["rt"]
-
-[dependencies.object_store]
-workspace = true
-optional = true
-
-[dependencies.zstd]
-workspace = true
-optional = true
 
 [dev-dependencies]
 proptest = { workspace = true }

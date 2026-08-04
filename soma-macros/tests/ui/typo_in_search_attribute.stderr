@@ -1,0 +1,5 @@
+error: unknown `soma` attribute on a field; expected `skip_hash` or `search`
+  --> tests/ui/typo_in_search_attribute.rs:11:12
+   |
+11 |     #[soma(serach(low = 0.1, high = 2.0))]
+   |            ^^^^^^

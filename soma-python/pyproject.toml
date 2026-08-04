@@ -21,9 +21,11 @@ dependencies = ["numpy>=1.20", "cloudpickle>=3.0"]
 
 [project.scripts]
 somatize-worker = "soma.cli:main"
+soma = "soma._cache_cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "numpy>=1.20"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "numpy>=1.20"]
+viz = ["plotly>=5.18", "pandas>=1.5", "rich>=13", "tqdm>=4.60"]
 
 [project.urls]
 Repository = "https://github.com/manucouto1/soma"
@@ -33,3 +35,44 @@ Documentation = "https://manucouto1.github.io/soma/"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "soma._soma"
+
+[tool.pytest.ini_options]
+# Slow tests (subprocess crash-sim, statistical TPE validation) are
+# opt-in: run them with `pytest -m slow`. Live tests need real endpoints
+# and a key, so they are opt-in twice over: `-m live` plus $SOMA_LIVE.
+addopts = "-m 'not slow and not live'"
+markers = [
+    "slow: expensive robustness tests (crash-sim subprocess, statistical TPE)",
+    "live: hits real LLM endpoints; needs $SOMA_LIVE and provider credentials",
+]
+
+[tool.coverage.run]
+source = ["python/soma"]
+
+[tool.mypy]
+files = ["python/soma"]
+# No `python_version`: mypy 2.x refuses anything below 3.10, and pinning it
+# to 3.10 while `requires-python` says 3.9 would be a claim we do not check.
+# Left unset, mypy uses the interpreter it runs on. Runtime annotations are
+# all under `from __future__ import annotations`, so the 3.9 floor holds
+# regardless of what version the check itself assumes.
+# The package ships `py.typed`, so what it claims about itself is public.
+# Not `strict`: most of this layer moves user data through untyped
+# boundaries, and annotating that `Any` as `Any` is honest, not a gap.
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Optional extras and untyped dependencies. Missing stubs upstream is not
+# something this package can fix, and the noise would hide our own errors.
+[[tool.mypy.overrides]]
+module = [
+    "cloudpickle.*",
+    "ipywidgets.*",
+    "jsonschema.*",
+    "pandas.*",
+    "plotly.*",
+    "rich.*",
+    "torch.*",
+    "tqdm.*",
+]
+ignore_missing_imports = true

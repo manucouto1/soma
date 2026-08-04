@@ -7,14 +7,14 @@ description: How Soma pipelines support end-to-end gradient flow through differe
 
 Soma distinguishes between two kinds of graphs that serve different purposes:
 
-| | Computational Graph (Soma Pipeline) | Orchestration Graph (Platform) |
+| | Computational Graph (Soma `Graph`) | Orchestration Graph (Platform) |
 |---|---|---|
 | **Nodes** | Filters (data transformations) | LLM, Agent, Condition, Tool, IO |
 | **Purpose** | Transform data | Orchestrate reasoning |
 | **Gradients** | Yes, if filters are differentiable | No (not meaningful) |
-| **Example** | `[Scaler] → [Linear] → [Softmax]` | `[Agent: Hypothesize] → [Pipeline] → [Agent: Analyze]` |
+| **Example** | `[Scaler] → [Linear] → [Softmax]` | `[Agent: Hypothesize] → [Graph] → [Agent: Analyze]` |
 
-Soma pipelines **are** computational graphs and **should** support gradient propagation when the user implements differentiable filters.
+A Soma `Graph` **is** a computational graph, and supports gradient propagation when its filters are differentiable.
 
 ## How Gradients Flow
 
@@ -29,11 +29,11 @@ pub struct FilterMeta {
 }
 ```
 
-When all filters in a pipeline are differentiable, `pipeline.forward()` maintains the computational graph and gradients flow end-to-end:
+When all filters in a graph are differentiable, `g.forward()` maintains the autograd graph and gradients flow end-to-end:
 
 ```
-Pipeline: [Scaler] → [Linear] → [ReLU] → [Linear2]
-           diff ✓     diff ✓    diff ✓     diff ✓
+Graph: [Scaler] → [Linear] → [ReLU] → [Linear2]
+        diff ✓     diff ✓    diff ✓     diff ✓
 
 x → forward(Scaler) → forward(Linear) → forward(ReLU) → forward(Linear2) → output
                                                                                │
@@ -41,50 +41,49 @@ loss = criterion(output, target)                                               �
 loss.backward()  ← gradients flow through all forwards ◄──────────────────────┘
 ```
 
-### Pipeline Methods
+### The methods that drive it
 
-```rust
-impl Pipeline {
-    /// Differentiable forward: maintains computational graph
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut current = x.clone();
-        for (filter, state) in &self.fitted_filters {
-            current = filter.forward(&current, state)?;
-            // No detach: gradient graph accumulates
-        }
-        Ok(current)
-    }
+Gradient flow is driven from Python, where the tensors and the optimizer live.
+`soma/_orchestrator.py` installs these on `Graph`:
 
-    /// Inference: detaches after each filter (no gradients)
-    pub fn predict(&self, x: &Tensor) -> Result<Tensor> {
-        let mut current = x.clone();
-        for (filter, state) in &self.fitted_filters {
-            current = filter.forward(&current, state)?.detach();
-        }
-        Ok(current)
-    }
+| Method | What it does |
+|---|---|
+| `g.materialize(sample)` | Threads shapes through the graph and builds each filter's `nn.Module`. Must run before training or auditing. |
+| `g.train()` / `g.eval()` | Flip every differentiable filter's mode |
+| `g.parameters()` | Every parameter, in topological order, deduplicated |
+| `g.make_optimizer(cls, **kw)` | Build and attach an optimizer (default Adam) |
+| `g.context()` | Context manager scoping one training step |
+| `g.forward(x)` | Returns `(out, aux)` while training, `out` alone in eval |
+| `g.backward(ctx, loss)` | `loss.backward()`, plus the audit hook and step event |
+| `g.step(ctx)` | Optimizer step |
+| `g.freeze()` | Fold module weights into node state and switch to eval |
 
-    /// Training: fit each filter sequentially, detach between them
-    pub fn fit(&mut self, x: &Tensor, y: Option<&Tensor>) -> Result<()> {
-        let mut current = x.clone();
-        for (filter, state_slot) in &mut self.filters {
-            let state = self.resolve_or_fit(filter, &current, y)?;
-            // Detach between fits: each filter trains independently
-            current = filter.forward(&current, &state)?.detach();
-            *state_slot = Some(state);
-        }
-        Ok(())
-    }
-}
+Nothing detaches between filters while training, so the autograd graph
+accumulates across the whole topology:
+
+```python
+g.materialize(x)
+g.train()
+g.make_optimizer(torch.optim.Adam, lr=1e-2)
+
+for _ in range(epochs):
+    with g.context() as ctx:
+        g.zero_grad()
+        out, aux = g.forward(x)
+        g.backward(ctx, nn.functional.mse_loss(out, y))
+    g.step(ctx)
 ```
+
+In eval — after `freeze()`, or with `training=False` — each filter loads its
+saved state and runs under `no_grad`, so no autograd graph is built at all.
 
 ### Gradient Interruption
 
 When a non-differentiable filter appears in the pipeline, it breaks the gradient chain:
 
 ```
-Pipeline: [Scaler] → [DecisionTree] → [Linear]
-           diff ✓     diff ✗           diff ✓
+Graph: [Scaler] → [DecisionTree] → [Linear]
+        diff ✓     diff ✗           diff ✓
 
 Gradients from Linear CANNOT reach Scaler.
 Linear can still receive gradients from its own output.
@@ -148,22 +147,17 @@ warning[gradient]: Gradient flow interrupted at `DecisionTree` (FilterKind::Opaq
 
 There is an important interaction between caching and gradients:
 
-### During `predict()` (inference)
+### In eval mode (inference)
 
 Caching works normally. Each filter's output is cached and reused. No gradients needed.
 
 ### During `forward()` (differentiable)
 
-Cached outputs **cannot** be used for gradient flow because the cached tensor has no computational graph attached. The compiler handles this:
-
-```rust
-ExecutionPlan::Cached { id, key }
-// ↑ Used in predict() mode
-
-ExecutionPlan::Execute { id, filter }
-// ↑ Used in forward() mode, even if cache exists,
-//   because we need the live computational graph
-```
+Cached outputs **cannot** be used for gradient flow because the cached
+tensor has no computational graph attached. `CompileMode::Differentiable`
+therefore disables output caching at runtime — every forward re-executes
+so the live computational graph exists end to end (fit states still
+cache).
 
 The compiler takes a `mode` parameter:
 
@@ -200,45 +194,180 @@ forward() results → cacheable only in inference mode
 
 ## Use Cases
 
-### End-to-End Differentiable Pipeline
+### End-to-end differentiable graph
 
 ```python
-pipeline = Pipeline([
-    MyScaler(with_mean=True),
-    LinearLayer(hidden=128),
-    ReLU(),
-    LinearLayer(hidden=10),
-])
+g = Graph.somatize(
+    MyScaler(with_mean=True)
+    >> LinearLayer(hidden=128)
+    >> ReLU()
+    >> LinearLayer(hidden=10)
+)
 
-pipeline.fit(x_train, y_train)
+g.fit(x_train, y_train)
 
 # Differentiable forward
-output = pipeline.forward(x_test)
+output = g.forward(x_test)
 loss = cross_entropy(output, y_test)
-loss.backward()  # gradients flow through entire pipeline
+loss.backward()  # gradients flow through the whole graph
 
 # Access gradients
 x_test.grad  # gradient with respect to input
 ```
 
-### Mixed Pipeline (partial gradients)
+### Mixed graph (partial gradients)
 
 ```python
-pipeline = Pipeline([
-    SQLQuery("SELECT * FROM features"),  # Opaque
-    MyScaler(),                           # Differentiable
-    NeuralNet(layers=3),                  # Differentiable
-])
+g = Graph.somatize(
+    SQLQuery("SELECT * FROM features")   # Opaque
+    >> MyScaler()                        # Differentiable
+    >> NeuralNet(layers=3)               # Differentiable
+)
 
 # Compiler warns: gradient flow interrupted at SQLQuery
 # But Scaler → NeuralNet gradient flow works fine
-output = pipeline.forward(x)
+output = g.forward(x)
 loss.backward()  # gradients flow from NeuralNet through Scaler
 ```
 
-### When to Use `forward()` vs `predict()`
+### Training mode vs eval mode
 
-| Method | Gradients | Caching | Use Case |
+There is one `forward()`; the mode decides what it does.
+
+| Mode | Gradients | Caching | Use case |
 |---|---|---|---|
-| `predict()` | No | Full caching | Inference, evaluation, production |
-| `forward()` | Yes | State-only caching | Training, fine-tuning, gradient analysis |
+| `g.eval()` (default) | No | Full output caching | Inference, evaluation, production |
+| `g.train()` | Yes | State-only caching | Training, fine-tuning, gradient analysis |
+
+## Native Training Loop (Python)
+
+The conceptual model above describes the runtime; the Python orchestrator
+exposes it as a small, RPC-ready surface on `Graph`. Filters that subclass
+`DifferentiableFilter` keep a persistent `nn.Module` on the instance,
+so a user-driven training loop can run batches through the graph with
+gradients flowing **natively** between filters — no per-batch
+serialization of weights or activations.
+
+### Anatomy of `DifferentiableFilter`
+
+A subclass implements two hooks plus an optional `forward` override:
+
+```python
+from soma import DifferentiableFilter
+import torch.nn as nn
+
+class Dense(DifferentiableFilter):
+    def __init__(self, out_dim, lr=1e-3):
+        super().__init__(out_dim=out_dim, lr=lr)
+
+    def build_module(self, input_shape):       # built once
+        return nn.Linear(input_shape[-1], self.out_dim)
+
+    def output_shape(self, input_shape):       # for cascade materialise
+        return (self.out_dim,)
+```
+
+`forward(x, state=None)` is provided by the base. It is **polymorphic on
+`self.training`**:
+
+- `training=True` → returns `(out_tensor, aux_dict)` with autograd live.
+  The `state` argument is ignored — parameters live on `self._module`.
+- `training=False` → optionally loads `state["weights_b64"]`, runs
+  `no_grad`, returns `(out_list, aux_dict)`. This is the path the Rust
+  runtime uses for cached/distributable inference after `freeze()`.
+
+The contract is **always `(out, aux)`**; `aux` is an empty dict unless
+the filter override surfaces auxiliary signals (gates, routing weights,
+auxiliary losses).
+
+### Graph orchestration API
+
+| Method | Description |
+|---|---|
+| `g.materialize(sample_input)` | Walk topology, build every `_module` once, threading shapes through `output_shape`. |
+| `g.train()` / `g.eval()` | Toggle `training` on every live filter (and its `_module`). |
+| `g.parameters()` | Iterate `nn.Parameter`s of every materialised filter, in topological order, deduplicated. |
+| `g.forward(x)` | Polymorphic. If any filter is in training, walks live filters with autograd live and returns `(out, aux_by_node)`. Otherwise delegates to the Rust inference path. |
+| `g.make_optimizer(cls=Adam, **kw)` | Build and register an optimiser over `g.parameters()`. |
+| `g.set_optimizer(opt)` | Register an externally-built optimiser. |
+| `g.context()` | Autograd context manager. Local: no-op. RPC: `dist.autograd.context()`. |
+| `g.backward(ctx, loss)` | Local: `loss.backward()`. RPC: `dist.autograd.backward(ctx, [loss])`. |
+| `g.step(ctx)` | Local: `opt.step()`. RPC: `DistributedOptimizer.step(ctx)`. |
+| `g.zero_grad()` | Wrapper around the registered optimiser; silent no-op before `make_optimizer`. |
+| `g.freeze()` | Snapshot every live `_module.state_dict()` into the runtime's filter-state library and switch to eval. After `freeze()`, the Rust forward path is ready. |
+
+### Canonical training loop
+
+```python
+from soma import Graph, DifferentiableFilter
+import torch, torch.nn as nn
+
+g = Graph.somatize(Dense(8) >> Dense(2))
+g.materialize(sample_x)
+g.train()
+g.make_optimizer(torch.optim.Adam, lr=1e-3)
+
+for epoch in range(epochs):
+    for x, y in batches:
+        with g.context() as ctx:
+            g.zero_grad()
+            out, aux = g.forward(x)
+            loss = nn.functional.mse_loss(out, y)
+            g.backward(ctx, loss)
+        g.step(ctx)
+
+g.freeze()                 # weights → state library, switch to eval
+g.eval()
+preds = g.forward(x_test)  # Rust inference path
+```
+
+### Auxiliary signals
+
+When a filter override returns `(out, {"gate": gate_tensor})`, the
+graph's training-mode `forward` collects per-node aux into
+`aux_by_node = {node_id: aux_dict}`. The user combines them with the
+main loss explicitly:
+
+```python
+out, aux = g.forward(x)
+main = nn.functional.cross_entropy(out, y)
+gate_l1 = aux["classifier"]["gate"].abs().mean()
+total = main + 0.1 * gate_l1
+g.backward(ctx, total)
+```
+
+`aux` tensors keep autograd live, so gradients from the auxiliary term
+reach the same parameters as the main loss.
+
+### Gradient health audit
+
+Pair the training loop with `graph.gradient_audit()` to record per-filter
+activation and gradient statistics and flag vanishing / exploding /
+NaN / dead / saturated nodes with no manual hooks:
+
+```python
+with g.gradient_audit() as audit:
+    for x, y in batches:
+        with g.context() as ctx:
+            g.zero_grad()
+            out, aux = g.forward(x)
+            loss = my_loss(out, y, aux)
+            g.backward(ctx, loss)
+        g.step(ctx)
+
+print(audit.report().pretty())
+audit.assert_healthy()
+```
+
+See the [Gradient Health Audit guide](../../guides/gradient-audit/) for
+metrics, flags, and threshold tuning.
+
+### RPC-ready by design
+
+The `context() / backward(ctx, loss) / step(ctx)` triplet is intentionally
+shaped after `torch.distributed.autograd`. Locally each call reduces to
+the obvious single-process action; once filters live on remote workers
+backed by `torch.distributed.rpc`, the same call sites swap in the
+distributed equivalents (`dist.autograd.context()`,
+`dist.autograd.backward(ctx, [loss])`,
+`DistributedOptimizer.step(ctx)`) without touching user code.

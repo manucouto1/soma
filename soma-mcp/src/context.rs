@@ -2,8 +2,7 @@
 
 use crate::protocol::ToolCallResult;
 use serde_json::json;
-use somatize_memory::{ExperimentRecord, KnowledgeBase, MemoryKnowledgeBase};
-use std::collections::HashMap;
+use somatize_memory::{ExperimentRecord, FileKnowledgeBase, KnowledgeBase, MemoryKnowledgeBase};
 use std::path::{Path, PathBuf};
 
 /// Server-side state for the Soma MCP server.
@@ -12,14 +11,84 @@ pub struct SomaContext {
     pub project_dir: PathBuf,
     /// Knowledge base for experiment tracking.
     pub kb: Box<dyn KnowledgeBase>,
+    /// Where the knowledge base is persisted, when it is.
+    kb_path: Option<PathBuf>,
 }
 
 impl SomaContext {
+    /// Create a context with a persistent knowledge base when one is
+    /// available: `SOMA_KB_PATH` if set, else the project's
+    /// `.soma/experiments.jsonl` when a `.soma/` directory exists.
+    /// Falls back to the in-memory KB otherwise (records are lost on
+    /// server exit).
     pub fn new(project_dir: impl Into<PathBuf>) -> Self {
+        Self::with_env_override(project_dir, std::env::var("SOMA_KB_PATH").ok())
+    }
+
+    /// Deterministic constructor: `env_override` plays the role of the
+    /// `SOMA_KB_PATH` environment variable. Used by `new()` and by
+    /// tests, which must never depend on (or leak through) the real
+    /// process environment.
+    pub fn with_env_override(
+        project_dir: impl Into<PathBuf>,
+        env_override: Option<String>,
+    ) -> Self {
+        let project_dir = project_dir.into();
+        let resolved = Self::kb_path(&project_dir, env_override);
+        let mut kb_path = None;
+        let kb: Box<dyn KnowledgeBase> = match &resolved {
+            Some(path) => match FileKnowledgeBase::open(path) {
+                Ok(kb) => {
+                    kb_path = resolved.clone();
+                    Box::new(kb)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "soma-mcp: failed to open knowledge base at {} ({e}); using in-memory",
+                        path.display()
+                    );
+                    Box::new(MemoryKnowledgeBase::new())
+                }
+            },
+            None => Box::new(MemoryKnowledgeBase::new()),
+        };
         Self {
-            project_dir: project_dir.into(),
-            kb: Box::new(MemoryKnowledgeBase::new()),
+            project_dir,
+            kb,
+            kb_path,
         }
+    }
+
+    /// Pick up experiments another process appended since the last
+    /// call. An MCP server outlives many training runs; without this it
+    /// answers every question from the snapshot it loaded at startup.
+    pub fn refresh_kb(&mut self) {
+        if let Err(e) = self.kb.refresh() {
+            eprintln!("soma-mcp: could not refresh the knowledge base: {e}");
+        }
+    }
+
+    /// Human-readable location of the journal, when it has one.
+    pub fn kb_location(&self) -> Option<String> {
+        self.kb_path.as_ref().map(|p| p.display().to_string())
+    }
+
+    /// The tracking root this project's runs live under (`.soma`).
+    pub fn tracking_root(&self) -> PathBuf {
+        self.project_dir.join(".soma")
+    }
+
+    /// Where the persistent KB lives, if anywhere: the explicit
+    /// override wins; otherwise a `.soma/` DIRECTORY in the project
+    /// enables `.soma/experiments.jsonl`.
+    fn kb_path(project_dir: &Path, env_override: Option<String>) -> Option<PathBuf> {
+        if let Some(path) = env_override.filter(|p| !p.is_empty()) {
+            return Some(PathBuf::from(path));
+        }
+        let soma_dir = project_dir.join(".soma");
+        soma_dir
+            .is_dir()
+            .then(|| soma_dir.join("experiments.jsonl"))
     }
 
     // ═══════════════════════════════════════
@@ -163,14 +232,14 @@ impl SomaContext {
             record = record.with_tags(tags);
         }
         if let Some(metrics) = params.get("metrics").and_then(|v| v.as_object()) {
-            let m: HashMap<String, f64> = metrics
+            let m: std::collections::BTreeMap<String, f64> = metrics
                 .iter()
                 .filter_map(|(k, v)| v.as_f64().map(|val| (k.clone(), val)))
                 .collect();
             record = record.with_metrics(m);
         }
         if let Some(p) = params.get("params").and_then(|v| v.as_object()) {
-            let params_map: HashMap<String, serde_json::Value> =
+            let params_map: std::collections::BTreeMap<String, serde_json::Value> =
                 p.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             record = record.with_params(params_map);
         }

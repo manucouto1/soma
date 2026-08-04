@@ -20,6 +20,28 @@ pub enum SomaError {
     #[error("trial pruned at step {step}: {reason}")]
     Pruned { step: usize, reason: String },
 
+    /// The run stopped at `node_id`, waiting for something outside it.
+    ///
+    /// Not a failure: the work so far is journaled and the run continues
+    /// where it left off once the answer is supplied. It travels as an error
+    /// so that `?` unwinds the whole plan — a suspended run must not have
+    /// its later nodes execute — while callers that care can match on it.
+    /// `reason` stays typed. It used to be
+    /// `serde_json::to_string(&reason).unwrap_or("unknown")` — the shape a
+    /// caller needs in order to answer, flattened into a string that
+    /// nothing ever parsed back, which is why resuming was unreachable
+    /// from anywhere but Rust.
+    #[error("run `{run_id}` suspended at node `{node_id}` (turn {turn}): {}", reason.label())]
+    Suspended {
+        run_id: String,
+        node_id: String,
+        turn: usize,
+        /// Boxed: `SomaError` is returned from nearly every function in
+        /// the workspace, and this is the only variant with a payload
+        /// worth more than a pointer.
+        reason: Box<crate::effect::SuspendReason>,
+    },
+
     #[error("schema mismatch: expected {expected}, got {got}")]
     SchemaMismatch { expected: String, got: String },
 

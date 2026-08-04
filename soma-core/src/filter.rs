@@ -76,6 +76,14 @@ pub struct FilterMeta {
     /// Whether `forward()` maintains a differentiable computational graph.
     pub differentiable: bool,
 
+    /// Whether the same config + state + input always produces the same
+    /// output. Nondeterministic filters (unseeded sampling, GPU-order
+    /// dependent reductions the user cares about) are excluded from
+    /// output caching unless the run pins a seed — reusing a recorded
+    /// result would silently freeze what the user expects to vary.
+    #[serde(default = "default_deterministic")]
+    pub deterministic: bool,
+
     /// Behavior in streaming mode.
     pub stream_mode: StreamMode,
 
@@ -89,6 +97,10 @@ pub struct FilterMeta {
     pub output_schema: Option<Schema>,
 }
 
+fn default_deterministic() -> bool {
+    true
+}
+
 /// The fundamental computation unit in Soma.
 ///
 /// A Filter has two phases:
@@ -98,7 +110,7 @@ pub struct FilterMeta {
 /// Each phase is independently cacheable:
 /// - State cache: `hash(config + training_data)`
 /// - Output cache: `hash(config + state + input_data)`
-pub trait Filter: Send + Sync {
+pub trait Filter: crate::any::AsAny + Send + Sync {
     /// Compute a hash of this filter's configuration.
     /// Same config must always produce the same hash.
     /// Only public constructor parameters contribute.
@@ -114,9 +126,6 @@ pub trait Filter: Send + Sync {
 
     /// Metadata for the compiler.
     fn meta(&self) -> FilterMeta;
-
-    /// Downcast support for composite execution.
-    fn as_any(&self) -> &dyn std::any::Any;
 
     /// Execute a composite fit across multiple filters that share an execution context.
     /// Used for differentiable filter chains where autograd must flow between them.
@@ -182,15 +191,12 @@ mod tests {
                 kind: FilterKind::Trainable,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -265,15 +271,12 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

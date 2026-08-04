@@ -3,87 +3,57 @@
 //! This is the default runner. The worker's RemoteRunner delegates here
 //! after preparing the environment (deserializing filters, resolving input).
 
-use super::Runner;
-use crate::EventBus;
-use crate::executor::{Context, Executable, GraphInfo};
-use crate::filter_library::FilterLibrary;
+use super::{RunContext, Runner};
+use crate::executor::{Context, RunMode};
 
 use somatize_compiler::ExecutionPlan;
-use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::Event;
-use somatize_core::filter::{Filter, FilterKind};
-use somatize_core::util::timestamp_id;
+use somatize_core::keys::{GRAPH_INPUT, input_key};
 use somatize_core::value::Value;
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
-
-/// Resolve every node_id in ``node_ids`` to its filter instance.
-/// Returns ``None`` if any id is missing from the library — in that case
-/// the runner falls back to sequential execution with a NodeNotFound error.
-fn collect_peers(
-    filters: &FilterLibrary,
-    node_ids: &[String],
-) -> Option<Vec<(String, Arc<dyn Filter>)>> {
-    node_ids
-        .iter()
-        .map(|id| filters.get(id).map(|f| (id.clone(), f)))
-        .collect()
-}
 
 /// Executes plans locally — same logic for local and remote execution.
 pub struct LocalRunner;
 
 impl LocalRunner {
-    /// Fit a Sequence plan, handling Composite steps as blocks.
-    fn fit_sequence(
+    /// Build the run's context and walk the plan.
+    ///
+    /// Fit and forward differ only in [`RunMode`], so they share this. Fit
+    /// used to have a walk of its own — flattening the plan into a list and
+    /// re-deriving inputs, events, caching and panic handling — which is
+    /// why it ignored `Parallel`, `Loop` and `Branch`, never emitted a cache
+    /// event, and failed outright on a graph containing a step.
+    fn walk(
         &self,
-        steps: &[ExecutionPlan],
-        filters: &FilterLibrary,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
+        plan: &ExecutionPlan,
+        ctx: &RunContext<'_>,
         input: &Value,
-        y: Option<&Value>,
-    ) -> Result<(Value, HashMap<String, Value>)> {
-        let mut current_input = input.clone();
-        let mut all_outputs = HashMap::new();
+        mode: RunMode,
+    ) -> Result<Context> {
+        let mut exec = Context::new(ctx.events.clone(), ctx.run_id)
+            .with_graph_info(ctx.graph_info.clone())
+            .with_seed(ctx.seed);
+        exec.mode = mode;
+        exec.driver = ctx.driver();
 
-        for step in steps {
-            let handled = if let ExecutionPlan::Composite { node_ids } = step
-                && let Some(peers) = collect_peers(filters, node_ids)
-                && let Some(filter) = filters.get(&node_ids[0])
-                && let Some(result) = filter.composite_fit(&peers, &current_input, y)
-            {
-                let (output, states) = result?;
-                for (id, state) in &states {
-                    all_outputs.insert(format!("__state_{id}"), state.clone());
-                }
-                if let Some(last_id) = node_ids.last() {
-                    all_outputs.insert(last_id.clone(), output.clone());
-                }
-                current_input = output;
-                true
-            } else {
-                false
-            };
-
-            if !handled {
-                let sub_result = <Self as Runner>::fit(
-                    self,
-                    step,
-                    filters,
-                    cache,
-                    event_bus,
-                    &current_input,
-                    y,
-                )?;
-                current_input = sub_result.0;
-                all_outputs.extend(sub_result.1);
-            }
+        if let Some(first) = plan.node_ids().first() {
+            exec.set(input_key(first), input.clone());
         }
+        exec.set(GRAPH_INPUT, input.clone());
 
-        Ok((current_input, all_outputs))
+        crate::executor::execute(plan, &mut exec, ctx.catalog, ctx.cache)?;
+        Ok(exec)
+    }
+
+    /// The output of the node that ran last, not of the last node listed.
+    ///
+    /// On a branch only one arm runs, so plan order is the wrong question.
+    fn last_output(exec: &Context) -> Option<Value> {
+        exec.execution_order()
+            .iter()
+            .rev()
+            .find(|id| !somatize_core::keys::is_reserved(id))
+            .and_then(|id| exec.get(id).cloned())
     }
 }
 
@@ -91,182 +61,121 @@ impl Runner for LocalRunner {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
+        ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
-        // Handle Composite plan: delegate to composite_fit on the first filter
-        if let ExecutionPlan::Composite { node_ids } = plan
-            && let Some(peers) = collect_peers(filters, node_ids)
-            && let Some(filter) = filters.get(&node_ids[0])
-            && let Some(result) = filter.composite_fit(&peers, input, y)
-        {
-            return result;
-            // Fallback: treat as sequential if composite_fit not supported
-        }
+        let exec = self.walk(plan, ctx, input, RunMode::Fit { y: y.cloned() })?;
 
-        // Handle Sequence that may contain Composite steps
-        if let ExecutionPlan::Sequence(steps) = plan {
-            return self.fit_sequence(steps, filters, cache, event_bus, input, y);
-        }
+        // Node outputs plus the states that were learned. The `__state_*`
+        // entries travel in the same map because that is what the session
+        // and the worker already read out of it.
+        let last = Self::last_output(&exec).unwrap_or(Value::Empty);
+        let mut produced = exec.into_outputs();
+        // The run's own inputs are not something a node produced.
+        produced.retain(|id, _| !somatize_core::keys::is_input_key(id));
 
-        // Single node or other plan types: sequential fit
-        let node_id_refs = plan.node_ids();
-        let node_ids: Vec<String> = node_id_refs.iter().map(|s| s.to_string()).collect();
-        let graph_info = GraphInfo::for_linear(&node_id_refs);
-        let run_id = timestamp_id("fit");
-        let mut outputs: HashMap<String, Value> = HashMap::new();
-        let mut trained_states: HashMap<String, Value> = HashMap::new();
-
-        if let Some(first) = node_ids.first() {
-            outputs.insert(format!("__input_{first}"), input.clone());
-        }
-
-        for node_id in &node_ids {
-            let filter = filters
-                .get(node_id)
-                .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
-
-            let meta = filter.meta();
-
-            event_bus.emit(Event::NodeStarted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                kind: meta.kind,
-            });
-
-            // Resolve input from predecessors
-            let preds = graph_info.predecessors(node_id);
-            let node_input = match preds.len() {
-                0 => input.clone(),
-                1 => outputs
-                    .get(&preds[0])
-                    .cloned()
-                    .unwrap_or_else(|| input.clone()),
-                _ => {
-                    let mut merged = serde_json::Map::new();
-                    for pred_id in preds {
-                        if let Some(val) = outputs.get(pred_id.as_str()) {
-                            let json_val =
-                                serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
-                            merged.insert(pred_id.clone(), json_val);
-                        }
-                    }
-                    Value::json(serde_json::Value::Object(merged))
-                }
-            };
-
-            let start = std::time::Instant::now();
-
-            // Fit trainable filters. Use Cow so the non-trainable branch
-            // can borrow the existing state (via the StateStore Arc)
-            // without cloning potentially huge tensors on every forward
-            // call.
-            let library_state: Option<Arc<Value>> = if meta.kind == FilterKind::Trainable {
-                None
-            } else {
-                filters.get_state(node_id)
-            };
-            let empty_state = Value::Empty;
-            let state: Cow<Value> = if meta.kind == FilterKind::Trainable {
-                let data_hash =
-                    CacheKey::hash_data(&serde_json::to_vec(&node_input).unwrap_or_default());
-                let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
-
-                let s = if let Some(cached) = cache.get(&state_key)? {
-                    cached
-                } else {
-                    let fitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        filter.fit(&node_input, y)
-                    }))
-                    .map_err(|panic| {
-                        let msg = panic
-                            .downcast_ref::<String>()
-                            .map(|s| s.as_str())
-                            .or_else(|| panic.downcast_ref::<&str>().copied())
-                            .unwrap_or("unknown panic");
-                        SomaError::Execution {
-                            node_id: node_id.clone(),
-                            message: format!("fit panicked: {msg}"),
-                        }
-                    })??;
-                    let _ = cache.put(&state_key, &fitted);
-                    fitted
-                };
-                trained_states.insert(node_id.clone(), s.clone());
-                Cow::Owned(s)
-            } else {
-                match library_state.as_deref() {
-                    Some(v) => Cow::Borrowed(v),
-                    None => Cow::Borrowed(&empty_state),
-                }
-            };
-
-            // Forward with state (catch panics)
-            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                filter.forward(&node_input, &state)
-            }))
-            .map_err(|panic| {
-                let msg = panic
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-                    .or_else(|| panic.downcast_ref::<&str>().copied())
-                    .unwrap_or("unknown panic");
-                SomaError::Execution {
-                    node_id: node_id.clone(),
-                    message: format!("forward panicked: {msg}"),
-                }
-            })??;
-
-            event_bus.emit(Event::NodeCompleted {
-                run_id: run_id.clone(),
-                node_id: node_id.to_string(),
-                duration: start.elapsed(),
-                output_summary: format!("{output}"),
-            });
-
-            outputs.insert(node_id.clone(), output);
-        }
-
-        let last_output = outputs.values().last().cloned().unwrap_or(Value::Empty);
-
-        // Forward outputs keyed by node_id (for GraphSession inspection).
-        // Trained states added with __state_ prefix (for Worker to extract).
-        for (id, state) in &trained_states {
-            outputs.insert(format!("__state_{id}"), state.clone());
-        }
-        Ok((last_output, outputs))
+        Ok((last, produced))
     }
 
-    fn forward(
-        &self,
-        plan: &ExecutionPlan,
-        filters: &FilterLibrary,
-        cache: &dyn CacheStore,
-        event_bus: &Arc<EventBus>,
-        input: &Value,
-    ) -> Result<Value> {
-        let node_ids = plan.node_ids();
-        let graph_info = GraphInfo::for_linear(&node_ids);
+    fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {
+        let exec = self.walk(plan, ctx, input, RunMode::Forward)?;
+        Self::last_output(&exec).ok_or_else(|| SomaError::Other("no output produced".into()))
+    }
+}
 
-        let mut ctx =
-            Context::new(event_bus.clone(), timestamp_id("forward")).with_graph_info(graph_info);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EventBus;
+    use crate::cache::MemoryCache;
+    use crate::executor::GraphInfo;
+    use crate::node_catalog::NodeCatalog;
+    use somatize_core::cache::{CacheKey, CacheStore};
+    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-        // Set input for root nodes
-        if let Some(first) = node_ids.first() {
-            ctx.set(format!("__input_{first}"), input.clone());
+    /// Counts fit() invocations — probe for state-cache key tests.
+    struct CountingFitFilter {
+        fits: Arc<AtomicUsize>,
+    }
+
+    impl Filter for CountingFitFilter {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"CountingFit"])
         }
-        ctx.set("__input__", input.clone());
+        fn fit(&self, _x: &Value, y: Option<&Value>) -> Result<Value> {
+            self.fits.fetch_add(1, Ordering::SeqCst);
+            Ok(y.cloned().unwrap_or(Value::Empty))
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            FilterMeta {
+                name: "CountingFit".into(),
+                kind: FilterKind::Trainable,
+                cacheable: true,
+                differentiable: false,
+                deterministic: true,
+                stream_mode: StreamMode::FixedState,
+                distribution: somatize_core::filter::Distribution::Local,
+                input_schema: None,
+                output_schema: None,
+            }
+        }
+    }
 
-        plan.execute(&mut ctx, filters, cache)?;
+    #[test]
+    fn state_cache_key_is_sensitive_to_labels() {
+        let fits = Arc::new(AtomicUsize::new(0));
+        let mut filters = NodeCatalog::new();
+        filters.register("clf", Box::new(CountingFitFilter { fits: fits.clone() }));
 
-        // Return last executed node's output
-        ctx.execution_order
-            .last()
-            .and_then(|id| ctx.store.remove(id))
-            .and_then(|vv| vv.as_value().cloned())
-            .ok_or_else(|| SomaError::Other("no output produced".into()))
+        let cache = MemoryCache::default();
+        let bus = Arc::new(EventBus::new(64));
+        let plan = ExecutionPlan::Execute {
+            node_id: "clf".into(),
+        };
+        let runner = LocalRunner;
+        // A single node: the fabricated linear topology is the real one.
+        fn ctx<'a>(
+            filters: &'a NodeCatalog,
+            cache: &'a dyn CacheStore,
+            bus: &'a Arc<EventBus>,
+        ) -> RunContext<'a> {
+            RunContext::new(filters, cache, bus, "test_run", GraphInfo::new())
+        }
+        let x = Value::tensor(vec![1.0, 2.0], vec![2]);
+        let y_a = Value::tensor(vec![0.0, 1.0], vec![2]);
+        let y_b = Value::tensor(vec![1.0, 0.0], vec![2]);
+
+        runner
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, Some(&y_a))
+            .unwrap();
+        assert_eq!(fits.load(Ordering::SeqCst), 1);
+
+        // Same features, same labels → cached state, no refit.
+        runner
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, Some(&y_a))
+            .unwrap();
+        assert_eq!(fits.load(Ordering::SeqCst), 1);
+
+        // Same features, DIFFERENT labels → must refit.
+        runner
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, Some(&y_b))
+            .unwrap();
+        assert_eq!(
+            fits.load(Ordering::SeqCst),
+            2,
+            "different labels must not reuse the cached state"
+        );
+
+        // Unsupervised (no labels) → distinct from both supervised keys.
+        runner
+            .fit(&plan, &ctx(&filters, &cache, &bus), &x, None)
+            .unwrap();
+        assert_eq!(fits.load(Ordering::SeqCst), 3);
     }
 }

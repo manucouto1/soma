@@ -145,7 +145,11 @@ pub fn schedule(
 
 fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_worker: Option<&str>) {
     match plan {
-        ExecutionPlan::Execute { node_id } => {
+        // A step schedules like any other single node. Its cost profile is
+        // different — latency-bound rather than CPU-bound — which is a
+        // reason to weight it differently once the scheduler models cost at
+        // all; today it models load, and a step contributes load like the rest.
+        ExecutionPlan::Execute { node_id } | ExecutionPlan::Step { node_id, .. } => {
             let worker = if let Some(fw) = forced_worker {
                 state
                     .workers
@@ -232,19 +236,6 @@ fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_wor
                 worker_ids: assigned_workers,
             });
             state.phase_index += 1;
-        }
-
-        ExecutionPlan::Cached { node_id, .. } => {
-            let worker = forced_worker
-                .and_then(|fw| state.workers.iter().find(|w| w.id == fw).copied())
-                .unwrap_or_else(|| least_loaded(&state.workers));
-            state.assignments.push(Assignment {
-                node_id: node_id.clone(),
-                worker_id: worker.id.clone(),
-                worker_name: worker.name.clone(),
-                phase: Phase::Sequential,
-                reason: "cached — will skip execution".into(),
-            });
         }
 
         ExecutionPlan::Remote { plan, .. } => {
@@ -338,8 +329,16 @@ fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_wor
     }
 }
 
+/// The worker with the most free slots.
+///
+/// Precondition: `workers` is non-empty — `schedule()` returns early (with
+/// a warning) for both "no workers" and "none with capacity" before any
+/// call can reach here.
 fn least_loaded<'a>(workers: &[&'a WorkerInfo]) -> &'a WorkerInfo {
-    workers.iter().max_by_key(|w| w.available_slots()).unwrap()
+    workers
+        .iter()
+        .max_by_key(|w| w.available_slots())
+        .expect("schedule() filters out an empty worker set before placing")
 }
 
 fn collect_node_ids(plan: &ExecutionPlan) -> Vec<String> {

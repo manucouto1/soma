@@ -1,107 +1,272 @@
-//! Integration test: full autonomous research loop.
+//! The research loop, driven end to end.
+//!
+//! A scripted model stands in for a real one and a one-node pipeline stands
+//! in for real work, so what this exercises is the wiring: propose → run →
+//! read metrics → propose again → conclude, over the same effect driver and
+//! journal every other step uses.
 
-use serde_json::json;
-use somatize_agent::{Action, Agent, SimpleResearchPlan};
-use somatize_memory::{ExperimentRecord, MemoryKnowledgeBase};
-use std::collections::HashMap;
+use somatize_agent::ResearchStep;
+use somatize_core::cache::CacheKey;
+use somatize_core::effect::{Effect, EffectResult, LlmResponse, StopReason};
+use somatize_core::error::{Result, SomaError};
+use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Graph, Node};
+use somatize_core::message::Message;
+use somatize_core::value::Value;
+use somatize_runtime::cache::FsActionStore;
+use somatize_runtime::effects::{
+    EffectDriver, EffectHandler, EffectJournal, GraphHandler, NodeOutcome,
+};
+use somatize_runtime::node_catalog::NodeCatalog;
+use std::sync::{Arc, Mutex};
 
-/// Simulate executing an experiment: returns a metric based on params.
-fn simulate_experiment(config: &HashMap<String, serde_json::Value>) -> f64 {
-    let c = config.get("C").and_then(|v| v.as_f64()).unwrap_or(1.0);
-    // Simulated metric: peaks at C=1.0
-    1.0 - (c - 1.0).abs() * 0.1
+// ── A model that answers from a script ──
+
+struct ScriptedModel {
+    replies: Mutex<Vec<String>>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl ScriptedModel {
+    fn new(replies: Vec<String>) -> Arc<Self> {
+        Arc::new(Self {
+            replies: Mutex::new(replies),
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl EffectHandler for ScriptedModel {
+    fn handles(&self, effect: &Effect) -> bool {
+        matches!(effect, Effect::Llm(_))
+    }
+
+    fn perform(&self, effect: &Effect) -> Result<EffectResult> {
+        let Effect::Llm(request) = effect else {
+            return Err(SomaError::Other("not an llm effect".into()));
+        };
+        self.asked.lock().unwrap().push(
+            request
+                .messages
+                .0
+                .last()
+                .map(|m| m.text())
+                .unwrap_or_default(),
+        );
+
+        let mut replies = self.replies.lock().unwrap();
+        let text = if replies.is_empty() {
+            r#"{"action": "conclude", "reason": "script exhausted"}"#.to_string()
+        } else {
+            replies.remove(0)
+        };
+
+        Ok(EffectResult::Llm(LlmResponse {
+            message: Message::assistant(text),
+            stop_reason: StopReason::EndTurn,
+            usage: Default::default(),
+            model: None,
+        }))
+    }
+}
+
+// ── A pipeline whose score depends on a parameter ──
+
+struct Scored;
+
+impl Filter for Scored {
+    fn meta(&self) -> FilterMeta {
+        FilterMeta {
+            name: "scored".into(),
+            kind: FilterKind::Trainable,
+            cacheable: false,
+            differentiable: false,
+            deterministic: true,
+            stream_mode: StreamMode::FixedState,
+            distribution: Distribution::Local,
+            input_schema: None,
+            output_schema: None,
+        }
+    }
+
+    fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+        Ok(Value::Empty)
+    }
+
+    /// The "experiment": bigger C, better f1, with a ceiling. A pipeline
+    /// reports its metrics as a node's output, the same way a `Study`
+    /// objective reads them.
+    fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+        let c = x.to_plain_json()["classifier.C"].as_f64().unwrap_or(0.0);
+        Ok(Value::json(
+            serde_json::json!({ "f1": (0.5 + c / 10.0).min(0.95) }),
+        ))
+    }
+
+    fn config_hash(&self) -> CacheKey {
+        CacheKey::from_parts(&[b"scored"])
+    }
+}
+
+fn pipeline() -> Graph {
+    let mut graph = Graph::new();
+    graph.add_node(Node::filter_with_id("classifier", "scored"));
+    graph
+}
+
+fn library() -> NodeCatalog {
+    let mut library = NodeCatalog::new();
+    library.register("classifier", Box::new(Scored));
+    library
+}
+
+fn driver(model: Arc<ScriptedModel>) -> (EffectDriver, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
+    let driver = EffectDriver::new(EffectJournal::new(store.clone(), store))
+        .with_handler(model)
+        .with_handler(Arc::new(GraphHandler::new(library())));
+    // The tempdir travels with the driver: dropping it would delete the
+    // journal out from under the run.
+    (driver, dir)
+}
+
+fn experiment(name: &str, c: f64) -> String {
+    format!(
+        r#"{{"action": "run_experiment", "name": "{name}",
+            "research_line": "regularization",
+            "hypothesis": "C={c} lifts f1",
+            "params": {{"classifier.C": {c}}}}}"#
+    )
+}
+
+fn run(step: ResearchStep, model: Arc<ScriptedModel>) -> Value {
+    let (driver, _dir) = driver(model);
+    match driver
+        .run(&step, "run_1", "researcher", &Value::Empty)
+        .unwrap()
+    {
+        NodeOutcome::Produced(value) => value,
+        other => panic!("expected the loop to finish, got {other:?}"),
+    }
 }
 
 #[test]
-fn agent_runs_research_loop() {
-    let kb = Box::new(MemoryKnowledgeBase::new());
-    let mut agent = Agent::new("test_agent", "find best C for SVM", kb).with_max_iterations(5);
+fn the_loop_runs_experiments_and_concludes() {
+    let model = ScriptedModel::new(vec![
+        experiment("exp_1", 1.0),
+        experiment("exp_2", 4.0),
+        r#"{"action": "conclude", "reason": "f1 above target"}"#.into(),
+    ]);
 
-    let plan = SimpleResearchPlan::new(
-        HashMap::from([("model".into(), json!("svm"))]),
-        "C",
-        vec![json!(0.1), json!(0.5), json!(1.0), json!(5.0), json!(10.0)],
+    let report = run(
+        ResearchStep::new("mock/model", "beat 0.8 f1", pipeline()),
+        model,
+    )
+    .to_plain_json();
+
+    assert_eq!(report["concluded"], "f1 above target");
+    assert_eq!(report["experiments"], 2);
+
+    // Each experiment carries the metrics its pipeline produced, so a
+    // conclusion can be traced back to the runs supporting it.
+    let records = report["records"].as_array().unwrap();
+    assert_eq!(records[0]["metrics"]["classifier.f1"], 0.6);
+    assert_eq!(records[1]["metrics"]["classifier.f1"], 0.9);
+    assert_eq!(records[1]["hypothesis"], "C=4 lifts f1");
+}
+
+#[test]
+fn the_model_is_shown_what_already_ran() {
+    let model = ScriptedModel::new(vec![
+        experiment("exp_1", 1.0),
+        r#"{"action": "conclude", "reason": "enough"}"#.into(),
+    ]);
+
+    run(
+        ResearchStep::new("mock/model", "beat 0.8 f1", pipeline()),
+        model.clone(),
     );
 
-    for _ in 0..5 {
-        let action = agent.step(&plan).unwrap();
-
-        match action {
-            Action::RunExperiment {
-                name,
-                research_line,
-                hypothesis,
-                pipeline_config,
-                parent,
-            } => {
-                // Simulate execution
-                let metric = simulate_experiment(&pipeline_config);
-
-                // Record result
-                let mut metrics = HashMap::new();
-                metrics.insert("accuracy".to_string(), metric);
-
-                let record = ExperimentRecord::new(&name, &name)
-                    .with_hypothesis(&hypothesis)
-                    .with_research_line(&research_line)
-                    .with_params(pipeline_config)
-                    .with_metrics(metrics);
-
-                if let Some(p) = parent {
-                    agent.record_result(record.with_parent(&p)).unwrap();
-                } else {
-                    agent.record_result(record).unwrap();
-                }
-            }
-            Action::Conclude { .. } => break,
-            _ => {}
-        }
-    }
-
-    // Agent should have run experiments
-    assert!(agent.iteration() > 0);
-    assert!(!agent.decisions().is_empty());
-
-    // Knowledge base should have records
-    let kb = agent.knowledge_base();
-    assert!(!kb.is_empty());
-    assert!(!kb.research_lines().unwrap().is_empty());
+    let asked = model.asked.lock().unwrap();
+    assert!(asked[0].contains("No experiments yet"), "{}", asked[0]);
+    // The second question carries the first result — an agent that cannot
+    // see what it already tried proposes it again.
+    assert!(asked[1].contains("exp_1"), "{}", asked[1]);
+    assert!(asked[1].contains("classifier.f1=0.6000"), "{}", asked[1]);
 }
 
 #[test]
-fn agent_stops_at_max_iterations() {
-    let kb = Box::new(MemoryKnowledgeBase::new());
-    let mut agent = Agent::new("test", "objective", kb).with_max_iterations(3);
+fn a_failed_experiment_is_reported_back_not_fatal() {
+    let mut broken = Graph::new();
+    broken.add_node(Node::filter_with_id("nowhere", "missing"));
 
-    let plan = SimpleResearchPlan::new(HashMap::new(), "x", vec![json!(1)]);
+    let model = ScriptedModel::new(vec![
+        experiment("exp_bad", 1.0),
+        r#"{"action": "conclude", "reason": "the pipeline is broken"}"#.into(),
+    ]);
 
-    let mut actions = Vec::new();
-    for _ in 0..10 {
-        let action = agent.step(&plan).unwrap();
-        let is_conclude = matches!(&action, Action::Conclude { .. });
-        actions.push(action);
-        if is_conclude {
-            break;
-        }
-    }
+    let report = run(
+        ResearchStep::new("mock/model", "find out", broken),
+        model.clone(),
+    )
+    .to_plain_json();
 
-    // Should conclude at iteration 4 (3 experiments + 1 conclude)
-    assert!(actions.len() <= 4);
-    assert!(matches!(actions.last().unwrap(), Action::Conclude { .. }));
+    // A configuration that will not run is a finding, and one of the more
+    // valuable kinds — it belongs in the record, not in a stack trace.
+    assert_eq!(report["experiments"], 1);
+    assert!(
+        report["records"][0]["notes"]
+            .as_str()
+            .unwrap()
+            .contains("failed")
+    );
+    assert!(model.asked.lock().unwrap()[1].contains("exp_bad"));
 }
 
 #[test]
-fn agent_tracks_decisions() {
-    let kb = Box::new(MemoryKnowledgeBase::new());
-    let mut agent = Agent::new("test", "objective", kb).with_max_iterations(3);
+fn the_iteration_budget_stops_a_loop_that_will_not_stop_itself() {
+    // A model that only ever proposes more work.
+    let model = ScriptedModel::new(
+        (0..20)
+            .map(|i| experiment(&format!("exp_{i}"), 1.0))
+            .collect(),
+    );
 
-    let plan = SimpleResearchPlan::new(HashMap::new(), "x", vec![json!(1)]);
+    let report = run(
+        ResearchStep::new("mock/model", "never satisfied", pipeline()).with_max_iterations(3),
+        model,
+    )
+    .to_plain_json();
 
-    agent.step(&plan).unwrap();
-    agent.step(&plan).unwrap();
+    assert_eq!(report["concluded"], "iteration budget exhausted");
+    assert_eq!(report["experiments"], 3);
+}
 
-    let decisions = agent.decisions();
-    assert_eq!(decisions.len(), 2);
-    assert_eq!(decisions[0].iteration, 1);
-    assert_eq!(decisions[1].iteration, 2);
+#[test]
+fn a_seeded_history_is_in_the_first_question() {
+    let mut record = somatize_memory::ExperimentRecord::new("earlier", "earlier");
+    record.research_line = Some("regularization".into());
+    record.metrics = [("f1".to_string(), 0.55)].into_iter().collect();
+
+    let model = ScriptedModel::new(vec![r#"{"action": "conclude", "reason": "known"}"#.into()]);
+    run(
+        ResearchStep::new("mock/model", "beat 0.8 f1", pipeline()).with_history(vec![record]),
+        model.clone(),
+    );
+
+    // Starting from an empty pool means repeating work somebody already did.
+    assert!(model.asked.lock().unwrap()[0].contains("earlier"));
+}
+
+#[test]
+fn prose_instead_of_an_action_ends_the_run_rather_than_guessing() {
+    let model = ScriptedModel::new(vec!["I think we should try more values of C.".into()]);
+    let step = ResearchStep::new("mock/model", "beat 0.8 f1", pipeline());
+
+    let (driver, _dir) = driver(model);
+    let err = driver
+        .run(&step, "run_1", "researcher", &Value::Empty)
+        .unwrap_err();
+    assert!(err.to_string().contains("no JSON object"), "{err}");
 }

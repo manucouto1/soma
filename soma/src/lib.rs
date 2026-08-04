@@ -8,16 +8,16 @@
 //! ```toml
 //! # Everything
 //! [dependencies]
-//! soma = "0.2"
+//! somatize = "0.4"
 //!
 //! # With S3 + Zarr storage
 //! [dependencies]
-//! soma = { version = "0.2", features = ["s3", "zarr"] }
+//! somatize = { version = "0.4", features = ["s3", "zarr"] }
 //!
 //! # Or pick individual crates
 //! [dependencies]
-//! soma-core = "0.2"
-//! soma-runtime = "0.2"
+//! somatize-core = "0.4"
+//! somatize-runtime = "0.4"
 //! ```
 //!
 //! ## Quick start
@@ -30,7 +30,7 @@
 //!     Node::new("model", "Model", "Model"),
 //! ]);
 //!
-//! let mut lib = FilterLibrary::new();
+//! let mut lib = NodeCatalog::new();
 //! lib.register("scaler", Box::new(MyScaler));
 //! lib.register("model", Box::new(MyModel));
 //!
@@ -57,8 +57,33 @@ pub use somatize_worker as worker;
 /// Autonomous research agent.
 pub use somatize_agent as agent;
 
+/// Provider-agnostic LLM access: the OpenAI-compatible client, the
+/// provider catalog, `ReactStep`, `JudgeStep`, the toolbox.
+///
+/// Absent until now, which meant the facade could not reach the agentic
+/// surface it advertises — a Rust caller had to depend on `somatize-llm`
+/// directly while `soma::` pretended the workspace ended at `agent`.
+pub use somatize_llm as llm;
+
+/// Remote DataStore backends (S3, Zarr). Feature-gated, off by default.
+///
+/// They are a separate crate because each owns a tokio runtime: while
+/// they lived in `soma-core`, everything depending on the contract crate
+/// inherited one. See design/decisions.
+#[cfg(feature = "s3")]
+pub use somatize_store as store;
+#[cfg(all(feature = "zarr", not(feature = "s3")))]
+pub use somatize_store as store;
+
+/// Worker registry and placement for a cluster of workers.
+///
+/// A workspace member the facade never reached, so a Rust caller wiring up
+/// a cluster had to depend on `somatize-coordinator` directly while
+/// `soma::` behaved as though the workspace ended at `worker`.
+pub use somatize_coordinator as coordinator;
+
 /// Derive macros (#[derive(SomaFilter)]).
-pub use somatize_macros;
+pub use somatize_macros as macros;
 
 /// Prelude — import the most commonly used types.
 pub mod prelude {
@@ -73,15 +98,23 @@ pub mod prelude {
     pub use somatize_core::value::Value;
     pub use somatize_core::virtual_value::VirtualValue;
 
+    // The effectful half. A `Step` sits beside a `Filter` and both are
+    // nodes in the same graph — so both belong in the same prelude. These
+    // were missing, which meant the one import line the docs recommend
+    // reached only the computational half of the model.
+    pub use somatize_core::effect::{Effect, EffectResult};
+    pub use somatize_core::node::{NodeMeta, NodeOutcome};
+    pub use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+
     // Compiler
     pub use somatize_compiler::{CompileMode, ExecutionPlan};
 
     // Runtime
     pub use somatize_runtime::cache::MemoryCache;
-    pub use somatize_runtime::filter_library::FilterLibrary;
     pub use somatize_runtime::graph_session::GraphSession;
+    pub use somatize_runtime::node_catalog::NodeCatalog;
     pub use somatize_runtime::{EventBus, execute};
 
-    // Derive macro
-    pub use somatize_macros::SomaFilter;
+    // Derive macros
+    pub use somatize_macros::{SomaFilter, SomaStep};
 }

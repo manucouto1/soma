@@ -26,14 +26,29 @@ impl TieredCache {
 }
 
 impl CacheStore for TieredCache {
+    /// The fastest tier — what a caller reaches first.
+    fn tier(&self) -> CacheTier {
+        self.tiers
+            .first()
+            .map(|(t, _)| *t)
+            .unwrap_or(CacheTier::Memory)
+    }
+
     fn get(&self, key: &CacheKey) -> Result<Option<Value>> {
-        for (i, (_, store)) in self.tiers.iter().enumerate() {
+        Ok(self.get_located(key)?.map(|(value, _)| value))
+    }
+
+    /// Which tier answered is the number that says whether the slower
+    /// tiers are earning their keep, so it is reported rather than
+    /// flattened into "the cache was used".
+    fn get_located(&self, key: &CacheKey) -> Result<Option<(Value, CacheTier)>> {
+        for (i, (tier, store)) in self.tiers.iter().enumerate() {
             if let Some(value) = store.get(key)? {
                 // Promote to faster tiers
                 for (_, faster_store) in &self.tiers[..i] {
                     let _ = faster_store.put(key, &value);
                 }
-                return Ok(Some(value));
+                return Ok(Some((value, *tier)));
             }
         }
         Ok(None)
@@ -43,6 +58,18 @@ impl CacheStore for TieredCache {
         // Write to all tiers
         for (_, store) in &self.tiers {
             store.put(key, value)?;
+        }
+        Ok(())
+    }
+
+    fn put_with_origin(
+        &self,
+        key: &CacheKey,
+        value: &Value,
+        origin: &somatize_core::cache::Origin,
+    ) -> Result<()> {
+        for (_, store) in &self.tiers {
+            store.put_with_origin(key, value, origin)?;
         }
         Ok(())
     }
@@ -97,6 +124,30 @@ mod tests {
         let memory = Box::new(MemoryCache::default());
         let local = Box::new(LocalCache::new(&dir).unwrap());
         (TieredCache::memory_and_local(memory, local), dir)
+    }
+
+    /// The cache-hit event used to report `Memory` unconditionally, so
+    /// every per-tier statistic said the same thing no matter which tier
+    /// did the work.
+    #[test]
+    fn get_located_names_the_tier_that_answered() {
+        let (cache, dir) = make_tiered();
+        let key = CacheKey::hash_data(b"only-on-disk");
+        let value = Value::tensor(vec![7.0], vec![1]);
+
+        // Write to the local tier alone, bypassing the memory tier.
+        let local = LocalCache::new(&dir).unwrap();
+        local.put(&key, &value).unwrap();
+
+        let (got, tier) = cache.get_located(&key).unwrap().unwrap();
+        assert_eq!(got, value);
+        assert_eq!(tier, CacheTier::Local);
+
+        // Now it has been promoted, so the memory tier answers.
+        let (_, tier) = cache.get_located(&key).unwrap().unwrap();
+        assert_eq!(tier, CacheTier::Memory);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

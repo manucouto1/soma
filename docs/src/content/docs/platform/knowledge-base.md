@@ -1,214 +1,184 @@
 ---
 title: Knowledge Base
-description: Temporal experiment tracking and navigable research history powered by ChronosVector.
+description: The API over the experiment pool — what it stores, how to query it, and what it does not do.
 ---
 
-## Purpose
+This page documents the `KnowledgeBase` API. For *why* the pool is
+shaped the way it is — fingerprints, derivation moves, the scoring
+formula — see [Experiment Pool](/soma/design/experiment-pool/).
 
-The Knowledge Base is a navigable, queryable record of all experiments executed in a Soma lab. It answers questions like:
+## What it is
 
-- "What experiments have we run on this dataset?"
-- "Which hyperparameter configurations worked best?"
-- "How has our accuracy evolved over the last month?"
-- "Where did a breakthrough happen?"
-- "Which research lines are worth continuing?"
+A `KnowledgeBase` is a store of `ExperimentRecord`s: one per run, with
+its conclusion, its parent, and the change that produced it. The default
+backend is a JSONL file at `.soma/experiments.jsonl`, appended to
+automatically whenever a tracked run or a study finishes successfully.
 
-It is powered by **ChronosVector**, which provides both semantic similarity search and temporal trajectory analysis.
+It answers:
 
-## Experiment Records
+- "What have I run that bears on this problem?"
+- "What did I try from this starting point, and what came of it?"
+- "What is different between these two runs?"
+- "Which research lines are improving?"
 
-Every completed study or pipeline run is indexed as an `ExperimentRecord`:
+## Backends
+
+| Backend | Storage | When |
+|---|---|---|
+| `FileKnowledgeBase` | `experiments.jsonl`, append-only | The default. What `.soma/` gets. |
+| `MemoryKnowledgeBase` | In-process `Vec` | Tests, and the MCP fallback when a project has no `.soma/`. |
+| `ChronosKnowledgeBase` | ChronosVector `TemporalHnsw` | Feature-gated (`chronos`). See the caveat at the bottom. |
+
+Only `record`, `all` and `len` are required of a backend. Search,
+research lines, trends, trajectories, change points, lineage and ranked
+retrieval all have default implementations over `all()`, so the
+analytics live in one place rather than once per backend.
+
+Methods return **owned** records. That costs a clone per hit and buys a
+backend that can page or query a remote store, which a
+reference-returning trait cannot have.
+
+## Recording
+
+Runs record themselves. `graph.track_run(...)` and `study.run(...)`
+append a record on success, built by reading the run directory:
+
+```python
+with g.track_run("mos-baseline", params={"lr": 0.01}, tags=["mos"]) as run:
+    for epoch in range(30):
+        ...
+        run.log("val_f1", evaluate(g), step=epoch)
+# .soma/experiments.jsonl now has a line with the conclusion,
+# the architecture fingerprint, the parent and the move.
+```
+
+Recording is best-effort throughout: it never fails a training run that
+already produced its results.
+
+To record work Soma did not execute, use the `record_experiment` MCP
+tool or build an `ExperimentRecord` directly. To add a finding to a run
+that already happened, use `soma.record_conclusion` — it appends an
+amendment rather than rewriting the original line.
+
+## Querying from Python
+
+```python
+import soma
+
+soma.experiments()               # every record, as dicts
+soma.experiments_dataframe()     # the same as a DataFrame (somatize[viz])
+soma.head()                      # what the next run will descend from
+soma.checkout(run_id)            # branch from an earlier run
+soma.detach()                    # start a new line
+soma.reindex()                   # rebuild the journal from .soma/runs/
+
+soma.find_similar("dropout collapse", limit=3)   # ranked retrieval
+soma.lineage(run_id)                             # ancestors + descendants
+soma.diff(run_a, run_b)                          # works on siblings too
+soma.record_conclusion(run_id, "what you learned")
+```
+
+From the CLI:
+
+```bash
+soma kb head                                    # what the next run descends from
+soma kb checkout run_20260730T160239_c38a       # branch from an earlier run
+soma kb detach                                  # start a new line
+soma kb reindex                                 # rebuild the journal from run dirs
+```
+
+## Querying from Rust
 
 ```rust
-#[derive(Serialize, Deserialize)]
-pub struct ExperimentRecord {
-    pub id: ExperimentId,
-    pub name: String,
-    pub hypothesis: Option<String>,
-    pub pipeline: PipelineSummary,          // what was executed
-    pub params: HashMap<String, Value>,     // hyperparameters used
-    pub metrics: HashMap<String, f64>,      // final metrics
-    pub embedding: Vec<f32>,               // semantic embedding
-    pub timestamp: DateTime<Utc>,
-    pub duration: Duration,
-    pub parent: Option<ExperimentId>,       // which experiment this derives from
-    pub research_line: Option<String>,      // grouping tag
-    pub tags: Vec<String>,
-    pub notes: Option<String>,             // agent or user notes
+use chrono::Utc;
+use somatize_memory::{FileKnowledgeBase, KnowledgeBase, RetrievalQuery};
+
+let kb = FileKnowledgeBase::open(".soma/experiments.jsonl")?;
+
+// Ranked retrieval: text, structure, recency, importance.
+let query = RetrievalQuery::new("dropout collapse", Utc::now()).with_limit(5);
+for hit in kb.retrieve(&query)? {
+    println!("{:.2}  {}", hit.score, hit.record.headline());
 }
+
+// The tree around one run, with the move on every edge.
+if let Some(lineage) = kb.lineage("run_20260730T160239_c1d9")? {
+    for node in &lineage.descendants {
+        println!("{}{}", "  ".repeat(node.depth), node.record.name);
+    }
+}
+
+// Line-level analytics.
+for line in kb.research_lines()? {
+    println!("{} — {} ({} experiments)", line.name, line.trend, line.experiments.len());
+}
+kb.trajectory("mos-baseline", "val_f1")?;
+kb.change_points("mos-baseline", "val_f1", 0.05)?;
+kb.promising_lines("val_f1")?;
 ```
 
-### Automatic Indexing
+### Staying current
 
-When a Study completes, the runtime automatically:
+A long-lived reader must refresh, or it answers from the snapshot it
+loaded at startup:
 
-1. Generates an embedding from the experiment description + params + results
-2. Creates an `ExperimentRecord`
-3. Stores it in ChronosVector with the current timestamp
-4. Links it to the parent experiment (if any)
-
-## Querying the Knowledge Base
-
-### Semantic Search
-
-Find experiments similar to a natural language query:
-
-```python
-kb = lab.knowledge_base()
-
-results = kb.search("normalization impact on short time series")
-# Returns experiments semantically similar to the query
-# Ranked by combined semantic + temporal proximity
+```rust
+let mut kb = FileKnowledgeBase::open(".soma/experiments.jsonl")?;
+let new_records = kb.refresh()?;   // reads only the tail, by byte offset
 ```
 
-### Trajectory Analysis
+The MCP server does this before every knowledge read. `refresh()` copes
+with a half-written line (defers it) and with the file having been
+replaced by `soma kb reindex` (reloads from scratch).
 
-Track how a metric evolves across experiments in a research line:
+## Research lines
 
-```python
-trajectory = kb.trajectory(
-    research_line="rocket_normalization",
-    metric="f1_weighted",
-)
+A research line groups an experiment with everything derived from it. A
+run with no parent names its own line after itself (slugified); every
+descendant **inherits** that name, however far the work drifts. That is
+what makes line-level analytics — trend, trajectory, change points —
+work on real data rather than on hand-assigned tags.
 
-# trajectory.values    → [0.72, 0.78, 0.81, 0.85, 0.84, 0.86]
-# trajectory.velocity  → rate of improvement (slowing down)
-# trajectory.change_points → [experiment_003: breakthrough]
-```
+`Trend` is `Improving`, `Plateaued`, `Declining` or `Unknown`, computed
+from the last three values of the line's first metric.
 
-### Change Point Detection
+## MCP
 
-Find where significant shifts occurred in experimental results:
-
-```python
-change_points = kb.change_points(
-    research_line="rocket_normalization",
-    metric="accuracy",
-)
-
-# [ChangePoint {
-#     experiment: "exp_003",
-#     timestamp: "2026-03-15T14:22:00Z",
-#     metric_before: 0.78,
-#     metric_after: 0.85,
-#     reason: "Switched from min-max to z-norm"
-# }]
-```
-
-### Promising Lines
-
-Identify which research directions are worth continuing:
-
-```python
-promising = kb.promising_lines()
-
-# [ResearchLine {
-#     name: "rocket_znorm",
-#     trend: "improving",
-#     velocity: 0.02,           # metric improvement per experiment
-#     acceleration: -0.005,     # slowing down but still positive
-#     best_metric: 0.86,
-#     n_experiments: 8,
-#     recommendation: "Continue with focus on hyperparameter tuning"
-# },
-# ResearchLine {
-#     name: "inception_minmax",
-#     trend: "plateaued",
-#     velocity: 0.001,
-#     best_metric: 0.79,
-#     recommendation: "Consider abandoning or pivoting"
-# }]
-```
-
-### Comparison
-
-Compare two research lines or experiments:
-
-```python
-comparison = kb.compare(
-    line_a="rocket_znorm",
-    line_b="inception_znorm",
-)
-
-# comparison.metric_comparison → side-by-side metrics
-# comparison.divergence_point  → when they started differing
-# comparison.resource_usage    → which used more compute
-```
-
-## Tiered Storage
-
-ChronosVector's tiered storage maps to experiment lifecycle:
-
-| Tier | Content | Latency | Retention |
-|---|---|---|---|
-| **Hot** (RocksDB) | Current session experiments | <1ms | Until session ends |
-| **Warm** (Parquet) | Recent experiments (this month) | <10ms | Configurable (default: 6 months) |
-| **Cold** (S3/Object Store) | Historical archive | <100ms | Indefinite |
-
-Automatic promotion/demotion:
-- New experiments → Hot
-- After session → demote to Warm
-- After retention period → demote to Cold
-- When queried, Cold results promote back to Warm
-
-## Navigable Interface
-
-The knowledge base exposes a navigable structure for UI rendering:
-
-```python
-# Browse by research line
-lines = kb.list_lines()
-
-# Browse experiments in a line (chronological)
-experiments = kb.list_experiments(line="rocket_znorm")
-
-# Get full details of an experiment
-exp = kb.get_experiment("exp_042")
-exp.pipeline       # what was executed
-exp.params         # hyperparameters
-exp.metrics        # results
-exp.parent         # derived from which experiment
-exp.children       # experiments derived from this one
-
-# Tree view: experiment genealogy
-tree = kb.experiment_tree("exp_001")
-# exp_001
-# ├── exp_003 (changed normalization)
-# │   ├── exp_005 (tuned learning rate)
-# │   └── exp_006 (added augmentation)
-# └── exp_004 (different classifier)
-```
-
-## Report Generation
-
-The knowledge base can generate reports from experiment history:
-
-```python
-report = kb.generate_report(
-    research_line="rocket_normalization",
-    format="markdown",
-)
-
-# Generated report includes:
-# - Research objective
-# - Methodology (pipelines used)
-# - Results table (all experiments, sorted by metric)
-# - Trajectory plot description
-# - Change points and breakthroughs
-# - Conclusions and recommendations
-# - References to specific experiments
-```
-
-## Integration with Agents
-
-Agents use the knowledge base as their primary memory:
+Seven tools expose the pool to a model. See
+[Experiment Pool](/soma/design/experiment-pool/#mcp-tools) for the full
+table; in short: `kb_find_similar`, `kb_lineage`, `kb_diff`,
+`kb_record_conclusion`, `kb_branch_from`, `kb_summarize_run`,
+`kb_stats`.
 
 ```
 Agent: "I want to try z-norm on the Coffee dataset"
-  → kb.search("z-norm Coffee dataset")
-  → "You already ran this in exp_012. F1 was 0.91.
-     Changing the classifier might be more productive."
-  → Agent adjusts strategy based on existing knowledge
+  → kb_find_similar(query="z-norm Coffee")
+  → "run_012 — completed in 3m 20s · val_f1=0.91
+     ⚠ dead end — run_019 tried z-norm on top and lost 0.04
+     run_dir: .soma/runs/run_012"
+  → the agent reads the run dir and picks a different axis
 ```
 
-This prevents redundant experiments and enables the agent to build on prior work rather than starting from scratch.
+## What this is not
+
+Some things previous versions of this page described do not exist, and
+should not be planned around:
+
+- **There is no automatic embedding.** `ExperimentRecord.embedding` is
+  an optional field and nothing populates it. `Embedder` is a trait with
+  no implementation in Soma — a seam, not a feature. Text search is
+  BM25.
+- **There is no tiered hot/warm/cold storage.** The journal is one
+  append-only file. The *computation cache* is tiered
+  ([Caching](/soma/design/caching/)); the experiment pool is not.
+- **There is no `velocity` or `acceleration`.** `ResearchLine` carries a
+  categorical `trend` and the best metric value.
+- **There is no `kb.compare()` or `lab.knowledge_base()`.** Use
+  `kb_diff` (MCP) or `somatize_memory::derive` (Rust) to compare two
+  records; `soma.experiments()` to read the pool from Python.
+- **`ChronosKnowledgeBase` is not the default and is not semantic.** It
+  is feature-gated behind `chronos`, and its encoder is feature hashing
+  over words — not a learned embedding. Its `search` is therefore
+  *weaker* than the BM25 default, not stronger. It becomes worth using
+  when a real `Embedder` exists; until then, prefer
+  `FileKnowledgeBase`.

@@ -1,0 +1,5 @@
+error: unknown `search` argument; expected one of: low, high, scale, choices
+ --> tests/ui/unknown_search_argument.rs:6:19
+  |
+6 |     #[soma(search(lo = 0.1, high = 2.0))]
+  |                   ^^

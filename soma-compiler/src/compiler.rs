@@ -5,9 +5,11 @@
 
 use crate::plan::ExecutionPlan;
 use somatize_core::cache::{CacheKey, CacheStore};
-use somatize_core::error::Result;
+use somatize_core::control::LoopCondition;
+use somatize_core::error::{Result, SomaError};
 use somatize_core::filter::{Filter, FilterMeta};
 use somatize_core::graph::{Graph, NodeId};
+use somatize_core::node::NodeMeta;
 use std::collections::{HashMap, HashSet};
 
 /// Compilation mode affects caching behavior.
@@ -36,35 +38,74 @@ pub enum DiagnosticLevel {
 }
 
 /// Compiled result: the plan plus any diagnostics.
+#[derive(Debug)]
 pub struct CompileResult {
     pub plan: ExecutionPlan,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// Registry that maps node IDs to their filter metadata.
-/// The compiler needs metadata (cacheable, differentiable, etc.)
-/// but doesn't need the actual filter implementations.
-pub trait FilterRegistry: Send + Sync {
-    fn meta(&self, node_id: &str) -> Option<FilterMeta>;
+/// Registry that maps node IDs to their metadata.
+///
+/// The compiler needs metadata (cacheable, differentiable, schemas) but
+/// not the implementations behind it. One required accessor, answering
+/// for both kinds of node: an optional `step_meta` alongside a required
+/// `meta` is how half the schema validation came to be skipped by
+/// whichever registry forgot to override it.
+pub trait NodeRegistry: Send + Sync {
+    /// A node's contract — schemas, cacheability, effectfulness — whichever
+    /// kind it is. `None` means the graph names a node nobody registered,
+    /// which the compiler reports rather than guesses around.
+    fn node_meta(&self, node_id: &str) -> Option<NodeMeta>;
+
+    /// The node's configuration identity, folded into cache keys. Required
+    /// rather than derived because only the registry knows how a node's
+    /// configuration is canonicalized (Rust: canonical CBOR of fields;
+    /// Python: qualname + config + source hash).
     fn config_hash(&self, node_id: &str) -> Option<CacheKey>;
+
+    /// The computational view, for the phases that only make sense for a
+    /// filter: gradient flow, differentiable collapsing.
+    ///
+    /// `None` for an effectful node — deliberately. Those phases ask
+    /// "should a gradient pass through here", and the answer for a step
+    /// is not "no, and warn about it" but "the question does not apply".
+    fn meta(&self, node_id: &str) -> Option<FilterMeta> {
+        self.node_meta(node_id)
+            .filter(|m| !m.effectful)
+            .map(|m| m.as_filter_meta())
+    }
 }
 
-/// Simple in-memory filter registry for compilation.
-pub struct SimpleFilterRegistry {
-    entries: HashMap<String, (FilterMeta, CacheKey)>,
+/// Simple in-memory node registry for compilation.
+pub struct SimpleNodeRegistry {
+    entries: HashMap<String, (NodeMeta, CacheKey)>,
 }
 
-impl SimpleFilterRegistry {
+impl SimpleNodeRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
         }
     }
 
+    /// Register a step's metadata, so its schemas take part in validation.
+    pub fn register_step_meta(
+        &mut self,
+        node_id: impl Into<String>,
+        meta: somatize_core::step::StepMeta,
+    ) {
+        let id = node_id.into();
+        // A step's config hash is not derivable from its metadata; the
+        // compiler only needs one for cache resolution, which does not
+        // apply to an effectful node.
+        let hash = CacheKey::from_parts(&[b"step-meta", id.as_bytes()]);
+        self.entries.insert(id, (meta.into(), hash));
+    }
+
     pub fn register(&mut self, node_id: impl Into<String>, filter: &dyn Filter) {
         let id = node_id.into();
         self.entries
-            .insert(id, (filter.meta(), filter.config_hash()));
+            .insert(id, (filter.meta().into(), filter.config_hash()));
     }
 
     pub fn register_meta(
@@ -73,18 +114,19 @@ impl SimpleFilterRegistry {
         meta: FilterMeta,
         config_hash: CacheKey,
     ) {
-        self.entries.insert(node_id.into(), (meta, config_hash));
+        self.entries
+            .insert(node_id.into(), (meta.into(), config_hash));
     }
 }
 
-impl Default for SimpleFilterRegistry {
+impl Default for SimpleNodeRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl FilterRegistry for SimpleFilterRegistry {
-    fn meta(&self, node_id: &str) -> Option<FilterMeta> {
+impl NodeRegistry for SimpleNodeRegistry {
+    fn node_meta(&self, node_id: &str) -> Option<NodeMeta> {
         self.entries.get(node_id).map(|(m, _)| m.clone())
     }
 
@@ -93,16 +135,61 @@ impl FilterRegistry for SimpleFilterRegistry {
     }
 }
 
+/// Graph-wide analysis shared by every level of plan construction.
+///
+/// Both maps are computed once over the whole graph. Sub-plans (loop bodies,
+/// branch arms) project onto them rather than recomputing, so a node's
+/// position relative to the rest of the graph is the same wherever it is
+/// emitted.
+struct PlanCtx<'b> {
+    /// Topological level per node; nodes sharing a level are independent.
+    levels: HashMap<&'b str, usize>,
+    /// `dominators[n]` — every node that lies on all paths from a root to `n`.
+    dominators: HashMap<&'b str, HashSet<&'b str>>,
+}
+
+impl<'b> PlanCtx<'b> {
+    /// Does `d` lie on every path from a root to `n`? (Reflexive: `d` dominates itself.)
+    fn dominates(&self, d: &str, n: &str) -> bool {
+        self.dominators.get(n).is_some_and(|set| set.contains(d))
+    }
+
+    fn level_of(&self, n: &str) -> usize {
+        self.levels.get(n).copied().unwrap_or(0)
+    }
+
+    /// Group nodes into ordered levels, dropping levels the subset doesn't occupy.
+    fn group_by_level(&self, nodes: &[&'b str]) -> Vec<Vec<&'b str>> {
+        let mut by_level: Vec<(usize, Vec<&'b str>)> = Vec::new();
+        for &n in nodes {
+            let lvl = self.level_of(n);
+            match by_level.iter_mut().find(|(l, _)| *l == lvl) {
+                Some((_, bucket)) => bucket.push(n),
+                None => by_level.push((lvl, vec![n])),
+            }
+        }
+        by_level.sort_by_key(|(l, _)| *l);
+        by_level.into_iter().map(|(_, ns)| ns).collect()
+    }
+
+    /// Deterministic topological order: by level, then by id.
+    fn in_topo_order(&self, set: HashSet<&'b str>) -> Vec<&'b str> {
+        let mut out: Vec<&'b str> = set.into_iter().collect();
+        out.sort_by(|a, b| self.level_of(a).cmp(&self.level_of(b)).then(a.cmp(b)));
+        out
+    }
+}
+
 /// Compiles a Graph into an ExecutionPlan.
 pub struct Compiler<'a> {
     graph: &'a Graph,
-    registry: &'a dyn FilterRegistry,
+    registry: &'a dyn NodeRegistry,
     mode: CompileMode,
     diagnostics: Vec<Diagnostic>,
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(graph: &'a Graph, registry: &'a dyn FilterRegistry, mode: CompileMode) -> Self {
+    pub fn new(graph: &'a Graph, registry: &'a dyn NodeRegistry, mode: CompileMode) -> Self {
         Self {
             graph,
             registry,
@@ -128,17 +215,35 @@ impl<'a> Compiler<'a> {
         self.check_gradient_flow(&sorted);
 
         // Validate schema compatibility
-        self.validate_schemas(&sorted);
+        self.validate_schemas(&sorted)?;
+
+        let ctx = PlanCtx {
+            levels: self.compute_levels(&sorted),
+            dominators: self.compute_dominators(&sorted),
+        };
+
+        // Reject ambiguous control flow before it can become a silent default
+        self.validate_control_flow(&sorted, &ctx)?;
 
         // Build the structural plan (detect parallelism)
-        let plan = self.build_plan(&sorted);
+        let plan = self.plan_subset(&sorted, &ctx)?;
 
-        // Resolve caching if applicable
-        let plan = if let Some(cache) = cache {
-            self.resolve_cache(plan, cache, &sorted)?
-        } else {
-            plan
-        };
+        // The plan carries no `Cached` nodes: cache lookups are resolved at
+        // runtime, per node. A caller passing a cache gets a note saying so
+        // — this used to be a whole "phase" that transformed nothing.
+        if cache.is_some()
+            && self.mode != CompileMode::NoCache
+            && let Some(&first) = sorted.first()
+        {
+            self.diagnostics.push(Diagnostic {
+                node_id: first.to_string(),
+                level: DiagnosticLevel::Info,
+                message: "cache lookups are resolved at runtime per node \
+                          (key = hash(config + state + input)); the compiled plan \
+                          contains no Cached nodes"
+                    .to_string(),
+            });
+        }
 
         // Resolve distribution (wrap Remote nodes)
         let plan = self.resolve_distribution(plan);
@@ -154,109 +259,391 @@ impl<'a> Compiler<'a> {
         })
     }
 
-    /// Build a plan from topologically sorted nodes, detecting parallelism.
-    fn build_plan(&self, sorted: &[&str]) -> ExecutionPlan {
-        // Compute topological levels (nodes at the same level can run in parallel)
-        let levels = self.compute_levels(sorted);
+    /// Reject control flow whose meaning would otherwise be decided at
+    /// runtime by whichever node happened to finish last.
+    fn validate_control_flow<'b>(&self, sorted: &[&'b str], ctx: &PlanCtx<'b>) -> Result<()> {
+        use somatize_core::graph::NodeKind;
+
+        let all: HashSet<&str> = sorted.iter().copied().collect();
+
+        for &node_id in sorted {
+            let Some(node) = self.graph.node(node_id) else {
+                continue;
+            };
+            match &node.kind {
+                NodeKind::Loop { until, .. } => {
+                    let body = self.claimed_subset(node_id, &all, ctx);
+                    if body.is_empty() {
+                        return Err(SomaError::Compilation(format!(
+                            "loop `{node_id}` has an empty body: it needs at least one \
+                             control edge to the node that starts each iteration"
+                        )));
+                    }
+                    if matches!(until, LoopCondition::BodyTerminal) {
+                        let terminals = self.body_terminals(&body);
+                        if terminals.len() != 1 {
+                            return Err(SomaError::Compilation(format!(
+                                "loop `{node_id}` cannot infer its stop condition: its body has \
+                                 {} terminal nodes ({}). Name the deciding node explicitly with \
+                                 `LoopCondition::WhenSignaled`, or use `LoopCondition::Exhaust` \
+                                 to always run `max_iterations` times",
+                                terminals.len(),
+                                terminals.join(", ")
+                            )));
+                        }
+                    }
+                    if let LoopCondition::WhenSignaled(target) = until
+                        && !body.contains(&target.as_str())
+                    {
+                        return Err(SomaError::Compilation(format!(
+                            "loop `{node_id}` waits on `{target}`, which is not in its body \
+                             ({}) — it would never be re-evaluated",
+                            body.join(", ")
+                        )));
+                    }
+                }
+                NodeKind::Branch { arms: declared } => {
+                    let edges = self.control_targets(node_id, &all);
+                    if edges.is_empty() {
+                        return Err(SomaError::Compilation(format!(
+                            "branch `{node_id}` has no arms: arms are the control edges \
+                             leaving it, each labelled with the value that selects it"
+                        )));
+                    }
+                    let mut seen: HashSet<String> = HashSet::new();
+                    for (target, label) in &edges {
+                        let label = label.clone().unwrap_or_else(|| target.to_string());
+                        if !seen.insert(label.clone()) {
+                            return Err(SomaError::Compilation(format!(
+                                "branch `{node_id}` has two arms labelled `{label}` — \
+                                 the second could never be selected"
+                            )));
+                        }
+                    }
+
+                    // When the node declares its label set, hold the edges to
+                    // it in both directions. A mislabelled edge is otherwise
+                    // an arm that simply never fires — visible only as a
+                    // wrong answer, and only sometimes.
+                    if !declared.is_empty() {
+                        let declared_set: HashSet<&str> =
+                            declared.iter().map(String::as_str).collect();
+
+                        for label in &seen {
+                            if !declared_set.contains(label.as_str())
+                                && !somatize_core::control::is_default_arm(label)
+                            {
+                                return Err(SomaError::Compilation(format!(
+                                    "branch `{node_id}` has an edge labelled `{label}`, which \
+                                     is not among its declared arms ({}). Fix the label, or \
+                                     declare it",
+                                    declared.join(", ")
+                                )));
+                            }
+                        }
+                        for label in declared {
+                            if !seen.contains(label) {
+                                return Err(SomaError::Compilation(format!(
+                                    "branch `{node_id}` declares arm `{label}` but no control \
+                                     edge is labelled with it, so selecting it would fail at \
+                                     runtime"
+                                )));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Nodes in `body` that no other body node depends on.
+    fn body_terminals<'b>(&self, body: &[&'b str]) -> Vec<&'b str> {
+        let member: HashSet<&str> = body.iter().copied().collect();
+        body.iter()
+            .copied()
+            .filter(|n| {
+                !self
+                    .graph
+                    .successors(n)
+                    .iter()
+                    .any(|s| member.contains(s as &str))
+            })
+            .collect()
+    }
+
+    /// Resolve `BodyTerminal` to the concrete node the executor will read.
+    ///
+    /// `validate_control_flow` has already rejected a body without exactly
+    /// one terminal, so the error arm cannot fire. It is an error rather
+    /// than a fallback because the fallback was `Exhaust`: a debug build
+    /// asserted, and a release build quietly turned "stop when the body
+    /// says so" into "run the full iteration count" — a loop that costs N
+    /// times what it should, reported as success.
+    fn resolve_loop_condition(
+        &self,
+        node_id: &str,
+        until: &LoopCondition,
+        body: &[&str],
+    ) -> Result<LoopCondition> {
+        match until {
+            LoopCondition::BodyTerminal => match self.body_terminals(body).as_slice() {
+                [only] => Ok(LoopCondition::WhenSignaled((*only).to_string())),
+                terminals => Err(SomaError::Compilation(format!(
+                    "loop `{node_id}` stops on its body terminal, but the body has {} \
+                     of them{}. Name the one that decides with \
+                     `LoopCondition::WhenSignaled`, or use `Exhaust` to always run \
+                     the full count",
+                    terminals.len(),
+                    if terminals.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", terminals.join(", "))
+                    }
+                ))),
+            },
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// Plan a set of nodes, emitting each exactly once.
+    ///
+    /// A `Loop` or `Branch` in the set *owns* its body / arms: those nodes are
+    /// compiled inside the construct and excluded from this level. Without
+    /// that exclusion the body would run once more after the loop finished,
+    /// and every arm would run unconditionally after the branch had already
+    /// picked one.
+    fn plan_subset<'b>(&self, nodes: &[&'b str], ctx: &PlanCtx<'b>) -> Result<ExecutionPlan> {
+        let member: HashSet<&str> = nodes.iter().copied().collect();
+
+        let mut owned: HashSet<&str> = HashSet::new();
+        for &n in nodes {
+            for m in self.owned_by(n, &member, ctx) {
+                owned.insert(m);
+            }
+        }
+
+        // Nodes not claimed by a construct, grouped by their graph-wide
+        // topological level so relative ordering survives the projection.
+        let top: Vec<&str> = nodes
+            .iter()
+            .copied()
+            .filter(|n| !owned.contains(n))
+            .collect();
 
         let mut plan_steps: Vec<ExecutionPlan> = Vec::new();
-
-        for level in &levels {
+        for level in ctx.group_by_level(&top) {
             if level.len() == 1 {
-                plan_steps.push(self.plan_for_node(level[0]));
+                plan_steps.push(self.plan_for_node(level[0], ctx)?);
             } else {
-                let branches: Vec<ExecutionPlan> =
-                    level.iter().map(|id| self.plan_for_node(id)).collect();
+                let branches: Vec<ExecutionPlan> = level
+                    .iter()
+                    .map(|id| self.plan_for_node(id, ctx))
+                    .collect::<Result<_>>()?;
                 plan_steps.push(ExecutionPlan::Parallel(branches));
             }
         }
 
-        if plan_steps.len() == 1 {
-            plan_steps.into_iter().next().unwrap()
-        } else {
-            ExecutionPlan::Sequence(plan_steps)
+        Ok(match plan_steps.len() {
+            0 => ExecutionPlan::Empty,
+            1 => plan_steps.into_iter().next().unwrap(),
+            _ => ExecutionPlan::Sequence(plan_steps),
+        })
+    }
+
+    /// The nodes a control-flow construct claims from `member`.
+    ///
+    /// Both `Loop` and `Branch` reach their sub-plans through **control**
+    /// edges; a data edge leaving either is an ordinary downstream dependency.
+    /// A target claims every node it dominates, so a node reachable from two
+    /// arms is dominated by neither and stays outside — running once after the
+    /// branch, which is what a convergence point should do.
+    fn owned_by<'b>(
+        &self,
+        node_id: &'b str,
+        member: &HashSet<&'b str>,
+        ctx: &PlanCtx<'b>,
+    ) -> Vec<&'b str> {
+        use somatize_core::graph::NodeKind;
+
+        let Some(node) = self.graph.node(node_id) else {
+            return Vec::new();
+        };
+        if !matches!(
+            node.kind,
+            NodeKind::Loop { .. } | NodeKind::Branch { .. } | NodeKind::Step { .. }
+        ) {
+            return Vec::new();
         }
+
+        let mut claimed = Vec::new();
+        for (entry, _) in self.control_targets(node_id, member) {
+            for &m in member {
+                if m != node_id && ctx.dominates(entry, m) {
+                    claimed.push(m);
+                }
+            }
+        }
+        claimed
+    }
+
+    /// Targets of control edges leaving `node_id`, restricted to `member`.
+    fn control_targets<'b>(
+        &self,
+        node_id: &str,
+        member: &HashSet<&'b str>,
+    ) -> Vec<(&'b str, Option<String>)> {
+        use somatize_core::graph::EdgeKind;
+
+        self.graph
+            .edges
+            .iter()
+            .filter(|e| e.source == node_id && e.kind == EdgeKind::Control)
+            .filter_map(|e| member.get(e.target.as_str()).map(|t| (*t, e.label.clone())))
+            .collect()
     }
 
     /// Generate the execution plan for a single node based on its kind.
-    fn plan_for_node(&self, node_id: &str) -> ExecutionPlan {
+    fn plan_for_node<'b>(&self, node_id: &'b str, ctx: &PlanCtx<'b>) -> Result<ExecutionPlan> {
         use somatize_core::graph::NodeKind;
 
         let node = match self.graph.node(node_id) {
             Some(n) => n,
             None => {
-                return ExecutionPlan::Execute {
+                return Ok(ExecutionPlan::Execute {
                     node_id: node_id.to_string(),
-                };
+                });
             }
         };
 
-        match &node.kind {
+        Ok(match &node.kind {
             NodeKind::Filter { .. } => ExecutionPlan::Execute {
                 node_id: node_id.to_string(),
             },
 
-            NodeKind::SubGraph { graph } => {
-                // Recursively compile the inner graph
-                let inner_compiler = Compiler::new(graph, self.registry, self.mode);
-                match inner_compiler.compile(None) {
-                    Ok(result) => result.plan,
-                    Err(_) => ExecutionPlan::Execute {
-                        node_id: node_id.to_string(),
-                    },
+            NodeKind::Step { .. } => {
+                // Control edges leaving a step are the places it may hand
+                // control to. Claimed the same way branch arms are, so each
+                // target is compiled once, inside the step that reaches it.
+                let all: HashSet<&str> = ctx.levels.keys().copied().collect();
+                let handoffs: Vec<(NodeId, ExecutionPlan)> = self
+                    .control_targets(node_id, &all)
+                    .into_iter()
+                    .map(|(target, _)| {
+                        let nodes = self.dominated_subset(target, &all, ctx);
+                        Ok((target.to_string(), self.plan_subset(&nodes, ctx)?))
+                    })
+                    .collect::<Result<_>>()?;
+                ExecutionPlan::Step {
+                    node_id: node_id.to_string(),
+                    handoffs,
                 }
             }
 
-            NodeKind::Loop { max_iterations } => {
-                // The body consists of the successors of this loop node.
-                // Build a sub-plan from the successor chain.
-                let successors = self.graph.successors(node_id);
-                let body = if successors.len() == 1 {
-                    self.plan_for_node(successors[0])
-                } else if successors.len() > 1 {
-                    let branches: Vec<ExecutionPlan> =
-                        successors.iter().map(|id| self.plan_for_node(id)).collect();
-                    ExecutionPlan::Parallel(branches)
-                } else {
+            NodeKind::SubGraph { graph } => {
+                // Recursively compile the inner graph. An inner error is this
+                // graph's error: the old fallback emitted a bare `Execute` for
+                // the node, which deferred the failure to runtime under a
+                // different name — inconsistent with the unknown-kind arm
+                // below, which refuses rather than guesses.
+                Compiler::new(graph, self.registry, self.mode)
+                    .compile(None)?
+                    .plan
+            }
+
+            NodeKind::Loop {
+                max_iterations,
+                until,
+            } => {
+                let all: HashSet<&str> = ctx.levels.keys().copied().collect();
+                let body_nodes = self.claimed_subset(node_id, &all, ctx);
+                let body = if body_nodes.is_empty() {
                     ExecutionPlan::Empty
+                } else {
+                    self.plan_subset(&body_nodes, ctx)?
                 };
                 ExecutionPlan::Loop {
                     node_id: node_id.to_string(),
                     body: Box::new(body),
                     max_iterations: *max_iterations,
+                    until: self.resolve_loop_condition(node_id, until, &body_nodes)?,
+                    // Whatever the stop condition is, a single-terminal body
+                    // has one obvious thing to hand to the next pass.
+                    carry_from: match self.body_terminals(&body_nodes).as_slice() {
+                        [only] => Some((*only).to_string()),
+                        _ => None,
+                    },
                 }
             }
 
-            NodeKind::Branch => {
-                // Arms come from control edges leaving this node.
+            NodeKind::Branch { .. } => {
+                let all: HashSet<&str> = ctx.levels.keys().copied().collect();
                 let arms: Vec<(String, ExecutionPlan)> = self
-                    .graph
-                    .edges
-                    .iter()
-                    .filter(|e| e.source == node_id)
-                    .map(|e| {
-                        let label = e.label.clone().unwrap_or_else(|| e.target.clone());
-                        let plan = self.plan_for_node(&e.target);
-                        (label, plan)
+                    .control_targets(node_id, &all)
+                    .into_iter()
+                    .map(|(target, label)| {
+                        let label = label.unwrap_or_else(|| target.to_string());
+                        let arm_nodes = self.dominated_subset(target, &all, ctx);
+                        Ok((label, self.plan_subset(&arm_nodes, ctx)?))
                     })
-                    .collect();
+                    .collect::<Result<_>>()?;
                 ExecutionPlan::Branch {
                     node_id: node_id.to_string(),
                     arms,
                 }
             }
 
-            _ => ExecutionPlan::Execute {
-                node_id: node_id.to_string(),
-            },
-        }
+            // `NodeKind` is `#[non_exhaustive]` and lives in another crate,
+            // so this arm cannot be deleted — but it must not stay silent.
+            // Falling through to `Execute` compiled an unknown kind as a
+            // plain filter: a loop that never iterated, a step that was
+            // never driven, and no diagnostic anywhere. Refusing to plan
+            // what this compiler does not understand is the only safe
+            // answer, and it turns a future omission into a clear error.
+            other => {
+                return Err(SomaError::Compilation(format!(
+                    "node `{node_id}` has kind {other:?}, which this compiler \
+                     does not know how to plan; the runtime would have run it \
+                     as an ordinary filter"
+                )));
+            }
+        })
     }
 
-    /// Compute topological levels: groups of nodes that can execute concurrently.
-    /// Each node's level = max(predecessor levels) + 1.
-    fn compute_levels<'b>(&self, sorted: &[&'b str]) -> Vec<Vec<&'b str>> {
+    /// Every node claimed by `node_id`'s control edges, in topological order.
+    fn claimed_subset<'b>(
+        &self,
+        node_id: &'b str,
+        universe: &HashSet<&'b str>,
+        ctx: &PlanCtx<'b>,
+    ) -> Vec<&'b str> {
+        let mut claimed: HashSet<&str> = HashSet::new();
+        for (entry, _) in self.control_targets(node_id, universe) {
+            claimed.extend(self.dominated_subset(entry, universe, ctx));
+        }
+        ctx.in_topo_order(claimed)
+    }
+
+    /// `entry` plus everything it dominates, in topological order.
+    fn dominated_subset<'b>(
+        &self,
+        entry: &'b str,
+        universe: &HashSet<&'b str>,
+        ctx: &PlanCtx<'b>,
+    ) -> Vec<&'b str> {
+        let set: HashSet<&str> = universe
+            .iter()
+            .copied()
+            .filter(|&m| ctx.dominates(entry, m))
+            .collect();
+        ctx.in_topo_order(set)
+    }
+
+    /// Topological level of each node: `max(predecessor levels) + 1`.
+    /// Nodes sharing a level have no dependency between them.
+    fn compute_levels<'b>(&self, sorted: &[&'b str]) -> HashMap<&'b str, usize> {
         let mut node_level: HashMap<&str, usize> = HashMap::new();
-        let mut max_level: usize = 0;
 
         for &node in sorted {
             let preds = self.graph.predecessors(node);
@@ -270,126 +657,48 @@ impl<'a> Compiler<'a> {
                     .unwrap_or(0)
             };
             node_level.insert(node, level);
-            if level > max_level {
-                max_level = level;
-            }
         }
 
-        let mut levels: Vec<Vec<&str>> = vec![Vec::new(); max_level + 1];
+        node_level
+    }
+
+    /// Dominator sets over the DAG: `d` dominates `n` when every path from a
+    /// root to `n` passes through `d`. Computed in topological order as
+    /// `dom(n) = {n} ∪ ⋂ dom(pred)`.
+    fn compute_dominators<'b>(&self, sorted: &[&'b str]) -> HashMap<&'b str, HashSet<&'b str>> {
+        let mut dom: HashMap<&str, HashSet<&str>> = HashMap::new();
+
         for &node in sorted {
-            let level = node_level[node];
-            levels[level].push(node);
-        }
+            let preds = self.graph.predecessors(node);
+            let mut set: HashSet<&str> = HashSet::new();
 
-        // Remove empty levels (shouldn't happen but defensive)
-        levels.retain(|l| !l.is_empty());
-        levels
-    }
-
-    /// Resolve caching: replace Execute nodes with Cached when possible.
-    /// Implements cascade invalidation.
-    fn resolve_cache(
-        &self,
-        plan: ExecutionPlan,
-        cache: &dyn CacheStore,
-        sorted: &[&str],
-    ) -> Result<ExecutionPlan> {
-        if self.mode == CompileMode::NoCache {
-            return Ok(plan);
-        }
-
-        // Compute cache keys for all nodes in topological order.
-        // A node's key depends on its config + its predecessors' keys.
-        let mut node_keys: HashMap<String, CacheKey> = HashMap::new();
-        let mut cached_nodes: HashSet<String> = HashSet::new();
-
-        for &node_id in sorted {
-            let config_hash = match self.registry.config_hash(node_id) {
-                Some(h) => h,
-                None => continue, // no filter registered, can't cache
-            };
-
-            let meta = self.registry.meta(node_id);
-            let cacheable = meta.as_ref().is_some_and(|m| m.cacheable);
-
-            // In differentiable mode, only cache states (not forward outputs)
-            // For simplicity at this stage, we skip caching in differentiable mode
-            let can_cache = cacheable && self.mode == CompileMode::Inference;
-
-            // Build the cache key from config + predecessor output keys
-            let pred_ids = self.graph.predecessors(node_id);
-            let mut key_parts: Vec<Vec<u8>> = vec![config_hash.0.to_vec()];
-            for pred in &pred_ids {
-                if let Some(pred_key) = node_keys.get(*pred) {
-                    key_parts.push(pred_key.0.to_vec());
-                } else {
-                    // Predecessor should always be processed first in topological order.
-                    // If missing, the cache key will be incomplete but won't panic.
-                    debug_assert!(
-                        false,
-                        "predecessor `{pred}` of `{node_id}` not in node_keys - \
-                         topological order may be broken"
-                    );
+            let mut pred_sets = preds.iter().filter_map(|p| dom.get(p));
+            if let Some(first) = pred_sets.next() {
+                set = first.clone();
+                for other in pred_sets {
+                    set.retain(|d| other.contains(d));
                 }
             }
-            let parts_refs: Vec<&[u8]> = key_parts.iter().map(|p| p.as_slice()).collect();
-            let key = CacheKey::from_parts(&parts_refs);
-            node_keys.insert(node_id.to_string(), key.clone());
-
-            // Check if this node's output exists in cache
-            if can_cache {
-                // Only use cache if ALL predecessors are also cached (or roots).
-                // This ensures cascade invalidation: if any upstream re-executed,
-                // the key is already different (since it includes predecessor keys).
-                if cache.exists(&key)? {
-                    cached_nodes.insert(node_id.to_string());
-                }
-            }
+            set.insert(node);
+            dom.insert(node, set);
         }
 
-        // Replace Execute nodes with Cached where applicable
-        Ok(self.apply_cache_to_plan(plan, &cached_nodes, &node_keys))
+        dom
     }
 
-    fn apply_cache_to_plan(
-        &self,
-        plan: ExecutionPlan,
-        cached: &HashSet<String>,
-        keys: &HashMap<String, CacheKey>,
-    ) -> ExecutionPlan {
-        match plan {
-            ExecutionPlan::Execute { ref node_id } => {
-                if cached.contains(node_id)
-                    && let Some(key) = keys.get(node_id)
-                {
-                    return ExecutionPlan::Cached {
-                        node_id: node_id.clone(),
-                        key: key.clone(),
-                    };
-                }
-                plan
-            }
-            ExecutionPlan::Sequence(steps) => ExecutionPlan::Sequence(
-                steps
-                    .into_iter()
-                    .map(|s| self.apply_cache_to_plan(s, cached, keys))
-                    .collect(),
-            ),
-            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches
-                    .into_iter()
-                    .map(|b| self.apply_cache_to_plan(b, cached, keys))
-                    .collect(),
-            ),
-            other => other,
-        }
-    }
-
+    /// Cache resolution happens at RUNTIME, not here.
+    ///
+    /// The compiler never sees the dataset, so any key it could derive
+    /// (formerly `H(config ‖ predecessor keys)`) is independent of the
+    /// input data — the same graph on two different datasets would
+    /// collide. The executor computes the real key
+    /// `hash(config + state + input)` per node with the materialized
+    /// input in hand, and skips execution on a hit.
     /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
     fn resolve_distribution(&self, plan: ExecutionPlan) -> ExecutionPlan {
         match plan {
-            ExecutionPlan::Execute { ref node_id } => {
-                if let Some(meta) = self.registry.meta(node_id) {
+            ExecutionPlan::Execute { ref node_id } | ExecutionPlan::Step { ref node_id, .. } => {
+                if let Some(meta) = self.registry.node_meta(node_id) {
                     match &meta.distribution {
                         somatize_core::filter::Distribution::Remote(target) => {
                             ExecutionPlan::Remote {
@@ -423,10 +732,12 @@ impl<'a> Compiler<'a> {
                 let targets: Vec<_> = node_ids
                     .iter()
                     .filter_map(|nid| {
-                        self.registry.meta(nid).and_then(|m| match &m.distribution {
-                            somatize_core::filter::Distribution::Remote(t) => Some(t.clone()),
-                            _ => None,
-                        })
+                        self.registry
+                            .node_meta(nid)
+                            .and_then(|m| match &m.distribution {
+                                somatize_core::filter::Distribution::Remote(t) => Some(t.clone()),
+                                _ => None,
+                            })
                     })
                     .collect();
 
@@ -512,30 +823,67 @@ impl<'a> Compiler<'a> {
     /// For each edge (A → B), checks that A's output_schema is compatible
     /// with B's input_schema. Emits warnings (not errors) for mismatches,
     /// since schemas are optional and None means "accepts anything".
-    fn validate_schemas(&mut self, sorted: &[&str]) {
-        for &node_id in sorted {
-            let input_schema = self
-                .registry
-                .meta(node_id)
-                .and_then(|m| m.input_schema.clone());
+    /// What a node accepts, whether it is a filter or a step.
+    fn input_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
+        self.registry
+            .node_meta(node_id)
+            .and_then(|m| m.input_schema)
+    }
 
+    /// What a node produces, whether it is a filter or a step.
+    fn output_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
+        self.registry
+            .node_meta(node_id)
+            .and_then(|m| m.output_schema)
+    }
+
+    /// Check that every edge could carry what flows along it.
+    ///
+    /// Two severities, because two very different things get called a
+    /// "schema mismatch":
+    ///
+    /// - **Warning** — the dtypes differ but could plausibly line up (`f32`
+    ///   into `f64`, a fixed shape into a dynamic one). Long-standing
+    ///   behaviour; plenty of working pipelines rely on it.
+    /// - **Error** — no reading of the producer could satisfy the consumer:
+    ///   a tensor arriving where a conversation is expected. Across 1600+
+    ///   annotated multi-agent traces this class — context lost or malformed
+    ///   at a handoff — is the single largest bucket of failures after bad
+    ///   specifications. It is cheap to catch here and expensive to catch
+    ///   after a few thousand tokens.
+    fn validate_schemas(&mut self, sorted: &[&str]) -> Result<()> {
+        for &node_id in sorted {
             // Skip if this node accepts anything
-            let Some(expected_input) = input_schema else {
+            let Some(expected_input) = self.input_schema_of(node_id) else {
                 continue;
             };
 
-            // Check each predecessor's output schema
             for pred_id in self.graph.predecessors(node_id) {
-                let pred_output = self
-                    .registry
-                    .meta(pred_id)
-                    .and_then(|m| m.output_schema.clone());
-
-                let Some(actual_output) = pred_output else {
+                let Some(actual_output) = self.output_schema_of(pred_id) else {
                     continue; // predecessor output unknown, skip
                 };
 
-                if !actual_output.is_compatible_with(&expected_input) {
+                // No possible reading — refuse to build the graph.
+                if actual_output.is_incompatible_with(&expected_input) {
+                    return Err(SomaError::Compilation(format!(
+                        "`{pred_id}` outputs {actual_output} but `{node_id}` expects \
+                         {expected_input}, and there is no conversion between them. \
+                         Insert a node that adapts one to the other"
+                    )));
+                }
+
+                let same_dtype = actual_output.dtype == expected_input.dtype;
+                let both_numeric =
+                    actual_output.dtype.is_numeric() && expected_input.dtype.is_numeric();
+
+                // Warn on a shape that does not line up, or on an implicit
+                // change of numeric width. Stay quiet about the promotions the
+                // runtime performs by design (text → conversation, anything →
+                // json): those are the intended way to connect such nodes, and
+                // warning about them would train people to ignore warnings.
+                if (same_dtype && !actual_output.is_compatible_with(&expected_input))
+                    || (!same_dtype && both_numeric)
+                {
                     self.diagnostics.push(Diagnostic {
                         node_id: node_id.to_string(),
                         level: DiagnosticLevel::Warning,
@@ -547,6 +895,7 @@ impl<'a> Compiler<'a> {
                 }
             }
         }
+        Ok(())
     }
 
     /// Check gradient flow and emit warnings for each interruption.
@@ -584,7 +933,7 @@ impl<'a> Compiler<'a> {
 /// Convenience function: compile a graph with default settings.
 pub fn compile(
     graph: &Graph,
-    registry: &dyn FilterRegistry,
+    registry: &dyn NodeRegistry,
     mode: CompileMode,
     cache: Option<&dyn CacheStore>,
 ) -> Result<CompileResult> {
@@ -598,7 +947,7 @@ pub fn compile(
 /// `StreamExecutor` that respects each filter's `StreamMode`.
 pub fn compile_stream(
     graph: &Graph,
-    _registry: &dyn FilterRegistry,
+    _registry: &dyn NodeRegistry,
     chunk_size: usize,
 ) -> Result<CompileResult> {
     graph.validate()?;
@@ -631,6 +980,7 @@ mod tests {
     use somatize_core::filter::{FilterKind, StreamMode};
     use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
     use somatize_core::value::Value;
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     // ── Mock cache store ──
@@ -677,6 +1027,7 @@ mod tests {
             kind,
             cacheable: true,
             differentiable,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -684,7 +1035,7 @@ mod tests {
         }
     }
 
-    fn register_nodes(registry: &mut SimpleFilterRegistry, ids: &[&str], meta: FilterMeta) {
+    fn register_nodes(registry: &mut SimpleNodeRegistry, ids: &[&str], meta: FilterMeta) {
         for (i, id) in ids.iter().enumerate() {
             let hash = CacheKey::from_parts(&[id.as_bytes(), &[i as u8]]);
             registry.register_meta(*id, meta.clone(), hash);
@@ -696,7 +1047,7 @@ mod tests {
     #[test]
     fn compile_empty_graph() {
         let graph = Graph::new();
-        let registry = SimpleFilterRegistry::new();
+        let registry = SimpleNodeRegistry::new();
         let result = compile(&graph, &registry, CompileMode::Inference, None).unwrap();
         assert!(matches!(result.plan, ExecutionPlan::Empty));
     }
@@ -705,7 +1056,7 @@ mod tests {
     fn compile_single_node() {
         let mut graph = Graph::new();
         graph.add_node(Node::new("a", "A", "F"));
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a"],
@@ -723,7 +1074,7 @@ mod tests {
             Node::new("b", "PCA", "F"),
             Node::new("c", "SVM", "F"),
         ]);
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b", "c"],
@@ -752,7 +1103,7 @@ mod tests {
         graph.add_edge(Edge::data("e3", "b1", "merge"));
         graph.add_edge(Edge::data("e4", "b2", "merge"));
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["root", "b1", "b2", "merge"],
@@ -779,7 +1130,7 @@ mod tests {
         graph.add_node(Node::new("b", "B", "F"));
         // No edges: fully independent
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -793,95 +1144,51 @@ mod tests {
     }
 
     #[test]
-    fn cache_resolution_replaces_cached_nodes() {
+    fn cache_resolution_is_deferred_to_runtime() {
         let graph = linear_pipeline(vec![
             Node::new("a", "Scaler", "F"),
             Node::new("b", "PCA", "F"),
             Node::new("c", "SVM", "F"),
         ]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b", "c"],
             make_meta(FilterKind::Trainable, true),
         );
 
-        // Pre-compute the cache key for node "a" (same logic as compiler)
+        // Even with a populated cache, the compiler must never emit
+        // Cached nodes: its keys cannot include the input data, so a
+        // compile-time hit could serve results from a different dataset.
+        // The executor resolves cache hits per node at runtime.
         let a_config = registry.config_hash("a").unwrap();
         let a_cache_key = CacheKey::from_parts(&[&a_config.0]);
-
         let cache = MockCacheStore::new();
         cache.insert(a_cache_key);
 
         let result = compile(&graph, &registry, CompileMode::Inference, Some(&cache)).unwrap();
 
-        // "a" is cached, "b"+"c" are differentiable → Composite
-        if let ExecutionPlan::Sequence(steps) = &result.plan {
-            assert!(
-                matches!(&steps[0], ExecutionPlan::Cached { node_id, .. } if node_id == "a"),
-                "first node should be cached, got: {:?}",
-                steps[0]
-            );
-            assert!(
-                matches!(&steps[1], ExecutionPlan::Composite { node_ids } if node_ids == &["b", "c"]),
-                "b+c should be Composite, got: {:?}",
-                steps[1]
-            );
-        } else {
-            panic!("expected Sequence, got: {:?}", result.plan);
-        }
-    }
-
-    #[test]
-    fn cascade_invalidation_different_config_changes_keys() {
-        // Register with config hash "v1"
-        let mut reg1 = SimpleFilterRegistry::new();
-        reg1.register_meta(
-            "a",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"scaler_v1"),
+        assert!(
+            !format!("{:?}", result.plan).contains("Cached"),
+            "compiler must not emit Cached nodes, got: {:?}",
+            result.plan
         );
-        reg1.register_meta(
-            "b",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"pca_v1"),
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.level == DiagnosticLevel::Info
+                    && d.message.contains("resolved at runtime")),
+            "expected an informational diagnostic about runtime cache resolution"
         );
-
-        // Register with config hash "v2" for node "a"
-        let mut reg2 = SimpleFilterRegistry::new();
-        reg2.register_meta(
-            "a",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"scaler_v2"), // changed!
-        );
-        reg2.register_meta(
-            "b",
-            make_meta(FilterKind::Trainable, true),
-            CacheKey::hash_data(b"pca_v1"), // same
-        );
-
-        // Compute keys for both configurations
-        // The plans have same structure but when cache keys are computed,
-        // changing "a" config changes "b"'s key too (cascade).
-        // We verify this by computing keys manually:
-        let a_key_v1 = CacheKey::from_parts(&[&CacheKey::hash_data(b"scaler_v1").0]);
-        let b_key_v1 = CacheKey::from_parts(&[&CacheKey::hash_data(b"pca_v1").0, &a_key_v1.0]);
-
-        let a_key_v2 = CacheKey::from_parts(&[&CacheKey::hash_data(b"scaler_v2").0]);
-        let b_key_v2 = CacheKey::from_parts(&[&CacheKey::hash_data(b"pca_v1").0, &a_key_v2.0]);
-
-        // a changed → a's key changed
-        assert_ne!(a_key_v1, a_key_v2);
-        // b's config didn't change but a's key is in b's key → b's key also changed
-        assert_ne!(b_key_v1, b_key_v2);
     }
 
     #[test]
     fn no_cache_mode_skips_all_caching() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -897,14 +1204,14 @@ mod tests {
         let result = compile(&graph, &registry, CompileMode::NoCache, Some(&cache)).unwrap();
 
         // Nothing should be cached
-        assert_eq!(result.plan.cached_count(), 0);
+        assert!(!format!("{:?}", result.plan).contains("Cached"));
     }
 
     #[test]
     fn differentiable_mode_skips_output_caching() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -919,7 +1226,7 @@ mod tests {
         let result = compile(&graph, &registry, CompileMode::Differentiable, Some(&cache)).unwrap();
 
         // Differentiable mode should not cache forward outputs
-        assert_eq!(result.plan.cached_count(), 0);
+        assert!(!format!("{:?}", result.plan).contains("Cached"));
     }
 
     #[test]
@@ -930,7 +1237,7 @@ mod tests {
             Node::new("linear", "Linear", "F"),
         ]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         registry.register_meta(
             "scaler",
             make_meta(FilterKind::Trainable, true),
@@ -963,7 +1270,7 @@ mod tests {
     fn no_diagnostic_when_all_differentiable() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],
@@ -982,7 +1289,7 @@ mod tests {
         graph.add_edge(Edge::data("e1", "a", "b"));
         graph.add_edge(Edge::data("e2", "b", "a"));
 
-        let registry = SimpleFilterRegistry::new();
+        let registry = SimpleNodeRegistry::new();
         let result = compile(&graph, &registry, CompileMode::Inference, None);
         assert!(matches!(result, Err(SomaError::CycleDetected)));
     }
@@ -999,7 +1306,7 @@ mod tests {
         graph.add_edge(Edge::data("e3", "b1", "end"));
         graph.add_edge(Edge::data("e4", "b2", "end"));
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["root", "b1", "b2", "end"],
@@ -1020,7 +1327,7 @@ mod tests {
             Node::new("evaluate", "Evaluate", "F"),
         ]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         // preprocess: local
         registry.register_meta(
             "preprocess",
@@ -1068,7 +1375,7 @@ mod tests {
     fn local_distribution_not_wrapped() {
         let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
 
-        let mut registry = SimpleFilterRegistry::new();
+        let mut registry = SimpleNodeRegistry::new();
         register_nodes(
             &mut registry,
             &["a", "b"],

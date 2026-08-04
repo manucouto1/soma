@@ -44,4 +44,7 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
-        args: ['--maxkb=500']
+        # The tutorial notebooks ship executed, with PNG fallbacks so
+        # their figures render on GitHub without running anything. That
+        # is the point of them, and it costs 400-900 KiB each.
+        args: ['--maxkb=1500']

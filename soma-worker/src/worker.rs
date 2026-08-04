@@ -6,7 +6,7 @@ use somatize_core::event::Event;
 use somatize_core::filter::Filter;
 use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
-use somatize_runtime::{EventBus, FilterLibrary, MemoryCache, Runner};
+use somatize_runtime::{EventBus, MemoryCache, NodeCatalog, Runner};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,13 +16,35 @@ pub struct Worker {
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
-    filters: FilterLibrary,
+    catalog: NodeCatalog,
     /// Optional persistent DataStore (S3, Zarr, etc.) — configured by user.
     data_store: Option<Arc<dyn DataStore>>,
     /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
     temp_store: Arc<LocalDataStore>,
     /// Environment manager for creating venvs with filter dependencies.
     env_manager: crate::env_manager::EnvManager,
+    /// Which interpreter to unpickle filters in, when no venv is needed.
+    ///
+    /// A cloudpickled filter can only be reconstructed by an interpreter
+    /// close enough to the one that pickled it. Defaulting to `python3`
+    /// off `PATH` means the worker will happily pick a different minor
+    /// version from the process that sent the work, and cloudpickle then
+    /// returns the class's `__dict__` instead of an instance — which
+    /// surfaces as `'dict' object is not callable`, from inside a
+    /// subprocess, with nothing pointing at the version gap.
+    python: String,
+}
+
+/// `$SOMA_PYTHON`, else `python3` off `PATH`.
+///
+/// The env var exists because a worker started from a shell has no other
+/// way to be told, and `python3` is frequently not the interpreter whose
+/// pickles it will be asked to read.
+fn default_python() -> String {
+    std::env::var("SOMA_PYTHON")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "python3".to_string())
 }
 
 impl Worker {
@@ -36,14 +58,26 @@ impl Worker {
             capabilities,
             event_bus: Arc::new(EventBus::new(256)),
             cache: Arc::new(MemoryCache::default()),
-            filters: FilterLibrary::new(),
+            catalog: NodeCatalog::new(),
             data_store: None,
             temp_store: Arc::new(temp_store),
             env_manager: crate::env_manager::EnvManager::new(
                 env_path,
                 crate::env_manager::EnvType::Venv,
             ),
+            python: default_python(),
         }
+    }
+
+    /// Run filters in this interpreter rather than whatever `python3`
+    /// resolves to.
+    ///
+    /// An embedding process should pass its own `sys.executable`: it is
+    /// the interpreter that pickled the filters, so it is the only one
+    /// certain to unpickle them.
+    pub fn with_python(mut self, python: impl Into<String>) -> Self {
+        self.python = python.into();
+        self
     }
 
     /// Set a custom cache store (e.g. tiered or shared).
@@ -71,24 +105,26 @@ impl Worker {
 
     /// Register a filter that this worker can execute.
     pub fn register_filter(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
-        self.filters.register(node_id, filter);
+        self.catalog.register(node_id, filter);
     }
 
     /// Get a filter by node_id (for stream executor construction).
     pub fn get_filter(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
-        self.filters.get(node_id)
+        self.catalog.get(node_id)
     }
 
     /// Get trained state for a filter.
     pub fn get_filter_state(&self, node_id: &str) -> Arc<Value> {
-        self.filters
+        self.catalog
             .get_state(node_id)
             .unwrap_or_else(|| Arc::new(Value::Empty))
     }
 
     /// Set trained state for a filter.
     pub fn set_filter_state(&mut self, node_id: &str, state: Value) {
-        self.filters.set_state(node_id, state);
+        if let Err(e) = self.catalog.try_set_state(node_id, state) {
+            tracing::error!(node_id, "storing filter state failed: {e}");
+        }
     }
 
     /// Wrap output in the right delivery: inline for small, DataRef for large.
@@ -129,6 +165,17 @@ impl Worker {
     /// In **Forward** mode: executes the compiled plan directly.
     pub fn execute_plan(&mut self, plan: &SerializedPlan) -> PlanResult {
         let start = Instant::now();
+
+        // Before anything else. A plan this build only partly understands
+        // must be refused, not executed with the parts it recognised.
+        if let Err(message) = plan.check_version() {
+            tracing::error!("{message}");
+            return PlanResult::Failed {
+                error: message,
+                duration_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+
         let _span = tracing::info_span!(
             "execute_plan",
             plan_id = %plan.plan_id,
@@ -154,17 +201,24 @@ impl Worker {
 
         // Create/reuse venv if there are pip requirements, otherwise use system python
         let python_path = if all_reqs.is_empty() {
-            "python3".to_string()
+            self.python.clone()
         } else {
             let reqs_str = all_reqs.join("\n");
-            match self.env_manager.ensure_env(&plan.plan_id, &reqs_str) {
+            // Keyed by the requirements, not by the plan. A plan id is a
+            // fresh timestamp, so keying on it meant every plan built its
+            // own venv and pip-installed into it — never reusing anything,
+            // and never cleaning up. Plans that need the same packages now
+            // share one environment, which is what the lockfile inside it
+            // was already written to support.
+            let env_id = crate::env_manager::EnvManager::env_id_for(&reqs_str);
+            match self.env_manager.ensure_env(&env_id, &reqs_str) {
                 Ok(path) => {
-                    tracing::info!("Using venv for plan {}: {:?}", plan.plan_id, path);
+                    tracing::info!("Using venv {env_id} for plan {}: {:?}", plan.plan_id, path);
                     path.to_string_lossy().to_string()
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create venv, falling back to system python: {e}");
-                    "python3".to_string()
+                    self.python.clone()
                 }
             }
         };
@@ -189,12 +243,24 @@ impl Worker {
                 filter_specs.len()
             );
 
-            let mut proc = crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
+            let proc = crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
                 .map_err(|e| {
-                    tracing::error!("Failed to spawn Python process: {e}");
+                    // Not `.expect`: this runs on a tokio worker thread, so
+                    // a panic here took the whole worker down — every other
+                    // pipeline it was holding with it — because one plan
+                    // named an interpreter that would not start.
+                    tracing::error!(python = %python_path, "failed to spawn Python: {e}");
                     e
-                })
-                .expect("PythonProcess spawn failed");
+                });
+            let mut proc = match proc {
+                Ok(p) => p,
+                Err(e) => {
+                    return PlanResult::Failed {
+                        error: format!("could not start `{python_path}`: {e}"),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+            };
 
             // Load trained states from previous epochs (SET_STATE)
             for sf in &plan.filters {
@@ -221,14 +287,23 @@ impl Worker {
             let process = Arc::new(std::sync::Mutex::new(proc));
 
             for sf in &plan.filters {
+                let config_hash = sf.config_hash.clone().unwrap_or_else(|| {
+                    crate::python_process::SubprocessFilter::fallback_config_hash(
+                        &sf.node_id,
+                        &sf.pickled_filter,
+                    )
+                });
                 let filter = Box::new(crate::python_process::SubprocessFilter::new(
                     process.clone(),
                     sf.node_id.clone(),
                     sf.trainable,
+                    config_hash,
                 ));
-                self.filters.register(&sf.node_id, filter);
-                if let Some(state) = &sf.state {
-                    self.filters.set_state(&sf.node_id, state.clone());
+                self.catalog.register(&sf.node_id, filter);
+                if let Some(state) = &sf.state
+                    && let Err(e) = self.catalog.try_set_state(&sf.node_id, state.clone())
+                {
+                    tracing::error!(node_id = %sf.node_id, "storing filter state failed: {e}");
                 }
             }
 
@@ -266,7 +341,7 @@ impl Worker {
                         .iter()
                         .map(|s| s.to_string())
                         .collect::<Vec<_>>();
-                    if let Some(filter) = self.filters.get(&node_ids[0]) {
+                    if let Some(filter) = self.catalog.get(&node_ids[0]) {
                         if let Some(sf) = filter
                             .as_any()
                             .downcast_ref::<crate::python_process::SubprocessFilter>()
@@ -275,7 +350,9 @@ impl Worker {
                                 .process
                                 .lock()
                                 .map_err(|e| {
-                                    somatize_core::error::SomaError::Other(format!("mutex: {e}"))
+                                    crate::error::WorkerError::Concurrency(format!(
+                                        "process mutex poisoned: {e}"
+                                    ))
                                 })
                                 .and_then(|mut proc| {
                                     proc.batched_fit(&node_ids, &x, y.as_ref(), *bs)
@@ -283,11 +360,18 @@ impl Worker {
                             match result {
                                 Ok((output, states)) => {
                                     for (id, state) in &states {
-                                        self.filters.set_state(id, state.clone());
+                                        if let Err(e) =
+                                            self.catalog.try_set_state(id, state.clone())
+                                        {
+                                            tracing::error!(
+                                                node_id = %id,
+                                                "storing filter state failed: {e}"
+                                            );
+                                        }
                                     }
                                     Ok((output, states))
                                 }
-                                Err(e) => Err(e),
+                                Err(e) => Err(e.into()),
                             }
                         } else {
                             Err(somatize_core::error::SomaError::Other(
@@ -300,21 +384,33 @@ impl Worker {
                         ))
                     }
                 } else {
+                    let run_id = format!("worker_fit_{}", plan.plan_id);
+                    // `linear`, explicitly: a worker receives a serialized
+                    // plan and no graph, so it has no topology to consult.
+                    // Correct for the pipelines that get dispatched, and
+                    // stated here rather than assumed inside the runner.
+                    let ctx = somatize_runtime::runner::RunContext::linear(
+                        &self.catalog,
+                        self.cache.as_ref(),
+                        &self.event_bus,
+                        &run_id,
+                        &plan.plan,
+                    );
                     runner
-                        .fit(
-                            &plan.plan,
-                            &self.filters,
-                            self.cache.as_ref(),
-                            &self.event_bus,
-                            &x,
-                            y.as_ref(),
-                        )
+                        .fit(&plan.plan, &ctx, &x, y.as_ref())
                         .map(|(output, all_outputs)| {
                             // Extract trained states (prefixed __state_) and store in library
                             let mut trained_states = std::collections::HashMap::new();
                             for (key, value) in &all_outputs {
-                                if let Some(node_id) = key.strip_prefix("__state_") {
-                                    self.filters.set_state(node_id, value.clone());
+                                if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
+                                    if let Err(e) =
+                                        self.catalog.try_set_state(node_id, value.clone())
+                                    {
+                                        tracing::error!(
+                                            node_id,
+                                            "storing filter state failed: {e}"
+                                        );
+                                    }
                                     trained_states.insert(node_id.to_string(), value.clone());
                                 }
                             }
@@ -322,15 +418,19 @@ impl Worker {
                         })
                 }
             }
-            ExecutionMode::Forward => runner
-                .forward(
-                    &plan.plan,
-                    &self.filters,
+            ExecutionMode::Forward => {
+                let run_id = format!("worker_forward_{}", plan.plan_id);
+                let ctx = somatize_runtime::runner::RunContext::linear(
+                    &self.catalog,
                     self.cache.as_ref(),
                     &self.event_bus,
-                    &x,
-                )
-                .map(|output| (output, std::collections::HashMap::new())),
+                    &run_id,
+                    &plan.plan,
+                );
+                runner
+                    .forward(&plan.plan, &ctx, &x)
+                    .map(|output| (output, std::collections::HashMap::new()))
+            }
         };
 
         let elapsed = start.elapsed().as_millis() as u64;
@@ -373,9 +473,9 @@ impl Worker {
         let fitted: Vec<FittedFilter> = node_ids
             .iter()
             .filter_map(|id| {
-                let filter = self.filters.get(id)?;
+                let filter = self.catalog.get(id)?;
                 let state = self
-                    .filters
+                    .catalog
                     .get_state(id)
                     .unwrap_or_else(|| Arc::new(Value::Empty));
                 Some(FittedFilter {
@@ -494,15 +594,12 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -541,6 +638,7 @@ mod tests {
         worker.register_filter("doubler", Box::new(TestDoubler));
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_001".into(),
             plan: ExecutionPlan::Execute {
                 node_id: "doubler".into(),
@@ -579,6 +677,7 @@ mod tests {
         // Don't register any filters
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_002".into(),
             plan: ExecutionPlan::Execute {
                 node_id: "nonexistent".into(),
@@ -623,6 +722,7 @@ mod tests {
         worker.register_filter("d2", Box::new(TestDoubler));
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_003".into(),
             plan: ExecutionPlan::Sequence(vec![
                 ExecutionPlan::Execute {
@@ -660,6 +760,7 @@ mod tests {
         let mut rx = worker.subscribe();
 
         let plan = SerializedPlan {
+            protocol_version: PROTOCOL_VERSION,
             plan_id: "p_004".into(),
             plan: ExecutionPlan::Execute {
                 node_id: "doubler".into(),

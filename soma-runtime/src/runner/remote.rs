@@ -4,28 +4,32 @@
 //! RemoteRunner implements Runner by serializing fit/forward calls and sending them
 //! through the transport layer.
 
-use super::Runner;
-use crate::EventBus;
-use crate::filter_library::FilterLibrary;
+use super::{RunContext, Runner};
+use crate::node_catalog::NodeCatalog;
 
+use crate::executor::RunMode;
 use somatize_compiler::ExecutionPlan;
-use somatize_core::cache::CacheStore;
 use somatize_core::error::Result;
 use somatize_core::value::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Abstraction for communicating with remote workers.
 /// Implemented by WsTransport (WebSocket), but could be HTTP, gRPC, etc.
 pub trait Transport: Send + Sync {
     /// Send a plan for execution and receive the output + trained states.
+    ///
+    /// `mode` says what to do with the nodes, and carries the labels when
+    /// there are any. It replaced a `fit_mode: bool` sitting beside an
+    /// `y: Option<&Value>` — a flag selecting between two operations with
+    /// differently shaped results, and a parameter that meant nothing
+    /// unless the flag was set. It is the same [`RunMode`] the local
+    /// executor reads, so the two paths cannot disagree about what a fit is.
     fn execute(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
+        filters: &NodeCatalog,
         input: &Value,
-        y: Option<&Value>,
-        fit_mode: bool,
+        mode: &RunMode,
     ) -> Result<(Value, HashMap<String, Value>)>;
 
     /// Request trained states from the remote worker.
@@ -46,8 +50,8 @@ pub trait Transport: Send + Sync {
             node_id: node_id.to_string(),
         };
         let input_val = input.cloned().unwrap_or(Value::Empty);
-        let filters = crate::filter_library::FilterLibrary::new();
-        let (output, _) = self.execute(&plan, &filters, &input_val, None, false)?;
+        let filters = crate::node_catalog::NodeCatalog::new();
+        let (output, _) = self.execute(&plan, &filters, &input_val, &RunMode::Forward)?;
         Ok(output)
     }
 }
@@ -74,24 +78,18 @@ impl Runner for RemoteRunner {
     fn fit(
         &self,
         plan: &ExecutionPlan,
-        filters: &FilterLibrary,
-        _cache: &dyn CacheStore,
-        _event_bus: &Arc<EventBus>,
+        ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
-        self.transport.execute(plan, filters, input, y, true)
+        self.transport
+            .execute(plan, ctx.catalog, input, &RunMode::Fit { y: y.cloned() })
     }
 
-    fn forward(
-        &self,
-        plan: &ExecutionPlan,
-        filters: &FilterLibrary,
-        _cache: &dyn CacheStore,
-        _event_bus: &Arc<EventBus>,
-        input: &Value,
-    ) -> Result<Value> {
-        let (output, _states) = self.transport.execute(plan, filters, input, None, false)?;
+    fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {
+        let (output, _states) =
+            self.transport
+                .execute(plan, ctx.catalog, input, &RunMode::Forward)?;
         Ok(output)
     }
 }

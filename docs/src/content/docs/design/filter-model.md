@@ -110,7 +110,7 @@ impl Graph {
 ### Stateless Filter (no training needed)
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Stateless", cacheable = true, differentiable = true)]
 struct ReLU;
 
@@ -130,7 +130,7 @@ impl Filter for ReLU {
 ### Trainable Filter
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Trainable", cacheable = true, differentiable = true)]
 struct StandardScaler {
     #[soma(search(choices = [true, false]))]
@@ -165,7 +165,7 @@ impl Filter for StandardScaler {
 ### Trainable Model with Intermediate Metrics
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Trainable", cacheable = true, differentiable = true)]
 struct LinearClassifier {
     #[soma(search(low = 1e-5, high = 1e-1, scale = "log"))]
@@ -219,7 +219,7 @@ impl Filter for LinearClassifier {
 ### Opaque Filter (non-differentiable)
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(kind = "Opaque", cacheable = true)]
 struct DecisionTree {
     #[soma(search(low = 2, high = 50))]
@@ -247,7 +247,7 @@ impl Filter for DecisionTree {
 
 ## The Derive Macro
 
-`#[derive(Filter)]` generates:
+`#[derive(SomaFilter)]` generates:
 
 1. **`Searchable` impl**: Collects `#[soma(search)]` annotations into a `SearchSpace`
 2. **`Serialize`/`Deserialize`**: For remote execution
@@ -263,7 +263,7 @@ impl Filter for DecisionTree {
 - The hash is deterministic: same config always produces the same key
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 struct MyFilter {
     scale: f64,          // ✓ included in config_hash
     method: String,      // ✓ included in config_hash
@@ -296,3 +296,29 @@ The Python `Filter` base class uses metaclasses to:
 - Register `search()` descriptors as `SearchDimension` entries
 - Generate `config_hash()` from `__init__` parameters
 - Serialize the filter for remote execution via pickle + config JSON
+
+## The other kind of node: Step
+
+A `Filter` is a function: same config, same state, same input, same
+output — which is what makes content-addressed caching sound. A
+[`Step`](/soma/design/agentic/) is not a function. It calls models, reads
+the world, decides what to run next, and may pause for a person. Forcing
+that into `forward()` would either make the trait async or make caching
+lie, so it gets its own shape: `poll()` advances one turn and returns a
+`Transition` describing what it needs.
+
+The two are **peer node kinds in the same graph**, registered in the same
+`NodeCatalog` and executed through the same single site (`run_node`).
+What the machinery around them needs to know collapses into one metadata
+type, `NodeMeta` (`soma-core/src/node.rs`): input resolution, panic
+containment, the start/complete/fail events and the cache guard all read
+`NodeMeta`, not "which kind is this". `From<StepMeta>` sets
+`cacheable: false, deterministic: false`, so the difference survives as
+*data* the executor's existing guard reads — there is no `if is_step`
+code path.
+
+The one thing a step never does is **output-cache**: its output is not a
+function of its input, the model is on the other end of it. Its *effects*
+are journaled instead — recorded once, replayed on resume — which is the
+durability mechanism that actually fits an effectful node. See
+[Caching](/soma/design/caching/#the-effect-journal) for the keying.

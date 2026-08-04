@@ -12,11 +12,19 @@ somatize-core = { workspace = true }
 somatize-compiler = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+# Only `tokio::sync::broadcast`, for the event bus. Inheriting the
+# workspace's `features = ["full"]` pulled the multi-threaded runtime,
+# net, fs, process and signal into every dependent for one channel type.
+tokio = { version = "1", default-features = false, features = ["sync"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# `#[tokio::test]` needs a runtime and the macro; the library does not.
+tokio = { version = "1", features = ["rt", "macros", "time"] }
 tempfile = "3"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }

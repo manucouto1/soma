@@ -53,8 +53,17 @@ Each worker runs a `soma-worker` daemon that:
 pub struct Worker {
     pub id: WorkerId,
     pub capabilities: Capabilities,
-    pub runtime: SomaRuntime,
-    pub memory: SomaMemory,
+    event_bus: Arc<EventBus>,
+    cache: Arc<dyn CacheStore>,
+    /// The node catalog — every implementation a plan may name, filters
+    /// and steps alike. (The field keeps its pre-refactor name.)
+    filters: NodeCatalog,
+    /// Optional persistent DataStore (S3, Zarr, …), configured by the user.
+    data_store: Option<Arc<dyn DataStore>>,
+    /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
+    temp_store: Arc<LocalDataStore>,
+    /// Creates venvs carrying the filters' dependencies.
+    env_manager: EnvManager,
 }
 
 pub struct Capabilities {
@@ -164,7 +173,7 @@ pub enum RemoteTarget {
 Filters declare their preferred distribution:
 
 ```rust
-#[derive(Filter)]
+#[derive(SomaFilter)]
 #[soma(distribution = "Remote(Tag(\"gpu\"))")]
 struct GpuTrainer {
     // This filter should run on a GPU worker
@@ -189,6 +198,12 @@ Sequence([
 ```
 
 ## Lab Configuration
+
+:::caution[Partly implemented]
+`soma.connect(...)` and `lab.workers()` work. `lab.run(study, data=...)` does
+not exist — today you drive a study locally with `study.run(...)` and route
+individual nodes to workers with `target=`, as shown above.
+:::
 
 Labs configure their workers and shared resources:
 

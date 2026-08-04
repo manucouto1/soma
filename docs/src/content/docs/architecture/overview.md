@@ -15,7 +15,7 @@ Soma is organized in three conceptual layers, each with clear responsibilities:
 ├─────────────────────────────────────────────────────┤
 │  Layer 2: COMPILER + PLANNER                        │
 │  Graph → ExecutionPlan                              │
-│  Cache resolution, gradient flow analysis            │
+│  Validation, gradient flow analysis, distribution     │
 │  Cost estimation, distribution planning              │
 ├─────────────────────────────────────────────────────┤
 │  Layer 1: RUNTIME                                   │
@@ -31,7 +31,7 @@ The execution engine. Receives a compiled `ExecutionPlan` and executes it:
 
 - **Tree-walk executor**: Recursively walks the plan tree (Sequence, Parallel, Loop, Branch)
 - **Event bus**: Broadcasts structured events via async channels
-- **Tiered cache**: Memory / RocksDB / S3 with automatic promotion and eviction
+- **Tiered cache**: in-memory LRU over a filesystem action store (BLAKE3 CAS), with promotion and value-density eviction
 - **Optimization engine**: Runs Studies with configurable samplers and pruners
 - **Stream support**: Processes chunks with configurable filter semantics
 
@@ -40,7 +40,7 @@ The execution engine. Receives a compiled `ExecutionPlan` and executes it:
 The intelligence layer. Converts a user-defined `Graph` into an optimized `ExecutionPlan`:
 
 - **Topological analysis**: Detects parallelizable branches, barriers, and dependencies
-- **Cache resolution**: Computes cache keys and replaces cached nodes before execution
+- **Validation**: Cycle detection and schema compatibility between connected filters
 - **Gradient flow verification**: Warns when non-differentiable filters break the gradient chain
 - **Schema validation**: Ensures type compatibility between connected filters
 - **Cost estimation**: Queries cache metadata to estimate execution time
@@ -62,7 +62,7 @@ User defines Graph (code or visual)
         ▼
 ┌─── Compiler ───┐
 │  Validate       │
-│  Resolve cache  │
+│  Plan the DAG   │
 │  Check grads    │
 │  Build plan     │
 └────────┬────────┘
@@ -82,7 +82,7 @@ User defines Graph (code or visual)
          ▼
 ┌─── CacheStore ─┐
 │  Memory   <1ms  │
-│  RocksDB  ~1ms  │
+│   files   ~1ms  │
 │  S3       ~50ms │
 └─────────────────┘
 ```
@@ -106,9 +106,17 @@ The runtime compiles and executes the graph in the current process. Cache is loc
 ```python
 g = Graph.somatize(Scaler() >> Model())
 g.add_worker("ws://gpu-0:8080", token="sk-xxx")
-g.set_strategy(DataParallel(num_replicas=2))
 g.fit(train_data)
 ```
+
+:::caution[TrainingStrategy is Rust-side today]
+`TrainingStrategy` (DataParallel, ModelParallel, Federated,
+PopulationBased) is a graph attribute set through the Rust API
+(`Graph::set_strategy`). It is **not exposed through the Python
+bindings yet** — from Python, distribution is configured with
+`add_worker` / `set_coordinator`, and the scheduler places the plan
+across the registered workers.
+:::
 
 The graph is compiled locally, the plan is sent to workers, executed remotely, and results returned. Cache can be shared (S3) across workers.
 
@@ -152,7 +160,6 @@ enum ExecutionPlan {
     Sequence(Vec<ExecutionPlan>),
     Parallel(Vec<ExecutionPlan>),
     Execute { id: NodeId, process: Arc<dyn Filter> },
-    Cached { id: NodeId, key: CacheKey },
     Loop { .. },
     Branch { .. },
     Remote { target: RemoteTarget, plan: Box<ExecutionPlan> },

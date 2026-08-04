@@ -4,9 +4,10 @@
 //! and executes fit/forward commands via stdin/stdout JSON Lines.
 //! The GIL is completely isolated from the Rust process — no segfaults.
 
+use crate::error::{Result, WorkerError};
 use base64::engine::{Engine, general_purpose::STANDARD};
 use somatize_core::cache::CacheKey;
-use somatize_core::error::{Result, SomaError};
+use somatize_core::error::SomaError;
 use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::value::Value;
 use std::collections::HashMap;
@@ -43,6 +44,8 @@ def _decode(obj):
             t, d = obj["type"], obj["data"]
             if t == "Tensor":
                 return d.get("values", [])
+            if t == "Text":
+                return d
             if t == "Json":
                 return d
             if t == "Empty":
@@ -343,19 +346,19 @@ impl PythonProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // Python stderr → worker stderr (for logs/tracing)
             .spawn()
-            .map_err(|e| SomaError::Other(format!("failed to spawn python: {e}")))?;
+            .map_err(|e| WorkerError::Python(format!("failed to spawn python: {e}")))?;
 
         let stdin = BufWriter::new(
             child
                 .stdin
                 .take()
-                .ok_or_else(|| SomaError::Other("no stdin".into()))?,
+                .ok_or_else(|| WorkerError::Python("no stdin".into()))?,
         );
         let stdout = BufReader::new(
             child
                 .stdout
                 .take()
-                .ok_or_else(|| SomaError::Other("no stdout".into()))?,
+                .ok_or_else(|| WorkerError::Python("no stdout".into()))?,
         );
 
         let node_ids: Vec<String> = filters.iter().map(|(id, _, _)| id.clone()).collect();
@@ -389,7 +392,7 @@ impl PythonProcess {
                 .get("error")
                 .and_then(|e| e.as_str())
                 .unwrap_or("unknown error");
-            return Err(SomaError::Other(format!("LOAD failed: {error}")));
+            return Err(WorkerError::Python(format!("LOAD failed: {error}")));
         }
 
         Ok(proc)
@@ -412,30 +415,30 @@ impl PythonProcess {
         let start = std::time::Instant::now();
 
         let line = serde_json::to_string(&cmd)
-            .map_err(|e| SomaError::Other(format!("serialize cmd: {e}")))?;
+            .map_err(|e| WorkerError::Encoding(format!("serialize cmd: {e}")))?;
 
         writeln!(self.stdin, "{line}")
-            .map_err(|e| SomaError::Other(format!("write to python stdin: {e}")))?;
+            .map_err(|e| WorkerError::Python(format!("write to python stdin: {e}")))?;
         self.stdin
             .flush()
-            .map_err(|e| SomaError::Other(format!("flush stdin: {e}")))?;
+            .map_err(|e| WorkerError::Python(format!("flush stdin: {e}")))?;
 
         let mut response = String::new();
         self.stdout
             .read_line(&mut response)
-            .map_err(|e| SomaError::Other(format!("read from python stdout: {e}")))?;
+            .map_err(|e| WorkerError::Python(format!("read from python stdout: {e}")))?;
 
         let duration_ms = start.elapsed().as_millis();
 
         if response.is_empty() {
             tracing::error!(action = %action, "Python process closed stdout (crashed?)");
-            return Err(SomaError::Other(
+            return Err(WorkerError::Python(
                 "python process closed stdout (crashed?)".into(),
             ));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&response).map_err(|e| {
-            SomaError::Other(format!("parse python response: {e}\nraw: {response}"))
+            WorkerError::Python(format!("parse python response: {e}\nraw: {response}"))
         })?;
 
         let ok = parsed.get("ok") == Some(&serde_json::Value::Bool(true));
@@ -464,7 +467,7 @@ impl PythonProcess {
                 .and_then(|e| e.as_str())
                 .unwrap_or("unknown error");
             let traceback = resp.get("traceback").and_then(|t| t.as_str()).unwrap_or("");
-            return Err(SomaError::Other(format!(
+            return Err(WorkerError::Python(format!(
                 "Python error: {error}\n{traceback}"
             )));
         }
@@ -501,6 +504,17 @@ impl PythonProcess {
                     return Ok(Value::tensor(flat, vec![rows, cols]));
                 }
             }
+        }
+        // A bare string from Python becomes text unless it parses as JSON —
+        // byte-for-byte the rule `py_to_value` applies in-process. The two
+        // paths must agree: the same filter run locally and on a worker has
+        // to produce the same `Value`, or its cache key changes with where
+        // it ran.
+        if let Some(s) = v.as_str() {
+            return Ok(match serde_json::from_str(s) {
+                Ok(parsed) => Value::json(parsed),
+                Err(_) => Value::text(s),
+            });
         }
         Ok(Value::json(v.clone()))
     }
@@ -558,7 +572,7 @@ impl PythonProcess {
                 if let Some(s) = b64.as_str() {
                     let bytes = STANDARD
                         .decode(s)
-                        .map_err(|e| SomaError::Other(format!("decode state: {e}")))?;
+                        .map_err(|e| WorkerError::Encoding(format!("decode state: {e}")))?;
                     states.insert(id.clone(), Value::bytes(bytes));
                 }
             }
@@ -612,7 +626,7 @@ impl PythonProcess {
         if let Some(b64) = resp.get("state_b64").and_then(|s| s.as_str()) {
             let bytes = STANDARD
                 .decode(b64)
-                .map_err(|e| SomaError::Other(format!("decode state: {e}")))?;
+                .map_err(|e| WorkerError::Encoding(format!("decode state: {e}")))?;
             Ok(Value::bytes(bytes))
         } else {
             Self::response_to_value(&resp)
@@ -622,13 +636,17 @@ impl PythonProcess {
     pub fn set_state(&mut self, node_id: &str, state: &Value) -> Result<()> {
         let b64 = match state {
             Value::Bytes(b) => STANDARD.encode(b.as_slice()),
-            _ => return Err(SomaError::Other("set_state expects Value::Bytes".into())),
+            _ => {
+                return Err(WorkerError::Encoding(
+                    "set_state expects Value::Bytes".into(),
+                ));
+            }
         };
         let resp = self
             .send(serde_json::json!({"cmd": "SET_STATE", "node_id": node_id, "state_b64": b64}))?;
         if resp.get("ok") != Some(&serde_json::Value::Bool(true)) {
             let error = resp.get("error").and_then(|e| e.as_str()).unwrap_or("?");
-            return Err(SomaError::Other(format!("set_state: {error}")));
+            return Err(WorkerError::Python(format!("set_state: {error}")));
         }
         Ok(())
     }
@@ -638,7 +656,7 @@ impl PythonProcess {
         if let Some(b64) = resp.get("gradients_b64").and_then(|s| s.as_str()) {
             let bytes = STANDARD
                 .decode(b64)
-                .map_err(|e| SomaError::Other(format!("decode gradients: {e}")))?;
+                .map_err(|e| WorkerError::Encoding(format!("decode gradients: {e}")))?;
             Ok(Value::bytes(bytes))
         } else {
             Ok(Value::Empty)
@@ -649,7 +667,7 @@ impl PythonProcess {
         let b64 = match gradients {
             Value::Bytes(b) => STANDARD.encode(b.as_slice()),
             _ => {
-                return Err(SomaError::Other(
+                return Err(WorkerError::Python(
                     "apply_gradients expects Value::Bytes".into(),
                 ));
             }
@@ -680,40 +698,66 @@ impl Drop for PythonProcess {
 // ── SubprocessFilter: implements Filter trait via PythonProcess ──
 
 /// A filter that delegates to a shared PythonProcess via stdin/stdout.
-/// Multiple SubprocessFilters can share the same process (Arc<Mutex>).
+/// Multiple SubprocessFilters can share the same process (`Arc<Mutex>`).
 pub struct SubprocessFilter {
     pub(crate) process: Arc<Mutex<PythonProcess>>,
     node_id: String,
     trainable: bool,
+    /// Real config hash — must reflect the filter's configuration, never
+    /// just the node id (two configs under the same node id must not
+    /// share cache entries).
+    config_hash: CacheKey,
 }
 
 impl SubprocessFilter {
-    pub fn new(process: Arc<Mutex<PythonProcess>>, node_id: String, trainable: bool) -> Self {
+    pub fn new(
+        process: Arc<Mutex<PythonProcess>>,
+        node_id: String,
+        trainable: bool,
+        config_hash: CacheKey,
+    ) -> Self {
         Self {
             process,
             node_id,
             trainable,
+            config_hash,
         }
+    }
+
+    /// Fallback identity for payloads that carry no explicit config hash:
+    /// hash the pickled filter bytes — any config change changes the
+    /// pickle, so stale cache hits are still impossible (the pickle is
+    /// merely less stable across environments than a real config hash).
+    pub fn fallback_config_hash(node_id: &str, pickled_filter: &[u8]) -> CacheKey {
+        CacheKey::from_parts(&[b"subprocess-filter", node_id.as_bytes(), pickled_filter])
     }
 }
 
+/// The seam.
+///
+/// `Filter` is a `soma-core` trait, so these three return `SomaError`
+/// while everything behind them is typed as a [`WorkerError`]. A subprocess
+/// that died and a payload that would not decode stay distinguishable
+/// right up to here, which is as far as the shared type can carry them.
 impl Filter for SubprocessFilter {
     fn config_hash(&self) -> CacheKey {
-        CacheKey::from_parts(&[self.node_id.as_bytes()])
+        self.config_hash.clone()
     }
 
-    fn fit(&self, x: &Value, y: Option<&Value>) -> Result<Value> {
-        self.process
+    fn fit(&self, x: &Value, y: Option<&Value>) -> somatize_core::error::Result<Value> {
+        Ok(self
+            .process
             .lock()
-            .map_err(|e| SomaError::Other(format!("process mutex poisoned: {e}")))?
-            .fit(&self.node_id, x, y)
+            .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))?
+            .fit(&self.node_id, x, y)?)
     }
 
-    fn forward(&self, x: &Value, state: &Value) -> Result<Value> {
-        self.process
+    fn forward(&self, x: &Value, state: &Value) -> somatize_core::error::Result<Value> {
+        Ok(self
+            .process
             .lock()
-            .map_err(|e| SomaError::Other(format!("process mutex poisoned: {e}")))?
-            .forward(&self.node_id, x, state)
+            .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))?
+            .forward(&self.node_id, x, state)?)
     }
 
     fn meta(&self) -> FilterMeta {
@@ -726,6 +770,7 @@ impl Filter for SubprocessFilter {
             },
             cacheable: true,
             differentiable: self.trainable,
+            deterministic: true,
             stream_mode: StreamMode::FixedState,
             distribution: somatize_core::filter::Distribution::Local,
             input_schema: None,
@@ -733,16 +778,12 @@ impl Filter for SubprocessFilter {
         }
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn composite_fit(
         &self,
         peers: &[(String, std::sync::Arc<dyn somatize_core::filter::Filter>)],
         x: &Value,
         y: Option<&Value>,
-    ) -> Option<Result<(Value, HashMap<String, Value>)>> {
+    ) -> Option<somatize_core::error::Result<(Value, HashMap<String, Value>)>> {
         // Subprocess transport serialises the node_ids only — other filters
         // aren't shipped; the worker already has them deserialised from the
         // preceding prepare step.
@@ -751,8 +792,9 @@ impl Filter for SubprocessFilter {
         Some(
             self.process
                 .lock()
-                .map_err(|e| SomaError::Other(format!("process mutex poisoned: {e}")))
-                .and_then(|mut proc| proc.composite_fit(&node_ids, x, y)),
+                .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))
+                .and_then(|mut proc| proc.composite_fit(&node_ids, x, y))
+                .map_err(SomaError::from),
         )
     }
 }

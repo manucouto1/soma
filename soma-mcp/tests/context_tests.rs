@@ -12,7 +12,8 @@ fn setup_context() -> (SomaContext, tempfile::TempDir) {
         filter_dir.join("scaler.py"),
         "from soma import Filter\n\nclass Scaler(Filter):\n    def fit(self, x, y=None):\n        return {}\n    def forward(self, x, state):\n        return x\n",
     ).unwrap();
-    let ctx = SomaContext::new(dir.path());
+    // Hermetic: never read the developer's real SOMA_KB_PATH.
+    let ctx = SomaContext::with_env_override(dir.path(), None);
     (ctx, dir)
 }
 

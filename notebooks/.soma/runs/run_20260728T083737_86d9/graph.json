@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {
+      "id": "encoder",
+      "label": "encoder",
+      "kind": {
+        "type": "Filter",
+        "filter_name": "Encoder"
+      }
+    }
+  ],
+  "edges": []
+}

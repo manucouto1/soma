@@ -137,6 +137,21 @@ impl CacheStore for MemoryCache {
     }
 
     fn put(&self, key: &CacheKey, value: &Value) -> Result<()> {
+        self.put_with_origin(
+            key,
+            value,
+            &Origin::Ingested {
+                source: "unknown".into(),
+            },
+        )
+    }
+
+    /// Overridden because the trait's default drops the origin, and
+    /// `MemoryCache` is the *default* store — so unless it records
+    /// provenance, most entries in most runs have none. It used to write
+    /// `Computed { node_id: "", run_id: "" }` for everything, which reads
+    /// as provenance while carrying none.
+    fn put_with_origin(&self, key: &CacheKey, value: &Value, origin: &Origin) -> Result<()> {
         let size = estimate_size(value);
         let now = Utc::now();
 
@@ -151,10 +166,7 @@ impl CacheStore for MemoryCache {
                     created_at: now,
                     last_accessed: now,
                     ttl: None,
-                    origin: Origin::Computed {
-                        node_id: String::new(),
-                        run_id: String::new(),
-                    },
+                    origin: origin.clone(),
                 },
                 size,
             },
@@ -195,6 +207,7 @@ fn estimate_size(value: &Value) -> usize {
         Value::Tensor { values, shape } => {
             values.len() * std::mem::size_of::<f64>() + shape.len() * std::mem::size_of::<usize>()
         }
+        Value::Text(s) => s.len(),
         Value::Json(v) => v.to_string().len(),
         Value::Bytes(b) | Value::Object(b) => b.len(),
         Value::Empty => 0,
@@ -206,6 +219,36 @@ fn estimate_size(value: &Value) -> usize {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// `MemoryCache` is the default store, and it inherited the trait's
+    /// origin-dropping default, writing `Computed { node_id: "", run_id: "" }`
+    /// for every entry — provenance-shaped, with no provenance in it.
+    #[test]
+    fn provenance_survives_a_put() {
+        let cache = MemoryCache::default();
+        let key = CacheKey::hash_data(b"provenance");
+
+        cache
+            .put_computed(
+                &key,
+                &Value::tensor(vec![1.0], vec![1]),
+                &Origin::Computed {
+                    node_id: "scaler".into(),
+                    run_id: "run-7".into(),
+                },
+                std::time::Duration::from_millis(3),
+                true,
+            )
+            .unwrap();
+
+        match cache.metadata(&key).unwrap().unwrap().origin {
+            Origin::Computed { node_id, run_id } => {
+                assert_eq!(node_id, "scaler");
+                assert_eq!(run_id, "run-7");
+            }
+            other => panic!("expected a Computed origin, got {other:?}"),
+        }
+    }
 
     #[test]
     fn put_and_get() {

@@ -1,20 +1,20 @@
 //! Graph session — the primary orchestrator for Graph → Compile → Execute.
 //!
-//! [`GraphSession`] binds a [`Graph`] with its [`FilterLibrary`], cache,
+//! [`GraphSession`] binds a [`Graph`] with its [`NodeCatalog`], cache,
 //! event bus, and optional distributed components into a single object
 //! that can compile, fit, and execute.
 
 use crate::cache::MemoryCache;
 use crate::event_bus::EventBus;
 use crate::executor::{self, Context, GraphInfo};
-use crate::filter_library::FilterLibrary;
+use crate::node_catalog::NodeCatalog;
 use crate::runner::Runner;
 use crate::runner::Transport;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
-use somatize_core::filter::FilterKind;
+use somatize_core::fingerprint::ArchitectureFingerprint;
 use somatize_core::graph::Graph;
 use somatize_core::store::{DataRef, DataStore};
 use somatize_core::util::timestamp_id;
@@ -22,10 +22,10 @@ use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The primary orchestrator: Graph + filters + cache + events.
+/// The primary orchestrator: Graph + catalog + cache + events.
 ///
 /// ```ignore
-/// let mut lib = FilterLibrary::new();
+/// let mut lib = NodeCatalog::new();
 /// lib.register("scaler", Box::new(MyScaler::new()));
 /// lib.register("model", Box::new(MyModel::new()));
 ///
@@ -35,23 +35,28 @@ use std::sync::Arc;
 /// ```
 pub struct GraphSession {
     graph: Graph,
-    library: FilterLibrary,
+    catalog: NodeCatalog,
     cache: Arc<dyn CacheStore>,
     event_bus: Arc<EventBus>,
     data_store: Option<Arc<dyn DataStore>>,
     transport: Option<Arc<dyn Transport>>,
+    /// Performs and journals step effects. Only needed when the graph
+    /// contains a step; a purely computational graph leaves it unset and
+    /// keeps exactly the old behaviour.
+    driver: Option<crate::effects::EffectDriver>,
     fitted: bool,
 }
 
 impl GraphSession {
-    pub fn new(graph: Graph, library: FilterLibrary) -> Self {
+    pub fn new(graph: Graph, catalog: NodeCatalog) -> Self {
         Self {
             graph,
-            library,
+            catalog,
             cache: Arc::new(MemoryCache::default()),
             event_bus: Arc::new(EventBus::new(256)),
             data_store: None,
             transport: None,
+            driver: None,
             fitted: false,
         }
     }
@@ -76,25 +81,48 @@ impl GraphSession {
         self
     }
 
+    /// Attach the effect driver a graph containing steps needs.
+    ///
+    /// The session clones the driver per run and hands it the catalog *at
+    /// that moment*, so filters or steps registered through
+    /// [`Self::catalog_mut`] after this call still count. Without a driver,
+    /// executing a step keeps failing with the executor's own explanation.
+    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+        self.driver = Some(driver);
+        self
+    }
+
+    /// The stored driver, armed with the catalog as it stands right now.
+    fn run_driver(&self) -> Option<crate::effects::EffectDriver> {
+        self.driver
+            .as_ref()
+            .map(|d| d.clone().with_catalog(Arc::new(self.catalog.clone())))
+    }
+
     // ── Core operations ──
 
     /// Compile the graph and return diagnostics without executing.
     pub fn compile(&self, mode: CompileMode) -> Result<CompileResult> {
-        compile(&self.graph, &self.library, mode, Some(self.cache.as_ref()))
+        compile(&self.graph, &self.catalog, mode, Some(self.cache.as_ref()))
     }
 
     /// Compile and execute the graph, returning all node outputs.
+    ///
+    /// Emits a `RunStarted`/`RunCompleted` (or `RunFailed`) bracket
+    /// around the node events so readers can compute total duration
+    /// and group the run.
     pub fn run(&mut self, mode: CompileMode) -> Result<HashMap<String, Value>> {
         let CompileResult { plan, diagnostics } =
-            compile(&self.graph, &self.library, mode, Some(self.cache.as_ref()))?;
+            compile(&self.graph, &self.catalog, mode, Some(self.cache.as_ref()))?;
 
         for diag in &diagnostics {
             tracing::warn!("compile diagnostic: {:?}", diag);
         }
 
         let graph_info = GraphInfo::from_graph(&self.graph);
-        let mut ctx = Context::new(self.event_bus.clone(), timestamp_id("graph_run"))
-            .with_graph_info(graph_info);
+        let run_id = timestamp_id("graph_run");
+        let mut ctx =
+            Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
 
         if let Some(store) = &self.data_store {
             ctx = ctx.with_data_store(store.clone());
@@ -102,47 +130,90 @@ impl GraphSession {
         if let Some(transport) = &self.transport {
             ctx = ctx.with_transport(transport.clone());
         }
+        if let Some(driver) = self.run_driver() {
+            ctx = ctx.with_driver(driver);
+        }
 
-        executor::execute(&plan, &mut ctx, &self.library, self.cache.as_ref())?;
+        self.event_bus.emit(Event::RunStarted {
+            run_id: run_id.clone(),
+            plan_summary: plan.summary(),
+        });
+        let start = std::time::Instant::now();
+        if let Err(e) = executor::execute(&plan, &mut ctx, &self.catalog, self.cache.as_ref()) {
+            self.event_bus.emit(Event::RunFailed {
+                run_id,
+                error: e.to_string(),
+            });
+            return Err(e);
+        }
+        self.event_bus.emit(Event::RunCompleted {
+            run_id,
+            duration: start.elapsed(),
+        });
 
-        Ok(ctx
-            .store
-            .into_iter()
-            .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-            .collect())
+        Ok(ctx.into_outputs())
     }
 
     /// Fit all trainable filters in topological order.
     /// Delegates to LocalRunner — same execution path as remote workers.
+    ///
+    /// Emits a `RunStarted`/`RunCompleted` (or `RunFailed`) bracket
+    /// tagged with the same run id as the node events inside it.
     pub fn fit(&mut self, x: &Value, y: Option<&Value>) -> Result<HashMap<String, Value>> {
         self.graph.validate()?;
 
         let CompileResult { plan, .. } = compile(
             &self.graph,
-            &self.library,
+            &self.catalog,
             CompileMode::NoCache,
             Some(self.cache.as_ref()),
         )?;
 
+        let run_id = timestamp_id("fit");
+        self.event_bus.emit(Event::RunStarted {
+            run_id: run_id.clone(),
+            plan_summary: plan.summary(),
+        });
+        let start = std::time::Instant::now();
+
         let runner = crate::runner::LocalRunner;
-        let (_last_output, mut all_outputs) = runner.fit(
-            &plan,
-            &self.library,
+        let mut ctx = crate::runner::RunContext::new(
+            &self.catalog,
             self.cache.as_ref(),
             &self.event_bus,
-            x,
-            y,
-        )?;
+            &run_id,
+            GraphInfo::from_graph(&self.graph),
+        );
+        if let Some(driver) = self.run_driver() {
+            ctx = ctx.with_driver(driver);
+        }
+        let result = runner.fit(&plan, &ctx, x, y);
+        let (_last_output, mut all_outputs) = match result {
+            Ok(out) => {
+                self.event_bus.emit(Event::RunCompleted {
+                    run_id,
+                    duration: start.elapsed(),
+                });
+                out
+            }
+            Err(e) => {
+                self.event_bus.emit(Event::RunFailed {
+                    run_id,
+                    error: e.to_string(),
+                });
+                return Err(e);
+            }
+        };
 
-        // Store trained states from __state_ keys into FilterLibrary
+        // Store trained states from __state_ keys into NodeCatalog
         for (key, value) in &all_outputs {
-            if let Some(node_id) = key.strip_prefix("__state_") {
-                self.library.set_state(node_id, value.clone());
+            if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
+                self.catalog.try_set_state(node_id, value.clone())?;
             }
         }
 
         // Remove __state_ keys from returned outputs (callers expect node IDs only)
-        all_outputs.retain(|k, _| !k.starts_with("__state_"));
+        all_outputs.retain(|k, _| somatize_core::keys::node_of_state_key(k).is_none());
 
         self.fitted = true;
         Ok(all_outputs)
@@ -151,20 +222,24 @@ impl GraphSession {
     /// Forward pass using the given strategy.
     ///
     /// Strategies define HOW data flows through the compiled graph:
-    /// - [`Standard`] — full input at once with inference caching (default)
-    /// - [`Stream`] — chunked input through StreamExecutor
-    /// - [`Batched`] — rows from DataStore, batch by batch
+    /// - [`crate::forward::Standard`] — full input at once with inference caching (default)
+    /// - [`crate::forward::Stream`] — chunked input through StreamExecutor
+    /// - [`crate::forward::Batched`] — rows from DataStore, batch by batch
     pub fn forward_with(
         &self,
         x: &Value,
         strategy: &dyn crate::forward::ForwardStrategy,
     ) -> Result<Value> {
+        let driver = self.run_driver();
         strategy.forward(
             &self.graph,
-            &self.library,
-            self.cache.as_ref(),
-            &self.event_bus,
-            self.data_store.as_ref(),
+            &crate::forward::ForwardEnv {
+                catalog: &self.catalog,
+                cache: self.cache.as_ref(),
+                event_bus: &self.event_bus,
+                data_store: self.data_store.as_ref(),
+                driver: driver.as_ref(),
+            },
             x,
         )
     }
@@ -189,7 +264,7 @@ impl GraphSession {
         let sorted = self.graph.topological_sort()?;
         let mut states_map = serde_json::Map::new();
         for node_id in &sorted {
-            if let Some(state) = self.library.get_state(node_id) {
+            if let Some(state) = self.catalog.get_state(node_id) {
                 let json = serde_json::to_value(&*state)
                     .map_err(|e| SomaError::Other(format!("state serialize: {e}")))?;
                 states_map.insert(node_id.to_string(), json);
@@ -197,7 +272,8 @@ impl GraphSession {
         }
 
         let states_value = Value::json(serde_json::Value::Object(states_map));
-        let key = CacheKey::from_parts(&[b"graph_states", self.graph_config_hash().as_bytes()]);
+        let fingerprint = self.graph_config_hash()?;
+        let key = CacheKey::from_parts(&[b"graph_states", fingerprint.as_bytes()]);
         store.put(&key, &states_value)
     }
 
@@ -222,7 +298,7 @@ impl GraphSession {
         for (node_id, json_val) in obj {
             let value: Value = serde_json::from_value(json_val.clone())
                 .map_err(|e| SomaError::Other(format!("state deserialize: {e}")))?;
-            self.library.set_state(node_id.clone(), value);
+            self.catalog.try_set_state(node_id.clone(), value)?;
         }
 
         self.fitted = true;
@@ -251,180 +327,82 @@ impl GraphSession {
         &self.graph
     }
 
-    /// Access the filter library.
-    pub fn library(&self) -> &FilterLibrary {
-        &self.library
+    /// Access the node catalog.
+    pub fn catalog(&self) -> &NodeCatalog {
+        &self.catalog
     }
 
-    /// Mutable access to the filter library (for registering filters after creation).
-    pub fn library_mut(&mut self) -> &mut FilterLibrary {
-        &mut self.library
+    /// Mutable access to the node catalog (for registering nodes after creation).
+    pub fn catalog_mut(&mut self) -> &mut NodeCatalog {
+        &mut self.catalog
     }
 
     // ── Private helpers ──
 
-    fn graph_config_hash(&self) -> String {
-        let node_ids: Vec<&str> = self.graph.nodes.iter().map(|n| n.id.as_str()).collect();
-        node_ids.join(",")
+    /// The address under which this graph's trained states are persisted.
+    ///
+    /// It has to follow the graph's *shape*, not just its node names. The
+    /// previous form was `node_ids.join(",")`, so two graphs that shared
+    /// node ids but wired them differently — or configured them
+    /// differently — persisted to one address and read back each other's
+    /// states. [`ArchitectureFingerprint`] already computes exactly this,
+    /// canonically, for the experiment pool.
+    fn graph_config_hash(&self) -> Result<String> {
+        Ok(ArchitectureFingerprint::of(&self.graph)?.digest)
     }
 }
 
-// ── Convenience free functions (backward compat) ──
+// ── Convenience free functions ──
+//
+// One-liners over [`GraphSession`]. They used to be separate
+// implementations, and `graph_fit` was the worst of them: a topological
+// loop written from scratch that never compiled a plan, so it ignored
+// parallelism, loops, branches and steps outright — and then discarded
+// every state it fitted instead of storing it. A graph that ran fine
+// through `GraphSession::fit` did something else here.
 
 /// Compile and execute a graph, returning all node outputs.
 pub fn graph_run(
     graph: &Graph,
-    library: &FilterLibrary,
+    catalog: &NodeCatalog,
     mode: CompileMode,
-    cache: &dyn CacheStore,
+    cache: Arc<dyn CacheStore>,
 ) -> Result<HashMap<String, Value>> {
-    let CompileResult { plan, diagnostics } = compile(graph, library, mode, Some(cache))?;
-
-    for diag in &diagnostics {
-        tracing::warn!("compile diagnostic: {:?}", diag);
-    }
-
-    let bus = Arc::new(EventBus::new(256));
-    let graph_info = GraphInfo::from_graph(graph);
-
-    let mut ctx = Context::new(bus, timestamp_id("graph_run")).with_graph_info(graph_info);
-
-    executor::execute(&plan, &mut ctx, library, cache)?;
-
-    Ok(ctx
-        .store
-        .into_iter()
-        .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-        .collect())
+    GraphSession::new(graph.clone(), catalog.clone())
+        .with_cache(cache)
+        .run(mode)
 }
 
-/// Fit all trainable filters in topological order.
+/// Fit all trainable filters, returning every node's output.
 pub fn graph_fit(
     graph: &Graph,
-    library: &FilterLibrary,
+    catalog: &NodeCatalog,
     x: &Value,
     y: Option<&Value>,
-    cache: &dyn CacheStore,
+    cache: Arc<dyn CacheStore>,
 ) -> Result<HashMap<String, Value>> {
-    graph.validate()?;
-    let sorted = graph.topological_sort()?;
-    let graph_info = GraphInfo::from_graph(graph);
-
-    let bus = Arc::new(EventBus::new(256));
-    let run_id = timestamp_id("graph_fit");
-
-    let mut outputs: HashMap<String, Value> = HashMap::new();
-
-    let roots = graph.roots();
-    for root_id in &roots {
-        outputs.insert(format!("__input_{root_id}"), x.clone());
-    }
-
-    for node_id in &sorted {
-        let filter = library
-            .get(node_id)
-            .ok_or_else(|| SomaError::NodeNotFound(node_id.to_string()))?;
-
-        bus.emit(Event::NodeStarted {
-            run_id: run_id.clone(),
-            node_id: node_id.to_string(),
-            kind: filter.meta().kind,
-        });
-
-        let preds = graph_info.predecessors(node_id);
-        let input = match preds.len() {
-            0 => x.clone(),
-            1 => outputs.get(&preds[0]).cloned().unwrap_or_else(|| x.clone()),
-            _ => {
-                let mut merged = serde_json::Map::new();
-                for pred_id in preds {
-                    if let Some(val) = outputs.get(pred_id.as_str()) {
-                        let json_val = serde_json::to_value(val).unwrap_or(serde_json::Value::Null);
-                        merged.insert(pred_id.clone(), json_val);
-                    }
-                }
-                Value::json(serde_json::Value::Object(merged))
-            }
-        };
-
-        let meta = filter.meta();
-        let start = std::time::Instant::now();
-
-        let (state, output) = if meta.kind == FilterKind::Trainable {
-            let data_hash = CacheKey::hash_data(&serde_json::to_vec(&input).unwrap_or_default());
-            let state_key = CacheKey::for_state(&filter.config_hash(), &data_hash);
-
-            let state = if let Some(cached) = cache.get(&state_key)? {
-                cached
-            } else {
-                let s = filter.fit(&input, y)?;
-                cache.put(&state_key, &s)?;
-                s
-            };
-
-            let output = filter.forward(&input, &state)?;
-            (state, output)
-        } else {
-            let output = filter.forward(&input, &Value::Empty)?;
-            (Value::Empty, output)
-        };
-
-        let _ = state;
-
-        bus.emit(Event::NodeCompleted {
-            run_id: run_id.clone(),
-            node_id: node_id.to_string(),
-            duration: start.elapsed(),
-            output_summary: format!("{output}"),
-        });
-
-        outputs.insert(node_id.to_string(), output);
-    }
-
-    Ok(outputs)
+    GraphSession::new(graph.clone(), catalog.clone())
+        .with_cache(cache)
+        .fit(x, y)
 }
 
-/// Compile in Inference mode and execute, returning the last leaf's output.
+/// Compile in Inference mode and execute, returning the output.
 pub fn graph_predict(
     graph: &Graph,
-    library: &FilterLibrary,
+    catalog: &NodeCatalog,
     x: &Value,
-    cache: &dyn CacheStore,
+    cache: Arc<dyn CacheStore>,
 ) -> Result<Value> {
-    let CompileResult { plan, .. } = compile(graph, library, CompileMode::Inference, Some(cache))?;
-
-    let bus = Arc::new(EventBus::new(256));
-    let graph_info = GraphInfo::from_graph(graph);
-    let mut ctx = Context::new(bus, timestamp_id("graph_predict")).with_graph_info(graph_info);
-
-    let roots = graph.roots();
-    if roots.len() == 1 {
-        ctx.set(format!("__input_{}", roots[0]), x.clone());
-    }
-    ctx.set("__input__", x.clone());
-
-    executor::execute(&plan, &mut ctx, library, cache)?;
-
-    let leaves = graph.leaves();
-    let mut extract =
-        |id: &str| -> Option<Value> { ctx.store.remove(id).and_then(|vv| vv.as_value().cloned()) };
-
-    if let Some(leaf_id) = leaves.first() {
-        extract(leaf_id)
-            .ok_or_else(|| SomaError::Other(format!("leaf node '{leaf_id}' produced no output")))
-    } else {
-        ctx.execution_order
-            .last()
-            .and_then(|id| extract(id))
-            .ok_or_else(|| SomaError::Other("no output produced".into()))
-    }
+    GraphSession::new(graph.clone(), catalog.clone())
+        .with_cache(cache)
+        .forward(x)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
-    use somatize_compiler::FilterRegistry;
+    use somatize_compiler::NodeRegistry;
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result;
     use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
@@ -455,15 +433,12 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -490,15 +465,12 @@ mod tests {
                 kind: FilterKind::Stateless,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -533,15 +505,12 @@ mod tests {
                 kind: FilterKind::Trainable,
                 cacheable: true,
                 differentiable: true,
+                deterministic: true,
                 stream_mode: StreamMode::FixedState,
                 distribution: somatize_core::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -561,7 +530,7 @@ mod tests {
     #[test]
     fn session_run_linear() {
         let graph = linear_graph(&["double", "add"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
         lib.register("add", Box::new(AdderFilter(10.0)));
 
@@ -575,14 +544,13 @@ mod tests {
         let bus = Arc::new(EventBus::new(64));
         let mut ctx =
             Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(session.graph()));
-        ctx.set("__input__", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
-        executor::execute(&plan, &mut ctx, session.library(), &MemoryCache::default()).unwrap();
+        ctx.set(
+            somatize_core::keys::GRAPH_INPUT,
+            Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
+        );
+        executor::execute(&plan, &mut ctx, session.catalog(), &MemoryCache::default()).unwrap();
 
-        let outputs: HashMap<String, Value> = ctx
-            .store
-            .into_iter()
-            .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-            .collect();
+        let outputs: HashMap<String, Value> = ctx.into_outputs();
 
         let result = outputs.get("add").unwrap();
         let (data, _) = result.as_tensor().unwrap();
@@ -592,7 +560,7 @@ mod tests {
     #[test]
     fn session_fit_and_forward() {
         let graph = linear_graph(&["mean", "double"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("mean", Box::new(MeanFilter));
         lib.register("double", Box::new(DoublerFilter));
 
@@ -613,7 +581,7 @@ mod tests {
     #[test]
     fn session_compile_diagnostics() {
         let graph = linear_graph(&["double"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
 
         let session = GraphSession::new(graph, lib);
@@ -626,7 +594,7 @@ mod tests {
     #[test]
     fn graph_run_linear() {
         let graph = linear_graph(&["double", "add"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
         lib.register("add", Box::new(AdderFilter(10.0)));
 
@@ -637,12 +605,12 @@ mod tests {
                 compile(&graph, &lib, CompileMode::NoCache, None).unwrap();
             let bus = Arc::new(EventBus::new(64));
             let mut ctx = Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(&graph));
-            ctx.set("__input__", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
+            ctx.set(
+                somatize_core::keys::GRAPH_INPUT,
+                Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
+            );
             executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();
-            ctx.store
-                .into_iter()
-                .filter_map(|(k, vv)| vv.as_value().cloned().map(|v| (k, v)))
-                .collect::<HashMap<String, Value>>()
+            ctx.into_outputs()
         };
 
         let result = outputs.get("add").unwrap();
@@ -659,7 +627,7 @@ mod tests {
         graph.edges.push(Edge::data("e1", "double", "merge"));
         graph.edges.push(Edge::data("e2", "add", "merge"));
 
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("double", Box::new(DoublerFilter));
         lib.register("add", Box::new(AdderFilter(100.0)));
 
@@ -680,15 +648,12 @@ mod tests {
                     kind: FilterKind::Stateless,
                     cacheable: true,
                     differentiable: false,
+                    deterministic: true,
                     stream_mode: StreamMode::FixedState,
                     distribution: somatize_core::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
             }
         }
         lib.register("merge", Box::new(MergeFilter));
@@ -698,7 +663,10 @@ mod tests {
 
         let bus = Arc::new(EventBus::new(64));
         let mut ctx = Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(&graph));
-        ctx.set("__input__", Value::tensor(vec![5.0], vec![1]));
+        ctx.set(
+            somatize_core::keys::GRAPH_INPUT,
+            Value::tensor(vec![5.0], vec![1]),
+        );
         executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();
 
         let merge_output = ctx.get("merge").unwrap();
@@ -711,14 +679,14 @@ mod tests {
     #[test]
     fn graph_fit_trainable() {
         let graph = linear_graph(&["mean", "double"]);
-        let mut lib = FilterLibrary::new();
+        let mut lib = NodeCatalog::new();
         lib.register("mean", Box::new(MeanFilter));
         lib.register("double", Box::new(DoublerFilter));
 
-        let cache = MemoryCache::default();
+        let cache = Arc::new(MemoryCache::default());
         let x = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
 
-        let outputs = graph_fit(&graph, &lib, &x, None, &cache).unwrap();
+        let outputs = graph_fit(&graph, &lib, &x, None, cache.clone()).unwrap();
 
         let result = outputs.get("double").unwrap();
         let (data, _) = result.as_tensor().unwrap();
@@ -728,14 +696,59 @@ mod tests {
     }
 
     #[test]
-    fn filter_library_registry_compat() {
-        let mut lib = FilterLibrary::new();
+    fn the_catalog_is_the_compiler_registry() {
+        let mut lib = NodeCatalog::new();
         lib.register("a", Box::new(DoublerFilter));
 
-        let registry: &dyn FilterRegistry = &lib;
+        let registry: &dyn NodeRegistry = &lib;
         assert!(registry.meta("a").is_some());
         assert_eq!(registry.meta("a").unwrap().name, "Doubler");
         assert!(registry.config_hash("a").is_some());
         assert!(registry.meta("b").is_none());
+    }
+
+    fn session_of(graph: Graph) -> GraphSession {
+        let mut lib = NodeCatalog::new();
+        for node in &graph.nodes {
+            lib.register(&node.id, Box::new(DoublerFilter));
+        }
+        GraphSession::new(graph, lib)
+    }
+
+    /// The persisted-state address follows the wiring, not just the names.
+    /// It used to be `node_ids.join(",")`, so these two graphs shared one
+    /// address and each would load back the other's trained states.
+    #[test]
+    fn state_address_separates_graphs_that_share_node_ids() {
+        let chain = session_of(linear_graph(&["a", "b", "c"]));
+
+        // Same three nodes, different wiring: a fan-out from `a`.
+        let mut fan = Graph::new();
+        for id in ["a", "b", "c"] {
+            fan.nodes.push(Node::new(id, id, id));
+        }
+        fan.edges.push(Edge::data("e0", "a", "b"));
+        fan.edges.push(Edge::data("e1", "a", "c"));
+        let fan = session_of(fan);
+
+        assert_ne!(
+            chain.graph_config_hash().unwrap(),
+            fan.graph_config_hash().unwrap(),
+            "two differently wired graphs must not persist states to one address"
+        );
+    }
+
+    /// The same graph built twice is the same address — otherwise nothing
+    /// persisted could ever be loaded back.
+    #[test]
+    fn state_address_is_stable_for_the_same_graph() {
+        assert_eq!(
+            session_of(linear_graph(&["a", "b"]))
+                .graph_config_hash()
+                .unwrap(),
+            session_of(linear_graph(&["a", "b"]))
+                .graph_config_hash()
+                .unwrap()
+        );
     }
 }

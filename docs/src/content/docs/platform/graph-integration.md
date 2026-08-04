@@ -3,21 +3,54 @@ title: Graph Integration
 description: How graphs become nodes in the platform's orchestration graphs.
 ---
 
-## The Bridge
+:::caution[Superseded, and mostly unnecessary]
+This page sketched a `publish` mechanism for exposing a Soma graph to a
+separate orchestration layer. That layer no longer exists as a separate
+thing: orchestration nodes are [steps in the same graph](/soma/design/agentic/),
+and running a pipeline from one is `Effect::Graph`, which is implemented.
 
-Soma graphs and the platform's orchestration graphs serve different purposes:
+What remains unimplemented is the *hosted* half — `lab.publish`,
+`lab.get_graph`, `PublishedGraph`. `Lab` has only `connect`, `health`,
+`info` and `workers`. Read the rest of this page as history.
+:::
 
-| | Soma Graph | Platform Graph |
+## The bridge, as it actually turned out
+
+The premise below was that Soma graphs and "platform graphs" are different
+kinds of object needing a bridge between them. They are not. A graph with an
+LLM node and a graph with a classifier node are the same kind of graph with
+different nodes in it — see [Agentic Graphs](/soma/design/agentic/) for why
+that turned out to be the right split.
+
+So there is no publishing step. A step that wants to run a pipeline emits
+one:
+
+```rust
+Effect::Graph {
+    graph: Box::new(pipeline),
+    input: params,
+    mode: GraphEffectMode::Fit,
+}
+```
+
+`GraphHandler` runs it through a `GraphSession`, with the pipeline's own
+cache, schema checks and events intact, and the result comes back to the
+step. Because it is an effect, it is journaled: a loop that crashes after
+its fourth experiment replays the first three instead of paying for them
+again. Nothing needs to be registered anywhere first.
+
+The table below is kept because the contrast in it is still worth reading —
+just note that both columns describe nodes in one graph now, not two systems.
+
+| | Filter node | Step node |
 |---|---|---|
-| **Node type** | Filters (data transformations) | LLM, Agent, Graph, Tool, IO |
-| **Purpose** | Compute | Orchestrate |
+| **Purpose** | Compute | Reach outside the graph |
+| **Determinism** | Same input ⇒ same output | Not promised |
 | **Gradients** | Yes (when differentiable) | No |
-| **Caching** | Content-addressable | Not applicable |
-| **Execution** | Compiled to ExecutionPlan | Event-driven execution |
+| **Reuse** | Content-addressed cache | Journal: record once, replay |
+| **Execution** | Compiled to ExecutionPlan | Compiled to ExecutionPlan |
 
-The bridge between them: **a compiled graph can be published as a node** in the platform graph.
-
-## Publishing a Graph
+## Publishing a Graph *(historical)*
 
 ```python
 # User defines and tests a graph locally
