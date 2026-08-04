@@ -293,11 +293,11 @@ fn session_graph_and_library_accessors() {
     let mut session = GraphSession::new(graph, lib);
 
     assert_eq!(session.graph().nodes.len(), 1);
-    assert!(session.library().get("a").is_some());
+    assert!(session.catalog().get("a").is_some());
 
     // Mutable access
-    session.library_mut().register("b", Box::new(Doubler));
-    assert!(session.library().get("b").is_some());
+    session.catalog_mut().register("b", Box::new(Doubler));
+    assert!(session.catalog().get("b").is_some());
 }
 
 #[test]

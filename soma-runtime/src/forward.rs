@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// forgetting one of six positional arguments is a bug the compiler cannot
 /// name.
 pub struct ForwardEnv<'a> {
-    pub library: &'a NodeCatalog,
+    pub catalog: &'a NodeCatalog,
     pub cache: &'a dyn CacheStore,
     pub event_bus: &'a Arc<EventBus>,
     pub data_store: Option<&'a Arc<dyn DataStore>>,
@@ -44,7 +44,7 @@ pub struct Standard;
 impl ForwardStrategy for Standard {
     fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, x: &Value) -> Result<Value> {
         let CompileResult { plan, .. } =
-            compile(graph, env.library, CompileMode::Inference, Some(env.cache))?;
+            compile(graph, env.catalog, CompileMode::Inference, Some(env.cache))?;
         run_forward(graph, &plan, env, x)
     }
 }
@@ -57,7 +57,7 @@ pub struct Stream {
 
 impl ForwardStrategy for Stream {
     fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, x: &Value) -> Result<Value> {
-        let CompileResult { plan, .. } = compile_stream(graph, env.library, self.chunk_size)?;
+        let CompileResult { plan, .. } = compile_stream(graph, env.catalog, self.chunk_size)?;
         run_forward(graph, &plan, env, x)
     }
 }
@@ -77,7 +77,7 @@ fn run_forward(
 ) -> Result<Value> {
     let run_id = somatize_core::util::timestamp_id("forward");
     let mut ctx = RunContext::new(
-        env.library,
+        env.catalog,
         env.cache,
         env.event_bus,
         &run_id,
@@ -111,7 +111,7 @@ impl ForwardStrategy for Batched<'_> {
 
         // Compile once, reuse for each batch.
         let CompileResult { plan, .. } =
-            compile(graph, env.library, CompileMode::Inference, Some(env.cache))?;
+            compile(graph, env.catalog, CompileMode::Inference, Some(env.cache))?;
 
         let mut all_values: Vec<f64> = Vec::new();
         let mut result_shape: Option<Vec<usize>> = None;
@@ -190,21 +190,21 @@ mod tests {
         let mut graph = Graph::new();
         graph.nodes.push(Node::new("double", "Double", "double"));
 
-        let mut library = NodeCatalog::new();
-        library.register("double", Box::new(DoublerFilter));
+        let mut catalog = NodeCatalog::new();
+        catalog.register("double", Box::new(DoublerFilter));
 
         let cache: Arc<dyn CacheStore> = Arc::new(MemoryCache::default());
         let bus = Arc::new(EventBus::new(64));
-        (graph, library, cache, bus)
+        (graph, catalog, cache, bus)
     }
 
     fn env<'a>(
-        library: &'a NodeCatalog,
+        catalog: &'a NodeCatalog,
         cache: &'a dyn CacheStore,
         event_bus: &'a Arc<EventBus>,
     ) -> ForwardEnv<'a> {
         ForwardEnv {
-            library,
+            catalog,
             cache,
             event_bus,
             data_store: None,
@@ -214,11 +214,11 @@ mod tests {
 
     #[test]
     fn standard_forward() {
-        let (graph, library, cache, bus) = make_session();
+        let (graph, catalog, cache, bus) = make_session();
         let input = Value::tensor(vec![1.0, 2.0, 3.0], vec![3]);
 
         let result = Standard
-            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
+            .forward(&graph, &env(&catalog, cache.as_ref(), &bus), &input)
             .unwrap();
         let (data, _) = result.as_tensor().unwrap();
         assert_eq!(data, &[2.0, 4.0, 6.0]);
@@ -226,11 +226,11 @@ mod tests {
 
     #[test]
     fn stream_forward() {
-        let (graph, library, cache, bus) = make_session();
+        let (graph, catalog, cache, bus) = make_session();
         let input = Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![6]);
 
         let result = Stream { chunk_size: 2 }
-            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
+            .forward(&graph, &env(&catalog, cache.as_ref(), &bus), &input)
             .unwrap();
         let (data, shape) = result.as_tensor().unwrap();
         assert_eq!(data, &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
@@ -239,14 +239,14 @@ mod tests {
 
     #[test]
     fn stream_matches_standard() {
-        let (graph, library, cache, bus) = make_session();
+        let (graph, catalog, cache, bus) = make_session();
         let input = Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4]);
 
         let standard = Standard
-            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
+            .forward(&graph, &env(&catalog, cache.as_ref(), &bus), &input)
             .unwrap();
         let streamed = Stream { chunk_size: 2 }
-            .forward(&graph, &env(&library, cache.as_ref(), &bus), &input)
+            .forward(&graph, &env(&catalog, cache.as_ref(), &bus), &input)
             .unwrap();
         assert_eq!(standard, streamed);
     }

@@ -64,6 +64,8 @@ pub struct EffectDriver {
 }
 
 impl EffectDriver {
+    /// A driver over `journal`, with no handlers yet — add them with
+    /// [`Self::with_handler`]; an effect nobody claims is a clear error.
     pub fn new(journal: EffectJournal) -> Self {
         Self {
             handlers: Vec::new(),
@@ -79,11 +81,13 @@ impl EffectDriver {
         self
     }
 
+    /// Add a handler. The first whose `handles()` claims an effect performs it.
     pub fn with_handler(mut self, handler: Arc<dyn EffectHandler>) -> Self {
         self.handlers.push(handler);
         self
     }
 
+    /// Emit the agent events (turns, effects, handoffs) to this bus.
     pub fn with_event_bus(mut self, bus: Arc<EventBus>) -> Self {
         self.event_bus = Some(bus);
         self
@@ -204,13 +208,6 @@ impl EffectDriver {
                         });
                     }
                     history.push(self.spawn_all(run_id, node_id, turn, &specs, join)?);
-                }
-
-                other => {
-                    return Err(SomaError::Execution {
-                        node_id: node_id.to_string(),
-                        message: format!("unsupported transition `{}`", other.label()),
-                    });
                 }
             }
         }
@@ -396,8 +393,7 @@ impl EffectDriver {
         effects: &[Effect],
         usage: &mut Usage,
     ) -> Result<Vec<EffectResult>> {
-        for (index, effect) in effects.iter().enumerate() {
-            let _ = index;
+        for effect in effects {
             self.emit(Event::EffectRequested {
                 run_id: run_id.to_string(),
                 node_id: node_id.to_string(),

@@ -55,6 +55,8 @@ pub struct EffectJournal {
 }
 
 impl EffectJournal {
+    /// A journal over the same two-table store the cache uses: action
+    /// records (kept) and content blobs (evictable).
     pub fn new(actions: Arc<dyn ActionCache>, blobs: Arc<dyn BlobStore>) -> Self {
         Self {
             actions,

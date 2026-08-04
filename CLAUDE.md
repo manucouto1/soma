@@ -104,7 +104,11 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **Branches**: Gitflow — `main`, `develop`, `feature/<crate>-<desc>`
 - **Tests**: TDD. All public APIs must have tests.
 - **Clippy**: `cargo clippy --workspace -- -D warnings` must pass
-- **Enums**: Public enums use `#[non_exhaustive]`
+- **Enums**: Public enums use `#[non_exhaustive]` when a variant may be added without
+  every consumer needing an opinion (data-ish enums: `Effect`, `Value`, `Event`).
+  Control-flow enums every consumer must decide over — `NodeOutcome`, `Transition` —
+  deliberately do NOT: a wildcard arm there is a silent wrong answer, and adding a
+  variant *should* break every match. State the reason in the doc comment either way.
 - **License**: Elastic License 2.0
 
 ## Key Design Decisions

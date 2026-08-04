@@ -34,7 +34,12 @@ use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
 /// What a step wants to happen next.
-#[non_exhaustive]
+///
+/// Deliberately NOT `#[non_exhaustive]`, for the same reason as
+/// [`crate::node::NodeOutcome`], its other half: the driver decides control
+/// flow off this value, and a wildcard arm there is a silent wrong answer.
+/// Adding a variant *should* break every consumer — each one has to decide
+/// what the new transition means for it.
 pub enum Transition {
     /// Perform these effects — concurrently — then poll again with the
     /// results in the same order.

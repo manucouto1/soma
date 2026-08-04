@@ -16,7 +16,7 @@ pub struct Worker {
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
-    filters: NodeCatalog,
+    catalog: NodeCatalog,
     /// Optional persistent DataStore (S3, Zarr, etc.) — configured by user.
     data_store: Option<Arc<dyn DataStore>>,
     /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
@@ -58,7 +58,7 @@ impl Worker {
             capabilities,
             event_bus: Arc::new(EventBus::new(256)),
             cache: Arc::new(MemoryCache::default()),
-            filters: NodeCatalog::new(),
+            catalog: NodeCatalog::new(),
             data_store: None,
             temp_store: Arc::new(temp_store),
             env_manager: crate::env_manager::EnvManager::new(
@@ -105,24 +105,24 @@ impl Worker {
 
     /// Register a filter that this worker can execute.
     pub fn register_filter(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
-        self.filters.register(node_id, filter);
+        self.catalog.register(node_id, filter);
     }
 
     /// Get a filter by node_id (for stream executor construction).
     pub fn get_filter(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
-        self.filters.get(node_id)
+        self.catalog.get(node_id)
     }
 
     /// Get trained state for a filter.
     pub fn get_filter_state(&self, node_id: &str) -> Arc<Value> {
-        self.filters
+        self.catalog
             .get_state(node_id)
             .unwrap_or_else(|| Arc::new(Value::Empty))
     }
 
     /// Set trained state for a filter.
     pub fn set_filter_state(&mut self, node_id: &str, state: Value) {
-        if let Err(e) = self.filters.try_set_state(node_id, state) {
+        if let Err(e) = self.catalog.try_set_state(node_id, state) {
             tracing::error!(node_id, "storing filter state failed: {e}");
         }
     }
@@ -299,9 +299,9 @@ impl Worker {
                     sf.trainable,
                     config_hash,
                 ));
-                self.filters.register(&sf.node_id, filter);
+                self.catalog.register(&sf.node_id, filter);
                 if let Some(state) = &sf.state
-                    && let Err(e) = self.filters.try_set_state(&sf.node_id, state.clone())
+                    && let Err(e) = self.catalog.try_set_state(&sf.node_id, state.clone())
                 {
                     tracing::error!(node_id = %sf.node_id, "storing filter state failed: {e}");
                 }
@@ -341,7 +341,7 @@ impl Worker {
                         .iter()
                         .map(|s| s.to_string())
                         .collect::<Vec<_>>();
-                    if let Some(filter) = self.filters.get(&node_ids[0]) {
+                    if let Some(filter) = self.catalog.get(&node_ids[0]) {
                         if let Some(sf) = filter
                             .as_any()
                             .downcast_ref::<crate::python_process::SubprocessFilter>()
@@ -361,7 +361,7 @@ impl Worker {
                                 Ok((output, states)) => {
                                     for (id, state) in &states {
                                         if let Err(e) =
-                                            self.filters.try_set_state(id, state.clone())
+                                            self.catalog.try_set_state(id, state.clone())
                                         {
                                             tracing::error!(
                                                 node_id = %id,
@@ -390,7 +390,7 @@ impl Worker {
                     // Correct for the pipelines that get dispatched, and
                     // stated here rather than assumed inside the runner.
                     let ctx = somatize_runtime::runner::RunContext::linear(
-                        &self.filters,
+                        &self.catalog,
                         self.cache.as_ref(),
                         &self.event_bus,
                         &run_id,
@@ -404,7 +404,7 @@ impl Worker {
                             for (key, value) in &all_outputs {
                                 if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
                                     if let Err(e) =
-                                        self.filters.try_set_state(node_id, value.clone())
+                                        self.catalog.try_set_state(node_id, value.clone())
                                     {
                                         tracing::error!(
                                             node_id,
@@ -421,7 +421,7 @@ impl Worker {
             ExecutionMode::Forward => {
                 let run_id = format!("worker_forward_{}", plan.plan_id);
                 let ctx = somatize_runtime::runner::RunContext::linear(
-                    &self.filters,
+                    &self.catalog,
                     self.cache.as_ref(),
                     &self.event_bus,
                     &run_id,
@@ -473,9 +473,9 @@ impl Worker {
         let fitted: Vec<FittedFilter> = node_ids
             .iter()
             .filter_map(|id| {
-                let filter = self.filters.get(id)?;
+                let filter = self.catalog.get(id)?;
                 let state = self
-                    .filters
+                    .catalog
                     .get_state(id)
                     .unwrap_or_else(|| Arc::new(Value::Empty));
                 Some(FittedFilter {

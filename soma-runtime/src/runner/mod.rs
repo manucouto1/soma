@@ -54,6 +54,8 @@ pub struct RunContext<'a> {
 }
 
 impl<'a> RunContext<'a> {
+    /// A context over the real topology; use [`Self::linear`] only when a
+    /// plan is genuinely all you have.
     pub fn new(
         catalog: &'a NodeCatalog,
         cache: &'a dyn CacheStore,

@@ -22,7 +22,7 @@ use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The primary orchestrator: Graph + filters + cache + events.
+/// The primary orchestrator: Graph + catalog + cache + events.
 ///
 /// ```ignore
 /// let mut lib = NodeCatalog::new();
@@ -35,7 +35,7 @@ use std::sync::Arc;
 /// ```
 pub struct GraphSession {
     graph: Graph,
-    library: NodeCatalog,
+    catalog: NodeCatalog,
     cache: Arc<dyn CacheStore>,
     event_bus: Arc<EventBus>,
     data_store: Option<Arc<dyn DataStore>>,
@@ -48,10 +48,10 @@ pub struct GraphSession {
 }
 
 impl GraphSession {
-    pub fn new(graph: Graph, library: NodeCatalog) -> Self {
+    pub fn new(graph: Graph, catalog: NodeCatalog) -> Self {
         Self {
             graph,
-            library,
+            catalog,
             cache: Arc::new(MemoryCache::default()),
             event_bus: Arc::new(EventBus::new(256)),
             data_store: None,
@@ -85,7 +85,7 @@ impl GraphSession {
     ///
     /// The session clones the driver per run and hands it the catalog *at
     /// that moment*, so filters or steps registered through
-    /// [`Self::library_mut`] after this call still count. Without a driver,
+    /// [`Self::catalog_mut`] after this call still count. Without a driver,
     /// executing a step keeps failing with the executor's own explanation.
     pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
         self.driver = Some(driver);
@@ -96,14 +96,14 @@ impl GraphSession {
     fn run_driver(&self) -> Option<crate::effects::EffectDriver> {
         self.driver
             .as_ref()
-            .map(|d| d.clone().with_catalog(Arc::new(self.library.clone())))
+            .map(|d| d.clone().with_catalog(Arc::new(self.catalog.clone())))
     }
 
     // ── Core operations ──
 
     /// Compile the graph and return diagnostics without executing.
     pub fn compile(&self, mode: CompileMode) -> Result<CompileResult> {
-        compile(&self.graph, &self.library, mode, Some(self.cache.as_ref()))
+        compile(&self.graph, &self.catalog, mode, Some(self.cache.as_ref()))
     }
 
     /// Compile and execute the graph, returning all node outputs.
@@ -113,7 +113,7 @@ impl GraphSession {
     /// and group the run.
     pub fn run(&mut self, mode: CompileMode) -> Result<HashMap<String, Value>> {
         let CompileResult { plan, diagnostics } =
-            compile(&self.graph, &self.library, mode, Some(self.cache.as_ref()))?;
+            compile(&self.graph, &self.catalog, mode, Some(self.cache.as_ref()))?;
 
         for diag in &diagnostics {
             tracing::warn!("compile diagnostic: {:?}", diag);
@@ -139,7 +139,7 @@ impl GraphSession {
             plan_summary: plan.summary(),
         });
         let start = std::time::Instant::now();
-        if let Err(e) = executor::execute(&plan, &mut ctx, &self.library, self.cache.as_ref()) {
+        if let Err(e) = executor::execute(&plan, &mut ctx, &self.catalog, self.cache.as_ref()) {
             self.event_bus.emit(Event::RunFailed {
                 run_id,
                 error: e.to_string(),
@@ -164,7 +164,7 @@ impl GraphSession {
 
         let CompileResult { plan, .. } = compile(
             &self.graph,
-            &self.library,
+            &self.catalog,
             CompileMode::NoCache,
             Some(self.cache.as_ref()),
         )?;
@@ -178,7 +178,7 @@ impl GraphSession {
 
         let runner = crate::runner::LocalRunner;
         let mut ctx = crate::runner::RunContext::new(
-            &self.library,
+            &self.catalog,
             self.cache.as_ref(),
             &self.event_bus,
             &run_id,
@@ -208,7 +208,7 @@ impl GraphSession {
         // Store trained states from __state_ keys into NodeCatalog
         for (key, value) in &all_outputs {
             if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
-                self.library.try_set_state(node_id, value.clone())?;
+                self.catalog.try_set_state(node_id, value.clone())?;
             }
         }
 
@@ -234,7 +234,7 @@ impl GraphSession {
         strategy.forward(
             &self.graph,
             &crate::forward::ForwardEnv {
-                library: &self.library,
+                catalog: &self.catalog,
                 cache: self.cache.as_ref(),
                 event_bus: &self.event_bus,
                 data_store: self.data_store.as_ref(),
@@ -264,7 +264,7 @@ impl GraphSession {
         let sorted = self.graph.topological_sort()?;
         let mut states_map = serde_json::Map::new();
         for node_id in &sorted {
-            if let Some(state) = self.library.get_state(node_id) {
+            if let Some(state) = self.catalog.get_state(node_id) {
                 let json = serde_json::to_value(&*state)
                     .map_err(|e| SomaError::Other(format!("state serialize: {e}")))?;
                 states_map.insert(node_id.to_string(), json);
@@ -298,7 +298,7 @@ impl GraphSession {
         for (node_id, json_val) in obj {
             let value: Value = serde_json::from_value(json_val.clone())
                 .map_err(|e| SomaError::Other(format!("state deserialize: {e}")))?;
-            self.library.try_set_state(node_id.clone(), value)?;
+            self.catalog.try_set_state(node_id.clone(), value)?;
         }
 
         self.fitted = true;
@@ -327,14 +327,14 @@ impl GraphSession {
         &self.graph
     }
 
-    /// Access the filter library.
-    pub fn library(&self) -> &NodeCatalog {
-        &self.library
+    /// Access the node catalog.
+    pub fn catalog(&self) -> &NodeCatalog {
+        &self.catalog
     }
 
-    /// Mutable access to the filter library (for registering filters after creation).
-    pub fn library_mut(&mut self) -> &mut NodeCatalog {
-        &mut self.library
+    /// Mutable access to the node catalog (for registering nodes after creation).
+    pub fn catalog_mut(&mut self) -> &mut NodeCatalog {
+        &mut self.catalog
     }
 
     // ── Private helpers ──
@@ -364,11 +364,11 @@ impl GraphSession {
 /// Compile and execute a graph, returning all node outputs.
 pub fn graph_run(
     graph: &Graph,
-    library: &NodeCatalog,
+    catalog: &NodeCatalog,
     mode: CompileMode,
     cache: Arc<dyn CacheStore>,
 ) -> Result<HashMap<String, Value>> {
-    GraphSession::new(graph.clone(), library.clone())
+    GraphSession::new(graph.clone(), catalog.clone())
         .with_cache(cache)
         .run(mode)
 }
@@ -376,12 +376,12 @@ pub fn graph_run(
 /// Fit all trainable filters, returning every node's output.
 pub fn graph_fit(
     graph: &Graph,
-    library: &NodeCatalog,
+    catalog: &NodeCatalog,
     x: &Value,
     y: Option<&Value>,
     cache: Arc<dyn CacheStore>,
 ) -> Result<HashMap<String, Value>> {
-    GraphSession::new(graph.clone(), library.clone())
+    GraphSession::new(graph.clone(), catalog.clone())
         .with_cache(cache)
         .fit(x, y)
 }
@@ -389,11 +389,11 @@ pub fn graph_fit(
 /// Compile in Inference mode and execute, returning the output.
 pub fn graph_predict(
     graph: &Graph,
-    library: &NodeCatalog,
+    catalog: &NodeCatalog,
     x: &Value,
     cache: Arc<dyn CacheStore>,
 ) -> Result<Value> {
-    GraphSession::new(graph.clone(), library.clone())
+    GraphSession::new(graph.clone(), catalog.clone())
         .with_cache(cache)
         .forward(x)
 }
@@ -548,7 +548,7 @@ mod tests {
             somatize_core::keys::GRAPH_INPUT,
             Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
         );
-        executor::execute(&plan, &mut ctx, session.library(), &MemoryCache::default()).unwrap();
+        executor::execute(&plan, &mut ctx, session.catalog(), &MemoryCache::default()).unwrap();
 
         let outputs: HashMap<String, Value> = ctx.into_outputs();
 

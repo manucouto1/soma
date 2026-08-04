@@ -228,12 +228,22 @@ impl<'a> Compiler<'a> {
         // Build the structural plan (detect parallelism)
         let plan = self.plan_subset(&sorted, &ctx)?;
 
-        // Resolve caching if applicable
-        let plan = if let Some(cache) = cache {
-            self.resolve_cache(plan, cache, &sorted)?
-        } else {
-            plan
-        };
+        // The plan carries no `Cached` nodes: cache lookups are resolved at
+        // runtime, per node. A caller passing a cache gets a note saying so
+        // — this used to be a whole "phase" that transformed nothing.
+        if cache.is_some()
+            && self.mode != CompileMode::NoCache
+            && let Some(&first) = sorted.first()
+        {
+            self.diagnostics.push(Diagnostic {
+                node_id: first.to_string(),
+                level: DiagnosticLevel::Info,
+                message: "cache lookups are resolved at runtime per node \
+                          (key = hash(config + state + input)); the compiled plan \
+                          contains no Cached nodes"
+                    .to_string(),
+            });
+        }
 
         // Resolve distribution (wrap Remote nodes)
         let plan = self.resolve_distribution(plan);
@@ -532,14 +542,14 @@ impl<'a> Compiler<'a> {
             }
 
             NodeKind::SubGraph { graph } => {
-                // Recursively compile the inner graph
-                let inner_compiler = Compiler::new(graph, self.registry, self.mode);
-                match inner_compiler.compile(None) {
-                    Ok(result) => result.plan,
-                    Err(_) => ExecutionPlan::Execute {
-                        node_id: node_id.to_string(),
-                    },
-                }
+                // Recursively compile the inner graph. An inner error is this
+                // graph's error: the old fallback emitted a bare `Execute` for
+                // the node, which deferred the failure to runtime under a
+                // different name — inconsistent with the unknown-kind arm
+                // below, which refuses rather than guesses.
+                Compiler::new(graph, self.registry, self.mode)
+                    .compile(None)?
+                    .plan
             }
 
             NodeKind::Loop {
@@ -684,27 +694,6 @@ impl<'a> Compiler<'a> {
     /// collide. The executor computes the real key
     /// `hash(config + state + input)` per node with the materialized
     /// input in hand, and skips execution on a hit.
-    fn resolve_cache(
-        &mut self,
-        plan: ExecutionPlan,
-        _cache: &dyn CacheStore,
-        sorted: &[&str],
-    ) -> Result<ExecutionPlan> {
-        if self.mode != CompileMode::NoCache
-            && let Some(&first) = sorted.first()
-        {
-            self.diagnostics.push(Diagnostic {
-                node_id: first.to_string(),
-                level: DiagnosticLevel::Info,
-                message: "cache lookups are resolved at runtime per node \
-                          (key = hash(config + state + input)); the compiled plan \
-                          contains no Cached nodes"
-                    .to_string(),
-            });
-        }
-        Ok(plan)
-    }
-
     /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
     fn resolve_distribution(&self, plan: ExecutionPlan) -> ExecutionPlan {
         match plan {

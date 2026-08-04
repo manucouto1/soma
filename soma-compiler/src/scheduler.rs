@@ -329,8 +329,16 @@ fn schedule_plan(plan: &ExecutionPlan, state: &mut ScheduleState<'_>, forced_wor
     }
 }
 
+/// The worker with the most free slots.
+///
+/// Precondition: `workers` is non-empty — `schedule()` returns early (with
+/// a warning) for both "no workers" and "none with capacity" before any
+/// call can reach here.
 fn least_loaded<'a>(workers: &[&'a WorkerInfo]) -> &'a WorkerInfo {
-    workers.iter().max_by_key(|w| w.available_slots()).unwrap()
+    workers
+        .iter()
+        .max_by_key(|w| w.available_slots())
+        .expect("schedule() filters out an empty worker set before placing")
 }
 
 fn collect_node_ids(plan: &ExecutionPlan) -> Vec<String> {

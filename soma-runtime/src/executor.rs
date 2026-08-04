@@ -890,6 +890,17 @@ fn composite_fit(node_ids: &[String], ctx: &mut Context, catalog: &NodeCatalog) 
     let Some(first) = node_ids.first() else {
         return Ok(false);
     };
+    // A Composite block is built by the compiler from differentiable
+    // filters. A step inside one is a broken plan, and falling back to
+    // one-by-one execution would paper over it.
+    if let Some(step_id) = node_ids.iter().find(|id| catalog.step(id).is_some()) {
+        return Err(SomaError::Execution {
+            node_id: step_id.to_string(),
+            message: "a Composite block contains a step; composite fit is defined \
+                      only over differentiable filters"
+                .into(),
+        });
+    }
     let peers: Option<Vec<(String, Arc<dyn somatize_core::filter::Filter>)>> = node_ids
         .iter()
         .map(|id| catalog.get(id).map(|f| (id.clone(), f)))
@@ -932,9 +943,11 @@ fn fit_state_if_needed(
     ctx: &mut Context,
     cache: &dyn CacheStore,
 ) -> Result<Option<Value>> {
-    if !ctx.mode.is_fit() || meta.kind != somatize_core::filter::FilterKind::Trainable {
+    if !ctx.mode.is_fit() || !meta.trainable() {
         return Ok(None);
     }
+    // The metadata already said "trainable", which a step's meta never
+    // does — this extraction is structural, not a second decision.
     let NodeImpl::Filter(filter) = node else {
         return Ok(None);
     };
@@ -1007,7 +1020,7 @@ fn run_node_inner(
 fn execute_parallel(
     branches: &[ExecutionPlan],
     ctx: &mut Context,
-    filters: &NodeCatalog,
+    catalog: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     // What a branch contributes is what it *wrote*, not what happens to be
@@ -1029,7 +1042,7 @@ fn execute_parallel(
             .map(|branch| {
                 let mut branch_ctx = ctx.snapshot();
                 s.spawn(move || {
-                    execute(branch, &mut branch_ctx, filters, cache)?;
+                    execute(branch, &mut branch_ctx, catalog, cache)?;
                     let written: std::collections::HashSet<&String> =
                         branch_ctx.execution_order[order_mark..].iter().collect();
                     let new_entries: Vec<(String, VirtualValue)> = written
@@ -1127,7 +1140,7 @@ fn execute_stream(
     node_ids: &[String],
     chunk_size: usize,
     ctx: &mut Context,
-    filters: &NodeCatalog,
+    catalog: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
     use crate::executors::{FittedFilter, StreamExecutor};
@@ -1138,10 +1151,10 @@ fn execute_stream(
     let fitted: Vec<FittedFilter> = node_ids
         .iter()
         .map(|nid| {
-            let filter = filters
+            let filter = catalog
                 .get(nid)
                 .ok_or_else(|| SomaError::NodeNotFound(nid.clone()))?;
-            let state = filters
+            let state = catalog
                 .get_state(nid)
                 .unwrap_or_else(|| Arc::new(Value::Empty));
             Ok(FittedFilter {
@@ -1172,11 +1185,15 @@ fn execute_stream(
     // so nothing paired: a reader building node timings saw N starts that
     // never finished and one completion that never began. Chunk progress
     // is a log line, not an event about a node that does not exist.
+    let last_meta = catalog.node_meta(last_id);
     ctx.event_bus.emit(Event::NodeStarted {
         run_id: ctx.run_id.clone(),
         node_id: last_id.clone(),
-        kind: somatize_core::filter::FilterKind::Stateless,
-        effectful: false,
+        kind: last_meta
+            .as_ref()
+            .map(|m| m.kind)
+            .unwrap_or(somatize_core::filter::FilterKind::Stateless),
+        effectful: last_meta.as_ref().is_some_and(|m| m.effectful),
     });
 
     // Incrementally concatenate tensor outputs to avoid holding all chunks

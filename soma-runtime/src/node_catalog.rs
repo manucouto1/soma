@@ -40,6 +40,7 @@ pub enum NodeImpl {
 }
 
 impl NodeImpl {
+    /// The node's contract, whichever kind it is.
     pub fn meta(&self) -> NodeMeta {
         match self {
             Self::Filter(f) => f.meta().into(),
@@ -47,6 +48,7 @@ impl NodeImpl {
         }
     }
 
+    /// The node's configuration identity, whichever kind it is.
     pub fn config_hash(&self) -> CacheKey {
         match self {
             Self::Filter(f) => f.config_hash(),
@@ -182,21 +184,6 @@ impl NodeCatalog {
         let mut ids: Vec<&str> = self.nodes.keys().map(String::as_str).collect();
         ids.sort_unstable();
         ids
-    }
-
-    /// Learn a node's state, if it has one to learn.
-    ///
-    /// `None` means "nothing to learn here" — a stateless filter, an
-    /// opaque one, or a step — which is a different answer from an error.
-    pub fn learn(&self, node_id: &str, x: &Value, y: Option<&Value>) -> Option<Result<Value>> {
-        match self.nodes.get(node_id)? {
-            NodeImpl::Filter(f)
-                if f.meta().kind == somatize_core::filter::FilterKind::Trainable =>
-            {
-                Some(f.fit(x, y))
-            }
-            _ => None,
-        }
     }
 
     /// Store a trained state for a node.
