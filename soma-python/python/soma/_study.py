@@ -14,6 +14,7 @@ Installed onto the Rust ``Graph`` at import (same pattern as
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from soma._soma import Graph as _RustGraph
@@ -21,6 +22,7 @@ from soma._soma import Graph as _RustGraph
 if TYPE_CHECKING:  # the runtime import would be circular; the annotation is not
     from soma._graph import Graph
 from soma._soma import Study as _Study
+from soma._soma import Trial
 
 
 def graph_search_space(self: Graph) -> list[dict]:
@@ -128,7 +130,13 @@ def graph_study(self: Graph, name: str, **kwargs: Any) -> _Study:
 _rust_study_run = _Study.run
 
 
-def _study_run(self, executor, on_event=None, resume=False, progress=False):
+def _study_run(
+    self: Study,
+    executor: Callable[[Trial], dict[str, float] | float | None],
+    on_event: Callable[[dict[str, Any]], object] | None = None,
+    resume: bool = False,
+    progress: bool = False,
+) -> None:
     """Run the study; ``progress=True`` draws a tqdm bar (part of the
     ``somatize[viz]`` extra) fed by live ``StudyProgress`` events, with
     the current best as postfix. Chains with a user ``on_event``.

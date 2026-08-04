@@ -28,7 +28,7 @@ without changing user code.
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 from soma._soma import Graph as _RustGraph
 
@@ -338,7 +338,7 @@ def optimizer(self: Graph) -> Any:
 
 
 @contextlib.contextmanager
-def context(self: Graph):
+def context(self: Graph) -> Iterator[Any]:
     """Autograd context for the training step.
 
     Locally a no-op that yields a sentinel. In the RPC future this becomes
