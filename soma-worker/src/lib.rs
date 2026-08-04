@@ -13,6 +13,7 @@ pub mod error;
 pub mod protocol;
 pub mod python_process;
 pub mod server;
+pub mod stream_exec;
 pub mod worker;
 pub mod ws_transport;
 

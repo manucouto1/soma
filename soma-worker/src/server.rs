@@ -58,8 +58,7 @@ struct ServerState {
     /// Track upload times for automatic cleanup.
     temp_uploads: Mutex<HashMap<CacheKey, Instant>>,
     /// Active streaming sessions: stream_id → (executor, start_time).
-    active_streams:
-        Mutex<HashMap<String, (somatize_runtime::executors::stream::StreamExecutor, Instant)>>,
+    active_streams: Mutex<HashMap<String, (crate::stream_exec::StreamExecutor, Instant)>>,
 }
 
 /// Build a worker server router (no authentication).
@@ -481,7 +480,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
 
 /// Handle a streaming protocol message. Returns an optional reply.
 fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option<StreamMessage> {
-    use somatize_runtime::executors::stream::{FittedFilter, StreamExecutor};
+    use crate::stream_exec::{FittedFilter, StreamExecutor};
 
     match msg {
         StreamMessage::StreamBegin {
@@ -524,20 +523,39 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 }
             }
 
-            // Build FittedFilter list from plan node order
+            // Build FittedFilter list from plan node order. A node the
+            // worker cannot resolve fails the stream up front, rather
+            // than silently streaming a shorter chain.
             let node_ids = plan.plan.node_ids();
-            let fitted: Vec<FittedFilter> = node_ids
+            let fitted: Result<Vec<FittedFilter>, String> = node_ids
                 .iter()
-                .filter_map(|id| {
-                    let filter = worker.get_filter(id)?;
+                .map(|id| {
+                    let filter = worker.get_filter(id).ok_or_else(|| {
+                        format!(
+                            "stream plan names `{id}`, but no filter with that id \
+                             is registered (steps cannot stream)"
+                        )
+                    })?;
                     let filter_state = worker.get_filter_state(id);
-                    Some(FittedFilter {
+                    Ok(FittedFilter {
                         name: id.to_string(),
                         filter,
                         state: filter_state,
                     })
                 })
                 .collect();
+            let fitted = match fitted {
+                Ok(f) => f,
+                Err(error) => {
+                    return Some(StreamMessage::StreamComplete {
+                        stream_id,
+                        result: PlanResult::Failed {
+                            error,
+                            duration_ms: 0,
+                        },
+                    });
+                }
+            };
 
             let executor = StreamExecutor::new(fitted);
             state

@@ -467,27 +467,46 @@ impl Worker {
         meta: &somatize_core::store::StoreMeta,
         start: Instant,
     ) -> PlanResult {
-        use somatize_runtime::executors::stream::{FittedFilter, StreamExecutor};
+        use crate::stream_exec::{FittedFilter, StreamExecutor};
+
+        /// Rows per chunk when auto-streaming from a DataStore — also the
+        /// threshold that triggers this path (see `total_rows > 1024`).
+        const STREAM_CHUNK_ROWS: usize = 1024;
 
         let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
-        let fitted: Vec<FittedFilter> = node_ids
+        // A node the catalog does not know is a failed plan, never a
+        // silently shorter chain (a `filter_map` here once streamed a
+        // 3-node plan through 2 filters and reported success).
+        let fitted: Result<Vec<FittedFilter>, String> = node_ids
             .iter()
-            .filter_map(|id| {
-                let filter = self.catalog.get(id)?;
+            .map(|id| {
+                let filter = self
+                    .catalog
+                    .get(id)
+                    .ok_or_else(|| format!("stream plan names `{id}`, but no filter with that id is registered (steps cannot stream)"))?;
                 let state = self
                     .catalog
                     .get_state(id)
                     .unwrap_or_else(|| Arc::new(Value::Empty));
-                Some(FittedFilter {
+                Ok(FittedFilter {
                     name: id.clone(),
                     filter,
                     state,
                 })
             })
             .collect();
+        let fitted = match fitted {
+            Ok(f) => f,
+            Err(error) => {
+                return PlanResult::Failed {
+                    error,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                };
+            }
+        };
 
         let mut executor = StreamExecutor::new(fitted);
-        let chunk_size = 1024;
+        let chunk_size = STREAM_CHUNK_ROWS;
         let run_id = format!("worker_stream_{}", plan.plan_id);
 
         self.event_bus.emit(Event::RunStarted {

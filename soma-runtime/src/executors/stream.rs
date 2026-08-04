@@ -1,243 +1,273 @@
-//! Streaming executor — processes data in chunks through fitted filters.
+//! The stream driver: chunked execution through `run_node`'s primitives.
 //!
-//! Respects each filter's [`StreamMode`]: FixedState processes chunks
-//! independently, Evolving updates state per chunk with checkpoints,
-//! Barrier accumulates all chunks before processing.
+//! One execution site is the runtime's core invariant, and streaming is
+//! no longer the exception: every chunk of every node goes through the
+//! same three primitives the topological walk composes — `output_key`
+//! (the memoization guard and the one key derivation), `compute_node`
+//! (panic containment around the only filter-vs-step match) and
+//! `store_output` (provenance on every write). What lives here is only
+//! what is genuinely streaming's: chunk flow per [`StreamMode`], the
+//! evolving state carried between chunks, barrier buffers and their
+//! flush, and the per-node event bracket.
+//!
+//! **Events.** One `NodeStarted` when the first chunk reaches a node,
+//! one `NodeCompleted` per started node at [`StreamRun::finish`] with an
+//! aggregated summary (`stream: N chunks, H hits, M misses`), and a real
+//! `NodeFailed` naming the chunk on error — so an upstream span left
+//! open means exactly what it means everywhere else: the run died
+//! mid-node. Per-chunk cache hit/miss events are deliberately not
+//! emitted (hundreds of standalone spans would drown a reader); the
+//! counts travel in the summary. A per-chunk `NodeStarted` under made-up
+//! ids (`model#chunk_3`) was tried once and reverted.
+//!
+//! **Evolving.** The forward's output value doubles as the next chunk's
+//! state — a documented conflation. Separating them needs a
+//! `step(chunk, state) -> (out, state)` API on filters, which is a
+//! user-facing change this driver deliberately does not smuggle in.
+//!
+//! The worker's remote streaming (`soma-worker/src/stream_exec.rs`)
+//! still runs the pre-unification executor and is the pending half of
+//! this work: unifying it needs a `Context` that survives between WS
+//! messages.
 
+use crate::executor::{Context, compute_node, output_key, store_output};
+use crate::node_catalog::{NodeCatalog, NodeImpl};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
-use somatize_core::filter::{Filter, StreamMode};
+use somatize_core::event::Event;
+use somatize_core::filter::StreamMode;
+use somatize_core::node::{NodeMeta, NodeOutcome};
 use somatize_core::value::Value;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-/// A fitted filter with its learned state, ready for streaming.
-#[derive(Clone)]
-pub struct FittedFilter {
-    pub name: String,
-    pub filter: Arc<dyn Filter>,
-    pub state: Arc<Value>,
+/// One plan node with its chunk-flow state and event/statistics bookkeeping.
+struct StreamNode {
+    id: String,
+    node: NodeImpl,
+    meta: NodeMeta,
+    /// From the filter's own meta — [`NodeMeta`] does not carry it, and
+    /// only a filter can be here (steps are refused at construction).
+    stream_mode: StreamMode,
+    /// The catalog state, same escalation `run_node` uses (`Value::Empty`
+    /// when nothing is fitted). Shadowed by `evolving` once set.
+    base_state: Arc<Value>,
+    /// Accumulated chunks awaiting the flush (Barrier mode).
+    barrier: Vec<Value>,
+    /// The last output, doubling as the next state (Evolving mode).
+    evolving: Option<Value>,
+    started: bool,
+    chunks: u64,
+    cache_hits: u64,
+    cache_misses: u64,
+    compute: Duration,
 }
 
-/// Per-filter streaming state — one per filter in the pipeline.
-struct FilterStreamState {
-    /// Accumulated chunks for Barrier mode.
-    barrier_buffer: Vec<Value>,
-    /// Evolving state (mutated per chunk).
-    evolving_state: Option<Value>,
-}
-
-/// Processes a stream of chunks through a sequence of fitted filters.
+/// Drives one stream plan: chunks in, one concatenated output out.
 ///
-/// Each filter's StreamMode defines its contract:
-/// - FixedState: each chunk processed independently, cacheable per chunk
-/// - Evolving: state mutates with each chunk, periodic checkpoints
-/// - Barrier: accumulates all chunks, processes as batch on flush
-pub struct StreamExecutor {
-    filters: Vec<FittedFilter>,
-    cache: Option<Arc<dyn CacheStore>>,
-    states: Vec<FilterStreamState>,
+/// Built from the [`NodeCatalog`] — a node the catalog does not know is
+/// an error, never a silent skip. The chunk loop lives in the caller
+/// ([`execute_stream`](crate::executor)); this type owns the per-node
+/// flow so the state that must survive between chunks (and, in the
+/// worker's future, between RPC messages) has a single home.
+pub(crate) struct StreamRun {
+    nodes: Vec<StreamNode>,
     chunk_count: usize,
-    /// The run's seed, folded into every chunk's cache key.
-    ///
-    /// Without it every seed of a study shares one cache line for the same
-    /// chunk, so the second seed reads back the first one's results and the
-    /// sweep measures one seed N times. The non-streaming path has salted
-    /// since `salt_with_seed` was introduced; this one never did.
-    seed: Option<i64>,
 }
 
-impl StreamExecutor {
-    pub fn new(filters: Vec<FittedFilter>) -> Self {
-        let n = filters.len();
-        Self {
-            filters,
-            cache: None,
-            states: (0..n)
-                .map(|_| FilterStreamState {
-                    barrier_buffer: Vec::new(),
-                    evolving_state: None,
+impl StreamRun {
+    pub(crate) fn new(node_ids: &[String], catalog: &NodeCatalog) -> Result<Self> {
+        let nodes = node_ids
+            .iter()
+            .map(|id| {
+                let node = catalog
+                    .node(id)
+                    .ok_or_else(|| SomaError::NodeNotFound(id.clone()))?
+                    .clone();
+                // The compiler refuses steps in a stream plan; this is the
+                // driver's own line of defense, not a user-facing path.
+                let stream_mode = match &node {
+                    NodeImpl::Filter(f) => f.meta().stream_mode,
+                    NodeImpl::Step(_) => {
+                        return Err(SomaError::Execution {
+                            node_id: id.clone(),
+                            message: "a step cannot run inside a stream plan".into(),
+                        });
+                    }
+                };
+                let meta = node.meta();
+                let base_state = catalog
+                    .get_state(id)
+                    .unwrap_or_else(|| Arc::new(Value::Empty));
+                Ok(StreamNode {
+                    id: id.clone(),
+                    node,
+                    meta,
+                    stream_mode,
+                    base_state,
+                    barrier: Vec::new(),
+                    evolving: None,
+                    started: false,
+                    chunks: 0,
+                    cache_hits: 0,
+                    cache_misses: 0,
+                    compute: Duration::ZERO,
                 })
-                .collect(),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            nodes,
             chunk_count: 0,
-            seed: None,
-        }
+        })
     }
 
-    /// Fold the run's seed into every cache key.
-    pub fn with_seed(mut self, seed: Option<i64>) -> Self {
-        self.seed = seed;
-        self
-    }
-
-    pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
-        self.cache = Some(cache);
-        self
-    }
-
-    /// Process a single chunk through the pipeline.
-    /// Returns the output chunk, or None if a Barrier filter is still accumulating.
-    pub fn process_chunk(&mut self, chunk: Value) -> Result<Option<Value>> {
-        let cache = self.cache.clone();
-        self.process_chunk_cached(chunk, cache.as_deref())
-    }
-
-    /// Process a chunk against a borrowed cache.
-    ///
-    /// The executor's own `cache` is an `Arc` because a long-lived one
-    /// (the worker keeps executors in a map between requests) outlives any
-    /// borrow. A caller that already holds the store — the plan executor
-    /// does, as a `&dyn` argument — has no `Arc` to give and would
-    /// otherwise have to leave chunk caching off. That is what happened:
-    /// `LocalRunner::forward` never set the owned handle, so every
-    /// streaming forward ran uncached and said nothing about it.
-    pub fn process_chunk_cached(
+    /// Push one chunk through the chain. `None` means a barrier swallowed
+    /// it — the nodes past the barrier see nothing until [`Self::flush`].
+    pub(crate) fn process_chunk(
         &mut self,
         chunk: Value,
-        cache: Option<&dyn CacheStore>,
+        ctx: &mut Context,
+        cache: &dyn CacheStore,
     ) -> Result<Option<Value>> {
-        let mut current = chunk;
+        let stage = format!("chunk {}", self.chunk_count);
         self.chunk_count += 1;
-
-        for i in 0..self.filters.len() {
-            let mode = self.filters[i].filter.meta().stream_mode;
-            match process_by_mode(
-                &mode,
-                &self.filters[i],
-                &current,
-                &mut self.states[i],
-                cache,
-                self.seed,
-            )? {
-                ChunkResult::Output(val) => current = val,
-                ChunkResult::Buffered => return Ok(None),
+        let mut current = chunk;
+        for i in 0..self.nodes.len() {
+            if matches!(self.nodes[i].stream_mode, StreamMode::Barrier) {
+                self.nodes[i].barrier.push(current);
+                return Ok(None);
             }
+            current = self.run_compute(i, current, &stage, ctx, cache)?;
         }
-
         Ok(Some(current))
     }
 
-    /// Flush barrier filters and process remaining data as batch.
-    pub fn flush(&mut self) -> Result<Option<Value>> {
+    /// Materialize every barrier buffer and cascade the result through the
+    /// rest of the chain — a second barrier downstream receives the whole
+    /// materialized value as one "chunk", which at flush time it is.
+    pub(crate) fn flush(
+        &mut self,
+        ctx: &mut Context,
+        cache: &dyn CacheStore,
+    ) -> Result<Option<Value>> {
         let mut current: Option<Value> = None;
-
-        for i in 0..self.filters.len() {
-            let mode = self.filters[i].filter.meta().stream_mode;
-            if let Some(val) = flush_by_mode(&mode, &self.filters[i], &mut self.states[i])? {
-                current = Some(val);
-            } else if let Some(val) = current.take() {
-                current = Some(
-                    self.filters[i]
-                        .filter
-                        .forward(&val, &self.filters[i].state)?,
-                );
+        for i in 0..self.nodes.len() {
+            if !self.nodes[i].barrier.is_empty() {
+                let buffer = std::mem::take(&mut self.nodes[i].barrier);
+                let materialized = materialize_buffer(&buffer)?;
+                current = Some(self.run_compute(i, materialized, "flush", ctx, cache)?);
+            } else if let Some(v) = current.take() {
+                current = Some(self.run_compute(i, v, "flush", ctx, cache)?);
             }
         }
-
         Ok(current)
     }
 
-    /// Process multiple chunks and collect outputs.
-    pub fn process_all(&mut self, chunks: Vec<Value>) -> Result<Vec<Value>> {
-        let mut outputs = Vec::new();
-        for chunk in chunks {
-            if let Some(output) = self.process_chunk(chunk)? {
-                outputs.push(output);
+    /// Close each started node's event bracket with its aggregate.
+    pub(crate) fn finish(&mut self, ctx: &Context) {
+        for node in &mut self.nodes {
+            if !node.started {
+                continue;
             }
+            node.started = false;
+            ctx.event_bus.emit(Event::NodeCompleted {
+                run_id: ctx.run_id.clone(),
+                node_id: node.id.clone(),
+                duration: node.compute,
+                output_summary: format!(
+                    "stream: {} chunks, {} hits, {} misses",
+                    node.chunks, node.cache_hits, node.cache_misses
+                ),
+            });
         }
-        if let Some(flushed) = self.flush()? {
-            outputs.push(flushed);
-        }
-        Ok(outputs)
     }
 
-    /// Number of chunks processed so far.
-    pub fn chunks_processed(&self) -> usize {
+    pub(crate) fn chunks_processed(&self) -> usize {
         self.chunk_count
     }
-}
 
-/// Result of processing a chunk through one filter.
-enum ChunkResult {
-    /// Filter produced output — pass to next filter.
-    Output(Value),
-    /// Filter is buffering (Barrier) — no output yet.
-    Buffered,
-}
-
-// ── StreamMode dispatch ──
-
-/// Process one chunk according to the stream mode.
-fn process_by_mode(
-    mode: &StreamMode,
-    fitted: &FittedFilter,
-    input: &Value,
-    state: &mut FilterStreamState,
-    cache: Option<&dyn CacheStore>,
-    seed: Option<i64>,
-) -> Result<ChunkResult> {
-    match mode {
-        StreamMode::FixedState => {
-            let result = forward_cached(fitted, input, cache, seed)?;
-            Ok(ChunkResult::Output(result))
+    /// One node, one value, through the shared primitives. Mode-agnostic:
+    /// the caller decides whether the value is a live chunk or a
+    /// materialized barrier buffer.
+    fn run_compute(
+        &mut self,
+        i: usize,
+        input: Value,
+        stage: &str,
+        ctx: &Context,
+        cache: &dyn CacheStore,
+    ) -> Result<Value> {
+        let node = &mut self.nodes[i];
+        if !node.started {
+            node.started = true;
+            ctx.event_bus.emit(Event::NodeStarted {
+                run_id: ctx.run_id.clone(),
+                node_id: node.id.clone(),
+                kind: node.meta.kind,
+                effectful: node.meta.effectful,
+            });
         }
-        StreamMode::Evolving => {
-            let default_state: &Value = &fitted.state;
-            let filter_state = state.evolving_state.as_ref().unwrap_or(default_state);
-            let result = fitted.filter.forward(input, filter_state)?;
-            state.evolving_state = Some(result.clone());
-            Ok(ChunkResult::Output(result))
+
+        let state_ref: &Value = match &node.evolving {
+            Some(v) => v,
+            None => node.base_state.as_ref(),
+        };
+        let input_key = CacheKey::for_value(&input);
+        let key = output_key(&node.node, &node.meta, state_ref, &input_key, ctx.seed);
+
+        if let Some(k) = &key {
+            if let Ok(Some((cached, _tier))) = cache.get_located(k) {
+                node.chunks += 1;
+                node.cache_hits += 1;
+                if matches!(node.stream_mode, StreamMode::Evolving) {
+                    node.evolving = Some(cached.clone());
+                }
+                return Ok(cached);
+            }
+            node.cache_misses += 1;
         }
-        StreamMode::Barrier => {
-            state.barrier_buffer.push(input.clone());
-            Ok(ChunkResult::Buffered)
+
+        let started_at = Instant::now();
+        match compute_node(&node.node, &node.id, ctx, &input, state_ref) {
+            Ok(NodeOutcome::Produced(out)) => {
+                let duration = started_at.elapsed();
+                node.compute += duration;
+                node.chunks += 1;
+                if let Some(k) = &key {
+                    store_output(
+                        cache,
+                        k,
+                        &out,
+                        &node.id,
+                        &ctx.run_id,
+                        duration,
+                        node.meta.deterministic,
+                    );
+                }
+                if matches!(node.stream_mode, StreamMode::Evolving) {
+                    node.evolving = Some(out.clone());
+                }
+                Ok(out)
+            }
+            // The compiler refuses steps in a stream plan, so reaching
+            // this is a soma bug — but a silent pass-through would be a
+            // worse answer than a clear refusal.
+            Ok(NodeOutcome::HandOff { .. } | NodeOutcome::Paused { .. }) => {
+                Err(SomaError::Execution {
+                    node_id: node.id.clone(),
+                    message: "a step cannot run inside a stream plan".into(),
+                })
+            }
+            Err(e) => {
+                ctx.event_bus.emit(Event::NodeFailed {
+                    run_id: ctx.run_id.clone(),
+                    node_id: node.id.clone(),
+                    error: format!("{stage}: {e}"),
+                });
+                Err(e)
+            }
         }
     }
-}
-
-/// Flush a filter by mode. Only Barrier has work to do.
-fn flush_by_mode(
-    mode: &StreamMode,
-    fitted: &FittedFilter,
-    state: &mut FilterStreamState,
-) -> Result<Option<Value>> {
-    match mode {
-        StreamMode::Barrier if !state.barrier_buffer.is_empty() => {
-            let materialized = materialize_buffer(&state.barrier_buffer)?;
-            state.barrier_buffer.clear();
-            let result = fitted.filter.forward(&materialized, &fitted.state)?;
-            Ok(Some(result))
-        }
-        _ => Ok(None),
-    }
-}
-
-/// Forward with optional cache lookup.
-fn forward_cached(
-    fitted: &FittedFilter,
-    input: &Value,
-    cache: Option<&dyn CacheStore>,
-    seed: Option<i64>,
-) -> Result<Value> {
-    if let Some(c) = cache {
-        // The same derivation `run_node` uses, seed and all. It was
-        // spelled out again here and the salt was left off, so a study's
-        // seeds shared one cache line whenever it streamed.
-        let cache_key = crate::executor::salt_with_seed(
-            CacheKey::for_output(
-                &fitted.filter.config_hash(),
-                &CacheKey::for_value(&fitted.state),
-                &CacheKey::for_value(input),
-            ),
-            seed,
-        );
-        if let Some(cached) = c.get(&cache_key)? {
-            return Ok(cached);
-        }
-        let result = fitted.filter.forward(input, &fitted.state)?;
-        let _ = c.put(&cache_key, &result);
-        return Ok(result);
-    }
-    fitted.filter.forward(input, &fitted.state)
 }
 
 /// Concatenate tensor chunks along first dimension.
@@ -279,54 +309,26 @@ pub fn materialize_buffer(buffer: &[Value]) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::cache::CacheKey;
+    use crate::cache::memory::MemoryCache;
+    use crate::event_bus::EventBus;
     use somatize_core::error::Result as SomaResult;
-    use somatize_core::filter::{Distribution, FilterKind, FilterMeta};
+    use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta};
 
-    /// JSON cannot write a non-finite float: `serde_json` turns NaN and
-    /// both infinities into `null`. Keying the chunk cache off
-    /// `serde_json::to_vec` therefore gave `[NaN]` and `[+inf]` the same
-    /// key, and the second chunk was answered with the first one's output.
-    #[test]
-    fn non_finite_chunks_do_not_share_a_cache_key() {
-        use crate::cache::memory::MemoryCache;
-
-        let nan = Value::tensor(vec![f64::NAN], vec![1]);
-        let inf = Value::tensor(vec![f64::INFINITY], vec![1]);
-
-        // The premise: JSON really does flatten both to the same bytes.
-        assert_eq!(
-            serde_json::to_vec(&nan).unwrap(),
-            serde_json::to_vec(&inf).unwrap(),
-            "if this ever stops being true the bug is gone by other means"
-        );
-        assert_ne!(CacheKey::for_value(&nan), CacheKey::for_value(&inf));
-
-        let cache = MemoryCache::default();
-        let fitted = FittedFilter {
-            name: "doubler".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Arc::new(Value::Empty),
-        };
-
-        let first = |v: &Value| match v {
-            Value::Tensor { values, .. } => values[0],
-            other => panic!("expected a tensor, got {other:?}"),
-        };
-
-        let out_nan = forward_cached(&fitted, &nan, Some(&cache), None).unwrap();
-        let out_inf = forward_cached(&fitted, &inf, Some(&cache), None).unwrap();
-
-        assert!(first(&out_nan).is_nan(), "NaN doubled is still NaN");
-        assert_eq!(
-            first(&out_inf),
-            f64::INFINITY,
-            "the infinite chunk was served the NaN chunk's cached output"
-        );
+    fn meta(name: &str, stream_mode: StreamMode, cacheable: bool) -> FilterMeta {
+        FilterMeta {
+            name: name.into(),
+            kind: FilterKind::Stateless,
+            cacheable,
+            differentiable: false,
+            deterministic: true,
+            stream_mode,
+            distribution: Distribution::Local,
+            input_schema: None,
+            output_schema: None,
+        }
     }
 
     struct DoubleChunk;
-
     impl Filter for DoubleChunk {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"DoubleChunk"])
@@ -336,29 +338,38 @@ mod tests {
         }
         fn forward(&self, x: &Value, _state: &Value) -> SomaResult<Value> {
             if let Value::Tensor { values, shape } = x {
-                let doubled: Vec<f64> = values.iter().map(|v| v * 2.0).collect();
-                Ok(Value::tensor(doubled, shape.clone()))
+                Ok(Value::tensor(
+                    values.iter().map(|v| v * 2.0).collect(),
+                    shape.clone(),
+                ))
             } else {
                 Ok(x.clone())
             }
         }
         fn meta(&self) -> FilterMeta {
-            FilterMeta {
-                name: "DoubleChunk".into(),
-                kind: FilterKind::Stateless,
-                cacheable: true,
-                differentiable: false,
-                deterministic: true,
-                stream_mode: StreamMode::FixedState,
-                distribution: Distribution::Local,
-                input_schema: None,
-                output_schema: None,
-            }
+            meta("DoubleChunk", StreamMode::FixedState, true)
         }
     }
 
-    struct Accumulator;
+    /// Identity, but declared uncacheable — the probe for the guard.
+    struct UncachedDouble;
+    impl Filter for UncachedDouble {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"UncachedDouble"])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> SomaResult<Value> {
+            DoubleChunk.forward(x, &Value::Empty)
+        }
+        fn meta(&self) -> FilterMeta {
+            meta("UncachedDouble", StreamMode::FixedState, false)
+        }
+    }
 
+    /// Barrier: forwards whatever it materialized.
+    struct Accumulator;
     impl Filter for Accumulator {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Accumulator"])
@@ -370,22 +381,13 @@ mod tests {
             Ok(x.clone())
         }
         fn meta(&self) -> FilterMeta {
-            FilterMeta {
-                name: "Accumulator".into(),
-                kind: FilterKind::Stateless,
-                cacheable: false,
-                differentiable: false,
-                deterministic: true,
-                stream_mode: StreamMode::Barrier,
-                distribution: Distribution::Local,
-                input_schema: None,
-                output_schema: None,
-            }
+            meta("Accumulator", StreamMode::Barrier, true)
         }
     }
 
+    /// Evolving: output = sum(chunk) + state, and the output IS the next
+    /// state — the documented conflation.
     struct RunningSum;
-
     impl Filter for RunningSum {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"RunningSum"])
@@ -405,202 +407,246 @@ mod tests {
             Ok(Value::tensor(vec![x_sum + state_sum], vec![1]))
         }
         fn meta(&self) -> FilterMeta {
-            FilterMeta {
-                name: "RunningSum".into(),
-                kind: FilterKind::Trainable,
-                cacheable: false,
-                differentiable: false,
-                deterministic: true,
-                stream_mode: StreamMode::Evolving,
-                distribution: Distribution::Local,
-                input_schema: None,
-                output_schema: None,
-            }
+            let mut m = meta("RunningSum", StreamMode::Evolving, false);
+            m.kind = FilterKind::Trainable;
+            m
         }
     }
 
-    fn make_fitted(filter: impl Filter + 'static, state: Value) -> FittedFilter {
-        let name = filter.meta().name.clone();
-        FittedFilter {
-            name,
-            filter: Arc::new(filter),
-            state: Arc::new(state),
+    struct Panicker;
+    impl Filter for Panicker {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Panicker"])
         }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, _x: &Value, _state: &Value) -> SomaResult<Value> {
+            panic!("chunk went sideways")
+        }
+        fn meta(&self) -> FilterMeta {
+            meta("Panicker", StreamMode::FixedState, true)
+        }
+    }
+
+    fn harness(nodes: Vec<(&str, Box<dyn Filter>)>) -> (StreamRun, Context, MemoryCache) {
+        let mut catalog = NodeCatalog::new();
+        let mut ids = Vec::new();
+        for (id, filter) in nodes {
+            catalog.register(id, filter);
+            ids.push(id.to_string());
+        }
+        let run = StreamRun::new(&ids, &catalog).unwrap();
+        let ctx = Context::new(Arc::new(EventBus::new(64)), "stream-test");
+        (run, ctx, MemoryCache::default())
+    }
+
+    fn tensor(vals: &[f64]) -> Value {
+        Value::tensor(vals.to_vec(), vec![vals.len()])
     }
 
     #[test]
     fn fixed_state_processes_each_chunk() {
-        let f = make_fitted(DoubleChunk, Value::Empty);
-        let mut exec = StreamExecutor::new(vec![f]);
-
-        let out1 = exec
-            .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
+        let (mut run, mut ctx, cache) = harness(vec![("double", Box::new(DoubleChunk))]);
+        let out = run
+            .process_chunk(tensor(&[1.0, 2.0]), &mut ctx, &cache)
             .unwrap();
-        assert_eq!(out1, Some(Value::tensor(vec![2.0, 4.0], vec![2])));
-
-        let out2 = exec
-            .process_chunk(Value::tensor(vec![3.0], vec![1]))
-            .unwrap();
-        assert_eq!(out2, Some(Value::tensor(vec![6.0], vec![1])));
+        assert_eq!(out, Some(tensor(&[2.0, 4.0])));
+        let out = run.process_chunk(tensor(&[3.0]), &mut ctx, &cache).unwrap();
+        assert_eq!(out, Some(tensor(&[6.0])));
     }
 
     #[test]
     fn barrier_accumulates_then_flushes() {
-        let f = make_fitted(Accumulator, Value::Empty);
-        let mut exec = StreamExecutor::new(vec![f]);
-
-        let r1 = exec
-            .process_chunk(Value::tensor(vec![1.0, 2.0], vec![2]))
-            .unwrap();
-        assert_eq!(r1, None);
-
-        let r2 = exec
-            .process_chunk(Value::tensor(vec![3.0, 4.0], vec![2]))
-            .unwrap();
-        assert_eq!(r2, None);
-
-        let flushed = exec.flush().unwrap().unwrap();
-        let (data, shape) = flushed.as_tensor().unwrap();
-        assert_eq!(data, &[1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(shape, &[4]);
+        let (mut run, mut ctx, cache) = harness(vec![("acc", Box::new(Accumulator))]);
+        assert_eq!(
+            run.process_chunk(tensor(&[1.0, 2.0]), &mut ctx, &cache)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            run.process_chunk(tensor(&[3.0, 4.0]), &mut ctx, &cache)
+                .unwrap(),
+            None
+        );
+        let flushed = run.flush(&mut ctx, &cache).unwrap().unwrap();
+        assert_eq!(flushed, tensor(&[1.0, 2.0, 3.0, 4.0]));
     }
 
     #[test]
     fn evolving_state_accumulates() {
-        let f = make_fitted(RunningSum, Value::tensor(vec![0.0], vec![1]));
-        let mut exec = StreamExecutor::new(vec![f]);
-
-        let r1 = exec
-            .process_chunk(Value::tensor(vec![10.0], vec![1]))
+        let (mut run, mut ctx, cache) = harness(vec![("sum", Box::new(RunningSum))]);
+        let r1 = run
+            .process_chunk(tensor(&[10.0]), &mut ctx, &cache)
             .unwrap()
             .unwrap();
-        let (d1, _) = r1.as_tensor().unwrap();
-        assert_eq!(d1, &[10.0]);
-
-        let r2 = exec
-            .process_chunk(Value::tensor(vec![5.0], vec![1]))
+        assert_eq!(r1, tensor(&[10.0]));
+        let r2 = run
+            .process_chunk(tensor(&[5.0]), &mut ctx, &cache)
             .unwrap()
             .unwrap();
-        let (d2, _) = r2.as_tensor().unwrap();
-        assert_eq!(d2, &[15.0]); // 10 + 5
+        assert_eq!(r2, tensor(&[15.0]), "10 + 5: the output was the state");
     }
 
     #[test]
     fn mixed_pipeline_fixed_then_barrier() {
-        let f1 = make_fitted(DoubleChunk, Value::Empty);
-        let f2 = make_fitted(Accumulator, Value::Empty);
-        let mut exec = StreamExecutor::new(vec![f1, f2]);
-
-        let r1 = exec
-            .process_chunk(Value::tensor(vec![1.0], vec![1]))
-            .unwrap();
-        assert_eq!(r1, None); // barrier
-
-        let r2 = exec
-            .process_chunk(Value::tensor(vec![2.0], vec![1]))
-            .unwrap();
-        assert_eq!(r2, None);
-
-        let flushed = exec.flush().unwrap().unwrap();
-        let (data, _) = flushed.as_tensor().unwrap();
-        assert_eq!(data, &[2.0, 4.0]); // doubled then accumulated
+        let (mut run, mut ctx, cache) = harness(vec![
+            ("double", Box::new(DoubleChunk)),
+            ("acc", Box::new(Accumulator)),
+        ]);
+        assert_eq!(
+            run.process_chunk(tensor(&[1.0]), &mut ctx, &cache).unwrap(),
+            None
+        );
+        assert_eq!(
+            run.process_chunk(tensor(&[2.0]), &mut ctx, &cache).unwrap(),
+            None
+        );
+        let flushed = run.flush(&mut ctx, &cache).unwrap().unwrap();
+        assert_eq!(flushed, tensor(&[2.0, 4.0]), "doubled then accumulated");
     }
 
+    /// T4: `cacheable: false` means NOTHING is written per chunk. The old
+    /// executor cached every filter it was handed a store for.
     #[test]
-    fn process_all_combines_chunks() {
-        let f = make_fitted(DoubleChunk, Value::Empty);
-        let mut exec = StreamExecutor::new(vec![f]);
-
-        let outputs = exec
-            .process_all(vec![
-                Value::tensor(vec![1.0], vec![1]),
-                Value::tensor(vec![2.0], vec![1]),
-                Value::tensor(vec![3.0], vec![1]),
-            ])
-            .unwrap();
-
-        assert_eq!(outputs.len(), 3);
-        let (d, _) = outputs[0].as_tensor().unwrap();
-        assert_eq!(d, &[2.0]);
+    fn uncacheable_chunks_are_not_cached() {
+        let (mut run, mut ctx, cache) = harness(vec![("raw", Box::new(UncachedDouble))]);
+        run.process_chunk(tensor(&[1.0]), &mut ctx, &cache).unwrap();
+        run.process_chunk(tensor(&[2.0]), &mut ctx, &cache).unwrap();
+        assert!(
+            cache.is_empty(),
+            "an uncacheable filter's chunks reached the store"
+        );
     }
 
+    /// A second pass over the same chunks is served from the store, and
+    /// the stats say so.
     #[test]
-    fn fixed_state_with_cache() {
-        let f = make_fitted(DoubleChunk, Value::Empty);
-        let cache = Arc::new(crate::MemoryCache::default());
-        let mut exec = StreamExecutor::new(vec![f]).with_cache(cache);
-
-        let r1 = exec
-            .process_chunk(Value::tensor(vec![5.0], vec![1]))
-            .unwrap()
-            .unwrap();
-        // Second call with same input should hit cache
-        let r2 = exec
-            .process_chunk(Value::tensor(vec![5.0], vec![1]))
-            .unwrap()
-            .unwrap();
-        assert_eq!(r1, r2);
-    }
-
-    /// A caller holding the store as a borrow — which the plan executor
-    /// does — could not enable chunk caching: `with_cache` wants an `Arc`.
-    /// So `LocalRunner::forward` never set one, and every streaming
-    /// forward ran uncached without saying so.
-    #[test]
-    fn a_borrowed_cache_is_enough_to_cache_chunks() {
-        use crate::cache::memory::MemoryCache;
-
+    fn cached_chunks_are_served_and_counted() {
+        let mut catalog = NodeCatalog::new();
+        catalog.register("double", Box::new(DoubleChunk));
+        let ids = vec!["double".to_string()];
         let cache = MemoryCache::default();
-        let fitted = vec![FittedFilter {
-            name: "doubler".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Arc::new(Value::Empty),
-        }];
+        let mut ctx = Context::new(Arc::new(EventBus::new(64)), "stream-test");
 
-        let chunk = Value::tensor(vec![1.0, 2.0], vec![2]);
-
-        let mut first = StreamExecutor::new(fitted.clone());
+        let mut first = StreamRun::new(&ids, &catalog).unwrap();
         let a = first
-            .process_chunk_cached(chunk.clone(), Some(&cache))
+            .process_chunk(tensor(&[5.0]), &mut ctx, &cache)
             .unwrap();
-        assert!(a.is_some());
-
-        // A second executor over the same store serves the chunk from the
-        // cache rather than recomputing it — which is only observable
-        // because the store was populated at all.
-        let mut second = StreamExecutor::new(fitted);
-        let b = second.process_chunk_cached(chunk, Some(&cache)).unwrap();
-        assert_eq!(a, b);
         assert!(!cache.is_empty(), "the chunk should have been cached");
+
+        let mut second = StreamRun::new(&ids, &catalog).unwrap();
+        let b = second
+            .process_chunk(tensor(&[5.0]), &mut ctx, &cache)
+            .unwrap();
+        assert_eq!(a, b);
+        assert_eq!(second.nodes[0].cache_hits, 1);
+        assert_eq!(second.nodes[0].cache_misses, 0);
     }
 
-    /// Two seeds must not share a chunk's cache line.
-    ///
-    /// `salt_with_seed` exists so a 5-seed study is five independent
-    /// computations rather than one recorded five times. The streaming
-    /// path derived its key by hand and left the salt off, so the second
-    /// seed read back the first seed's chunk results.
+    /// T7: two seeds must not share a chunk's cache line. `output_key`
+    /// salts exactly as the standard path does — that is the point of
+    /// sharing the derivation instead of spelling it out again.
     #[test]
     fn a_chunk_cache_key_follows_the_run_seed() {
-        let fitted = FittedFilter {
-            name: "f".into(),
-            filter: Arc::new(DoubleChunk),
-            state: Arc::new(Value::Empty),
-        };
-        let cache = crate::cache::memory::MemoryCache::default();
-        let chunk = Value::tensor(vec![1.0, 2.0], vec![2]);
+        let mut catalog = NodeCatalog::new();
+        catalog.register("double", Box::new(DoubleChunk));
+        let ids = vec!["double".to_string()];
+        let cache = MemoryCache::default();
+        let bus = Arc::new(EventBus::new(64));
 
-        let a = forward_cached(&fitted, &chunk, Some(&cache), Some(1)).unwrap();
-        let b = forward_cached(&fitted, &chunk, Some(&cache), Some(2)).unwrap();
-        assert_eq!(a, b, "the computation itself does not depend on the seed");
-
-        // Three distinct keys — two seeds and the unseeded case — for the
-        // same chunk. One shared entry would be the bug.
-        forward_cached(&fitted, &chunk, Some(&cache), None).unwrap();
+        for seed in [Some(1), Some(2), None] {
+            let mut ctx = Context::new(bus.clone(), "stream-test").with_seed(seed);
+            let mut run = StreamRun::new(&ids, &catalog).unwrap();
+            run.process_chunk(tensor(&[1.0, 2.0]), &mut ctx, &cache)
+                .unwrap();
+        }
         assert_eq!(
             cache.len(),
             3,
             "each seed must own its own cache line for the same chunk"
         );
+    }
+
+    /// T8: JSON flattens NaN and +inf to the same bytes; the content key
+    /// must not.
+    #[test]
+    fn non_finite_chunks_do_not_share_a_cache_key() {
+        let nan = tensor(&[f64::NAN]);
+        let inf = tensor(&[f64::INFINITY]);
+        assert_eq!(
+            serde_json::to_vec(&nan).unwrap(),
+            serde_json::to_vec(&inf).unwrap(),
+            "if this ever stops being true the bug is gone by other means"
+        );
+
+        let (mut run, mut ctx, cache) = harness(vec![("double", Box::new(DoubleChunk))]);
+        let out_nan = run.process_chunk(nan, &mut ctx, &cache).unwrap().unwrap();
+        let out_inf = run.process_chunk(inf, &mut ctx, &cache).unwrap().unwrap();
+
+        let first = |v: &Value| match v {
+            Value::Tensor { values, .. } => values[0],
+            other => panic!("expected a tensor, got {other:?}"),
+        };
+        assert!(first(&out_nan).is_nan(), "NaN doubled is still NaN");
+        assert_eq!(
+            first(&out_inf),
+            f64::INFINITY,
+            "the infinite chunk was served the NaN chunk's cached output"
+        );
+    }
+
+    /// T3: a panic in a filter is an error, not a dead process — the
+    /// catch_unwind is inherited from `compute_node`, not reimplemented.
+    #[test]
+    fn a_panicking_chunk_is_contained() {
+        let (mut run, mut ctx, cache) = harness(vec![("boom", Box::new(Panicker))]);
+        let err = run
+            .process_chunk(tensor(&[1.0]), &mut ctx, &cache)
+            .unwrap_err();
+        assert!(err.to_string().contains("panicked"), "{err}");
+    }
+
+    /// T9: the barrier's flush leg goes through the cache like any other
+    /// execution — a second run's flush is a hit. (The old executor's
+    /// flush ran bare `forward`s: no cache, no events.)
+    #[test]
+    fn barrier_flush_goes_through_the_cache() {
+        let mut catalog = NodeCatalog::new();
+        catalog.register("acc", Box::new(Accumulator));
+        let ids = vec!["acc".to_string()];
+        let cache = MemoryCache::default();
+        let mut ctx = Context::new(Arc::new(EventBus::new(64)), "stream-test");
+
+        let mut first = StreamRun::new(&ids, &catalog).unwrap();
+        first
+            .process_chunk(tensor(&[1.0]), &mut ctx, &cache)
+            .unwrap();
+        first
+            .process_chunk(tensor(&[2.0]), &mut ctx, &cache)
+            .unwrap();
+        first.flush(&mut ctx, &cache).unwrap();
+        assert!(!cache.is_empty(), "the flush output should be cached");
+
+        let mut second = StreamRun::new(&ids, &catalog).unwrap();
+        second
+            .process_chunk(tensor(&[1.0]), &mut ctx, &cache)
+            .unwrap();
+        second
+            .process_chunk(tensor(&[2.0]), &mut ctx, &cache)
+            .unwrap();
+        second.flush(&mut ctx, &cache).unwrap();
+        assert_eq!(second.nodes[0].cache_hits, 1, "the flush should be a hit");
+    }
+
+    /// An unknown node id is an error at construction — the worker's old
+    /// `filter_map` silently dropped it and streamed a shorter chain.
+    #[test]
+    fn an_unknown_node_is_an_error_not_a_skip() {
+        let catalog = NodeCatalog::new();
+        let Err(err) = StreamRun::new(&["ghost".to_string()], &catalog) else {
+            panic!("an unknown node must not stream");
+        };
+        assert!(matches!(err, SomaError::NodeNotFound(id) if id == "ghost"));
     }
 }
