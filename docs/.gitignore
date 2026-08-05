@@ -1,5 +1,11 @@
 # build output
 dist/
+
+# rendered from notebooks/ by scripts/notebooks_to_docs.py on every dev,
+# build and check. notebooks/ is the source of truth; a committed copy
+# would drift from the notebook it came from.
+src/content/docs/tutorials/
+src/assets/notebooks/
 # generated types
 .astro/
 

@@ -1,0 +1,29 @@
+/* Rich outputs carried over from the notebooks: `_repr_html_` tables, the
+   run-status chips, and the `to_svg` architecture diagrams.
+
+   They arrive with their colours baked in — the SVG draws dark text, the
+   chips use light-theme greys — because a notebook renders on one surface
+   and knows which. A docs page does not: the same markup has to survive the
+   reader's theme toggle. Rather than rewrite someone's inline styles, this
+   pins the surface those styles were drawn for, so the block stays legible
+   in dark mode instead of turning into dark text on a dark background. */
+.nb-output {
+	background: #ffffff;
+	color: #1c1c1c;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	padding: 0.75rem 1rem;
+	margin: 1rem 0;
+	/* Diagrams and run tables are wider than the prose column. They scroll
+	   inside this box; the page itself must never scroll sideways. */
+	overflow-x: auto;
+}
+
+.nb-output svg {
+	display: block;
+	max-width: none;
+}
+
+.nb-output table {
+	margin: 0;
+}

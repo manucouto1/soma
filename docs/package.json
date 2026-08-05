@@ -3,6 +3,11 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
+    "notebooks": "python3 scripts/notebooks_to_docs.py",
+    "predev": "npm run notebooks",
+    "prestart": "npm run notebooks",
+    "prebuild": "npm run notebooks",
+    "precheck": "npm run notebooks",
     "dev": "astro dev",
     "start": "astro dev",
     "build": "astro build",
