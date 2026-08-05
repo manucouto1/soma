@@ -82,25 +82,69 @@ def materialize(self: Graph, sample_input: Any) -> None:
             # materialization; lazy path in DifferentiableFilter.forward
             # will build modules on first call.
             return
-    shape: tuple[int, ...] | None = tuple(x.shape[1:])
-    for _, f in self.filters():
-        # Eager materialisation threads one shape forward, so it only
-        # describes a chain. A filter that reads several predecessors
-        # owns its own construction — it is the only thing that knows how
-        # it combines them — and is left to build lazily on first
-        # forward, which is the same fallback a non-diff filter gets.
+    sample_shape: tuple[int, ...] = tuple(x.shape[1:])
+
+    # Each node's input shape comes from its PREDECESSORS, not from
+    # whatever was built last. Threading one shape down the iteration order
+    # only describes a chain, and it is wrong in two ways the moment a
+    # graph forks: a second root is handed the previous branch's output
+    # instead of the graph's input, and a fan-in node is handed one
+    # predecessor's shape as though it were the whole input. Both build a
+    # module of the wrong width and fail at the first forward with a
+    # matmul error naming shapes the caller never chose.
+    preds: dict[str, list[str]] = {}
+    for source, target in self.edges():
+        preds.setdefault(target, []).append(source)
+
+    # Topological order, so a predecessor's output shape is always known
+    # before its consumer asks for it. Relying on `filters()` order would
+    # make this work by luck on the graphs where it happens to agree.
+    by_id = dict(self.filters())
+    ready = [n for n in by_id if not preds.get(n)]
+    seen: set[str] = set()
+    order: list[str] = []
+    while ready:
+        node = ready.pop(0)
+        if node in seen:
+            continue
+        seen.add(node)
+        order.append(node)
+        for candidate, parents in preds.items():
+            if candidate not in seen and all(p in seen for p in parents):
+                ready.append(candidate)
+    # A cycle would leave nodes out; the compiler rejects those, but this
+    # runs before it, so anything left over is appended and builds lazily.
+    order += [n for n in by_id if n not in seen]
+
+    out_shape: dict[str, tuple[int, ...] | None] = {}
+    for node_id in order:
+        f = by_id[node_id]
+        parents = preds.get(node_id, [])
+        if not parents:
+            # A root receives the graph's input. Every root does.
+            shape: tuple[int, ...] | None = sample_shape
+        elif len(parents) == 1:
+            shape = out_shape.get(parents[0])
+        else:
+            # A filter reading several predecessors owns its own
+            # construction — it is the only thing that knows how it
+            # combines them — so it builds lazily on first forward, which
+            # is the same fallback a non-differentiable filter gets.
+            shape = None
+
         if getattr(f, "_multi_input", False):
             shape = None
-            continue
+
         if shape is not None and hasattr(f, "materialize") and hasattr(f, "output_shape"):
             f.materialize(shape)
             try:
-                shape = tuple(f.output_shape(shape))
+                out_shape[node_id] = tuple(f.output_shape(shape))
             except Exception:
-                shape = None
+                out_shape[node_id] = None
         else:
-            # Non-diff filter or one that doesn't propagate static shapes.
-            shape = None
+            # Non-diff filter, a fan-in, or one that doesn't propagate
+            # static shapes: downstream falls back to lazy materialization.
+            out_shape[node_id] = None
 
 
 def train(self: Graph, mode: bool = True) -> Graph:

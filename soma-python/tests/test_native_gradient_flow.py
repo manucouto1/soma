@@ -496,3 +496,163 @@ def test_a_torch_graph_still_takes_the_python_walk():
     out, aux = g.forward(torch.randn(3, 8))
     assert out.requires_grad, "autograd must survive the forward"
     assert isinstance(aux, dict)
+
+
+class TestMaterializeUsesTopology:
+    """`materialize` sizes each module from its PREDECESSORS.
+
+    It used to thread one shape down the iteration order, which describes a
+    chain and nothing else. On any graph that forks it was wrong twice: a
+    second root received the previous branch's output shape instead of the
+    graph's input, and a fan-in node received one predecessor's shape as
+    though it were the whole input. Both built a module of the wrong width
+    and died at the first forward with a matmul error naming shapes the
+    caller never chose.
+    """
+
+    @staticmethod
+    def _mlp(out, seen):
+        import torch.nn as nn
+
+        from soma import DifferentiableFilter
+
+        class Mlp(DifferentiableFilter):
+            _cache_version = "test-mat-mlp-v1"
+
+            def __init__(self, tag):
+                super().__init__(tag=tag)
+
+            def build_module(self, input_shape):
+                seen[self.tag] = tuple(input_shape)
+                return nn.Linear(input_shape[-1], out)
+
+            def output_shape(self, input_shape):
+                return (out,)
+
+        return Mlp
+
+    def test_every_root_receives_the_graph_input(self):
+        import torch
+
+        from soma import Graph
+
+        seen: dict[str, tuple] = {}
+        Mlp = self._mlp(4, seen)
+        g = Graph()
+        g.node("a", Mlp("a"))
+        g.node("b", Mlp("b"))
+        g.node("sink", Mlp("sink"))
+        g.connect("a", "sink")
+        g.connect("b", "sink")
+
+        g.materialize(torch.randn(8, 10))
+
+        assert seen["a"] == (10,), seen
+        assert seen["b"] == (10,), "the second root got the first branch's output"
+
+    def test_a_fan_in_node_builds_from_the_combined_width(self):
+        import torch
+        import torch.nn as nn
+
+        from soma import DifferentiableFilter, Graph
+
+        seen: dict[str, tuple] = {}
+        Mlp = self._mlp(4, seen)
+
+        class Gate(DifferentiableFilter):
+            _cache_version = "test-mat-gate-v1"
+            _multi_input = True
+
+            def __init__(self):
+                super().__init__()
+
+            def build_module(self, input_shape):
+                seen["gate"] = tuple(input_shape)
+                return nn.Linear(input_shape[-1], 3)
+
+            def output_shape(self, input_shape):
+                return (3,)
+
+            def forward(self, x, state=None):
+                if isinstance(x, dict):
+                    x = torch.cat(
+                        [torch.as_tensor(v, dtype=torch.float32) for _, v in sorted(x.items())],
+                        dim=1,
+                    )
+                self.materialize(tuple(x.shape[1:]))
+                out = self._module(x)
+                return (out, {}) if self.training else (out.detach().tolist(), {})
+
+        g = Graph()
+        g.node("a", Mlp("a"))
+        g.node("b", Mlp("b"))
+        g.node("gate", Gate())
+        g.connect("a", "gate")
+        g.connect("b", "gate")
+        g.materialize(torch.randn(8, 10))
+        g.train()
+
+        out, _ = g.forward(torch.randn(8, 10))
+        # Two branches of 4, so the gate is 8 wide — not 4.
+        assert seen["gate"] == (8,), seen
+        assert out.shape[-1] == 3
+
+    def test_gradients_reach_every_branch_of_a_fan_in(self):
+        """The property the whole thing exists for: an ensemble whose
+        branches each learn from the combined loss."""
+        import torch
+        import torch.nn as nn
+
+        from soma import DifferentiableFilter, Graph
+
+        seen: dict[str, tuple] = {}
+        Mlp = self._mlp(4, seen)
+
+        class Gate(DifferentiableFilter):
+            _cache_version = "test-mat-gate2-v1"
+            _multi_input = True
+
+            def __init__(self):
+                super().__init__()
+
+            def build_module(self, input_shape):
+                return nn.Linear(input_shape[-1], 3)
+
+            def output_shape(self, input_shape):
+                return (3,)
+
+            def forward(self, x, state=None):
+                if isinstance(x, dict):
+                    x = torch.cat(
+                        [torch.as_tensor(v, dtype=torch.float32) for _, v in sorted(x.items())],
+                        dim=1,
+                    )
+                self.materialize(tuple(x.shape[1:]))
+                out = self._module(x)
+                return (out, {}) if self.training else (out.detach().tolist(), {})
+
+        g = Graph()
+        g.node("a", Mlp("a"))
+        g.node("b", Mlp("b"))
+        g.node("gate", Gate())
+        g.connect("a", "gate")
+        g.connect("b", "gate")
+
+        x = torch.randn(16, 10)
+        y = torch.randint(0, 3, (16,))
+        g.materialize(x)
+        g.train()
+        g.make_optimizer(torch.optim.Adam, lr=1e-2)
+
+        with g.context() as ctx:
+            g.zero_grad()
+            out, _ = g.forward(x)
+            g.backward(ctx, nn.functional.cross_entropy(out, y))
+
+        nodes = dict(g.filters())
+        for node_id in ("a", "b", "gate"):
+            module = nodes[node_id]._module
+            total = sum(
+                float(p.grad.abs().sum()) for p in module.parameters() if p.grad is not None
+            )
+            assert total > 0.0, f"no gradient reached `{node_id}`"
