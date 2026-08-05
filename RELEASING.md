@@ -7,9 +7,36 @@ the first one was not like the ones after it.
 
 | | Published | At |
 |---|---|---|
-| crates.io — all eleven | yes | 0.4.0 |
-| PyPI `somatize` | yes | 0.3.1 |
+| PyPI `somatize` | **yes** | **0.5.0** |
+| crates.io `somatize-macros`, `somatize-core` | yes | 0.5.0 |
+| crates.io — the other nine | **no** — see below | 0.4.0 |
 | crates.io `somatize-mcp` | never, deliberately | — |
+
+**PyPI 0.5.0 is verified end to end**: installed from a clean venv on
+3.13, `import soma`, a graph fitted and forwarded, `soma.Pbt`
+constructed. That is "can a stranger install this" answered with a yes
+that was checked rather than assumed.
+
+Wheels cover **3.12 and 3.13 only** (`--interpreter python3.12
+python3.13` in `release.yml`). A 3.14 user falls back to the sdist and
+therefore needs a Rust toolchain — worth adding an interpreter to that
+line before it becomes the common case.
+
+### The v0.5.0 run stopped at `somatize-store`
+
+```
+403 Forbidden: The provided access token is not valid for crate `somatize-store`
+```
+
+Trusted publishing was configured for the first two crates and not the
+rest. The workflow's fail-fast did exactly its job: it stopped in
+dependency order without publishing anything out of sequence, which is
+the state that cannot be undone.
+
+To finish it, add the trusted publisher (below) to the nine remaining
+crates and re-run — `gh run rerun <id> --failed`. The two already at
+0.5.0 are skipped as "already exists", and the chain continues from
+`somatize-store`.
 
 The eleven crates went out on 2026-08-05 in one token-authenticated pass,
 and a crate outside this workspace depending on `somatize = "0.4.0"` from
