@@ -6,6 +6,19 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Least privilege, declared here rather than inherited. The repository default
+# is already read-only, but that is a setting anyone with admin can change from
+# the UI; this file is the record. No job here needs to write anything.
+permissions:
+  contents: read
+
+# Cancel superseded runs on a pull request — pushing three times in a minute
+# should not queue three 40-minute runs. A push to a branch is NOT cancelled:
+# that run is the record for that commit, and main's history deserves one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -18,8 +31,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache cargo
@@ -48,7 +62,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+        with:
+          toolchain: stable
 
       # PyO3 0.24 supports up to Python 3.13; runner defaults (e.g.
       # macos-latest) may already ship 3.14.
@@ -90,7 +106,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+        with:
+          toolchain: stable
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -135,7 +153,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+        with:
+          toolchain: stable
 
       - name: cargo doc
         run: cargo doc --workspace --no-deps --document-private-items
@@ -165,8 +185,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
         with:
+          toolchain: stable
           components: llvm-tools-preview
 
       - name: Setup Python for PyO3
@@ -177,8 +198,14 @@ jobs:
       - name: Point PyO3 at the pinned interpreter
         run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
 
+      # Both this action and rust-toolchain above select what they install
+      # from the *ref* (@cargo-llvm-cov, @stable). Pinning the ref to a SHA
+      # therefore drops the selection — it has to move into `with:`, or the
+      # action installs nothing and the step fails.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@faf6515f98a6da02430741fd0af1094fde82286d # cargo-llvm-cov branch @ 2026-08-05
+        with:
+          tool: cargo-llvm-cov
 
       - name: Cache cargo
         uses: actions/cache@v4
