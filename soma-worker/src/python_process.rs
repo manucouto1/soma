@@ -216,34 +216,65 @@ for line in sys.stdin:
         elif action == "GET_GRADIENTS":
             nid = cmd["node_id"]
             f = filters[nid]["obj"]
+            # A DifferentiableFilter is not itself an nn.Module: it builds
+            # one and keeps it in `_module`. Looking only at `f` found no
+            # parameters and returned an EMPTY buffer, so AllReduce averaged
+            # nothing and the round reported success — the gradients simply
+            # never left the worker.
+            module = getattr(f, "_module", None) or f
+            if not hasattr(module, "named_parameters"):
+                print(json.dumps({"ok": False, "error":
+                    "`%s` has no parameters: it is neither an nn.Module nor a "
+                    "materialized DifferentiableFilter, so there are no "
+                    "gradients to read" % nid}), flush=True)
+                continue
+            try:
+                import torch
+            except ImportError:
+                print(json.dumps({"ok": False, "error":
+                    "`%s` cannot produce gradients: torch is not installed in "
+                    "this worker's environment" % nid}), flush=True)
+                continue
+            grads = {n: p.grad.detach().clone()
+                     for n, p in module.named_parameters() if p.grad is not None}
+            if not grads:
+                print(json.dumps({"ok": False, "error":
+                    "`%s` has parameters but none carry a gradient. Run a "
+                    "backward pass before asking for them" % nid}), flush=True)
+                continue
             buf = io.BytesIO()
-            if hasattr(f, 'parameters'):
-                try:
-                    import torch
-                    grads = {name: p.grad.clone() for name, p in f.named_parameters() if p.grad is not None}
-                    torch.save(grads, buf)
-                except ImportError:
-                    pass
-            grad_b64 = base64.b64encode(buf.getvalue()).decode()
-            print(json.dumps({"ok": True, "gradients_b64": grad_b64}), flush=True)
+            torch.save(grads, buf)
+            print(json.dumps({"ok": True, "gradients_b64":
+                base64.b64encode(buf.getvalue()).decode()}), flush=True)
 
         elif action == "APPLY_GRADIENTS":
             nid = cmd["node_id"]
             f = filters[nid]["obj"]
-            grad_bytes = base64.b64decode(cmd["gradients_b64"])
-            if hasattr(f, 'named_parameters'):
-                try:
-                    import torch
-                    buf = io.BytesIO(grad_bytes)
-                    grads = torch.load(buf, weights_only=True)
-                    for name, p in f.named_parameters():
-                        if name in grads:
-                            p.grad = grads[name]
-                    if hasattr(f, 'optimizer'):
-                        f.optimizer.step()
-                except ImportError:
-                    pass
-            print(json.dumps({"ok": True}), flush=True)
+            module = getattr(f, "_module", None) or f
+            if not hasattr(module, "named_parameters"):
+                print(json.dumps({"ok": False, "error":
+                    "`%s` has no parameters to apply gradients to" % nid}), flush=True)
+                continue
+            try:
+                import torch
+            except ImportError:
+                print(json.dumps({"ok": False, "error":
+                    "`%s` cannot take gradients: torch is not installed" % nid}), flush=True)
+                continue
+            buf = io.BytesIO(base64.b64decode(cmd["gradients_b64"]))
+            grads = torch.load(buf, weights_only=True)
+            applied = 0
+            for name, p in module.named_parameters():
+                if name in grads:
+                    p.grad = grads[name].clone()
+                    applied += 1
+            if applied == 0 and grads:
+                print(json.dumps({"ok": False, "error":
+                    "`%s`: none of the %d aggregated gradients matched a "
+                    "parameter name. The replicas are not the same model"
+                    % (nid, len(grads))}), flush=True)
+                continue
+            print(json.dumps({"ok": True, "applied": applied}), flush=True)
 
         elif action == "BATCHED_FIT":
             # Process dataset in batches — model loaded ONCE, batches processed in loop
@@ -670,18 +701,26 @@ impl PythonProcess {
     }
 
     /// Collect the filter's current gradients as torch-saved bytes, for
-    /// AllReduce aggregation. `Value::Empty` when the filter has no
-    /// parameters (or torch is absent) — nothing to aggregate, not an error.
+    /// AllReduce aggregation.
+    ///
+    /// A filter with no parameters, or no gradient on them, is an **error**
+    /// rather than `Value::Empty`. Returning empty meant the average was
+    /// taken over nothing and applied as nothing, and the round reported
+    /// success — a data-parallel step that trained no one. The daemon says
+    /// which of the three it is; this passes that on.
     pub fn get_gradients(&mut self, node_id: &str) -> Result<Value> {
         let resp = self.send(serde_json::json!({"cmd": "GET_GRADIENTS", "node_id": node_id}))?;
         if let Some(b64) = resp.get("gradients_b64").and_then(|s| s.as_str()) {
             let bytes = STANDARD
                 .decode(b64)
                 .map_err(|e| WorkerError::Encoding(format!("decode gradients: {e}")))?;
-            Ok(Value::bytes(bytes))
-        } else {
-            Ok(Value::Empty)
+            return Ok(Value::bytes(bytes));
         }
+        let error = resp
+            .get("error")
+            .and_then(|e| e.as_str())
+            .unwrap_or("the worker returned no gradients and said nothing about why");
+        Err(WorkerError::Python(format!("get_gradients: {error}")))
     }
 
     /// Hand aggregated gradients (bytes from

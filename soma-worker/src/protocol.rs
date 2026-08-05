@@ -410,6 +410,18 @@ pub enum WorkerToCoordinator {
         states: std::collections::HashMap<String, Value>,
     },
 
+    /// A command failed, and the client can read why.
+    ///
+    /// Without this variant an error was sent as a bare `{"error": …}`,
+    /// which is not a `WorkerToCoordinator` at all — and the client skips
+    /// what it cannot parse, so it waited for a reply that had already
+    /// been sent, until the socket closed. Every failure the worker
+    /// reported over WebSocket hung its caller.
+    Error {
+        /// What went wrong, as the worker saw it.
+        message: String,
+    },
+
     /// A command that produces no data succeeded.
     ///
     /// `SetState` and `ApplyGradients` need *a* reply: the client blocks

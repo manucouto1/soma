@@ -341,7 +341,13 @@ async fn ws_handler(
 /// Still not a `WorkerToCoordinator` variant, so a client cannot match on
 /// it; that is a wire-protocol change and belongs with versioning it.
 fn error_reply(message: &str) -> String {
-    serde_json::json!({ "error": message }).to_string()
+    // A real protocol variant, not a bare `{"error": …}`. The client
+    // silently skips what it cannot parse, so an unparseable failure left
+    // it waiting for a reply that had already gone.
+    serde_json::to_string(&WorkerToCoordinator::Error {
+        message: message.to_string(),
+    })
+    .unwrap_or_else(|_| r#"{"type":"Error","message":"unserializable error"}"#.to_string())
 }
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {

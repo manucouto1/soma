@@ -112,11 +112,30 @@ impl WsTransport {
                 .await
                 .map_err(|e| WorkerError::Transport(format!("WS send: {e}")))?;
 
-            while let Some(Ok(Message::Text(response))) = ws.next().await {
-                if let Ok(result) = serde_json::from_str::<WorkerToCoordinator>(&response) {
-                    let _ = ws.close(None).await;
-                    return Ok(result);
-                }
+            while let Some(frame) = ws.next().await {
+                // Ping, Pong and Binary are not answers; a Text frame
+                // always is, one way or another.
+                let Ok(Message::Text(response)) = frame else {
+                    continue;
+                };
+                let parsed = serde_json::from_str::<WorkerToCoordinator>(&response);
+                let _ = ws.close(None).await;
+                return match parsed {
+                    // The worker said what went wrong. Surface it here
+                    // rather than at every call site.
+                    Ok(WorkerToCoordinator::Error { message }) => {
+                        Err(WorkerError::Transport(format!("remote worker: {message}")))
+                    }
+                    Ok(result) => Ok(result),
+                    // A reply this build cannot read is an error, not
+                    // something to skip. Skipping it is what made every
+                    // worker-side failure hang the caller until the socket
+                    // closed, with nothing said about why.
+                    Err(e) => Err(WorkerError::Encoding(format!(
+                        "cannot read the worker's reply: {e}. Raw: {}",
+                        response.chars().take(200).collect::<String>()
+                    ))),
+                };
             }
 
             Err(WorkerError::Transport(

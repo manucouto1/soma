@@ -352,3 +352,42 @@ async fn the_transport_does_not_panic_when_called_from_inside_a_runtime() {
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
 }
+
+/// A worker-side failure must reach the caller, not hang it.
+///
+/// `error_reply` used to send a bare `{"error": …}`, which is not a
+/// `WorkerToCoordinator` at all — and `WsTransport::send_msg` skipped what
+/// it could not parse and kept waiting. So every error the worker reported
+/// over WebSocket blocked its caller until the socket closed, saying
+/// nothing about why. It cost an afternoon to find, because the symptom
+/// was a hang in a completely different feature.
+#[tokio::test]
+async fn a_worker_error_reaches_the_caller_instead_of_hanging_it() {
+    let worker = make_worker();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, worker_router(worker)).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // `CancelPlan` is answered with an error, and any error will do.
+    let transport = somatize_worker::WsTransport::new(format!("ws://{addr}"), None);
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            transport.send_msg(&CoordinatorToWorker::CancelPlan {
+                plan_id: "nothing-is-running".into(),
+            })
+        }),
+    )
+    .await
+    .expect("the call hung: an unparseable reply is being skipped again")
+    .expect("task panicked");
+
+    let err = outcome.expect_err("cancelling a plan that is not running is an error");
+    assert!(
+        err.to_string().contains("not implemented"),
+        "the worker's own words should come through: {err}"
+    );
+}

@@ -30,7 +30,7 @@ registry-side before the next tag.
 
 | What | Where | Behaviour |
 |---|---|---|
-| `TrainingStrategy::DataParallel` | `soma-worker/src/python_process.rs` | The loop, the context, the AllReduce averaging and the four wire messages all work now. The daemon reads gradients off the filter object, and a `DifferentiableFilter` keeps its network in `_module` — so a real model contributes an EMPTY gradient set and the round reports success. **`Federated` runs**; this does not, quietly, which is worse |
+| Remote materialization of a `DifferentiableFilter` | `soma-worker/src/python_process.rs` | A differentiable filter fit on a worker cannot size its module from what the subprocess receives: `tuple index out of range` inside `fit`. It blocks `data_parallel` from training a real model, and `federated` from having differentiable clients. Everything above it — both loops, the context, AllReduce, the four wire messages — works |
 | `ModelParallel`, `PopulationBased` | `soma-runtime/src/strategy.rs` | Unwritten. `PbtRunner` works but answers to `PbtExecutor`, so connecting it is an adapter |
 | `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
 | ~~Seed dropped on the remote path~~ | `soma-worker/src/ws_transport.rs` | **Fixed 2026-08-05.** `Transport::execute` now takes the run's seed and `WsTransport` puts it on the wire; it was hardcoded `None`, so a remote sweep shared one cache line across every seed |

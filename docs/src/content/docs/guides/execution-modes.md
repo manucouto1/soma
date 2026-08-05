@@ -123,17 +123,22 @@ Verified on 2026-08-05, and the answer differs per strategy:
   states element-wise — including the dicts a Python filter's `fit`
   returns. Verified over two real workers: two shards whose means are 1.5
   and 5.5 produce 3.5, which no single client can.
-- **`data_parallel` runs its loop**, and stops short of being useful. The
-  worker now answers `GetState`/`SetState`/`GetGradients`/`ApplyGradients`
-  — it always had the machinery, in `PythonProcess` and in the daemon
-  script, and nothing called it. What is still missing is one level down:
-  the daemon reads gradients from the filter object itself, and a
-  `DifferentiableFilter` is not an `nn.Module` — it builds one and keeps it
-  in `_module`. So for Soma's own trainable filters the daemon finds no
-  parameters and returns an **empty** gradient set, AllReduce averages
-  nothing, and the round reports success. For a filter with no parameters
-  at all that is the right answer; for a model it is not. Do not use
-  `data_parallel` to train something until that is fixed.
+- **`data_parallel` runs its loop and reports precisely.** The worker
+  answers `GetState`/`SetState`/`GetGradients`/`ApplyGradients` — the
+  machinery was always there, in `PythonProcess` and the daemon script, and
+  nothing called it. The daemon now reads gradients from a
+  `DifferentiableFilter`'s `_module` rather than from the filter object,
+  which has no parameters; and a filter that has none, or whose parameters
+  carry no gradient, is an **error** naming which of the three it is,
+  rather than an empty set that AllReduce averages into nothing while
+  reporting success.
+
+  What still fails is one layer further in: a `DifferentiableFilter` fit on
+  a *remote* worker cannot size its module from the input the subprocess
+  receives (`tuple index out of range` inside `fit`). That is remote
+  materialization, not the strategy — `federated` hits it too if its
+  clients are differentiable filters, which is why its example uses a
+  plain one.
 - **`model_parallel` and `population_based` are unwritten.** They refuse.
   `PbtRunner` exists and works, but answers to a different trait
   (`PbtExecutor`), so connecting it is an adapter rather than a rename.
