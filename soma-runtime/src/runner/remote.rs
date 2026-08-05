@@ -24,12 +24,20 @@ pub trait Transport: Send + Sync {
     /// differently shaped results, and a parameter that meant nothing
     /// unless the flag was set. It is the same [`RunMode`] the local
     /// executor reads, so the two paths cannot disagree about what a fit is.
+    ///
+    /// `seed` is the run's experiment seed, and it is a parameter rather
+    /// than something the transport digs out because the transport has no
+    /// [`RunContext`] to dig in. Without it the worker salts nothing, and a
+    /// five-seed sweep run remotely shares one cache line across all five —
+    /// the worker protocol's `SerializedPlan::seed` documents that as the
+    /// bug it exists to close, and this path was still passing `None`.
     fn execute(
         &self,
         plan: &ExecutionPlan,
         filters: &NodeCatalog,
         input: &Value,
         mode: &RunMode,
+        seed: Option<i64>,
     ) -> Result<(Value, HashMap<String, Value>)>;
 
     /// Request trained states from the remote worker.
@@ -45,13 +53,18 @@ pub trait Transport: Send + Sync {
     fn apply_gradients(&self, gradients: &HashMap<String, Value>) -> Result<()>;
 
     /// Convenience: execute a single node remotely (used by the plan executor).
+    ///
+    /// Unseeded, and it has to be: this takes a node id and nothing else,
+    /// so there is no run to take a seed from. Callers that have a
+    /// [`RunContext`] should go through [`Transport::execute`] with
+    /// `ctx.seed` instead of reaching for this.
     fn execute_node(&self, node_id: &str, input: Option<&Value>) -> Result<Value> {
         let plan = ExecutionPlan::Execute {
             node_id: node_id.to_string(),
         };
         let input_val = input.cloned().unwrap_or(Value::Empty);
         let filters = crate::node_catalog::NodeCatalog::new();
-        let (output, _) = self.execute(&plan, &filters, &input_val, &RunMode::Forward)?;
+        let (output, _) = self.execute(&plan, &filters, &input_val, &RunMode::Forward, None)?;
         Ok(output)
     }
 }
@@ -83,14 +96,19 @@ impl Runner for RemoteRunner {
         input: &Value,
         y: Option<&Value>,
     ) -> Result<(Value, HashMap<String, Value>)> {
-        self.transport
-            .execute(plan, ctx.catalog, input, &RunMode::Fit { y: y.cloned() })
+        self.transport.execute(
+            plan,
+            ctx.catalog,
+            input,
+            &RunMode::Fit { y: y.cloned() },
+            ctx.seed,
+        )
     }
 
     fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {
         let (output, _states) =
             self.transport
-                .execute(plan, ctx.catalog, input, &RunMode::Forward)?;
+                .execute(plan, ctx.catalog, input, &RunMode::Forward, ctx.seed)?;
         Ok(output)
     }
 }

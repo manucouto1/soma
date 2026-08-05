@@ -32,7 +32,15 @@ registry-side before the next tag.
 |---|---|---|
 | **The whole `TrainingStrategy` layer** | `soma-runtime/src/strategy.rs` | `impl StrategyExecutor for TrainingStrategy` **has no caller anywhere in the workspace**, and `soma-compiler/src/scheduler.rs` never mentions the strategy either. Setting one records it on the graph and changes nothing. `Local`, `DataParallel` and `Federated` are written and unreachable; `ModelParallel` and `PopulationBased` additionally return "not yet implemented". `PbtRunner` works but answers to a different trait (`PbtExecutor`), so connecting it is an adapter, not a rename |
 | `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
-| Filter serialization over WS | `soma-worker/src/ws_transport.rs` | Sends an empty filter list where the catalog's would go |
+| ~~Seed dropped on the remote path~~ | `soma-worker/src/ws_transport.rs` | **Fixed 2026-08-05.** `Transport::execute` now takes the run's seed and `WsTransport` puts it on the wire; it was hardcoded `None`, so a remote sweep shared one cache line across every seed |
+
+The empty `filters` list on that same transport is **not** a gap: the
+worker rebuilds a Python filter by unpickling
+`SerializedFilter::pickled_filter`, and those bytes live only in the
+Python layer. A `NodeCatalog` holds live filters and their states, never
+the pickle, so this transport cannot supply them and sending empty
+pickles would be worse than sending none. The path that can supply them
+builds its own `SerializedPlan` in `soma-python/src/graph.rs`.
 
 The strategy layer is the largest single gap, and it is a wiring gap
 rather than a blank page: the sharding, aggregation and federated round

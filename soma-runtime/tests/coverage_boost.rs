@@ -245,6 +245,7 @@ fn session_with_transport() {
             _filters: &NodeCatalog,
             _input: &Value,
             _mode: &somatize_runtime::executor::RunMode,
+            _seed: Option<i64>,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             Ok((
                 Value::tensor(vec![42.0], vec![1]),
@@ -719,6 +720,7 @@ fn executor_remote_with_transport() {
             _filters: &NodeCatalog,
             input: &Value,
             _mode: &somatize_runtime::executor::RunMode,
+            _seed: Option<i64>,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             // Remote "doubles" the input
             match input {

@@ -339,6 +339,49 @@ where
 /// while everything behind them is a typed [`WorkerError`]. A refused
 /// socket and a reply that would not decode stay distinguishable inside
 /// this crate, which is where the retry decision is made.
+/// Build the wire plan for one `execute`.
+///
+/// Split out of the trait method so it can be tested without a socket:
+/// what goes on the wire is worth an assertion, and the seed in
+/// particular used to be hardcoded `None` here.
+///
+/// `filters` stays empty, and a `NodeCatalog` cannot change that. The
+/// worker reconstructs a Python filter by unpickling
+/// `SerializedFilter::pickled_filter`, and those bytes only exist in the
+/// Python layer (`Graph.pickled_filters`); a catalog holds live
+/// `Arc<dyn Filter>` values and their states, never the pickle. So the
+/// old `TODO: serialize from NodeCatalog if needed` described something
+/// that cannot be done from here — sending entries with empty pickle
+/// bytes would be worse than sending none, since the worker would try to
+/// unpickle them. The path that CAN supply filters builds its own
+/// `SerializedPlan` in `soma-python/src/graph.rs`; this transport is for
+/// plans whose nodes the worker already has.
+fn wire_plan(
+    plan: &ExecutionPlan,
+    input: &Value,
+    mode: &RunMode,
+    seed: Option<i64>,
+) -> SerializedPlan {
+    SerializedPlan {
+        protocol_version: PROTOCOL_VERSION,
+        plan_id: somatize_core::util::timestamp_id("remote"),
+        plan: plan.clone(),
+        input: Some(InputSource::Inline {
+            value: input.clone(),
+        }),
+        filters: vec![],
+        mode: match mode {
+            RunMode::Fit { y } => ExecutionMode::Fit {
+                y: y.clone(),
+                batch_size: None,
+            },
+            RunMode::Forward => ExecutionMode::Forward,
+        },
+        seed,
+        metadata: serde_json::json!({}),
+    }
+}
+
 impl Transport for WsTransport {
     fn execute(
         &self,
@@ -346,25 +389,9 @@ impl Transport for WsTransport {
         _filters: &NodeCatalog,
         input: &Value,
         mode: &RunMode,
+        seed: Option<i64>,
     ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
-        let serialized = SerializedPlan {
-            protocol_version: PROTOCOL_VERSION,
-            plan_id: somatize_core::util::timestamp_id("remote"),
-            plan: plan.clone(),
-            input: Some(InputSource::Inline {
-                value: input.clone(),
-            }),
-            filters: vec![], // TODO: serialize from NodeCatalog if needed
-            mode: match mode {
-                RunMode::Fit { y } => ExecutionMode::Fit {
-                    y: y.clone(),
-                    batch_size: None,
-                },
-                RunMode::Forward => ExecutionMode::Forward,
-            },
-            seed: None,
-            metadata: serde_json::json!({}),
-        };
+        let serialized = wire_plan(plan, input, mode, seed);
 
         let msg = CoordinatorToWorker::AssignPlan { plan: serialized };
         match self.send_msg(&msg)? {
@@ -435,5 +462,67 @@ impl Transport for WsTransport {
         };
         self.send_msg(&msg)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan() -> ExecutionPlan {
+        ExecutionPlan::Execute {
+            node_id: "n".into(),
+        }
+    }
+
+    // The regression this file existed to have. `seed` was hardcoded to
+    // `None` here while `SerializedPlan::seed` documented itself as the
+    // field that stops a sweep's seeds sharing one cache line — so the
+    // remote path silently reintroduced the bug the protocol had closed.
+    #[test]
+    fn wire_plan_carries_the_run_seed() {
+        let p = wire_plan(&plan(), &Value::Empty, &RunMode::Forward, Some(7));
+        assert_eq!(p.seed, Some(7));
+    }
+
+    #[test]
+    fn wire_plan_without_a_seed_stays_unseeded() {
+        let p = wire_plan(&plan(), &Value::Empty, &RunMode::Forward, None);
+        assert_eq!(p.seed, None);
+    }
+
+    // Two seeds must not produce the same wire plan, or the worker cannot
+    // tell them apart and the cache line is shared again.
+    #[test]
+    fn different_seeds_differ_on_the_wire() {
+        let a = wire_plan(&plan(), &Value::Empty, &RunMode::Forward, Some(1));
+        let b = wire_plan(&plan(), &Value::Empty, &RunMode::Forward, Some(2));
+        assert_ne!(a.seed, b.seed);
+    }
+
+    // Not a limitation to fix later: a NodeCatalog holds live filters, not
+    // the pickle bytes the worker unpickles, so this transport cannot fill
+    // this in. Asserted so nobody "implements the TODO" by sending empty
+    // pickles, which the worker would try to unpickle.
+    #[test]
+    fn wire_plan_sends_no_filters() {
+        let p = wire_plan(&plan(), &Value::Empty, &RunMode::Forward, Some(1));
+        assert!(p.filters.is_empty());
+    }
+
+    #[test]
+    fn fit_mode_carries_labels_and_the_seed_together() {
+        let y = Value::tensor(vec![1.0], vec![1]);
+        let p = wire_plan(
+            &plan(),
+            &Value::Empty,
+            &RunMode::Fit { y: Some(y.clone()) },
+            Some(3),
+        );
+        assert_eq!(p.seed, Some(3));
+        match p.mode {
+            ExecutionMode::Fit { y: got, .. } => assert_eq!(got, Some(y)),
+            other => panic!("expected Fit, got {other:?}"),
+        }
     }
 }
