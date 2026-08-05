@@ -77,6 +77,11 @@ docs/           → 39 hand-written Starlight pages + the 15 tutorial pages
                   rendered from notebooks/ by scripts/notebooks_to_docs.py
                   (an npm pre-hook; generated, gitignored — notebooks/ is the
                   source of truth). Sidebar guard: `cd docs && npm run check`
+examples/       → git submodule → github.com/manucouto1/soma-examples. Longer,
+                  complete programs (not feature demos), each with its artifacts
+                  committed so the README reads without running anything. It
+                  consumes soma as a user would, so once the release works its
+                  CI is the proof the published package installs.
 notebooks/      → 15 executed tutorial notebooks (10-12 are one campaign, sharing
                   campaign.py; 13 is agentic, with an embedded mock provider so it
                   runs with no key; 14 replicates Du et al. multi-agent debate on

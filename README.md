@@ -17,6 +17,16 @@ Part of the **Nous-Soma-Chronos** ecosystem:
 [tutorial notebooks](https://manucouto1.github.io/soma/getting-started/notebooks/),
 [Python API](https://manucouto1.github.io/soma/api/python/).
 
+**Examples**: [`examples/`](https://github.com/manucouto1/soma-examples) is a
+submodule — longer, complete programs rather than feature demonstrations, with
+every figure produced by the code beside it. Clone it with the repository:
+
+```bash
+git clone --recursive https://github.com/manucouto1/soma
+# already cloned?
+git submodule update --init
+```
+
 ## Key Concepts
 
 | Concept | Description |
