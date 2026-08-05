@@ -101,8 +101,10 @@ pub enum InputSource {
 impl InputSource {
     /// Resolve the input to a concrete Value.
     ///
-    /// Tries the persistent [`DataStore`](somatize_core::store::DataStore)
-    /// first, then the temp store that HTTP uploads land in.
+    /// Tries the persistent [`DataStore`] first, then the temp store that
+    /// HTTP uploads land in.
+    ///
+    /// [`DataStore`]: somatize_core::store::DataStore
     ///
     /// A reference that resolves nowhere is an **error**, and it did not
     /// used to be: this logged a warning and returned [`Value::Empty`].

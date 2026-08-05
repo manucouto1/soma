@@ -103,7 +103,9 @@ impl GraphSession {
     /// more — which is what it did for the whole life of the type. `fit`
     /// consults the graph's strategy and, when it is not `Local` and
     /// transports are present, hands execution to
-    /// [`StrategyExecutor`](crate::strategy::StrategyExecutor).
+    /// [`StrategyExecutor`].
+    ///
+    /// [`StrategyExecutor`]: crate::strategy::StrategyExecutor
     pub fn with_transports(mut self, transports: Vec<Arc<dyn Transport>>) -> Self {
         self.transports = transports;
         self
