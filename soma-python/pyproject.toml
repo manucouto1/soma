@@ -25,7 +25,12 @@ soma = "soma._cache_cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "numpy>=1.20"]
-viz = ["plotly>=5.18", "pandas>=1.5", "rich>=13", "tqdm>=4.60"]
+# safetensors is not a plotting library, but it is what makes
+# `gradient_audit(channels=True)` persist anything for `plot_channels` and
+# the report's channel section to draw. Undeclared, it happened to be
+# present in every environment this was developed in and absent from a
+# clean install, where channel snapshots silently recorded nothing.
+viz = ["plotly>=5.18", "pandas>=1.5", "rich>=13", "tqdm>=4.60", "safetensors>=0.4"]
 
 [project.urls]
 Repository = "https://github.com/manucouto1/soma"

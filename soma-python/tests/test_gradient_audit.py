@@ -642,3 +642,82 @@ def test_complex_multimodal_health_e2e(tmp_path):
     assert "IGNORED_CHANNELS" in parent
     # And the outer SVG shows the flagged node.
     assert "#fff3e0" in view.to_svg(), "encoder painted as flagged"
+
+
+def test_channel_snapshots_without_safetensors_warn_instead_of_vanishing(
+    monkeypatch, tmp_path
+):
+    """A missing optional dependency has to say so.
+
+    ``_persist_snapshot`` used to ``return`` on ImportError. The run
+    finished, the health flags were correct, and nothing was written — so
+    ``plot_channels`` reported "no channel snapshots (available: [])", a
+    message about the filter rather than about the missing package.
+    ``graph.save`` has always raised a clear error for the same import.
+
+    Found by running an example against a clean install of the published
+    package: every environment this was developed in happened to have
+    ``safetensors`` pulled in by something else.
+    """
+    import builtins
+
+    import soma
+    from soma._audit import Audit
+
+    real_import = builtins.__import__
+
+    def no_safetensors(name, *args, **kwargs):
+        if name.startswith("safetensors"):
+            raise ImportError("no safetensors for this test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_safetensors)
+    # Warn-once is per process by design, so a previous test must not
+    # silence this one.
+    monkeypatch.setattr(Audit, "_warned_no_safetensors", False)
+
+    class Enc(soma.DifferentiableFilter):
+        _cache_version = "chan-warn-v1"
+
+        def __init__(self, out_dim=4, **kw):
+            super().__init__(out_dim=out_dim, **kw)
+            self.out_dim = out_dim
+
+        def build_module(self, input_shape):
+            torch.manual_seed(0)
+            return nn.Sequential(
+                nn.Linear(int(input_shape[-1]), self.out_dim), nn.ReLU()
+            )
+
+        def output_shape(self, input_shape):
+            return (input_shape[0], self.out_dim)
+
+    monkeypatch.chdir(tmp_path)
+    g = soma.Graph(cache="memory")
+    g.node("enc", Enc(4))
+    x = torch.randn(8, 3)
+    y = torch.randn(8, 4)
+    g.materialize(x)
+    g.train()
+    g.make_optimizer(torch.optim.Adam, lr=1e-3)
+
+    with pytest.warns(RuntimeWarning, match="safetensors"):
+        with g.track_run("chan-warn"):
+            with g.gradient_audit(channels=True):
+                with g.context() as ctx:
+                    g.zero_grad()
+                    out, _ = g.forward(x)
+                    g.backward(ctx, torch.nn.functional.mse_loss(out, y))
+                g.step(ctx)
+
+
+def test_plot_channels_on_an_empty_index_blames_the_run_not_the_filter():
+    """An empty index is the run recording none, not this filter."""
+    plotly = pytest.importorskip("plotly")  # noqa: F401
+    from soma.viz._health import plot_channels
+
+    class NoChannels:
+        dir = "/nonexistent-run-dir-for-this-test"
+
+    with pytest.raises(ValueError, match="no channel snapshots in this run at all"):
+        plot_channels(NoChannels(), "encoder/fuse")

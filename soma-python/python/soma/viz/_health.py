@@ -308,11 +308,25 @@ def plot_channels(run_view, filter_id: str, step: int | None = None):
     (default: the last). Dead channels (zero fraction above the audit
     threshold) are called out in the title and hover."""
     go = _figures._go()
-    entries = [e for e in _channel_index(run_view) if e["filter"] == filter_id]
+    index = _channel_index(run_view)
+    entries = [e for e in index if e["filter"] == filter_id]
     if not entries:
+        available = sorted({e["filter"] for e in index})
+        if not available:
+            # An empty index is almost never "this filter had no channels":
+            # it is the whole run having recorded none. The usual cause is
+            # `safetensors` missing, which the audit can only warn about at
+            # the time — long before anyone tries to plot.
+            raise ValueError(
+                f"no channel snapshots in this run at all, so {filter_id!r} "
+                "has none either. Either the audit did not run with "
+                "channels= set, or the 'safetensors' package was missing "
+                "while it ran, which disables snapshot persistence "
+                "(pip install safetensors)"
+            )
         raise ValueError(
             f"no channel snapshots for filter {filter_id!r} "
-            f"(available: {sorted({e['filter'] for e in _channel_index(run_view)})})"
+            f"(available: {available})"
         )
     entry = (
         min(entries, key=lambda e: abs(e["step"] - step))

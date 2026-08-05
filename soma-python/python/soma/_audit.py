@@ -39,6 +39,7 @@ import dataclasses
 import io
 import math
 import sys
+import warnings
 from collections import defaultdict
 from typing import Any, Iterable, Iterator
 
@@ -413,6 +414,10 @@ class Audit:
 
     # ── Hook installation ──
 
+    #: Set once when `safetensors` turns out to be missing, so the
+    #: warning is emitted per process rather than per snapshot.
+    _warned_no_safetensors = False
+
     def _install(self) -> None:
         for fid, mod in self.modules:
             self._handles.append(
@@ -784,7 +789,30 @@ class Audit:
         try:
             from safetensors.numpy import save_file
         except ImportError:
-            return  # tensor snapshots need safetensors; scalars still logged
+            # Silently returning here meant `channels=True` recorded
+            # nothing and said nothing: the run finished, the health flags
+            # were right, and `plot_channels` later reported "no channel
+            # snapshots (available: [])" — a message that names the filter
+            # and not the missing package. `graph.save` has always raised a
+            # clear error for the same import; this one just gave up.
+            #
+            # Warned once per process rather than per snapshot: a run takes
+            # one snapshot per filter per cadence, and the tenth copy of
+            # this tells you nothing the first did not.
+            if not Audit._warned_no_safetensors:
+                Audit._warned_no_safetensors = True
+                warnings.warn(
+                    "soma: channel snapshots need the 'safetensors' package "
+                    "and it is not installed, so gradient_audit(channels=...) "
+                    "is recording per-step scalars but no correlation "
+                    "matrices — plot_channels and the report's channel "
+                    "section will have nothing to show. "
+                    "Install it with: pip install safetensors "
+                    "(or pip install 'somatize[viz]')",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            return
 
         chan_dir = pathlib.Path(run.dir) / "diagnostics" / "channels"
         fdir = chan_dir / fid
