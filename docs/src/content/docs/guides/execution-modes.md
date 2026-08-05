@@ -133,12 +133,12 @@ Verified on 2026-08-05, and the answer differs per strategy:
   rather than an empty set that AllReduce averages into nothing while
   reporting success.
 
-  What still fails is one layer further in: a `DifferentiableFilter` fit on
-  a *remote* worker cannot size its module from the input the subprocess
-  receives (`tuple index out of range` inside `fit`). That is remote
-  materialization, not the strategy — `federated` hits it too if its
-  clients are differentiable filters, which is why its example uses a
-  plain one.
+  A `DifferentiableFilter` fits and forwards on a worker now. What it does
+  not do is *train* there: the remote Fit calls the filter's `fit`, not the
+  `context`/`backward`/`step` loop, so its parameters carry no gradient and
+  `data_parallel` says so in as many words. Averaging gradients that were
+  never computed is the one thing left between this and data-parallel
+  training.
 - **`model_parallel` and `population_based` are unwritten.** They refuse.
   `PbtRunner` exists and works, but answers to a different trait
   (`PbtExecutor`), so connecting it is an adapter rather than a rename.

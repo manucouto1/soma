@@ -160,10 +160,37 @@ impl EnvManager {
         // PyPI: this one publishes as `somatize`. The result was discarded
         // with `let _`, so installing the wrong package, or failing to
         // install anything, was indistinguishable from success.
-        let bootstrap = Command::new(&pip)
-            .args(["install", "-q", "cloudpickle", "somatize"])
+        // Pinned to THIS build's version where PyPI has it. An unpinned
+        // install put somatize 0.3.1 in the venv of a 0.4.0 worker, so the
+        // subprocess ran a months-old `_composite.py` against filters
+        // pickled by the current build — and the failure surfaced as
+        // `'NoneType' object has no attribute 'size'` inside the user's
+        // fit, with nothing anywhere mentioning a version.
+        //
+        // It falls back rather than refusing, because a build ahead of the
+        // last release is the normal state of a repository and a mismatch
+        // is harmless for a plain filter. It is not harmless for a
+        // differentiable one, so the fallback warns loudly.
+        let version = env!("CARGO_PKG_VERSION");
+        let pinned = format!("somatize=={version}");
+        let mut bootstrap = Command::new(&pip)
+            .args(["install", "-q", "cloudpickle", &pinned])
             .output()
             .map_err(|e| WorkerError::Env(format!("pip install (bootstrap deps) failed: {e}")))?;
+        if !bootstrap.status.success() {
+            tracing::warn!(
+                version,
+                "PyPI has no somatize {version}; installing the latest instead. A \
+                 filter pickled by this build and unpickled against a different \
+                 somatize can fail deep inside its own fit, naming no version",
+            );
+            bootstrap = Command::new(&pip)
+                .args(["install", "-q", "cloudpickle", "somatize"])
+                .output()
+                .map_err(|e| {
+                    WorkerError::Env(format!("pip install (bootstrap deps) failed: {e}"))
+                })?;
+        }
         if !bootstrap.status.success() {
             return Err(WorkerError::Env(format!(
                 "installing the bootstrap dependencies (cloudpickle, somatize) failed in {}:\n{}",

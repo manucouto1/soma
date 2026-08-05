@@ -19,6 +19,17 @@ use std::sync::{Arc, Mutex};
 const DAEMON_SCRIPT: &str = r#"
 import json, sys, base64, cloudpickle, io, pickle
 
+# stdout is the protocol. A `print` inside a user's filter — the most
+# natural thing in the world to write while debugging one — landed in the
+# middle of the JSON dialogue and the worker died parsing its own reply.
+# The protocol keeps the real handle; everything else is sent to stderr,
+# where the worker already forwards it.
+_protocol = sys.stdout
+sys.stdout = sys.stderr
+
+def _reply(payload):
+    print(json.dumps(payload), file=_protocol, flush=True)
+
 filters = {}
 
 def _encode(obj):
@@ -43,7 +54,24 @@ def _decode(obj):
             # Soma Value format
             t, d = obj["type"], obj["data"]
             if t == "Tensor":
-                return d.get("values", [])
+                # The shape travels with the values and used to be dropped
+                # here, so a (8, 2) tensor reached the filter as 16 loose
+                # floats. Anything that reads `x.shape[1:]` — every
+                # DifferentiableFilter, when it sizes its module — then saw
+                # an empty tuple and died with "tuple index out of range",
+                # seven layers from the cause.
+                vals, shape = d.get("values", []), d.get("shape") or []
+                if len(shape) <= 1:
+                    return vals
+                def _nest(flat, dims):
+                    if len(dims) == 1:
+                        return list(flat)
+                    step = 1
+                    for k in dims[1:]:
+                        step *= k
+                    return [_nest(flat[i * step:(i + 1) * step], dims[1:])
+                            for i in range(dims[0])]
+                return _nest(vals, list(shape))
             if t == "Text":
                 return d
             if t == "Json":
@@ -66,7 +94,7 @@ for line in sys.stdin:
     try:
         cmd = json.loads(line)
     except json.JSONDecodeError as e:
-        print(json.dumps({"ok": False, "error": f"invalid JSON: {e}"}), flush=True)
+        _reply(({"ok": False, "error": f"invalid JSON: {e}"}))
         continue
 
     try:
@@ -76,21 +104,21 @@ for line in sys.stdin:
             for f in cmd["filters"]:
                 obj = cloudpickle.loads(base64.b64decode(f["pickle_b64"]))
                 filters[f["id"]] = {"obj": obj, "trainable": f.get("trainable", True)}
-            print(json.dumps({"ok": True}), flush=True)
+            _reply(({"ok": True}))
 
         elif action == "FIT":
             f = filters[cmd["node_id"]]["obj"]
             data = _decode(cmd.get("data"))
             y = _decode(cmd.get("y"))
             result = f.fit(data, y)
-            print(json.dumps({"ok": True, "result": _encode(result)}), flush=True)
+            _reply(({"ok": True, "result": _encode(result)}))
 
         elif action == "FORWARD":
             f = filters[cmd["node_id"]]["obj"]
             data = _decode(cmd.get("data"))
             state = _decode(cmd.get("state", {}))
             result = f.forward(data, state)
-            print(json.dumps({"ok": True, "result": _encode(result)}), flush=True)
+            _reply(({"ok": True, "result": _encode(result)}))
 
         elif action == "COMPOSITE_FORWARD":
             node_ids = cmd["node_ids"]
@@ -111,7 +139,7 @@ for line in sys.stdin:
                 out = f.forward(out, state)
 
             result = out.detach().tolist() if hasattr(out, 'detach') else out
-            print(json.dumps({"ok": True, "result": _encode(result)}), flush=True)
+            _reply(({"ok": True, "result": _encode(result)}))
 
         elif action == "COMPOSITE_FIT":
             node_ids = cmd["node_ids"]
@@ -181,7 +209,7 @@ for line in sys.stdin:
                     states[nid] = base64.b64encode(buf.getvalue()).decode()
 
             result = out.detach().tolist() if hasattr(out, 'detach') else out
-            print(json.dumps({"ok": True, "result": _encode(result), "states": states}), flush=True)
+            _reply(({"ok": True, "result": _encode(result), "states": states}))
 
         elif action == "GET_STATE":
             nid = cmd["node_id"]
@@ -196,7 +224,7 @@ for line in sys.stdin:
             else:
                 buf.write(cloudpickle.dumps(f))
             state_b64 = base64.b64encode(buf.getvalue()).decode()
-            print(json.dumps({"ok": True, "state_b64": state_b64}), flush=True)
+            _reply(({"ok": True, "state_b64": state_b64}))
 
         elif action == "SET_STATE":
             nid = cmd["node_id"]
@@ -211,7 +239,7 @@ for line in sys.stdin:
                     filters[nid]["obj"] = cloudpickle.loads(buf.read())
             else:
                 filters[nid]["obj"] = cloudpickle.loads(buf.read())
-            print(json.dumps({"ok": True}), flush=True)
+            _reply(({"ok": True}))
 
         elif action == "GET_GRADIENTS":
             nid = cmd["node_id"]
@@ -223,43 +251,43 @@ for line in sys.stdin:
             # never left the worker.
             module = getattr(f, "_module", None) or f
             if not hasattr(module, "named_parameters"):
-                print(json.dumps({"ok": False, "error":
+                _reply(({"ok": False, "error":
                     "`%s` has no parameters: it is neither an nn.Module nor a "
                     "materialized DifferentiableFilter, so there are no "
-                    "gradients to read" % nid}), flush=True)
+                    "gradients to read" % nid}))
                 continue
             try:
                 import torch
             except ImportError:
-                print(json.dumps({"ok": False, "error":
+                _reply(({"ok": False, "error":
                     "`%s` cannot produce gradients: torch is not installed in "
-                    "this worker's environment" % nid}), flush=True)
+                    "this worker's environment" % nid}))
                 continue
             grads = {n: p.grad.detach().clone()
                      for n, p in module.named_parameters() if p.grad is not None}
             if not grads:
-                print(json.dumps({"ok": False, "error":
+                _reply(({"ok": False, "error":
                     "`%s` has parameters but none carry a gradient. Run a "
-                    "backward pass before asking for them" % nid}), flush=True)
+                    "backward pass before asking for them" % nid}))
                 continue
             buf = io.BytesIO()
             torch.save(grads, buf)
-            print(json.dumps({"ok": True, "gradients_b64":
-                base64.b64encode(buf.getvalue()).decode()}), flush=True)
+            _reply(({"ok": True, "gradients_b64":
+                base64.b64encode(buf.getvalue()).decode()}))
 
         elif action == "APPLY_GRADIENTS":
             nid = cmd["node_id"]
             f = filters[nid]["obj"]
             module = getattr(f, "_module", None) or f
             if not hasattr(module, "named_parameters"):
-                print(json.dumps({"ok": False, "error":
-                    "`%s` has no parameters to apply gradients to" % nid}), flush=True)
+                _reply(({"ok": False, "error":
+                    "`%s` has no parameters to apply gradients to" % nid}))
                 continue
             try:
                 import torch
             except ImportError:
-                print(json.dumps({"ok": False, "error":
-                    "`%s` cannot take gradients: torch is not installed" % nid}), flush=True)
+                _reply(({"ok": False, "error":
+                    "`%s` cannot take gradients: torch is not installed" % nid}))
                 continue
             buf = io.BytesIO(base64.b64decode(cmd["gradients_b64"]))
             grads = torch.load(buf, weights_only=True)
@@ -269,12 +297,12 @@ for line in sys.stdin:
                     p.grad = grads[name].clone()
                     applied += 1
             if applied == 0 and grads:
-                print(json.dumps({"ok": False, "error":
+                _reply(({"ok": False, "error":
                     "`%s`: none of the %d aggregated gradients matched a "
                     "parameter name. The replicas are not the same model"
-                    % (nid, len(grads))}), flush=True)
+                    % (nid, len(grads))}))
                 continue
-            print(json.dumps({"ok": True, "applied": applied}), flush=True)
+            _reply(({"ok": True, "applied": applied}))
 
         elif action == "BATCHED_FIT":
             # Process dataset in batches — model loaded ONCE, batches processed in loop
@@ -334,7 +362,7 @@ for line in sys.stdin:
                     batch_input = f.forward(batch_input, all_states.get(nid, {}))
 
                 import sys
-                print(f"    Batch {b+1}/{n_batches} complete", file=sys.stderr, flush=True)
+                print(f"    Batch {b+1}/{n_batches} complete", file=sys.stderr)
 
             # Encode final states
             encoded_states = {}
@@ -342,19 +370,19 @@ for line in sys.stdin:
                 encoded_states[nid] = _encode(state)
 
             result = _encode(batch_input) if batch_input is not None else None
-            print(json.dumps({"ok": True, "result": result, "states": encoded_states}), flush=True)
+            _reply(({"ok": True, "result": result, "states": encoded_states}))
 
         elif action == "SHUTDOWN":
-            print(json.dumps({"ok": True}), flush=True)
+            _reply(({"ok": True}))
             break
 
         else:
-            print(json.dumps({"ok": False, "error": f"unknown command: {action}"}), flush=True)
+            _reply(({"ok": False, "error": f"unknown command: {action}"}))
 
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        print(json.dumps({"ok": False, "error": str(e), "traceback": tb}), flush=True)
+        _reply(({"ok": False, "error": str(e), "traceback": tb}))
 "#;
 
 /// A persistent Python child process that executes filter commands.
