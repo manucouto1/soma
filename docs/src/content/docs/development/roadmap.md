@@ -60,8 +60,8 @@ index once an `Embedder` exists).
 
 ### Documentation
 
-Notebooks 06–09 are in Spanish while the other eleven are in English.
-Translating them is outstanding.
+~~Notebooks 06–09 are in Spanish~~ — translated 2026-08-05. All fifteen are
+in English.
 
 
 ## Phase Overview

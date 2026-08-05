@@ -75,8 +75,9 @@ cell, because `Graph.load` resolves filters by import path.
 - **"I want to run a research campaign"** → 10 → 11 → 12
 - **"I want to build and tune an agentic flow"** → 01 → 13 → 15 → 14
 
-Notebooks 01–05 and 10–15 are in English; 06–09 are in Spanish, and
-translating them is outstanding.
+All fifteen are in English. Notebooks 06–09 were written in Spanish and
+translated on 2026-08-05; their saved outputs are the originals, since
+nothing that produces one changed.
 
 Re-execute them with `python notebooks/execute.py` (all of them) or
 `python notebooks/execute.py 10 11 12` (a subset). Each runs in a fresh
