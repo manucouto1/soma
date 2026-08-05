@@ -133,5 +133,15 @@ def test_orchestrate_caps_the_width():
     )
     out = g.forward("go")
 
-    assert Works._seen == ["a", "b"], "the cap keeps the first two tasks only"
+    # Sorted, like the sibling test above and for the same reason: the
+    # capped workers run in parallel, so `_seen` records whichever
+    # finished first. Asserting arrival order made this flaky — it went
+    # red on CI as `['b', 'a']` after passing everywhere for weeks.
+    #
+    # The claim survives the sort: {"a", "b"} is still two tasks and still
+    # the *first* two, which is what a cap of 2 against a five-task plan
+    # has to mean. Output order is pinned by the assertion below, and that
+    # one is deterministic — the join reads the spawn order, not the
+    # completion order.
+    assert sorted(Works._seen) == ["a", "b"], "the cap keeps the first two tasks only"
     assert out == "did a | did b"
