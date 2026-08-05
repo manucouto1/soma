@@ -5,23 +5,33 @@ first one is not like the ones after it.
 
 ## Where things stand
 
-Verified against crates.io and PyPI on 2026-08-05:
-
 | | Published | At |
 |---|---|---|
+| crates.io — all eleven | **yes** | **0.4.0** |
 | PyPI `somatize` | yes | 0.3.1 |
-| crates.io `somatize-macros`, `-core`, `-compiler`, `-runtime`, `-memory`, `-worker`, `-agent`, `somatize` | yes | 0.3.1 |
-| crates.io `somatize-store`, `somatize-llm`, `somatize-coordinator` | **never** | — |
 | crates.io `somatize-mcp` | never, deliberately | — |
 
-The eight published crates are exactly the ones `release.yml` used to list.
-The three that were never published are exactly the three it was missing —
-and at 0.3.1 the facade did not depend on them, which is why nobody
-noticed. At 0.4.0 `somatize` depends on all three, so a release with the
-old list would fail at the facade, and the `|| true` on every line would
-have reported success while leaving `somatize` at 0.3.1 for good.
+The eleven crates went out on 2026-08-05 in one token-authenticated pass,
+and a crate outside this workspace depending on `somatize = "0.4.0"` from
+crates.io compiles and runs. That is the Rust half of "can a stranger
+install this", and it is now yes rather than unknown.
 
-## The 0.4.0 release cannot be done piecemeal
+**What is left: PyPI.** Configure the trusted publisher (below), then tag.
+The release workflow will skip every crate as already published and do the
+wheels.
+
+### How it stood before, and why
+
+Eight crates were published at 0.3.1 — exactly the eight `release.yml` used
+to list. `somatize-store`, `somatize-llm` and `somatize-coordinator` had
+never been published, exactly the three it was missing, and at 0.3.1 the
+facade did not depend on them, which is why nobody noticed.
+
+At 0.4.0 `somatize` depends on all three, so a release with the old list
+would have failed at the facade, and the `|| true` on every line would have
+reported success while leaving `somatize` at 0.3.1 for good.
+
+## Why it could not be done piecemeal
 
 Publishing only the three missing crates does not work, and the error is
 the same one you get for any of them:
@@ -65,8 +75,10 @@ trusted-publisher config to a crate id
 publisher" for names that have never been published. There is nowhere to
 configure a publisher for a crate that does not exist yet.
 
-So the first 0.4.0 release is one token-authenticated pass over the whole
-chain, from a machine with a crates.io token:
+The first 0.4.0 release was therefore one token-authenticated pass over the
+whole chain, from a machine with a crates.io token — **already done**, kept
+here because the next major version starts from the same place if a new
+crate is ever added:
 
 ```bash
 for c in somatize-macros somatize-core somatize-store somatize-compiler \
