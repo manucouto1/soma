@@ -150,8 +150,27 @@ impl EnvManager {
         std::fs::write(&req_file, requirements)
             .map_err(|e| WorkerError::Env(format!("Failed to write requirements.txt: {e}")))?;
 
-        // Always ensure soma is installed
-        let _ = Command::new(&pip).args(["install", "soma"]).output();
+        // The bootstrap in `python_process.rs` opens with
+        // `import json, sys, base64, cloudpickle, io, pickle`, so a venv
+        // without cloudpickle cannot load a single filter — the child dies
+        // on its first line and the worker reports "python process closed
+        // stdout (crashed?)", which names neither the module nor the venv.
+        //
+        // This used to install "soma", which is a DIFFERENT project on
+        // PyPI: this one publishes as `somatize`. The result was discarded
+        // with `let _`, so installing the wrong package, or failing to
+        // install anything, was indistinguishable from success.
+        let bootstrap = Command::new(&pip)
+            .args(["install", "-q", "cloudpickle", "somatize"])
+            .output()
+            .map_err(|e| WorkerError::Env(format!("pip install (bootstrap deps) failed: {e}")))?;
+        if !bootstrap.status.success() {
+            return Err(WorkerError::Env(format!(
+                "installing the bootstrap dependencies (cloudpickle, somatize) failed in {}:\n{}",
+                env_dir.display(),
+                String::from_utf8_lossy(&bootstrap.stderr)
+            )));
+        }
 
         let output = Command::new(&pip)
             .args(["install", "-r", &req_file.to_string_lossy(), "-q"])
