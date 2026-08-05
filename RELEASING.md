@@ -8,109 +8,45 @@ the first one was not like the ones after it.
 | | Published | At |
 |---|---|---|
 | PyPI `somatize` | **yes** | **0.5.0** |
-| crates.io `somatize-macros`, `somatize-core` | yes | 0.5.0 |
-| crates.io — the other nine | **no** — see below | 0.4.0 |
+| crates.io — all eleven | **yes** | **0.5.0** |
 | crates.io `somatize-mcp` | never, deliberately | — |
 
-**PyPI 0.5.0 is verified end to end**: installed from a clean venv on
-3.13, `import soma`, a graph fitted and forwarded, `soma.Pbt`
-constructed. That is "can a stranger install this" answered with a yes
-that was checked rather than assumed.
+**Both halves are verified, not assumed.**
+
+- PyPI: clean venv on 3.13, `pip install somatize==0.5.0`, `import soma`,
+  a graph fitted and forwarded, a `soma.Pbt` constructed.
+- crates.io: a brand-new crate outside this workspace, `cargo add
+  somatize@0.5.0`, compiles and runs.
 
 Wheels cover **3.12 and 3.13 only** (`--interpreter python3.12
 python3.13` in `release.yml`). A 3.14 user falls back to the sdist and
 therefore needs a Rust toolchain — worth adding an interpreter to that
 line before it becomes the common case.
 
-### The v0.5.0 run stopped at `somatize-store`
+## What the v0.5.0 release taught, for the next one
+
+The first pass **stopped at the third crate**:
 
 ```
 403 Forbidden: The provided access token is not valid for crate `somatize-store`
 ```
 
-Trusted publishing was configured for the first two crates and not the
-rest. The workflow's fail-fast did exactly its job: it stopped in
-dependency order without publishing anything out of sequence, which is
-the state that cannot be undone.
+Trusted publishing had been configured for `somatize-macros` and
+`somatize-core` and not for the other nine. Two things made that
+recoverable rather than a disaster:
 
-To finish it, add the trusted publisher (below) to the nine remaining
-crates and re-run — `gh run rerun <id> --failed`. The two already at
-0.5.0 are skipped as "already exists", and the chain continues from
-`somatize-store`.
+1. **The fail-fast.** Every line in the publish loop used to end in
+   `|| true`. It now swallows *only* "already exists", so the job stopped
+   in dependency order having published exactly two crates — a consistent
+   prefix — instead of pressing on and leaving holes. A crate published
+   out of order cannot be unpublished, only yanked.
+2. **"Already exists" is skipped.** After adding the missing publishers,
+   `gh run rerun <id> --failed` walked the same list, skipped the two
+   that were done, and continued from `somatize-store`.
 
-The eleven crates went out on 2026-08-05 in one token-authenticated pass,
-and a crate outside this workspace depending on `somatize = "0.4.0"` from
-crates.io compiles and runs. That is the Rust half of "can a stranger
-install this", and it is yes rather than unknown.
-
-## Why the next tag is v0.5.0, not v0.4.1
-
-The tempting move is to tag `v0.4.0` again: the workflow skips a crate
-that is already on crates.io, so it would publish PyPI alone and cost
-nothing. It is the wrong move.
-
-Eight commits landed after that crates.io pass, seven of them breaking —
-workers gained a DataStore, the four state and gradient messages, real
-federated and data-parallel training, model parallelism, and an error
-path that no longer hangs its caller. Tagging `v0.4.0` would put that
-code on PyPI as `somatize` 0.4.0 while crates.io kept the *old* 0.4.0
-under the same number. Two artifacts, one version, different code — the
-exact desynchronization the whole trusted-publishing setup exists to
-avoid.
-
-So: bump the workspace version, tag it, and let one pass publish both
-registries from one tree. Breaking changes below 1.0 bump the minor,
-which is why 0.4.0 → **0.5.0**.
-
-**What is left: PyPI.** Configure the trusted publisher (below), then tag.
-The release workflow will publish the eleven crates and do the
-wheels.
-
-### How it stood before, and why
-
-Eight crates were published at 0.3.1 — exactly the eight `release.yml` used
-to list. `somatize-store`, `somatize-llm` and `somatize-coordinator` had
-never been published, exactly the three it was missing, and at 0.3.1 the
-facade did not depend on them, which is why nobody noticed.
-
-At 0.4.0 `somatize` depends on all three, so a release with the old list
-would have failed at the facade, and the `|| true` on every line would have
-reported success while leaving `somatize` at 0.3.1 for good.
-
-## Why it could not be done piecemeal
-
-Publishing only the three missing crates does not work, and the error is
-the same one you get for any of them:
-
-```
-error: failed to prepare local package for uploading
-  failed to select a version for the requirement `somatize-core = "^0.4.0"`
-  candidate versions found which didn't match: 0.3.1, 0.3.0, 0.2.46, ...
-```
-
-Every workspace crate requires its siblings at `^0.4.0`, and the registry
-only has 0.3.1. So the whole chain has to go out at 0.4.0, in order — the
-eleven crates `release.yml` lists, which is the correct order (validated
-against the dependency graph).
-
-### The cycle that had to be broken first
-
-`somatize-macros` had `somatize-core` as a dev-dependency declared
-`{ workspace = true }`, and the workspace entry carries
-`version = "0.4.0"`. A **versioned** dev-dependency survives into the
-published manifest, so:
-
-```
-somatize-macros  needs  somatize-core   ^0.4.0    (dev-dependency)
-somatize-core    needs  somatize-macros ^0.4.0    (normal dependency)
-```
-
-Neither can go first, and nothing published breaks the tie. The published
-`somatize-macros` 0.3.1 manifest lists three dependencies and no dev ones,
-which is the clue: cargo strips a dev-dependency that has **no version**.
-It is now declared path-only (`{ path = "../soma-core" }`), it packages
-(13 files, 41.9 kB), and `cargo test -p somatize-macros` is unaffected —
-the path is all it ever needed.
+So: before tagging, check the trusted publisher exists for **every**
+crate in the list, not just the first. Configuring one crate and assuming
+the rest looks identical until the run is halfway through.
 
 ## The first release needs a token. Only the first.
 
