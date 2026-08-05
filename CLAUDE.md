@@ -73,7 +73,10 @@ soma-coordinator→ worker registry + placement, with a `soma-coordinator` binar
 soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, Tool,
                   Study, Run, RunView, soma.viz, soma.agentic, soma.library
 soma/           → facade crate (`somatize`) re-exporting the workspace
-docs/           → 35 Starlight pages (sidebar guard: `cd docs && npm run check`)
+docs/           → 39 hand-written Starlight pages + the 15 tutorial pages
+                  rendered from notebooks/ by scripts/notebooks_to_docs.py
+                  (an npm pre-hook; generated, gitignored — notebooks/ is the
+                  source of truth). Sidebar guard: `cd docs && npm run check`
 notebooks/      → 15 executed tutorial notebooks (10-12 are one campaign, sharing
                   campaign.py; 13 is agentic, with an embedded mock provider so it
                   runs with no key; 14 replicates Du et al. multi-agent debate on

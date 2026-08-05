@@ -11,6 +11,45 @@ tables as a record of what was planned, not as a description of what is
 left. [Crates](/soma/architecture/crates/) describes the tree as it is.
 :::
 
+## What is actually left
+
+Re-derived from the code on 2026-08-05, because the phase tables below
+answer a question nobody is asking any more.
+
+### Blocking a release
+
+**Publishing has never been verified end to end.** This is the one item
+that stands between the workspace and a version a stranger can install.
+`release.yml` publishes on a `v*` tag; until a tag runs green with the
+crates and the wheels actually landing, "it works" is a claim about a
+local checkout. Trusted publishing (OIDC) now replaces the stored tokens
+on both crates.io and PyPI, which means the publisher must be configured
+registry-side before the next tag.
+
+### Public surface that exists but refuses
+
+| What | Where | Behaviour |
+|---|---|---|
+| `TrainingStrategy::ModelParallel` | `soma-runtime/src/strategy.rs` | Returns an error. Forward/backward across partitions is unwritten |
+| `TrainingStrategy::PopulationBased` | `soma-runtime/src/strategy.rs` | Returns an error — but `PbtRunner` exists and works. This is a seam left unconnected, not a missing feature |
+| `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
+| Filter serialization over WS | `soma-worker/src/ws_transport.rs` | Sends an empty filter list where the catalog's would go |
+
+### Deferred on purpose, with the seam in place
+
+Documented where each belongs, not here:
+[`soma ui`](/soma/design/visualization/) and the rest of the visualization
+deferrals (fANOVA importances, `NodeProgress`/`ParetoUpdated` emitters,
+a Python-implementable `EventSink`, parquet compaction), and the
+[experiment-pool](/soma/design/experiment-pool/) ones (warm-starting a
+study from the pool, dedup by cache key, ChronosVector as a real vector
+index once an `Embedder` exists).
+
+### Documentation
+
+Notebooks 06–09 are in Spanish while the other eleven are in English.
+Translating them is outstanding.
+
 
 ## Phase Overview
 

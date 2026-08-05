@@ -21,6 +21,11 @@ execution site, and errors became typed at the crate edges.
 For decisions taken since, and what each was chosen *over*, see
 [Design Decisions](/soma/design/decisions/). For the current tree, see
 [Crates](/soma/architecture/crates/).
+
+Every **Status** line below was re-checked against the code on 2026-08-05,
+because several of them had drifted in the direction that matters least to
+a reader and most to an evaluator: they described as missing things that
+had shipped.
 :::
 
 ```
@@ -123,7 +128,7 @@ enum RuntimeError { FilterFailed { node_id: String, source: Box<dyn Error> }, ..
 
 **Impact**: High. Touches every error site. Should be done before 1.0.
 
-**Status**: Deferred. Current approach works but `Pruned` as error is a known smell.
+**Status**: Half done. `TrialOutcome` exists (`soma-runtime/src/executors/study.rs`) and separates completion from pruning, and `soma-llm` and `soma-worker` carry their own error types. `SomaError::Pruned` still exists alongside it, so the smell is narrowed, not removed.
 
 ---
 
@@ -183,7 +188,7 @@ pub struct Graph {
 
 **Proposed Fix**: Implement LRU eviction.
 
-**Status**: Must fix before production use. Not blocking for development.
+**Status**: Done. `soma-runtime/src/cache/memory.rs` enforces `max_bytes` with `evict_until_fits`, evicting least-recently-accessed entries.
 
 ---
 
@@ -202,7 +207,7 @@ fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
 }
 ```
 
-**Status**: Must fix before exposing grid search on large spaces.
+**Status**: Done. `GridSampler` generates combinations from the trial index; it never materializes the product.
 
 ---
 
@@ -248,7 +253,7 @@ fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
 - `FittedPipeline` — holds trained states
 - Pipeline wraps both with caching and events
 
-**Status**: Deferred. Current design is functional.
+**Status**: Moot. `Pipeline` was removed — `Graph` is the only user-facing API, and the responsibilities listed here now sit in `GraphSession`, `NodeCatalog` and the cache.
 
 ---
 
@@ -260,7 +265,7 @@ fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
 
 **Proposed Fix**: Keep enum public but add `#[non_exhaustive]` attribute.
 
-**Status**: Should apply before 1.0 release.
+**Status**: Done, and deliberately not everywhere: `ExecutionPlan`, `Effect`, `Value` and `Event` are `#[non_exhaustive]`; `NodeOutcome` and `Transition` are not, because every consumer must decide over them and a wildcard arm there is a silent wrong answer.
 
 ---
 
@@ -268,16 +273,26 @@ fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
 
 | Abstraction | Purpose | Status |
 |---|---|---|
-| `DataFlow` trait | Abstract input resolution from graph topology | GraphInfo added (partial) |
-| `CachePolicy` | LRU, TTL, size-based eviction | Not implemented |
-| `StreamingFilter` | Chunk processing with stream modes | Done locally (`StreamRun`); worker remote path pending |
-| `Scheduler` | Distribute trials/plans across workers | Not implemented |
-| `MetricsCollector` | Pluggable observability backends | EventBus only |
-| `DataSchema` | Type-safe input/output validation | Not implemented |
+| `DataFlow` trait | Abstract input resolution from graph topology | `GraphInfo` resolves by predecessors, not by "last executed" |
+| `CachePolicy` | LRU, TTL, size-based eviction | LRU with `max_bytes` (memory), plus the tiered store's `soma cache gc`/`pin` |
+| `StreamingFilter` | Chunk processing with stream modes | Done. `StreamRun` composes `run_node`'s primitives, locally and on the worker |
+| `Scheduler` | Distribute trials/plans across workers | Done. `soma-compiler/src/scheduler.rs` produces a `DistributionPlan` |
+| `MetricsCollector` | Pluggable observability backends | EventBus, plus the run-dir readers behind `soma.runs()` and `soma report`. A Python-implementable `EventSink` is still open |
+| `DataSchema` | Type-safe input/output validation | Done. `Schema` (dtype + shape) is checked between connected nodes at `compile()` |
 
 ---
 
 ## Test Coverage Gaps
+
+:::note[Superseded]
+This section describes coverage at 907 tests. The suite is now 1030 Rust
+`#[test]` functions plus 699 Python tests, and most of the "missing"
+column below has since been written — cache invalidation, tiered
+promotion, Bayesian sampling and pruning, filter panics, concurrency,
+and end-to-end workflows all have tests today. Property tests live in
+`soma-core/tests/proptests.rs`. The table is kept for the shape of the
+reasoning, not as a gap list.
+:::
 
 ### Currently Tested vs Missing
 
@@ -306,12 +321,18 @@ fn sample(&self, space: &SearchSpace, trial_index: usize) -> Option<Params> {
 
 ### Before 1.0
 
-1. Apply `#[non_exhaustive]` to public enums (ExecutionPlan, Event, Value, SomaError)
-2. Implement LRU eviction in MemoryCache
-3. Fix GridSampler for large spaces (lazy generation)
-4. Separate `Pruned` from `SomaError` into `TrialOutcome` enum
-5. Add integration tests for full workflows
-6. Add `#[must_use]` annotations where appropriate
+1. ~~Apply `#[non_exhaustive]` to public enums~~ — done, and deliberately
+   not to the control-flow enums
+2. ~~Implement LRU eviction in MemoryCache~~ — done
+3. ~~Fix GridSampler for large spaces (lazy generation)~~ — done
+4. ~~Separate `Pruned` from `SomaError` into `TrialOutcome`~~ — `TrialOutcome`
+   exists; the `SomaError::Pruned` variant still does too
+5. ~~Add integration tests for full workflows~~ — done
+6. Add `#[must_use]` annotations where appropriate — open
+
+What actually blocks a 1.0, as of 2026-08-05, is none of the above: it is
+that publishing has never been verified end to end. See
+[Roadmap](/soma/development/roadmap/).
 
 ### Next Iteration
 

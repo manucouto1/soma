@@ -36,14 +36,18 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      # NOT actions/cache over `target`. That is what killed a run on main:
+      # 13 crates after --workspace tests plus the feature-gated checks make
+      # a target/ far larger than the ~14 GB an ubuntu runner has free, and
+      # the post-step has to compress it, needing the space twice over. The
+      # runner died with "No space left on device" AFTER every test had
+      # passed. rust-cache caches the registry and the dependency artifacts
+      # but prunes the workspace's own crates — which are rebuilt anyway —
+      # and derives its own key.
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: check
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
@@ -76,14 +80,11 @@ jobs:
       - name: Point PyO3 at the pinned interpreter
         run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
 
+      # See the note on the first of these.
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          key: test
 
       - name: cargo test
         run: cargo test --workspace
@@ -207,14 +208,11 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      # See the note on the first of these.
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          key: cov
 
       - name: cargo llvm-cov
         run: cargo llvm-cov --workspace --no-fail-fast --summary-only

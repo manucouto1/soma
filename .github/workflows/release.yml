@@ -41,21 +41,50 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          cargo publish -p somatize-macros --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize-core --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize-compiler --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize-runtime --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize-memory --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize-worker --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize-agent --allow-dirty || true
-          sleep 30
-          cargo publish -p somatize --allow-dirty || true
+          set -euo pipefail
+
+          # Every crate the facade needs, in dependency order. Three were
+          # missing — somatize-store, somatize-llm and somatize-coordinator —
+          # and `somatize` depends on all three, so publishing the facade
+          # could not have succeeded. Nobody found out, because every line
+          # ended in `|| true`. somatize-mcp is deliberately absent: nothing
+          # depends on it and it is run as a binary.
+          CRATES="
+            somatize-macros
+            somatize-core
+            somatize-store
+            somatize-compiler
+            somatize-runtime
+            somatize-memory
+            somatize-llm
+            somatize-worker
+            somatize-agent
+            somatize-coordinator
+            somatize
+          "
+
+          # Re-running a release must not fail on the crates that already
+          # went out, but that is the ONLY failure worth swallowing. Anything
+          # else — a compile error, an unpublished dependency, a rejected
+          # token — fails the job.
+          for crate in $CRATES; do
+            echo "::group::publish $crate"
+            if output=$(cargo publish -p "$crate" --allow-dirty 2>&1); then
+              echo "$output"
+            elif grep -qE 'already (exists|uploaded)' <<<"$output"; then
+              echo "$output"
+              echo "$crate is already on crates.io at this version — skipping"
+            else
+              echo "$output"
+              echo "::error::publishing $crate failed"
+              exit 1
+            fi
+            echo "::endgroup::"
+            # cargo already blocks until the crate appears in the index, so
+            # this is belt and braces against a slow propagation making the
+            # next crate fail for a reason that is not its own.
+            sleep 15
+          done
 
   # Build wheels + sdist AND publish to PyPI in a single job, so nothing is
   # passed through GitHub artifact storage (avoids the artifact storage quota).
