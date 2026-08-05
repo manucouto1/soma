@@ -82,6 +82,26 @@ class Graph:
     def add_tool(self, tool: Tool) -> None:
         """Register a tool without attaching it to a particular agent."""
 
+    def set_strategy(
+        self,
+        kind: str,
+        num_replicas: int | None = ...,
+        num_clients: int | None = ...,
+        rounds: int | None = ...,
+        aggregation: str | None = ...,
+        generations: int | None = ...,
+        population_size: int | None = ...,
+    ) -> None:
+        """Set the graph's training strategy.
+
+        `"local"`, `"data_parallel"`, `"federated"`, `"population_based"`.
+        Only `federated` (with `fed_avg`) runs today: `data_parallel` needs
+        gradients the worker cannot yet hand over, and the other two are
+        unwritten. Each says so when you try."""
+
+    def strategy(self) -> str:
+        """The training strategy, as the string `set_strategy` takes."""
+
     def add_worker(
         self, address: str, token: str | None = ..., tags: list[str] | None = ...
     ) -> None:

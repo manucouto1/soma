@@ -114,36 +114,31 @@ g.node("model", MyModel())
 g.fit(data)  # runs locally, no workers needed
 ```
 
-:::danger[These four strategies are a design, not a running feature]
-Read this before the code below, because the code below does not do what
-its comments say.
+:::caution[One of these four runs today. Read this before the code below]
+Verified on 2026-08-05, and the answer differs per strategy:
 
-`Graph::set_strategy` exists in Rust (`soma-core/src/graph.rs`) and records
-the strategy on the graph, which serializes with it. That is all that
-happens. Verified on 2026-08-05:
+- **`federated` runs.** `g.set_strategy("federated", num_clients=…,
+  rounds=…)` exists in Python, `fit` hands execution to the strategy when
+  more than one worker is registered, and FedAvg averages the clients'
+  states element-wise — including the dicts a Python filter's `fit`
+  returns. Verified over two real workers: two shards whose means are 1.5
+  and 5.5 produce 3.5, which no single client can.
+- **`data_parallel` does not**, and the error says why: it needs each
+  worker's gradients, and `soma-worker/src/server.rs` answers
+  `GetGradients`/`ApplyGradients` with "not implemented for
+  SubprocessFilter". The AllReduce averaging itself is written and tested;
+  nothing can reach it yet.
+- **`model_parallel` and `population_based` are unwritten.** They refuse.
+  `PbtRunner` exists and works, but answers to a different trait
+  (`PbtExecutor`), so connecting it is an adapter rather than a rename.
+- **`fed_prox` and `fed_yogi`** refuse too: the first needs the previous
+  global model to measure drift against, the second the optimizer moments
+  it carries between rounds, and this aggregator is given neither. A plain
+  mean under their name would be FedAvg lying.
 
-- **Python has no `set_strategy`.** Not "not yet wired" — the method does
-  not exist, so every `g.set_strategy(...)` on this page raises
-  `AttributeError`.
-- **The scheduler does not read it.** `soma-compiler/src/scheduler.rs`
-  contains no reference to the strategy; it groups differentiable nodes
-  and distributes parallel branches, and would do so identically whatever
-  strategy is set.
-- **The training loops have no caller.** `soma-runtime/src/strategy.rs`
-  implements `StrategyExecutor` for `TrainingStrategy` — the sharding, the
-  gradient aggregation, the federated round loop are all written — and
-  nothing in the workspace calls `fit` on it. `ModelParallel` and
-  `PopulationBased` return "not yet implemented"; `Local`, `DataParallel`
-  and `Federated` are implemented and equally unreachable.
-
-So `g.fit(data)` does not shard, does not AllReduce, and does not run
-federated rounds. What *does* work today is placement: `add_worker`,
-`set_coordinator`, `target=` on a node, and remote execution of the
-compiled plan — the sections above this one.
-
-The snippets below are kept because they describe the intended API and
-the semantics each strategy is meant to have. Treat them as a
-specification.
+Until this was wired, `set_strategy` did not exist in Python at all, and
+in Rust nothing read the attribute back — setting a strategy recorded it
+and changed nothing.
 :::
 
 ### Data Parallel

@@ -10,6 +10,7 @@ use crate::executor::{self, Context, GraphInfo};
 use crate::node_catalog::NodeCatalog;
 use crate::runner::Runner;
 use crate::runner::Transport;
+use crate::strategy::StrategyExecutor;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::error::{Result, SomaError};
@@ -17,6 +18,7 @@ use somatize_core::event::Event;
 use somatize_core::fingerprint::ArchitectureFingerprint;
 use somatize_core::graph::Graph;
 use somatize_core::store::{DataRef, DataStore};
+use somatize_core::strategy::TrainingStrategy;
 use somatize_core::util::timestamp_id;
 use somatize_core::value::Value;
 use std::collections::HashMap;
@@ -40,6 +42,12 @@ pub struct GraphSession {
     event_bus: Arc<EventBus>,
     data_store: Option<Arc<dyn DataStore>>,
     transport: Option<Arc<dyn Transport>>,
+    /// One transport per worker, for a graph carrying a `TrainingStrategy`.
+    /// Separate from `transport` because a strategy indexes its workers —
+    /// `execute_on_worker(i, …)` — and a single transport cannot answer
+    /// that. Empty unless [`with_transports`](Self::with_transports) is
+    /// used.
+    transports: Vec<Arc<dyn Transport>>,
     /// Performs and journals step effects. Only needed when the graph
     /// contains a step; a purely computational graph leaves it unset and
     /// keeps exactly the old behaviour.
@@ -58,6 +66,7 @@ impl GraphSession {
             event_bus: Arc::new(EventBus::new(256)),
             data_store: None,
             transport: None,
+            transports: Vec::new(),
             driver: None,
             fitted: false,
         }
@@ -80,6 +89,18 @@ impl GraphSession {
     /// Attach the data store batched forward passes read rows from.
     pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
         self.data_store = Some(store);
+        self
+    }
+
+    /// Attach one transport per worker, so a `TrainingStrategy` can run.
+    ///
+    /// Without this, setting a strategy on a graph records it and nothing
+    /// more — which is what it did for the whole life of the type. `fit`
+    /// consults the graph's strategy and, when it is not `Local` and
+    /// transports are present, hands execution to
+    /// [`StrategyExecutor`](crate::strategy::StrategyExecutor).
+    pub fn with_transports(mut self, transports: Vec<Arc<dyn Transport>>) -> Self {
+        self.transports = transports;
         self
     }
 
@@ -183,6 +204,41 @@ impl GraphSession {
             plan_summary: plan.summary(),
         });
         let start = std::time::Instant::now();
+
+        // A graph carrying a strategy trains through it, when there are
+        // workers to run it on. This branch is what the type was missing:
+        // `set_strategy` recorded an attribute nothing ever read.
+        let strategy = self.graph.effective_strategy().clone();
+        if !matches!(strategy, TrainingStrategy::Local) && !self.transports.is_empty() {
+            let node_ids: Vec<String> = plan.node_ids().into_iter().map(String::from).collect();
+            let strategy_ctx = crate::strategy::TransportContext::new(
+                self.transports.clone(),
+                &plan,
+                &self.catalog,
+                None,
+            );
+            let outcome = strategy.fit(&strategy_ctx, x, y, &node_ids);
+            return match outcome {
+                Ok(states) => {
+                    for (node_id, state) in &states {
+                        self.catalog.try_set_state(node_id.clone(), state.clone())?;
+                    }
+                    self.fitted = true;
+                    self.event_bus.emit(Event::RunCompleted {
+                        run_id,
+                        duration: start.elapsed(),
+                    });
+                    Ok(states)
+                }
+                Err(e) => {
+                    self.event_bus.emit(Event::RunFailed {
+                        run_id,
+                        error: e.to_string(),
+                    });
+                    Err(e)
+                }
+            };
+        }
 
         let runner = crate::runner::LocalRunner;
         let mut ctx = crate::runner::RunContext::new(

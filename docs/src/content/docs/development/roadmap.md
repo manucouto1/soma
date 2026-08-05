@@ -30,7 +30,8 @@ registry-side before the next tag.
 
 | What | Where | Behaviour |
 |---|---|---|
-| **The whole `TrainingStrategy` layer** | `soma-runtime/src/strategy.rs` | `impl StrategyExecutor for TrainingStrategy` **has no caller anywhere in the workspace**, and `soma-compiler/src/scheduler.rs` never mentions the strategy either. Setting one records it on the graph and changes nothing. `Local`, `DataParallel` and `Federated` are written and unreachable; `ModelParallel` and `PopulationBased` additionally return "not yet implemented". `PbtRunner` works but answers to a different trait (`PbtExecutor`), so connecting it is an adapter, not a rename |
+| `TrainingStrategy::DataParallel` | `soma-worker/src/server.rs` | The strategy, the context and the AllReduce averaging all work; the worker refuses `GetGradients`/`ApplyGradients` for a `SubprocessFilter`, so nothing reaches them. **`Federated` runs** as of 2026-08-05 |
+| `ModelParallel`, `PopulationBased` | `soma-runtime/src/strategy.rs` | Unwritten. `PbtRunner` works but answers to `PbtExecutor`, so connecting it is an adapter |
 | `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
 | ~~Seed dropped on the remote path~~ | `soma-worker/src/ws_transport.rs` | **Fixed 2026-08-05.** `Transport::execute` now takes the run's seed and `WsTransport` puts it on the wire; it was hardcoded `None`, so a remote sweep shared one cache line across every seed |
 
@@ -42,11 +43,10 @@ the pickle, so this transport cannot supply them and sending empty
 pickles would be worse than sending none. The path that can supply them
 builds its own `SerializedPlan` in `soma-python/src/graph.rs`.
 
-The strategy layer is the largest single gap, and it is a wiring gap
-rather than a blank page: the sharding, aggregation and federated round
-loops exist. What is missing is the caller — something in `fit` that
-looks at the graph's strategy and hands execution to it — plus the two
-unwritten variants and a Python `set_strategy`.
+The strategy layer is no longer a blank: `Federated` trains across
+workers, with the caller in `GraphSession::fit`, a `StrategyContext` over
+one transport per worker, and FedAvg written. What remains is gradients
+crossing the worker boundary — everything `DataParallel` waits on.
 
 ### Deferred on purpose, with the seam in place
 

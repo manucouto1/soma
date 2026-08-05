@@ -510,6 +510,75 @@ impl PyGraph {
         }
     }
 
+    /// The graph's filters, serialized for the wire.
+    ///
+    /// Extracted because three call sites built the same vector; the
+    /// strategy path needs it for a reason the others do not — see
+    /// `register_filters_on`.
+    fn serialized_filters(&self) -> Vec<somatize_worker::protocol::SerializedFilter> {
+        self.graph
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
+                let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
+                let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
+                let config_hash = self.library.get(&node.id).map(|f| f.config_hash());
+                Some(somatize_worker::protocol::SerializedFilter {
+                    node_id: node.id.clone(),
+                    pickled_filter: pickled.clone(),
+                    state,
+                    requirements: reqs.clone(),
+                    trainable,
+                    config_hash,
+                })
+            })
+            .collect()
+    }
+
+    /// Put this graph's filters on every worker before a strategy runs.
+    ///
+    /// A strategy drives workers through `Transport::execute`, which
+    /// cannot carry them: the worker rebuilds a Python filter by
+    /// unpickling `SerializedFilter::pickled_filter`, and those bytes live
+    /// only here — a `NodeCatalog` holds live filters, never the pickle.
+    /// So the strategy's first call would arrive at a worker that has
+    /// never heard of the node, and fail with `node not found in graph`.
+    ///
+    /// An `ExecutionPlan::Empty` carrying the filters registers them and
+    /// executes nothing. The worker keeps its catalog between messages, so
+    /// every later call in the round loop finds them.
+    fn register_filters_on(&self, addr: &str, token: Option<&str>) -> PyResult<()> {
+        use somatize_worker::protocol::{CoordinatorToWorker, SerializedPlan};
+
+        let mut plan = SerializedPlan::new(
+            somatize_core::util::timestamp_id("register"),
+            somatize_compiler::ExecutionPlan::Empty,
+        );
+        plan.filters = self.serialized_filters();
+        let transport = somatize_worker::WsTransport::new(addr, token.map(str::to_string));
+        transport
+            .send_msg(&CoordinatorToWorker::AssignPlan { plan })
+            .map_err(|e| soma_err_to_py(e.into()))?;
+        Ok(())
+    }
+
+    /// A session wired to one transport per registered worker.
+    ///
+    /// The strategy indexes its workers — `execute_on_worker(i, …)` — so a
+    /// single transport cannot serve it, which is why this exists beside
+    /// `make_transport`.
+    fn session_with_transports(
+        &self,
+        transports: Vec<Arc<dyn somatize_runtime::runner::Transport>>,
+    ) -> somatize_core::error::Result<somatize_runtime::GraphSession> {
+        let session = somatize_runtime::GraphSession::new(self.graph.clone(), self.library.clone())
+            .with_cache(self.cache.clone())
+            .with_event_bus(self.event_bus.clone())
+            .with_transports(transports);
+        Ok(session)
+    }
+
     /// Build a transport from the first registered worker (if any).
     fn make_transport(&self) -> Option<Arc<dyn somatize_runtime::runner::Transport>> {
         if self.workers.is_empty() {
@@ -1373,6 +1442,39 @@ impl PyGraph {
             )));
         }
 
+        // A strategy over several workers goes through the runtime's
+        // StrategyExecutor rather than a single dispatch: it shards the
+        // input, runs a round per client and aggregates between rounds.
+        // One worker is not a strategy — it is the ordinary path below.
+        if self.graph.effective_strategy_is_distributed()
+            && self.workers.len() > 1
+            && self.graph.nodes.iter().all(|n| !n.is_local())
+        {
+            for (addr, token, _) in &self.workers {
+                self.register_filters_on(addr, token.as_deref())?;
+            }
+            let transports: Vec<Arc<dyn somatize_runtime::runner::Transport>> = self
+                .workers
+                .iter()
+                .map(|(addr, token, _)| {
+                    Arc::new(somatize_worker::WsTransport::new(addr, token.clone()))
+                        as Arc<dyn somatize_runtime::runner::Transport>
+                })
+                .collect();
+            let states = py.allow_threads(|| {
+                self.session_with_transports(transports)
+                    .and_then(|mut session| session.fit(&x_val, y_val.as_ref()))
+            });
+            let states = states.map_err(soma_err_to_py)?;
+            for (node_id, state) in states {
+                if let Err(e) = self.library.try_set_state(&node_id, state) {
+                    return Err(soma_err_to_py(e));
+                }
+            }
+            self.fitted = true;
+            return Ok(());
+        }
+
         // Dispatch fit to worker if possible.
         // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
@@ -1928,6 +2030,95 @@ impl PyGraph {
             cache_dir,
         )?);
         Ok(())
+    }
+
+    /// Set the graph's training strategy.
+    ///
+    ///   g.set_strategy("federated", num_clients=2, rounds=3)
+    ///   g.set_strategy("data_parallel", num_replicas=4)
+    ///
+    /// The strings are the ones the documentation has always shown. Until
+    /// now the method they were shown on did not exist in Python at all,
+    /// and in Rust nothing read the attribute back — see the guide for
+    /// what runs today: `federated` does, `data_parallel` needs gradients
+    /// the worker cannot yet hand over, and the other two are unwritten.
+    #[pyo3(signature = (kind, num_replicas=None, num_clients=None, rounds=None, aggregation=None, generations=None, population_size=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_strategy(
+        &mut self,
+        kind: &str,
+        num_replicas: Option<usize>,
+        num_clients: Option<usize>,
+        rounds: Option<usize>,
+        aggregation: Option<&str>,
+        generations: Option<usize>,
+        population_size: Option<usize>,
+    ) -> PyResult<()> {
+        use somatize_core::strategy::{
+            ClientSelection, ExploitStrategy, ExploreStrategy, FederatedAggregation,
+            GradientAggregation, TrainingStrategy,
+        };
+        let strategy = match kind {
+            "local" => TrainingStrategy::Local,
+            "data_parallel" => TrainingStrategy::DataParallel {
+                num_replicas: num_replicas.unwrap_or(1),
+                aggregation: match aggregation.unwrap_or("all_reduce") {
+                    "all_reduce" => GradientAggregation::AllReduce,
+                    "parameter_server" => GradientAggregation::ParameterServer,
+                    other => {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "unknown gradient aggregation '{other}'. \
+                             Available: all_reduce, parameter_server"
+                        )));
+                    }
+                },
+            },
+            "federated" => TrainingStrategy::Federated {
+                num_clients: num_clients.unwrap_or(2),
+                rounds: rounds.unwrap_or(1),
+                aggregation: match aggregation.unwrap_or("fed_avg") {
+                    "fed_avg" => FederatedAggregation::FedAvg,
+                    other => {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "unknown federated aggregation '{other}'. Only fed_avg \
+                             runs today: fed_prox needs the previous global model \
+                             and fed_yogi needs optimizer moments, neither of which \
+                             the aggregator is given"
+                        )));
+                    }
+                },
+                client_selection: ClientSelection::All,
+            },
+            "population_based" => TrainingStrategy::PopulationBased {
+                population_size: population_size.unwrap_or(4),
+                generations: generations.unwrap_or(1),
+                exploit: ExploitStrategy::Truncation { fraction: 0.2 },
+                explore: ExploreStrategy::Perturbation { factor: 0.2 },
+            },
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "unknown strategy '{other}'. Available: local, data_parallel, \
+                     federated, population_based"
+                )));
+            }
+        };
+        self.graph.set_strategy(strategy);
+        Ok(())
+    }
+
+    /// The graph's training strategy, as the string `set_strategy` takes.
+    fn strategy(&self) -> String {
+        use somatize_core::strategy::TrainingStrategy as T;
+        match self.graph.effective_strategy() {
+            T::Local => "local",
+            T::DataParallel { .. } => "data_parallel",
+            T::Federated { .. } => "federated",
+            T::ModelParallel { .. } => "model_parallel",
+            T::PopulationBased { .. } => "population_based",
+            T::Custom { .. } => "custom",
+            _ => "unknown",
+        }
+        .to_string()
     }
 
     /// Shutdown a specific worker by address.

@@ -627,3 +627,70 @@ class TestEdgeCasesAdvanced:
         r = repr(g)
         assert "1 nodes" in r
         assert "fitted=false" in r
+
+
+class TestFederatedStrategy:
+    """A `TrainingStrategy` that actually trains.
+
+    `set_strategy` did not exist in Python, and in Rust nothing read the
+    attribute back: `impl StrategyExecutor for TrainingStrategy` had no
+    caller anywhere in the workspace. Setting a strategy recorded it and
+    changed nothing.
+    """
+
+    def test_set_strategy_round_trips(self):
+        g = Graph(cache="memory")
+        assert g.strategy() == "local"
+        g.set_strategy("federated", num_clients=2, rounds=3)
+        assert g.strategy() == "federated"
+
+    def test_an_unknown_strategy_is_refused_by_name(self):
+        g = Graph(cache="memory")
+        with pytest.raises(ValueError, match="unknown strategy"):
+            g.set_strategy("magic")
+        with pytest.raises(ValueError, match="fed_prox needs"):
+            g.set_strategy("federated", aggregation="fed_prox")
+
+    def test_federated_fit_averages_across_two_workers(self):
+        """The property that cannot be faked by a single client.
+
+        Two workers, one shard each: the halves of 0..8 have means 1.5 and
+        5.5, and FedAvg of those is 3.5. A run that quietly used one client
+        would produce 1.5 or 5.5, so this asserts both.
+        """
+        from conftest import start_worker_and_wait
+
+        class Mean(Filter):
+            _cache_version = "fed-e2e-mean-v1"
+
+            def fit(self, x, y=None):
+                import numpy as np
+
+                return {"mu": float(np.asarray(x, dtype=float).mean())}
+
+            def forward(self, x, state):
+                import numpy as np
+
+                return (np.asarray(x, dtype=float) - state["mu"]).tolist()
+
+        ports = []
+        for _ in range(2):
+            port = find_free_port()
+            start_worker_and_wait(
+                lambda p=port: Worker(port=p, tags=["fed"], max_concurrent=2), port
+            )
+            ports.append(port)
+
+        g = Graph(cache="memory")
+        for port in ports:
+            g.add_worker(f"ws://127.0.0.1:{port}", tags=["fed"])
+        g.node("m", Mean(), target="fed")
+        g.set_strategy("federated", num_clients=2, rounds=2)
+
+        g.fit([float(i) for i in range(8)])
+
+        mu = g.state()["m"]["mu"]
+        assert abs(mu - 3.5) < 1e-9, f"expected the mean of both clients, got {mu}"
+        assert abs(mu - 1.5) > 1e-6 and abs(mu - 5.5) > 1e-6, (
+            "this is one client's answer, so the aggregation did not happen"
+        )

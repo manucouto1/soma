@@ -322,6 +322,16 @@ impl Graph {
         self.training_strategy = Some(strategy);
     }
 
+    /// Whether the effective strategy needs more than this process.
+    ///
+    /// `Local` does not, and neither does an absent one — which is the
+    /// same thing. Everything else asks for workers, so a caller can use
+    /// this to decide whether to take the distributed path at all rather
+    /// than matching on the enum in three places.
+    pub fn effective_strategy_is_distributed(&self) -> bool {
+        !matches!(self.effective_strategy(), TrainingStrategy::Local)
+    }
+
     /// Get the effective training strategy (defaults to Local).
     pub fn effective_strategy(&self) -> &TrainingStrategy {
         static LOCAL: TrainingStrategy = TrainingStrategy::Local;
