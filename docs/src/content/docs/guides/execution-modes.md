@@ -114,13 +114,36 @@ g.node("model", MyModel())
 g.fit(data)  # runs locally, no workers needed
 ```
 
-:::caution[Strategy selection is Rust-side today]
-The `g.set_strategy(...)` calls in this section describe the Rust API
-(`Graph::set_strategy` / `Graph::with_strategy` in `soma-core`). They
-are **not yet exposed through the Python bindings** — calling
-`set_strategy` on a Python `Graph` raises `AttributeError`. Everything
-else on this page (`add_worker`, `set_coordinator`, `fit`, streaming)
-is available from Python today.
+:::danger[These four strategies are a design, not a running feature]
+Read this before the code below, because the code below does not do what
+its comments say.
+
+`Graph::set_strategy` exists in Rust (`soma-core/src/graph.rs`) and records
+the strategy on the graph, which serializes with it. That is all that
+happens. Verified on 2026-08-05:
+
+- **Python has no `set_strategy`.** Not "not yet wired" — the method does
+  not exist, so every `g.set_strategy(...)` on this page raises
+  `AttributeError`.
+- **The scheduler does not read it.** `soma-compiler/src/scheduler.rs`
+  contains no reference to the strategy; it groups differentiable nodes
+  and distributes parallel branches, and would do so identically whatever
+  strategy is set.
+- **The training loops have no caller.** `soma-runtime/src/strategy.rs`
+  implements `StrategyExecutor` for `TrainingStrategy` — the sharding, the
+  gradient aggregation, the federated round loop are all written — and
+  nothing in the workspace calls `fit` on it. `ModelParallel` and
+  `PopulationBased` return "not yet implemented"; `Local`, `DataParallel`
+  and `Federated` are implemented and equally unreachable.
+
+So `g.fit(data)` does not shard, does not AllReduce, and does not run
+federated rounds. What *does* work today is placement: `add_worker`,
+`set_coordinator`, `target=` on a node, and remote execution of the
+compiled plan — the sections above this one.
+
+The snippets below are kept because they describe the intended API and
+the semantics each strategy is meant to have. Treat them as a
+specification.
 :::
 
 ### Data Parallel

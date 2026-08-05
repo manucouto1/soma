@@ -30,10 +30,15 @@ registry-side before the next tag.
 
 | What | Where | Behaviour |
 |---|---|---|
-| `TrainingStrategy::ModelParallel` | `soma-runtime/src/strategy.rs` | Returns an error. Forward/backward across partitions is unwritten |
-| `TrainingStrategy::PopulationBased` | `soma-runtime/src/strategy.rs` | Returns an error — but `PbtRunner` exists and works. This is a seam left unconnected, not a missing feature |
+| **The whole `TrainingStrategy` layer** | `soma-runtime/src/strategy.rs` | `impl StrategyExecutor for TrainingStrategy` **has no caller anywhere in the workspace**, and `soma-compiler/src/scheduler.rs` never mentions the strategy either. Setting one records it on the graph and changes nothing. `Local`, `DataParallel` and `Federated` are written and unreachable; `ModelParallel` and `PopulationBased` additionally return "not yet implemented". `PbtRunner` works but answers to a different trait (`PbtExecutor`), so connecting it is an adapter, not a rename |
 | `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
 | Filter serialization over WS | `soma-worker/src/ws_transport.rs` | Sends an empty filter list where the catalog's would go |
+
+The strategy layer is the largest single gap, and it is a wiring gap
+rather than a blank page: the sharding, aggregation and federated round
+loops exist. What is missing is the caller — something in `fit` that
+looks at the graph's strategy and hands execution to it — plus the two
+unwritten variants and a Python `set_strategy`.
 
 ### Deferred on purpose, with the seam in place
 

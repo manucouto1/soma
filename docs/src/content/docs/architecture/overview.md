@@ -109,13 +109,19 @@ g.add_worker("ws://gpu-0:8080", token="sk-xxx")
 g.fit(train_data)
 ```
 
-:::caution[TrainingStrategy is Rust-side today]
+:::caution[TrainingStrategy is recorded, not executed]
 `TrainingStrategy` (DataParallel, ModelParallel, Federated,
 PopulationBased) is a graph attribute set through the Rust API
-(`Graph::set_strategy`). It is **not exposed through the Python
-bindings yet** — from Python, distribution is configured with
-`add_worker` / `set_coordinator`, and the scheduler places the plan
-across the registered workers.
+(`Graph::set_strategy`), and setting it is the whole of what happens: no
+scheduler and no runtime reads it back, so it changes nothing about how a
+graph runs. Python has no `set_strategy` at all.
+
+What distributes work today is placement — `add_worker` /
+`set_coordinator` and `target=` on a node — and the scheduler assigns the
+compiled plan across the registered workers without consulting the
+strategy. See
+[Execution Modes](/soma/guides/execution-modes/) for exactly what is and
+is not wired.
 :::
 
 The graph is compiled locally, the plan is sent to workers, executed remotely, and results returned. Cache can be shared (S3) across workers.
