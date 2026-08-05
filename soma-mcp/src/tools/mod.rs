@@ -50,37 +50,88 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         // ── Execution tools ──
         ToolDefinition {
             name: "run_pipeline".into(),
-            description: "NOT IMPLEMENTED — echoes its arguments back and executes nothing. \
-                 Running a pipeline needs the user's filter code loaded (Python via PyO3 or a \
-                 Rust dylib), which this server cannot do. To actually run something, ask the \
-                 user to run it from Python; then read the result with kb_summarize_run."
+            description: "Build a computation graph out of the project's filters and RUN it. \
+                 Each node names a filter as `module.Class`, `path/to/file.py:Class`, or a \
+                 bare class name found in the files list_filters returns; `config` is its \
+                 constructor keywords. Edges connect node ids. The graph is fitted and then \
+                 forwarded on `input`, in a Python subprocess rooted at the project, so the \
+                 filters you just read with read_filter_source are the ones that run. \
+                 Tracked by default: the result carries a run_dir, and kb_summarize_run will \
+                 read it back. This EXECUTES project code."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pipeline_config": { "type": "object", "description": "Pipeline configuration (filter names and params)" },
-                    "input_data": { "type": "array", "items": { "type": "number" }, "description": "Input data as array of numbers" }
+                    "nodes": {
+                        "type": "array",
+                        "description": "Graph nodes, in any order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Node id, used by edges" },
+                                "filter": { "type": "string", "description": "module.Class | path.py:Class | ClassName" },
+                                "config": { "type": "object", "description": "Constructor keyword arguments" },
+                                "target": { "type": "string", "description": "Worker tag, for a distributed node" }
+                            },
+                            "required": ["id", "filter"]
+                        }
+                    },
+                    "edges": {
+                        "type": "array",
+                        "description": "Directed edges as [from_id, to_id] pairs",
+                        "items": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "input": { "description": "Input data: a number, a list, a nested list, or an object" },
+                    "y": { "description": "Targets, for a supervised fit" },
+                    "fit": { "type": "boolean", "description": "Fit before forwarding (default true)" },
+                    "cache": { "type": "string", "enum": ["memory", "tiered", "none"], "description": "Cache backend (default memory)" },
+                    "track": { "type": "boolean", "description": "Record into the experiment pool (default true)" },
+                    "name": { "type": "string", "description": "Run name, as it appears in the pool" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "params": { "type": "object", "description": "Hyperparameters that live outside the graph, recorded with the run" }
                 },
-                "required": ["pipeline_config", "input_data"]
+                "required": ["nodes", "input"]
             }),
         },
         ToolDefinition {
             name: "run_study".into(),
-            description: "NOT IMPLEMENTED — echoes its arguments back and runs no trials. \
-                 Same reason as run_pipeline: the objective function is user code this server \
-                 cannot load. Ask the user to run the study from Python; its results land in \
-                 the experiment pool automatically and kb_find_similar will find them."
+            description: "Search a graph's hyperparameters and RUN the trials. Same node spec \
+                 as run_pipeline, with one difference: any config value written as \
+                 {\"__search__\": {\"low\": 1e-4, \"high\": 1e-1, \"scale\": \"log\"}} or \
+                 {\"__search__\": {\"choices\": [...]}} becomes a dimension to search. The \
+                 graph is rebuilt per trial with the sampled values, fitted, and forwarded; \
+                 its output is the objective — a number, or an object from which `metric` is \
+                 read (soma.library.Eval emits one). Returns the best trial and a run_dir. \
+                 This EXECUTES project code, n_trials times."
                 .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "nodes": {
+                        "type": "array",
+                        "description": "Graph nodes; mark searched values with {\"__search__\": {...}}",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string" },
+                                "filter": { "type": "string" },
+                                "config": { "type": "object" }
+                            },
+                            "required": ["id", "filter"]
+                        }
+                    },
+                    "edges": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+                    "input": { "description": "Input data, the same for every trial" },
+                    "y": { "description": "Targets, for a supervised fit" },
                     "name": { "type": "string", "description": "Study name" },
-                    "search_space": { "type": "array", "description": "Search space dimensions" },
-                    "strategy": { "type": "string", "enum": ["grid", "random", "bayesian"] },
-                    "n_trials": { "type": "integer", "description": "Number of trials" },
-                    "objectives": { "type": "array", "description": "Optimization objectives [(metric, direction)]" }
+                    "strategy": { "type": "string", "enum": ["grid", "random", "bayesian"], "description": "Sampler (default random)" },
+                    "n_trials": { "type": "integer", "description": "How many trials to run (default 10)" },
+                    "metric": { "type": "string", "description": "Key to read from the graph's output when it is an object (default \"score\")" },
+                    "direction": { "type": "string", "enum": ["minimize", "maximize"], "description": "Default minimize" },
+                    "seed": { "type": "integer", "description": "Seeds the sampler, so the search repeats" },
+                    "cache": { "type": "string", "enum": ["memory", "tiered", "none"] }
                 },
-                "required": ["name", "search_space", "strategy", "n_trials", "objectives"]
+                "required": ["nodes", "input"]
             }),
         },
         // ── Knowledge tools ──
@@ -419,16 +470,28 @@ mod tests {
     }
 
     #[test]
-    fn the_unimplemented_tools_say_so_up_front() {
-        // These used to promise execution and return a stub, which
-        // actively misleads a model into thinking it ran something.
+    fn the_execution_tools_say_that_they_execute() {
+        // They spent a long time declaring "NOT IMPLEMENTED" and echoing
+        // their arguments. They run now — and a tool that runs project
+        // code has to say so where the model reads it, not only in a
+        // design document.
         for name in ["run_pipeline", "run_study"] {
             let tool = all_tools().into_iter().find(|t| t.name == name).unwrap();
             assert!(
-                tool.description.starts_with("NOT IMPLEMENTED"),
-                "{name}: {}",
+                !tool.description.contains("NOT IMPLEMENTED"),
+                "{name} still claims to do nothing: {}",
                 tool.description
             );
+            assert!(
+                tool.description.contains("EXECUTES project code"),
+                "{name} must announce that it executes: {}",
+                tool.description
+            );
+            // `nodes` is what turns these from a vague "config" into a
+            // graph a model can actually describe.
+            let props = tool.input_schema.get("properties").unwrap();
+            assert!(props.get("nodes").is_some(), "{name} takes no nodes");
+            assert!(props.get("input").is_some(), "{name} takes no input");
         }
     }
 

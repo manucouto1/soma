@@ -13,7 +13,10 @@ use crate::run::append_run_record;
 /// `PanicException`, which does not inherit `Exception` and is therefore
 /// not caught by `except Exception`: a study builder would take the
 /// interpreter down instead of reporting a bad search space.
-fn parse_py_search_dim(_py: Python<'_>, item: &Bound<'_, PyAny>) -> PyResult<SearchDimension> {
+pub(crate) fn parse_py_search_dim(
+    _py: Python<'_>,
+    item: &Bound<'_, PyAny>,
+) -> PyResult<SearchDimension> {
     let dict = item.downcast::<PyDict>()?;
 
     /// The key, or a message naming the dimension and what it needs.

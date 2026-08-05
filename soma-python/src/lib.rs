@@ -18,6 +18,7 @@ mod bridge;
 mod cache;
 mod convert;
 mod graph;
+mod pbt;
 mod readers;
 mod run;
 mod store;
@@ -185,6 +186,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agentic::providers, m)?)?;
     m.add_function(wrap_pyfunction!(agentic::models, m)?)?;
     m.add_class::<PyStudy>()?;
+    m.add_class::<crate::pbt::PyPbt>()?;
     m.add_class::<PyTrial>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorker>()?;

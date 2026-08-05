@@ -575,7 +575,21 @@ impl PyGraph {
         let session = somatize_runtime::GraphSession::new(self.graph.clone(), self.library.clone())
             .with_cache(self.cache.clone())
             .with_event_bus(self.event_bus.clone())
-            .with_transports(transports);
+            .with_transports(transports)
+            // In the same order the transports were built, which is the
+            // order `self.workers` is in — a strategy that pins a
+            // partition to a tag resolves it against these.
+            .with_worker_identities(
+                self.workers
+                    .iter()
+                    .map(
+                        |(addr, _, tags)| somatize_runtime::strategy::WorkerIdentity {
+                            id: addr.clone(),
+                            tags: tags.clone(),
+                        },
+                    )
+                    .collect(),
+            );
         Ok(session)
     }
 
@@ -2056,7 +2070,7 @@ impl PyGraph {
     /// and in Rust nothing read the attribute back — see the guide for
     /// what runs today: `federated` does, `data_parallel` needs gradients
     /// the worker cannot yet hand over, and the other two are unwritten.
-    #[pyo3(signature = (kind, num_replicas=None, num_clients=None, rounds=None, aggregation=None, generations=None, population_size=None))]
+    #[pyo3(signature = (kind, num_replicas=None, num_clients=None, rounds=None, aggregation=None, generations=None, population_size=None, partitions=None))]
     #[allow(clippy::too_many_arguments)]
     fn set_strategy(
         &mut self,
@@ -2067,10 +2081,12 @@ impl PyGraph {
         aggregation: Option<&str>,
         generations: Option<usize>,
         population_size: Option<usize>,
+        partitions: Option<&Bound<'_, pyo3::types::PyAny>>,
     ) -> PyResult<()> {
+        use somatize_core::filter::RemoteTarget;
         use somatize_core::strategy::{
-            ClientSelection, ExploitStrategy, ExploreStrategy, FederatedAggregation,
-            GradientAggregation, TrainingStrategy,
+            ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy,
+            FederatedAggregation, GradientAggregation, Partition, TrainingStrategy,
         };
         let strategy = match kind {
             "local" => TrainingStrategy::Local,
@@ -2103,6 +2119,47 @@ impl PyGraph {
                 },
                 client_selection: ClientSelection::All,
             },
+            "model_parallel" => {
+                let Some(spec) = partitions else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "model_parallel needs partitions=[{\"nodes\": [...], \
+                         \"tag\": \"gpu0\"}, ...]: it splits the MODEL across \
+                         workers, so something has to say which nodes go where",
+                    ));
+                };
+                let mut parsed = Vec::new();
+                for (i, item) in spec.try_iter()?.enumerate() {
+                    let item = item?;
+                    let nodes: Vec<String> = item
+                        .get_item("nodes")
+                        .map_err(|_| {
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "partition {i} has no \"nodes\""
+                            ))
+                        })?
+                        .extract()?;
+                    // A tag matches any worker carrying it; a worker names
+                    // exactly one. Both are how `add_worker` registers them.
+                    let target = if let Ok(tag) = item.get_item("tag") {
+                        RemoteTarget::Tag(tag.extract()?)
+                    } else if let Ok(worker) = item.get_item("worker") {
+                        RemoteTarget::WorkerId(worker.extract()?)
+                    } else {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "partition {i} names neither a \"tag\" nor a \"worker\", \
+                             so its nodes have nowhere to run"
+                        )));
+                    };
+                    parsed.push(Partition {
+                        node_ids: nodes,
+                        target,
+                    });
+                }
+                TrainingStrategy::ModelParallel {
+                    partitions: parsed,
+                    communication: CommunicationProtocol::DataStore,
+                }
+            }
             "population_based" => TrainingStrategy::PopulationBased {
                 population_size: population_size.unwrap_or(4),
                 generations: generations.unwrap_or(1),
@@ -2112,7 +2169,7 @@ impl PyGraph {
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "unknown strategy '{other}'. Available: local, data_parallel, \
-                     federated, population_based"
+                     federated, model_parallel, population_based"
                 )));
             }
         };

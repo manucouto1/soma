@@ -123,14 +123,33 @@ impl PbtRunner {
             }
 
             // Stage 2: Evaluate
+            //
+            // One member that cannot be evaluated is scored at negative
+            // infinity and exploited away — a flaky run should not cost
+            // the population. Every member failing is a different thing:
+            // the callback is wrong, and a generation where nothing could
+            // be scored has no signal to evolve on. Reporting success
+            // there hands back a population of -inf that looks ranked.
+            let mut first_failure: Option<String> = None;
+            let mut failures = 0usize;
             for member in &mut population {
                 match executor.evaluate(member) {
                     Ok(fitness) => member.fitness = Some(fitness),
                     Err(e) => {
                         tracing::warn!("PBT evaluate failed for {}: {e}", member.id);
+                        first_failure.get_or_insert_with(|| e.to_string());
+                        failures += 1;
                         member.fitness = Some(f64::NEG_INFINITY);
                     }
                 }
+            }
+            if failures == population.len() {
+                return Err(somatize_core::error::SomaError::Other(format!(
+                    "PBT generation {generation}: no member could be evaluated, \
+                     so there is no fitness to evolve on. The first failure was: \
+                     {}",
+                    first_failure.unwrap_or_else(|| "unreported".into())
+                )));
             }
 
             // Sort by fitness (descending)

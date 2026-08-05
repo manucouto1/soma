@@ -525,6 +525,172 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
+// ── Execution ──
+
+/// A truncated preview of an output, for a model that needs the shape.
+fn preview(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) if map.contains_key("truncated") => format!(
+            "{} values (showing the first {})",
+            map.get("length").and_then(|v| v.as_u64()).unwrap_or(0),
+            map.get("head")
+                .and_then(|h| h.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0),
+        ),
+        serde_json::Value::Array(items) => {
+            let shown: Vec<String> = items.iter().take(8).map(|v| v.to_string()).collect();
+            if items.len() > shown.len() {
+                format!("[{}, … {} total]", shown.join(", "), items.len())
+            } else {
+                format!("[{}]", shown.join(", "))
+            }
+        }
+        other => {
+            let text = other.to_string();
+            if text.chars().count() > 200 {
+                format!("{}…", text.chars().take(200).collect::<String>())
+            } else {
+                text
+            }
+        }
+    }
+}
+
+/// What the driver reported for a failed run: the error, then whatever
+/// the traceback and the filter's own prints said. A model debugging its
+/// own graph needs the traceback more than it needs a tidy sentence.
+fn render_failure(payload: &serde_json::Value, what: &str) -> String {
+    let mut out = format!(
+        "{what} failed\n\n{}\n",
+        payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("the driver reported no reason")
+    );
+    for (label, key) in [
+        ("traceback", "detail"),
+        ("stdout", "stdout"),
+        ("stderr", "stderr"),
+    ] {
+        if let Some(text) = payload.get(key).and_then(|v| v.as_str())
+            && !text.trim().is_empty()
+        {
+            let _ = writeln!(out, "\n{label}:\n{text}");
+        }
+    }
+    let _ = write!(
+        out,
+        "\nnext: read_filter_source(file_path=…) to see the code that failed"
+    );
+    out
+}
+
+/// One pipeline run, as the model reads it.
+pub fn render_pipeline_run(payload: &serde_json::Value) -> String {
+    if payload.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return render_failure(payload, "run_pipeline");
+    }
+    let mut out = String::from("run_pipeline: ok\n");
+    if let Some(plan) = payload.get("plan").and_then(|v| v.as_str()) {
+        let _ = writeln!(out, "\nplan:\n{}", plan.trim_end());
+    }
+    if let Some(output) = payload.get("output") {
+        let _ = writeln!(out, "\noutput: {}", preview(output));
+    }
+    if let Some(state) = payload.get("state").and_then(|v| v.as_object())
+        && !state.is_empty()
+    {
+        let names: Vec<&str> = state.keys().take(8).map(|s| s.as_str()).collect();
+        let _ = writeln!(out, "state learned by: {}", names.join(", "));
+    }
+    for (label, key) in [("stdout", "stdout"), ("stderr", "stderr")] {
+        if let Some(text) = payload.get(key).and_then(|v| v.as_str())
+            && !text.trim().is_empty()
+        {
+            let _ = writeln!(out, "\n{label}:\n{text}");
+        }
+    }
+    match payload.get("run_dir").and_then(|v| v.as_str()) {
+        Some(dir) => {
+            let _ = write!(
+                out,
+                "\nrun_dir: {dir}\nnext: kb_summarize_run(run_id=…) for what the \
+                 pool recorded, or kb_find_similar(query=…) for what it resembles"
+            );
+        }
+        None => {
+            let _ = write!(
+                out,
+                "\nrun_dir: none — this run was not tracked, so the pool did not \
+                 record it\nnext: run_pipeline(track=true) to keep the next one"
+            );
+        }
+    }
+    out
+}
+
+/// One study, as the model reads it.
+pub fn render_study_run(payload: &serde_json::Value) -> String {
+    if payload.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return render_failure(payload, "run_study");
+    }
+    let mut out = format!(
+        "run_study: {} trials\n",
+        payload
+            .get("n_trials")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+    );
+    if let Some(objectives) = payload.get("objectives").and_then(|v| v.as_array()) {
+        let pairs: Vec<String> = objectives
+            .iter()
+            .filter_map(|o| o.as_array())
+            .map(|o| {
+                format!(
+                    "{} ({})",
+                    o.first().and_then(|v| v.as_str()).unwrap_or("?"),
+                    o.get(1).and_then(|v| v.as_str()).unwrap_or("?")
+                )
+            })
+            .collect();
+        let _ = writeln!(out, "optimizing: {}", pairs.join(", "));
+    }
+    match payload.get("best_trial") {
+        Some(serde_json::Value::Object(best)) => {
+            out.push_str("\nbest trial:\n");
+            if let Some(params) = best.get("params").and_then(|v| v.as_object()) {
+                for (key, value) in params.iter().take(MAX_METRICS) {
+                    let _ = writeln!(out, "  {key} = {value}");
+                }
+            }
+            if let Some(metrics) = best.get("metrics").and_then(|v| v.as_object()) {
+                for (key, value) in metrics.iter().take(MAX_METRICS) {
+                    let _ = writeln!(out, "  → {key} = {value}");
+                }
+            }
+        }
+        // A study that ran and chose nothing is worth saying out loud:
+        // every trial pruned, or every one failed.
+        _ => out.push_str("\nno best trial: every trial was pruned or errored\n"),
+    }
+    if let Some(text) = payload.get("stderr").and_then(|v| v.as_str())
+        && !text.trim().is_empty()
+    {
+        let _ = writeln!(out, "\nstderr:\n{text}");
+    }
+    let _ = write!(
+        out,
+        "\nrun_dir: {}\nnext: kb_find_similar(query=…) to place this against \
+         earlier work, or run_pipeline(...) with the best params to keep one run",
+        payload
+            .get("run_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none — the study was not tracked")
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

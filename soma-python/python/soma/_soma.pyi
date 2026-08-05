@@ -91,13 +91,19 @@ class Graph:
         aggregation: str | None = ...,
         generations: int | None = ...,
         population_size: int | None = ...,
+        partitions: list[dict[str, Any]] | None = ...,
     ) -> None:
         """Set the graph's training strategy.
 
-        `"local"`, `"data_parallel"`, `"federated"`, `"population_based"`.
-        Only `federated` (with `fed_avg`) runs today: `data_parallel` needs
-        gradients the worker cannot yet hand over, and the other two are
-        unwritten. Each says so when you try."""
+        `"local"`, `"data_parallel"`, `"federated"`, `"model_parallel"`,
+        `"population_based"`. The first four run; `population_based`
+        refuses and says where PBT does live (`soma.Pbt`), because a
+        member's hyperparameters cannot be applied over the wire.
+
+        `model_parallel` takes `partitions=[{"nodes": [...], "tag": "gpu0"}]`
+        — or `"worker"` instead of `"tag"` to pin one by address. The
+        partitions must tile the graph: a node claimed twice, claimed by
+        nobody, or interleaved with another stage is refused."""
 
     def strategy(self) -> str:
         """The training strategy, as the string `set_strategy` takes."""
@@ -398,6 +404,43 @@ def models(provider: str) -> list[str]:
     """The models a provider currently offers. Reaches the network."""
 
 # ── Studies ─────────────────────────────────────────────────────────
+
+class Pbt:
+    """Population-Based Training: train, evaluate, exploit, explore.
+
+    Not a `TrainingStrategy`. Each member carries its own hyperparameters,
+    and applying those means rebuilding the graph's filters — which is the
+    caller's job, exactly as it is for `Study`. So PBT takes callbacks.
+    """
+
+    def __new__(
+        cls,
+        search_space: list[dict[str, Any]],
+        population_size: int = ...,
+        generations: int = ...,
+        exploit: str = ...,
+        explore: str = ...,
+        fraction: float = ...,
+        factor: float = ...,
+        threshold: float = ...,
+        train_steps_per_generation: int = ...,
+    ) -> Pbt:
+        """`exploit` is "truncation" | "binary"; `explore` is "perturbation" | "resample"."""
+
+    def run(
+        self,
+        train: Callable[[dict[str, Any]], Any],
+        evaluate: Callable[[dict[str, Any]], float],
+    ) -> list[dict[str, Any]]:
+        """Evolve, returning the population best-first.
+
+        `train(member)` gets `{"id", "params", "state", "fitness"}` and
+        returns the new state; `evaluate(member)` returns fitness, where
+        **higher is better** — a loss handed back unnegated evolves the
+        population towards its worst member.
+        """
+
+    def __repr__(self) -> str: ...
 
 class Study:
     """A search: a space, a strategy, and the trials it produced."""

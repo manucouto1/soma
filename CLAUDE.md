@@ -172,7 +172,17 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **DataStore**: Abstraction for data movement between workers (Local, S3, Cached, Stream, Inline).
 - **Scheduler**: Analyzes ExecutionPlan topology, assigns to workers (sequential→same worker,
   parallel→distribute, differentiable→group together). Produces DistributionPlan.
-- **TrainingStrategy**: Graph-level attribute (inherited by subgraphs): Local, DataParallel, ModelParallel, Federated, PopulationBased, Custom.
+- **TrainingStrategy**: Graph-level attribute (inherited by subgraphs): Local, DataParallel,
+  ModelParallel, Federated, PopulationBased, Custom. Local/Federated/DataParallel/ModelParallel
+  RUN; `PopulationBased` refuses **by design** — each member needs its own hyperparameters
+  applied to the graph, and a worker is sent a plan, not a way to build one. PBT is therefore
+  an executor with callbacks, like `Study`: `soma.Pbt(search_space=…).run(train, evaluate)`
+  (soma-python/src/pbt.rs over the long-unreachable `PbtRunner`). DataParallel is a real
+  synchronous SGD round: remote fit leaves gradients on the parameters, they cross the wire as
+  JSON (a torch pickle cannot be averaged in Rust), `shard_pair` splits x AND y together, and
+  the stepped weights are read back over the wire — `get_state` would return the pre-step ones.
+  ModelParallel partitions must TILE the plan: claimed twice / claimed by nobody / interleaved
+  are all errors. `TransportContext::with_targets` is what lets a partition find its worker.
 - **Partition**: Maps arbitrary node subsets to RemoteTargets for model parallelism.
 - **PbtRunner**: Population-Based Training — cyclic train→evaluate→exploit/explore per generation.
 - **Graph visualization**: `to_mermaid()`, `to_graphviz()`, `to_text()`, `to_svg()` — pure data→string,
@@ -300,13 +310,23 @@ soma-mcp /path/to/project
 SOMA_PROJECT_DIR=/path/to/project soma-mcp
 ```
 
-20 tools: list_filters, read_filter_source, write_filter_source, run_pipeline*,
-run_study*, record_experiment, query_knowledge_base, get_trajectory,
+20 tools: list_filters, read_filter_source, write_filter_source, run_pipeline,
+run_study, record_experiment, query_knowledge_base, get_trajectory,
 get_change_points, list_research_lines, promising_lines,
 create_research_line, generate_report, plus the experiment pool:
 kb_find_similar, kb_lineage, kb_diff, kb_record_conclusion, kb_branch_from,
-kb_summarize_run, kb_stats.  (* declared but NOT implemented — they cannot
-load user code; their descriptions say so.)
+kb_summarize_run, kb_stats.
+
+`run_pipeline`/`run_study` EXECUTE (soma-mcp/src/exec.rs): a model gives
+nodes (`module.Class` | `path.py:Class` | a bare name found in the files
+`list_filters` returns), edges and input; a generated driver builds the
+`soma.Graph` and runs it in a Python subprocess rooted at the project,
+with `$SOMA_PYTHON` choosing the interpreter. Tracked by default, so
+`kb_summarize_run` can read the run back. A config value written
+`{"__search__": {...}}` becomes a class-level search dimension (that is
+where `FilterMeta` looks), which is the whole difference between the two
+tools. The driver writes its result to a FILE, never stdout — a `print`
+inside a user's filter must not corrupt the reply.
 
 ## Feature Flags
 

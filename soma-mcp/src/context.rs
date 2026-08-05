@@ -177,46 +177,56 @@ impl SomaContext {
     // Execution tools
     // ═══════════════════════════════════════
 
-    /// `run_pipeline`: declared but NOT implemented. Executing a
-    /// pipeline means loading user filter code (Python via PyO3, or a
-    /// Rust dylib), which this server cannot do; it answers with a
-    /// `"status": "stub"` payload that says so, and the tool's
-    /// description says so too — better than a stub that reads like
-    /// success.
+    /// `run_pipeline`: build the graph the model described and run it.
+    ///
+    /// The nodes name filters that live in the project — the same files
+    /// `list_filters` lists and `read_filter_source` reads — so the loop
+    /// a model works in is closed: read the code, write a variant, run
+    /// it, read the result out of the experiment pool.
+    ///
+    /// Tracked by default, so the run lands in `.soma/experiments.jsonl`
+    /// with a lineage and `kb_summarize_run` can be pointed at it.
     pub fn run_pipeline(&self, params: &serde_json::Value) -> ToolCallResult {
-        // For now, return a stub. Full execution requires loading user filters
-        // dynamically (Python via PyO3 or Rust dylib).
-        let config = params.get("pipeline_config").cloned().unwrap_or(json!({}));
-        let input = params.get("input_data").cloned().unwrap_or(json!([]));
-
-        ToolCallResult::text(json!({
-            "status": "stub",
-            "message": "Pipeline execution via MCP requires dynamic filter loading. Use soma-python for now.",
-            "config": config,
-            "input_shape": input.as_array().map(|a| a.len()).unwrap_or(0)
-        }).to_string())
+        let Some(nodes) = params.get("nodes").and_then(|v| v.as_array()) else {
+            return ToolCallResult::error(
+                "Missing required parameter: nodes (a list of \
+                 {id, filter, config})",
+            );
+        };
+        if nodes.is_empty() {
+            return ToolCallResult::error("`nodes` is empty: there is no graph to run");
+        }
+        let mut spec = params.clone();
+        spec["kind"] = json!("pipeline");
+        match crate::exec::GraphRunner::new(&self.project_dir).run(&spec) {
+            Ok(payload) => ToolCallResult::text(crate::render::render_pipeline_run(&payload)),
+            Err(e) => ToolCallResult::error(e),
+        }
     }
 
-    /// `run_study`: declared but NOT implemented, for the same reason
-    /// as [`run_pipeline`](Self::run_pipeline) — a study runs user
-    /// code. The stub echoes the study name and trial count so the
-    /// model sees its arguments were understood, not executed.
+    /// `run_study`: the same graph spec, searched.
+    ///
+    /// The search space is not a second vocabulary — a node config value
+    /// written as `{"__search__": {...}}` becomes a dimension, and
+    /// `graph.search_space()` finds it. So the difference between running
+    /// a graph once and searching it is which values were marked.
     pub fn run_study(&self, params: &serde_json::Value) -> ToolCallResult {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unnamed");
-        let n_trials = params
-            .get("n_trials")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(10);
-
-        ToolCallResult::text(json!({
-            "status": "stub",
-            "message": "Study execution via MCP requires dynamic filter loading. Use soma-python for now.",
-            "study_name": name,
-            "n_trials": n_trials
-        }).to_string())
+        let Some(nodes) = params.get("nodes").and_then(|v| v.as_array()) else {
+            return ToolCallResult::error(
+                "Missing required parameter: nodes (a list of \
+                 {id, filter, config}); mark the values to search with \
+                 {\"__search__\": {\"low\": …, \"high\": …}}",
+            );
+        };
+        if nodes.is_empty() {
+            return ToolCallResult::error("`nodes` is empty: there is no graph to search");
+        }
+        let mut spec = params.clone();
+        spec["kind"] = json!("study");
+        match crate::exec::GraphRunner::new(&self.project_dir).run(&spec) {
+            Ok(payload) => ToolCallResult::text(crate::render::render_study_run(&payload)),
+            Err(e) => ToolCallResult::error(e),
+        }
     }
 
     // ═══════════════════════════════════════
@@ -535,7 +545,7 @@ impl SomaContext {
 }
 
 /// Find Python and Rust filter files in a directory.
-fn find_filter_files(dir: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
+pub(crate) fn find_filter_files(dir: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
     let mut files = Vec::new();
     if !dir.exists() {
         return Ok(files);

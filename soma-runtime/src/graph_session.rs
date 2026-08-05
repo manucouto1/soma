@@ -48,6 +48,10 @@ pub struct GraphSession {
     /// that. Empty unless [`with_transports`](Self::with_transports) is
     /// used.
     transports: Vec<Arc<dyn Transport>>,
+    /// Who each transport talks to, in transport order. Only model
+    /// parallelism needs it — a partition is pinned to a worker by id or
+    /// tag, where every other strategy treats workers as interchangeable.
+    worker_identities: Vec<crate::strategy::WorkerIdentity>,
     /// Performs and journals step effects. Only needed when the graph
     /// contains a step; a purely computational graph leaves it unset and
     /// keeps exactly the old behaviour.
@@ -67,6 +71,7 @@ impl GraphSession {
             data_store: None,
             transport: None,
             transports: Vec::new(),
+            worker_identities: Vec::new(),
             driver: None,
             fitted: false,
         }
@@ -101,6 +106,19 @@ impl GraphSession {
     /// [`StrategyExecutor`](crate::strategy::StrategyExecutor).
     pub fn with_transports(mut self, transports: Vec<Arc<dyn Transport>>) -> Self {
         self.transports = transports;
+        self
+    }
+
+    /// Name the workers behind the transports, in the same order.
+    ///
+    /// Needed only by `ModelParallel`, whose partitions are pinned to a
+    /// worker id or tag. Without it that strategy refuses rather than
+    /// sending a partition to whichever worker happened to be first.
+    pub fn with_worker_identities(
+        mut self,
+        identities: Vec<crate::strategy::WorkerIdentity>,
+    ) -> Self {
+        self.worker_identities = identities;
         self
     }
 
@@ -216,7 +234,8 @@ impl GraphSession {
                 &plan,
                 &self.catalog,
                 None,
-            );
+            )
+            .with_targets(self.worker_identities.clone());
             let outcome = strategy.fit(&strategy_ctx, x, y, &node_ids);
             return match outcome {
                 Ok(states) => {

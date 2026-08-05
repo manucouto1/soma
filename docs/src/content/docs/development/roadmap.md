@@ -34,8 +34,9 @@ registry-side before the next tag.
 | ~~A backward pass on a worker~~ | `soma-worker/src/python_process.rs` | **Fixed 2026-08-05.** A remote fit of a `DifferentiableFilter` runs forward/loss/backward and leaves the gradients on the parameters, so `data_parallel` trains. Verified against a hand-computed reference: same init, each shard's gradient taken separately, the two averaged, one SGD step — an exact match, and different from what either shard alone gives |
 | ~~Gradients as an opaque torch blob~~ | `soma-worker/src/python_process.rs` | **Fixed 2026-08-05.** They cross the wire as JSON. The aggregator is in Rust, and the mean of two pickles is not a thing that can be computed: the round died at the aggregation step having done all the work |
 | ~~Targets not sharded~~ | `soma-runtime/src/strategy.rs` | **Fixed 2026-08-05.** `shard_pair` splits inputs and targets together. Sharding only `x` sent each replica the whole `y` — shapes that broadcast rather than fail, so every replica trained on pairs that were never pairs and the round reported success |
-| `ModelParallel`, `PopulationBased` | `soma-runtime/src/strategy.rs` | Unwritten. `PbtRunner` works but answers to `PbtExecutor`, so connecting it is an adapter |
-| `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
+| ~~`ModelParallel`~~ | `soma-runtime/src/strategy.rs` | **Written 2026-08-05.** Partitions tile the graph and each is a stage on its pinned worker, threading the activation. A node claimed twice, claimed by nobody, or interleaved with another stage is refused rather than run |
+| `PopulationBased` | `soma-runtime/src/strategy.rs` | Refuses **by design**, not for want of an implementation: every member needs different hyperparameters applied to the graph, and a worker is sent a plan rather than a way to build one. PBT lives where `Study` lives — `soma.Pbt(...).run(train, evaluate)`, added 2026-08-05 |
+| ~~`run_pipeline`, `run_study`~~ | `soma-mcp/src/exec.rs` | **Written 2026-08-05.** They build the graph a model described out of the project's own filters and run it in a Python subprocess rooted there. The claim that "the server cannot load user code" was true of the server and beside the point: `soma-worker` has always run Python in a subprocess |
 | ~~Seed dropped on the remote path~~ | `soma-worker/src/ws_transport.rs` | **Fixed 2026-08-05.** `Transport::execute` now takes the run's seed and `WsTransport` puts it on the wire; it was hardcoded `None`, so a remote sweep shared one cache line across every seed |
 
 The empty `filters` list on that same transport is **not** a gap: the
@@ -46,10 +47,11 @@ the pickle, so this transport cannot supply them and sending empty
 pickles would be worse than sending none. The path that can supply them
 builds its own `SerializedPlan` in `soma-python/src/graph.rs`.
 
-The strategy layer is no longer a blank: `Federated` and `DataParallel`
-both train across workers, with the caller in `GraphSession::fit`, a
+The strategy layer is no longer a blank: `Federated`, `DataParallel` and
+`ModelParallel` all run across workers, with the caller in `GraphSession::fit`, a
 `StrategyContext` over one transport per worker, and FedAvg and AllReduce
-written. What remains there is `ModelParallel` and `PopulationBased`.
+written. `PopulationBased` stays refused on purpose, with `soma.Pbt` as
+the thing that actually evolves a population.
 
 One trap is worth knowing while developing against a worker: it builds an
 isolated venv per pipeline and installs `somatize` from PyPI, so a

@@ -9,12 +9,15 @@
 //! (`kb_*`) that let a model find what has already been tried, follow a
 //! lineage, compare two runs and retain what it concluded.
 //!
-//! `run_pipeline` and `run_study` are declared but not implemented —
-//! executing user code is out of reach for this server, and their
-//! descriptions say so rather than returning a stub that reads like
-//! success.
+//! `run_pipeline` and `run_study` execute. They used to echo their
+//! arguments back, on the grounds that this server cannot load user
+//! code — true of the server, which is Rust, and beside the point: it
+//! runs the graph in a Python subprocess rooted at the project
+//! directory, which is what `soma-worker` has always done. See
+//! [`exec`].
 
 pub mod context;
+pub mod exec;
 pub mod protocol;
 pub mod render;
 pub mod server;

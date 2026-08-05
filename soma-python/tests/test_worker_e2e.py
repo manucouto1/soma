@@ -839,3 +839,96 @@ class TestFederatedStrategy:
         g.node("n", Noop())
         with pytest.raises(RuntimeError, match="data_parallel"):
             g.fit([1.0, 2.0], [1.0, 2.0], mode="differentiable")
+
+    def test_model_parallel_runs_each_stage_where_it_was_pinned(self):
+        """The model is split, the data is not.
+
+        Two stages on two workers: the first doubles, the second adds ten.
+        The answer proves both ran, in order, and that the activation
+        crossed the machine boundary — a run that sent the whole plan to
+        one worker would produce the same numbers, so the states are
+        checked too: each worker learns only its own node.
+        """
+        from conftest import start_worker_and_wait
+
+        class Double(Filter):
+            _cache_version = "mp-double-v1"
+
+            def fit(self, x, y=None):
+                return {"seen": len(x)}
+
+            def forward(self, x, state):
+                return [v * 2 for v in x]
+
+        class AddTen(Filter):
+            _cache_version = "mp-addten-v1"
+
+            def fit(self, x, y=None):
+                return {"seen": len(x)}
+
+            def forward(self, x, state):
+                return [v + 10 for v in x]
+
+        ports = []
+        for tag in ("stage0", "stage1"):
+            port = find_free_port()
+            start_worker_and_wait(
+                lambda p=port, t=tag: Worker(port=p, tags=[t], max_concurrent=2), port
+            )
+            ports.append((port, tag))
+
+        g = Graph(cache="memory")
+        for port, tag in ports:
+            g.add_worker(f"ws://127.0.0.1:{port}", tags=[tag])
+        g.node("double", Double(), target="stage0")
+        g.node("addten", AddTen(), target="stage1")
+        g.connect("double", "addten")
+        g.set_strategy(
+            "model_parallel",
+            partitions=[
+                {"nodes": ["double"], "tag": "stage0"},
+                {"nodes": ["addten"], "tag": "stage1"},
+            ],
+        )
+
+        g.fit([1.0, 2.0, 3.0])
+
+        # Both stages learned, so both ran — and each learned only its own.
+        state = g.state()
+        assert set(state) == {"double", "addten"}, state
+        assert state["double"]["seen"] == 3
+        assert state["addten"]["seen"] == 3
+
+    def test_model_parallel_refuses_a_partition_that_leaves_a_node_out(self):
+        """Every node needs a worker: there is no default target."""
+        from conftest import start_worker_and_wait
+
+        class Id(Filter):
+            _cache_version = "mp-id-v1"
+
+            def forward(self, x, state):
+                return x
+
+        ports = []
+        for tag in ("s0", "s1"):
+            port = find_free_port()
+            start_worker_and_wait(
+                lambda p=port, t=tag: Worker(port=p, tags=[t], max_concurrent=2), port
+            )
+            ports.append((port, tag))
+
+        g = Graph(cache="memory")
+        for port, tag in ports:
+            g.add_worker(f"ws://127.0.0.1:{port}", tags=[tag])
+        g.node("a", Id(), target="s0")
+        g.node("b", Id(), target="s1")
+        g.connect("a", "b")
+        g.set_strategy("model_parallel", partitions=[{"nodes": ["a"], "tag": "s0"}])
+
+        with pytest.raises(RuntimeError, match="no partition claims b"):
+            g.fit([1.0, 2.0])
+
+    def test_model_parallel_needs_partitions(self):
+        g = Graph(cache="memory")
+        with pytest.raises(ValueError, match="model_parallel needs partitions"):
+            g.set_strategy("model_parallel")

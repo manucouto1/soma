@@ -17,6 +17,7 @@ from soma._soma import (
     tool,
 )
 from soma._graph import Graph
+from soma._soma import Pbt
 from soma._study import Study
 from soma.filter import Filter
 from soma._identity import CacheConfigError
@@ -89,6 +90,7 @@ __all__ = [
     "providers",
     "models",
     "Run",
+    "Pbt",
     "Study",
     "Trial",
     "Worker",

@@ -231,9 +231,14 @@ An MCP server exposing the project to an agent: 20 tools over code,
 knowledge, project state and the experiment pool. The rendered text *is*
 the API, so every result ends with a `next:` line and a `run_dir:`.
 
-Four of the declared tools (`run_pipeline`, `run_study`) are not
-implemented because they cannot load user code; their descriptions say so
-rather than failing at call time.
+`run_pipeline` and `run_study` **execute**: a model describes a graph out
+of the project's own filters — the ones `list_filters` lists and
+`read_filter_source` reads — and `soma-mcp/src/exec.rs` runs it in a
+Python subprocess rooted at the project directory. A config value written
+as `{"__search__": {...}}` becomes a search dimension, so the only
+difference between running a graph and searching it is which values were
+marked. Both say in their own descriptions that they execute project
+code.
 
 ### `soma-coordinator`
 

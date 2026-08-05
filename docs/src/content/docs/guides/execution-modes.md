@@ -114,7 +114,7 @@ g.node("model", MyModel())
 g.fit(data)  # runs locally, no workers needed
 ```
 
-:::caution[Two of these four run today. Read this before the code below]
+:::caution[Three of these four run. Read this before the code below]
 Verified on 2026-08-05, and the answer differs per strategy:
 
 - **`federated` runs.** `g.set_strategy("federated", num_clients=…,
@@ -141,9 +141,44 @@ Verified on 2026-08-05, and the answer differs per strategy:
   replica trained on pairs that were never pairs); and the final state is
   **read back over the wire** rather than recalled from the fit, which
   returned the weights from before the averaged gradient was applied.
-- **`model_parallel` and `population_based` are unwritten.** They refuse.
-  `PbtRunner` exists and works, but answers to a different trait
-  (`PbtExecutor`), so connecting it is an adapter rather than a rename.
+- **`model_parallel` runs.** Partitions tile the graph and each one is a
+  *stage*: it runs on the worker it was pinned to, and its output is the
+  next stage's input. The model is split; the data is not.
+
+  ```python
+  g.set_strategy("model_parallel", partitions=[
+      {"nodes": ["encoder"],    "tag": "gpu0"},
+      {"nodes": ["classifier"], "tag": "gpu1"},
+  ])
+  ```
+
+  The partitions must tile the plan, and three things are refused rather
+  than run: a node claimed by two partitions (it would run twice, on two
+  machines, and the second activation would overwrite the first), a node
+  claimed by nobody (model parallelism has no default target), and a
+  stage interleaved with another (the activation would have to cross
+  back). Use `"worker"` instead of `"tag"` to pin one by address.
+- **`population_based` refuses, and it is not a gap.** PBT gives every
+  member *different* hyperparameters, and applying those means rebuilding
+  the graph's filters — which a worker cannot be asked to do, because it
+  is sent a plan, not a way to construct one. That is the same shape as
+  `Study`, so PBT is an executor driven from Python:
+
+  ```python
+  pbt = soma.Pbt(
+      search_space=[{"type": "float", "name": "lr",
+                     "low": 1e-4, "high": 1e-1, "scale": "log"}],
+      population_size=8, generations=5,
+  )
+  best = pbt.run(train, evaluate)   # best[0] is the fittest member
+  ```
+
+  `train(member)` receives `{"id", "params", "state", "fitness"}` and
+  returns the new state; `evaluate(member)` returns a number where
+  **higher is better**. A single member that cannot be evaluated is
+  scored at negative infinity and exploited away; a generation where
+  *none* could be evaluated is an error, because a population of
+  negative infinities looks ranked and has no signal in it.
 - **`fed_prox` and `fed_yogi`** refuse too: the first needs the previous
   global model to measure drift against, the second the optimizer moments
   it carries between rounds, and this aggregator is given neither. A plain
@@ -209,32 +244,62 @@ g.fit(data)
 
 ### Model Parallel
 
-Split the model across workers. Different nodes run on different machines.
+Split the model across workers. Each partition is a stage: it runs where
+it was pinned, and hands its activation to the next one.
 
 ```python
 g = Graph()
 g.node("encoder", Encoder(), target="gpu-0")
 g.node("classifier", Classifier(), target="gpu-1")
-g.edge("encoder", "classifier")
+g.connect("encoder", "classifier")
 
 g.add_worker("ws://gpu-0:8080", tags=["gpu-0"])
 g.add_worker("ws://gpu-1:8080", tags=["gpu-1"])
 
-g.fit(data)  # encoder on gpu-0, classifier on gpu-1
+g.set_strategy("model_parallel", partitions=[
+    {"nodes": ["encoder"],    "tag": "gpu-0"},
+    {"nodes": ["classifier"], "tag": "gpu-1"},
+])
+
+g.fit(data)  # encoder on gpu-0, its output feeds classifier on gpu-1
 ```
+
+The `target=` on a node routes a single remote node; `partitions=` is what
+makes the graph a pipeline of stages. A partition that does not tile the
+plan is refused — see the note above for the three cases.
 
 ### Population-Based Training
 
-Evolutionary hyperparameter optimization. Each generation trains a population,
-evaluates, then evolves the best.
+Evolutionary hyperparameter optimization: each generation trains a
+population, evaluates it, and lets the underperformers copy and mutate
+the leaders.
+
+It is **not** a distribution strategy — see the note above — so it is
+driven from Python like a `Study`:
 
 ```python
-g.set_strategy("pbt",
+import soma
+
+pbt = soma.Pbt(
+    search_space=[
+        {"type": "float", "name": "lr", "low": 1e-4, "high": 1e-1, "scale": "log"},
+    ],
     population_size=20,
     generations=50,
-    exploit="truncation",
-    explore="perturbation",
+    exploit="truncation",     # or "binary"
+    explore="perturbation",   # or "resample"
 )
+
+def train(member):
+    g = build_graph(lr=member["params"]["lr"])
+    g.fit(train_x, train_y)
+    return g.state()
+
+def evaluate(member):
+    return accuracy(member)   # higher is better
+
+population = pbt.run(train, evaluate)
+print(population[0]["params"], population[0]["fitness"])   # the fittest
 ```
 
 ---

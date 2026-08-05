@@ -14,7 +14,10 @@ use crate::node_catalog::NodeCatalog;
 use crate::runner::Transport;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::strategy::{FederatedAggregation, GradientAggregation, TrainingStrategy};
+use somatize_core::filter::RemoteTarget;
+use somatize_core::strategy::{
+    FederatedAggregation, GradientAggregation, Partition, TrainingStrategy,
+};
 use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -74,6 +77,42 @@ pub trait StrategyContext {
 
     /// Apply gradients on a worker.
     fn apply_gradients(&self, worker_idx: usize, gradients: &HashMap<String, Value>) -> Result<()>;
+
+    /// Run *part* of the graph on a worker, returning the activation and
+    /// the states it learned.
+    ///
+    /// This is what model parallelism needs and data parallelism does
+    /// not: every other strategy runs the whole plan on each worker and
+    /// only ever wants the states back. Here each worker holds a slice of
+    /// the model, so its output is the next worker's input.
+    ///
+    /// Defaults to refusing, so a context that cannot address part of a
+    /// plan says so instead of silently running all of it.
+    fn execute_partition(
+        &self,
+        _worker_idx: usize,
+        _node_ids: &[String],
+        _input: &Value,
+        _y: Option<&Value>,
+    ) -> Result<(Value, HashMap<String, Value>)> {
+        Err(SomaError::Other(
+            "this context cannot run part of a plan, so a model-parallel \
+             partition has nowhere to go"
+                .into(),
+        ))
+    }
+
+    /// Which worker answers to `target`.
+    ///
+    /// Every other strategy indexes workers by position, because every
+    /// worker is interchangeable to it. A partition is pinned to one, so
+    /// it has to be found by id or tag.
+    fn worker_for(&self, target: &RemoteTarget) -> Result<usize> {
+        Err(SomaError::Other(format!(
+            "this context does not know which worker is which, so {target:?} \
+             cannot be resolved"
+        )))
+    }
 }
 
 /// Contract for training strategy execution.
@@ -186,17 +225,40 @@ impl StrategyExecutor for TrainingStrategy {
                 ctx.get_state(0, node_ids)
             }
 
-            TrainingStrategy::ModelParallel { .. } => {
-                // TODO: forward/backward across partitions
-                Err(SomaError::Other(
-                    "ModelParallel strategy execution not yet implemented".into(),
-                ))
+            TrainingStrategy::ModelParallel { partitions, .. } => {
+                let stages = order_partitions(partitions, node_ids)?;
+
+                // Each stage runs where it was pinned, and hands its
+                // activation to the next one. That is the whole of model
+                // parallelism on the forward path: the model is split, the
+                // data is not.
+                let mut activation = input.clone();
+                let mut states: HashMap<String, Value> = HashMap::new();
+                for (partition, ids) in &stages {
+                    let worker = ctx.worker_for(&partition.target)?;
+                    let (output, learned) = ctx.execute_partition(worker, ids, &activation, y)?;
+                    states.extend(learned);
+                    activation = output;
+                }
+                Ok(states)
             }
 
             TrainingStrategy::PopulationBased { .. } => {
-                // TODO: PBT cycle
+                // Not a missing implementation — a wrong home. PBT gives
+                // each member DIFFERENT hyperparameters, and applying them
+                // means rebuilding the graph's filters with new configs.
+                // A strategy only gets to send a plan; the configs live in
+                // the caller's language. Which is exactly the shape of
+                // `Study`, and why `PbtRunner` takes a callback.
                 Err(SomaError::Other(
-                    "PopulationBased strategy execution not yet implemented".into(),
+                    "population-based training is not a distribution strategy: \
+                     each member needs its own hyperparameters applied to the \
+                     graph, and a worker is sent a plan, not a way to rebuild \
+                     the filters. It runs as an executor instead, driven from \
+                     Python:\n    pbt = soma.Pbt(search_space=[...], \
+                     population_size=8, generations=5)\n    \
+                     best = pbt.run(train, evaluate)"
+                        .into(),
                 ))
             }
 
@@ -472,6 +534,20 @@ pub struct TransportContext<'a> {
     seed: Option<i64>,
     /// The states each worker returned from its last fit, by worker index.
     states: Mutex<Vec<HashMap<String, Value>>>,
+    /// `(id, tags)` per worker, in transport order. Empty unless
+    /// [`with_targets`](Self::with_targets) was used — only model
+    /// parallelism needs to tell workers apart, and only it pays for
+    /// knowing.
+    identities: Vec<WorkerIdentity>,
+}
+
+/// How a worker can be named by a `RemoteTarget`.
+#[derive(Debug, Clone)]
+pub struct WorkerIdentity {
+    /// The worker's id — its address, as registered.
+    pub id: String,
+    /// Capability tags it was registered with.
+    pub tags: Vec<String>,
 }
 
 impl<'a> TransportContext<'a> {
@@ -489,7 +565,15 @@ impl<'a> TransportContext<'a> {
             catalog,
             seed,
             states: Mutex::new(vec![HashMap::new(); n]),
+            identities: Vec::new(),
         }
+    }
+
+    /// Name the workers, so a partition pinned to an id or a tag can find
+    /// one. Without this, `worker_for` refuses rather than guessing.
+    pub fn with_targets(mut self, identities: Vec<WorkerIdentity>) -> Self {
+        self.identities = identities;
+        self
     }
 
     fn transport(&self, idx: usize) -> Result<&Arc<dyn Transport>> {
@@ -547,6 +631,64 @@ impl StrategyContext for TransportContext<'_> {
             .collect())
     }
 
+    fn worker_for(&self, target: &RemoteTarget) -> Result<usize> {
+        if self.identities.is_empty() {
+            return Err(SomaError::Other(format!(
+                "this context was built without worker identities, so {target:?} \
+                 cannot be resolved. Build it with `with_targets`"
+            )));
+        }
+        let found = match target {
+            RemoteTarget::WorkerId(id) => self.identities.iter().position(|w| &w.id == id),
+            RemoteTarget::Tag(tag) => self
+                .identities
+                .iter()
+                .position(|w| w.tags.iter().any(|t| t == tag)),
+        };
+        found.ok_or_else(|| {
+            SomaError::Other(format!(
+                "no registered worker answers to {target:?}. Registered: {}",
+                self.identities
+                    .iter()
+                    .map(|w| format!("{} {:?}", w.id, w.tags))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+    }
+
+    fn execute_partition(
+        &self,
+        worker_idx: usize,
+        node_ids: &[String],
+        input: &Value,
+        y: Option<&Value>,
+    ) -> Result<(Value, HashMap<String, Value>)> {
+        // A stage's plan is its own nodes, in order — not the whole plan
+        // this context holds, which is what every other strategy sends.
+        let stage = ExecutionPlan::Sequence(
+            node_ids
+                .iter()
+                .map(|node_id| ExecutionPlan::Execute {
+                    node_id: node_id.clone(),
+                })
+                .collect(),
+        );
+        let (output, states) = self.transport(worker_idx)?.execute(
+            &stage,
+            self.catalog,
+            input,
+            &RunMode::Fit { y: y.cloned() },
+            self.seed,
+        )?;
+        if let Ok(mut cache) = self.states.lock()
+            && let Some(slot) = cache.get_mut(worker_idx)
+        {
+            slot.extend(states.clone());
+        }
+        Ok((output, states))
+    }
+
     fn read_back_state(
         &self,
         worker_idx: usize,
@@ -596,6 +738,94 @@ impl StrategyContext for TransportContext<'_> {
     fn apply_gradients(&self, worker_idx: usize, gradients: &HashMap<String, Value>) -> Result<()> {
         self.transport(worker_idx)?.apply_gradients(gradients)
     }
+}
+
+/// Put the partitions in execution order, checking they can be a chain.
+///
+/// A partition is a *stage*: it runs somewhere, and its output is the next
+/// stage's input. That only means something if the partitions tile the
+/// plan — so a node claimed twice, a node claimed by nobody, and a
+/// partition whose nodes are interleaved with another's are all errors
+/// here rather than a pipeline that quietly drops or repeats a node.
+fn order_partitions<'a>(
+    partitions: &'a [Partition],
+    node_ids: &[String],
+) -> Result<Vec<(&'a Partition, Vec<String>)>> {
+    if partitions.is_empty() {
+        return Err(SomaError::Other(
+            "model-parallel training with no partitions: there is nothing to \
+             say where any node runs"
+                .into(),
+        ));
+    }
+    let position: HashMap<&str, usize> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+
+    let mut claimed: HashMap<&str, usize> = HashMap::new();
+    let mut stages: Vec<(&Partition, Vec<usize>)> = Vec::new();
+    for (p_idx, partition) in partitions.iter().enumerate() {
+        let mut positions = Vec::with_capacity(partition.node_ids.len());
+        for node in &partition.node_ids {
+            let Some(&pos) = position.get(node.as_str()) else {
+                return Err(SomaError::Other(format!(
+                    "partition {p_idx} claims `{node}`, which is not in this \
+                     graph. Its nodes are: {}",
+                    node_ids.join(", ")
+                )));
+            };
+            if let Some(&first) = claimed.get(node.as_str()) {
+                return Err(SomaError::Other(format!(
+                    "`{node}` is claimed by partitions {first} and {p_idx}. A \
+                     node runs in one place"
+                )));
+            }
+            claimed.insert(node.as_str(), p_idx);
+            positions.push(pos);
+        }
+        positions.sort_unstable();
+        stages.push((partition, positions));
+    }
+
+    let unclaimed: Vec<&str> = node_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !claimed.contains_key(id))
+        .collect();
+    if !unclaimed.is_empty() {
+        return Err(SomaError::Other(format!(
+            "no partition claims {}. Every node needs a worker; model \
+             parallelism has no default target",
+            unclaimed.join(", ")
+        )));
+    }
+
+    stages.sort_by_key(|(_, positions)| positions.first().copied().unwrap_or(0));
+    // Contiguous, once ordered: stage k must own a solid run of the plan.
+    let mut next = 0usize;
+    for (p_idx, (_, positions)) in stages.iter().enumerate() {
+        for &pos in positions {
+            if pos != next {
+                return Err(SomaError::Other(format!(
+                    "partition {p_idx} is interleaved with another: it owns \
+                     `{}` but not `{}`, which runs before it. A stage has to \
+                     own a contiguous run of the graph",
+                    node_ids[pos], node_ids[next]
+                )));
+            }
+            next += 1;
+        }
+    }
+
+    Ok(stages
+        .into_iter()
+        .map(|(partition, positions)| {
+            let ids = positions.iter().map(|&i| node_ids[i].clone()).collect();
+            (partition, ids)
+        })
+        .collect())
 }
 
 /// Split inputs and targets into `n` shards **together**.
@@ -675,6 +905,199 @@ mod tests {
     fn one(node: &str, values: Vec<f64>) -> HashMap<String, Value> {
         let n = values.len();
         HashMap::from([(node.to_string(), Value::tensor(values, vec![n]))])
+    }
+
+    fn part(nodes: &[&str], tag: &str) -> Partition {
+        Partition {
+            node_ids: nodes.iter().map(|s| s.to_string()).collect(),
+            target: RemoteTarget::Tag(tag.into()),
+        }
+    }
+
+    fn ids(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The ordinary case: two stages, in plan order whatever order they
+    /// were declared in.
+    #[test]
+    fn partitions_are_ordered_by_the_plan_not_by_declaration() {
+        let declared = [part(&["c", "d"], "gpu1"), part(&["a", "b"], "gpu0")];
+        let stages = order_partitions(&declared, &ids(&["a", "b", "c", "d"])).unwrap();
+        assert_eq!(stages.len(), 2);
+        assert_eq!(stages[0].1, ids(&["a", "b"]));
+        assert_eq!(stages[1].1, ids(&["c", "d"]));
+    }
+
+    /// A node claimed twice would run twice, on two machines, and the
+    /// second activation would silently overwrite the first.
+    #[test]
+    fn a_node_in_two_partitions_is_refused() {
+        let declared = [part(&["a", "b"], "gpu0"), part(&["b"], "gpu1")];
+        let err = order_partitions(&declared, &ids(&["a", "b"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("`b` is claimed by partitions 0 and 1"),
+            "{err}"
+        );
+    }
+
+    /// A node claimed by nobody has no worker, and model parallelism has
+    /// no default target to fall back on.
+    #[test]
+    fn an_unclaimed_node_is_refused_by_name() {
+        let declared = [part(&["a"], "gpu0")];
+        let err = order_partitions(&declared, &ids(&["a", "b"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no partition claims b"), "{err}");
+    }
+
+    /// Interleaved stages are not a pipeline: `a`,`c` on one worker and
+    /// `b` on another would need the activation to cross back.
+    #[test]
+    fn interleaved_partitions_are_refused() {
+        let declared = [part(&["a", "c"], "gpu0"), part(&["b"], "gpu1")];
+        let err = order_partitions(&declared, &ids(&["a", "b", "c"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("interleaved"), "{err}");
+    }
+
+    #[test]
+    fn no_partitions_at_all_is_refused() {
+        let err = order_partitions(&[], &ids(&["a"])).unwrap_err().to_string();
+        assert!(err.contains("nothing to say where any node runs"), "{err}");
+    }
+
+    /// The activation is threaded: stage 2 receives what stage 1 produced,
+    /// not the graph's input. A context that ignored the chaining would
+    /// hand both stages the same thing and still "succeed".
+    #[test]
+    fn model_parallel_threads_the_activation_between_stages() {
+        use std::sync::Mutex as StdMutex;
+
+        #[derive(Default)]
+        struct Chain {
+            seen: StdMutex<Vec<(usize, Vec<String>, Value)>>,
+        }
+        impl StrategyContext for Chain {
+            fn num_workers(&self) -> usize {
+                2
+            }
+            fn execute_on_worker(
+                &self,
+                _: usize,
+                _: &serde_json::Value,
+                _: &Value,
+                _: Option<&Value>,
+            ) -> Result<HashMap<String, Value>> {
+                unreachable!("model parallelism runs partitions, not whole plans")
+            }
+            fn execute_partition(
+                &self,
+                worker_idx: usize,
+                node_ids: &[String],
+                input: &Value,
+                _: Option<&Value>,
+            ) -> Result<(Value, HashMap<String, Value>)> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((worker_idx, node_ids.to_vec(), input.clone()));
+                // Each stage adds one, so the output identifies its stage.
+                let next = match input {
+                    Value::Tensor { values, shape } => {
+                        Value::tensor(values.iter().map(|v| v + 1.0).collect(), shape.clone())
+                    }
+                    other => other.clone(),
+                };
+                let states = node_ids
+                    .iter()
+                    .map(|id| (id.clone(), Value::tensor(vec![1.0], vec![1])))
+                    .collect();
+                Ok((next, states))
+            }
+            fn worker_for(&self, target: &RemoteTarget) -> Result<usize> {
+                match target {
+                    RemoteTarget::Tag(t) if t == "gpu0" => Ok(0),
+                    RemoteTarget::Tag(t) if t == "gpu1" => Ok(1),
+                    other => Err(SomaError::Other(format!("no worker for {other:?}"))),
+                }
+            }
+            fn get_state(&self, _: usize, _: &[String]) -> Result<HashMap<String, Value>> {
+                Ok(HashMap::new())
+            }
+            fn set_state(&self, _: usize, _: &HashMap<String, Value>) -> Result<()> {
+                Ok(())
+            }
+            fn get_gradients(&self, _: usize, _: &[String]) -> Result<HashMap<String, Value>> {
+                Ok(HashMap::new())
+            }
+            fn apply_gradients(&self, _: usize, _: &HashMap<String, Value>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let ctx = Chain::default();
+        let states = TrainingStrategy::ModelParallel {
+            partitions: vec![part(&["a"], "gpu0"), part(&["b"], "gpu1")],
+            communication: somatize_core::strategy::CommunicationProtocol::DataStore,
+        }
+        .fit(
+            &ctx,
+            &Value::tensor(vec![10.0], vec![1]),
+            None,
+            &ids(&["a", "b"]),
+        )
+        .unwrap();
+
+        let seen = ctx.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one call per stage");
+        assert_eq!(seen[0].0, 0, "stage 1 on gpu0");
+        assert_eq!(seen[0].2, Value::tensor(vec![10.0], vec![1]));
+        assert_eq!(seen[1].0, 1, "stage 2 on gpu1");
+        assert_eq!(
+            seen[1].2,
+            Value::tensor(vec![11.0], vec![1]),
+            "stage 2 must receive stage 1's output, not the graph input"
+        );
+        // Both stages' states come back, not just the last one's.
+        assert_eq!(states.len(), 2);
+        assert!(states.contains_key("a") && states.contains_key("b"));
+    }
+
+    /// A context with no idea which worker is which refuses rather than
+    /// sending the partition to whoever is first.
+    #[test]
+    fn an_unnamed_worker_pool_refuses_a_pinned_partition() {
+        let plan = ExecutionPlan::Empty;
+        let catalog = NodeCatalog::new();
+        let ctx = TransportContext::new(Vec::new(), &plan, &catalog, None);
+        let err = ctx
+            .worker_for(&RemoteTarget::Tag("gpu".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("with_targets"), "{err}");
+
+        let ctx = TransportContext::new(Vec::new(), &plan, &catalog, None).with_targets(vec![
+            WorkerIdentity {
+                id: "ws://a".into(),
+                tags: vec!["cpu".into()],
+            },
+        ]);
+        assert!(ctx.worker_for(&RemoteTarget::Tag("cpu".into())).unwrap() == 0);
+        assert!(
+            ctx.worker_for(&RemoteTarget::WorkerId("ws://a".into()))
+                .unwrap()
+                == 0
+        );
+        let err = ctx
+            .worker_for(&RemoteTarget::Tag("gpu".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no registered worker"), "{err}");
     }
 
     /// Inputs and targets split together. Sharding only `x` sent every
