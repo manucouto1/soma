@@ -21,6 +21,41 @@ noticed. At 0.4.0 `somatize` depends on all three, so a release with the
 old list would fail at the facade, and the `|| true` on every line would
 have reported success while leaving `somatize` at 0.3.1 for good.
 
+## The 0.4.0 release cannot be done piecemeal
+
+Publishing only the three missing crates does not work, and the error is
+the same one you get for any of them:
+
+```
+error: failed to prepare local package for uploading
+  failed to select a version for the requirement `somatize-core = "^0.4.0"`
+  candidate versions found which didn't match: 0.3.1, 0.3.0, 0.2.46, ...
+```
+
+Every workspace crate requires its siblings at `^0.4.0`, and the registry
+only has 0.3.1. So the whole chain has to go out at 0.4.0, in order — the
+eleven crates `release.yml` lists, which is the correct order (validated
+against the dependency graph).
+
+### The cycle that had to be broken first
+
+`somatize-macros` had `somatize-core` as a dev-dependency declared
+`{ workspace = true }`, and the workspace entry carries
+`version = "0.4.0"`. A **versioned** dev-dependency survives into the
+published manifest, so:
+
+```
+somatize-macros  needs  somatize-core   ^0.4.0    (dev-dependency)
+somatize-core    needs  somatize-macros ^0.4.0    (normal dependency)
+```
+
+Neither can go first, and nothing published breaks the tie. The published
+`somatize-macros` 0.3.1 manifest lists three dependencies and no dev ones,
+which is the clue: cargo strips a dev-dependency that has **no version**.
+It is now declared path-only (`{ path = "../soma-core" }`), it packages
+(13 files, 41.9 kB), and `cargo test -p somatize-macros` is unaffected —
+the path is all it ever needed.
+
 ## The first release needs a token. Only the first.
 
 `release.yml` publishes with Trusted Publishing (OIDC) and stores no
@@ -30,18 +65,24 @@ trusted-publisher config to a crate id
 publisher" for names that have never been published. There is nowhere to
 configure a publisher for a crate that does not exist yet.
 
-So, once, from a machine with a crates.io token:
+So the first 0.4.0 release is one token-authenticated pass over the whole
+chain, from a machine with a crates.io token:
 
 ```bash
-cargo publish -p somatize-store
-cargo publish -p somatize-llm
-cargo publish -p somatize-coordinator
+for c in somatize-macros somatize-core somatize-store somatize-compiler \
+         somatize-runtime somatize-memory somatize-llm somatize-worker \
+         somatize-agent somatize-coordinator somatize; do
+  cargo publish -p "$c" || break
+done
 ```
 
-They must go in dependency order relative to what they need
-(`somatize-store` and `somatize-llm` need `somatize-core` and
-`somatize-runtime`, both already published; `somatize-coordinator` needs
-`somatize-worker`, also published), so the order above works as written.
+`cargo publish` waits for each crate to appear in the index before
+returning, so the next one resolves. Stop at the first failure rather than
+pressing on — a crate published out of order cannot be unpublished, only
+yanked.
+
+After that pass, the eight that already existed and the three new ones are
+all on 0.4.0, and every one of them can be given a trusted publisher.
 
 ## Then configure Trusted Publishing
 

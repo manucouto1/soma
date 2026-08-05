@@ -17,5 +17,15 @@ proc-macro2 = { workspace = true }
 
 [dev-dependencies]
 trybuild = "1"
-somatize-core = { workspace = true }
+# Path only, and deliberately NOT `workspace = true`: inheriting the
+# workspace entry brings its `version = "0.4.0"` along, and a versioned
+# dev-dependency survives into the published manifest. That makes a cycle
+# nothing can break — `somatize-macros` would need `somatize-core ^0.4.0`
+# to publish, and `somatize-core` needs `somatize-macros ^0.4.0`, so
+# neither can go first and the whole 0.4.0 release is stuck.
+#
+# Cargo strips a dev-dependency with no version at publish time, which is
+# why the published 0.3.1 manifest lists three dependencies and no dev
+# ones. Local `cargo test` is unaffected: the path is all it ever needed.
+somatize-core = { path = "../soma-core" }
 serde = { workspace = true }
