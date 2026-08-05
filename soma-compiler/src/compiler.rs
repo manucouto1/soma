@@ -234,6 +234,9 @@ impl<'a> Compiler<'a> {
         // Check gradient flow
         self.check_gradient_flow(&sorted);
 
+        // Check the shape of the graph itself
+        self.check_connectivity();
+
         // Validate schema compatibility
         self.validate_schemas(&sorted)?;
 
@@ -923,8 +926,71 @@ impl<'a> Compiler<'a> {
     /// Gradient flow can restart after an opaque node (differentiable nodes
     /// after an opaque one can still propagate gradients among themselves),
     /// but gradients from before the interruption are lost.
+    /// Report parts of the architecture that are not wired into it.
+    ///
+    /// A node with no edges at all is silently a second root: roots receive
+    /// the graph's input, so it runs, on data it was never meant to see,
+    /// and its output goes nowhere. The DSL makes this easy to write by
+    /// accident, because Python binds `>>` tighter than `|` — the fork in
+    /// `A() | B() >> C()` is `A() | (B() >> C())`, and `A` is left
+    /// dangling. Nothing else catches it: it is not a cycle, not a
+    /// duplicate id, not a dangling edge endpoint, and the schemas of a
+    /// node nobody feeds are trivially satisfied.
+    ///
+    /// A leaf — a node whose output nobody consumes — is Info rather than
+    /// Warning, because fan-out to several leaves is a legitimate shape.
+    /// It is worth saying only when there is more than one, since `forward`
+    /// returns the leaf that actually ran and the others are computed and
+    /// dropped.
+    fn check_connectivity(&mut self) {
+        if self.graph.nodes.len() < 2 {
+            return;
+        }
+
+        let mut leaves = Vec::new();
+        for node in &self.graph.nodes {
+            let id = node.id.as_str();
+            let has_input = !self.graph.predecessors(id).is_empty();
+            let has_output = !self.graph.successors(id).is_empty();
+
+            if !has_input && !has_output {
+                self.diagnostics.push(Diagnostic {
+                    node_id: id.to_string(),
+                    level: DiagnosticLevel::Warning,
+                    message: format!(
+                        "`{id}` has no edges. It is therefore a root: it will run on the \
+                         graph's input, and its output will be discarded. If it was meant \
+                         to be part of the pipeline, connect it; if it is a spawn target, \
+                         register it with `register_step` instead of adding a node."
+                    ),
+                });
+            } else if !has_output {
+                leaves.push(id.to_string());
+            }
+        }
+
+        if leaves.len() > 1 {
+            self.diagnostics.push(Diagnostic {
+                node_id: leaves[0].clone(),
+                level: DiagnosticLevel::Info,
+                message: format!(
+                    "{} nodes produce output nobody consumes ({}). `forward` returns the \
+                     leaf that actually ran; the others are computed and dropped.",
+                    leaves.len(),
+                    leaves.join(", "),
+                ),
+            });
+        }
+    }
+
     fn check_gradient_flow(&mut self, sorted: &[&str]) {
-        let mut gradient_flows = true;
+        // Starts false, not true. A non-differentiable node only interrupts
+        // a gradient if there is one to interrupt — and the first node in
+        // topological order has nothing upstream of it. Starting true made
+        // every graph of ordinary filters warn about its own first node,
+        // which is most preprocessing pipelines, and a warning that fires
+        // on correct code teaches people to stop reading warnings.
+        let mut gradient_flows = false;
 
         for &node_id in sorted {
             if let Some(meta) = self.registry.meta(node_id) {

@@ -1,6 +1,6 @@
 //! Compiler edge cases: empty graphs, cycles, unregistered nodes.
 
-use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
+use somatize_compiler::{CompileMode, DiagnosticLevel, SimpleNodeRegistry, compile};
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta};
 use somatize_core::error::Result;
 use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
@@ -137,9 +137,17 @@ fn gradient_all_opaque_single_warning() {
 
     let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
 
-    // Only first opaque triggers warning (flow is already interrupted)
-    assert_eq!(result.diagnostics.len(), 1);
-    assert_eq!(result.diagnostics[0].node_id, "o1");
+    // Was: exactly one warning, on `o1`. The intent then was to avoid
+    // warning once per opaque node; the intent now is not to warn at all,
+    // because there is no gradient anywhere in this graph to interrupt.
+    // Saying "gradients from upstream will not reach downstream filters"
+    // about the first node of an all-opaque pipeline is simply false, and
+    // it fired on every ordinary preprocessing graph in existence.
+    assert!(
+        result.diagnostics.is_empty(),
+        "a graph with no differentiable node has no gradient to interrupt: {:?}",
+        result.diagnostics
+    );
 }
 
 // ── Cache cascade with diamond ──
@@ -418,4 +426,133 @@ fn schema_none_skips_validation() {
 
     let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
     assert!(result.diagnostics.is_empty());
+}
+
+// ── Architecture that is not wired into itself ──
+//
+// These exist because the author of the examples repository hit the DSL
+// precedence trap on his first afternoon: `(A() | B()) >> C()` written
+// without the parentheses leaves `A` dangling, and every existing check
+// passed it — not a cycle, not a duplicate id, not a dangling endpoint,
+// and a node nobody feeds satisfies its schemas trivially.
+
+fn plain_graph(ids: &[&str], edges: &[(&str, &str)]) -> (Graph, SimpleNodeRegistry) {
+    let mut graph = Graph::new();
+    let mut reg = SimpleNodeRegistry::new();
+    for id in ids {
+        graph.add_node(Node::new(*id, *id, "P"));
+        reg.register_meta(
+            *id,
+            make_meta(FilterKind::Stateless, false),
+            CacheKey::hash_data(id.as_bytes()),
+        );
+    }
+    for (from, to) in edges {
+        graph.add_edge(Edge::data(format!("{}->{}", *from, *to), *from, *to));
+    }
+    (graph, reg)
+}
+
+#[test]
+fn a_node_with_no_edges_is_reported() {
+    let (graph, reg) = plain_graph(&["a", "b", "orphan"], &[("a", "b")]);
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+
+    let orphan: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.node_id == "orphan" && d.level == DiagnosticLevel::Warning)
+        .collect();
+    assert_eq!(orphan.len(), 1, "{:?}", result.diagnostics);
+    assert!(orphan[0].message.contains("no edges"), "{orphan:?}");
+}
+
+#[test]
+fn a_connected_graph_reports_nothing() {
+    let (graph, reg) = plain_graph(&["a", "b"], &[("a", "b")]);
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    assert!(
+        result.diagnostics.is_empty(),
+        "a healthy linear graph must compile silently, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn a_fork_is_info_not_a_warning() {
+    let (graph, reg) = plain_graph(&["a", "left", "right"], &[("a", "left"), ("a", "right")]);
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|d| d.level == DiagnosticLevel::Warning),
+        "a fan-out is a legitimate shape: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.level == DiagnosticLevel::Info && d.message.contains("nobody consumes")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn a_single_node_graph_is_not_an_orphan() {
+    let (graph, reg) = plain_graph(&["only"], &[]);
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+// The false positive that made the warning worthless: a graph of ordinary
+// filters has no gradient anywhere, so nothing is interrupted at its first
+// node. This used to warn on every preprocessing pipeline ever compiled.
+#[test]
+fn plain_filters_do_not_warn_about_gradient_flow() {
+    let (graph, reg) = plain_graph(&["a", "b", "c"], &[("a", "b"), ("b", "c")]);
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("gradient flow interrupted")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+// But a real interruption still reports: differentiable, then not, and the
+// gradient from the first cannot reach anything past the second.
+#[test]
+fn a_real_gradient_interruption_still_warns() {
+    let mut graph = Graph::new();
+    let mut reg = SimpleNodeRegistry::new();
+    for (id, diff) in [("enc", true), ("wall", false), ("head", true)] {
+        graph.add_node(Node::new(id, id, "P"));
+        reg.register_meta(
+            id,
+            make_meta(FilterKind::Trainable, diff),
+            CacheKey::hash_data(id.as_bytes()),
+        );
+    }
+    graph.add_edge(Edge::data(format!("{}->{}", "enc", "wall"), "enc", "wall"));
+    graph.add_edge(Edge::data(
+        format!("{}->{}", "wall", "head"),
+        "wall",
+        "head",
+    ));
+
+    let result = compile(&graph, &reg, CompileMode::Inference, None).unwrap();
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.node_id == "wall" && d.message.contains("gradient flow interrupted")),
+        "{:?}",
+        result.diagnostics
+    );
 }
