@@ -13,10 +13,18 @@ permissions:
   contents: read
 
 # Cancel superseded runs on a pull request — pushing three times in a minute
-# should not queue three 40-minute runs. A push to a branch is NOT cancelled:
-# that run is the record for that commit, and main's history deserves one.
+# should not queue three 40-minute runs.
+#
+# A push gets a group of its OWN, keyed by commit, and that is the whole
+# point of the expression below. Grouping pushes by ref does not merely
+# fail to protect them: GitHub cancels the *pending* run in a group when a
+# new one arrives, `cancel-in-progress` notwithstanding — that setting only
+# governs runs already executing. Three pushes to main in ten minutes
+# therefore killed the middle one before it started a single job, and that
+# commit has no CI record at all. Keyed by SHA, a push never competes with
+# another push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
