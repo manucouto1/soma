@@ -1917,53 +1917,17 @@ impl PyGraph {
         secret_key: Option<String>,
         cache_dir: Option<String>,
     ) -> PyResult<()> {
-        match store_type.as_str() {
-            "local" => {
-                let p = path.ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err("local store requires 'path'")
-                })?;
-                let store = somatize_core::store::LocalDataStore::new(p);
-                self.data_store = Some(Arc::new(store));
-                Ok(())
-            }
-            "s3" => {
-                let bucket = bucket.ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err("s3 store requires 'bucket'")
-                })?;
-                let prefix = prefix.unwrap_or_default();
-                let endpoint = endpoint.ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err("s3 store requires 'endpoint'")
-                })?;
-                let ak = access_key
-                    .or_else(|| std::env::var("AWS_ACCESS_KEY_ID").ok())
-                    .ok_or_else(|| {
-                        pyo3::exceptions::PyValueError::new_err(
-                            "s3 store requires 'access_key' or AWS_ACCESS_KEY_ID env var",
-                        )
-                    })?;
-                let sk = secret_key
-                    .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
-                    .ok_or_else(|| {
-                        pyo3::exceptions::PyValueError::new_err(
-                            "s3 store requires 'secret_key' or AWS_SECRET_ACCESS_KEY env var",
-                        )
-                    })?;
-                let cache = cache_dir.unwrap_or_else(|| {
-                    std::env::temp_dir()
-                        .join(format!("soma-s3-cache-{bucket}"))
-                        .to_string_lossy()
-                        .to_string()
-                });
-                let store =
-                    somatize_store::S3DataStore::new(bucket, prefix, endpoint, ak, sk, cache)
-                        .map_err(soma_err_to_py)?;
-                self.data_store = Some(Arc::new(store));
-                Ok(())
-            }
-            other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unknown store type: '{other}'. Available: local, s3"
-            ))),
-        }
+        self.data_store = Some(crate::store::build_data_store(
+            &store_type,
+            path,
+            bucket,
+            prefix,
+            endpoint,
+            access_key,
+            secret_key,
+            cache_dir,
+        )?);
+        Ok(())
     }
 
     /// Shutdown a specific worker by address.

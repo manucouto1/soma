@@ -508,6 +508,26 @@ class Worker:
     def info(self) -> str:
         """A one-line summary of what this worker can run."""
 
+    def set_data_store(
+        self,
+        store_type: str,
+        path: str | None = ...,
+        bucket: str | None = ...,
+        prefix: str | None = ...,
+        endpoint: str | None = ...,
+        access_key: str | None = ...,
+        secret_key: str | None = ...,
+        cache_dir: str | None = ...,
+    ) -> None:
+        """Give this worker a store, so it can resolve the references a
+        client sends instead of the data itself.
+
+        Same arguments as `Graph.set_data_store`, and that is the point:
+        both ends of a transfer have to be told about the same store.
+        Configuring only the client uploads the payload somewhere the
+        worker cannot read, and the plan fails on the worker naming the
+        reference it could not resolve."""
+
     def serve(self) -> None:
         """Serve requests. Blocks until shut down, releasing the GIL."""
 

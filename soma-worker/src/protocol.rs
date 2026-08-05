@@ -3,6 +3,7 @@
 //! Defines message types for plan assignment, results, heartbeats,
 //! Python job management, and worker capabilities.
 
+use crate::error::{Result, WorkerError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use somatize_compiler::ExecutionPlan;
@@ -99,23 +100,42 @@ pub enum InputSource {
 
 impl InputSource {
     /// Resolve the input to a concrete Value.
-    /// Tries persistent DataStore first, then temp store for HTTP uploads.
+    ///
+    /// Tries the persistent [`DataStore`](somatize_core::store::DataStore)
+    /// first, then the temp store that HTTP uploads land in.
+    ///
+    /// A reference that resolves nowhere is an **error**, and it did not
+    /// used to be: this logged a warning and returned [`Value::Empty`].
+    /// That value went on to the filter, so the failure surfaced as a
+    /// `TypeError` inside somebody's own `fit` — hundreds of thousands of
+    /// rows after the actual problem, and pointing at their code. The
+    /// usual cause is the asymmetry this error names: the client uploaded
+    /// to a store the worker was never given.
     pub fn resolve(
         &self,
         data_store: Option<&dyn somatize_core::store::DataStore>,
         temp_store: &somatize_core::store::LocalDataStore,
-    ) -> Value {
+    ) -> Result<Value> {
         match self {
-            InputSource::Inline { value } => value.clone(),
+            InputSource::Inline { value } => Ok(value.clone()),
             InputSource::Reference { data_ref } => {
                 if let Some(store) = data_store
                     && let Ok(val) = store.get(data_ref)
                 {
-                    return val;
+                    return Ok(val);
                 }
-                temp_store.get(data_ref).unwrap_or_else(|e| {
-                    tracing::warn!("Failed to resolve DataRef: {e}");
-                    Value::Empty
+                temp_store.get(data_ref).map_err(|e| {
+                    let where_it_looked = if data_store.is_some() {
+                        "neither this worker's DataStore nor its temp store"
+                    } else {
+                        "this worker's temp store, and it has no DataStore \
+                         configured — a client that uploads to one must be \
+                         talking to a worker given the same one"
+                    };
+                    WorkerError::Transport(format!(
+                        "cannot resolve the input reference {data_ref:?}: \
+                         looked in {where_it_looked} ({e})"
+                    ))
                 })
             }
         }
@@ -621,6 +641,45 @@ pub enum StreamMessage {
 
 #[cfg(test)]
 mod tests {
+    // ── Resolving an input that is not there ──
+
+    #[test]
+    fn an_unresolvable_reference_is_an_error_not_an_empty_value() {
+        // It used to warn and return Value::Empty. That value travelled on
+        // into the filter, so the failure surfaced as a TypeError inside
+        // the user's own fit — long after the real problem and pointing at
+        // their code.
+        let temp = somatize_core::store::LocalDataStore::new(
+            std::env::temp_dir().join("soma-resolve-test-empty"),
+        );
+        let source = InputSource::Reference {
+            data_ref: somatize_core::store::DataRef::S3 {
+                bucket: "nowhere".into(),
+                key: "missing".into(),
+                region: None,
+            },
+        };
+        let err = source.resolve(None, &temp).unwrap_err().to_string();
+        assert!(err.contains("cannot resolve the input reference"), "{err}");
+        // And it says WHY, because the usual cause is a client configured
+        // with a store the worker was never given.
+        assert!(err.contains("no DataStore configured"), "{err}");
+    }
+
+    #[test]
+    fn an_inline_input_resolves_to_itself() {
+        let temp = somatize_core::store::LocalDataStore::new(
+            std::env::temp_dir().join("soma-resolve-test-inline"),
+        );
+        let source = InputSource::Inline {
+            value: Value::tensor(vec![1.0, 2.0], vec![2]),
+        };
+        assert_eq!(
+            source.resolve(None, &temp).unwrap(),
+            Value::tensor(vec![1.0, 2.0], vec![2])
+        );
+    }
+
     use super::*;
     use somatize_core::event::PlanSummary;
 

@@ -332,11 +332,24 @@ impl Worker {
             tracing::info!("Filters registered, Python process ready");
         }
 
-        // Resolve input via InputSource::resolve()
-        let input_value = plan
+        // Resolve input via InputSource::resolve(). A reference that
+        // resolves nowhere fails HERE, naming what it looked in — it used
+        // to become an empty value and travel on into the filter, where it
+        // surfaced as a TypeError in the user's own code.
+        let input_value = match plan
             .input
             .as_ref()
-            .map(|src| src.resolve(self.data_store.as_deref(), &self.temp_store));
+            .map(|src| src.resolve(self.data_store.as_deref(), &self.temp_store))
+            .transpose()
+        {
+            Ok(value) => value,
+            Err(e) => {
+                return PlanResult::Failed {
+                    error: e.to_string(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                };
+            }
+        };
 
         // DataStore-backed streaming: if input is a large DataRef and we
         // have a store, read chunks via get_rows() and stream them (no

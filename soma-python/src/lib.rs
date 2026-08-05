@@ -20,6 +20,7 @@ mod convert;
 mod graph;
 mod readers;
 mod run;
+mod store;
 mod study;
 mod worker;
 

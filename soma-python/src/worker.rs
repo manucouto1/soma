@@ -21,6 +21,23 @@ pub(crate) struct PyWorker {
     max_concurrent: usize,
     worker_id: Option<String>,
     coordinator: Option<String>,
+    /// Built in `serve`, not here: the Rust worker is constructed on its
+    /// own thread, and an `Arc<dyn DataStore>` is easier to make there
+    /// than to carry across.
+    data_store: Option<StoreConfig>,
+}
+
+/// What `set_data_store` was told, kept until `serve` can act on it.
+#[derive(Clone)]
+struct StoreConfig {
+    store_type: String,
+    path: Option<String>,
+    bucket: Option<String>,
+    prefix: Option<String>,
+    endpoint: Option<String>,
+    access_key: Option<String>,
+    secret_key: Option<String>,
+    cache_dir: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -49,10 +66,61 @@ impl PyWorker {
             max_concurrent,
             worker_id,
             coordinator,
+            data_store: None,
         }
     }
 
     /// Start the worker server (blocking). Releases the GIL so other threads can run.
+    /// Give this worker a DataStore, so it can resolve the references a
+    /// client sends instead of the data itself.
+    ///
+    /// Same arguments as `Graph.set_data_store`, and that is the whole
+    /// point: the two ends of a transfer have to be told about the same
+    /// store. Configuring only the client uploads the payload to a bucket
+    /// the worker cannot open, and the plan then fails on the worker
+    /// naming the reference it could not resolve.
+    ///
+    ///   w = soma.Worker(port=8080)
+    ///   w.set_data_store("s3", bucket="my-lab", prefix="exp/",
+    ///                    endpoint="...", access_key="...", secret_key="...")
+    ///   w.serve()
+    #[pyo3(signature = (store_type, path=None, bucket=None, prefix=None, endpoint=None, access_key=None, secret_key=None, cache_dir=None))]
+    fn set_data_store(
+        &mut self,
+        store_type: String,
+        path: Option<String>,
+        bucket: Option<String>,
+        prefix: Option<String>,
+        endpoint: Option<String>,
+        access_key: Option<String>,
+        secret_key: Option<String>,
+        cache_dir: Option<String>,
+    ) -> PyResult<()> {
+        // Built once here as well, so a bad configuration is refused at the
+        // call rather than inside a thread nobody is watching.
+        crate::store::build_data_store(
+            &store_type,
+            path.clone(),
+            bucket.clone(),
+            prefix.clone(),
+            endpoint.clone(),
+            access_key.clone(),
+            secret_key.clone(),
+            cache_dir.clone(),
+        )?;
+        self.data_store = Some(StoreConfig {
+            store_type,
+            path,
+            bucket,
+            prefix,
+            endpoint,
+            access_key,
+            secret_key,
+            cache_dir,
+        });
+        Ok(())
+    }
+
     fn serve(&self, py: Python<'_>) -> PyResult<()> {
         // This interpreter, not whatever `python3` resolves to. A filter
         // arrives cloudpickled by the process that built the graph; only
@@ -73,6 +141,19 @@ impl PyWorker {
         let max_concurrent = self.max_concurrent;
         let worker_id = self.worker_id.clone();
         let coordinator = self.coordinator.clone();
+        let store = match &self.data_store {
+            Some(c) => Some(crate::store::build_data_store(
+                &c.store_type,
+                c.path.clone(),
+                c.bucket.clone(),
+                c.prefix.clone(),
+                c.endpoint.clone(),
+                c.access_key.clone(),
+                c.secret_key.clone(),
+                c.cache_dir.clone(),
+            )?),
+            None => None,
+        };
 
         // Build the runtime in a new thread; release GIL so other Python threads can run.
         let handle = std::thread::spawn(move || {
@@ -102,7 +183,12 @@ impl PyWorker {
                 eprintln!("Soma worker '{id}' starting on port {port}");
                 eprintln!("Capabilities: {}", caps.summary());
 
-                let worker = somatize_worker::Worker::new(&id, caps.clone()).with_python(&python);
+                let mut worker =
+                    somatize_worker::Worker::new(&id, caps.clone()).with_python(&python);
+                if let Some(store) = store {
+                    eprintln!("DataStore configured: references will be resolved");
+                    worker = worker.with_data_store(store);
+                }
                 let addr = format!("0.0.0.0:{port}");
 
                 // Register with coordinator if configured
