@@ -53,9 +53,18 @@ jobs:
         with:
           path: docs/dist
 
+  # Gated on a repository variable, not on the build: `build` above IS the check
+  # (it fails if cargo doc or Starlight break), and it runs on every push. The
+  # deploy cannot: this repository is private, and GitHub Pages on a private
+  # repository needs a paid plan — the API answers 422 "Your current plan does
+  # not support GitHub Pages for this repository", so `deploy-pages` 404s on
+  # every push and paints the workflow red for a reason that is not the code.
+  # To turn deployment on: enable Pages (make the repository public, or upgrade
+  # the plan), then set the repository variable PAGES_ENABLED to "true".
   deploy:
     name: Deploy to Pages
     needs: build
+    if: vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
