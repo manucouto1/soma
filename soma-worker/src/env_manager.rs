@@ -105,6 +105,34 @@ impl EnvManager {
 
     // ── Internal ──
 
+    /// Put `package_dir` on the venv's import path with a `.pth` file.
+    ///
+    /// The alternative — `pip install` of the source tree — would rebuild
+    /// the compiled extension for every pipeline that asks for a different
+    /// requirement set. A single path entry costs nothing and points at the
+    /// build that is already there.
+    ///
+    /// Nothing else is placed on the path, so the venv's own packages
+    /// (torch, numpy, whatever the requirements asked for) keep winning.
+    fn link_local_package(env_dir: &Path, package_dir: &str) -> Result<()> {
+        let lib = env_dir.join("lib");
+        let site = std::fs::read_dir(&lib)
+            .map_err(|e| WorkerError::Env(format!("reading {}: {e}", lib.display())))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().join("site-packages"))
+            .find(|p| p.is_dir())
+            .ok_or_else(|| {
+                WorkerError::Env(format!(
+                    "no site-packages under {} to link the local soma package into",
+                    lib.display()
+                ))
+            })?;
+        std::fs::write(site.join("_soma_local.pth"), format!("{package_dir}\n"))
+            .map_err(|e| WorkerError::Env(format!("writing _soma_local.pth: {e}")))?;
+        tracing::info!(path = %package_dir, "worker venv uses the local soma package");
+        Ok(())
+    }
+
     fn create_env(&self, env_dir: &Path) -> Result<()> {
         match self.env_type {
             EnvType::Venv => {
@@ -171,18 +199,55 @@ impl EnvManager {
         // last release is the normal state of a repository and a mismatch
         // is harmless for a plain filter. It is not harmless for a
         // differentiable one, so the fallback warns loudly.
+        // `$SOMA_LOCAL_PACKAGE` short-circuits all of that: it names the
+        // directory holding the `soma` package this build belongs to, and
+        // is how a working tree runs its OWN Python layer on a worker
+        // instead of whatever the last release put on PyPI. The Python
+        // `Worker` sets it automatically. It is added by a `.pth` rather
+        // than installed, because installing it would mean compiling the
+        // extension module once per venv.
         let version = env!("CARGO_PKG_VERSION");
-        let pinned = format!("somatize=={version}");
-        let mut bootstrap = Command::new(&pip)
-            .args(["install", "-q", "cloudpickle", &pinned])
-            .output()
-            .map_err(|e| WorkerError::Env(format!("pip install (bootstrap deps) failed: {e}")))?;
-        if !bootstrap.status.success() {
+        let local_package = std::env::var("SOMA_LOCAL_PACKAGE").ok().filter(|p| {
+            let ok = std::path::Path::new(p).join("soma").is_dir();
+            if !ok {
+                tracing::warn!(
+                    path = %p,
+                    "SOMA_LOCAL_PACKAGE does not contain a `soma` directory; \
+                     falling back to installing somatize from PyPI"
+                );
+            }
+            ok
+        });
+        let mut bootstrap = if let Some(dir) = &local_package {
+            let out = Command::new(&pip)
+                .args(["install", "-q", "cloudpickle"])
+                .output()
+                .map_err(|e| WorkerError::Env(format!("pip install cloudpickle failed: {e}")))?;
+            if out.status.success() {
+                Self::link_local_package(env_dir, dir)?;
+            }
+            out
+        } else {
+            Command::new(&pip)
+                .args([
+                    "install",
+                    "-q",
+                    "cloudpickle",
+                    &format!("somatize=={version}"),
+                ])
+                .output()
+                .map_err(|e| {
+                    WorkerError::Env(format!("pip install (bootstrap deps) failed: {e}"))
+                })?
+        };
+        if !bootstrap.status.success() && local_package.is_none() {
             tracing::warn!(
                 version,
                 "PyPI has no somatize {version}; installing the latest instead. A \
                  filter pickled by this build and unpickled against a different \
-                 somatize can fail deep inside its own fit, naming no version",
+                 somatize can fail deep inside its own fit, naming no version. \
+                 Set SOMA_LOCAL_PACKAGE to this build's Python package \
+                 directory to run the real thing instead",
             );
             bootstrap = Command::new(&pip)
                 .args(["install", "-q", "cloudpickle", "somatize"])

@@ -2,6 +2,46 @@
 
 use crate::prelude::*;
 
+/// Tell the worker's `EnvManager` to use *this* process's Soma.
+///
+/// A worker builds an isolated venv per pipeline and installs `somatize`
+/// into it from PyPI. When the working tree is ahead of the last release —
+/// the normal state of a repository — PyPI has no such version and the
+/// install falls back to the latest one there. The worker then runs a
+/// different Soma than the one that pickled the filters: a
+/// `DifferentiableFilter` whose `fit` trained in the older release trained
+/// on the worker and diverged, while the same graph run locally did
+/// nothing of the sort, and no message anywhere mentioned a version.
+///
+/// A worker started from Python should run that Python's Soma. Only set
+/// when the caller has not said otherwise, and only when the directory
+/// really holds the package.
+fn point_env_manager_at_this_soma(py: Python<'_>) {
+    if std::env::var_os("SOMA_LOCAL_PACKAGE").is_some() {
+        return;
+    }
+    let Ok(module) = py.import("soma") else {
+        return;
+    };
+    let Ok(file) = module
+        .getattr("__file__")
+        .and_then(|f| f.extract::<String>())
+    else {
+        return;
+    };
+    // …/site-packages/soma/__init__.py → …/site-packages
+    let Some(parent) = std::path::Path::new(&file)
+        .parent()
+        .and_then(|p| p.parent())
+        .filter(|p| p.join("soma").join("__init__.py").is_file())
+    else {
+        return;
+    };
+    // SAFETY: set once, during construction, before any worker thread that
+    // reads it exists.
+    unsafe { std::env::set_var("SOMA_LOCAL_PACKAGE", parent) };
+}
+
 // ── PyWorker ──
 
 /// A Soma worker that can be started from Python.
@@ -46,6 +86,7 @@ impl PyWorker {
     #[new]
     #[pyo3(signature = (port=8080, tags=None, token=None, cpus=None, memory=None, gpus=None, max_concurrent=4, worker_id=None, coordinator=None))]
     fn new(
+        py: Python<'_>,
         port: u16,
         tags: Option<Vec<String>>,
         token: Option<String>,
@@ -56,6 +97,7 @@ impl PyWorker {
         worker_id: Option<String>,
         coordinator: Option<String>,
     ) -> Self {
+        point_env_manager_at_this_soma(py);
         Self {
             port,
             tags: tags.unwrap_or_default(),

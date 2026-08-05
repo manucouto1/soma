@@ -1375,10 +1375,24 @@ impl PyGraph {
         // filter's ``composite_fit``. Gradients flow end-to-end inside the
         // user-provided composite_fit implementation.
         if mode == "differentiable" {
+            // `mode="differentiable"` is the *local* loop: the caller drives
+            // `context`/`backward`/`step` and owns when the parameters move.
+            // A worker cannot be driven that way — it would need distributed
+            // autograd — so this stays refused rather than running a fit
+            // that computes gradients and never steps.
+            //
+            // Training a differentiable graph on workers is
+            // `set_strategy("data_parallel")`, which is a complete round:
+            // each replica fits its own shard, the gradients are averaged
+            // across replicas and applied, and the stepped weights are read
+            // back. See `guides/execution-modes.md`.
             if !self.workers.is_empty() {
                 return Err(PyRuntimeError::new_err(
-                    "mode='differentiable' is only supported for local execution \
-                     (no workers). Remote differentiable training is not yet implemented.",
+                    "mode='differentiable' drives the training loop locally, so \
+                     it cannot run on workers. To train this graph on the \
+                     workers you registered, set a strategy instead:\n    \
+                     g.set_strategy(\"data_parallel\", num_replicas=N)\n    \
+                     g.fit(x, y)",
                 ));
             }
             self.graph.validate().map_err(soma_err_to_py)?;

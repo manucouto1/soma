@@ -43,6 +43,25 @@ pub trait StrategyContext {
     /// Get trained states from a worker.
     fn get_state(&self, worker_idx: usize, node_ids: &[String]) -> Result<HashMap<String, Value>>;
 
+    /// Read a worker's state *now*, over the wire, rather than recalling
+    /// what its last fit returned.
+    ///
+    /// The two differ exactly when something changed the model after the
+    /// fit — which is what [`apply_gradients`](Self::apply_gradients) does.
+    /// A data-parallel round that finished with `get_state` handed back the
+    /// weights each replica had *before* the averaged gradient was applied,
+    /// so the training it had just done was discarded on the way out.
+    ///
+    /// Defaults to `get_state`, for a context whose two answers cannot
+    /// differ.
+    fn read_back_state(
+        &self,
+        worker_idx: usize,
+        node_ids: &[String],
+    ) -> Result<HashMap<String, Value>> {
+        self.get_state(worker_idx, node_ids)
+    }
+
     /// Set states on a worker (e.g. after aggregation).
     fn set_state(&self, worker_idx: usize, states: &HashMap<String, Value>) -> Result<()>;
 
@@ -103,11 +122,12 @@ impl StrategyExecutor for TrainingStrategy {
                 aggregation,
             } => {
                 let n = (*num_replicas).min(ctx.num_workers());
-                let shards = shard_value(input, n);
+                let (shards, y_shards) = shard_pair(input, y, n)?;
 
-                // Fit on each worker with its shard
+                // Fit on each worker with its shard — inputs and targets
+                // split together, so example i still meets target i.
                 for (i, shard) in shards.iter().enumerate() {
-                    ctx.execute_on_worker(i, &serde_json::json!({}), shard, y)?;
+                    ctx.execute_on_worker(i, &serde_json::json!({}), shard, y_shards[i].as_ref())?;
                 }
 
                 // Collect and aggregate gradients
@@ -117,13 +137,17 @@ impl StrategyExecutor for TrainingStrategy {
                 }
                 let averaged = aggregation.aggregate(&all_grads)?;
 
-                // Apply to all workers
+                // Apply to all workers. This is where the step happens: the
+                // replicas move together, on the mean of what they each saw.
                 for i in 0..n {
                     ctx.apply_gradients(i, &averaged)?;
                 }
 
-                // Return states from first worker
-                ctx.get_state(0, node_ids)
+                // Read worker 0 back over the wire. `get_state` would return
+                // what its fit returned — the weights from *before* the
+                // averaged gradient was applied — so the round would train
+                // and then hand back the untrained model.
+                ctx.read_back_state(0, node_ids)
             }
 
             TrainingStrategy::Federated {
@@ -133,12 +157,17 @@ impl StrategyExecutor for TrainingStrategy {
                 ..
             } => {
                 let n = (*num_clients).min(ctx.num_workers());
-                let shards = shard_value(input, n);
+                let (shards, y_shards) = shard_pair(input, y, n)?;
 
                 for _round in 0..*rounds {
                     // Each client trains on its shard
                     for (i, shard) in shards.iter().enumerate().take(n) {
-                        ctx.execute_on_worker(i, &serde_json::json!({}), shard, y)?;
+                        ctx.execute_on_worker(
+                            i,
+                            &serde_json::json!({}),
+                            shard,
+                            y_shards[i].as_ref(),
+                        )?;
                     }
 
                     // Collect and aggregate states
@@ -518,6 +547,23 @@ impl StrategyContext for TransportContext<'_> {
             .collect())
     }
 
+    fn read_back_state(
+        &self,
+        worker_idx: usize,
+        node_ids: &[String],
+    ) -> Result<HashMap<String, Value>> {
+        let states = self.transport(worker_idx)?.get_state(node_ids)?;
+        // Record it, so a later `get_state` agrees with the wire.
+        if let Ok(mut cache) = self.states.lock()
+            && let Some(slot) = cache.get_mut(worker_idx)
+        {
+            for (id, value) in &states {
+                slot.insert(id.clone(), value.clone());
+            }
+        }
+        Ok(states)
+    }
+
     fn set_state(&self, worker_idx: usize, states: &HashMap<String, Value>) -> Result<()> {
         // Into the catalog, which is what the next plan serializes its
         // filter states from.
@@ -549,6 +595,51 @@ impl StrategyContext for TransportContext<'_> {
 
     fn apply_gradients(&self, worker_idx: usize, gradients: &HashMap<String, Value>) -> Result<()> {
         self.transport(worker_idx)?.apply_gradients(gradients)
+    }
+}
+
+/// Split inputs and targets into `n` shards **together**.
+///
+/// Sharding `x` and sending every worker the whole `y` is the bug this
+/// exists to make impossible. It is not caught by anything downstream: a
+/// 4-row output against an 8-row target does not fail, it *broadcasts*, so
+/// each replica computed a loss between things that were never paired,
+/// backpropagated it, and reported a successful round. Only the diverging
+/// weights showed it.
+///
+/// Row counts that disagree are an error naming both, since pairing
+/// example `i` with target `i` is the one assumption every shard rests on.
+fn shard_pair(x: &Value, y: Option<&Value>, n: usize) -> Result<(Vec<Value>, Vec<Option<Value>>)> {
+    let x_shards = shard_value(x, n);
+    let Some(y) = y else {
+        return Ok((x_shards, vec![None; n]));
+    };
+    if let (Some(xr), Some(yr)) = (rows_of(x), rows_of(y))
+        && xr != yr
+    {
+        return Err(SomaError::Other(format!(
+            "sharding across {n} workers: the input has {xr} rows and the \
+             targets have {yr}. Each shard pairs example i with target i, \
+             so the two must agree"
+        )));
+    }
+    let y_shards = shard_value(y, n);
+    if y_shards.len() != x_shards.len() {
+        return Err(SomaError::Other(format!(
+            "sharding across {n} workers: the input split into {} shards and \
+             the targets into {}",
+            x_shards.len(),
+            y_shards.len()
+        )));
+    }
+    Ok((x_shards, y_shards.into_iter().map(Some).collect()))
+}
+
+/// Leading dimension of a tensor, when it has one.
+fn rows_of(value: &Value) -> Option<usize> {
+    match value {
+        Value::Tensor { shape, .. } if !shape.is_empty() => Some(shape[0]),
+        _ => None,
     }
 }
 
@@ -584,6 +675,39 @@ mod tests {
     fn one(node: &str, values: Vec<f64>) -> HashMap<String, Value> {
         let n = values.len();
         HashMap::from([(node.to_string(), Value::tensor(values, vec![n]))])
+    }
+
+    /// Inputs and targets split together. Sharding only `x` sent every
+    /// replica the whole `y`: shapes that broadcast rather than fail, so
+    /// each one trained on pairs that were never pairs.
+    #[test]
+    fn shard_pair_splits_targets_alongside_inputs() {
+        let x = Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4, 1]);
+        let y = Value::tensor(vec![10.0, 20.0, 30.0, 40.0], vec![4, 1]);
+        let (xs, ys) = shard_pair(&x, Some(&y), 2).unwrap();
+        assert_eq!(xs[0], Value::tensor(vec![1.0, 2.0], vec![2, 1]));
+        assert_eq!(ys[0], Some(Value::tensor(vec![10.0, 20.0], vec![2, 1])));
+        assert_eq!(xs[1], Value::tensor(vec![3.0, 4.0], vec![2, 1]));
+        assert_eq!(ys[1], Some(Value::tensor(vec![30.0, 40.0], vec![2, 1])));
+    }
+
+    #[test]
+    fn shard_pair_refuses_row_counts_that_disagree() {
+        let x = Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4, 1]);
+        let y = Value::tensor(vec![10.0, 20.0], vec![2, 1]);
+        let err = shard_pair(&x, Some(&y), 2).unwrap_err().to_string();
+        assert!(
+            err.contains("4 rows") && err.contains("2"),
+            "the error should name both counts: {err}"
+        );
+    }
+
+    #[test]
+    fn shard_pair_without_targets_yields_none_per_shard() {
+        let x = Value::tensor(vec![1.0, 2.0], vec![2, 1]);
+        let (xs, ys) = shard_pair(&x, None, 2).unwrap();
+        assert_eq!(xs.len(), 2);
+        assert_eq!(ys, vec![None, None]);
     }
 
     /// FedAvg is an element-wise mean, and this is the whole reason the

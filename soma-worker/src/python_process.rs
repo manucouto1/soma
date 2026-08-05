@@ -32,6 +32,58 @@ def _reply(payload):
 
 filters = {}
 
+def _unwrap(out):
+    """A filter's forward may return `(out, aux)`; the chain wants both."""
+    if isinstance(out, tuple) and len(out) == 2 and isinstance(out[1], dict):
+        return out[0], out[1]
+    return out, {}
+
+def _backward_pass(f, data, y):
+    """Forward, loss, backward — leaving the gradients on the parameters.
+
+    This is what a *remote* fit of a DifferentiableFilter has to do and did
+    not: its `fit` learns no state (the parameters live in `_module`), so a
+    worker ran `fit`, got `{}` back, and reported a trained model whose
+    parameters had never seen a gradient. `data_parallel` then averaged
+    nothing across replicas.
+
+    Deliberately does NOT step. Whoever owns the round owns the step: in a
+    data-parallel round the gradients are averaged across replicas first,
+    and stepping here would apply each replica's own gradient before the
+    average.
+
+    Returns the filter's state, or None when it is not a differentiable
+    filter and this does not apply.
+    """
+    module = getattr(f, "_module", None)
+    if module is None and not getattr(f, "_differentiable", False):
+        return None
+    import torch
+    was_training = getattr(f, "training", False)
+    f.training = True          # so forward returns a live tensor, not a list
+    try:
+        out, aux = _unwrap(f.forward(data, {}))
+        if not hasattr(out, "backward"):
+            return None
+        y_t = y if hasattr(y, "shape") else torch.tensor(y, dtype=torch.float32)
+        if y_t.shape != out.shape and y_t.numel() == out.numel():
+            y_t = y_t.reshape(out.shape)
+        if y_t.shape != out.shape:
+            raise ValueError(
+                "the targets have shape %s and the output %s; they cannot be "
+                "paired" % (tuple(y_t.shape), tuple(out.shape)))
+        loss = f.compute_loss(out, y_t, aux) if hasattr(f, "compute_loss") \
+            else torch.nn.functional.mse_loss(out, y_t)
+        loss.backward()
+    finally:
+        f.training = was_training
+    module = getattr(f, "_module", None)
+    if module is None:
+        return None
+    buf = io.BytesIO()
+    torch.save(module.state_dict(), buf)
+    return {"weights_b64": base64.b64encode(buf.getvalue()).decode()}
+
 def _encode(obj):
     """Encode a Python object to JSON-safe format."""
     if obj is None:
@@ -111,6 +163,10 @@ for line in sys.stdin:
             data = _decode(cmd.get("data"))
             y = _decode(cmd.get("y"))
             result = f.fit(data, y)
+            if y is not None:
+                trained = _backward_pass(f, data, y)
+                if trained is not None:
+                    result = trained
             _reply(({"ok": True, "result": _encode(result)}))
 
         elif action == "FORWARD":
@@ -136,7 +192,7 @@ for line in sys.stdin:
             for nid in node_ids:
                 f = filters[nid]["obj"]
                 state = _decode(cmd.get("states", {}).get(nid, {}))
-                out = f.forward(out, state)
+                out, _ = _unwrap(f.forward(out, state))
 
             result = out.detach().tolist() if hasattr(out, 'detach') else out
             _reply(({"ok": True, "result": _encode(result)}))
@@ -156,8 +212,10 @@ for line in sys.stdin:
                     fit_states[nid] = state
                 else:
                     fit_states[nid] = {}
-                # Forward to propagate output to next filter
-                fit_input = f.forward(fit_input, fit_states[nid])
+                # Forward to propagate output to next filter. `forward`
+                # may answer `(out, aux)` — chaining the tuple fed the next
+                # filter a 2-tuple where it wanted a tensor.
+                fit_input, _ = _unwrap(f.forward(fit_input, fit_states[nid]))
 
             # Step 2: forward with autograd if torch available
             try:
@@ -170,31 +228,68 @@ for line in sys.stdin:
                 x = data
 
             out = x
+            aux = {}
             for nid in node_ids:
                 f = filters[nid]["obj"]
-                out = f.forward(out, fit_states.get(nid, {}))
+                # Training mode, so a DifferentiableFilter hands back a live
+                # tensor rather than a detached list — without this the
+                # `hasattr(out, 'backward')` below was never true and the
+                # whole backward block was dead code.
+                _was = getattr(f, "training", False)
+                f.training = True
+                try:
+                    out, aux = _unwrap(f.forward(out, fit_states.get(nid, {})))
+                finally:
+                    f.training = _was
 
-            # Backward
+            # Backward. This used to be wrapped in `except Exception: pass`,
+            # so a loss that could not be computed — wrong shape, wrong dtype,
+            # a `compute_loss` that raised — produced a fit that reported
+            # success and had trained nothing. A backward that cannot run is
+            # an error; the parameters are the whole point of being here.
+            #
+            # The gradients are deliberately LEFT on the parameters. A
+            # data-parallel round reads them with GET_GRADIENTS after this
+            # returns, averages them across replicas, and steps in
+            # APPLY_GRADIENTS. Stepping here as well would apply each
+            # replica's own gradient before the average, which is not
+            # data-parallel SGD and not anything else either.
             if y is not None and hasattr(out, 'backward'):
                 last = filters[node_ids[-1]]["obj"]
                 try:
                     import torch
-                    if isinstance(y, list):
-                        y_t = torch.tensor(y, dtype=torch.float32)
-                    else:
-                        y_t = y
-                    if hasattr(last, 'loss_fn'):
+                except ImportError:
+                    _reply(({"ok": False, "error":
+                        "composite fit of %s produced a differentiable output "
+                        "but torch is not importable" % node_ids}))
+                    continue
+                if isinstance(y, list):
+                    y_t = torch.tensor(y, dtype=torch.float32)
+                else:
+                    y_t = y
+                try:
+                    # `compute_loss` is the DifferentiableFilter contract;
+                    # `loss_fn` is the older duck-typed attribute, still read
+                    # so a filter that predates the base class keeps working.
+                    if hasattr(last, 'compute_loss'):
+                        loss = last.compute_loss(out, y_t, aux)
+                    elif hasattr(last, 'loss_fn'):
                         loss = last.loss_fn(out, y_t)
                     else:
                         loss = torch.nn.functional.mse_loss(out, y_t)
                     loss.backward()
-                    for nid in node_ids:
-                        f = filters[nid]["obj"]
-                        if hasattr(f, 'optimizer'):
-                            f.optimizer.step()
-                            f.optimizer.zero_grad()
-                except Exception:
-                    pass
+                except Exception as e:
+                    _reply(({"ok": False, "error":
+                        "composite fit of %s: the backward pass failed: %s: %s"
+                        % (node_ids, type(e).__name__, e)}))
+                    continue
+                # A filter carrying its own optimizer keeps its own loop: it
+                # is not part of a gradient-averaging round.
+                for nid in node_ids:
+                    f = filters[nid]["obj"]
+                    if hasattr(f, 'optimizer'):
+                        f.optimizer.step()
+                        f.optimizer.zero_grad()
 
             states = {}
             for nid in node_ids:
@@ -214,6 +309,19 @@ for line in sys.stdin:
         elif action == "GET_STATE":
             nid = cmd["node_id"]
             f = filters[nid]["obj"]
+            _mod = getattr(f, "_module", None)
+            if _mod is not None and hasattr(_mod, "state_dict"):
+                # A DifferentiableFilter is not itself an nn.Module, so the
+                # branch below would cloudpickle the whole filter object —
+                # a state no local graph could load. Its state is the
+                # `{"weights_b64": …}` dict its own `forward` reads back and
+                # the local fit path writes, so send exactly that.
+                import torch
+                buf = io.BytesIO()
+                torch.save(_mod.state_dict(), buf)
+                _reply(({"ok": True, "state": {
+                    "weights_b64": base64.b64encode(buf.getvalue()).decode()}}))
+                continue
             buf = io.BytesIO()
             if hasattr(f, 'state_dict'):
                 try:
@@ -229,6 +337,21 @@ for line in sys.stdin:
         elif action == "SET_STATE":
             nid = cmd["node_id"]
             f = filters[nid]["obj"]
+            _state = cmd.get("state")
+            if isinstance(_state, dict) and "weights_b64" in _state:
+                # The symmetric read of the GET_STATE branch above.
+                import torch
+                _mod = getattr(f, "_module", None)
+                if _mod is None:
+                    _reply(({"ok": False, "error":
+                        "`%s` was sent weights but has no module to load them "
+                        "into: it was never materialized on this worker" % nid}))
+                    continue
+                _mod.load_state_dict(torch.load(
+                    io.BytesIO(base64.b64decode(_state["weights_b64"])),
+                    weights_only=True))
+                _reply(({"ok": True}))
+                continue
             state_bytes = base64.b64decode(cmd["state_b64"])
             buf = io.BytesIO(state_bytes)
             if hasattr(f, 'load_state_dict'):
@@ -263,17 +386,19 @@ for line in sys.stdin:
                     "`%s` cannot produce gradients: torch is not installed in "
                     "this worker's environment" % nid}))
                 continue
-            grads = {n: p.grad.detach().clone()
+            # Nested lists, not a torch pickle. The aggregator that averages
+            # these lives in Rust, and a pickle is opaque to it: AllReduce
+            # over two `Value::Bytes` blobs could only refuse. Plain JSON is
+            # also what makes the average independent of the torch version
+            # each worker happens to have.
+            grads = {n: p.grad.detach().cpu().tolist()
                      for n, p in module.named_parameters() if p.grad is not None}
             if not grads:
                 _reply(({"ok": False, "error":
                     "`%s` has parameters but none carry a gradient. Run a "
                     "backward pass before asking for them" % nid}))
                 continue
-            buf = io.BytesIO()
-            torch.save(grads, buf)
-            _reply(({"ok": True, "gradients_b64":
-                base64.b64encode(buf.getvalue()).decode()}))
+            _reply(({"ok": True, "gradients": grads}))
 
         elif action == "APPLY_GRADIENTS":
             nid = cmd["node_id"]
@@ -289,20 +414,44 @@ for line in sys.stdin:
                 _reply(({"ok": False, "error":
                     "`%s` cannot take gradients: torch is not installed" % nid}))
                 continue
-            buf = io.BytesIO(base64.b64decode(cmd["gradients_b64"]))
-            grads = torch.load(buf, weights_only=True)
+            grads = cmd.get("gradients") or {}
             applied = 0
+            mismatch = None
             for name, p in module.named_parameters():
-                if name in grads:
-                    p.grad = grads[name].clone()
-                    applied += 1
+                if name not in grads:
+                    continue
+                g = torch.tensor(grads[name], dtype=p.dtype, device=p.device)
+                if tuple(g.shape) != tuple(p.shape):
+                    mismatch = ("`%s`: aggregated gradient for `%s` has shape %s, "
+                                "the parameter has %s"
+                                % (nid, name, tuple(g.shape), tuple(p.shape)))
+                    break
+                p.grad = g
+                applied += 1
+            if mismatch is not None:
+                _reply(({"ok": False, "error": mismatch}))
+                continue
             if applied == 0 and grads:
                 _reply(({"ok": False, "error":
                     "`%s`: none of the %d aggregated gradients matched a "
                     "parameter name. The replicas are not the same model"
                     % (nid, len(grads))}))
                 continue
-            _reply(({"ok": True, "applied": applied}))
+            # Applying an averaged gradient and stopping there would leave
+            # every replica exactly where the round started: data-parallel
+            # SGD *is* the step. The optimizer is built once and kept on the
+            # filter, so its moments survive across rounds — an Adam rebuilt
+            # every round is plain SGD wearing its name.
+            stepped = False
+            if applied and hasattr(f, "make_optimizer"):
+                opt = getattr(f, "_soma_dp_optimizer", None)
+                if opt is None:
+                    opt = f.make_optimizer([module])
+                    f._soma_dp_optimizer = opt
+                opt.step()
+                opt.zero_grad()
+                stepped = True
+            _reply(({"ok": True, "applied": applied, "stepped": stepped}))
 
         elif action == "BATCHED_FIT":
             # Process dataset in batches — model loaded ONCE, batches processed in loop
@@ -693,10 +842,19 @@ impl PythonProcess {
         Self::response_to_value(&resp)
     }
 
-    /// Extract one filter's state as opaque bytes — a torch `state_dict`
-    /// when the filter has one, the cloudpickled filter otherwise.
+    /// Extract one filter's state.
+    ///
+    /// A materialized `DifferentiableFilter` answers with its own state
+    /// convention — `Value::Json({"weights_b64": …})`, the dict its
+    /// `forward` reads back and the local fit path writes — so a state
+    /// read off a worker is loadable by a local graph. Anything else is
+    /// opaque bytes: a torch `state_dict` when the filter has one, the
+    /// cloudpickled filter otherwise.
     pub fn get_state(&mut self, node_id: &str) -> Result<Value> {
         let resp = self.send(serde_json::json!({"cmd": "GET_STATE", "node_id": node_id}))?;
+        if let Some(state) = resp.get("state") {
+            return Ok(Value::json(state.clone()));
+        }
         if let Some(b64) = resp.get("state_b64").and_then(|s| s.as_str()) {
             let bytes = STANDARD
                 .decode(b64)
@@ -707,10 +865,23 @@ impl PythonProcess {
         }
     }
 
-    /// Load bytes produced by [`PythonProcess::get_state`] back into the
+    /// Load what [`PythonProcess::get_state`] produced back into the
     /// filter — how FedAvg-style aggregated states reach a worker.
-    /// Anything but `Value::Bytes` is an encoding error.
+    ///
+    /// Mirrors `get_state` in both of its forms: a `Value::Json` state goes
+    /// as-is (and `{"weights_b64": …}` is loaded into the filter's module),
+    /// bytes go base64. Anything else is an encoding error.
     pub fn set_state(&mut self, node_id: &str, state: &Value) -> Result<()> {
+        if let Value::Json(j) = state {
+            let resp = self.send(serde_json::json!({
+                "cmd": "SET_STATE", "node_id": node_id, "state": (**j).clone(),
+            }))?;
+            if resp.get("ok") != Some(&serde_json::Value::Bool(true)) {
+                let error = resp.get("error").and_then(|e| e.as_str()).unwrap_or("?");
+                return Err(WorkerError::Python(format!("set_state: {error}")));
+            }
+            return Ok(());
+        }
         let b64 = match state {
             Value::Bytes(b) => STANDARD.encode(b.as_slice()),
             _ => {
@@ -728,8 +899,16 @@ impl PythonProcess {
         Ok(())
     }
 
-    /// Collect the filter's current gradients as torch-saved bytes, for
-    /// AllReduce aggregation.
+    /// Collect the filter's current gradients, one nested list per named
+    /// parameter, for AllReduce aggregation.
+    ///
+    /// Returns `Value::Json({param_name: nested list})` rather than the
+    /// torch pickle this used to send. The aggregator is in Rust
+    /// ([`somatize_runtime::strategy`]), and a pickle is opaque to it: the
+    /// average of two `Value::Bytes` blobs is not a thing that can be
+    /// computed, so the round died at the aggregation step having done all
+    /// the work. Plain JSON also makes the average independent of the
+    /// torch version each worker happens to have installed.
     ///
     /// A filter with no parameters, or no gradient on them, is an **error**
     /// rather than `Value::Empty`. Returning empty meant the average was
@@ -738,11 +917,8 @@ impl PythonProcess {
     /// which of the three it is; this passes that on.
     pub fn get_gradients(&mut self, node_id: &str) -> Result<Value> {
         let resp = self.send(serde_json::json!({"cmd": "GET_GRADIENTS", "node_id": node_id}))?;
-        if let Some(b64) = resp.get("gradients_b64").and_then(|s| s.as_str()) {
-            let bytes = STANDARD
-                .decode(b64)
-                .map_err(|e| WorkerError::Encoding(format!("decode gradients: {e}")))?;
-            return Ok(Value::bytes(bytes));
+        if let Some(grads) = resp.get("gradients") {
+            return Ok(Value::json(grads.clone()));
         }
         let error = resp
             .get("error")
@@ -751,22 +927,31 @@ impl PythonProcess {
         Err(WorkerError::Python(format!("get_gradients: {error}")))
     }
 
-    /// Hand aggregated gradients (bytes from
-    /// [`PythonProcess::get_gradients`], post-AllReduce) to the filter:
-    /// the daemon writes them onto the matching parameters and steps the
-    /// filter's optimizer if it has one.
+    /// Hand aggregated gradients (the post-AllReduce mean of what
+    /// [`PythonProcess::get_gradients`] returned) to the filter: the daemon
+    /// writes them onto the matching parameters and steps the optimizer, so
+    /// the replica actually moves.
     pub fn apply_gradients(&mut self, node_id: &str, gradients: &Value) -> Result<()> {
-        let b64 = match gradients {
-            Value::Bytes(b) => STANDARD.encode(b.as_slice()),
-            _ => {
-                return Err(WorkerError::Python(
-                    "apply_gradients expects Value::Bytes".into(),
-                ));
+        let json = match gradients {
+            Value::Json(j) => (**j).clone(),
+            other => {
+                return Err(WorkerError::Python(format!(
+                    "apply_gradients expects the JSON gradients get_gradients \
+                     returns, got {}",
+                    other.type_name()
+                )));
             }
         };
-        self.send(
-            serde_json::json!({"cmd": "APPLY_GRADIENTS", "node_id": node_id, "gradients_b64": b64}),
+        let resp = self.send(
+            serde_json::json!({"cmd": "APPLY_GRADIENTS", "node_id": node_id, "gradients": json}),
         )?;
+        // The reply used to be discarded, so every failure the daemon
+        // reported here — a shape mismatch, a model that is not the same
+        // model — was a successful round that changed nothing.
+        if resp.get("ok") != Some(&serde_json::Value::Bool(true)) {
+            let error = resp.get("error").and_then(|e| e.as_str()).unwrap_or("?");
+            return Err(WorkerError::Python(format!("apply_gradients: {error}")));
+        }
         Ok(())
     }
 

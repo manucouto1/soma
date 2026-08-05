@@ -30,7 +30,10 @@ registry-side before the next tag.
 
 | What | Where | Behaviour |
 |---|---|---|
-| A backward pass on a worker | `soma-worker/src/python_process.rs` | A `DifferentiableFilter` now fits and forwards remotely (2026-08-05), but the remote Fit does not run `context`/`backward`/`step`, so its parameters carry no gradient and `data_parallel` says exactly that. Remote *training* of a differentiable model is the gap; everything else — both strategy loops, the context, FedAvg, AllReduce, the four wire messages, remote materialization — works |
+| `mode="differentiable"` with workers | `soma-python/src/graph.rs` | Refused, and the message names the path that works. That mode *is* the local loop — the caller drives `context`/`backward`/`step` and owns when the parameters move — and driving it remotely would need distributed autograd. Training a differentiable graph on workers is `set_strategy("data_parallel")`, which is a complete round |
+| ~~A backward pass on a worker~~ | `soma-worker/src/python_process.rs` | **Fixed 2026-08-05.** A remote fit of a `DifferentiableFilter` runs forward/loss/backward and leaves the gradients on the parameters, so `data_parallel` trains. Verified against a hand-computed reference: same init, each shard's gradient taken separately, the two averaged, one SGD step — an exact match, and different from what either shard alone gives |
+| ~~Gradients as an opaque torch blob~~ | `soma-worker/src/python_process.rs` | **Fixed 2026-08-05.** They cross the wire as JSON. The aggregator is in Rust, and the mean of two pickles is not a thing that can be computed: the round died at the aggregation step having done all the work |
+| ~~Targets not sharded~~ | `soma-runtime/src/strategy.rs` | **Fixed 2026-08-05.** `shard_pair` splits inputs and targets together. Sharding only `x` sent each replica the whole `y` — shapes that broadcast rather than fail, so every replica trained on pairs that were never pairs and the round reported success |
 | `ModelParallel`, `PopulationBased` | `soma-runtime/src/strategy.rs` | Unwritten. `PbtRunner` works but answers to `PbtExecutor`, so connecting it is an adapter |
 | `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
 | ~~Seed dropped on the remote path~~ | `soma-worker/src/ws_transport.rs` | **Fixed 2026-08-05.** `Transport::execute` now takes the run's seed and `WsTransport` puts it on the wire; it was hardcoded `None`, so a remote sweep shared one cache line across every seed |
@@ -43,10 +46,17 @@ the pickle, so this transport cannot supply them and sending empty
 pickles would be worse than sending none. The path that can supply them
 builds its own `SerializedPlan` in `soma-python/src/graph.rs`.
 
-The strategy layer is no longer a blank: `Federated` trains across
-workers, with the caller in `GraphSession::fit`, a `StrategyContext` over
-one transport per worker, and FedAvg written. What remains is gradients
-crossing the worker boundary — everything `DataParallel` waits on.
+The strategy layer is no longer a blank: `Federated` and `DataParallel`
+both train across workers, with the caller in `GraphSession::fit`, a
+`StrategyContext` over one transport per worker, and FedAvg and AllReduce
+written. What remains there is `ModelParallel` and `PopulationBased`.
+
+One trap is worth knowing while developing against a worker: it builds an
+isolated venv per pipeline and installs `somatize` from PyPI, so a
+working tree ahead of the last release ran an *older* Soma on the worker
+than the one that pickled the filters. `soma.Worker(...)` now points its
+environments at the calling interpreter's own package; the standalone
+binary takes `SOMA_LOCAL_PACKAGE`.
 
 ### Deferred on purpose, with the seam in place
 

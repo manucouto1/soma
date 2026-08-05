@@ -694,3 +694,148 @@ class TestFederatedStrategy:
         assert abs(mu - 1.5) > 1e-6 and abs(mu - 5.5) > 1e-6, (
             "this is one client's answer, so the aggregation did not happen"
         )
+
+    def test_data_parallel_trains_on_the_averaged_gradient(self):
+        """Two replicas, one shard each, and the step is the mean of both.
+
+        The weights are compared against a reference computed here: the
+        same initialisation, each shard's gradient taken separately, the
+        two averaged, one SGD step. They must match exactly — and must
+        NOT match what either shard alone would have produced, which is
+        what a round that quietly used one replica returns.
+
+        SGD rather than the default Adam on purpose: Adam's first step is
+        ``lr * sign(g)``, so the averaged and single-shard references would
+        be indistinguishable and the test would pass on a broken round.
+        """
+        import base64
+        import io
+
+        torch = pytest.importorskip("torch")
+        import torch.nn as nn
+
+        from conftest import start_worker_and_wait
+        from soma import DifferentiableFilter
+
+        class Lin(DifferentiableFilter):
+            _cache_version = "dp-averaged-gradient-v1"
+
+            def __init__(self, out_dim=1, **kw):
+                super().__init__(out_dim=out_dim, **kw)
+                self.out_dim = out_dim
+
+            def build_module(self, input_shape):
+                torch.manual_seed(1234)
+                return nn.Linear(int(input_shape[-1]), self.out_dim)
+
+            def output_shape(self, input_shape):
+                return (input_shape[0], self.out_dim)
+
+            def make_optimizer(self, modules):
+                return torch.optim.SGD(
+                    [p for m in modules for p in m.parameters()], lr=0.01
+                )
+
+        x = [[float(i), float(i) * 2] for i in range(8)]
+        y = [[float(i) * 3] for i in range(8)]
+
+        def grads_of(rows, targets):
+            torch.manual_seed(1234)
+            m = nn.Linear(2, 1)
+            out = m(torch.tensor(rows))
+            nn.functional.mse_loss(out, torch.tensor(targets)).backward()
+            return {n: p.grad.clone() for n, p in m.named_parameters()}
+
+        first, second = grads_of(x[:4], y[:4]), grads_of(x[4:], y[4:])
+
+        def stepped(grads):
+            torch.manual_seed(1234)
+            m = nn.Linear(2, 1)
+            for name, p in m.named_parameters():
+                p.grad = grads[name].clone()
+            torch.optim.SGD(m.parameters(), lr=0.01).step()
+            return {n: p.detach().clone() for n, p in m.named_parameters()}
+
+        averaged = stepped({n: (first[n] + second[n]) / 2 for n in first})
+        one_shard_only = stepped(first)
+
+        ports = []
+        for _ in range(2):
+            port = find_free_port()
+            start_worker_and_wait(
+                lambda p=port: Worker(port=p, tags=["dp"], max_concurrent=2), port
+            )
+            ports.append(port)
+
+        g = Graph(cache="memory")
+        for port in ports:
+            g.add_worker(f"ws://127.0.0.1:{port}", tags=["dp"])
+        g.node("t", Lin(1), target="dp")
+        g.set_strategy("data_parallel", num_replicas=2)
+
+        g.fit(x, y)
+
+        got = torch.load(
+            io.BytesIO(base64.b64decode(g.state()["t"]["weights_b64"])),
+            weights_only=True,
+        )
+        for name in averaged:
+            assert torch.allclose(got[name], averaged[name], atol=1e-6), (
+                f"{name} is not the averaged-gradient step: "
+                f"{got[name].tolist()} vs {averaged[name].tolist()}"
+            )
+            assert not torch.allclose(got[name], one_shard_only[name], atol=1e-4), (
+                f"{name} is what one shard alone produces, so the round "
+                "trained on a single replica"
+            )
+
+    def test_data_parallel_refuses_mismatched_rows(self):
+        """Inputs and targets are sharded together, so they must agree.
+
+        Before they were sharded together, each replica got its own quarter
+        of x and the whole of y: shapes that broadcast rather than fail, so
+        every replica trained on pairs that were never pairs and the round
+        reported success.
+        """
+        from conftest import start_worker_and_wait
+
+        class Noop(Filter):
+            _cache_version = "dp-rows-v1"
+
+            def fit(self, x, y=None):
+                return {}
+
+            def forward(self, x, state):
+                return x
+
+        ports = []
+        for _ in range(2):
+            port = find_free_port()
+            start_worker_and_wait(
+                lambda p=port: Worker(port=p, tags=["rows"], max_concurrent=2), port
+            )
+            ports.append(port)
+
+        g = Graph(cache="memory")
+        for port in ports:
+            g.add_worker(f"ws://127.0.0.1:{port}", tags=["rows"])
+        g.node("n", Noop(), target="rows")
+        g.set_strategy("data_parallel", num_replicas=2)
+
+        with pytest.raises(RuntimeError, match="8 rows and the targets have 4"):
+            g.fit([float(i) for i in range(8)], [float(i) for i in range(4)])
+
+    def test_differentiable_mode_points_at_the_strategy(self):
+        """Refused, and the message names the path that does work."""
+
+        class Noop(Filter):
+            _cache_version = "diffmode-v1"
+
+            def forward(self, x, state):
+                return x
+
+        g = Graph(cache="memory")
+        g.add_worker("ws://127.0.0.1:1")
+        g.node("n", Noop())
+        with pytest.raises(RuntimeError, match="data_parallel"):
+            g.fit([1.0, 2.0], [1.0, 2.0], mode="differentiable")

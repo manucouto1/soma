@@ -114,7 +114,7 @@ g.node("model", MyModel())
 g.fit(data)  # runs locally, no workers needed
 ```
 
-:::caution[One of these four runs today. Read this before the code below]
+:::caution[Two of these four run today. Read this before the code below]
 Verified on 2026-08-05, and the answer differs per strategy:
 
 - **`federated` runs.** `g.set_strategy("federated", num_clients=…,
@@ -123,22 +123,24 @@ Verified on 2026-08-05, and the answer differs per strategy:
   states element-wise — including the dicts a Python filter's `fit`
   returns. Verified over two real workers: two shards whose means are 1.5
   and 5.5 produce 3.5, which no single client can.
-- **`data_parallel` runs its loop and reports precisely.** The worker
-  answers `GetState`/`SetState`/`GetGradients`/`ApplyGradients` — the
-  machinery was always there, in `PythonProcess` and the daemon script, and
-  nothing called it. The daemon now reads gradients from a
-  `DifferentiableFilter`'s `_module` rather than from the filter object,
-  which has no parameters; and a filter that has none, or whose parameters
-  carry no gradient, is an **error** naming which of the three it is,
-  rather than an empty set that AllReduce averages into nothing while
-  reporting success.
+- **`data_parallel` trains.** Each replica fits its own shard, the
+  gradients are read off the workers, averaged, applied, and the stepped
+  weights are read back. Verified over two real workers against a
+  reference computed by hand: same initialisation, each shard's gradient
+  taken separately, the two averaged, one SGD step — the weights match
+  exactly, and differ from what either shard alone produces.
 
-  A `DifferentiableFilter` fits and forwards on a worker now. What it does
-  not do is *train* there: the remote Fit calls the filter's `fit`, not the
-  `context`/`backward`/`step` loop, so its parameters carry no gradient and
-  `data_parallel` says so in as many words. Averaging gradients that were
-  never computed is the one thing left between this and data-parallel
-  training.
+  Four things had to be true at once, and none of them were:
+  a remote fit of a `DifferentiableFilter` now runs a **backward pass**
+  (its `fit` learns no state — the parameters live in `_module` — so the
+  worker used to report a trained model whose parameters had never seen a
+  gradient); gradients cross the wire as **JSON**, not a torch pickle,
+  because the aggregator is in Rust and cannot average an opaque blob;
+  inputs and targets are **sharded together** (sharding only `x` sent every
+  replica the whole `y`, shapes that broadcast rather than fail, so each
+  replica trained on pairs that were never pairs); and the final state is
+  **read back over the wire** rather than recalled from the fit, which
+  returned the weights from before the averaged gradient was applied.
 - **`model_parallel` and `population_based` are unwritten.** They refuse.
   `PbtRunner` exists and works, but answers to a different trait
   (`PbtExecutor`), so connecting it is an adapter rather than a rename.
@@ -150,6 +152,23 @@ Verified on 2026-08-05, and the answer differs per strategy:
 Until this was wired, `set_strategy` did not exist in Python at all, and
 in Rust nothing read the attribute back — setting a strategy recorded it
 and changed nothing.
+:::
+
+:::tip[Developing against a worker]
+A worker builds an isolated venv per pipeline and installs `somatize`
+into it from PyPI. A working tree is normally *ahead* of the last
+release, so there is no such version to install and the worker would
+quietly run an older Soma than the one that pickled the filters — which
+is exactly how a `DifferentiableFilter` came to train on a worker and
+diverge while the same graph ran fine locally.
+
+A worker started from Python (`soma.Worker(...)`) now points its
+environments at that interpreter's own `soma` package. For the standalone
+`somatize-worker` binary, set it yourself:
+
+```bash
+SOMA_LOCAL_PACKAGE=/path/to/soma/soma-python/python somatize-worker --port 8080
+```
 :::
 
 ### Data Parallel
