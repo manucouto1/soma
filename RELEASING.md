@@ -1,23 +1,42 @@
 # Releasing
 
-What actually has to happen for `v0.4.0` to publish, in order, and why the
-first one is not like the ones after it.
+What actually has to happen for a version to publish, in order, and why
+the first one was not like the ones after it.
 
 ## Where things stand
 
 | | Published | At |
 |---|---|---|
-| crates.io — all eleven | **yes** | **0.4.0** |
+| crates.io — all eleven | yes | 0.4.0 |
 | PyPI `somatize` | yes | 0.3.1 |
 | crates.io `somatize-mcp` | never, deliberately | — |
 
 The eleven crates went out on 2026-08-05 in one token-authenticated pass,
 and a crate outside this workspace depending on `somatize = "0.4.0"` from
 crates.io compiles and runs. That is the Rust half of "can a stranger
-install this", and it is now yes rather than unknown.
+install this", and it is yes rather than unknown.
+
+## Why the next tag is v0.5.0, not v0.4.1
+
+The tempting move is to tag `v0.4.0` again: the workflow skips a crate
+that is already on crates.io, so it would publish PyPI alone and cost
+nothing. It is the wrong move.
+
+Eight commits landed after that crates.io pass, seven of them breaking —
+workers gained a DataStore, the four state and gradient messages, real
+federated and data-parallel training, model parallelism, and an error
+path that no longer hangs its caller. Tagging `v0.4.0` would put that
+code on PyPI as `somatize` 0.4.0 while crates.io kept the *old* 0.4.0
+under the same number. Two artifacts, one version, different code — the
+exact desynchronization the whole trusted-publishing setup exists to
+avoid.
+
+So: bump the workspace version, tag it, and let one pass publish both
+registries from one tree. Breaking changes below 1.0 bump the minor,
+which is why 0.4.0 → **0.5.0**.
 
 **What is left: PyPI.** Configure the trusted publisher (below), then tag.
-The release workflow will skip every crate as already published and do the
+The release workflow will publish the eleven crates and do the
 wheels.
 
 ### How it stood before, and why
