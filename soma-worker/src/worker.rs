@@ -354,7 +354,19 @@ impl Worker {
         // DataStore-backed streaming: if input is a large DataRef and we
         // have a store, read chunks via get_rows() and stream them (no
         // full materialization).
-        if let Some(InputSource::Reference { data_ref }) = &plan.input
+        //
+        // FORWARD ONLY, and the mode check is the whole point. This branch
+        // used to be taken before `plan.mode` was ever looked at, so a Fit
+        // over a large reference was silently executed as a stream of
+        // forwards: nothing was fitted, no state was stored, and the fit
+        // reported success. The next forward then found no state and died
+        // inside the user's filter — while the same graph under the
+        // 1024-row threshold fitted normally and gave the right answer.
+        // A stream has no fit semantics (`compile_stream` refuses one
+        // locally, for the same reason), so a Fit falls through to the
+        // path that can honour it.
+        if matches!(plan.mode, ExecutionMode::Forward)
+            && let Some(InputSource::Reference { data_ref }) = &plan.input
             && let Some(store) = self.data_store.clone()
             && let Ok(meta) = store.meta(data_ref)
             && meta.total_rows > 1024
@@ -847,6 +859,182 @@ mod tests {
             events
                 .iter()
                 .any(|e| matches!(e, Event::NodeCompleted { .. }))
+        );
+    }
+
+    /// A Fit over a large reference must FIT, not stream.
+    ///
+    /// The auto-stream branch used to be taken before `plan.mode` was
+    /// looked at, so a fit whose input happened to exceed 1024 rows was
+    /// silently executed as a stream of forwards: nothing was fitted, no
+    /// state was stored, and the plan reported success. The next forward
+    /// then found no state and died inside the user's filter — while the
+    /// same graph under the threshold fitted normally and was correct.
+    #[test]
+    fn a_fit_over_a_large_reference_is_not_silently_streamed() {
+        struct Counter;
+        impl Filter for Counter {
+            fn config_hash(&self) -> CacheKey {
+                CacheKey::from_parts(&[b"Counter"])
+            }
+            fn fit(&self, x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
+                // The state a real fit produces: something derived from
+                // the WHOLE input, which is exactly what a stream cannot
+                // give you.
+                let n = match x {
+                    Value::Tensor { values, .. } => values.len() as f64,
+                    _ => 0.0,
+                };
+                Ok(Value::tensor(vec![n], vec![1]))
+            }
+            fn forward(&self, x: &Value, _state: &Value) -> SomaResult<Value> {
+                Ok(x.clone())
+            }
+            fn meta(&self) -> FilterMeta {
+                FilterMeta {
+                    name: "Counter".into(),
+                    kind: FilterKind::Trainable,
+                    cacheable: true,
+                    differentiable: false,
+                    deterministic: true,
+                    stream_mode: StreamMode::FixedState,
+                    distribution: somatize_core::filter::Distribution::Local,
+                    input_schema: None,
+                    output_schema: None,
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(dir.path().join("data")));
+        let n = 2048usize; // over the auto-stream threshold
+        let key = somatize_core::cache::CacheKey::hash_data(b"fit-input");
+        let data_ref = store
+            .put(&key, &Value::tensor(vec![1.0; n], vec![n]))
+            .unwrap();
+
+        let mut worker = make_worker().with_data_store(store);
+        worker.register_filter("counter", Box::new(Counter));
+
+        let mut plan = SerializedPlan::new(
+            "p_fit_large",
+            ExecutionPlan::Execute {
+                node_id: "counter".into(),
+            },
+        );
+        plan.input = Some(InputSource::Reference { data_ref });
+        plan.mode = ExecutionMode::Fit {
+            y: None,
+            batch_size: None,
+        };
+
+        let result = worker.execute_plan(&plan);
+        assert!(
+            matches!(result, PlanResult::Success { .. }),
+            "the fit failed: {result:?}"
+        );
+        // It fitted over everything, so the state says 2048 — not a chunk.
+        let state = worker.get_filter_state("counter");
+        let (values, _) = state
+            .as_tensor()
+            .expect("no state was stored: the fit was streamed");
+        assert_eq!(
+            values[0], n as f64,
+            "the fit saw a chunk, not the whole input"
+        );
+    }
+
+    /// A stateful filter, streamed from a DataStore.
+    ///
+    /// The path above it only ever ran `TestDoubler`, which ignores its
+    /// state, so "the stream reaches the filter" was proved and "the
+    /// stream reaches the filter WITH its state" was not. Against a real
+    /// worker, any filter whose `forward` reads `state["..."]` died with a
+    /// KeyError on chunk 0 — while the same graph under the 1024-row
+    /// threshold worked and gave the right answer.
+    #[test]
+    fn a_stateful_filter_keeps_its_state_across_a_streamed_data_ref() {
+        struct Centre;
+        impl Filter for Centre {
+            fn config_hash(&self) -> CacheKey {
+                CacheKey::from_parts(&[b"Centre"])
+            }
+            fn fit(&self, _x: &Value, _y: Option<&Value>) -> SomaResult<Value> {
+                Ok(Value::Empty)
+            }
+            fn forward(&self, x: &Value, state: &Value) -> SomaResult<Value> {
+                // The state a fit would have produced. Reading it is the
+                // whole point: an empty state has to be an error here, not
+                // a silently different answer.
+                let mean = match state {
+                    Value::Tensor { values, .. } if !values.is_empty() => values[0],
+                    other => {
+                        return Err(somatize_core::error::SomaError::Execution {
+                            node_id: "centre".into(),
+                            message: format!("no state reached the filter: {other:?}"),
+                        });
+                    }
+                };
+                match x {
+                    Value::Tensor { values, shape } => Ok(Value::tensor(
+                        values.iter().map(|v| v - mean).collect(),
+                        shape.clone(),
+                    )),
+                    other => Ok(other.clone()),
+                }
+            }
+            fn meta(&self) -> FilterMeta {
+                FilterMeta {
+                    name: "Centre".into(),
+                    kind: FilterKind::Trainable,
+                    cacheable: true,
+                    differentiable: false,
+                    deterministic: true,
+                    stream_mode: StreamMode::FixedState,
+                    distribution: somatize_core::filter::Distribution::Local,
+                    input_schema: None,
+                    output_schema: None,
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(dir.path().join("data")));
+
+        let n = 2048usize; // over the auto-stream threshold: two chunks
+        let values: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let mean = values.iter().sum::<f64>() / n as f64;
+        let key = somatize_core::cache::CacheKey::hash_data(b"stateful-stream-input");
+        let data_ref = store.put(&key, &Value::tensor(values, vec![n])).unwrap();
+
+        let mut worker = make_worker().with_data_store(store);
+        worker.register_filter("centre", Box::new(Centre));
+        worker.set_filter_state("centre", Value::tensor(vec![mean], vec![1]));
+
+        let mut plan = SerializedPlan::new(
+            "p_stateful_stream",
+            ExecutionPlan::Execute {
+                node_id: "centre".into(),
+            },
+        );
+        plan.input = Some(InputSource::Reference { data_ref });
+
+        let result = worker.execute_plan(&plan);
+        let PlanResult::Success { output, .. } = result else {
+            panic!("a stateful filter must keep its state when streamed: {result:?}");
+        };
+        let value = match output {
+            OutputDelivery::Inline { value } => value,
+            OutputDelivery::Reference { data_ref } => worker.temp_store().get(&data_ref).unwrap(),
+        };
+        let (data, shape) = value.as_tensor().unwrap();
+        assert_eq!(shape, &[n]);
+        // Centred on the mean of the WHOLE input, not of a chunk.
+        assert!((data[0] - (0.0 - mean)).abs() < 1e-9, "{}", data[0]);
+        assert!(
+            (data[n - 1] - ((n - 1) as f64 - mean)).abs() < 1e-9,
+            "{}",
+            data[n - 1]
         );
     }
 
