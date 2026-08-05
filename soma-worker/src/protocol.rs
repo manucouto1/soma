@@ -410,6 +410,16 @@ pub enum WorkerToCoordinator {
         states: std::collections::HashMap<String, Value>,
     },
 
+    /// A command that produces no data succeeded.
+    ///
+    /// `SetState` and `ApplyGradients` need *a* reply: the client blocks
+    /// until it can parse one, so an unknown `{"type":"Ack"}` would leave
+    /// it waiting until the socket closed.
+    Ack {
+        /// Sender.
+        worker_id: WorkerId,
+    },
+
     /// Response to GetGradients: gradient data.
     GradientsResult {
         /// Sender.

@@ -431,12 +431,11 @@ impl StateAggregator for FederatedAggregation {
 /// This is the piece that was missing: `StrategyExecutor` was written and
 /// had nowhere to run, because nothing implemented the context it takes.
 ///
-/// It deliberately does **not** send `GetState`/`SetState` over the wire.
-/// A Fit already returns its trained states in the plan result, so asking
-/// for them again would be a second round trip for something already in
-/// hand — and `soma-worker/src/server.rs` refuses those two messages for a
-/// `SubprocessFilter` anyway. Federated therefore runs today; DataParallel
-/// does not, and says why.
+/// It deliberately does **not** send `GetState`/`SetState` over the wire,
+/// even though the worker now answers them: a Fit already returns its
+/// trained states in the plan result, so asking again would be a second
+/// round trip for something already in hand. Gradients are different —
+/// nothing else carries them — so those two do go to the worker.
 pub struct TransportContext<'a> {
     transports: Vec<Arc<dyn Transport>>,
     plan: &'a ExecutionPlan,
@@ -542,30 +541,14 @@ impl StrategyContext for TransportContext<'_> {
 
     fn get_gradients(
         &self,
-        _worker_idx: usize,
-        _node_ids: &[String],
+        worker_idx: usize,
+        node_ids: &[String],
     ) -> Result<HashMap<String, Value>> {
-        Err(SomaError::Other(
-            "gradients cannot be read off a worker yet: \
-             soma-worker/src/server.rs answers GetGradients with \
-             \"not implemented for SubprocessFilter\". That is what \
-             DataParallel is waiting on — Federated needs only states, and \
-             works"
-                .into(),
-        ))
+        self.transport(worker_idx)?.get_gradients(node_ids)
     }
 
-    fn apply_gradients(
-        &self,
-        _worker_idx: usize,
-        _gradients: &HashMap<String, Value>,
-    ) -> Result<()> {
-        Err(SomaError::Other(
-            "gradients cannot be applied on a worker yet: \
-             soma-worker/src/server.rs answers ApplyGradients with \
-             \"not implemented for SubprocessFilter\""
-                .into(),
-        ))
+    fn apply_gradients(&self, worker_idx: usize, gradients: &HashMap<String, Value>) -> Result<()> {
+        self.transport(worker_idx)?.apply_gradients(gradients)
     }
 }
 
@@ -772,10 +755,16 @@ mod tests {
         assert!((values[0] - 1.5).abs() > 1e-6 && (values[0] - 5.5).abs() > 1e-6);
     }
 
-    /// DataParallel fails, and the message names the thing to fix rather
-    /// than being silent about it.
+    /// DataParallel drives its workers through the context now.
+    ///
+    /// It used to be impossible: `soma-worker/src/server.rs` refused
+    /// `GetGradients`/`ApplyGradients`, so the loop could not get past its
+    /// first collection. The server dispatches them today, and this
+    /// asserts the loop completes rather than erroring — the gradients a
+    /// parameterless filter contributes are empty, and an empty average is
+    /// the right answer for it.
     #[test]
-    fn data_parallel_names_its_blocker() {
+    fn data_parallel_runs_its_loop() {
         use somatize_compiler::ExecutionPlan;
 
         struct Noop;
@@ -811,7 +800,7 @@ mod tests {
         let catalog = NodeCatalog::new();
         let ctx = TransportContext::new(transports, &plan, &catalog, None);
 
-        let err = TrainingStrategy::DataParallel {
+        let out = TrainingStrategy::DataParallel {
             num_replicas: 2,
             aggregation: GradientAggregation::AllReduce,
         }
@@ -821,7 +810,10 @@ mod tests {
             None,
             &["m".to_string()],
         )
-        .expect_err("DataParallel cannot work until the worker hands gradients over");
-        assert!(err.to_string().contains("server.rs"), "{err}");
+        .expect("DataParallel drives the workers through the context");
+        assert!(
+            out.is_empty(),
+            "a filter with no parameters contributes no gradients: {out:?}"
+        );
     }
 }

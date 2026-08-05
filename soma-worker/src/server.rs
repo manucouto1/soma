@@ -421,15 +421,84 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
                         state.shutdown.trigger();
                         break;
                     }
+                    // These four used to be refused together with "not
+                    // implemented for SubprocessFilter". Every piece they
+                    // need was already written — the daemon script has
+                    // GET_STATE/SET_STATE/GET_GRADIENTS/APPLY_GRADIENTS and
+                    // `PythonProcess` has the methods — and nothing called
+                    // them, which is what kept DataParallel from running.
+                    //
+                    // Off the reactor, for the same reason `AssignPlan` is:
+                    // each one takes the worker's mutex and then talks to a
+                    // Python subprocess over a pipe. Doing that inline in an
+                    // async handler parks a tokio worker thread, and with
+                    // two of these in flight the runtime deadlocks — which
+                    // is exactly what it did.
                     Ok(
-                        CoordinatorToWorker::GetState { .. }
+                        msg @ (CoordinatorToWorker::GetState { .. }
                         | CoordinatorToWorker::SetState { .. }
                         | CoordinatorToWorker::GetGradients { .. }
-                        | CoordinatorToWorker::ApplyGradients { .. },
-                    ) => error_reply(
-                        "get_state/set_state/get_gradients/apply_gradients \
-                         are not implemented for SubprocessFilter",
-                    ),
+                        | CoordinatorToWorker::ApplyGradients { .. }),
+                    ) => {
+                        let st = state.clone();
+                        let joined = tokio::task::spawn_blocking(move || {
+                            let mut worker = st.worker.lock().unwrap_or_else(|e| e.into_inner());
+                            let id = worker.id.clone();
+                            match msg {
+                                CoordinatorToWorker::GetState { plan_id, node_ids } => {
+                                    match worker.read_states(&node_ids) {
+                                        Ok(states) => serde_json::to_string(
+                                            &WorkerToCoordinator::StateResult {
+                                                worker_id: id,
+                                                plan_id,
+                                                states,
+                                            },
+                                        )
+                                        .unwrap_or_default(),
+                                        Err(e) => error_reply(&e.to_string()),
+                                    }
+                                }
+                                CoordinatorToWorker::SetState { states, .. } => {
+                                    match worker.write_states(&states) {
+                                        Ok(()) => {
+                                            serde_json::to_string(&WorkerToCoordinator::Ack {
+                                                worker_id: id,
+                                            })
+                                            .unwrap_or_default()
+                                        }
+                                        Err(e) => error_reply(&e.to_string()),
+                                    }
+                                }
+                                CoordinatorToWorker::GetGradients { plan_id, node_ids } => {
+                                    match worker.read_gradients(&node_ids) {
+                                        Ok(gradients) => serde_json::to_string(
+                                            &WorkerToCoordinator::GradientsResult {
+                                                worker_id: id,
+                                                plan_id,
+                                                gradients,
+                                            },
+                                        )
+                                        .unwrap_or_default(),
+                                        Err(e) => error_reply(&e.to_string()),
+                                    }
+                                }
+                                CoordinatorToWorker::ApplyGradients { gradients, .. } => {
+                                    match worker.write_gradients(&gradients) {
+                                        Ok(()) => {
+                                            serde_json::to_string(&WorkerToCoordinator::Ack {
+                                                worker_id: id,
+                                            })
+                                            .unwrap_or_default()
+                                        }
+                                        Err(e) => error_reply(&e.to_string()),
+                                    }
+                                }
+                                _ => unreachable!("guarded by the match arm above"),
+                            }
+                        })
+                        .await;
+                        joined.unwrap_or_else(|e| error_reply(&format!("worker task: {e}")))
+                    }
                     Err(e) => error_reply(&format!("invalid message: {e}")),
                 };
 

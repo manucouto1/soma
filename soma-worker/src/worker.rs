@@ -1,5 +1,6 @@
 //! Worker — receives and executes plans from a coordinator.
 
+use crate::error::{Result, WorkerError};
 use crate::protocol::*;
 use somatize_core::cache::CacheStore;
 use somatize_core::event::Event;
@@ -7,6 +8,7 @@ use somatize_core::filter::Filter;
 use somatize_core::store::{DataStore, LocalDataStore};
 use somatize_core::value::Value;
 use somatize_runtime::{EventBus, MemoryCache, NodeCatalog, Runner};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -140,6 +142,91 @@ impl Worker {
         self.catalog
             .get_state(node_id)
             .unwrap_or_else(|| Arc::new(Value::Empty))
+    }
+
+    /// Reach the live Python process behind a node, if it has one.
+    ///
+    /// Every per-node operation that has to talk to the subprocess goes
+    /// through here rather than repeating the downcast.
+    fn subprocess_for(
+        &self,
+        node_id: &str,
+    ) -> Option<Arc<std::sync::Mutex<crate::python_process::PythonProcess>>> {
+        let filter = self.catalog.get(node_id)?;
+        let sf = filter
+            .as_any()
+            .downcast_ref::<crate::python_process::SubprocessFilter>()?;
+        Some(sf.process.clone())
+    }
+
+    /// Trained state of one or more nodes, read from the Python process.
+    ///
+    /// The four methods below back the wire messages of the same names.
+    /// They existed on `PythonProcess` and in the daemon script from the
+    /// start; what was missing was anything calling them, so
+    /// `soma-worker/src/server.rs` answered all four with "not implemented
+    /// for SubprocessFilter" and `DataParallel` could not run.
+    pub fn read_states(&self, node_ids: &[String]) -> Result<HashMap<String, Value>> {
+        let mut out = HashMap::new();
+        for node_id in node_ids {
+            let Some(proc) = self.subprocess_for(node_id) else {
+                // A Rust filter keeps its state in the catalog.
+                out.insert(node_id.clone(), (*self.get_filter_state(node_id)).clone());
+                continue;
+            };
+            let mut guard = proc
+                .lock()
+                .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))?;
+            out.insert(node_id.clone(), guard.get_state(node_id)?);
+        }
+        Ok(out)
+    }
+
+    /// Load states into the Python process (and the catalog beside it).
+    pub fn write_states(&mut self, states: &HashMap<String, Value>) -> Result<()> {
+        for (node_id, state) in states {
+            if let Some(proc) = self.subprocess_for(node_id) {
+                let mut guard = proc.lock().map_err(|e| {
+                    WorkerError::Concurrency(format!("process mutex poisoned: {e}"))
+                })?;
+                guard.set_state(node_id, state)?;
+            }
+            self.set_filter_state(node_id, state.clone());
+        }
+        Ok(())
+    }
+
+    /// Gradients currently held by each node's parameters.
+    pub fn read_gradients(&self, node_ids: &[String]) -> Result<HashMap<String, Value>> {
+        let mut out = HashMap::new();
+        for node_id in node_ids {
+            let proc = self.subprocess_for(node_id).ok_or_else(|| {
+                WorkerError::Env(format!(
+                    "`{node_id}` has no Python process, so it has no gradients to read"
+                ))
+            })?;
+            let mut guard = proc
+                .lock()
+                .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))?;
+            out.insert(node_id.clone(), guard.get_gradients(node_id)?);
+        }
+        Ok(out)
+    }
+
+    /// Apply aggregated gradients to each node's parameters.
+    pub fn write_gradients(&self, gradients: &HashMap<String, Value>) -> Result<()> {
+        for (node_id, grads) in gradients {
+            let proc = self.subprocess_for(node_id).ok_or_else(|| {
+                WorkerError::Env(format!(
+                    "`{node_id}` has no Python process, so gradients cannot be applied"
+                ))
+            })?;
+            let mut guard = proc
+                .lock()
+                .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))?;
+            guard.apply_gradients(node_id, grads)?;
+        }
+        Ok(())
     }
 
     /// Set trained state for a filter.
@@ -398,9 +485,7 @@ impl Worker {
                                 .process
                                 .lock()
                                 .map_err(|e| {
-                                    crate::error::WorkerError::Concurrency(format!(
-                                        "process mutex poisoned: {e}"
-                                    ))
+                                    WorkerError::Concurrency(format!("process mutex poisoned: {e}"))
                                 })
                                 .and_then(|mut proc| {
                                     proc.batched_fit(&node_ids, &x, y.as_ref(), *bs)

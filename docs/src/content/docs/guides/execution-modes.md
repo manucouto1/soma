@@ -123,11 +123,17 @@ Verified on 2026-08-05, and the answer differs per strategy:
   states element-wise — including the dicts a Python filter's `fit`
   returns. Verified over two real workers: two shards whose means are 1.5
   and 5.5 produce 3.5, which no single client can.
-- **`data_parallel` does not**, and the error says why: it needs each
-  worker's gradients, and `soma-worker/src/server.rs` answers
-  `GetGradients`/`ApplyGradients` with "not implemented for
-  SubprocessFilter". The AllReduce averaging itself is written and tested;
-  nothing can reach it yet.
+- **`data_parallel` runs its loop**, and stops short of being useful. The
+  worker now answers `GetState`/`SetState`/`GetGradients`/`ApplyGradients`
+  — it always had the machinery, in `PythonProcess` and in the daemon
+  script, and nothing called it. What is still missing is one level down:
+  the daemon reads gradients from the filter object itself, and a
+  `DifferentiableFilter` is not an `nn.Module` — it builds one and keeps it
+  in `_module`. So for Soma's own trainable filters the daemon finds no
+  parameters and returns an **empty** gradient set, AllReduce averages
+  nothing, and the round reports success. For a filter with no parameters
+  at all that is the right answer; for a model it is not. Do not use
+  `data_parallel` to train something until that is fixed.
 - **`model_parallel` and `population_based` are unwritten.** They refuse.
   `PbtRunner` exists and works, but answers to a different trait
   (`PbtExecutor`), so connecting it is an adapter rather than a rename.

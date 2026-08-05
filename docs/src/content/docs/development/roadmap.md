@@ -30,7 +30,7 @@ registry-side before the next tag.
 
 | What | Where | Behaviour |
 |---|---|---|
-| `TrainingStrategy::DataParallel` | `soma-worker/src/server.rs` | The strategy, the context and the AllReduce averaging all work; the worker refuses `GetGradients`/`ApplyGradients` for a `SubprocessFilter`, so nothing reaches them. **`Federated` runs** as of 2026-08-05 |
+| `TrainingStrategy::DataParallel` | `soma-worker/src/python_process.rs` | The loop, the context, the AllReduce averaging and the four wire messages all work now. The daemon reads gradients off the filter object, and a `DifferentiableFilter` keeps its network in `_module` — so a real model contributes an EMPTY gradient set and the round reports success. **`Federated` runs**; this does not, quietly, which is worse |
 | `ModelParallel`, `PopulationBased` | `soma-runtime/src/strategy.rs` | Unwritten. `PbtRunner` works but answers to `PbtExecutor`, so connecting it is an adapter |
 | `run_pipeline`, `run_study` | `soma-mcp/src/context.rs` | Declared as MCP tools, not implemented: the server cannot load user code. Their own descriptions say so |
 | ~~Seed dropped on the remote path~~ | `soma-worker/src/ws_transport.rs` | **Fixed 2026-08-05.** `Transport::execute` now takes the run's seed and `WsTransport` puts it on the wire; it was hardcoded `None`, so a remote sweep shared one cache line across every seed |
