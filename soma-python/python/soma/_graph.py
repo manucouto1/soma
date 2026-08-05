@@ -54,6 +54,8 @@ class Graph(_RustGraph):
     step = _orchestrator.step
     zero_grad = _orchestrator.zero_grad
     freeze = _orchestrator.freeze
+    architecture = _orchestrator.architecture
+    architecture_overlay = _orchestrator.architecture_overlay
 
     # ── Checkpoints (soma._checkpoint) ──
     state = _checkpoint.state

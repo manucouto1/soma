@@ -146,6 +146,66 @@ def materialize(self: Graph, sample_input: Any) -> None:
             # static shapes: downstream falls back to lazy materialization.
             out_shape[node_id] = None
 
+    # Whatever is still unbuilt gets built here, by running the graph once.
+    # Shapes alone cannot size a fan-in — only the node knows how it
+    # combines its inputs — so the only way to find out is to ask it.
+    self.py_state["materialize_sample"] = x
+    _complete_materialization(self)
+
+
+def _unbuilt(self: Graph) -> list[str]:
+    """Differentiable filters that still have no module.
+
+    `parameters()` skips these silently, which is how an optimiser ends up
+    training a subset of the graph and nothing says so.
+    """
+    return [
+        node_id
+        for node_id, f in self.filters()
+        if getattr(f, "_differentiable", False) and getattr(f, "_module", None) is None
+    ]
+
+
+def _complete_materialization(self: Graph) -> list[str]:
+    """Build anything left lazy, by running one forward on the sample.
+
+    A fan-in cannot be sized from shapes — it is the only thing that knows
+    how it combines its predecessors — so `materialize` leaves it alone and
+    it builds on first forward. That is fine until something needs its
+    parameters *before* the first forward, which is exactly what
+    `make_optimizer` does: the gate of an ensemble stays at its initial
+    weights for the whole run, and nothing raises.
+
+    So: probe. A few rows, no grad, and every filter forced out of training
+    mode so dropout and batch-norm statistics are untouched. Returns
+    whatever is still unbuilt afterwards.
+    """
+    if torch is None:
+        return []
+    pending = _unbuilt(self)
+    if not pending:
+        return []
+    sample = self.py_state.get("materialize_sample")
+    if sample is None:
+        return pending
+
+    probe = sample[:8] if hasattr(sample, "__getitem__") and len(sample) > 8 else sample
+    was_training = [(f, getattr(f, "training", False)) for _, f in self.filters()]
+    try:
+        for f, _ in was_training:
+            f.training = False
+        with torch.no_grad():
+            self.forward(probe)
+    except Exception:
+        # A graph that cannot be run on its input alone keeps its lazy
+        # nodes. Not fatal here — `make_optimizer` is where it matters,
+        # and it names them.
+        pass
+    finally:
+        for f, mode in was_training:
+            f.training = mode
+    return _unbuilt(self)
+
 
 def train(self: Graph, mode: bool = True) -> Graph:
     """Set ``training=mode`` on every live filter (and its ``_module``)."""
@@ -361,6 +421,22 @@ def make_optimizer(self: Graph, optim_cls: Any = None, **kwargs: Any) -> Any:
         raise RuntimeError("torch is required to build an optimiser")
     if optim_cls is None:
         optim_cls = torch.optim.Adam
+
+    # An optimiser is a trigger for whatever construction is still
+    # pending, not something the caller warms up by hand with a throwaway
+    # forward.
+    still_lazy = _complete_materialization(self)
+    if still_lazy:
+        raise RuntimeError(
+            "graph.make_optimizer(): "
+            f"{', '.join(repr(n) for n in still_lazy)} "
+            f"{'has' if len(still_lazy) == 1 else 'have'} no module yet, so "
+            "their parameters would be missing from the optimiser and they "
+            "would never train. Call graph.materialize(sample_input) with an "
+            "input the whole graph can run on — a fan-in can only be sized by "
+            "running it."
+        )
+
     params = list(self.parameters())
     if not params:
         raise RuntimeError(
@@ -435,6 +511,114 @@ def zero_grad(self: Graph, set_to_none: bool = True) -> None:
         # Nothing to zero yet (e.g. user is about to make_optimizer).
         return
     opt.zero_grad(set_to_none=set_to_none)
+
+
+# ── Architecture, as data and as an annotation ───────────────
+
+
+def _theta(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M θ"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k θ"
+    return f"{n} θ"
+
+
+def architecture(self: Graph) -> dict:
+    """What each node *is*, as numbers rather than a picture.
+
+    Per node: the module class it built, total / trainable / frozen
+    parameter counts, whether it is differentiable at all, and whether it
+    has been built yet. Plus the totals.
+
+    Data first, deliberately: a figure is one consumer of this, a printed
+    table is another, and a future GUI is a third. A graph of plain
+    Filters reports zero throughout, which is the honest answer rather
+    than an empty diagram.
+    """
+    nodes: dict[str, dict] = {}
+    for node_id, f in self.filters():
+        module = getattr(f, "_module", None)
+        params = list(module.parameters()) if module is not None else []
+        trainable = sum(p.numel() for p in params if p.requires_grad)
+        frozen = sum(p.numel() for p in params if not p.requires_grad)
+        nodes[node_id] = {
+            "filter": type(f).__name__,
+            "module": type(module).__name__ if module is not None else None,
+            "differentiable": bool(getattr(f, "_differentiable", False)),
+            "built": module is not None,
+            "parameters": trainable + frozen,
+            "trainable": trainable,
+            "frozen": frozen,
+        }
+    return {
+        "nodes": nodes,
+        "total_parameters": sum(n["parameters"] for n in nodes.values()),
+        "total_trainable": sum(n["trainable"] for n in nodes.values()),
+        "total_frozen": sum(n["frozen"] for n in nodes.values()),
+    }
+
+
+def architecture_overlay(self: Graph, flags: Any = None) -> dict:
+    """The same information in the shape the renderers already take.
+
+    Feed it straight to ``graph.to_svg(overlay=…)``,
+    ``to_mermaid(overlay=…)`` or ``to_graphviz(overlay=…)`` — every one of
+    them already accepts an overlay, and ``NodeOverlay.sublabel`` is a
+    free-form label line, so no renderer needs to learn about parameters.
+
+    ``flags`` merges health in: pass an ``Audit.report()``, a
+    ``RunView.overlay()``, or a plain ``{node_id: [flag, …]}``. A node that
+    is differentiable but not built says so, because "0 θ" and "not built
+    yet" are very different things to see on a diagram.
+    """
+    per_node = _flag_map(flags)
+    arch = architecture(self)
+    out: dict[str, dict] = {}
+    for node_id, info in arch["nodes"].items():
+        parts: list[str] = []
+        if info["differentiable"] and not info["built"]:
+            parts.append("not built")
+        elif info["trainable"]:
+            parts.append(_theta(info["trainable"]))
+        if info["frozen"]:
+            parts.append(f"{_theta(info['frozen'])} frozen")
+        entry: dict[str, Any] = {}
+        if parts:
+            entry["sublabel"] = " · ".join(parts)
+        node_flags = per_node.get(node_id)
+        if node_flags:
+            entry["flags"] = list(node_flags)
+        if entry:
+            out[node_id] = entry
+    return {"nodes": out}
+
+
+def _flag_map(flags: Any) -> dict[str, list[str]]:
+    """Accept the three shapes a caller is likely to already be holding."""
+    if flags is None:
+        return {}
+    # An Audit.report(): filters carry `filter_id` and `flags`, and the
+    # ids of submodules are "<node>/<path>" — roll those up to the node.
+    if hasattr(flags, "filters"):
+        rolled: dict[str, list[str]] = {}
+        for entry in flags.filters:
+            if not entry.flags:
+                continue
+            node = entry.filter_id.split("/")[0]
+            for flag in entry.flags:
+                name = flag.split("(")[0]
+                if name not in rolled.setdefault(node, []):
+                    rolled[node].append(name)
+        return rolled
+    if isinstance(flags, dict):
+        # A RunView.overlay(): {"nodes": {id: {"flags": [...]}}}
+        inner = flags.get("nodes") or {} if "nodes" in flags else flags
+        return {
+            node_id: list(value.get("flags", []) if isinstance(value, dict) else value)
+            for node_id, value in inner.items()
+        }
+    raise TypeError(f"cannot read health flags from {type(flags).__name__}")
 
 
 # ── Freeze (training → inference) ────────────────────────────

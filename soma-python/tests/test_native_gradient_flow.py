@@ -656,3 +656,191 @@ class TestMaterializeUsesTopology:
                 float(p.grad.abs().sum()) for p in module.parameters() if p.grad is not None
             )
             assert total > 0.0, f"no gradient reached `{node_id}`"
+
+
+class TestLazyConstructionCompletesItself:
+    """`make_optimizer` triggers whatever construction is still pending.
+
+    A fan-in cannot be sized from shapes, so `materialize` leaves it to
+    build on first forward. That was fine until something needed its
+    parameters BEFORE the first forward — and `make_optimizer` does.
+    `parameters()` skips unbuilt filters silently, so the optimiser trained
+    a subset of the graph, the gate of an ensemble sat at its initial
+    weights for the whole run, and nothing raised. The workaround was a
+    throwaway forward. The API does it now.
+    """
+
+    @staticmethod
+    def _fan_in_graph():
+        import torch
+        import torch.nn as nn
+
+        from soma import DifferentiableFilter, Graph
+
+        class Mlp(DifferentiableFilter):
+            _cache_version = "test-lazy-mlp-v1"
+
+            def __init__(self, tag="a"):
+                super().__init__(tag=tag)
+
+            def build_module(self, input_shape):
+                return nn.Linear(input_shape[-1], 3)
+
+            def output_shape(self, input_shape):
+                return (3,)
+
+        class Gate(DifferentiableFilter):
+            _cache_version = "test-lazy-gate-v1"
+            _multi_input = True
+
+            def __init__(self):
+                super().__init__()
+
+            def build_module(self, input_shape):
+                mod = nn.Module()
+                mod.w = nn.Parameter(torch.zeros(2))
+                return mod
+
+            def output_shape(self, input_shape):
+                return (3,)
+
+            def forward(self, x, state=None):
+                stacked = torch.stack(
+                    [torch.as_tensor(x[k], dtype=torch.float32) for k in sorted(x)], dim=0
+                )
+                self.materialize((stacked.shape[-1],))
+                w = torch.softmax(self._module.w, dim=0).view(-1, 1, 1)
+                out = (stacked * w).sum(0)
+                return (out, {}) if self.training else (out.detach().tolist(), {})
+
+        g = Graph()
+        g.node("a", Mlp("a"))
+        g.node("b", Mlp("b"))
+        g.node("gate", Gate())
+        g.connect("a", "gate")
+        g.connect("b", "gate")
+        return g
+
+    def test_materialize_builds_the_fan_in_too(self):
+        import torch
+
+        g = self._fan_in_graph()
+        g.materialize(torch.randn(8, 6))
+        gate = dict(g.filters())["gate"]
+        assert gate._module is not None, "the fan-in was left unbuilt"
+
+    def test_the_optimizer_sees_the_fan_in_without_a_warm_up_forward(self):
+        import torch
+
+        g = self._fan_in_graph()
+        g.materialize(torch.randn(8, 6))
+        g.train()
+        opt = g.make_optimizer(torch.optim.Adam, lr=1e-1)
+        owned = {id(p) for group in opt.param_groups for p in group["params"]}
+        gate = dict(g.filters())["gate"]
+        assert all(id(p) in owned for p in gate._module.parameters()), (
+            "the gate's parameters are missing from the optimiser, so it would never train"
+        )
+
+    def test_the_gate_actually_moves(self):
+        """The symptom the silent bug produced: weights frozen at their
+        initial value, and an ensemble that scores worse than its best
+        branch."""
+        import torch
+        import torch.nn as nn
+
+        g = self._fan_in_graph()
+        x = torch.randn(16, 6)
+        y = torch.randint(0, 3, (16,))
+        g.materialize(x)
+        g.train()
+        g.make_optimizer(torch.optim.Adam, lr=1e-1)
+        gate = dict(g.filters())["gate"]
+        before = gate._module.w.detach().clone()
+
+        for _ in range(3):
+            with g.context() as ctx:
+                g.zero_grad()
+                out, _ = g.forward(x)
+                g.backward(ctx, nn.functional.cross_entropy(out, y))
+            g.step(ctx)
+
+        assert not torch.equal(before, gate._module.w.detach())
+
+    def test_it_names_what_it_could_not_build(self):
+        """Better than optimising a subset in silence."""
+        import pytest
+        import torch
+        import torch.nn as nn
+
+        from soma import DifferentiableFilter, Graph
+
+        class Impossible(DifferentiableFilter):
+            _cache_version = "test-lazy-impossible-v1"
+            _multi_input = True
+
+            def __init__(self):
+                super().__init__()
+
+            def build_module(self, input_shape):
+                return nn.Linear(input_shape[-1], 2)
+
+            def output_shape(self, input_shape):
+                return (2,)
+
+            def forward(self, x, state=None):
+                raise RuntimeError("this node cannot run on the graph input alone")
+
+        g = Graph()
+        g.node("only", Impossible())
+        g.materialize(torch.randn(4, 5))
+        with pytest.raises(RuntimeError, match="only"):
+            g.make_optimizer(torch.optim.Adam)
+
+
+class TestArchitectureAsData:
+    def test_a_pipeline_of_plain_filters_reports_zero(self):
+        import numpy as np
+
+        from soma import Filter, Graph
+
+        class Plain(Filter):
+            _cache_version = "test-arch-plain-v1"
+
+            def fit(self, x, y=None):
+                return {}
+
+            def forward(self, x, state):
+                return np.asarray(x).tolist()
+
+        g = Graph()
+        g.node("a", Plain())
+        g.node("b", Plain())
+        g.connect("a", "b")
+
+        arch = g.architecture()
+        assert arch["total_trainable"] == 0
+        assert arch["nodes"]["a"]["differentiable"] is False
+        # Zero parameters must not become an annotation: a plain pipeline
+        # renders exactly as it did before.
+        assert g.architecture_overlay() == {"nodes": {}}
+        assert g.to_mermaid(overlay=g.architecture_overlay()) == g.to_mermaid()
+
+    def test_parameters_and_flags_reach_the_diagram(self):
+        import torch
+
+        g = TestLazyConstructionCompletesItself._fan_in_graph()
+        g.materialize(torch.randn(8, 6))
+
+        arch = g.architecture()
+        assert arch["nodes"]["a"]["trainable"] > 0
+        assert arch["total_trainable"] == sum(
+            n["trainable"] for n in arch["nodes"].values()
+        )
+
+        overlay = g.architecture_overlay(flags={"a": ["LEAKAGE"]})
+        assert "θ" in overlay["nodes"]["a"]["sublabel"]
+        assert overlay["nodes"]["a"]["flags"] == ["LEAKAGE"]
+
+        mermaid = g.to_mermaid(overlay=overlay)
+        assert "θ" in mermaid and "LEAKAGE" in mermaid
