@@ -60,6 +60,8 @@ pub struct GridSampler {
 }
 
 impl GridSampler {
+    /// A grid with `points_per_dim` values per continuous dimension
+    /// (categorical dimensions contribute every choice).
     pub fn new(points_per_dim: usize) -> Self {
         Self {
             points_per_dim,
@@ -176,6 +178,8 @@ pub struct RandomSampler {
 }
 
 impl RandomSampler {
+    /// A random sampler producing `n_trials` configurations. `None` seed
+    /// defaults to 42, keeping runs reproducible.
     pub fn new(n_trials: usize, seed: Option<u64>) -> Self {
         Self {
             n_trials,

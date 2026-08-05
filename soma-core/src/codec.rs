@@ -25,6 +25,8 @@ use crate::error::{Result, SomaError};
 use crate::value::Value;
 use std::sync::Arc;
 
+/// Frame magic: the first six bytes of every `SOMA1`-encoded value.
+/// Public so stores can sniff a blob's format without decoding it.
 pub const MAGIC: &[u8; 6] = b"SOMA1\0";
 
 const TAG_EMPTY: u8 = 0;

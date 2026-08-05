@@ -148,23 +148,34 @@ impl fmt::Display for CacheKey {
 /// Which storage tier a cached entry lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CacheTier {
+    /// In-process memory (the LRU tier).
     Memory,
+    /// Local disk (the persistent action-record + blob store).
     Local,
+    /// A remote backend shared across machines.
     Remote,
 }
 
 /// Where a cached value originated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Origin {
+    /// Produced by executing a node — the common case.
     Computed {
+        /// Node that produced the value.
         node_id: String,
+        /// Run the computation happened in.
         run_id: String,
     },
+    /// Loaded from an external source rather than computed.
     Ingested {
+        /// Where the value came from (path, URL, dataset name).
         source: String,
     },
+    /// Produced by a stream executor over a time window.
     Streamed {
+        /// Inclusive start of the window.
         window_start: DateTime<Utc>,
+        /// Exclusive end of the window.
         window_end: DateTime<Utc>,
     },
 }
@@ -172,11 +183,17 @@ pub enum Origin {
 /// Metadata about a cached entry, queryable without loading the value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntryMeta {
+    /// The entry's cache key.
     pub key: CacheKey,
+    /// Encoded size of the stored value in bytes.
     pub size_bytes: u64,
+    /// When the entry was stored.
     pub created_at: DateTime<Utc>,
+    /// Last read, the signal LRU eviction ranks by.
     pub last_accessed: DateTime<Utc>,
+    /// Time-to-live, `None` for entries that never expire.
     pub ttl: Option<std::time::Duration>,
+    /// Where the value came from.
     pub origin: Origin,
 }
 
@@ -185,10 +202,19 @@ pub struct EntryMeta {
 /// Implementations may be in-memory, on-disk (RocksDB/sled),
 /// or remote (S3). The tiered cache composes multiple stores.
 pub trait CacheStore: Send + Sync {
+    /// Look up the value stored under `key`, `None` on a miss.
     fn get(&self, key: &CacheKey) -> Result<Option<Value>>;
+
+    /// Store `value` under `key`, replacing any existing entry.
     fn put(&self, key: &CacheKey, value: &Value) -> Result<()>;
+
+    /// Whether `key` has an entry, without loading the value.
     fn exists(&self, key: &CacheKey) -> Result<bool>;
+
+    /// Delete the entry under `key`; absent keys are not an error.
     fn remove(&self, key: &CacheKey) -> Result<()>;
+
+    /// The entry's [`EntryMeta`], without loading the value.
     fn metadata(&self, key: &CacheKey) -> Result<Option<EntryMeta>>;
 
     /// Store a value together with its provenance. Stores that persist

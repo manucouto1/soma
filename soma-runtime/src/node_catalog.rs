@@ -35,7 +35,9 @@ use std::sync::Arc;
 /// both.
 #[derive(Clone)]
 pub enum NodeImpl {
+    /// A computational node: memoizes by content, may learn state.
     Filter(Arc<dyn Filter>),
+    /// An effectful node: journals its effects instead of caching output.
     Step(Arc<dyn Step>),
 }
 

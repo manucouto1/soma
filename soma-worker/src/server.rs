@@ -57,9 +57,19 @@ struct ServerState {
     temp_store: Arc<LocalDataStore>,
     /// Track upload times for automatic cleanup.
     temp_uploads: Mutex<HashMap<CacheKey, Instant>>,
-    /// Active streaming sessions: stream_id → (executor, start_time).
-    active_streams:
-        Mutex<HashMap<String, (somatize_runtime::executors::stream::StreamExecutor, Instant)>>,
+    /// Active streaming sessions, one driver + context alive between
+    /// WS messages — the state a chunked run must carry across RPCs.
+    active_streams: Mutex<HashMap<String, StreamSession>>,
+}
+
+/// One in-flight streaming run: the driver, its execution context, and
+/// the cache it reads/writes — held between `StreamBegin`, N ×
+/// `ChunkData` and `StreamEnd`.
+struct StreamSession {
+    run: somatize_runtime::StreamRun,
+    ctx: somatize_runtime::Context,
+    cache: std::sync::Arc<dyn somatize_core::cache::CacheStore>,
+    started: Instant,
 }
 
 /// Build a worker server router (no authentication).
@@ -481,7 +491,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<ServerState>) {
 
 /// Handle a streaming protocol message. Returns an optional reply.
 fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option<StreamMessage> {
-    use somatize_runtime::executors::stream::{FittedFilter, StreamExecutor};
+    use somatize_runtime::{Context, StreamRun};
 
     match msg {
         StreamMessage::StreamBegin {
@@ -524,27 +534,37 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 }
             }
 
-            // Build FittedFilter list from plan node order
-            let node_ids = plan.plan.node_ids();
-            let fitted: Vec<FittedFilter> = node_ids
-                .iter()
-                .filter_map(|id| {
-                    let filter = worker.get_filter(id)?;
-                    let filter_state = worker.get_filter_state(id);
-                    Some(FittedFilter {
-                        name: id.to_string(),
-                        filter,
-                        state: filter_state,
-                    })
-                })
-                .collect();
+            // Build the stream driver over the registered filters. A node
+            // the worker cannot resolve fails the stream up front, rather
+            // than silently streaming a shorter chain.
+            let node_ids: Vec<String> =
+                plan.plan.node_ids().into_iter().map(String::from).collect();
+            let run = match StreamRun::new(&node_ids, worker.catalog()) {
+                Ok(run) => run,
+                Err(e) => {
+                    return Some(StreamMessage::StreamComplete {
+                        stream_id,
+                        result: PlanResult::Failed {
+                            error: e.to_string(),
+                            duration_ms: 0,
+                        },
+                    });
+                }
+            };
 
-            let executor = StreamExecutor::new(fitted);
+            let run_id = format!("worker_stream_{stream_id}");
+            let ctx = Context::new(worker.event_bus().clone(), run_id).with_seed(plan.seed);
+            let session = StreamSession {
+                run,
+                ctx,
+                cache: worker.cache().clone(),
+                started: Instant::now(),
+            };
             state
                 .active_streams
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(stream_id, (executor, Instant::now()));
+                .insert(stream_id, session);
 
             None // No reply for StreamBegin
         }
@@ -557,21 +577,31 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 .active_streams
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some((executor, _)) = streams.get_mut(&stream_id) {
-                match executor.process_chunk(value) {
+            if let Some(session) = streams.get_mut(&stream_id) {
+                let outcome =
+                    session
+                        .run
+                        .process_chunk(value, &mut session.ctx, session.cache.as_ref());
+                match outcome {
                     Ok(Some(result)) => Some(StreamMessage::ChunkResult {
                         stream_id,
                         chunk_index,
                         value: result,
                     }),
                     Ok(None) => None, // Barrier mode — no result yet
-                    Err(e) => Some(StreamMessage::StreamComplete {
-                        stream_id,
-                        result: PlanResult::Failed {
-                            error: e.to_string(),
-                            duration_ms: 0,
-                        },
-                    }),
+                    Err(e) => {
+                        // The run is dead; drop the session so a retry
+                        // does not resume a half-failed one.
+                        let duration_ms = session.started.elapsed().as_millis() as u64;
+                        streams.remove(&stream_id);
+                        Some(StreamMessage::StreamComplete {
+                            stream_id,
+                            result: PlanResult::Failed {
+                                error: e.to_string(),
+                                duration_ms,
+                            },
+                        })
+                    }
                 }
             } else {
                 Some(StreamMessage::StreamComplete {
@@ -588,13 +618,24 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 .active_streams
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some((mut executor, start)) = streams.remove(&stream_id) {
-                let duration_ms = start.elapsed().as_millis() as u64;
-                // Flush barrier filters — only Barrier mode accumulates data.
-                let output = executor
-                    .flush()
-                    .unwrap_or(None)
-                    .unwrap_or(somatize_core::value::Value::Empty);
+            if let Some(mut session) = streams.remove(&stream_id) {
+                let duration_ms = session.started.elapsed().as_millis() as u64;
+                // Flush barrier filters, then close each node's event
+                // bracket with its chunk/hit/miss aggregate.
+                let flushed = session.run.flush(&mut session.ctx, session.cache.as_ref());
+                let output = match flushed {
+                    Ok(v) => v.unwrap_or(somatize_core::value::Value::Empty),
+                    Err(e) => {
+                        return Some(StreamMessage::StreamComplete {
+                            stream_id,
+                            result: PlanResult::Failed {
+                                error: format!("stream flush: {e}"),
+                                duration_ms,
+                            },
+                        });
+                    }
+                };
+                session.run.finish(&session.ctx);
                 Some(StreamMessage::StreamComplete {
                     stream_id,
                     result: PlanResult::Success {

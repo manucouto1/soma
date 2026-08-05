@@ -48,6 +48,8 @@ pub struct GraphSession {
 }
 
 impl GraphSession {
+    /// A session over `graph` with an in-memory cache and its own event
+    /// bus; the `with_*` builders swap in shared or persistent components.
     pub fn new(graph: Graph, catalog: NodeCatalog) -> Self {
         Self {
             graph,
@@ -61,21 +63,27 @@ impl GraphSession {
         }
     }
 
+    /// Replace the default in-memory cache, e.g. with a tiered or
+    /// persistent store shared across sessions.
     pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
         self.cache = cache;
         self
     }
 
+    /// Replace the session's own event bus, e.g. with one a tracker
+    /// is already subscribed to.
     pub fn with_event_bus(mut self, bus: Arc<EventBus>) -> Self {
         self.event_bus = bus;
         self
     }
 
+    /// Attach the data store batched forward passes read rows from.
     pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
         self.data_store = Some(store);
         self
     }
 
+    /// Attach the transport that carries `Remote` plan nodes to workers.
     pub fn with_transport(mut self, transport: Arc<dyn Transport>) -> Self {
         self.transport = Some(transport);
         self

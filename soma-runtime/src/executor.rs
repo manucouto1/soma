@@ -31,6 +31,8 @@ pub struct GraphInfo {
 }
 
 impl GraphInfo {
+    /// An empty topology; every node resolves to no predecessors until
+    /// [`Self::set_predecessors`] says otherwise.
     pub fn new() -> Self {
         Self::default()
     }
@@ -94,7 +96,10 @@ pub enum RunMode {
     /// A trainable node learns its state from its resolved input and these
     /// labels, then computes with it. Labels are shared by the whole run;
     /// `None` means unsupervised.
-    Fit { y: Option<Value> },
+    Fit {
+        /// The run's labels; `None` means unsupervised.
+        y: Option<Value>,
+    },
 }
 
 impl RunMode {
@@ -162,6 +167,8 @@ pub struct Context {
 }
 
 impl Context {
+    /// A forward-mode context with empty topology and no optional
+    /// components; the `with_*` builders add what the run needs.
     pub fn new(event_bus: Arc<EventBus>, run_id: impl Into<String>) -> Self {
         Self {
             mode: RunMode::Forward,
@@ -190,6 +197,7 @@ impl Context {
         self
     }
 
+    /// Set the topology used for input resolution.
     pub fn with_graph_info(mut self, info: GraphInfo) -> Self {
         self.graph_info = info;
         self
@@ -219,11 +227,13 @@ impl Context {
         self
     }
 
+    /// Set the transport a plan with `Remote` nodes executes through.
     pub fn with_transport(mut self, transport: Arc<dyn crate::runner::Transport>) -> Self {
         self.transport = Some(transport);
         self
     }
 
+    /// Set the data store used for spilling and remote data movement.
     pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
         self.data_store = Some(store);
         self
@@ -644,6 +654,84 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic")
 }
 
+// ── The primitives every execution path shares ──
+//
+// `run_node` composes these for the topological walk; the stream driver
+// composes the same three per chunk. Anything that must be true of every
+// node execution — the memoization guard, the one key derivation, panic
+// containment, provenance on writes — lives here and nowhere else.
+
+/// The node's output key, or `None` when it must not be memoized.
+///
+/// The single owner of the `cacheable && deterministic` guard and of the
+/// derivation `hash(config + state + input)`, salted with the run seed.
+/// Nondeterministic forwards are excluded because serving a recorded
+/// result would silently freeze what the user expects to vary.
+pub(crate) fn output_key(
+    node: &NodeImpl,
+    meta: &somatize_core::node::NodeMeta,
+    state: &Value,
+    input_key: &somatize_core::cache::CacheKey,
+    seed: Option<i64>,
+) -> Option<somatize_core::cache::CacheKey> {
+    if !(meta.cacheable && meta.deterministic) {
+        return None;
+    }
+    let key = somatize_core::cache::CacheKey::for_output(
+        &node.config_hash(),
+        &somatize_core::cache::CacheKey::for_value(state),
+        input_key,
+    );
+    Some(salt_with_seed(key, seed))
+}
+
+/// Run the node's own computation, containing any panic.
+///
+/// The `catch_unwind` around [`run_node_inner`] — a panic in user code
+/// (a Python filter or step alike) must not crash the process.
+pub(crate) fn compute_node(
+    node: &NodeImpl,
+    node_id: &str,
+    ctx: &Context,
+    input: &Value,
+    state: &Value,
+) -> Result<NodeOutcome> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_node_inner(node, node_id, ctx, input, state)
+    }));
+    match result {
+        Ok(inner) => inner,
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            tracing::error!(node_id, "node panicked: {msg}");
+            Err(SomaError::Execution {
+                node_id: node_id.to_string(),
+                message: format!("node panicked: {msg}"),
+            })
+        }
+    }
+}
+
+/// Store a computed output with its provenance. Best-effort: a full
+/// cache disk must never fail the run.
+pub(crate) fn store_output(
+    cache: &dyn CacheStore,
+    key: &somatize_core::cache::CacheKey,
+    output: &Value,
+    node_id: &str,
+    run_id: &str,
+    duration: std::time::Duration,
+    deterministic: bool,
+) {
+    let origin = somatize_core::cache::Origin::Computed {
+        node_id: node_id.to_string(),
+        run_id: run_id.to_string(),
+    };
+    if let Err(e) = cache.put_computed(key, output, &origin, duration, deterministic) {
+        tracing::warn!(node_id, error = %e, "failed to cache node output");
+    }
+}
+
 /// Run one node and act on how it finished.
 ///
 /// The single entry point for both kinds. Everything that does not depend
@@ -757,20 +845,16 @@ fn run_node(
         .or(state.as_deref())
         .unwrap_or(&Value::Empty);
 
-    // Nondeterministic forwards (declared via `deterministic = false`) are
-    // excluded: serving a recorded result would silently freeze what the
-    // user expects to vary. (Their fit STATES still cache — any recorded
-    // training result is acceptable, constructive-trace semantics.)
-    let out_key = if meta.cacheable && meta.deterministic {
-        let key = somatize_core::cache::CacheKey::for_output(
-            &node.config_hash(),
-            &somatize_core::cache::CacheKey::for_value(state_ref),
-            &ctx.input_hash(node_id, &input),
-        );
-        Some(salt_with_seed(key, ctx.seed))
-    } else {
-        None
-    };
+    // Nondeterministic forwards are excluded by `output_key` — their fit
+    // STATES still cache: any recorded training result is acceptable,
+    // constructive-trace semantics.
+    let out_key = output_key(
+        &node,
+        &meta,
+        state_ref,
+        &ctx.input_hash(node_id, &input),
+        ctx.seed,
+    );
 
     // `get_located`, not `get`: which tier served the value is the whole
     // content of this event, and hardcoding `Memory` made every per-tier
@@ -804,26 +888,7 @@ fn run_node(
         effectful: meta.effectful,
     });
 
-    // catch_unwind: a panic in user code must not crash the process. It
-    // wraps the step branch too — a Python step is user code by the same
-    // argument a Python filter is, and it used to take the process down.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_node_inner(&node, node_id, ctx, &input, state_ref)
-    }));
-
-    let result = match result {
-        Ok(inner) => inner,
-        Err(panic) => {
-            let msg = panic_message(&*panic);
-            tracing::error!(node_id, "node panicked: {msg}");
-            Err(SomaError::Execution {
-                node_id: node_id.to_string(),
-                message: format!("node panicked: {msg}"),
-            })
-        }
-    };
-
-    let outcome = match result {
+    let outcome = match compute_node(&node, node_id, ctx, &input, state_ref) {
         Ok(outcome) => outcome,
         Err(e) => {
             tracing::error!(node_id, error = %e, "node execution failed");
@@ -841,16 +906,15 @@ fn run_node(
         NodeOutcome::Produced(output) => {
             let summary = format!("{output}");
             if let Some(key) = &out_key {
-                // Best-effort: a full cache disk must never fail the run.
-                let origin = somatize_core::cache::Origin::Computed {
-                    node_id: node_id.to_string(),
-                    run_id: ctx.run_id.clone(),
-                };
-                if let Err(e) =
-                    cache.put_computed(key, output, &origin, duration, meta.deterministic)
-                {
-                    tracing::warn!(node_id, error = %e, "failed to cache node output");
-                }
+                store_output(
+                    cache,
+                    key,
+                    output,
+                    node_id,
+                    &ctx.run_id,
+                    duration,
+                    meta.deterministic,
+                );
             }
             let vv = ctx.maybe_spill(node_id, output.clone());
             ctx.set_virtual(node_id, vv);
@@ -1135,7 +1199,12 @@ pub(crate) fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     }
 }
 
-/// Execute a stream plan: chunk input, process through StreamExecutor, concatenate.
+/// Execute a stream plan: chunk the input and drive it through
+/// [`StreamRun`](crate::executors::stream), which runs every chunk of
+/// every node through the same primitives `run_node` composes. Events
+/// are per node — `NodeStarted` at the first chunk, `NodeCompleted`
+/// after the flush with an aggregated summary, a real `NodeFailed` on
+/// error — so a stream run reads back like any other run.
 fn execute_stream(
     node_ids: &[String],
     chunk_size: usize,
@@ -1143,27 +1212,19 @@ fn execute_stream(
     catalog: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
-    use crate::executors::{FittedFilter, StreamExecutor};
+    use crate::executors::stream::StreamRun;
 
-    let start = Instant::now();
-
-    // Build FittedFilter list from the library in plan order.
-    let fitted: Vec<FittedFilter> = node_ids
-        .iter()
-        .map(|nid| {
-            let filter = catalog
-                .get(nid)
-                .ok_or_else(|| SomaError::NodeNotFound(nid.clone()))?;
-            let state = catalog
-                .get_state(nid)
-                .unwrap_or_else(|| Arc::new(Value::Empty));
-            Ok(FittedFilter {
-                name: nid.clone(),
-                filter,
-                state,
-            })
-        })
-        .collect::<Result<_>>()?;
+    // Streaming has no training semantics; leaving this undefined would
+    // silently skip every fit. Nothing invokes it today — keep it that
+    // way explicitly.
+    if matches!(ctx.mode, RunMode::Fit { .. }) {
+        return Err(SomaError::Execution {
+            node_id: node_ids.first().cloned().unwrap_or_default(),
+            message: "a stream plan cannot run in fit mode: fit the graph first, \
+                      then stream the forward"
+                .into(),
+        });
+    }
 
     // Resolve input from the first node's predecessors.
     let first_id = node_ids
@@ -1174,86 +1235,28 @@ fn execute_stream(
     // Chunk the input along the first tensor dimension.
     let chunks = chunk_value(&input, chunk_size);
 
-    let mut executor = StreamExecutor::new(fitted).with_seed(ctx.seed);
+    let last_id = node_ids.last().unwrap().clone();
+    let mut run = StreamRun::new(node_ids, catalog)?;
 
-    let last_id = node_ids.last().unwrap();
-
-    // One bracket for the node that produces the stream's output.
-    //
-    // This used to emit a `NodeStarted` per chunk under a made-up id
-    // (`model#chunk_3`) and a single `NodeCompleted` under the real one,
-    // so nothing paired: a reader building node timings saw N starts that
-    // never finished and one completion that never began. Chunk progress
-    // is a log line, not an event about a node that does not exist.
-    let last_meta = catalog.node_meta(last_id);
-    ctx.event_bus.emit(Event::NodeStarted {
-        run_id: ctx.run_id.clone(),
-        node_id: last_id.clone(),
-        kind: last_meta
-            .as_ref()
-            .map(|m| m.kind)
-            .unwrap_or(somatize_core::filter::FilterKind::Stateless),
-        effectful: last_meta.as_ref().is_some_and(|m| m.effectful),
-    });
-
-    // Incrementally concatenate tensor outputs to avoid holding all chunks
-    // in memory simultaneously. Each chunk is dropped after its data is
-    // extracted, keeping peak memory proportional to the final output size
-    // rather than O(n_chunks × chunk_size).
-    let mut all_data: Vec<f64> = Vec::new();
-    let mut result_shape: Option<Vec<usize>> = None;
-    let mut non_tensor_output: Option<Value> = None;
-
-    let mut append_output = |output: Value| {
-        match &output {
-            Value::Tensor { values, shape } => {
-                if result_shape.is_none() {
-                    result_shape = Some(shape.clone());
-                }
-                all_data.extend_from_slice(values.as_slice());
-                // `output` is dropped here, freeing the chunk's allocation
-            }
-            _ => {
-                non_tensor_output = Some(output);
-            }
-        }
-    };
+    // Incremental concatenation — bounded memory, see `StreamOutput`.
+    let mut output = crate::executors::StreamOutput::new();
 
     for (i, chunk) in chunks.into_iter().enumerate() {
         tracing::debug!(node_id = %last_id, chunk = i, "streaming chunk");
-        if let Some(output) = executor.process_chunk_cached(chunk, Some(cache))? {
-            append_output(output);
+        if let Some(out) = run.process_chunk(chunk, ctx, cache)? {
+            output.push(out);
         }
     }
 
     // Flush barrier filters.
-    if let Some(flushed) = executor.flush()? {
-        append_output(flushed);
+    if let Some(flushed) = run.flush(ctx, cache)? {
+        output.push(flushed);
     }
 
-    // Build the final result.
-    let result = if let Some(mut shape) = result_shape {
-        // Tensor output: fix the first dimension to reflect total rows.
-        let row_size: usize = shape.iter().skip(1).product::<usize>().max(1);
-        shape[0] = all_data.len() / row_size;
-        Value::tensor(all_data, shape)
-    } else {
-        non_tensor_output.unwrap_or(Value::Empty)
-    };
+    tracing::debug!(node_id = %last_id, chunks = run.chunks_processed(), "stream done");
+    run.finish(ctx);
 
-    let duration = start.elapsed();
-    ctx.set(last_id.clone(), result);
-    ctx.event_bus.emit(Event::NodeCompleted {
-        run_id: ctx.run_id.clone(),
-        node_id: last_id.clone(),
-        duration,
-        output_summary: format!(
-            "stream: {} chunks through {} filters",
-            executor.chunks_processed(),
-            node_ids.len()
-        ),
-    });
-
+    ctx.set(last_id, output.finish());
     Ok(())
 }
 
@@ -2215,5 +2218,255 @@ mod tests {
         let result = ctx.get("double").unwrap();
         let (data, _) = result.as_tensor().unwrap();
         assert_eq!(data, &[10.0, 20.0]);
+    }
+
+    /// Fails on any chunk containing a value >= its threshold.
+    struct Tripwire {
+        at: f64,
+    }
+    impl Filter for Tripwire {
+        fn config_hash(&self) -> CacheKey {
+            CacheKey::from_parts(&[b"Tripwire", &self.at.to_le_bytes()])
+        }
+        fn fit(&self, _x: &Value, _y: Option<&Value>) -> Result<Value> {
+            Ok(Value::Empty)
+        }
+        fn forward(&self, x: &Value, _state: &Value) -> Result<Value> {
+            if let Value::Tensor { values, .. } = x
+                && values.iter().any(|v| *v >= self.at)
+            {
+                return Err(SomaError::Other(format!("tripped at {}", self.at)));
+            }
+            Ok(x.clone())
+        }
+        fn meta(&self) -> FilterMeta {
+            DoublerFilter.meta()
+        }
+    }
+
+    fn stream_events(
+        rx: &mut tokio::sync::broadcast::Receiver<Event>,
+    ) -> Vec<(String, &'static str)> {
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::NodeStarted { node_id, .. } => seen.push((node_id, "started")),
+                Event::NodeCompleted { node_id, .. } => seen.push((node_id, "completed")),
+                Event::NodeFailed { node_id, .. } => seen.push((node_id, "failed")),
+                _ => {}
+            }
+        }
+        seen
+    }
+
+    /// T1: one bracket per NODE, not one per plan and not one per chunk.
+    /// Three chunks through two nodes is exactly two started/completed
+    /// pairs, both under real node ids.
+    #[test]
+    fn stream_emits_one_bracket_per_node() {
+        let (bus, cache) = setup();
+        let mut rx = bus.subscribe();
+        let mut ctx = Context::new(bus, "run_stream_events");
+        ctx.set(
+            "__input__",
+            Value::tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![6]),
+        );
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+
+        let mut filters = NodeCatalog::new();
+        filters.register("double", Box::new(DoublerFilter));
+        filters.register("add", Box::new(AdderFilter { amount: 1.0 }));
+
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into(), "add".into()],
+            chunk_size: 2,
+        };
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        let seen = stream_events(&mut rx);
+        for node in ["double", "add"] {
+            assert_eq!(
+                seen.iter()
+                    .filter(|(id, kind)| id == node && *kind == "started")
+                    .count(),
+                1,
+                "{node}: exactly one NodeStarted, got {seen:?}"
+            );
+            assert_eq!(
+                seen.iter()
+                    .filter(|(id, kind)| id == node && *kind == "completed")
+                    .count(),
+                1,
+                "{node}: exactly one NodeCompleted, got {seen:?}"
+            );
+        }
+        assert!(
+            seen.iter().all(|(id, _)| id == "double" || id == "add"),
+            "no made-up node ids: {seen:?}"
+        );
+    }
+
+    /// T2: the failing node emits a real NodeFailed naming the chunk;
+    /// the upstream node's span stays open — it died mid-node, which is
+    /// literally true.
+    #[test]
+    fn stream_node_failed_names_the_chunk() {
+        let (bus, cache) = setup();
+        let mut rx = bus.subscribe();
+        let mut ctx = Context::new(bus, "run_stream_fail");
+        ctx.set("__input__", Value::tensor(vec![1.0, 3.0], vec![2]));
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+
+        let mut filters = NodeCatalog::new();
+        filters.register("double", Box::new(DoublerFilter));
+        // Doubling 3.0 -> 6.0 trips the wire on the second chunk.
+        filters.register("trip", Box::new(Tripwire { at: 5.0 }));
+
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into(), "trip".into()],
+            chunk_size: 1,
+        };
+        let err = execute(&plan, &mut ctx, &filters, &cache).unwrap_err();
+        assert!(err.to_string().contains("tripped"), "{err}");
+
+        let mut failed = None;
+        let mut double_completed = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::NodeFailed { node_id, error, .. } => failed = Some((node_id, error)),
+                Event::NodeCompleted { node_id, .. } if node_id == "double" => {
+                    double_completed = true;
+                }
+                _ => {}
+            }
+        }
+        let (node_id, error) = failed.expect("no NodeFailed was emitted");
+        assert_eq!(node_id, "trip");
+        assert!(error.contains("chunk 1"), "should name the chunk: {error}");
+        assert!(
+            !double_completed,
+            "the upstream span must stay open: the run died mid-node"
+        );
+    }
+
+    /// T6: the derivation is shared, so a single-chunk stream and the
+    /// standard path land on ONE cache line — the second is a hit.
+    #[test]
+    fn stream_and_standard_share_one_cache_line() {
+        let (bus, cache) = setup();
+        let input = Value::tensor(vec![1.0, 2.0], vec![2]);
+
+        let mut ctx = Context::new(bus.clone(), "run_standard");
+        ctx.set("__input__", input.clone());
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+        let mut filters = NodeCatalog::new();
+        filters.register("double", Box::new(DoublerFilter));
+        let standard = ExecutionPlan::Execute {
+            node_id: "double".into(),
+        };
+        execute(&standard, &mut ctx, &filters, &cache).unwrap();
+        assert_eq!(cache.len(), 1);
+
+        let mut rx = bus.subscribe();
+        let mut ctx2 = Context::new(bus, "run_streamed");
+        ctx2.set("__input__", input);
+        ctx2.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+        let streamed = ExecutionPlan::Stream {
+            node_ids: vec!["double".into()],
+            chunk_size: 1000, // single chunk == the standard input
+        };
+        execute(&streamed, &mut ctx2, &filters, &cache).unwrap();
+
+        assert_eq!(
+            cache.len(),
+            1,
+            "the stream must read the standard path's line, not mint its own"
+        );
+        let mut completed_summary = String::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::NodeCompleted {
+                node_id,
+                output_summary,
+                ..
+            } = event
+                && node_id == "double"
+            {
+                completed_summary = output_summary;
+            }
+        }
+        assert!(
+            completed_summary.contains("1 hits"),
+            "the chunk should have been a cache hit: {completed_summary}"
+        );
+    }
+
+    /// T11: for a plain FixedState chain, the stream path's event set is
+    /// the standard path's, modulo the per-chunk hit/miss events the
+    /// stream deliberately aggregates.
+    #[test]
+    fn stream_events_match_standard_for_fixed_chains() {
+        let run = |streamed: bool| -> Vec<(String, &'static str)> {
+            let (bus, cache) = setup();
+            let mut rx = bus.subscribe();
+            let mut ctx = Context::new(bus, "run_compare");
+            ctx.set("__input__", Value::tensor(vec![1.0, 2.0], vec![2]));
+            ctx.graph_info
+                .set_predecessors("double", vec!["__input__".into()]);
+            ctx.graph_info
+                .set_predecessors("add", vec!["double".into()]);
+            let mut filters = NodeCatalog::new();
+            filters.register("double", Box::new(DoublerFilter));
+            filters.register("add", Box::new(AdderFilter { amount: 1.0 }));
+            let plan = if streamed {
+                ExecutionPlan::Stream {
+                    node_ids: vec!["double".into(), "add".into()],
+                    chunk_size: 1,
+                }
+            } else {
+                ExecutionPlan::Sequence(vec![
+                    ExecutionPlan::Execute {
+                        node_id: "double".into(),
+                    },
+                    ExecutionPlan::Execute {
+                        node_id: "add".into(),
+                    },
+                ])
+            };
+            execute(&plan, &mut ctx, &filters, &cache).unwrap();
+            let mut seen = stream_events(&mut rx);
+            seen.sort();
+            seen
+        };
+
+        assert_eq!(
+            run(false),
+            run(true),
+            "same nodes, same brackets, whichever path executed them"
+        );
+    }
+
+    /// D10: a stream plan in fit mode is an explicit error, not an
+    /// undefined skip of every fit.
+    #[test]
+    fn stream_refuses_fit_mode() {
+        let (bus, cache) = setup();
+        let mut ctx = Context::new(bus, "run_stream_fit");
+        ctx.mode = RunMode::Fit { y: None };
+        ctx.set("__input__", Value::tensor(vec![1.0], vec![1]));
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+        let mut filters = NodeCatalog::new();
+        filters.register("double", Box::new(DoublerFilter));
+
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into()],
+            chunk_size: 2,
+        };
+        let err = execute(&plan, &mut ctx, &filters, &cache).unwrap_err();
+        assert!(err.to_string().contains("fit"), "{err}");
     }
 }

@@ -56,18 +56,27 @@ pub struct Capabilities {
 /// GPU hardware info.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuInfo {
+    /// Device name as the driver reports it (e.g. "A100").
     pub name: String,
+    /// Total device memory in bytes.
     pub memory_bytes: u64,
 }
 
 /// Current load metrics reported by a worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadMetrics {
+    /// CPU utilization across all cores, 0.0–1.0.
     pub cpu_usage: f32,
+    /// RAM utilization as a fraction of total, 0.0–1.0.
     pub memory_usage: f32,
+    /// Per-GPU utilization, in the same order as [`Capabilities::gpus`].
     pub gpu_usage: Vec<f32>,
+    /// Plans currently executing.
     pub active_plans: usize,
+    /// Plans accepted but not yet started.
     pub queue_depth: usize,
+    /// When this snapshot was taken; heartbeats carry it so the
+    /// coordinator can tell a fresh reading from a stale one.
     pub timestamp: DateTime<Utc>,
 }
 
@@ -77,9 +86,15 @@ pub struct LoadMetrics {
 #[non_exhaustive]
 pub enum InputSource {
     /// Data embedded directly in the message (small payloads).
-    Inline { value: Value },
+    Inline {
+        /// The value itself, carried in the message.
+        value: Value,
+    },
     /// Data referenced in a remote store (large payloads).
-    Reference { data_ref: DataRef },
+    Reference {
+        /// Where to fetch the value from; see [`InputSource::resolve`].
+        data_ref: DataRef,
+    },
 }
 
 impl InputSource {
@@ -173,7 +188,10 @@ pub struct SerializedPlan {
     /// What the sender speaks. See [`PROTOCOL_VERSION`].
     #[serde(default = "unversioned")]
     pub protocol_version: u32,
+    /// Identifies this execution end to end — results, events and
+    /// cancellations all refer back to it.
     pub plan_id: PlanId,
+    /// The compiled plan the worker will execute.
     pub plan: ExecutionPlan,
     /// Input data — inline for small values, DataRef for large ones.
     pub input: Option<InputSource>,
@@ -183,6 +201,14 @@ pub struct SerializedPlan {
     /// Fit or Forward.
     #[serde(default)]
     pub mode: ExecutionMode,
+    /// The run's experiment seed, folded into every cache key on the
+    /// worker exactly as it is locally. Absent (the pre-seed wire
+    /// format) means unseeded — which shares cache lines across a
+    /// sweep's seeds, the bug this field exists to close.
+    #[serde(default)]
+    pub seed: Option<i64>,
+    /// Free-form annotations that travel with the plan (experiment name,
+    /// submitter, ...). The worker carries them; it never interprets them.
     pub metadata: serde_json::Value,
 }
 
@@ -224,25 +250,32 @@ impl SerializedPlan {
             input: None,
             filters: Vec::new(),
             mode: ExecutionMode::Forward,
+            seed: None,
             metadata: serde_json::json!({}),
         }
     }
 
+    /// Attach the plan's input data — inline or by reference.
     pub fn with_input(mut self, input: InputSource) -> Self {
         self.input = Some(input);
         self
     }
 
+    /// Attach the filter payloads the worker must reconstruct before
+    /// the plan can run.
     pub fn with_filters(mut self, filters: Vec<SerializedFilter>) -> Self {
         self.filters = filters;
         self
     }
 
+    /// Choose fit or forward execution (the default is
+    /// [`ExecutionMode::Forward`]).
     pub fn with_mode(mut self, mode: ExecutionMode) -> Self {
         self.mode = mode;
         self
     }
 
+    /// Replace the free-form metadata (defaults to `{}`).
     pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
         self.metadata = metadata;
         self
@@ -278,62 +311,93 @@ impl SerializedPlan {
 pub enum WorkerToCoordinator {
     /// Worker announces itself.
     Register {
+        /// The identity this worker will report in every later message.
         worker_id: WorkerId,
+        /// What the worker can run — the coordinator places plans by these.
         capabilities: Capabilities,
     },
 
     /// Periodic health check.
     Heartbeat {
+        /// Sender.
         worker_id: WorkerId,
+        /// A load snapshot the coordinator reads for placement decisions.
         load: LoadMetrics,
     },
 
     /// Execution event streamed back in real-time.
     Event {
+        /// Sender.
         worker_id: WorkerId,
+        /// Which execution the event belongs to.
         plan_id: PlanId,
+        /// The runtime event, forwarded verbatim.
         event: Event,
     },
 
     /// Plan execution completed.
     PlanResult {
+        /// Sender.
         worker_id: WorkerId,
+        /// Which execution finished.
         plan_id: PlanId,
+        /// Success with its output, or failure with the error.
         result: PlanResult,
     },
 
     /// Python job progress update.
     JobProgress {
+        /// Sender.
         worker_id: WorkerId,
+        /// Which Python job is reporting.
         job_id: String,
+        /// Coarse stage label ("environment", "execute", ...).
         phase: String,
+        /// Which phase the job is in, 1-based.
         step: u32,
+        /// How many phases there are in total.
         total: u32,
+        /// Job-defined metrics at this point; `{}` when it has none yet.
         metrics: serde_json::Value,
     },
 
     /// Python job result.
     JobResult {
+        /// Sender.
         worker_id: WorkerId,
+        /// Which Python job finished.
         job_id: String,
+        /// Whether the job's process exited cleanly.
         success: bool,
+        /// The last JSON line the job printed to stdout — the job's way
+        /// of reporting final metrics; `{}` when it printed none.
         metrics: serde_json::Value,
+        /// Captured stdout on success; stderr followed by stdout on
+        /// failure, so the traceback comes first.
         output: String,
+        /// Wall-clock execution time in milliseconds.
         duration_ms: u64,
     },
 
     // ── Distributed training responses ──
     /// Response to GetState: trained filter states.
     StateResult {
+        /// Sender.
         worker_id: WorkerId,
+        /// Which execution the states came from.
         plan_id: PlanId,
+        /// Trained state per requested node id.
         states: std::collections::HashMap<String, Value>,
     },
 
     /// Response to GetGradients: gradient data.
     GradientsResult {
+        /// Sender.
         worker_id: WorkerId,
+        /// Which execution produced the gradients.
         plan_id: PlanId,
+        /// Gradient payload per requested node id, opaque bytes for the
+        /// aggregator to combine.
         gradients: std::collections::HashMap<String, Value>,
     },
 }
@@ -341,8 +405,13 @@ pub enum WorkerToCoordinator {
 /// A Python pipeline job: source files + requirements for isolated execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythonPipelineJob {
+    /// Identifies this job in progress updates and its result.
     pub job_id: String,
+    /// Which pipeline the files define. Also names the isolated
+    /// environment, so re-running the same pipeline reuses its venv.
     pub pipeline_id: String,
+    /// The investigation this job belongs to — grouping across jobs,
+    /// carried for the record.
     pub investigation_id: String,
     /// Source files: path → content
     pub files: Vec<PipelineFile>,
@@ -359,7 +428,9 @@ pub struct PythonPipelineJob {
 /// A source file in a pipeline job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineFile {
+    /// Destination path, relative to the job's working directory.
     pub path: String,
+    /// Full file content, written verbatim.
     pub content: String,
 }
 
@@ -368,16 +439,28 @@ pub struct PipelineFile {
 #[serde(tag = "type")]
 pub enum CoordinatorToWorker {
     /// Accept worker registration.
-    Registered { worker_id: WorkerId },
+    Registered {
+        /// Echoes the id the worker registered under.
+        worker_id: WorkerId,
+    },
 
     /// Assign a native Soma plan for execution.
-    AssignPlan { plan: SerializedPlan },
+    AssignPlan {
+        /// The plan, its input, and the filters to reconstruct.
+        plan: SerializedPlan,
+    },
 
     /// Assign a Python pipeline job (with environment isolation).
-    AssignPythonJob { job: PythonPipelineJob },
+    AssignPythonJob {
+        /// Sources, requirements and entry point to run in isolation.
+        job: PythonPipelineJob,
+    },
 
     /// Cancel a running plan/job.
-    CancelPlan { plan_id: PlanId },
+    CancelPlan {
+        /// Which execution to stop.
+        plan_id: PlanId,
+    },
 
     /// Request current status.
     StatusRequest,
@@ -386,30 +469,42 @@ pub enum CoordinatorToWorker {
     Ping,
 
     /// Graceful shutdown: worker should finish running plans and exit.
-    Shutdown { reason: String },
+    Shutdown {
+        /// Why the coordinator asked; for the worker's log, not logic.
+        reason: String,
+    },
 
     // ── Distributed training messages ──
     /// Request trained states from specific filters.
     GetState {
+        /// Which execution holds the filters.
         plan_id: PlanId,
+        /// Nodes whose trained state is wanted.
         node_ids: Vec<String>,
     },
 
     /// Load states into filters (e.g. after FedAvg aggregation).
     SetState {
+        /// Which execution holds the filters.
         plan_id: PlanId,
+        /// Replacement state per node id, loaded into each filter.
         states: std::collections::HashMap<String, Value>,
     },
 
     /// Request gradients from filters (for AllReduce in DataParallel).
     GetGradients {
+        /// Which execution holds the filters.
         plan_id: PlanId,
+        /// Nodes whose gradients are wanted.
         node_ids: Vec<String>,
     },
 
     /// Apply aggregated gradients (after AllReduce).
     ApplyGradients {
+        /// Which execution holds the filters.
         plan_id: PlanId,
+        /// Aggregated gradients per node id; each filter's optimizer
+        /// steps with them.
         gradients: std::collections::HashMap<String, Value>,
     },
 }
@@ -420,9 +515,14 @@ pub enum CoordinatorToWorker {
 #[non_exhaustive]
 pub enum OutputDelivery {
     /// Small output — embedded directly in the WS message.
-    Inline { value: Value },
+    Inline {
+        /// The output itself.
+        value: Value,
+    },
     /// Large output — stored on worker, download via HTTP GET /download?key=...
     Reference {
+        /// The download key; `WsTransport::resolve_output` turns it back
+        /// into a value.
         data_ref: somatize_core::store::DataRef,
     },
 }
@@ -439,16 +539,22 @@ pub enum OutputDelivery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum PlanResult {
+    /// The plan ran to completion.
     Success {
+        /// The final output — inline, or a reference to download.
         output: OutputDelivery,
+        /// Wall-clock execution time in milliseconds.
         duration_ms: u64,
         /// Trained states returned after Fit mode (node_id → state).
         /// Empty for Forward mode.
         #[serde(default)]
         states: std::collections::HashMap<String, Value>,
     },
+    /// The plan did not complete.
     Failed {
+        /// What went wrong, as the worker reported it.
         error: String,
+        /// Wall-clock time until the failure, in milliseconds.
         duration_ms: u64,
     },
 }
@@ -457,14 +563,22 @@ pub enum PlanResult {
 ///
 /// Wire format: msgpack-encoded StreamMessage (efficient binary, no JSON overhead).
 /// Client sends StreamBegin + N × ChunkData + StreamEnd.
-/// Worker responds with ChunkResult per chunk + StreamComplete at the end.
+/// Worker responds with ChunkResult per chunk — except while a
+/// Barrier-mode node is accumulating, which yields nothing until the
+/// flush — and StreamComplete at the end.
+///
+/// The worker drives each session with the runtime's `StreamRun`, the
+/// same stream executor a local `Graph.stream()` uses, so chunk caching
+/// and StreamMode semantics do not fork between local and remote.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[non_exhaustive]
 pub enum StreamMessage {
     /// Begin a streaming session.
     StreamBegin {
+        /// Names the session; every later frame quotes it.
         stream_id: String,
+        /// The execution id the session runs under.
         plan_id: PlanId,
         /// Number of chunks (None if unknown ahead of time).
         total_chunks: Option<usize>,
@@ -473,21 +587,34 @@ pub enum StreamMessage {
     },
     /// A single chunk of input data.
     ChunkData {
+        /// Which session the chunk belongs to.
         stream_id: String,
+        /// Position in the stream, echoed back in the matching
+        /// [`StreamMessage::ChunkResult`].
         chunk_index: usize,
+        /// The chunk itself.
         value: Value,
     },
     /// All chunks have been sent.
-    StreamEnd { stream_id: String },
+    StreamEnd {
+        /// Which session the sender has finished feeding.
+        stream_id: String,
+    },
     /// Result for a processed chunk (streamed back to client).
     ChunkResult {
+        /// Which session produced the result.
         stream_id: String,
+        /// Index of the input chunk this result answers.
         chunk_index: usize,
+        /// The processed chunk.
         value: Value,
     },
     /// Final result after all chunks processed.
     StreamComplete {
+        /// Which session finished.
         stream_id: String,
+        /// The flush output on success — where Barrier-mode results
+        /// arrive — or the failure that ended the run.
         result: PlanResult,
     },
 }
@@ -678,6 +805,7 @@ mod tests {
                 }),
                 filters: vec![],
                 mode: ExecutionMode::default(),
+                seed: None,
                 metadata: serde_json::json!({"experiment": "test"}),
             },
         };

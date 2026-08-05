@@ -13,24 +13,40 @@ use serde::{Deserialize, Serialize};
 /// A worker's capabilities and current load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerInfo {
+    /// Stable identifier assignments and transfers refer to.
     pub id: String,
+    /// Human-readable name, carried into [`Assignment::worker_name`] so a
+    /// distribution plan reads without a worker lookup.
     pub name: String,
+    /// Capability tags (e.g. `"gpu"`) matched against a plan's
+    /// `RemoteTarget::Tag` requirements.
     pub tags: Vec<String>,
+    /// Whether the worker has a GPU.
     pub gpu: bool,
+    /// CPU cores available on the worker.
     pub cpu_cores: usize,
+    /// Jobs currently running; the load side of [`available_slots`](Self::available_slots).
     pub active_jobs: usize,
+    /// Upper bound on concurrent jobs; the capacity side of
+    /// [`available_slots`](Self::available_slots).
     pub max_concurrent: usize,
 }
 
 impl WorkerInfo {
+    /// How many more jobs this worker can take right now. Saturates at
+    /// zero: a worker reporting more active jobs than its limit is full,
+    /// not underflowed.
     pub fn available_slots(&self) -> usize {
         self.max_concurrent.saturating_sub(self.active_jobs)
     }
 
+    /// Whether the worker can take at least one more job. [`schedule`]
+    /// filters on this before any placement is attempted.
     pub fn has_capacity(&self) -> bool {
         self.available_slots() > 0
     }
 
+    /// Whether the worker advertises `tag` among its capability tags.
     pub fn matches_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t == tag)
     }
@@ -39,10 +55,18 @@ impl WorkerInfo {
 /// Assignment of a node/phase to a specific worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assignment {
+    /// The plan node being placed.
     pub node_id: String,
+    /// Id of the chosen [`WorkerInfo`].
     pub worker_id: String,
+    /// The worker's display name, copied here so the plan is readable on
+    /// its own.
     pub worker_name: String,
+    /// The kind of phase this node runs in.
     pub phase: Phase,
+    /// Why the scheduler chose this worker ("least loaded worker",
+    /// "grouped with differentiable neighbors", ...) — diagnostic text,
+    /// not machine-read.
     pub reason: String,
 }
 
@@ -50,37 +74,64 @@ pub struct Assignment {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
+    /// Nodes run one after another — kept on a single worker to avoid
+    /// moving intermediate data.
     Sequential,
+    /// Independent branches run concurrently — distributed across workers.
     Parallel,
-    Trial { trial_index: usize, total: usize },
+    /// One trial of a study, placed round-robin across all workers.
+    Trial {
+        /// Zero-based index of this trial within the study.
+        trial_index: usize,
+        /// Total number of trials in the study.
+        total: usize,
+    },
 }
 
 /// The complete distribution plan produced by the scheduler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributionPlan {
+    /// One entry per placed node: which worker, and why.
     pub assignments: Vec<Assignment>,
+    /// The ordered phases the plan executes in.
     pub phases: Vec<PlanPhase>,
+    /// Data movements required where consecutive nodes landed on
+    /// different workers.
     pub data_transfers: Vec<DataTransfer>,
+    /// Non-fatal conditions ("No workers available — will execute
+    /// locally", "All workers are at capacity"). An empty `assignments`
+    /// with a warning means: run locally instead.
     pub warnings: Vec<String>,
 }
 
 /// A phase in the execution plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanPhase {
+    /// Position of this phase in execution order, starting at 0.
     pub phase_index: usize,
+    /// Whether the phase runs its nodes sequentially, in parallel, or as
+    /// a study trial.
     pub phase_type: Phase,
+    /// Every node the phase covers.
     pub node_ids: Vec<String>,
+    /// The workers involved: one id for a sequential phase, one per
+    /// branch for a parallel one.
     pub worker_ids: Vec<String>,
 }
 
 /// A data transfer between workers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataTransfer {
+    /// The node whose output must move.
     pub from_node: String,
+    /// The node that consumes it on the other worker.
     pub to_node: String,
+    /// Worker id the data currently lives on.
     pub from_worker: String,
+    /// Worker id the data must reach.
     pub to_worker: String,
-    pub transfer_type: String, // "s3", "direct", "cached"
+    /// How the data moves: `"s3"`, `"direct"`, or `"cached"`.
+    pub transfer_type: String,
 }
 
 /// Mutable state accumulated during scheduling.

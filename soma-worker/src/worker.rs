@@ -12,7 +12,10 @@ use std::time::Instant;
 
 /// Worker state: manages execution of plans received from a coordinator.
 pub struct Worker {
+    /// The identity this worker registers and reports under.
     pub id: WorkerId,
+    /// What this worker can run, announced to the coordinator at
+    /// registration.
     pub capabilities: Capabilities,
     event_bus: Arc<EventBus>,
     cache: Arc<dyn CacheStore>,
@@ -48,6 +51,10 @@ fn default_python() -> String {
 }
 
 impl Worker {
+    /// A worker with an in-memory cache, an empty catalog, and per-worker
+    /// temp/env directories derived from `id`. Filters arrive later, with
+    /// the plans; the interpreter defaults to `$SOMA_PYTHON`, then
+    /// `python3` — see [`Worker::with_python`] for why that matters.
     pub fn new(id: impl Into<String>, capabilities: Capabilities) -> Self {
         let worker_id: String = id.into();
         let temp_path = std::env::temp_dir().join(format!("soma-uploads-{worker_id}"));
@@ -108,9 +115,24 @@ impl Worker {
         self.catalog.register(node_id, filter);
     }
 
-    /// Get a filter by node_id (for stream executor construction).
+    /// Get a filter by node_id.
     pub fn get_filter(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
         self.catalog.get(node_id)
+    }
+
+    /// The node catalog — what a stream driver is built over.
+    pub fn catalog(&self) -> &NodeCatalog {
+        &self.catalog
+    }
+
+    /// The worker's event bus.
+    pub fn event_bus(&self) -> &Arc<EventBus> {
+        &self.event_bus
+    }
+
+    /// The worker's cache store.
+    pub fn cache(&self) -> &Arc<dyn CacheStore> {
+        &self.cache
     }
 
     /// Get trained state for a filter.
@@ -316,8 +338,9 @@ impl Worker {
             .as_ref()
             .map(|src| src.resolve(self.data_store.as_deref(), &self.temp_store));
 
-        // DataStore-backed streaming: if input is a large DataRef and we have a store,
-        // read chunks via get_rows() and process with StreamExecutor (no full materialization).
+        // DataStore-backed streaming: if input is a large DataRef and we
+        // have a store, read chunks via get_rows() and stream them (no
+        // full materialization).
         if let Some(InputSource::Reference { data_ref }) = &plan.input
             && let Some(store) = self.data_store.clone()
             && let Ok(meta) = store.meta(data_ref)
@@ -389,13 +412,14 @@ impl Worker {
                     // plan and no graph, so it has no topology to consult.
                     // Correct for the pipelines that get dispatched, and
                     // stated here rather than assumed inside the runner.
-                    let ctx = somatize_runtime::runner::RunContext::linear(
+                    let mut ctx = somatize_runtime::runner::RunContext::linear(
                         &self.catalog,
                         self.cache.as_ref(),
                         &self.event_bus,
                         &run_id,
                         &plan.plan,
                     );
+                    ctx.seed = plan.seed;
                     runner
                         .fit(&plan.plan, &ctx, &x, y.as_ref())
                         .map(|(output, all_outputs)| {
@@ -420,13 +444,14 @@ impl Worker {
             }
             ExecutionMode::Forward => {
                 let run_id = format!("worker_forward_{}", plan.plan_id);
-                let ctx = somatize_runtime::runner::RunContext::linear(
+                let mut ctx = somatize_runtime::runner::RunContext::linear(
                     &self.catalog,
                     self.cache.as_ref(),
                     &self.event_bus,
                     &run_id,
                     &plan.plan,
                 );
+                ctx.seed = plan.seed;
                 runner
                     .forward(&plan.plan, &ctx, &x)
                     .map(|output| (output, std::collections::HashMap::new()))
@@ -457,8 +482,10 @@ impl Worker {
         }
     }
 
-    /// DataStore-backed streaming: read chunks via get_rows(), process with StreamExecutor.
-    /// Avoids loading the entire dataset into memory.
+    /// DataStore-backed streaming: read chunks via get_rows() and drive
+    /// them through the runtime's `StreamRun` — the same primitives,
+    /// cache, and per-node events as a local stream, without loading the
+    /// dataset into memory. The concatenated output is the plan result.
     fn execute_streamed_from_store(
         &mut self,
         plan: &SerializedPlan,
@@ -467,28 +494,30 @@ impl Worker {
         meta: &somatize_core::store::StoreMeta,
         start: Instant,
     ) -> PlanResult {
-        use somatize_runtime::executors::stream::{FittedFilter, StreamExecutor};
+        use somatize_runtime::{Context, StreamOutput, StreamRun};
+
+        /// Rows per chunk when auto-streaming from a DataStore — also the
+        /// threshold that triggers this path (see `total_rows > 1024`).
+        const STREAM_CHUNK_ROWS: usize = 1024;
 
         let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
-        let fitted: Vec<FittedFilter> = node_ids
-            .iter()
-            .filter_map(|id| {
-                let filter = self.catalog.get(id)?;
-                let state = self
-                    .catalog
-                    .get_state(id)
-                    .unwrap_or_else(|| Arc::new(Value::Empty));
-                Some(FittedFilter {
-                    name: id.clone(),
-                    filter,
-                    state,
-                })
-            })
-            .collect();
 
-        let mut executor = StreamExecutor::new(fitted);
-        let chunk_size = 1024;
+        // StreamRun refuses a node the catalog does not know — a failed
+        // plan, never a silently shorter chain (a `filter_map` here once
+        // streamed a 3-node plan through 2 filters and reported success).
+        let mut run = match StreamRun::new(&node_ids, &self.catalog) {
+            Ok(run) => run,
+            Err(e) => {
+                return PlanResult::Failed {
+                    error: e.to_string(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                };
+            }
+        };
+
+        let chunk_size = STREAM_CHUNK_ROWS;
         let run_id = format!("worker_stream_{}", plan.plan_id);
+        let mut ctx = Context::new(self.event_bus.clone(), run_id.clone()).with_seed(plan.seed);
 
         self.event_bus.emit(Event::RunStarted {
             run_id: run_id.clone(),
@@ -498,8 +527,20 @@ impl Worker {
                 parallel_branches: 0,
             },
         });
+        // Every early return below is a failed run; say so on the bus
+        // instead of leaving the RunStarted bracket open.
+        let fail = |bus: &EventBus, error: String, start: Instant| {
+            bus.emit(Event::RunFailed {
+                run_id: run_id.clone(),
+                error: error.clone(),
+            });
+            PlanResult::Failed {
+                error,
+                duration_ms: start.elapsed().as_millis() as u64,
+            }
+        };
 
-        let mut last_output = Value::Empty;
+        let mut output = StreamOutput::new();
         let total = meta.total_rows;
         let mut chunk_idx = 0;
 
@@ -508,45 +549,46 @@ impl Worker {
             let chunk = match store.get_rows(data_ref, row_start, len) {
                 Ok(c) => c,
                 Err(e) => {
-                    return PlanResult::Failed {
-                        error: format!("get_rows({row_start}..{}): {e}", row_start + len),
-                        duration_ms: start.elapsed().as_millis() as u64,
-                    };
+                    let error = format!("get_rows({row_start}..{}): {e}", row_start + len);
+                    return fail(&self.event_bus, error, start);
                 }
             };
 
-            match executor.process_chunk(chunk) {
-                Ok(Some(output)) => last_output = output,
+            match run.process_chunk(chunk, &mut ctx, self.cache.as_ref()) {
+                Ok(Some(out)) => output.push(out),
                 Ok(None) => {} // Barrier — accumulating
                 Err(e) => {
-                    return PlanResult::Failed {
-                        error: format!("stream chunk {chunk_idx}: {e}"),
-                        duration_ms: start.elapsed().as_millis() as u64,
-                    };
+                    return fail(
+                        &self.event_bus,
+                        format!("stream chunk {chunk_idx}: {e}"),
+                        start,
+                    );
                 }
             }
             chunk_idx += 1;
         }
 
-        // Flush barrier filters
-        match executor.flush() {
-            Ok(Some(output)) => last_output = output,
+        // Flush barrier filters.
+        match run.flush(&mut ctx, self.cache.as_ref()) {
+            Ok(Some(out)) => output.push(out),
             Ok(None) => {}
             Err(e) => {
-                return PlanResult::Failed {
-                    error: format!("stream flush: {e}"),
-                    duration_ms: start.elapsed().as_millis() as u64,
-                };
+                return fail(&self.event_bus, format!("stream flush: {e}"), start);
             }
         }
+        run.finish(&ctx);
 
         tracing::info!(
             "Streamed {chunk_idx} chunks ({total} rows) in {}ms",
             start.elapsed().as_millis()
         );
 
+        self.event_bus.emit(Event::RunCompleted {
+            run_id,
+            duration: start.elapsed(),
+        });
         PlanResult::Success {
-            output: self.wrap_output(last_output),
+            output: self.wrap_output(output.finish()),
             duration_ms: start.elapsed().as_millis() as u64,
             states: std::collections::HashMap::new(),
         }
@@ -648,6 +690,7 @@ mod tests {
             }),
             filters: vec![],
             mode: ExecutionMode::default(),
+            seed: None,
             metadata: serde_json::json!({}),
         };
 
@@ -685,6 +728,7 @@ mod tests {
             input: None,
             filters: vec![],
             mode: ExecutionMode::default(),
+            seed: None,
             metadata: serde_json::json!({}),
         };
 
@@ -737,6 +781,7 @@ mod tests {
             }),
             filters: vec![],
             mode: ExecutionMode::default(),
+            seed: None,
             metadata: serde_json::json!({}),
         };
 
@@ -770,6 +815,7 @@ mod tests {
             }),
             filters: vec![],
             mode: ExecutionMode::default(),
+            seed: None,
             metadata: serde_json::json!({}),
         };
 
@@ -789,5 +835,76 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Event::NodeCompleted { .. }))
         );
+    }
+
+    /// The DataStore auto-stream path runs through the runtime's
+    /// `StreamRun`: the plan output is the CONCATENATED stream (the old
+    /// executor returned only the last chunk's output), events carry a
+    /// closed Run bracket, and the plan's seed salts the chunk cache.
+    #[test]
+    fn a_large_data_ref_streams_concatenated_through_stream_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(dir.path().join("data")));
+
+        // 2048 rows > the 1024-row auto-stream threshold: two chunks.
+        let n = 2048usize;
+        let values: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let key = somatize_core::cache::CacheKey::hash_data(b"stream-input");
+        let data_ref = store.put(&key, &Value::tensor(values, vec![n])).unwrap();
+
+        let mut worker = make_worker().with_data_store(store);
+        let mut rx = worker.subscribe();
+        worker.register_filter("doubler", Box::new(TestDoubler));
+
+        let mut plan = SerializedPlan::new(
+            "p_stream",
+            ExecutionPlan::Execute {
+                node_id: "doubler".into(),
+            },
+        );
+        plan.input = Some(InputSource::Reference { data_ref });
+        plan.seed = Some(7);
+
+        let result = worker.execute_plan(&plan);
+        let PlanResult::Success { output, .. } = result else {
+            panic!("stream plan failed: {result:?}");
+        };
+        let value = match output {
+            OutputDelivery::Inline { value } => value,
+            OutputDelivery::Reference { data_ref } => worker.temp_store().get(&data_ref).unwrap(),
+        };
+        let (data, shape) = value.as_tensor().unwrap();
+        assert_eq!(
+            shape,
+            &[n],
+            "the output is the whole stream, not the last chunk"
+        );
+        assert_eq!(data[0], 0.0);
+        assert_eq!(data[n - 1], (n - 1) as f64 * 2.0);
+
+        let mut started = 0;
+        let mut node_completed = 0;
+        let mut run_completed = 0;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                Event::NodeStarted { node_id, .. } => {
+                    assert_eq!(node_id, "doubler");
+                    started += 1;
+                }
+                Event::NodeCompleted {
+                    node_id,
+                    output_summary,
+                    ..
+                } => {
+                    assert_eq!(node_id, "doubler");
+                    assert!(output_summary.contains("2 chunks"), "{output_summary}");
+                    node_completed += 1;
+                }
+                Event::RunCompleted { .. } => run_completed += 1,
+                _ => {}
+            }
+        }
+        assert_eq!((started, node_completed), (1, 1), "one bracket per node");
+        assert_eq!(run_completed, 1, "the run bracket must close");
     }
 }

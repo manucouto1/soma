@@ -1,3 +1,5 @@
+//! [`TieredCache`] — multi-level [`CacheStore`] with promotion on hit.
+
 use somatize_core::cache::{CacheKey, CacheStore, CacheTier, EntryMeta};
 use somatize_core::error::Result;
 use somatize_core::value::Value;

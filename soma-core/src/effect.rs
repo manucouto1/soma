@@ -37,7 +37,12 @@ pub enum Effect {
     Llm(LlmRequest),
 
     /// Invoke a registered tool.
-    Tool { name: String, args: Value },
+    Tool {
+        /// The name the tool was registered under — a [`ToolSpec::name`].
+        name: String,
+        /// Arguments, as JSON shaped by the tool's [`ToolSpec::input_schema`].
+        args: Value,
+    },
 
     /// Run a Soma graph and hand back its output.
     ///
@@ -45,8 +50,13 @@ pub enum Effect {
     /// tool for an agent: it runs through the ordinary compiler and executor,
     /// with the ordinary cache, and the agent just sees a result.
     Graph {
+        /// The graph to run. Structure travels in the effect itself, so the
+        /// handler needs no registry lookup to know what it is performing —
+        /// only the node *implementations* are resolved on the other side.
         graph: Box<Graph>,
+        /// The input handed to the sub-graph's root nodes.
         input: Value,
+        /// Forward with the states already fitted, or fit first.
         #[serde(default)]
         mode: GraphEffectMode,
     },
@@ -55,7 +65,13 @@ pub enum Effect {
     Sleep(Duration),
 
     /// An effect this runtime doesn't know about, for host-supplied handlers.
-    Custom { kind: String, payload: Value },
+    Custom {
+        /// Which handler this is meant for — the string
+        /// [`EffectHandler::handles`] implementations match on.
+        kind: String,
+        /// Whatever that handler expects.
+        payload: Value,
+    },
 }
 
 impl Effect {
@@ -126,10 +142,17 @@ pub enum GraphEffectMode {
 /// A model call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
+    /// Which model to ask, in the provider's naming.
     pub model: String,
+    /// The conversation so far, oldest turn first.
     pub messages: Messages,
+    /// System prompt, kept apart from `messages` because providers disagree
+    /// about where it goes — a `system` turn, a top-level field, or folded
+    /// into the first user turn. The client places it at its edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Cap on generated tokens. A reply that hits it stops with
+    /// [`StopReason::MaxTokens`], which steps treat as an error, not an answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     /// Tools the model may call, as JSON Schema definitions.
@@ -151,6 +174,13 @@ pub struct LlmRequest {
 }
 
 impl LlmRequest {
+    /// A request with only the essentials: a model and a conversation.
+    ///
+    /// Everything else is opt-in through the `with_*` builders — and because
+    /// unset options are skipped when the request is serialized, they are
+    /// also absent from the journal key ([`Effect::cache_key`]). Growing this
+    /// struct therefore never moves the keys of requests that predate the
+    /// new knob.
     pub fn new(model: impl Into<String>, messages: Messages) -> Self {
         Self {
             model: model.into(),
@@ -163,21 +193,45 @@ impl LlmRequest {
         }
     }
 
+    /// Set the system prompt.
+    ///
+    /// Stated here once, placed by the provider client wherever this
+    /// endpoint wants it — as its own turn, or prepended to the first user
+    /// turn when the endpoint refuses a system role.
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
         self.system = Some(system.into());
         self
     }
 
+    /// Cap the reply at `n` generated tokens.
+    ///
+    /// A budget, not a target: a reply that runs into it is a cut-off
+    /// thought, and [`LlmResponse::reject_non_answers`] turns it into an
+    /// error rather than letting the fragment flow downstream as an answer.
     pub fn with_max_tokens(mut self, n: u32) -> Self {
         self.max_tokens = Some(n);
         self
     }
 
+    /// Offer the model these tools, replacing any previous set.
+    ///
+    /// Offering is all this does. When the model wants one, the reply stops
+    /// with [`StopReason::ToolUse`] and it is the step's job to perform the
+    /// calls — typically as [`Effect::Tool`] — and ask the model to continue
+    /// with the results appended to the conversation.
     pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
         self.tools = tools;
         self
     }
 
+    /// Ask for this much reasoning, in the provider's vocabulary
+    /// (`low` … `max`).
+    ///
+    /// Passed through verbatim (`reasoning_effort` on OpenAI-shaped
+    /// endpoints); endpoints without the concept ignore the unknown field.
+    /// Like every other knob it is part of the journal key — the same
+    /// question at a different effort is a different request, so a replay
+    /// never serves the cheaper answer.
     pub fn with_effort(mut self, effort: impl Into<String>) -> Self {
         self.effort = Some(effort.into());
         self
@@ -222,26 +276,36 @@ pub trait EffectHandler: Send + Sync {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum EffectResult {
+    /// A model's reply to [`Effect::Llm`].
     Llm(LlmResponse),
     /// A tool's output, or its error text.
     Tool {
+        /// What the tool produced — its error text when `is_error` is set.
         output: Value,
+        /// The tool ran and reported failure. Reported, not raised, so the
+        /// step (or the model, told via a tool-result block) can adapt.
         #[serde(default)]
         is_error: bool,
     },
+    /// The output of the sub-graph run requested by [`Effect::Graph`].
     Graph(Value),
     /// What a node spawned by [`crate::step::Transition::Spawn`] produced.
     Node(Value),
+    /// The sleep elapsed — or was replayed from the journal, and nobody slept.
     Slept,
+    /// Whatever a host-supplied handler returned for [`Effect::Custom`].
     Custom(Value),
     /// The effect could not be performed. Handed to the step rather than
     /// raised, so it can retry, fall back, or give up deliberately.
     Failed {
+        /// What went wrong, as text the step can quote or act on.
         message: String,
     },
 }
 
 impl EffectResult {
+    /// Did this effect fail — either outright ([`Self::Failed`]) or as a
+    /// tool that ran and reported an error?
     pub fn is_error(&self) -> bool {
         matches!(
             self,
@@ -266,7 +330,10 @@ impl EffectResult {
 pub struct LlmResponse {
     /// The assistant turn, blocks intact — prose and tool calls together.
     pub message: crate::message::Message,
+    /// Why generation ended. Checked before the text is trusted —
+    /// see [`Self::reject_non_answers`].
     pub stop_reason: StopReason,
+    /// Token accounting for this one call.
     #[serde(default)]
     pub usage: Usage,
     /// Which model actually served this, which may differ from the one asked
@@ -323,13 +390,17 @@ impl LlmResponse {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StopReason {
+    /// The model finished its turn on its own — the one reason that is an answer.
     EndTurn,
+    /// Generation hit `max_tokens` mid-answer; the text is a fragment.
+    /// [`LlmResponse::reject_non_answers`] turns this into an error.
     MaxTokens,
     /// The model wants tools run before it continues.
     ToolUse,
     /// The provider declined. Carried as a value, not an error: the step
     /// decides whether to rephrase, fall back, or surface it.
     Refusal {
+        /// The provider's refusal category, when it gave one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         category: Option<String>,
     },
@@ -338,17 +409,23 @@ pub enum StopReason {
 /// Token accounting for one call.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// Tokens the model read.
     #[serde(default)]
     pub input_tokens: u64,
+    /// Tokens the model generated.
     #[serde(default)]
     pub output_tokens: u64,
+    /// Input tokens served from the provider's prompt cache.
     #[serde(default)]
     pub cache_read_tokens: u64,
+    /// Input tokens written to the provider's prompt cache.
     #[serde(default)]
     pub cache_write_tokens: u64,
 }
 
 impl Usage {
+    /// Input plus output tokens — the headline number for cost and for
+    /// watching a conversation approach its context limit.
     pub fn total(&self) -> u64 {
         self.input_tokens + self.output_tokens
     }
@@ -381,6 +458,7 @@ pub struct NodeSpec {
 }
 
 impl NodeSpec {
+    /// A spec for one spawned instance of `runs`, unlabelled.
     pub fn new(runs: impl Into<NodeId>, input: Value) -> Self {
         Self {
             runs: runs.into(),
@@ -389,6 +467,8 @@ impl NodeSpec {
         }
     }
 
+    /// Name this instance, so siblings spawned from the same node stay
+    /// tellable apart in events and the journal.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self
@@ -409,6 +489,17 @@ pub enum JoinPolicy {
     First,
 }
 
+impl JoinPolicy {
+    /// A label for telemetry, in the spirit of [`Effect::label`].
+    pub fn label(&self) -> &'static str {
+        match self {
+            JoinPolicy::All => "all",
+            JoinPolicy::AllSettled => "all-settled",
+            JoinPolicy::First => "first",
+        }
+    }
+}
+
 /// Why a run stopped and what would restart it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -416,12 +507,17 @@ pub enum JoinPolicy {
 pub enum SuspendReason {
     /// Waiting on a person.
     Human {
+        /// What to ask them.
         prompt: String,
+        /// JSON Schema the answer should satisfy, when a shape is expected.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         schema: Option<serde_json::Value>,
     },
     /// Waiting on something outside the run entirely.
-    External { token: String },
+    External {
+        /// Opaque correlation token; whoever resumes the run quotes it back.
+        token: String,
+    },
 }
 
 impl SuspendReason {

@@ -518,3 +518,65 @@ def plot_gantt(run_view):
         bargap=0.3,
     )
     return fig
+
+
+# Effect kinds in fixed categorical order — never cycled, never rank-
+# dependent. Anything unrecognized folds into "other" (muted), it does
+# not invent a ninth hue.
+_EFFECT_SLOTS = {"llm": 0, "tool": 1, "graph": 2, "sleep": 3, "custom": 4}
+
+
+def plot_agentic(run_view):
+    """Waterfall of an agent run's effect executions (model calls, tools,
+    sub-graphs), colored by effect kind. Replayed effects — served from
+    the journal instead of performed — carry a hatch pattern; a failed
+    effect gets a status-red outline and says so on hover."""
+    go = _go()
+    spans = run_view.agentic_timeline()
+    spans = [s for s in spans if s["started_ts"]]
+    if not spans:
+        raise ValueError(f"run {run_view.id} has no agent effect events")
+
+    fig = go.Figure()
+    shown: set[str] = set()
+    for i, s in enumerate(spans):
+        kind = s["effect"].split(":", 1)[0]
+        slot = _EFFECT_SLOTS.get(kind)
+        color = _theme.CATEGORICAL[slot] if slot is not None else _theme.MUTED
+        duration = s["duration_ms"] or 0
+        replay = s["replayed"]
+        marker = {"color": color}
+        if replay:
+            # Secondary encoding, not a new hue: same identity, hatched.
+            marker["pattern"] = {"shape": "/", "fgcolor": _theme.SURFACE, "solidity": 0.35}
+        if s["is_error"]:
+            marker["line"] = {"color": _theme.STATE_COLORS["failed"], "width": 2}
+        fig.add_trace(
+            go.Bar(
+                base=[s["started_ts"]],
+                x=[max(duration, 1)],  # sub-ms spans stay visible
+                y=[f"{s['node_id']} · t{s['turn']} #{i}"],
+                orientation="h",
+                name=kind,
+                legendgroup=kind,
+                showlegend=kind not in shown,
+                marker=marker,
+                hovertemplate=(
+                    f"{s['node_id']} turn {s['turn']}<br>{s['effect']}"
+                    + (" (replayed)" if replay else "")
+                    + (" — ERROR" if s["is_error"] else "")
+                    + f"<br>{duration}ms<extra></extra>"
+                ),
+            )
+        )
+        shown.add(kind)
+    fig.update_layout(
+        template="soma",
+        title=f"Agent activity — {run_view.name}",
+        xaxis={"type": "date", "title": "wall time"},
+        yaxis={"autorange": "reversed", "tickfont": {"size": 11}},
+        barmode="overlay",
+        bargap=0.3,
+        showlegend=len(shown) > 1,
+    )
+    return fig

@@ -26,21 +26,32 @@ pub enum CompileMode {
 /// Diagnostic message emitted during compilation.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
+    /// The node the diagnostic is about.
     pub node_id: NodeId,
+    /// How seriously to take it.
     pub level: DiagnosticLevel,
+    /// Human-readable description of what the compiler noticed.
     pub message: String,
 }
 
+/// Severity of a [`Diagnostic`]. Nothing here fails compilation — a
+/// condition worth stopping for is returned as an error, not collected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticLevel {
+    /// Probably not what the author intended (e.g. a gradient path broken
+    /// by a non-differentiable node); the plan still compiles.
     Warning,
+    /// Worth knowing, nothing to fix.
     Info,
 }
 
 /// Compiled result: the plan plus any diagnostics.
 #[derive(Debug)]
 pub struct CompileResult {
+    /// The executable plan the runtime walks.
     pub plan: ExecutionPlan,
+    /// What the compiler noticed along the way; never fatal (see
+    /// [`DiagnosticLevel`]).
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -82,6 +93,9 @@ pub struct SimpleNodeRegistry {
 }
 
 impl SimpleNodeRegistry {
+    /// An empty registry; populate it with [`register`](Self::register),
+    /// [`register_meta`](Self::register_meta) or
+    /// [`register_step_meta`](Self::register_step_meta).
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -102,12 +116,16 @@ impl SimpleNodeRegistry {
         self.entries.insert(id, (meta.into(), hash));
     }
 
+    /// Register a filter, taking metadata and config hash from the
+    /// instance itself.
     pub fn register(&mut self, node_id: impl Into<String>, filter: &dyn Filter) {
         let id = node_id.into();
         self.entries
             .insert(id, (filter.meta().into(), filter.config_hash()));
     }
 
+    /// Register filter metadata directly, for callers that have no filter
+    /// instance to hand — a plan received over the wire, a test.
     pub fn register_meta(
         &mut self,
         node_id: impl Into<String>,
@@ -189,6 +207,8 @@ pub struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
+    /// A compiler over `graph`, reading node contracts from `registry`.
+    /// Nothing happens until [`compile`](Self::compile) is called.
     pub fn new(graph: &'a Graph, registry: &'a dyn NodeRegistry, mode: CompileMode) -> Self {
         Self {
             graph,
@@ -943,11 +963,22 @@ pub fn compile(
 /// Compile a graph for streaming execution.
 ///
 /// Produces an `ExecutionPlan::Stream` wrapping the topologically sorted
-/// node chain. The runtime will chunk input and process through a
-/// `StreamExecutor` that respects each filter's `StreamMode`.
+/// node chain, which the runtime executes chunk by chunk through the
+/// same primitives `run_node` uses.
+///
+/// Streaming executes a single linear chain of filters — it used to
+/// accept any DAG and silently run it as a chain, which for a diamond
+/// is simply the wrong answer. So this validates what the executor can
+/// honour:
+///
+/// - every node has at most one predecessor and one successor;
+/// - no node is a step (the effect journal keys by `(run, node, turn)`,
+///   so chunk 2 would replay chunk 1's effects — no defensible
+///   semantics);
+/// - `chunk_size > 0`.
 pub fn compile_stream(
     graph: &Graph,
-    _registry: &dyn NodeRegistry,
+    registry: &dyn NodeRegistry,
     chunk_size: usize,
 ) -> Result<CompileResult> {
     graph.validate()?;
@@ -958,6 +989,39 @@ pub fn compile_stream(
             plan: ExecutionPlan::Empty,
             diagnostics: Vec::new(),
         });
+    }
+
+    if chunk_size == 0 {
+        return Err(SomaError::Compilation(
+            "stream chunk_size must be at least 1".into(),
+        ));
+    }
+
+    for id in &sorted {
+        let (preds, succs) = (graph.predecessors(id), graph.successors(id));
+        if preds.len() > 1 || succs.len() > 1 {
+            return Err(SomaError::Compilation(format!(
+                "streaming executes a single linear chain; node `{id}` has {} \
+                 predecessors and {} successors — restructure the graph or use \
+                 the standard forward",
+                preds.len(),
+                succs.len(),
+            )));
+        }
+        match registry.node_meta(id) {
+            Some(meta) if meta.effectful => {
+                return Err(SomaError::Compilation(format!(
+                    "step `{id}` cannot be streamed: effect journaling has no \
+                     per-chunk semantics. Run the graph with the standard forward"
+                )));
+            }
+            Some(_) => {}
+            None => {
+                return Err(SomaError::Compilation(format!(
+                    "graph names node `{id}` but nothing with that id is registered"
+                )));
+            }
+        }
     }
 
     let node_ids: Vec<NodeId> = sorted.into_iter().map(|s| s.to_string()).collect();
@@ -1395,5 +1459,100 @@ mod tests {
                     .all(|s| matches!(s, ExecutionPlan::Execute { .. }))
             );
         }
+    }
+
+    // ── compile_stream ──
+
+    #[test]
+    fn stream_compiles_a_linear_chain() {
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("b", "B", "F")]);
+        let mut registry = SimpleNodeRegistry::new();
+        register_nodes(
+            &mut registry,
+            &["a", "b"],
+            make_meta(FilterKind::Stateless, false),
+        );
+
+        let result = compile_stream(&graph, &registry, 64).unwrap();
+        let ExecutionPlan::Stream {
+            node_ids,
+            chunk_size,
+        } = result.plan
+        else {
+            panic!("expected a Stream plan");
+        };
+        assert_eq!(node_ids, vec!["a", "b"]);
+        assert_eq!(chunk_size, 64);
+    }
+
+    #[test]
+    fn stream_of_an_empty_graph_is_empty() {
+        let result = compile_stream(&Graph::new(), &SimpleNodeRegistry::new(), 64).unwrap();
+        assert!(matches!(result.plan, ExecutionPlan::Empty));
+    }
+
+    #[test]
+    fn stream_rejects_a_zero_chunk() {
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F")]);
+        let mut registry = SimpleNodeRegistry::new();
+        register_nodes(
+            &mut registry,
+            &["a"],
+            make_meta(FilterKind::Stateless, false),
+        );
+
+        let err = compile_stream(&graph, &registry, 0).unwrap_err();
+        assert!(err.to_string().contains("chunk_size"), "{err}");
+    }
+
+    /// A diamond used to stream as a chain in topological order — a
+    /// silently wrong answer. Now it is a compile error naming the node.
+    #[test]
+    fn stream_rejects_a_non_linear_graph_by_name() {
+        let mut graph = Graph::new();
+        for id in ["a", "b", "c", "d"] {
+            graph.add_node(Node::new(id, id, "F"));
+        }
+        graph.add_edge(Edge::data("e1", "a", "b"));
+        graph.add_edge(Edge::data("e2", "a", "c"));
+        graph.add_edge(Edge::data("e3", "b", "d"));
+        graph.add_edge(Edge::data("e4", "c", "d"));
+        let mut registry = SimpleNodeRegistry::new();
+        register_nodes(
+            &mut registry,
+            &["a", "b", "c", "d"],
+            make_meta(FilterKind::Stateless, false),
+        );
+
+        let err = compile_stream(&graph, &registry, 64).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("`a`"), "should name the forking node: {msg}");
+        assert!(msg.contains("linear chain"), "{msg}");
+    }
+
+    /// The effect journal keys by (run, node, turn): chunk 2 would replay
+    /// chunk 1's effects. There is no defensible semantics, so refuse.
+    #[test]
+    fn stream_rejects_a_step_by_name() {
+        let graph = linear_pipeline(vec![Node::new("a", "A", "F"), Node::new("s", "S", "Step")]);
+        let mut registry = SimpleNodeRegistry::new();
+        register_nodes(
+            &mut registry,
+            &["a"],
+            make_meta(FilterKind::Stateless, false),
+        );
+        registry.register_step_meta("s", somatize_core::step::StepMeta::new("S"));
+
+        let err = compile_stream(&graph, &registry, 64).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("`s`"), "{msg}");
+        assert!(msg.contains("cannot be streamed"), "{msg}");
+    }
+
+    #[test]
+    fn stream_reports_an_unregistered_node() {
+        let graph = linear_pipeline(vec![Node::new("ghost", "G", "F")]);
+        let err = compile_stream(&graph, &SimpleNodeRegistry::new(), 64).unwrap_err();
+        assert!(err.to_string().contains("`ghost`"), "{err}");
     }
 }

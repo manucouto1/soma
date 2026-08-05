@@ -122,6 +122,8 @@ view.events()          # enveloped {seq, ts, event_type, ...}, torn lines skippe
 view.metric_series()   # metrics.jsonl (event-log fallback)
 view.node_timings()    # per-node spans: wall times, durations, outcomes
 view.cache_activity()  # hits/misses, per node
+view.agentic_activity()  # agent steps: turns, tokens, effects, tools
+view.agentic_timeline()  # per-effect spans — the agent-run gantt
 view.to_mermaid()      # graph.json + overlay: status colors, durations, flags
 ```
 

@@ -1,3 +1,12 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
+//! Proc macros for Soma filters: `#[derive(SomaFilter)]` (config hash,
+//! metadata, `Searchable`) and `#[derive(SomaStep)]` (a step's journal
+//! identity). The attributes each derive understands are documented on
+//! the derive itself.
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Expr, Fields, Lit, parse_macro_input};
@@ -127,9 +136,7 @@ fn derive_soma_filter_impl(input: DeriveInput) -> syn::Result<proc_macro2::Token
 
     let stream_mode = match struct_attrs.stream.as_deref() {
         Some("Barrier") => quote! { somatize_core::filter::StreamMode::Barrier },
-        Some("Evolving") => {
-            quote! { somatize_core::filter::StreamMode::Evolving { checkpoint_every: 100 } }
-        }
+        Some("Evolving") => quote! { somatize_core::filter::StreamMode::Evolving },
         _ => quote! { somatize_core::filter::StreamMode::FixedState },
     };
 

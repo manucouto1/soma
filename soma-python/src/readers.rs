@@ -348,6 +348,25 @@ pub(crate) fn run_trial_timeline_json(dir: String) -> PyResult<String> {
     to_json_py(&spans)
 }
 
+/// Agent-level activity aggregated per step node (turns, tokens,
+/// effects by label, tool calls, suspensions).
+#[pyfunction]
+pub(crate) fn run_agentic_activity_json(dir: String) -> PyResult<String> {
+    let activity = open_run_reader(&dir)?
+        .agentic_activity()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&activity)
+}
+
+/// Per-effect execution spans (the gantt substrate for agent runs).
+#[pyfunction]
+pub(crate) fn run_agentic_timeline_json(dir: String) -> PyResult<String> {
+    let spans = open_run_reader(&dir)?
+        .agentic_timeline()
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    to_json_py(&spans)
+}
+
 /// Rendering overlay aggregated from this run's events (JSON
 /// GraphOverlay: per-node status, duration, cache tier, flags).
 #[pyfunction]

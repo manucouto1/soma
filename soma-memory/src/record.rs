@@ -41,29 +41,52 @@ pub enum RecordKind {
 /// silently mixing the two is worse than having none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Embedding {
+    /// Identity of the model that produced the vector — see
+    /// [`Embedder::id`](crate::retrieval::Embedder::id).
     pub embedder_id: String,
+    /// The dense vector itself.
     pub vector: Vec<f32>,
 }
 
 /// A recorded experiment in the knowledge base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentRecord {
+    /// Unique identifier — the run id, for records built from a run.
     pub id: String,
+    /// Human-readable name; for a rootless record it also seeds the
+    /// research-line slug (see [`slugify`]).
     pub name: String,
+    /// What the user set out to test, when declared at run start.
     pub hypothesis: Option<String>,
+    /// One-line rendering of the pipeline that ran.
     pub pipeline_summary: String,
+    /// Parameters the run captured, plus `seed.*` entries for its seeds.
     pub params: BTreeMap<String, serde_json::Value>,
+    /// Final metric values, by name.
     pub metrics: BTreeMap<String, f64>,
+    /// When the run started.
     pub timestamp: DateTime<Utc>,
+    /// Wall time of the run.
     pub duration: Duration,
+    /// Id of the record this one descends from, when known — the other
+    /// end of [`derivation`](Self::derivation).
     pub parent: Option<String>,
+    /// Slug of the research line this record belongs to: inherited from
+    /// the parent, or derived from the name for a root.
     pub research_line: Option<String>,
+    /// Free-form tags; [`from_run`](Self::from_run) always includes
+    /// `run:<id>`.
     pub tags: Vec<String>,
+    /// Free-form human notes, set at recording time or layered on later
+    /// via an [`amendment`](Self::amendment).
     pub notes: Option<String>,
 
     // ── Added in schema version 2. All optional, all defaulted. ──
+    /// [`RECORD_SCHEMA_VERSION`] at write time; 1 for lines written
+    /// before versioning existed.
     #[serde(default = "legacy_schema_version")]
     pub schema_version: u32,
+    /// What this journal line is — see [`RecordKind`].
     #[serde(default)]
     pub kind: RecordKind,
     /// The run this record came from, and where its raw artifacts are —
@@ -71,23 +94,31 @@ pub struct ExperimentRecord {
     /// this summary was distilled from.
     #[serde(default)]
     pub run_id: Option<String>,
+    /// Absolute path of that run directory, as recorded at write time.
     #[serde(default)]
     pub run_dir: Option<String>,
+    /// Structural fingerprint of the graph that ran — what
+    /// [`derive`](crate::derivation::derive) diffs to build the move.
     #[serde(default)]
     pub architecture: Option<ArchitectureFingerprint>,
     /// Metric this experiment was optimizing, when it declared one.
     #[serde(default)]
     pub objective: Option<String>,
+    /// Deterministic, templated summary of how the run ended — the text
+    /// retrieval leans on hardest after the name.
     #[serde(default)]
     pub conclusion: Option<RunConclusion>,
     /// The move that produced this experiment from its parent.
     #[serde(default)]
     pub derivation: Option<DerivationMove>,
+    /// Repository state (sha, branch, dirty) when the run happened.
     #[serde(default)]
     pub git: Option<GitInfo>,
     /// For `kind = Amendment`: the id of the record being amended.
     #[serde(default)]
     pub amends: Option<String>,
+    /// Dense vector for semantic retrieval, tagged with the model that
+    /// produced it (see [`Embedding`]).
     #[serde(default)]
     pub embedding: Option<Embedding>,
 }
@@ -98,6 +129,8 @@ fn legacy_schema_version() -> u32 {
 }
 
 impl ExperimentRecord {
+    /// A record with only its identity set: timestamped now, current
+    /// schema version, every optional field absent.
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -222,46 +255,56 @@ impl ExperimentRecord {
         }
     }
 
+    /// Set the hypothesis under test.
     pub fn with_hypothesis(mut self, h: impl Into<String>) -> Self {
         self.hypothesis = Some(h.into());
         self
     }
 
+    /// Set the one-line pipeline summary.
     pub fn with_pipeline(mut self, summary: impl Into<String>) -> Self {
         self.pipeline_summary = summary.into();
         self
     }
 
+    /// Replace the parameter map ([`with_extra_params`](Self::with_extra_params) merges).
     pub fn with_params(mut self, params: BTreeMap<String, serde_json::Value>) -> Self {
         self.params = params;
         self
     }
 
+    /// Replace the metric map ([`with_extra_metrics`](Self::with_extra_metrics) merges).
     pub fn with_metrics(mut self, metrics: BTreeMap<String, f64>) -> Self {
         self.metrics = metrics;
         self
     }
 
+    /// Set the run's wall time.
     pub fn with_duration(mut self, d: Duration) -> Self {
         self.duration = d;
         self
     }
 
+    /// Set the parent id only — no line inheritance, no derivation.
+    /// [`descended_from`](Self::descended_from) is the full attachment.
     pub fn with_parent(mut self, parent: impl Into<String>) -> Self {
         self.parent = Some(parent.into());
         self
     }
 
+    /// Pin the research line explicitly, overriding inheritance.
     pub fn with_research_line(mut self, line: impl Into<String>) -> Self {
         self.research_line = Some(line.into());
         self
     }
 
+    /// Replace the tag list.
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
     }
 
+    /// Attach free-form notes.
     pub fn with_notes(mut self, notes: impl Into<String>) -> Self {
         self.notes = Some(notes.into());
         self
@@ -310,19 +353,28 @@ pub fn slugify(name: &str) -> String {
 /// A research line: a group of related experiments tracking evolution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResearchLine {
+    /// Line slug, shared by every member (see [`slugify`]).
     pub name: String,
+    /// Ids of the experiments in the line.
     pub experiments: Vec<String>,
+    /// Direction the line's recent metric values are moving.
     pub trend: Trend,
+    /// Highest raw value observed across all members and metrics.
     pub best_metric_value: Option<f64>,
+    /// Name of the metric behind [`best_metric_value`](Self::best_metric_value).
     pub best_metric_name: Option<String>,
 }
 
 /// Trend direction of a research line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Trend {
+    /// Recent values consistently rising.
     Improving,
+    /// Recent values neither consistently rising nor falling.
     Plateaued,
+    /// Recent values consistently falling.
     Declining,
+    /// Too few points, or no metrics, to say.
     Unknown,
 }
 
@@ -340,11 +392,17 @@ impl std::fmt::Display for Trend {
 /// A point where experiment results changed significantly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangePoint {
+    /// The experiment at which the shift shows (the "after" side).
     pub experiment_id: String,
+    /// When that experiment ran.
     pub timestamp: DateTime<Utc>,
+    /// The metric that shifted.
     pub metric_name: String,
+    /// Its value in the preceding experiment.
     pub value_before: f64,
+    /// Its value in this experiment.
     pub value_after: f64,
+    /// Human-readable rendering of the shift.
     pub description: String,
 }
 

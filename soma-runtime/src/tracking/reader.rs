@@ -40,16 +40,21 @@ pub struct RunReader {
 /// Listing entry for one run: manifest identity plus derived liveness.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunInfo {
+    /// Run identifier from the manifest; also tags every event of the run.
     pub run_id: String,
     /// Manifest `kind` as its snake_case string (`fit`, `train`, `study`, …).
     pub kind: String,
+    /// Human-readable name from the manifest.
     pub name: String,
     /// `running` | `completed` | `failed` | `crashed`.
     pub state: String,
+    /// When the run directory was created.
     pub created_at: DateTime<Utc>,
+    /// When the run finalized, if it did.
     pub finished_at: Option<DateTime<Utc>>,
     /// Wall time from creation to finish, when finished.
     pub duration_ms: Option<u64>,
+    /// Free-form tags from the manifest.
     pub tags: Vec<String>,
     /// Absolute path of the run directory.
     pub dir: String,
@@ -59,43 +64,63 @@ pub struct RunInfo {
 /// per execution (re-runs and stream chunks produce separate spans).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeSpan {
+    /// Graph node this span belongs to.
     pub node_id: String,
     /// Envelope timestamp of the opening event.
     pub started_ts: Option<DateTime<Utc>>,
     /// Envelope timestamp of the closing event.
     pub finished_ts: Option<DateTime<Utc>>,
+    /// Wall time between the two envelope timestamps.
     pub duration_ms: Option<u64>,
     /// `completed` | `failed` | `cache_hit` | `running`.
     pub outcome: String,
     /// Cache tier that served a hit (`memory`, `local`, …).
     pub cache_tier: Option<String>,
+    /// Failure message when `outcome` is `failed`.
     pub error: Option<String>,
+    /// The node was a step (from `NodeStarted`); defaults for spans
+    /// reconstructed from logs that predate the field.
+    #[serde(default)]
+    pub effectful: bool,
 }
 
 /// Per-run cache effectiveness, reconstructed from hit/miss events.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheActivity {
+    /// Cache hits across the whole run.
     pub hits: u64,
+    /// Cache misses across the whole run.
     pub misses: u64,
+    /// Per-node breakdown, keyed by node id.
     pub by_node: BTreeMap<String, NodeCacheCounts>,
 }
 
+/// One node's share of [`CacheActivity`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeCacheCounts {
+    /// Hits recorded for this node.
     pub hits: u64,
+    /// Misses recorded for this node.
     pub misses: u64,
+    /// Tier that served the most recent hit (`memory`, `local`, …).
     pub last_tier: Option<String>,
 }
 
 /// One line of `metrics.jsonl` (also derivable from events).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricPoint {
+    /// Wall time the point was logged.
     pub ts: DateTime<Utc>,
+    /// Metric name (`loss`, `accuracy`, …).
     pub name: String,
+    /// The recorded scalar.
     pub value: f64,
+    /// Logger-supplied step index within the run.
     pub step: u64,
+    /// Owning trial, when logged inside a study.
     #[serde(default)]
     pub trial_id: Option<String>,
+    /// Emitting node, when the metric came from inside a node.
     #[serde(default)]
     pub node_id: Option<String>,
 }
@@ -103,21 +128,126 @@ pub struct MetricPoint {
 /// One `HealthFlag` event with its wall time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthFlagRecord {
+    /// Wall time the flag was raised.
     pub ts: DateTime<Utc>,
+    /// Node the flag fired on — hierarchical (`node/module.path`) when it
+    /// came from an intra-node audit hook.
     pub node_id: String,
+    /// Training step at which the flag fired.
     pub step: usize,
+    /// Flag family name, as emitted by the audit.
     pub flag: String,
+    /// Human-readable description of what was detected.
     pub detail: String,
+}
+
+/// Agent-level activity for one run, aggregated from the step events
+/// (`AgentTurnStarted`, `EffectCompleted`, `ToolCalled`, `Suspended`,
+/// `AgentStepCompleted`, …). Empty `by_node` means the run had no agent
+/// steps — or predates their telemetry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgenticActivity {
+    /// Agent turns across all step nodes.
+    pub turns: u64,
+    /// Prompt tokens consumed across all step nodes.
+    pub input_tokens: u64,
+    /// Completion tokens produced across all step nodes.
+    pub output_tokens: u64,
+    /// Effects performed or replayed across all step nodes.
+    pub effects: u64,
+    /// Of `effects`, how many were served from the journal (a resumed
+    /// or replayed run should be nearly all replays).
+    pub replayed: u64,
+    /// Tool invocations across all step nodes.
+    pub tool_calls: u64,
+    /// Step nodes that completed successfully.
+    pub steps_completed: u64,
+    /// Step nodes that completed failed.
+    pub steps_failed: u64,
+    /// `Suspended` transitions observed across the run.
+    pub suspensions: u64,
+    /// Per-step-node breakdown, keyed by node id.
+    pub by_node: BTreeMap<String, AgentNodeActivity>,
+}
+
+/// One step node's share of the run's agentic work. Spawned instances
+/// appear under their own hierarchical ids (`parent/label`).
+///
+/// Token, turn and duration totals come from the accounting events
+/// (`AgentStepCompleted`, whose totals are cumulative, or the cost a
+/// `Suspended` carries when nothing completed after it) — never by
+/// summing both, which would double-count a resumed run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentNodeActivity {
+    /// Agent turns this node ran.
+    pub turns: u64,
+    /// Prompt tokens this node consumed.
+    pub input_tokens: u64,
+    /// Completion tokens this node produced.
+    pub output_tokens: u64,
+    /// Wall time from the accounting events (see the type docs).
+    pub duration_ms: u64,
+    /// Effects this node performed or replayed.
+    pub effects: u64,
+    /// Effect counts by label (`llm:<model>`, `tool:<name>`, …).
+    pub effects_by_label: BTreeMap<String, u64>,
+    /// Effects that completed carrying an error result.
+    pub effect_errors: u64,
+    /// Of `effects`, how many were served from the journal.
+    pub replayed: u64,
+    /// Tool invocations this node made.
+    pub tool_calls: u64,
+    /// Tool invocations that returned an error.
+    pub tool_errors: u64,
+    /// Control handoffs this node emitted to other nodes.
+    pub handoffs_out: u64,
+    /// Times this node suspended awaiting external input.
+    pub suspensions: u64,
+    /// Instances this node fanned out (sum over its `AgentSpawned`s).
+    pub spawned: u64,
+    /// `AgentStepCompleted` events with `failed: false` / `true`.
+    pub completions: u64,
+    /// Completions that reported `failed: true`.
+    pub failures: u64,
+}
+
+/// One effect's execution inside a step — the gantt substrate for
+/// agent runs, the per-effect analogue of [`NodeSpan`]. An unclosed
+/// span (`outcome: "running"`) means the run died mid-effect.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EffectSpan {
+    /// Step node the effect ran inside.
+    pub node_id: String,
+    /// Turn index within the step's loop.
+    pub turn: usize,
+    /// `Effect::label()` — e.g. `llm:qwen2.5:14b`, `tool:search`.
+    pub effect: String,
+    /// Envelope timestamp of the opening event.
+    pub started_ts: Option<DateTime<Utc>>,
+    /// Envelope timestamp of the closing event.
+    pub finished_ts: Option<DateTime<Utc>>,
+    /// Wall time between the two envelope timestamps.
+    pub duration_ms: Option<u64>,
+    /// Served from the journal instead of being performed.
+    pub replayed: bool,
+    /// The effect completed carrying an error result.
+    pub is_error: bool,
+    /// `completed` | `running`.
+    pub outcome: String,
 }
 
 /// One trial's lifetime, from `study.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrialSpan {
+    /// Trial identifier from `study.json`.
     pub trial_id: String,
     /// `completed` | `pruned` | `failed` | `running` | `pending`.
     pub state: String,
+    /// When the trial started, if it did.
     pub started_at: Option<DateTime<Utc>>,
+    /// When the trial finished, if it did.
     pub finished_at: Option<DateTime<Utc>>,
+    /// Wall time between the two, when both are known.
     pub duration_ms: Option<u64>,
 }
 
@@ -130,14 +260,17 @@ impl RunReader {
         Ok(Self { dir })
     }
 
+    /// The run directory this reader was opened on.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
+    /// Parse `manifest.json` — the run's immutable identity record.
     pub fn manifest(&self) -> Result<RunManifest> {
         load_manifest(&self.dir)
     }
 
+    /// Parse `status.json` — the latest state + heartbeat snapshot.
     pub fn status(&self) -> Result<RunStatus> {
         load_status(&self.dir)
     }
@@ -182,7 +315,9 @@ impl RunReader {
         let mut open: BTreeMap<String, usize> = BTreeMap::new();
         for env in self.events()? {
             match env.event {
-                Event::NodeStarted { node_id, .. } => {
+                Event::NodeStarted {
+                    node_id, effectful, ..
+                } => {
                     open.insert(node_id.clone(), spans.len());
                     spans.push(NodeSpan {
                         node_id,
@@ -192,6 +327,7 @@ impl RunReader {
                         outcome: "running".into(),
                         cache_tier: None,
                         error: None,
+                        effectful,
                     });
                 }
                 Event::NodeCacheHit {
@@ -208,6 +344,7 @@ impl RunReader {
                         outcome: "cache_hit".into(),
                         cache_tier: Some(format!("{tier:?}").to_lowercase()),
                         error: None,
+                        effectful: false,
                     });
                 }
                 Event::NodeCompleted {
@@ -225,6 +362,7 @@ impl RunReader {
                                 outcome: String::new(),
                                 cache_tier: None,
                                 error: None,
+                                effectful: false,
                             });
                             spans.last_mut().expect("just pushed")
                         }
@@ -246,6 +384,7 @@ impl RunReader {
                                 outcome: String::new(),
                                 cache_tier: None,
                                 error: None,
+                                effectful: false,
                             });
                             spans.last_mut().expect("just pushed")
                         }
@@ -355,6 +494,213 @@ impl RunReader {
             }
         }
         Ok(flags)
+    }
+
+    /// Agent-level activity, aggregated per step node.
+    ///
+    /// Accounting rule: `AgentStepCompleted` totals are authoritative
+    /// (they are cumulative — a resumed run re-counts its replayed
+    /// effects). A `Suspended` cost stands in only until a later
+    /// completion for the same node supersedes it, and turn counts seen
+    /// on the wire (`AgentTurnStarted`) are used only for nodes that
+    /// died without any accounting event at all.
+    pub fn agentic_activity(&self) -> Result<AgenticActivity> {
+        #[derive(Default)]
+        struct Pending {
+            turns: u64,
+            input_tokens: u64,
+            output_tokens: u64,
+            duration_ms: u64,
+        }
+        let mut by_node: BTreeMap<String, AgentNodeActivity> = BTreeMap::new();
+        let mut pending: BTreeMap<String, Pending> = BTreeMap::new();
+        let mut observed_turns: BTreeMap<String, u64> = BTreeMap::new();
+
+        for env in self.events()? {
+            match env.event {
+                Event::AgentTurnStarted { node_id, turn, .. } => {
+                    let seen = observed_turns.entry(node_id).or_default();
+                    *seen = (*seen).max(turn as u64 + 1);
+                }
+                Event::EffectCompleted {
+                    node_id,
+                    effect,
+                    replayed,
+                    is_error,
+                    ..
+                } => {
+                    let node = by_node.entry(node_id).or_default();
+                    node.effects += 1;
+                    *node.effects_by_label.entry(effect).or_default() += 1;
+                    if replayed {
+                        node.replayed += 1;
+                    }
+                    if is_error {
+                        node.effect_errors += 1;
+                    }
+                }
+                Event::ToolCalled {
+                    node_id, is_error, ..
+                } => {
+                    let node = by_node.entry(node_id).or_default();
+                    node.tool_calls += 1;
+                    if is_error {
+                        node.tool_errors += 1;
+                    }
+                }
+                Event::Handoff { from, .. } => {
+                    by_node.entry(from).or_default().handoffs_out += 1;
+                }
+                Event::Suspended {
+                    node_id,
+                    turns,
+                    duration,
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } => {
+                    by_node.entry(node_id.clone()).or_default().suspensions += 1;
+                    pending.insert(
+                        node_id,
+                        Pending {
+                            turns: turns as u64,
+                            input_tokens,
+                            output_tokens,
+                            duration_ms: duration.as_millis() as u64,
+                        },
+                    );
+                }
+                Event::AgentSpawned {
+                    node_id, children, ..
+                } => {
+                    by_node.entry(node_id).or_default().spawned += children.len() as u64;
+                }
+                Event::AgentStepCompleted {
+                    node_id,
+                    turns,
+                    duration,
+                    input_tokens,
+                    output_tokens,
+                    failed,
+                    ..
+                } => {
+                    let node = by_node.entry(node_id.clone()).or_default();
+                    node.turns += turns as u64;
+                    node.input_tokens += input_tokens;
+                    node.output_tokens += output_tokens;
+                    node.duration_ms += duration.as_millis() as u64;
+                    if failed {
+                        node.failures += 1;
+                    } else {
+                        node.completions += 1;
+                    }
+                    pending.remove(&node_id);
+                }
+                _ => {}
+            }
+        }
+
+        for (node_id, p) in pending {
+            let node = by_node.entry(node_id).or_default();
+            node.turns += p.turns;
+            node.input_tokens += p.input_tokens;
+            node.output_tokens += p.output_tokens;
+            node.duration_ms += p.duration_ms;
+        }
+        for (node_id, seen) in observed_turns {
+            let node = by_node.entry(node_id).or_default();
+            if node.turns == 0 {
+                node.turns = seen;
+            }
+        }
+
+        let mut totals = AgenticActivity::default();
+        for node in by_node.values() {
+            totals.turns += node.turns;
+            totals.input_tokens += node.input_tokens;
+            totals.output_tokens += node.output_tokens;
+            totals.effects += node.effects;
+            totals.replayed += node.replayed;
+            totals.tool_calls += node.tool_calls;
+            totals.steps_completed += node.completions;
+            totals.steps_failed += node.failures;
+            totals.suspensions += node.suspensions;
+        }
+        totals.by_node = by_node;
+        Ok(totals)
+    }
+
+    /// Per-effect execution spans in event order — the gantt substrate
+    /// for agent runs. Concurrent same-label effects within a turn are
+    /// matched first-in-first-out, which is the order the driver
+    /// reports completions in.
+    pub fn agentic_timeline(&self) -> Result<Vec<EffectSpan>> {
+        let mut spans: Vec<EffectSpan> = Vec::new();
+        let mut open: BTreeMap<(String, usize, String), Vec<usize>> = BTreeMap::new();
+        for env in self.events()? {
+            match env.event {
+                Event::EffectRequested {
+                    node_id,
+                    turn,
+                    effect,
+                    ..
+                } => {
+                    open.entry((node_id.clone(), turn, effect.clone()))
+                        .or_default()
+                        .push(spans.len());
+                    spans.push(EffectSpan {
+                        node_id,
+                        turn,
+                        effect,
+                        started_ts: Some(env.ts),
+                        finished_ts: None,
+                        duration_ms: None,
+                        replayed: false,
+                        is_error: false,
+                        outcome: "running".into(),
+                    });
+                }
+                Event::EffectCompleted {
+                    node_id,
+                    turn,
+                    effect,
+                    duration,
+                    replayed,
+                    is_error,
+                    ..
+                } => {
+                    let key = (node_id.clone(), turn, effect.clone());
+                    let idx = open
+                        .get_mut(&key)
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.remove(0));
+                    let span = match idx {
+                        Some(i) => &mut spans[i],
+                        None => {
+                            spans.push(EffectSpan {
+                                node_id,
+                                turn,
+                                effect,
+                                started_ts: None,
+                                finished_ts: None,
+                                duration_ms: None,
+                                replayed: false,
+                                is_error: false,
+                                outcome: String::new(),
+                            });
+                            spans.last_mut().expect("just pushed")
+                        }
+                    };
+                    span.finished_ts = Some(env.ts);
+                    span.duration_ms = Some(duration.as_millis() as u64);
+                    span.replayed = replayed;
+                    span.is_error = is_error;
+                    span.outcome = "completed".into();
+                }
+                _ => {}
+            }
+        }
+        Ok(spans)
     }
 
     /// The graph this run executed (`graph.json`), if snapshotted.

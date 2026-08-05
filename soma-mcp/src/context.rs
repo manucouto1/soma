@@ -95,6 +95,14 @@ impl SomaContext {
     // Code tools
     // ═══════════════════════════════════════
 
+    /// `list_filters`: every `.py`/`.rs` file under `path` (default:
+    /// the project directory), recursing but skipping hidden
+    /// directories. Returns a JSON array of `{"path": ...}` objects.
+    ///
+    /// Like every handler below, it takes the raw `arguments` object
+    /// from `tools/call` and reports a missing or bad argument as a
+    /// [`ToolCallResult::error`] — the model reads the message and can
+    /// retry, which a protocol-level error would not allow.
     pub fn list_filters(&self, params: &serde_json::Value) -> ToolCallResult {
         let dir = params
             .get("path")
@@ -114,6 +122,8 @@ impl SomaContext {
         }
     }
 
+    /// `read_filter_source`: the contents of `file_path`, resolved
+    /// against the project directory when relative.
     pub fn read_filter_source(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(path) = params.get("file_path").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing required parameter: file_path");
@@ -126,6 +136,10 @@ impl SomaContext {
         }
     }
 
+    /// `write_filter_source`: write `content` to `file_path`, creating
+    /// parent directories as needed. An existing file is copied to a
+    /// `.bak` sibling first — a model editing code deserves one level
+    /// of undo.
     pub fn write_filter_source(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(path) = params.get("file_path").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing required parameter: file_path");
@@ -163,6 +177,12 @@ impl SomaContext {
     // Execution tools
     // ═══════════════════════════════════════
 
+    /// `run_pipeline`: declared but NOT implemented. Executing a
+    /// pipeline means loading user filter code (Python via PyO3, or a
+    /// Rust dylib), which this server cannot do; it answers with a
+    /// `"status": "stub"` payload that says so, and the tool's
+    /// description says so too — better than a stub that reads like
+    /// success.
     pub fn run_pipeline(&self, params: &serde_json::Value) -> ToolCallResult {
         // For now, return a stub. Full execution requires loading user filters
         // dynamically (Python via PyO3 or Rust dylib).
@@ -177,6 +197,10 @@ impl SomaContext {
         }).to_string())
     }
 
+    /// `run_study`: declared but NOT implemented, for the same reason
+    /// as [`run_pipeline`](Self::run_pipeline) — a study runs user
+    /// code. The stub echoes the study name and trial count so the
+    /// model sees its arguments were understood, not executed.
     pub fn run_study(&self, params: &serde_json::Value) -> ToolCallResult {
         let name = params
             .get("name")
@@ -199,6 +223,11 @@ impl SomaContext {
     // Knowledge tools
     // ═══════════════════════════════════════
 
+    /// `record_experiment`: append an experiment to the knowledge base.
+    /// `id` and `name` are required; hypothesis, research line,
+    /// pipeline summary, parent, notes, tags, metrics and params are
+    /// taken when present and silently skipped when absent or of the
+    /// wrong JSON type — a partial record beats no record.
     pub fn record_experiment(&mut self, params: &serde_json::Value) -> ToolCallResult {
         let Some(id) = params.get("id").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing required parameter: id");
@@ -250,6 +279,10 @@ impl SomaContext {
         }
     }
 
+    /// `query_knowledge_base`: free-text search over recorded
+    /// experiments (`query`, plus `max_results`, default 10). Returns a
+    /// JSON array of experiment summaries — id, name, hypothesis, line,
+    /// metrics, tags — enough to decide which one to ask more about.
     pub fn query_knowledge_base(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(query) = params.get("query").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing required parameter: query");
@@ -280,6 +313,9 @@ impl SomaContext {
         }
     }
 
+    /// `get_trajectory`: the values of `metric` across the experiments
+    /// of `research_line`, in recording order — how the line has been
+    /// moving, as `{experiment_id, value}` pairs.
     pub fn get_trajectory(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(line) = params.get("research_line").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing: research_line");
@@ -300,6 +336,10 @@ impl SomaContext {
         }
     }
 
+    /// `get_change_points`: the experiments where `metric` jumped by
+    /// more than `threshold` (default 0.05) within `research_line` —
+    /// the moments worth reading closely, with before/after values and
+    /// a description of each.
     pub fn get_change_points(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(line) = params.get("research_line").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing: research_line");
@@ -332,6 +372,9 @@ impl SomaContext {
         }
     }
 
+    /// `list_research_lines`: every research line in the pool, with its
+    /// trend, experiment count and best metric so far. Takes no
+    /// arguments.
     pub fn list_research_lines(&self, _params: &serde_json::Value) -> ToolCallResult {
         match self.kb.research_lines() {
             Ok(lines) => {
@@ -353,6 +396,9 @@ impl SomaContext {
         }
     }
 
+    /// `promising_lines`: the research lines with an improving trend,
+    /// or whose best result is on `metric` — where the next experiment
+    /// is most likely to pay off.
     pub fn promising_lines(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(metric) = params.get("metric").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing: metric");
@@ -374,6 +420,11 @@ impl SomaContext {
     // Project tools
     // ═══════════════════════════════════════
 
+    /// `create_research_line`: start a named line by recording a
+    /// `<name>_init` marker experiment carrying the description. Lines
+    /// have no existence of their own in the pool — they are the set of
+    /// experiments tagged with them, so creating one means recording
+    /// one.
     pub fn create_research_line(&mut self, params: &serde_json::Value) -> ToolCallResult {
         let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing: name");
@@ -395,6 +446,11 @@ impl SomaContext {
         }
     }
 
+    /// `generate_report`: a Markdown report for `research_line` — the
+    /// experiment table, the trajectory of its first metric, the
+    /// significant changes, and the line's trend. Markdown because the
+    /// consumer is a model (or a human pasted the output): structure
+    /// survives, no renderer needed.
     pub fn generate_report(&self, params: &serde_json::Value) -> ToolCallResult {
         let Some(line) = params.get("research_line").and_then(|v| v.as_str()) else {
             return ToolCallResult::error("Missing: research_line");

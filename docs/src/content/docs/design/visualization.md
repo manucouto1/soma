@@ -28,6 +28,8 @@ serve PyO3, the CLI, and any future front-end:
 | `metric_series(name)` | metric points from `metrics.jsonl` (event-log fallback) |
 | `health_flags()` | `HealthFlag` events with wall time |
 | `trial_timeline()` | trial lifetimes from `study.json` |
+| `agentic_activity()` | agent-step totals and per-node breakdown: turns, tokens, effects by label, tools, replays, suspensions |
+| `agentic_timeline()` | per-effect execution spans (`EffectRequested`→`EffectCompleted`), the agent-run gantt substrate |
 | `overlay()` | a `GraphOverlay` folding all of the above per node |
 | `to_mermaid()` / `to_graphviz()` / `to_svg()` | the run's graph annotated with its overlay |
 
@@ -101,6 +103,7 @@ study.plot_pareto_front()           # multi-objective front
 run = soma.runs()[0]
 run.plot_metrics()                  # logged metric curves
 run.plot_gantt()                    # node spans — where wall time went
+run.plot_agentic()                  # effect spans — where an agent run went
 run.plot_health()                   # HealthFlag marks, node × step
 run.plot_audit("out_grad.norm")     # gradient-audit series per filter
 run.plot_channels("encoder")        # channel-correlation heatmap
@@ -160,11 +163,12 @@ just their static packaging:
 | `soma-data-metrics` | `Vec<MetricPoint>` |
 | `soma-data-health-flags` | `Vec<HealthFlagRecord>` |
 | `soma-data-trial-timeline` | `Vec<TrialSpan>` |
+| `soma-data-agentic` | `AgenticActivity` (empty `by_node` for runs with no agent steps) |
 
 Charts are Plotly figure JSON under `soma-fig-<name>` ids
 (`history`, `intermediate`, `parallel-coords`, `importances`,
-`timeline`, `pareto`, `metrics`, `gantt`, `health`, `audit`,
-`channels`, `module-flow-<node>`).
+`timeline`, `pareto`, `metrics`, `gantt`, `agentic`, `health`,
+`audit`, `channels`, `module-flow-<node>`).
 
 ### Inner architectures (`gradient_audit(inside=...)`)
 

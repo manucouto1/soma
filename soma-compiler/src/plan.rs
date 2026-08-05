@@ -24,12 +24,16 @@ pub enum ExecutionPlan {
     Parallel(Vec<ExecutionPlan>),
 
     /// Execute a single filter node.
-    Execute { node_id: NodeId },
+    Execute {
+        /// The graph node to execute.
+        node_id: NodeId,
+    },
 
     /// Run an effectful step to completion: poll, perform its effects,
     /// repeat. Distinct from `Execute` because the runtime has to drive a
     /// turn loop and journal what it performs, not call a function once.
     Step {
+        /// The effectful node the runtime drives.
         node_id: NodeId,
         /// Where this step may hand control, by target node id.
         ///
@@ -43,8 +47,12 @@ pub enum ExecutionPlan {
 
     /// Iterate: run `body` until `until` says stop, or `max_iterations` is hit.
     Loop {
+        /// The loop controller node — the id events and assignments are
+        /// reported under, distinct from any node inside `body`.
         node_id: NodeId,
+        /// The sub-plan executed once per iteration.
         body: Box<ExecutionPlan>,
+        /// Hard iteration cap; `None` leaves stopping entirely to `until`.
         max_iterations: Option<usize>,
         /// Already resolved by the compiler — never `BodyTerminal` here.
         /// The executor reads the signal from exactly this node.
@@ -65,27 +73,40 @@ pub enum ExecutionPlan {
 
     /// Conditional branching: evaluate condition, pick an arm.
     Branch {
+        /// The node whose output selects an arm. The selector is control,
+        /// not data: the chosen arm receives the branch's *input*.
         node_id: NodeId,
+        /// `(label, sub-plan)` per arm; the condition value picks by label.
         arms: Vec<(String, ExecutionPlan)>,
     },
 
     /// Execute a sub-plan on a remote worker.
     Remote {
+        /// The node the distribution directive was attached to. The wrapped
+        /// `plan` names it again, which is why this wrapper contributes no
+        /// ids of its own to `node_ids()`.
         node_id: NodeId,
+        /// Where to run: a specific worker by id, or any worker with a tag.
         target: RemoteTarget,
+        /// The sub-plan the remote worker executes.
         plan: Box<ExecutionPlan>,
     },
 
     /// Execute multiple differentiable nodes as a single block.
     /// The executor passes tensors directly between filters (no Value conversion),
     /// preserving PyTorch autograd for gradient flow.
-    Composite { node_ids: Vec<NodeId> },
+    Composite {
+        /// The differentiable nodes fused into the block, in execution order.
+        node_ids: Vec<NodeId>,
+    },
 
     /// Streaming execution: process input in chunks through a filter chain.
     /// Each filter's StreamMode (FixedState/Evolving/Barrier) defines its
     /// per-chunk contract. Results flow progressively — no full materialization.
     Stream {
+        /// The filter chain each chunk flows through, in order.
         node_ids: Vec<NodeId>,
+        /// How many input rows each chunk carries.
         chunk_size: usize,
     },
 

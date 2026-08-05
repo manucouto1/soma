@@ -25,21 +25,39 @@ use std::fmt;
 #[non_exhaustive]
 pub enum VirtualValue {
     /// Already computed and in memory. Ready to use.
-    Materialized { value: Value, schema: Schema },
+    Materialized {
+        /// The concrete value.
+        value: Value,
+        /// Its schema (inferred or declared).
+        schema: Schema,
+    },
 
     /// Stored in cache (K/V store). Can be loaded on demand.
-    Cached { key: CacheKey, schema: Schema },
+    Cached {
+        /// Key to load the value from the cache store.
+        key: CacheKey,
+        /// Schema, known without loading the data.
+        schema: Schema,
+    },
 
     /// Not computed yet. Carries the "recipe" to produce it:
     /// which node produces it, and what its cache key would be.
     Deferred {
+        /// The node whose execution would produce this value.
         producer_node_id: String,
+        /// Where the value will land once computed.
         cache_key: CacheKey,
+        /// Expected schema of the eventual value.
         schema: Schema,
     },
 
     /// A stream that materializes chunk by chunk.
-    Stream { source_id: String, schema: Schema },
+    Stream {
+        /// Identifier of the stream source producing the chunks.
+        source_id: String,
+        /// Schema of each chunk.
+        schema: Schema,
+    },
 }
 
 /// Status of a VirtualValue without inspecting the actual data.

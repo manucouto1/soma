@@ -22,15 +22,20 @@ pub type TrialId = String;
 /// A metric measurement reported during training.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MetricRecord {
+    /// Metric name, e.g. `loss` or `val_f1`.
     pub name: String,
+    /// The measured value.
     pub value: f64,
+    /// Training step at which the measurement was taken.
     pub step: usize,
+    /// When the measurement was recorded.
     pub timestamp: DateTime<Utc>,
 }
 
 /// Summary of a compiled plan (for event payloads without the full plan).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanSummary {
+    /// Number of nodes in the compiled plan.
     pub total_nodes: usize,
     /// Always 0 from a compiled plan, and not a placeholder: cache keys are
     /// resolved per node at run time (a node's key depends on its input's
@@ -38,6 +43,7 @@ pub struct PlanSummary {
     /// will be served from cache. The answer arrives as
     /// [`Event::NodeCacheHit`] per node — count those, not this.
     pub cached_nodes: usize,
+    /// Number of branches the plan can execute concurrently.
     pub parallel_branches: usize,
 }
 
@@ -49,14 +55,20 @@ pub enum Event {
     // ── Level 1: Pipeline execution (per run) ──
     /// A pipeline run has started.
     RunStarted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// Coarse shape of the plan about to execute — see
+        /// [`PlanSummary::cached_nodes`] for what it deliberately cannot say.
         plan_summary: PlanSummary,
     },
 
     /// A filter node has started execution.
     NodeStarted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// Structural kind of the node, from its metadata — see [`FilterKind`].
         kind: FilterKind,
         /// Does this node reach outside the graph — a model, a tool, a
         /// person?
@@ -71,17 +83,25 @@ pub enum Event {
 
     /// A filter node reports progress (0.0 to 1.0).
     NodeProgress {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// Fraction complete, from 0.0 to 1.0.
         progress: f32,
     },
 
     /// A filter node's result was loaded from cache.
     NodeCacheHit {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The key the result was found under.
         key: CacheKey,
+        /// Which [`CacheTier`] served the hit.
         tier: CacheTier,
+        /// Time spent loading the cached result.
         #[serde(with = "duration_millis")]
         load_time: Duration,
     },
@@ -89,172 +109,261 @@ pub enum Event {
     /// A cacheable node's key was computed but not found — the filter
     /// executes and (on success) fills this key.
     NodeCacheMiss {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The key that was looked up and not found — the same key the
+        /// node's output will be stored under on success.
         key: CacheKey,
     },
 
     /// A filter node completed successfully.
     NodeCompleted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// Wall time from start to finish. Control-flow constructs (loops,
+        /// branches) report zero — their time is in the nodes they ran.
         #[serde(with = "duration_millis")]
         duration: Duration,
+        /// Short human-readable rendering of the output, never the payload
+        /// itself.
         output_summary: String,
     },
 
     /// A filter node failed.
     NodeFailed {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The error, rendered as a string.
         error: String,
     },
 
     /// The pipeline run completed.
     RunCompleted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// Wall time for the whole run.
         #[serde(with = "duration_millis")]
         duration: Duration,
     },
 
     /// The pipeline run failed.
-    RunFailed { run_id: RunId, error: String },
+    RunFailed {
+        /// The run this event belongs to.
+        run_id: RunId,
+        /// The error, rendered as a string.
+        error: String,
+    },
 
     // ── Level 2: Trial execution (per hyperparameter set) ──
     /// A new trial has started.
     TrialStarted {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The trial this event concerns.
         trial_id: TrialId,
+        /// The hyperparameters sampled for this trial, as JSON.
         params: serde_json::Value,
     },
 
     /// A trial reports an intermediate metric.
     TrialMetric {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The trial this event concerns.
         trial_id: TrialId,
+        /// The intermediate measurement — what pruners decide on.
         metric: MetricRecord,
     },
 
     /// A trial was pruned (stopped early).
     TrialPruned {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The trial this event concerns.
         trial_id: TrialId,
+        /// The training step at which the pruner struck.
         step: usize,
+        /// Why the pruner stopped it, human-readable (e.g. `below median`).
         reason: String,
     },
 
     /// A trial completed successfully.
     TrialCompleted {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The trial this event concerns.
         trial_id: TrialId,
+        /// The measurements the trial finished with — the values the
+        /// sampler and the study's best-trial bookkeeping consume.
         final_metrics: Vec<MetricRecord>,
     },
 
     /// A trial failed.
     TrialFailed {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The trial this event concerns.
         trial_id: TrialId,
+        /// The error, rendered as a string.
         error: String,
     },
 
     // ── Level 3: Study execution (optimization session) ──
     /// An optimization study has started.
     StudyStarted {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// Human-readable study name.
         name: String,
+        /// How many trials the study intends to run.
         total_trials: usize,
     },
 
     /// Study progress update.
     StudyProgress {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// Trials finished so far.
         completed: usize,
+        /// Total trials planned.
         total: usize,
+        /// Best objective value seen so far; `NaN` until a trial has
+        /// completed (consumers render it as "no best yet", they do not
+        /// compare it).
         best_value: f64,
     },
 
     /// The best trial has been updated.
     BestUpdated {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The trial this event concerns.
         trial_id: TrialId,
+        /// The new best objective value.
         value: f64,
+        /// The hyperparameters that produced it, as JSON.
         params: serde_json::Value,
     },
 
     /// The Pareto front has changed (multi-objective).
     ParetoUpdated {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// Number of non-dominated trials after the update.
         front_size: usize,
     },
 
     /// The study completed.
     StudyCompleted {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The winning trial.
         best_trial_id: TrialId,
+        /// Its objective value (`NaN` when no trial completed).
         best_value: f64,
     },
 
     // ── Level 4: Population-Based Training ──
     /// A PBT generation started (train → evaluate → exploit/explore).
     GenerationStarted {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The generation index.
         generation: usize,
+        /// How many population members train in this generation.
         population_size: usize,
     },
 
     /// A PBT generation completed.
     GenerationCompleted {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The generation index.
         generation: usize,
+        /// Best fitness in the population after evaluation.
         best_fitness: f64,
+        /// Mean fitness across the population — tracks whether the whole
+        /// population improves, not just its champion.
         mean_fitness: f64,
     },
 
     /// A population member was replaced during exploit step.
     MemberExploited {
+        /// The study this event belongs to.
         study_id: StudyId,
+        /// The generation index.
         generation: usize,
+        /// The underperforming member whose params and state were
+        /// overwritten.
         replaced_id: String,
+        /// The better-performing member it copied them from (explore then
+        /// perturbs the copy).
         donor_id: String,
     },
 
     // ── Level 5: Training telemetry (native training loop) ──
     /// A training epoch started.
     EpochStarted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// Zero-based epoch index.
         epoch: usize,
+        /// Planned epoch count when the loop knows it up front; `None` for
+        /// open-ended training, where progress cannot be a percentage.
         total_epochs: Option<usize>,
     },
 
     /// A training epoch completed with its summary metrics.
     EpochCompleted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// Zero-based epoch index.
         epoch: usize,
+        /// Summary metrics for the epoch (e.g. mean loss).
         metrics: Vec<MetricRecord>,
     },
 
     /// One optimizer step completed (coarse liveness marker).
     StepCompleted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The optimizer step index.
         step: usize,
+        /// The epoch this step belongs to, when the loop tracks one.
         epoch: Option<usize>,
     },
 
     /// A user- or node-scoped metric reported outside a trial.
     MetricReported {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The measurement.
         metric: MetricRecord,
+        /// The node the metric is scoped to, if any.
         node_id: Option<NodeId>,
+        /// The trial the metric is scoped to, if any.
         trial_id: Option<TrialId>,
     },
 
     /// A training-health diagnostic fired for a node (e.g.
     /// `DEAD_CHANNELS`, `IGNORED_CHANNELS`, `LEAKAGE`, `NONFINITE`).
     HealthFlag {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The training step at which the diagnostic fired.
         step: usize,
+        /// The flag family, optionally with a count — e.g.
+        /// `DEAD_CHANNELS(3)`.
         flag: String,
+        /// Supporting numbers behind the flag, e.g. `zero_frac=0.98`.
         detail: String,
     },
 
@@ -269,15 +378,21 @@ pub enum Event {
     // because `StepCompleted` above already means "one optimizer step".
     /// A step began a turn (one `poll`).
     AgentTurnStarted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// Zero-based index of the turn being started.
         turn: usize,
     },
 
     /// A step asked for an effect to be performed.
     EffectRequested {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The turn (one `poll`) that requested the effect.
         turn: usize,
         /// `Effect::label()` — e.g. `llm:claude-opus-5`, `tool:search`.
         effect: String,
@@ -285,15 +400,23 @@ pub enum Event {
 
     /// An effect finished.
     EffectCompleted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The turn (one `poll`) that requested the effect.
         turn: usize,
+        /// `Effect::label()` — matches the [`Event::EffectRequested`] this
+        /// answers.
         effect: String,
+        /// How long performing (or replaying) the effect took.
         #[serde(with = "duration_millis")]
         duration: Duration,
         /// Served from the journal rather than actually performed.
         /// A replay should be nearly all `true`.
         replayed: bool,
+        /// The effect's result was an error. It is still delivered to the
+        /// step, which decides whether that is fatal.
         is_error: bool,
     },
 
@@ -301,42 +424,111 @@ pub enum Event {
     /// thing worth counting per run, and it is what a permission or audit
     /// layer hooks into.
     ToolCalled {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The tool's name.
         tool: String,
+        /// The tool returned an error result.
         is_error: bool,
     },
 
     /// Control passed from one node to another.
     Handoff {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node handing control off.
         from: NodeId,
+        /// The node receiving it.
         to: NodeId,
     },
 
     /// The run stopped, pending something outside it.
+    ///
+    /// Carries what the step has cost *so far*: a suspended step has not
+    /// finished, so no [`Event::AgentStepCompleted`] fires for it. When the
+    /// run resumes and finishes, that final event's totals are cumulative
+    /// (replayed effects re-count their recorded usage), superseding these.
+    /// The fields default to zero so run dirs written before they existed
+    /// still deserialize.
     Suspended {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// What the run is waiting on, as a short label (e.g. `human`).
         reason: String,
+        /// Turns taken up to and including the one that suspended.
+        #[serde(default)]
+        turns: usize,
+        /// Wall time spent so far.
+        #[serde(default, with = "duration_millis")]
+        duration: Duration,
+        /// LLM input tokens consumed so far.
+        #[serde(default)]
+        input_tokens: u64,
+        /// LLM output tokens generated so far.
+        #[serde(default)]
+        output_tokens: u64,
     },
 
     /// A suspended run picked up again.
     Resumed {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// The turn the step resumes at.
         turn: usize,
     },
 
-    /// A step finished, with what it cost.
+    /// A step finished, with what it cost — however it finished.
+    ///
+    /// `Done`, a handoff, a failed poll or effect, and turn exhaustion all
+    /// emit this: the cost was paid either way, and telemetry that loses
+    /// the expensive failures undercounts exactly the runs worth studying.
+    /// Suspension is the one exit that does not — see [`Event::Suspended`].
     AgentStepCompleted {
+        /// The run this event belongs to.
         run_id: RunId,
+        /// The node this event concerns.
         node_id: NodeId,
+        /// Total turns taken.
         turns: usize,
+        /// Total wall time across all turns.
         #[serde(with = "duration_millis")]
         duration: Duration,
+        /// Total LLM input tokens consumed. Cumulative across a resume:
+        /// replayed effects re-count their recorded usage.
         input_tokens: u64,
+        /// Total LLM output tokens generated (same accounting as
+        /// `input_tokens`).
         output_tokens: u64,
+        /// The step ended in an error (the node will also emit
+        /// [`Event::NodeFailed`]). Defaults to `false` so run dirs written
+        /// before the field existed still deserialize.
+        #[serde(default)]
+        failed: bool,
+    },
+
+    /// A step fanned work out to spawned instances.
+    ///
+    /// `children` are the hierarchical ids (`parent/label`) the instances
+    /// run under; their own turn and completion events appear under those
+    /// ids, which is how a reader ties the sub-tree together.
+    AgentSpawned {
+        /// The run this event belongs to.
+        run_id: RunId,
+        /// The node this event concerns.
+        node_id: NodeId,
+        /// The turn (one `poll`) that spawned the instances.
+        turn: usize,
+        /// Hierarchical ids (`parent/label`) the spawned instances run
+        /// under.
+        children: Vec<NodeId>,
+        /// The join policy, as a label (`all`, `all-settled`, `first`).
+        join: String,
     },
 }
 
@@ -431,6 +623,10 @@ mod tests {
                 run_id: "r".into(),
                 node_id: "approve".into(),
                 reason: "human".into(),
+                turns: 2,
+                duration: Duration::from_millis(3400),
+                input_tokens: 600,
+                output_tokens: 120,
             },
             Event::Resumed {
                 run_id: "r".into(),
@@ -444,6 +640,14 @@ mod tests {
                 duration: Duration::from_millis(8000),
                 input_tokens: 1200,
                 output_tokens: 340,
+                failed: false,
+            },
+            Event::AgentSpawned {
+                run_id: "r".into(),
+                node_id: "orchestrator".into(),
+                turn: 1,
+                children: vec!["orchestrator/web".into(), "orchestrator/code".into()],
+                join: "all".into(),
             },
         ];
 
@@ -456,6 +660,36 @@ mod tests {
                 "agent event did not survive a round trip"
             );
         }
+    }
+
+    /// Run dirs written before `Suspended` carried cost and
+    /// `AgentStepCompleted` carried `failed` must still read back — the
+    /// fields default rather than fail the whole line.
+    #[test]
+    fn agent_events_read_back_without_the_newer_fields() {
+        let suspended: Event = serde_json::from_str(
+            r#"{"event_type":"Suspended","run_id":"r","node_id":"approve","reason":"human"}"#,
+        )
+        .unwrap();
+        let Event::Suspended {
+            turns,
+            input_tokens,
+            ..
+        } = suspended
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!((turns, input_tokens), (0, 0));
+
+        let completed: Event = serde_json::from_str(
+            r#"{"event_type":"AgentStepCompleted","run_id":"r","node_id":"n","turns":2,
+                "duration":100,"input_tokens":10,"output_tokens":5}"#,
+        )
+        .unwrap();
+        let Event::AgentStepCompleted { failed, .. } = completed else {
+            panic!("wrong variant");
+        };
+        assert!(!failed);
     }
 
     /// Telemetry must never carry the conversation. A prompt belongs in the

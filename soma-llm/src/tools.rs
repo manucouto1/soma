@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 /// What a tool produced.
 pub struct ToolOutcome {
+    /// The result the model reads — text for prose, JSON for structure.
     pub output: Value,
     /// A failure the *model* should see and adapt to, rather than one that
     /// stops the run. A search returning nothing is information.
@@ -31,6 +32,7 @@ pub struct ToolOutcome {
 }
 
 impl ToolOutcome {
+    /// A successful result.
     pub fn ok(output: Value) -> Self {
         Self {
             output,
@@ -38,6 +40,7 @@ impl ToolOutcome {
         }
     }
 
+    /// A failure to report to the model, phrased so it can adapt.
     pub fn error(message: impl Into<String>) -> Self {
         Self {
             output: Value::text(message.into()),
@@ -48,6 +51,7 @@ impl ToolOutcome {
 
 /// Something a model can call.
 pub trait Tool: Send + Sync {
+    /// Name, description and argument schema — what the model is shown.
     fn spec(&self) -> ToolSpec;
 
     /// Run it. Blocking; the driver calls these on threads.
@@ -64,6 +68,8 @@ impl<F> FnTool<F>
 where
     F: Fn(&Value) -> Result<ToolOutcome> + Send + Sync,
 {
+    /// Pair a spec with the closure that fulfils it. Usually reached via
+    /// [`Toolbox::add_fn`].
     pub fn new(spec: ToolSpec, f: F) -> Self {
         Self { spec, f }
     }
@@ -88,10 +94,13 @@ pub struct Toolbox {
 }
 
 impl Toolbox {
+    /// An empty toolbox.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Register a tool under its spec's name, replacing any tool that
+    /// already held it.
     pub fn add(&mut self, tool: Arc<dyn Tool>) {
         self.tools.insert(tool.spec().name, tool);
     }
@@ -121,6 +130,7 @@ impl Toolbox {
         Ok(count)
     }
 
+    /// The tool registered under `name`, if any.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }
@@ -139,14 +149,17 @@ impl Toolbox {
         self.tools.values().map(|t| t.spec()).collect()
     }
 
+    /// Registered tool names, sorted.
     pub fn names(&self) -> Vec<&str> {
         self.tools.keys().map(String::as_str).collect()
     }
 
+    /// How many tools are registered.
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
+    /// Whether no tools are registered.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }

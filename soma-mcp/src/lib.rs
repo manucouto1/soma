@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! MCP (Model Context Protocol) server for Soma.
 //!
 //! Exposes 20 tools for code agents: filter CRUD, knowledge base

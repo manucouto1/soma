@@ -18,7 +18,7 @@ pub use head::{
 pub use jsonl_sink::JsonlEventSink;
 pub use local_tracker::{LocalTracker, collect_git_info, load_manifest, load_status};
 pub use reader::{
-    CacheActivity, HealthFlagRecord, MetricPoint, NodeCacheCounts, NodeSpan, RunInfo, RunReader,
-    STALE_HEARTBEAT_SECS, TrialSpan, list_runs,
+    AgentNodeActivity, AgenticActivity, CacheActivity, EffectSpan, HealthFlagRecord, MetricPoint,
+    NodeCacheCounts, NodeSpan, RunInfo, RunReader, STALE_HEARTBEAT_SECS, TrialSpan, list_runs,
 };
 pub use summary::summarize;

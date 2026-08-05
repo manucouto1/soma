@@ -50,7 +50,10 @@ impl HashAlgo {
 /// Address of a blob: the hash of its bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ContentHash {
+    /// Algorithm the digest was computed with — part of the identity,
+    /// so the same bytes hashed by two algorithms are two addresses.
     pub algo: HashAlgo,
+    /// The 32-byte digest.
     pub digest: [u8; 32],
 }
 
@@ -84,6 +87,8 @@ impl ContentHash {
         recomputed.digest == self.digest
     }
 
+    /// Hex representation of the digest (algorithm prefix not included;
+    /// see [`HashAlgo::prefix`] for the store-layout form).
     pub fn to_hex(&self) -> String {
         self.digest.iter().map(|b| format!("{b:02x}")).collect()
     }
@@ -117,14 +122,20 @@ pub struct ActionResult {
     pub compute_ms: u64,
     /// Whether the producing filter declared its forward deterministic.
     pub deterministic: bool,
+    /// Provenance of the computation (node, run, source).
     pub origin: Origin,
+    /// When the action first ran.
     pub created_at: DateTime<Utc>,
+    /// Last time this record served a hit — recency for eviction.
     pub last_accessed: DateTime<Utc>,
 }
 
 /// Store of action records (the small table).
 pub trait ActionCache: Send + Sync {
+    /// Look up the record for a provenance key, `None` on a miss.
     fn get_action(&self, key: &CacheKey) -> Result<Option<ActionResult>>;
+
+    /// Store a record under its key, replacing any existing one.
     fn put_action(&self, result: &ActionResult) -> Result<()>;
 }
 
@@ -133,7 +144,11 @@ pub trait BlobStore: Send + Sync {
     /// Store bytes under their content hash. Idempotent: storing the
     /// same bytes twice is a no-op.
     fn put_bytes(&self, bytes: &[u8]) -> Result<ContentHash>;
+
+    /// Read the blob at `hash`, `None` if absent (possibly evicted).
     fn get_bytes(&self, hash: &ContentHash) -> Result<Option<Vec<u8>>>;
+
+    /// Whether a blob exists at `hash`, without reading it.
     fn contains(&self, hash: &ContentHash) -> Result<bool>;
 }
 

@@ -1,3 +1,5 @@
+//! The `#[derive(SomaFilter)]` macro, exercised end to end.
+
 use serde::{Deserialize, Serialize};
 use somatize_core::SomaFilter;
 use somatize_core::search::Searchable;

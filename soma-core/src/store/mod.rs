@@ -97,27 +97,43 @@ pub fn slice_tensor_rows(value: &Value, start: usize, len: usize) -> Result<Valu
 #[non_exhaustive]
 pub enum DataRef {
     /// Data in local filesystem
-    Local { path: String },
+    Local {
+        /// Absolute path to the file holding the serialized value.
+        path: String,
+    },
     /// Data in S3-compatible object storage
     S3 {
+        /// Bucket the object lives in.
         bucket: String,
+        /// Object key within the bucket.
         key: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
     },
     /// Data in Soma cache (content-addressable)
-    Cached { cache_key: CacheKey },
+    Cached {
+        /// Key the value is cached under.
+        cache_key: CacheKey,
+    },
     /// Data available as a stream endpoint
     Stream {
+        /// URL the stream can be read from.
         endpoint: String,
+        /// Wire format of the streamed records.
         format: StreamFormat,
     },
     /// Data materialized inline (small values only)
-    Inline { value: Value },
+    Inline {
+        /// The value itself, carried in the reference.
+        value: Value,
+    },
     /// Data stored as a Zarr v3 array in object storage (chunked tensors).
     Zarr {
+        /// Bucket the array lives in.
         bucket: String,
         /// Root path of the Zarr array (contains zarr.json + chunk objects).
         array_path: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
     },
 }
@@ -127,10 +143,14 @@ pub enum DataRef {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StreamFormat {
+    /// Newline-delimited JSON, one record per line (the default).
     #[default]
     JsonLines,
+    /// Comma-separated values.
     Csv,
+    /// Apache Arrow IPC stream.
     Arrow,
+    /// Length-prefixed protobuf messages.
     Protobuf,
 }
 
@@ -141,21 +161,32 @@ pub enum StreamFormat {
 pub enum StorageConfig {
     /// Local filesystem (NFS, mounted volume)
     #[serde(rename = "local")]
-    Local { base_path: String },
+    Local {
+        /// Directory values are written under.
+        base_path: String,
+    },
     /// S3-compatible object storage
     #[serde(rename = "s3")]
     S3 {
+        /// Bucket to store objects in.
         bucket: String,
+        /// Key prefix all objects are written under.
         prefix: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
+        /// Custom endpoint URL for non-AWS backends (MinIO, Ceph).
         endpoint: Option<String>,
     },
     /// Zarr v3 chunked storage on S3-compatible backend.
     #[serde(rename = "zarr")]
     Zarr {
+        /// Bucket to store arrays in.
         bucket: String,
+        /// Key prefix all arrays are written under.
         prefix: String,
+        /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
+        /// Custom endpoint URL for non-AWS backends (MinIO, Ceph).
         endpoint: Option<String>,
         /// Rows per chunk (first dimension).
         chunk_rows: usize,
@@ -213,6 +244,9 @@ pub struct LocalDataStore {
 }
 
 impl LocalDataStore {
+    /// Create a store rooted at `base_path`, creating the directory if
+    /// needed. Creation failure is deliberately ignored here — the
+    /// first `put` will surface it as a [`SomaError::DataStore`].
     pub fn new(base_path: impl Into<std::path::PathBuf>) -> Self {
         let base = base_path.into();
         std::fs::create_dir_all(&base).ok();
@@ -280,83 +314,6 @@ impl DataStore for LocalDataStore {
     }
 }
 
-/// Stream-aware cache for inference pipelines.
-///
-/// Key insight: during inference, the filter STATE is fixed (from training).
-/// Only the DATA changes. So we cache:
-/// 1. Filter states (from training) — keyed by config_hash + training_data_hash
-/// 2. Chunk results — keyed by config_hash + state_hash + chunk_hash
-///
-/// This means: if the same chunk passes through the same filter with the
-/// same trained state, the result is returned from cache instantly.
-pub struct StreamCache {
-    /// State cache: filter_id → (state_key, cached state)
-    states: std::collections::HashMap<String, (CacheKey, Value)>,
-    /// Chunk result cache: LRU of chunk results
-    chunk_cache: std::collections::HashMap<CacheKey, Value>,
-    /// Max cached chunks (LRU eviction)
-    max_chunks: usize,
-    /// Stats
-    pub hits: u64,
-    pub misses: u64,
-}
-
-impl StreamCache {
-    pub fn new(max_chunks: usize) -> Self {
-        Self {
-            states: std::collections::HashMap::new(),
-            chunk_cache: std::collections::HashMap::new(),
-            max_chunks,
-            hits: 0,
-            misses: 0,
-        }
-    }
-
-    /// Load a filter's trained state into the stream cache.
-    pub fn load_state(&mut self, filter_id: &str, state_key: CacheKey, state: Value) {
-        self.states
-            .insert(filter_id.to_string(), (state_key, state));
-    }
-
-    /// Get a filter's cached state (for forward() during inference).
-    pub fn get_state(&self, filter_id: &str) -> Option<&Value> {
-        self.states.get(filter_id).map(|(_, v)| v)
-    }
-
-    /// Try to get a cached chunk result.
-    /// chunk_key = hash(config_hash + state_hash + chunk_data_hash)
-    pub fn get_chunk(&mut self, chunk_key: &CacheKey) -> Option<&Value> {
-        if let Some(v) = self.chunk_cache.get(chunk_key) {
-            self.hits += 1;
-            Some(v)
-        } else {
-            self.misses += 1;
-            None
-        }
-    }
-
-    /// Cache a chunk result.
-    pub fn put_chunk(&mut self, chunk_key: CacheKey, value: Value) {
-        if self.chunk_cache.len() >= self.max_chunks {
-            // Simple eviction: remove first entry (not true LRU, but fast)
-            if let Some(k) = self.chunk_cache.keys().next().cloned() {
-                self.chunk_cache.remove(&k);
-            }
-        }
-        self.chunk_cache.insert(chunk_key, value);
-    }
-
-    /// Cache hit rate.
-    pub fn hit_rate(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f64 / total as f64
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,44 +354,6 @@ mod tests {
         assert_eq!(data, &[42.0]);
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn stream_cache_basics() {
-        let mut cache = StreamCache::new(100);
-
-        let state = Value::tensor(vec![0.0, 1.0], vec![2]);
-        let state_key = CacheKey::hash_data(b"state_001");
-        cache.load_state("normalize", state_key, state.clone());
-
-        assert!(cache.get_state("normalize").is_some());
-        assert!(cache.get_state("unknown").is_none());
-    }
-
-    #[test]
-    fn stream_cache_chunks() {
-        let mut cache = StreamCache::new(3);
-
-        let k1 = CacheKey::hash_data(b"chunk_1");
-        let k2 = CacheKey::hash_data(b"chunk_2");
-        let k3 = CacheKey::hash_data(b"chunk_3");
-        let k4 = CacheKey::hash_data(b"chunk_4");
-
-        cache.put_chunk(k1.clone(), Value::tensor(vec![1.0], vec![1]));
-        cache.put_chunk(k2.clone(), Value::tensor(vec![2.0], vec![1]));
-        cache.put_chunk(k3.clone(), Value::tensor(vec![3.0], vec![1]));
-
-        // All 3 should be cached
-        assert!(cache.get_chunk(&k1).is_some());
-        assert!(cache.get_chunk(&k2).is_some());
-        assert!(cache.get_chunk(&k3).is_some());
-        assert_eq!(cache.hits, 3);
-
-        // Adding k4 should evict one (max_chunks = 3)
-        cache.put_chunk(k4.clone(), Value::tensor(vec![4.0], vec![1]));
-        assert!(cache.get_chunk(&k4).is_some());
-
-        assert!(cache.hit_rate() > 0.0);
     }
 
     #[test]

@@ -27,38 +27,57 @@ pub enum TrainingStrategy {
     /// Replicate the entire graph on N workers, each sees a data shard.
     /// Gradients are aggregated after each step.
     DataParallel {
+        /// Number of graph replicas — one worker and one data shard each.
         num_replicas: usize,
+        /// How the replicas' gradients are combined after each step.
         aggregation: GradientAggregation,
     },
 
     /// Arbitrary model partitioning: each Partition maps a set of
     /// node IDs to a worker target. Any topology is supported.
     ModelParallel {
+        /// Which nodes run where. Nodes not covered by any
+        /// [`Partition`] stay on the default (local) target.
         partitions: Vec<Partition>,
+        /// How activations and gradients move between partitions.
         communication: CommunicationProtocol,
     },
 
     /// Federated learning: data stays on workers, only model updates
     /// are shared. The coordinator aggregates after each round.
     Federated {
+        /// Total number of participating clients (the pool
+        /// [`ClientSelection`] draws from each round).
         num_clients: usize,
+        /// Number of train→aggregate rounds to run.
         rounds: usize,
+        /// How client updates are combined into the global model.
         aggregation: FederatedAggregation,
+        /// Which clients participate in each round.
         client_selection: ClientSelection,
     },
 
     /// Population-Based Training: evolutionary hyperparameter optimization.
     /// Each generation trains a population, evaluates, then evolves.
     PopulationBased {
+        /// Number of concurrently trained population members.
         population_size: usize,
+        /// Number of train→evaluate→exploit/explore cycles.
         generations: usize,
+        /// How underperformers copy from top performers.
         exploit: ExploitStrategy,
+        /// How copied hyperparameters are mutated afterwards.
         explore: ExploreStrategy,
     },
 
     /// User-defined strategy with a registered coordinator.
     Custom {
+        /// Name identifying the user-provided coordinator. The
+        /// built-in strategy executor refuses this variant outright —
+        /// it never falls back to `Local` — so running it means
+        /// supplying your own coordination logic.
         coordinator: String,
+        /// Opaque configuration passed through to the coordinator.
         config: serde_json::Value,
     },
 }
@@ -73,7 +92,11 @@ pub enum GradientAggregation {
     /// A central parameter server collects and distributes updates.
     ParameterServer,
     /// Decentralized gossip-based aggregation.
-    Decentralized { topology: String },
+    Decentralized {
+        /// Name of the gossip topology (e.g. `"ring"`), interpreted by
+        /// the executing backend.
+        topology: String,
+    },
 }
 
 /// A partition maps a set of node IDs to a worker target.
@@ -82,7 +105,10 @@ pub enum GradientAggregation {
 /// The user has full control over the partitioning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Partition {
+    /// The nodes this partition claims. Need not be contiguous in the
+    /// graph — any subset can be pinned to a target.
     pub node_ids: Vec<NodeId>,
+    /// Worker the nodes run on, by id or by capability tag.
     pub target: RemoteTarget,
 }
 
@@ -96,7 +122,11 @@ pub enum CommunicationProtocol {
     /// Direct point-to-point streaming between workers.
     Direct,
     /// Pipeline parallelism with micro-batching for overlap.
-    Pipeline { micro_batch_size: usize },
+    Pipeline {
+        /// Rows per micro-batch: smaller batches overlap partitions
+        /// more at the cost of per-message overhead.
+        micro_batch_size: usize,
+    },
 }
 
 /// Aggregation method for federated learning rounds.
@@ -107,9 +137,21 @@ pub enum FederatedAggregation {
     /// Federated Averaging: weighted mean of client updates.
     FedAvg,
     /// FedProx: adds proximal term to prevent client drift.
-    FedProx { mu: f64 },
+    FedProx {
+        /// Proximal term weight: larger values pull clients harder
+        /// toward the global model.
+        mu: f64,
+    },
     /// FedYogi: adaptive federated optimization.
-    FedYogi { beta1: f64, beta2: f64, tau: f64 },
+    FedYogi {
+        /// First-moment (momentum) decay rate.
+        beta1: f64,
+        /// Second-moment decay rate.
+        beta2: f64,
+        /// Adaptivity floor: bounds how large the effective per-round
+        /// step can grow.
+        tau: f64,
+    },
 }
 
 /// How clients are selected per federated round.
@@ -120,9 +162,15 @@ pub enum ClientSelection {
     /// All available clients participate.
     All,
     /// Random subset of clients.
-    Random { fraction: f64 },
+    Random {
+        /// Fraction of `num_clients` sampled each round, in `(0, 1]`.
+        fraction: f64,
+    },
     /// Only clients matching specific tags.
-    ByCapability { required_tags: Vec<String> },
+    ByCapability {
+        /// Capability tags a client must carry to be eligible.
+        required_tags: Vec<String>,
+    },
 }
 
 /// PBT exploit strategy: how underperformers learn from top performers.
@@ -131,9 +179,18 @@ pub enum ClientSelection {
 #[non_exhaustive]
 pub enum ExploitStrategy {
     /// Bottom fraction copies weights+hyperparams from top fraction.
-    Truncation { fraction: f64 },
+    Truncation {
+        /// Fraction of the population treated as top/bottom (the
+        /// `PbtRunner` clamps it to at most half the population).
+        fraction: f64,
+    },
     /// Each member is compared to a random other; loser copies winner.
-    Binary { threshold: f64 },
+    Binary {
+        /// Intended fitness margin the winner must exceed before the
+        /// loser copies it. The current `PbtRunner` copies on any
+        /// strict fitness loss and does not read this field yet.
+        threshold: f64,
+    },
 }
 
 /// PBT explore strategy: how hyperparameters are mutated after exploit.
@@ -142,7 +199,11 @@ pub enum ExploitStrategy {
 #[non_exhaustive]
 pub enum ExploreStrategy {
     /// Multiply each hyperparameter by a random factor in [1-factor, 1+factor].
-    Perturbation { factor: f64 },
+    Perturbation {
+        /// Half-width of the multiplicative jitter (0.2 → factors in
+        /// [0.8, 1.2]).
+        factor: f64,
+    },
     /// Resample hyperparameters from the original search space.
     Resample,
 }

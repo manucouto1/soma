@@ -44,7 +44,9 @@ pub struct ArchitectureFingerprint {
     /// Every edge as `(source id, target id, kind)`, sorted.
     #[serde(default)]
     pub edges: Vec<EdgeRef>,
+    /// Node count — cheap size signal for ranking without opening `nodes`.
     pub n_nodes: usize,
+    /// Edge count — same role as `n_nodes`.
     pub n_edges: usize,
     /// Per-node filter config hash, keyed by node id. Empty unless the
     /// caller had a filter registry to hand (soma-core has no access to
@@ -56,7 +58,9 @@ pub struct ArchitectureFingerprint {
 /// One edge, by node id — the diffable form.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EdgeRef {
+    /// Source node id.
     pub source: String,
+    /// Target node id.
     pub target: String,
     /// `data` or `control`.
     pub kind: String,

@@ -1,3 +1,6 @@
+//! [`LocalCache`] — filesystem-backed [`CacheStore`] with sharded
+//! directories and atomic writes.
+
 use chrono::Utc;
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta, Origin};
 use somatize_core::error::{Result, SomaError};
@@ -14,6 +17,7 @@ pub struct LocalCache {
 }
 
 impl LocalCache {
+    /// Open (or create) a cache rooted at `base_dir`.
     pub fn new(base_dir: impl Into<PathBuf>) -> Result<Self> {
         let base_dir = base_dir.into();
         fs::create_dir_all(&base_dir)?;
@@ -42,6 +46,7 @@ impl LocalCache {
         walkdir_count(&self.base_dir)
     }
 
+    /// Whether the cache holds no entries (scans the filesystem).
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

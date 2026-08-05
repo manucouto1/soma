@@ -44,7 +44,9 @@ pub enum LoopCondition {
 /// A loop body's verdict on whether to go round again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopSignal {
+    /// Run the body again.
     Continue,
+    /// The loop is done; do not run the body again.
     Stop,
 }
 

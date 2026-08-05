@@ -1,3 +1,5 @@
+//! Core-type edge cases: odd values, degenerate graphs, boundary shapes.
+
 use somatize_core::cache::CacheKey;
 use somatize_core::error::SomaError;
 use somatize_core::event::MetricRecord;

@@ -67,11 +67,15 @@ pub trait StrategyExecutor {
 
 /// Contract for gradient aggregation across workers.
 pub trait GradientAggregator {
+    /// Combine per-worker gradients (keyed by node id) into the one set
+    /// every worker then applies.
     fn aggregate(&self, gradients: &[HashMap<String, Value>]) -> Result<HashMap<String, Value>>;
 }
 
 /// Contract for federated state aggregation.
 pub trait StateAggregator {
+    /// Combine per-worker trained states (keyed by node id) into the one
+    /// set redistributed to every worker.
     fn aggregate(&self, states: &[HashMap<String, Value>]) -> Result<HashMap<String, Value>>;
 }
 

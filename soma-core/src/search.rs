@@ -9,10 +9,23 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Scale for continuous search ranges.
+///
+/// Governs how samplers interpolate between `low` and `high`: which
+/// values a grid places its points at and where random draws
+/// concentrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Scale {
+    /// Uniform spacing across the range.
     Linear,
+    /// Logarithmic spacing: samples concentrate near the low end.
+    /// The right choice for learning rates and regularization
+    /// strengths, where orders of magnitude matter more than
+    /// absolute differences.
     Log,
+    /// Mirror image of [`Scale::Log`]: samples concentrate near the
+    /// *high* end. Useful for parameters like momentum or keep
+    /// probability, where the interesting region is close to the
+    /// upper bound.
     ReverseLog,
 }
 
@@ -23,37 +36,64 @@ pub enum Scale {
 pub enum SearchDimension {
     /// Continuous range (f64)
     Float {
+        /// Parameter name (prefixed with the filter label when spaces
+        /// are merged, e.g. `"SVM.C"`).
         name: String,
+        /// Inclusive lower bound. Must be strictly less than `high`.
         low: f64,
+        /// Inclusive upper bound.
         high: f64,
+        /// How samplers interpolate between the bounds.
         scale: Scale,
+        /// Value used when the dimension is not being searched;
+        /// `None` means the filter's own field default applies.
         default: Option<f64>,
     },
 
     /// Integer range
     Int {
+        /// Parameter name (prefixed with the filter label when spaces
+        /// are merged).
         name: String,
+        /// Inclusive lower bound. Must be strictly less than `high`.
         low: i64,
+        /// Inclusive upper bound.
         high: i64,
+        /// How samplers interpolate between the bounds.
         scale: Scale,
     },
 
     /// Discrete set of choices
     Categorical {
+        /// Parameter name (prefixed with the filter label when spaces
+        /// are merged).
         name: String,
+        /// The candidate values, as JSON so strings, numbers, and
+        /// booleans can mix. Must not be empty.
         choices: Vec<serde_json::Value>,
     },
 
     /// Active only when parent parameter has specific values
     Conditional {
+        /// Parameter name (prefixed with the filter label when spaces
+        /// are merged).
         name: String,
+        /// Name of the parameter this dimension depends on. Prefixed
+        /// alongside `name` in [`SearchSpace::merge_with_prefix`], so
+        /// the link survives merging.
         parent: String,
+        /// Parent values that activate this dimension; for any other
+        /// parent value the dimension is skipped.
         parent_values: Vec<serde_json::Value>,
+        /// The dimension to sample when active.
         dimension: Box<SearchDimension>,
     },
 }
 
 impl SearchDimension {
+    /// The parameter name, whichever variant this is. This is the key
+    /// trial params are stored under and the handle [`SearchSpace::freeze`]
+    /// matches on.
     pub fn name(&self) -> &str {
         match self {
             Self::Float { name, .. }
@@ -63,7 +103,10 @@ impl SearchDimension {
         }
     }
 
-    /// Validate the dimension configuration.
+    /// Validate the dimension configuration: ranges must satisfy
+    /// `low < high`, categorical `choices` must not be empty, and a
+    /// conditional is as valid as its inner dimension. The `Err`
+    /// message names the offending dimension.
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Float {
@@ -127,20 +170,37 @@ impl fmt::Display for SearchDimension {
 /// Aggregation of search dimensions from one or more filters.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchSpace {
+    /// The dimensions samplers draw from. [`SearchSpace::freeze`]
+    /// removes a dimension from this list, so everything here is
+    /// actively searched.
     pub dimensions: Vec<SearchDimension>,
+    /// Parameters pinned to a fixed value by [`SearchSpace::freeze`],
+    /// keyed by dimension name. The `StudyRunner` injects these into
+    /// every trial's params so a frozen parameter still reaches the
+    /// filter (and its cache key).
     pub frozen: HashMap<String, serde_json::Value>,
 }
 
 impl SearchSpace {
+    /// An empty search space: no dimensions, nothing frozen.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Append a dimension. No name-collision check happens here; use
+    /// [`SearchSpace::merge_with_prefix`] when combining spaces from
+    /// several filters.
     pub fn add(&mut self, dim: SearchDimension) {
         self.dimensions.push(dim);
     }
 
     /// Merge another search space with a prefix to avoid name collisions.
+    ///
+    /// Every dimension name in `other` becomes `"{prefix}.{name}"`
+    /// (conditional dimensions get their `parent` prefixed too, so the
+    /// dependency still resolves). This is how a graph aggregates each
+    /// filter's [`Searchable::search_space`] into one space keyed by
+    /// node label.
     pub fn merge_with_prefix(&mut self, prefix: &str, other: SearchSpace) {
         for dim in other.dimensions {
             let prefixed = prefix_dimension(prefix, dim);
@@ -149,17 +209,28 @@ impl SearchSpace {
     }
 
     /// Freeze a parameter to a fixed value (exclude from search).
+    ///
+    /// Removes the dimension named `name` from [`SearchSpace::dimensions`]
+    /// and records the value in [`SearchSpace::frozen`]; the value is
+    /// then injected into every trial's params by the runner. Freezing
+    /// a name with no matching dimension just records the value.
     pub fn freeze(&mut self, name: &str, value: serde_json::Value) {
         self.frozen.insert(name.to_string(), value);
         self.dimensions.retain(|d| d.name() != name);
     }
 
-    /// Get only the active (non-frozen) dimensions.
+    /// The dimensions still being searched. Since [`SearchSpace::freeze`]
+    /// removes frozen dimensions from the list, this is every entry of
+    /// [`SearchSpace::dimensions`] — the method exists so callers state
+    /// their intent rather than reach into the field.
     pub fn active_dimensions(&self) -> &[SearchDimension] {
         &self.dimensions
     }
 
-    /// Validate all dimensions.
+    /// Validate all dimensions, collecting every failure rather than
+    /// stopping at the first — a study definition should surface all
+    /// its range errors in one pass. `Ok(())` when every dimension
+    /// passes [`SearchDimension::validate`].
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let errors: Vec<String> = self
             .dimensions
@@ -173,10 +244,13 @@ impl SearchSpace {
         }
     }
 
+    /// `true` when there is nothing left to search. Frozen values do
+    /// not count: a space can be empty yet still carry frozen params.
     pub fn is_empty(&self) -> bool {
         self.dimensions.is_empty()
     }
 
+    /// Number of searchable dimensions (frozen params excluded).
     pub fn len(&self) -> usize {
         self.dimensions.len()
     }
@@ -245,10 +319,23 @@ fn prefix_dimension(prefix: &str, dim: SearchDimension) -> SearchDimension {
 /// Trait for filters that declare their search space.
 /// Auto-generated by `#[derive(Filter)]`.
 pub trait Searchable {
+    /// The dimensions this filter exposes for search, one per field
+    /// annotated with a `#[soma(search(...))]` range. Names are the
+    /// bare field names — a graph namespaces them per node via
+    /// [`SearchSpace::merge_with_prefix`].
     fn search_space() -> SearchSpace;
+    /// Build an instance from a sampled configuration — how a trial's
+    /// sampled point becomes a runnable filter. Params are keyed by
+    /// bare field name; in the derived impl a missing or
+    /// wrongly-typed key falls back to the type's `Default`, never an
+    /// error (the `Result` is for hand-written impls with real
+    /// construction failures).
     fn from_sample(params: &HashMap<String, serde_json::Value>) -> crate::error::Result<Self>
     where
         Self: Sized;
+    /// The instance's current searchable field values, keyed by bare
+    /// field name — the inverse of [`Searchable::from_sample`], used
+    /// to record what configuration actually ran.
     fn current_params(&self) -> HashMap<String, serde_json::Value>;
 }
 

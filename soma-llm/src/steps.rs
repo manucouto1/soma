@@ -45,6 +45,8 @@ pub struct ReactStep {
 }
 
 impl ReactStep {
+    /// A loop on `model` with no tools, no system prompt, and 12 turns.
+    /// `model` may be `provider/name`-qualified; the router resolves it.
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             model: model.into(),
@@ -59,6 +61,7 @@ impl ReactStep {
         }
     }
 
+    /// System prompt, sent with every turn of the loop.
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
         self.system = Some(system.into());
         self
@@ -77,11 +80,14 @@ impl ReactStep {
         self
     }
 
+    /// Cap on tokens per reply. Hitting it mid-answer is an error, not a
+    /// short answer — see the `length` handling in [`Step::poll`].
     pub fn with_max_tokens(mut self, n: u32) -> Self {
         self.max_tokens = Some(n);
         self
     }
 
+    /// Reasoning effort, for models that take one (e.g. `"low"`, `"high"`).
     pub fn with_effort(mut self, effort: impl Into<String>) -> Self {
         self.effort = Some(effort.into());
         self
@@ -455,17 +461,21 @@ pub struct LlmStep {
 }
 
 impl LlmStep {
+    /// One call to `model`, answering with the reply text alone.
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             inner: ReactStep::new(model).text_only(),
         }
     }
 
+    /// System prompt for the call.
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
         self.inner = self.inner.with_system(system);
         self
     }
 
+    /// Cap on tokens in the reply. Hitting it is an error, as in
+    /// [`ReactStep::with_max_tokens`].
     pub fn with_max_tokens(mut self, n: u32) -> Self {
         self.inner = self.inner.with_max_tokens(n);
         self
@@ -496,8 +506,13 @@ impl Step for LlmStep {
 /// A verdict a judge returns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Verdict {
+    /// In `[0.0, 1.0]`, clamped. A study reads this as its metric.
     pub score: f64,
+    /// Whether `score` met the judge's threshold. A loop reads this as its
+    /// termination signal.
     pub passed: bool,
+    /// The model's one-sentence justification — kept because a bare number
+    /// is undebuggable when the judge is wrong.
     pub reason: String,
 }
 

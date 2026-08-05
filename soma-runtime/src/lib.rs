@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! Execution engine for Soma computational graphs.
 //!
 //! Two decisions shape this crate. [`NodeCatalog`] is THE registry — every
@@ -10,7 +14,7 @@
 //! [`NodeMeta`](somatize_core::node::NodeMeta), not a branch on its kind.
 //!
 //! The pieces:
-//! - [`runner`] — trait-based execution: LocalRunner, StreamExecutor, StudyRunner, PbtRunner
+//! - [`runner`] — trait-based execution: LocalRunner, StudyRunner, PbtRunner
 //! - [`executor`] — walks `ExecutionPlan` trees (sequence, parallel, step, loop, remote)
 //! - [`GraphSession`] — the primary orchestrator: Graph + catalog → compile → execute;
 //!   give it an [`EffectDriver`] via `with_driver`
@@ -44,8 +48,8 @@ pub use effects::{EffectDriver, EffectHandler, EffectJournal, EffectSite, NodeOu
 pub use event_bus::EventBus;
 pub use executor::{Context, GraphInfo, execute};
 pub use executors::{
-    FittedFilter, FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner,
-    PopulationMember, StreamExecutor, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
+    FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember,
+    StreamOutput, StreamRun, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
 };
 pub use forward::{Batched, ForwardStrategy, Standard, Stream};
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};

@@ -50,11 +50,21 @@ pub enum NodeOutcome {
     /// The carry is stored under the *handing* node, so the target reads
     /// it as an ordinary predecessor output rather than through a special
     /// path.
-    HandOff { target: NodeId, carry: Value },
+    HandOff {
+        /// The node control passes to; must have been declared as a handoff.
+        target: NodeId,
+        /// The value the target reads as this node's output.
+        carry: Value,
+    },
 
     /// The run stopped, pending something outside it. `turn` is where to
     /// deliver the answer when resuming.
-    Paused { turn: usize, reason: SuspendReason },
+    Paused {
+        /// The step's turn counter at suspension — resume delivers here.
+        turn: usize,
+        /// What the run is waiting for (a person, an external event).
+        reason: SuspendReason,
+    },
 }
 
 /// A node's contract, independent of whether it computes or acts.

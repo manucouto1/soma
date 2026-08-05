@@ -50,7 +50,9 @@ pub enum Transition {
     /// The map half of map-reduce, where the fan-out width is only known at
     /// runtime. LangGraph calls this `Send`.
     Spawn {
+        /// The nodes to create — one per unit of discovered work.
         specs: Vec<NodeSpec>,
+        /// How their outputs recombine, and what one failure does to the rest.
         join: JoinPolicy,
     },
 
@@ -58,11 +60,19 @@ pub enum Transition {
     ///
     /// A handoff, in the sense the OpenAI Agents SDK uses: delegation that
     /// transfers control rather than nesting a call.
-    Goto { target: NodeId, carry: Value },
+    Goto {
+        /// Where control goes — a node reachable over a declared handoff edge.
+        target: NodeId,
+        /// The value it receives as its input.
+        carry: Value,
+    },
 
     /// Stop the run and persist it. Resuming replays the journal up to here
     /// and continues with whatever came back.
-    Suspend { reason: SuspendReason },
+    Suspend {
+        /// What the run is waiting for, and what would restart it.
+        reason: SuspendReason,
+    },
 
     /// Finished, with this output.
     Done(Value),
@@ -83,6 +93,9 @@ impl Transition {
         }
     }
 
+    /// Is this the step's last word? `Done` and `Goto` are — nothing polls
+    /// the step again this run. The other three expect another poll: after
+    /// the effects, after the spawned nodes, or after a resume.
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Done(_) | Self::Goto { .. })
     }
@@ -122,6 +135,8 @@ pub struct StepCtx<'a> {
 }
 
 impl<'a> StepCtx<'a> {
+    /// A context with no results yet — what a first poll sees. Later turns
+    /// attach theirs with [`Self::with_history`] or [`Self::with_results`].
     pub fn new(node_id: &'a str, run_id: &'a str, input: &'a Value, turn: usize) -> Self {
         Self {
             node_id,
@@ -160,6 +175,7 @@ impl<'a> StepCtx<'a> {
 /// What the compiler and runtime need to know about a step without running it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepMeta {
+    /// The step type's name, for events and error messages.
     pub name: String,
 
     /// Cap on turns before the runtime gives up.
@@ -186,6 +202,8 @@ pub struct StepMeta {
 }
 
 impl StepMeta {
+    /// Defaults: a 24-turn budget, journaling on, schemas undeclared, runs
+    /// locally.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -197,6 +215,8 @@ impl StepMeta {
         }
     }
 
+    /// Set the turn budget — see [`StepMeta::max_turns`] for what running
+    /// out means.
     pub fn with_max_turns(mut self, n: usize) -> Self {
         self.max_turns = n;
         self
@@ -209,11 +229,14 @@ impl StepMeta {
         self
     }
 
+    /// Declare what this step accepts, so an impossible edge into it fails
+    /// at compile rather than mid-run.
     pub fn with_input_schema(mut self, schema: Schema) -> Self {
         self.input_schema = Some(schema);
         self
     }
 
+    /// Declare what this step produces, for its successors' input checks.
     pub fn with_output_schema(mut self, schema: Schema) -> Self {
         self.output_schema = Some(schema);
         self
@@ -229,6 +252,7 @@ pub trait Step: crate::any::AsAny + Send + Sync {
     /// of every journal key this step writes.
     fn config_hash(&self) -> CacheKey;
 
+    /// This step's [`StepMeta`]: turn budget, journaling, schemas, placement.
     fn meta(&self) -> StepMeta;
 
     /// Advance one turn.

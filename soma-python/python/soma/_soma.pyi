@@ -628,6 +628,12 @@ def run_health_flags_json(dir: str) -> str:
 def run_trial_timeline_json(dir: str) -> str:
     """Trial lifetimes. Empty for a run that is not a study."""
 
+def run_agentic_activity_json(dir: str) -> str:
+    """Agent-step activity per node: turns, tokens, effects, tools."""
+
+def run_agentic_timeline_json(dir: str) -> str:
+    """Per-effect execution spans for agent runs."""
+
 def run_overlay_json(dir: str) -> str:
     """This run's events folded into a rendering overlay."""
 

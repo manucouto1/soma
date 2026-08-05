@@ -20,12 +20,17 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Role {
+    /// Instructions that frame the conversation.
     System,
+    /// The human — or the calling program — side of the exchange, including
+    /// tool results, which return to the model as user-role turns.
     User,
+    /// The model's own turns.
     Assistant,
 }
 
 impl Role {
+    /// The wire spelling — the same lowercase token serde reads and writes.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::System => "system",
@@ -53,30 +58,40 @@ impl std::fmt::Display for Role {
 #[non_exhaustive]
 pub enum ContentBlock {
     /// Plain prose.
-    Text { text: String },
+    Text {
+        /// The prose itself.
+        text: String,
+    },
 
     /// The model asking for a tool to be run.
     ToolUse {
         /// Correlates with the matching [`ContentBlock::ToolResult`].
         id: String,
+        /// Which tool — a [`crate::tool::ToolSpec::name`].
         name: String,
+        /// Arguments, shaped by the tool's declared schema.
         input: serde_json::Value,
     },
 
     /// The answer to a [`ContentBlock::ToolUse`].
     ToolResult {
+        /// The `id` of the [`ContentBlock::ToolUse`] this answers.
         tool_use_id: String,
+        /// The tool's output — or its error text — as the model will read it.
         content: String,
+        /// The tool failed and `content` is its error text.
         #[serde(default)]
         is_error: bool,
     },
 }
 
 impl ContentBlock {
+    /// A prose block.
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
     }
 
+    /// A tool call: run `name` with `input`; `id` pairs it with its result.
     pub fn tool_use(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -89,6 +104,7 @@ impl ContentBlock {
         }
     }
 
+    /// A successful tool result, answering the call identified by `tool_use_id`.
     pub fn tool_result(tool_use_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self::ToolResult {
             tool_use_id: tool_use_id.into(),
@@ -119,23 +135,29 @@ impl ContentBlock {
 /// One turn in a conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
+    /// Who produced this turn.
     pub role: Role,
+    /// The turn's blocks, in order.
     pub content: Vec<ContentBlock>,
 }
 
 impl Message {
+    /// A turn with an explicit role and block list.
     pub fn new(role: Role, content: Vec<ContentBlock>) -> Self {
         Self { role, content }
     }
 
+    /// A system turn holding one prose block.
     pub fn system(text: impl Into<String>) -> Self {
         Self::new(Role::System, vec![ContentBlock::text(text)])
     }
 
+    /// A user turn holding one prose block — the common case.
     pub fn user(text: impl Into<String>) -> Self {
         Self::new(Role::User, vec![ContentBlock::text(text)])
     }
 
+    /// An assistant turn holding one prose block.
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::new(Role::Assistant, vec![ContentBlock::text(text)])
     }
@@ -167,22 +189,27 @@ impl Message {
 pub struct Messages(pub Vec<Message>);
 
 impl Messages {
+    /// An empty conversation.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Append a turn.
     pub fn push(&mut self, message: Message) {
         self.0.push(message);
     }
 
+    /// How many turns so far.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Whether no turn has been added yet.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Iterate over the turns, oldest first.
     pub fn iter(&self) -> std::slice::Iter<'_, Message> {
         self.0.iter()
     }

@@ -16,7 +16,9 @@ pub enum Value {
     /// Numeric tensor data (shape + flat data).
     /// `values` is wrapped in [`Arc`] so that cloning a `Value` is O(1).
     Tensor {
+        /// Flat data in row-major order; `Arc`-shared, never mutated in place.
         values: Arc<Vec<f64>>,
+        /// Dimension sizes; the product must equal `values.len()`.
         shape: Vec<usize>,
     },
 
@@ -45,6 +47,7 @@ pub enum Value {
 }
 
 impl Value {
+    /// Create a tensor from flat row-major data and a shape.
     pub fn tensor(values: Vec<f64>, shape: Vec<usize>) -> Self {
         Self::Tensor {
             values: Arc::new(values),
@@ -52,22 +55,27 @@ impl Value {
         }
     }
 
+    /// Create a text value.
     pub fn text(s: impl AsRef<str>) -> Self {
         Self::Text(Arc::from(s.as_ref()))
     }
 
+    /// Create a JSON value.
     pub fn json(val: serde_json::Value) -> Self {
         Self::Json(Arc::new(val))
     }
 
+    /// Create a raw bytes value.
     pub fn bytes(data: Vec<u8>) -> Self {
         Self::Bytes(Arc::new(data))
     }
 
+    /// Create an opaque serialized object (e.g. a Python pickle).
     pub fn object(data: Vec<u8>) -> Self {
         Self::Object(Arc::new(data))
     }
 
+    /// Is this the [`Value::Empty`] variant?
     pub fn is_empty(&self) -> bool {
         matches!(self, Self::Empty)
     }

@@ -28,14 +28,21 @@ pub enum FilterKind {
 }
 
 /// How a filter behaves in streaming mode.
+///
+/// Deliberately NOT `#[non_exhaustive]`: the stream driver must decide
+/// chunk flow for every mode, and a wildcard arm there is a silent
+/// wrong answer (it was — an unknown mode used to fall through to
+/// FixedState). Adding a mode *should* break every consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum StreamMode {
     /// State is fixed (pre-trained). Each chunk processed independently.
     FixedState,
 
-    /// State evolves with each chunk (online learning).
-    Evolving { checkpoint_every: usize },
+    /// State evolves with each chunk (online learning): the forward's
+    /// output value doubles as the next chunk's state. (It once carried
+    /// a `checkpoint_every` that wrote checkpoints nothing ever read —
+    /// only two hardcoded constructors ever set it.)
+    Evolving,
 
     /// Must see all data before producing output. Forces materialization.
     Barrier,

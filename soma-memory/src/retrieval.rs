@@ -103,11 +103,13 @@ pub struct RetrievalQuery {
     /// Reference time for recency. A parameter, not `Utc::now()`, so
     /// ranking is reproducible.
     pub now: DateTime<Utc>,
+    /// Recency half-life in days; [`DEFAULT_HALF_LIFE_DAYS`] unless set.
     pub half_life_days: f64,
     /// Query vector, from the same embedder that produced the records'.
     /// When present, it blends into the lexical term for records
     /// carrying a vector from the *same* model.
     pub embedding: Option<(String, Vec<f32>)>,
+    /// Maximum number of results returned.
     pub limit: usize,
     /// Restrict to one research line.
     pub research_line: Option<String>,
@@ -130,21 +132,26 @@ impl RetrievalQuery {
         }
     }
 
+    /// Compare candidates structurally against this fingerprint,
+    /// activating the structural term.
     pub fn with_architecture(mut self, architecture: ArchitectureFingerprint) -> Self {
         self.architecture = Some(architecture);
         self
     }
 
+    /// Cap the number of results.
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
 
+    /// Restrict candidates to one research line, before scoring.
     pub fn in_line(mut self, line: impl Into<String>) -> Self {
         self.research_line = Some(line.into());
         self
     }
 
+    /// Require every listed tag on a candidate, before scoring.
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
@@ -154,18 +161,25 @@ impl RetrievalQuery {
 /// The four terms behind a score, so a result can explain itself.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScoreComponents {
+    /// BM25 relevance normalized against the best hit, optionally
+    /// blended with cosine similarity — in `[0, 1]`.
     pub lexical: f64,
+    /// Architecture similarity to the query's fingerprint, in `[0, 1]`.
     pub structural: f64,
+    /// Exponential age decay (see [`recency`]), in `(0, 1]`.
     pub recency: f64,
+    /// How much the record is worth reading (see [`importance`]).
     pub importance: f64,
 }
 
 /// A record and why it came back.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScoredRecord {
+    /// The matching record itself.
     pub record: ExperimentRecord,
     /// Composite score in `[0, 1]`.
     pub score: f64,
+    /// The four terms the score was added from.
     pub components: ScoreComponents,
 }
 

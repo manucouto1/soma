@@ -49,6 +49,11 @@ pub struct ResearchStep {
 }
 
 impl ResearchStep {
+    /// A researcher that pursues `objective` by experimenting on
+    /// `pipeline`, asking `model` what to try next. Starts with an empty
+    /// seed and 20 iterations; adjust with
+    /// [`with_history`](Self::with_history) and
+    /// [`with_max_iterations`](Self::with_max_iterations).
     pub fn new(model: impl Into<String>, objective: impl Into<String>, pipeline: Graph) -> Self {
         Self {
             model: model.into(),
@@ -66,6 +71,8 @@ impl ResearchStep {
         self
     }
 
+    /// Cap the loop at `n` experiments. The cap is the budget, not the
+    /// goal — the agent may `Conclude` well before reaching it.
     pub fn with_max_iterations(mut self, n: usize) -> Self {
         self.max_iterations = n;
         self

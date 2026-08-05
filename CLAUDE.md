@@ -41,7 +41,7 @@ soma-core       → types, traits, serialization. The rule is no runtime, no
                   Filter, Step, Value, Graph, Event, Schema, VirtualValue, Search, Study,
                   Effect/Transition, Message/ContentBlock, ToolSpec, LoopCondition,
                   TrainingStrategy (the type; running one is in soma-runtime),
-                  DataStore trait + LocalDataStore, StreamCache
+                  DataStore trait + LocalDataStore
 soma-store      → remote DataStore backends (S3, Zarr), feature-gated and off
                   by default. Split out of soma-core because each owns a tokio
                   runtime; see docs design/decisions.
@@ -49,13 +49,16 @@ soma-compiler   → Graph → ExecutionPlan (cache resolution, schema validation
                   Scheduler (distribute plan across workers), ExecutionPlan visualization
 soma-runtime    → GraphSession (primary orchestrator), parallel executor (threads),
                   NodeCatalog (filters AND steps), EffectDriver + EffectJournal + GraphHandler,
-                  stream executor,
+                  StreamRun (chunked execution through run_node's primitives),
                   LRU/local/tiered cache, Grid/Random/Bayesian samplers,
                   Median/Percentile pruners, StudyRunner, PbtRunner
 soma-memory     → Experiment pool: ExperimentRecord (experiments.jsonl), DerivationMove,
                   BM25+structural retrieval, KnowledgeBase trait + MemoryKB/FileKB/ChronosKB
 soma-worker     → Protocol (Rust plans + Python jobs), Worker, EnvManager
-                  (isolated venv/conda per pipeline), Axum HTTP/WS server
+                  (isolated venv/conda per pipeline), Axum HTTP/WS server.
+                  Remote streaming drives the runtime's StreamRun, held
+                  (with its Context) in active_streams between WS messages;
+                  SerializedPlan carries the run seed
 soma-llm        → LlmProvider + OpenAI-compatible client (ollama/hf/nvidia/kimi/glm/
                   deepseek/groq/vllm...), provider catalog as TOML data (incl.
                   RetryPolicy + Quirks), Toolbox, MCP client, ReactStep/JudgeStep
@@ -134,6 +137,17 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   and the start/complete/fail events happen once for filters and steps alike;
   `run_node_inner` is the only `match` on the execution hot path that tells them apart
   (`fit_state_if_needed` and `composite_fit` also discriminate, on the fit side).
+  Its guts are three primitives — `output_key` (guard + derivation + seed salt),
+  `compute_node` (catch_unwind), `store_output` (provenance) — which `StreamRun`
+  composes per chunk, so local streaming is the same execution site too. Stream
+  event shape: one bracket per NODE (started at first chunk, completed after
+  flush with "stream: N chunks, H hits, M misses"), per-chunk hit/miss
+  aggregated, never emitted. FixedState keys are IDENTICAL to the batch path's
+  (single-chunk stream and plain forward share one cache line). compile_stream
+  refuses DAGs, steps, chunk 0. Stream + fit = error. The worker's remote
+  streaming drives the SAME StreamRun (sessions in active_streams keep driver +
+  Context alive between WS messages; the DataStore auto-stream concatenates via
+  StreamOutput), and SerializedPlan.seed salts remote keys.
 - **RunContext**: what a runner needs besides the plan — catalog, cache, events, run id, and
   the *real* `GraphInfo`. `RunContext::linear` is the explicit fallback for a caller that
   has only a plan (the worker); the runner no longer invents a topology.
@@ -142,12 +156,12 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **VirtualValue**: Lazy references (Materialized | Cached | Deferred | Stream).
 - **Schema**: dtype + shape for compile-time type checking between connected filters.
 - **TrialOutcome**: Separates control flow (Completed | Pruned) from errors.
-- **StreamMode**: FixedState | Evolving (checkpoints) | Barrier (materializes).
+- **StreamMode**: FixedState | Evolving (output doubles as next state) | Barrier (materializes).
+  Exhaustive on purpose (control-flow enum, no wildcard arms).
 - **Distribution**: Local | Remote(WorkerId | Tag) — compiler wraps in ExecutionPlan::Remote.
 - **GraphInfo**: Topology-aware input resolution (predecessors, not "last executed").
 - **LRU Cache**: Enforces max_bytes with eviction. No unbounded growth.
 - **DataStore**: Abstraction for data movement between workers (Local, S3, Cached, Stream, Inline).
-- **StreamCache**: Inference optimization — caches filter states and chunk results by content hash.
 - **Scheduler**: Analyzes ExecutionPlan topology, assigns to workers (sequential→same worker,
   parallel→distribute, differentiable→group together). Produces DistributionPlan.
 - **TrainingStrategy**: Graph-level attribute (inherited by subgraphs): Local, DataParallel, ModelParallel, Federated, PopulationBased, Custom.

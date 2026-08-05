@@ -1,3 +1,7 @@
+// The crate is fully documented and clippy runs with -D warnings in CI,
+// so this makes "public API without docs" a build error from here on.
+#![warn(missing_docs)]
+
 //! Remote worker for distributed pipeline execution.
 //!
 //! Receives execution plans from a coordinator, runs them locally,

@@ -13,7 +13,9 @@ use std::collections::HashMap;
 /// Direction of optimization for an objective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
+    /// Lower values are better (losses, error rates).
     Minimize,
+    /// Higher values are better (accuracy, F1).
     Maximize,
 }
 
@@ -32,7 +34,10 @@ impl Direction {
 /// An optimization objective (metric + direction).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Objective {
+    /// Name of the metric to optimize, matched against each trial's
+    /// recorded [`MetricRecord`]s.
     pub metric: String,
+    /// Whether lower or higher values of the metric win.
     pub direction: Direction,
 }
 
@@ -48,7 +53,11 @@ pub enum Scalarizer {
     /// emphasizes the worst-performing term so non-convex trade-offs
     /// aren't missed. For `Maximize`: `minᵢ(wᵢ·vᵢ) + ρ·Σ wᵢ·vᵢ`;
     /// for `Minimize` the `min` becomes a `max`.
-    AugmentedTchebycheff { rho: f64 },
+    AugmentedTchebycheff {
+        /// Weight of the augmenting sum term. `0.0` is pure worst-case;
+        /// small values (~0.05–0.1) keep the sum as a tie-breaker.
+        rho: f64,
+    },
 }
 
 /// A scalar objective composed from several named metrics.
@@ -60,7 +69,12 @@ pub enum Scalarizer {
 pub struct CompositeObjective {
     /// `(metric_name, weight)` pairs. Negative weights penalize.
     pub terms: Vec<(String, f64)>,
+    /// Direction of the *composite* value. Overrides any per-objective
+    /// direction: see [`Study::primary_direction`].
     pub direction: Direction,
+    /// How the weighted terms collapse into one scalar. Defaults to
+    /// [`Scalarizer::WeightedSum`]; absent in pre-scalarizer JSON, hence
+    /// `serde(default)`.
     #[serde(default)]
     pub scalarizer: Scalarizer,
 }
@@ -98,27 +112,50 @@ impl CompositeObjective {
 #[serde(tag = "strategy_type")]
 pub enum SearchStrategy {
     /// Exhaustive grid search.
-    Grid { points_per_dim: usize },
+    Grid {
+        /// Grid resolution per continuous dimension (categoricals use
+        /// all their choices), so total trials grow multiplicatively
+        /// with dimension count.
+        points_per_dim: usize,
+    },
 
     /// Random sampling.
-    Random { n_trials: usize, seed: Option<u64> },
-
-    /// Bayesian optimization (TPE).
-    Bayesian {
+    Random {
+        /// Number of configurations to sample.
         n_trials: usize,
-        n_startup: usize,
+        /// RNG seed for reproducible sampling; `None` derives one.
         seed: Option<u64>,
     },
 
-    /// Successive halving with early stopping.
+    /// Bayesian optimization (TPE).
+    Bayesian {
+        /// Total number of trials, startup included.
+        n_trials: usize,
+        /// Trials sampled randomly before the TPE model takes over
+        /// (it needs history to split good from bad).
+        n_startup: usize,
+        /// RNG seed for reproducible sampling; `None` derives one.
+        seed: Option<u64>,
+    },
+
+    /// Successive halving with early stopping. Declared for forward
+    /// compatibility: no sampler implements it yet, and Python's
+    /// `Study.run` rejects it as unsupported.
     Hyperband {
+        /// Budget (e.g. epochs) a surviving trial may consume.
         max_resource: usize,
+        /// Fraction of trials kept per halving round (`3` keeps one
+        /// in three).
         reduction_factor: usize,
     },
 
-    /// Multi-objective optimization.
+    /// Multi-objective optimization. Declared for forward
+    /// compatibility: no sampler implements it yet — for multiple
+    /// metrics today, scalarize via [`CompositeObjective`].
     MultiObjective {
+        /// Number of configurations to sample.
         n_trials: usize,
+        /// The objectives to trade off against each other.
         objectives: Vec<Objective>,
     },
 }
@@ -144,15 +181,26 @@ pub enum PruningStrategy {
     None,
 
     /// Prune if metric is below median of completed trials at same step.
-    Median { n_warmup_steps: usize },
-
-    /// Prune if metric is below given percentile.
-    Percentile {
-        percentile: f64,
+    Median {
+        /// Steps a trial runs unconditionally before pruning checks
+        /// begin — early metrics are too noisy to kill on.
         n_warmup_steps: usize,
     },
 
-    /// Bracket-based pruning (used with Hyperband).
+    /// Prune if metric is below given percentile.
+    Percentile {
+        /// Percentile (0–100) of completed trials' values at the same
+        /// step the trial must reach to survive. `50.0` is
+        /// [`PruningStrategy::Median`].
+        percentile: f64,
+        /// Steps a trial runs unconditionally before pruning checks
+        /// begin.
+        n_warmup_steps: usize,
+    },
+
+    /// Bracket-based pruning (used with Hyperband). Declared for
+    /// forward compatibility: the `StudyRunner` currently builds no
+    /// pruner for it, so it behaves like [`PruningStrategy::None`].
     Hyperband,
 }
 
@@ -160,28 +208,59 @@ pub enum PruningStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "trial_state")]
 pub enum TrialState {
+    /// Created but not yet started (the state [`Trial::new`] assigns).
     Pending,
+    /// Currently executing.
     Running,
+    /// Finished normally — the only state [`Study::objective_value`]
+    /// scores.
     Completed,
-    Pruned { step: usize, reason: String },
-    Failed { error: String },
+    /// Stopped early by the pruner. Terminal but not a failure: a
+    /// pruned trial's metrics stay recorded.
+    Pruned {
+        /// The step at which the pruner intervened.
+        step: usize,
+        /// Human-readable pruning verdict (e.g. value vs. median).
+        reason: String,
+    },
+    /// Errored during execution.
+    Failed {
+        /// The error message that terminated the trial.
+        error: String,
+    },
 }
 
 /// A single hyperparameter evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trial {
+    /// Identifier unique within the study (the runner uses
+    /// `trial_NNNN`).
     pub id: String,
+    /// The full configuration this trial ran with: sampled dimension
+    /// values (prefixed names like `"SVM.C"`), plus the study's frozen
+    /// params and a `"seed"` entry when [`Study::seeds`] is non-empty.
     pub params: HashMap<String, serde_json::Value>,
+    /// Lifecycle state; see [`TrialState`].
     pub state: TrialState,
+    /// Every metric recorded during the trial, in recording order —
+    /// multiple values per name across steps are expected.
     pub metrics: Vec<MetricRecord>,
+    /// Wall-clock duration, set when the trial reaches a terminal state.
     pub duration_ms: Option<u64>,
+    /// When execution started. `serde(default)`: absent in trials
+    /// serialized before timestamps existed.
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
+    /// When the trial reached a terminal state. `serde(default)` for
+    /// the same pre-timestamp JSON.
     #[serde(default)]
     pub finished_at: Option<DateTime<Utc>>,
 }
 
 impl Trial {
+    /// A fresh [`TrialState::Pending`] trial for a sampled
+    /// configuration: no metrics, no timestamps. The runner flips it
+    /// to `Running` and stamps `started_at` when execution begins.
     pub fn new(id: impl Into<String>, params: HashMap<String, serde_json::Value>) -> Self {
         Self {
             id: id.into(),
@@ -217,10 +296,16 @@ impl Trial {
         }
     }
 
+    /// `true` only for [`TrialState::Completed`] — pruned and failed
+    /// trials are finished but not complete. This is the filter
+    /// [`Study::completed_trials`] and pruner histories use.
     pub fn is_complete(&self) -> bool {
         matches!(self.state, TrialState::Completed)
     }
 
+    /// `true` once the trial can no longer change state: `Completed`,
+    /// `Pruned`, or `Failed`. This is what [`Study::progress`] counts,
+    /// so pruned and failed trials still advance the progress bar.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.state,
@@ -232,13 +317,26 @@ impl Trial {
 /// An optimization study: orchestrates multiple trials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Study {
+    /// Unique identifier, generated by [`Study::new`].
     pub id: String,
+    /// Human-readable name; needs no uniqueness.
     pub name: String,
+    /// The dimensions trials are sampled from.
     pub search_space: SearchSpace,
+    /// How configurations are chosen (grid, random, TPE, ...).
     pub strategy: SearchStrategy,
+    /// Early-stopping policy for unpromising trials; `None` by default.
     pub pruning: PruningStrategy,
+    /// Declared objectives. Only the first is scored today (see
+    /// [`Study::objective_value`]), unless `composite` overrides it.
     pub objectives: Vec<Objective>,
+    /// Every trial the study has run, in start order — terminal and
+    /// in-flight alike.
     pub trials: Vec<Trial>,
+    /// Study-level fixed parameters, injected into every trial's
+    /// params by the runner (same mechanism as
+    /// [`SearchSpace::freeze`](crate::search::SearchSpace::freeze),
+    /// but settable after the space was built).
     pub frozen: HashMap<String, serde_json::Value>,
     /// Experiment seeds: when non-empty, every sampled configuration is
     /// evaluated once per seed (trial params carry `"seed"`), giving
@@ -249,12 +347,17 @@ pub struct Study {
     /// over `objectives` when set.
     #[serde(default)]
     pub composite: Option<CompositeObjective>,
+    /// When the study was created. `serde(default)`: absent in
+    /// pre-timestamp JSON.
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    /// When the study was last saved/modified.
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
+    /// Free-form labels for filtering studies in listings.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Git commit the study ran at, for reproducibility bookkeeping.
     #[serde(default)]
     pub git_sha: Option<String>,
     /// Total trials resolved by the sampler at run start (grid sizes
@@ -264,6 +367,10 @@ pub struct Study {
 }
 
 impl Study {
+    /// A fresh study with a generated `id` and `created_at` stamped
+    /// now: no trials, no pruning ([`PruningStrategy::None`]), no
+    /// composite objective. Layer options on with the `with_*`
+    /// builders.
     pub fn new(
         name: impl Into<String>,
         search_space: SearchSpace,
@@ -289,17 +396,23 @@ impl Study {
         }
     }
 
+    /// Builder: replace the pruning strategy (the default from
+    /// [`Study::new`] is [`PruningStrategy::None`]).
     pub fn with_pruning(mut self, pruning: PruningStrategy) -> Self {
         self.pruning = pruning;
         self
     }
 
+    /// Builder: set the composite objective. Once set it becomes the
+    /// value the optimizer sees, overriding `objectives` for scoring
+    /// and direction — see [`Study::objective_value`].
     pub fn with_composite(mut self, composite: CompositeObjective) -> Self {
         self.composite = composite.into();
         self
     }
 
-    /// Get completed trials.
+    /// Trials in [`TrialState::Completed`] — the population pruners
+    /// compare against. Pruned and failed trials are excluded.
     pub fn completed_trials(&self) -> Vec<&Trial> {
         self.trials.iter().filter(|t| t.is_complete()).collect()
     }
