@@ -83,8 +83,8 @@ fails the build rather than quietly misleading a reader.
 |---|---|---|---|
 | [`CacheActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:98` |
 | [`CacheKey`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/cache/mod.rs:21` |
-| [`CacheStore`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/cache/mod.rs:198` |
-| [`CacheTier`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/cache/mod.rs:153` |
+| [`CacheStore`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/cache/mod.rs:219` |
+| [`CacheTier`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/cache/mod.rs:174` |
 | [`Capabilities`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/protocol.rs:44` |
 | [`Catalog`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/catalog.rs:374` |
 | [`Change`](/soma/internals/agentic/#soma-memory-somatize-memory) | enum | `soma-memory` | `soma-memory/src/derivation.rs:31` |
@@ -134,7 +134,7 @@ fails the build rather than quietly misleading a reader.
 | [`EffectSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:227` |
 | [`Embedder`](/soma/internals/agentic/#soma-memory-somatize-memory) | «trait» | `soma-memory` | `soma-memory/src/retrieval.rs:64` |
 | [`Embedding`](/soma/internals/agentic/#soma-memory-somatize-memory) | struct | `soma-memory` | `soma-memory/src/record.rs:43` |
-| [`EntryMeta`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/cache/mod.rs:179` |
+| [`EntryMeta`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/cache/mod.rs:200` |
 | [`EnvLockfile`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/env_manager.rs:25` |
 | [`EnvManager`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/env_manager.rs:38` |
 | [`EnvType`](/soma/internals/distribution/#soma-worker-somatize-worker) | enum | `soma-worker` | `soma-worker/src/env_manager.rs:14` |
@@ -276,7 +276,7 @@ fails the build rather than quietly misleading a reader.
 |---|---|---|---|
 | [`Objective`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/optimizer/study.rs:36` |
 | [`OpenAiCompatible`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/openai_compat.rs:188` |
-| [`Origin`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/cache/mod.rs:162` |
+| [`Origin`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/cache/mod.rs:183` |
 | [`OutputDelivery`](/soma/internals/distribution/#soma-worker-somatize-worker) | enum | `soma-worker` | `soma-worker/src/protocol.rs:560` |
 
 ### P

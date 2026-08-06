@@ -41,7 +41,7 @@ is what keeps those anchors honest.
 
 | ID | Finding | Severity |
 |---|---|---|
-| [D-31](#d-31--zarrstores-chunk-cache-is-write-only) | `ZarrStore`'s local chunk cache is never read — every `get` goes back to S3 | High |
+| [D-31](#d-31--zarrstores-chunk-cache-is-write-only) | ~~`ZarrStore`'s local chunk cache is never read — every `get` goes back to S3~~ — **Resolved** | High |
 | [D-01](#d-01--pygraph-is-the-workspaces-god-object) | ~~`PyGraph`: 2 458 lines, 19 fields, ~47 public methods~~ — **Resolved** | High |
 | [D-11](#d-11--the-stream-path-re-implements-run_node-and-has-drifted) | Stream execution re-implements `run_node` and has drifted — no cache events | High |
 | [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | `mean_by_key` panics on an empty slice, reachable from Python | High |
@@ -532,6 +532,15 @@ are never cleaned up either — the cache grows without bound.
 comment at `:514` says "parsing the hex suffix", which is what it should do),
 or key the cache by the path string directly and stop pretending it is a
 `CacheKey`.
+
+**Resolved** The inverse now exists — `CacheKey::from_hex`
+(`soma-core/src/cache/mod.rs:148`) — and `key_from_path`
+(`soma-store/src/zarr.rs:523`) decodes rather than hashes. It returns
+`Result`, because a path this store did not write is a malformed `DataRef`
+and not a cache miss; `remove` deletes `local_cache/<key.to_hex()>`, which is
+the directory the writer actually used, so the two derivations cannot drift
+again. Two tests hold it: a read looks where the write put it, and a path
+that is not a key is an error rather than a key.
 
 ### D-32 · The compiler never descends into `Loop` or `Branch`
 

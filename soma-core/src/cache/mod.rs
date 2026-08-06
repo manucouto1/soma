@@ -134,6 +134,27 @@ impl CacheKey {
     pub fn to_hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }
+
+    /// Parse a key back from [`to_hex`](Self::to_hex).
+    ///
+    /// The inverse has to exist because a key travels inside a path: a
+    /// `DataRef::Zarr` names its array `<prefix><hex>`, and a reader
+    /// holding only that path has to get back to the key to find the
+    /// local cache entry the *writer* used. Hashing the hex instead
+    /// produces a different key that looks exactly as valid — see D-31,
+    /// where it made a whole chunk cache write-only.
+    ///
+    /// `None` for anything that is not 64 hex digits.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        if hex.len() != 32 * 2 {
+            return None;
+        }
+        let mut bytes = [0u8; 32];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        }
+        Some(Self(bytes))
+    }
 }
 
 impl fmt::Debug for CacheKey {
@@ -389,5 +410,21 @@ mod tests {
         let json = serde_json::to_string(&key).unwrap();
         let deserialized: CacheKey = serde_json::from_str(&json).unwrap();
         assert_eq!(key, deserialized);
+    }
+
+    #[test]
+    fn a_key_survives_a_trip_through_a_path() {
+        let key = CacheKey::hash_data(b"chunked tensor");
+        assert_eq!(CacheKey::from_hex(&key.to_hex()), Some(key));
+    }
+
+    #[test]
+    fn hex_that_is_not_a_key_is_not_hashed_into_one() {
+        // The failure D-31 was made of: hashing the input produces a
+        // perfectly valid key that addresses the wrong thing.
+        assert_eq!(CacheKey::from_hex("not hex"), None);
+        assert_eq!(CacheKey::from_hex(""), None);
+        assert_eq!(CacheKey::from_hex(&"a".repeat(63)), None);
+        assert_eq!(CacheKey::from_hex(&"z".repeat(64)), None);
     }
 }
