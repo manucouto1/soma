@@ -296,7 +296,7 @@ The narrative version of D2, for orientation. Every step links to the detail.
 Remote execution replaces step 5 with a serialized plan over a WebSocket
 ([D5](/soma/internals/distribution/#d5--what-crosses-the-wire)); the executor
 itself does not change. Streaming replaces it with `StreamRun`, which composes
-the *same three primitives* per chunk — which is why a single-chunk stream and a
+the *same four primitives* per chunk — which is why a single-chunk stream and a
 plain forward produce identical cache keys.
 
 ---

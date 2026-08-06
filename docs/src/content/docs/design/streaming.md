@@ -15,11 +15,12 @@ Stream:  data arrives in chunks     → state may evolve, forward per chunk
 ```
 
 The unification is not just at the API surface. Every chunk of every
-node runs through the same three primitives `run_node` composes for
+node runs through the same four primitives `run_node` composes for
 the topological walk: `output_key` (the `cacheable && deterministic`
 guard and the one key derivation, salted with the run seed),
-`compute_node` (panic containment around the only filter-vs-step
-match), and `store_output` (provenance on every cache write). The
+`probe_cache` (the lookup, and what it found), `compute_node` (panic
+containment around the only filter-vs-step match), and `store_output`
+(provenance on every cache write). The
 stream driver (`StreamRun`, in `soma-runtime/src/execution/stream.rs`)
 owns only what is genuinely streaming's: chunk flow per `StreamMode`,
 the state carried between chunks, barrier buffers and their flush, and

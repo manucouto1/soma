@@ -30,7 +30,9 @@
 //! is public and why the state that must survive between chunks lives
 //! here rather than in the plan walk.
 
-use crate::execution::executor::{Context, compute_node, output_key, store_output};
+use crate::execution::executor::{
+    Context, Probe, compute_node, output_key, probe_cache, store_output,
+};
 use crate::execution::node_catalog::{NodeCatalog, NodeImpl};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::data::value::Value;
@@ -170,6 +172,16 @@ impl StreamRun {
                 continue;
             }
             node.started = false;
+            // The counts as data, not only as prose. They used to appear
+            // solely inside `output_summary`, which a human could read and
+            // `RunReader::cache_activity` could not — so every streamed
+            // run reported zero cache activity.
+            ctx.event_bus.emit(Event::NodeCacheSummary {
+                run_id: ctx.run_id.clone(),
+                node_id: node.id.clone(),
+                hits: node.cache_hits,
+                misses: node.cache_misses,
+            });
             ctx.event_bus.emit(Event::NodeCompleted {
                 run_id: ctx.run_id.clone(),
                 node_id: node.id.clone(),
@@ -214,11 +226,18 @@ impl StreamRun {
             Some(v) => v,
             None => node.base_state.as_ref(),
         };
+        // Every chunk's input is a different value, so there is nothing
+        // to memoize the way the batch walk memoizes a shared
+        // predecessor's hash — and `compile_stream` refuses DAGs, so a
+        // stream has no diamond to share one across in the first place.
         let input_key = CacheKey::for_value(&input);
         let key = output_key(&node.node, &node.meta, state_ref, &input_key, ctx.seed);
 
-        if let Some(k) = &key {
-            if let Ok(Some((cached, _tier))) = cache.get_located(k) {
+        // The stream tallies rather than emitting: it probes once per
+        // chunk, and hundreds of standalone hit spans would drown a
+        // reader. `finish` reports the totals as `NodeCacheSummary`.
+        match probe_cache(cache, key.as_ref()) {
+            Probe::Hit(cached, ..) => {
                 node.chunks += 1;
                 node.cache_hits += 1;
                 if matches!(node.stream_mode, StreamMode::Evolving) {
@@ -226,7 +245,8 @@ impl StreamRun {
                 }
                 return Ok(cached);
             }
-            node.cache_misses += 1;
+            Probe::Miss if key.is_some() => node.cache_misses += 1,
+            Probe::Miss => {}
         }
 
         let started_at = Instant::now();

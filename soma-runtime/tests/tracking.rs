@@ -1072,6 +1072,42 @@ fn session_fit_and_run_emit_matching_run_bracket() {
     );
 }
 
+/// A streamed run must show up in `cache_activity`.
+///
+/// The stream probes the cache once per chunk and deliberately does not
+/// emit a span per probe — hundreds of them would drown a reader. But the
+/// totals used to travel *only* inside `NodeCompleted`'s summary string,
+/// so the reader saw node spans and zero cache activity for the same run,
+/// which reads as "streaming does not use the cache".
+#[test]
+fn a_streamed_run_reports_its_cache_activity() {
+    use somatize_core::tracking::event::Event;
+    use somatize_runtime::tracking::RunReader;
+
+    let root = tempfile::tempdir().unwrap();
+    let tracker = LocalTracker::create(root.path(), RunKind::Fit, "streamed").unwrap();
+    let sink = tracker.sink();
+    let rid = tracker.run_id().to_string();
+
+    sink.record(&Event::NodeCacheSummary {
+        run_id: rid.clone(),
+        node_id: "scaler".into(),
+        hits: 7,
+        misses: 3,
+    });
+    sink.flush();
+    tracker.finalize(RunState::Completed).unwrap();
+
+    let activity = RunReader::open(tracker.run_dir())
+        .unwrap()
+        .cache_activity()
+        .unwrap();
+    assert_eq!(activity.hits, 7);
+    assert_eq!(activity.misses, 3);
+    assert_eq!(activity.by_node["scaler"].hits, 7);
+    assert_eq!(activity.by_node["scaler"].misses, 3);
+}
+
 #[test]
 fn run_reader_overlay_and_annotated_mermaid() {
     use somatize_core::cache::{CacheKey, CacheTier};

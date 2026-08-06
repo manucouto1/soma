@@ -442,7 +442,7 @@ short version, organized by which pattern failed.
 | Composite | `resolve_distribution` / `collapse_differentiable` do not use `children()` and skip `Loop`/`Branch` — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) |
 | Template method | `Transport::execute_node`'s default is wrong for every caller, and its own doc says so — [D-41](/soma/internals/debt/#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) |
 | Strategy | `Runner` — a strategy interface that had one live implementation and one dead one; the dead one is deleted — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
-| Shared primitives | `run_node` and `StreamRun::run_compute` share three primitives and duplicate everything around them, and have drifted — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |
+| Shared primitives | `run_node` and `StreamRun::run_compute` share four primitives; what still differs between them is reporting, and it is a decision rather than drift — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |
 | Newtype | Not applied to any id type — [D-56](/soma/internals/debt/#d-56--nodeid-is-a-string-and-so-is-everything-else) |
 | Builder | Three wide structs skipped it — [D-06](/soma/internals/debt/#d-06--wide-data-structs-with-no-builder) |
 | Atomic commit | Was four implementations, two without fsync; now one — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) |

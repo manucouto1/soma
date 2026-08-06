@@ -668,6 +668,45 @@ pub(crate) fn compute_node(
     }
 }
 
+/// What a cache probe found.
+///
+/// `load_time` is the lookup itself, not "everything before the node
+/// ran": a probe that reports the cost of resolving the input is not
+/// measuring the cache.
+pub(crate) enum Probe {
+    /// Served from the cache, by this tier, in this long.
+    Hit(Value, somatize_core::cache::CacheTier, std::time::Duration),
+    /// Not cached — or the node is not cacheable at all, which is the
+    /// same answer to the only question the caller is asking.
+    Miss,
+}
+
+/// Look for a node's output in the cache.
+///
+/// The fourth primitive beside [`output_key`], [`compute_node`] and
+/// [`store_output`]. Both execution sites wrote this lookup out, and the
+/// stream's copy reported nothing to the bus — which is why
+/// `RunReader::cache_activity` read zero for every streamed run.
+/// Reporting differs between the two by design (see [`Probe`]'s callers);
+/// the *lookup* must not, and now cannot.
+///
+/// `get_located`, not `get`: which tier served the value is the whole
+/// content of a hit event, and hardcoding `Memory` made every per-tier
+/// statistic report the same thing.
+pub(crate) fn probe_cache(
+    cache: &dyn CacheStore,
+    key: Option<&somatize_core::cache::CacheKey>,
+) -> Probe {
+    let Some(key) = key else {
+        return Probe::Miss;
+    };
+    let started = Instant::now();
+    match cache.get_located(key) {
+        Ok(Some((value, tier))) => Probe::Hit(value, tier, started.elapsed()),
+        _ => Probe::Miss,
+    }
+}
+
 /// Store a computed output with its provenance. Best-effort: a full
 /// cache disk must never fail the run.
 pub(crate) fn store_output(
@@ -812,29 +851,28 @@ fn run_node(
         ctx.seed,
     );
 
-    // `get_located`, not `get`: which tier served the value is the whole
-    // content of this event, and hardcoding `Memory` made every per-tier
-    // statistic report the same thing.
-    if let Some(key) = &out_key
-        && let Ok(Some((cached, tier))) = cache.get_located(key)
-    {
-        ctx.set(node_id.to_string(), cached.clone());
-        ctx.event_bus.emit(Event::NodeCacheHit {
-            run_id: ctx.run_id.clone(),
-            node_id: node_id.to_string(),
-            key: key.clone(),
-            tier,
-            load_time: start.elapsed(),
-        });
-        return Ok(NodeOutcome::Produced(cached));
-    }
-
-    if let Some(key) = &out_key {
-        ctx.event_bus.emit(Event::NodeCacheMiss {
-            run_id: ctx.run_id.clone(),
-            node_id: node_id.to_string(),
-            key: key.clone(),
-        });
+    // The batch walk reports one probe per node, as it happens.
+    match probe_cache(cache, out_key.as_ref()) {
+        Probe::Hit(cached, tier, load_time) => {
+            ctx.set(node_id.to_string(), cached.clone());
+            ctx.event_bus.emit(Event::NodeCacheHit {
+                run_id: ctx.run_id.clone(),
+                node_id: node_id.to_string(),
+                key: out_key.expect("a hit implies a key"),
+                tier,
+                load_time,
+            });
+            return Ok(NodeOutcome::Produced(cached));
+        }
+        Probe::Miss => {
+            if let Some(key) = &out_key {
+                ctx.event_bus.emit(Event::NodeCacheMiss {
+                    run_id: ctx.run_id.clone(),
+                    node_id: node_id.to_string(),
+                    key: key.clone(),
+                });
+            }
+        }
     }
 
     ctx.event_bus.emit(Event::NodeStarted {
@@ -2300,6 +2338,49 @@ mod tests {
         assert!(
             completed_summary.contains("1 hits"),
             "the chunk should have been a cache hit: {completed_summary}"
+        );
+    }
+
+    /// The stream's cache counts have to reach a reader as *data*. They
+    /// used to exist only inside `NodeCompleted`'s human summary, which
+    /// is why `RunReader::cache_activity` reported zero for every
+    /// streamed run while its node spans said the nodes had run.
+    #[test]
+    fn stream_reports_its_cache_counts_as_data() {
+        let (bus, cache) = setup();
+        let mut rx = bus.subscribe();
+        let mut ctx = Context::new(bus, "run_stream_counts");
+        ctx.set(
+            "__input__",
+            Value::tensor(vec![1.0, 2.0, 3.0, 4.0], vec![4]),
+        );
+        ctx.graph_info
+            .set_predecessors("double", vec!["__input__".into()]);
+        let mut filters = NodeCatalog::new();
+        filters.register("double", Box::new(DoublerFilter));
+
+        let plan = ExecutionPlan::Stream {
+            node_ids: vec!["double".into()],
+            chunk_size: 2,
+        };
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        let mut summary = None;
+        while let Ok(event) = rx.try_recv() {
+            if let Event::NodeCacheSummary {
+                node_id,
+                hits,
+                misses,
+                ..
+            } = event
+            {
+                summary = Some((node_id, hits, misses));
+            }
+        }
+        assert_eq!(
+            summary,
+            Some(("double".to_string(), 0, 2)),
+            "two chunks, two misses, one aggregate — not zero and not two events"
         );
     }
 

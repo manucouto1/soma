@@ -383,8 +383,8 @@ fails the build rather than quietly misleading a reader.
 | [`Stream`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:58` |
 | [`StreamMessage`](/soma/internals/distribution/#soma-worker-somatize-worker) | enum | `soma-worker` | `soma-worker/src/protocol.rs:620` |
 | [`StreamMode`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/graph/filter.rs:37` |
-| [`StreamOutput`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/stream.rs:283` |
-| [`StreamRun`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/stream.rs:73` |
+| [`StreamOutput`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/stream.rs:303` |
+| [`StreamRun`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/stream.rs:75` |
 | [`Study`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/optimizer/study.rs:291` |
 | [`StudyIo`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/optimizer/study_io.rs:19` |
 | [`StudyRunner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/study.rs:160` |

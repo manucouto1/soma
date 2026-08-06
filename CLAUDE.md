@@ -170,12 +170,14 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   and the start/complete/fail events happen once for filters and steps alike;
   `run_node_inner` is the only `match` on the execution hot path that tells them apart
   (`fit_state_if_needed` and `composite_fit` also discriminate, on the fit side).
-  Its guts are three primitives — `output_key` (guard + derivation + seed salt),
-  `compute_node` (catch_unwind), `store_output` (provenance) — which `StreamRun`
+  Its guts are four primitives — `output_key` (guard + derivation + seed salt),
+  `probe_cache` (the lookup → `Probe::Hit|Miss`), `compute_node` (catch_unwind),
+  `store_output` (provenance) — which `StreamRun`
   composes per chunk, so local streaming is the same execution site too. Stream
   event shape: one bracket per NODE (started at first chunk, completed after
   flush with "stream: N chunks, H hits, M misses"), per-chunk hit/miss
-  aggregated, never emitted. FixedState keys are IDENTICAL to the batch path's
+  aggregated into ONE `NodeCacheSummary` per node at `finish` — never a span
+  per chunk, but the counts do reach `RunReader::cache_activity` as data. FixedState keys are IDENTICAL to the batch path's
   (single-chunk stream and plain forward share one cache line). compile_stream
   refuses DAGs, steps, chunk 0. Stream + fit = error. The worker's remote
   streaming drives the SAME StreamRun (sessions in active_streams keep driver +

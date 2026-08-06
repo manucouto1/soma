@@ -112,7 +112,7 @@
     },
     {
       "id": "b",
-      "title": "`execute` → `run_node` → the three primitives",
+      "title": "`execute` → `run_node` → the four primitives",
       "entry": "execute",
       "blocks": [
         {
@@ -211,12 +211,21 @@
                 ]
               },
               {
-                "label": "cache.get_located(key) hit → emit NodeCacheHit, return Produced",
-                "at": ":862"
+                "label": "▸ PRIMITIVE 4  probe_cache(cache, key) → Probe",
+                "at": ":696",
+                "sym": "probe_cache",
+                "mark": "P4",
+                "note": [
+                  "Hit(value, tier, load_time) | Miss  — the lookup only"
+                ]
               },
               {
-                "label": "miss → emit NodeCacheMiss, emit NodeStarted",
-                "at": ":876"
+                "label": "Hit  → emit NodeCacheHit, return Produced",
+                "at": ":856"
+              },
+              {
+                "label": "Miss → emit NodeCacheMiss, emit NodeStarted",
+                "at": ":867"
               },
               {
                 "label": "▸ PRIMITIVE 2  compute_node(…) = catch_unwind(run_node_inner)",
@@ -439,51 +448,53 @@
               },
               {
                 "label": "run = StreamRun::new(node_ids, catalog)   (steps → Err)",
-                "at": "stream.rs:83"
+                "at": "stream.rs:85"
               },
               {
                 "label": "per chunk: run.process_chunk(chunk, ctx, cache)",
-                "at": "stream.rs:130",
+                "at": "stream.rs:132",
                 "children": [
                   {
                     "label": "per node i:",
                     "children": [
                       {
                         "label": "Barrier  → buffer the value, stop the cascade",
-                        "at": ":140"
+                        "at": ":142"
                       },
                       {
                         "label": "else     → current = run_compute(i, current, …)",
-                        "at": ":194",
+                        "at": ":206",
                         "children": [
                           {
                             "label": "first touch → emit NodeStarted",
-                            "at": ":203"
+                            "at": ":217"
                           },
                           {
                             "label": "state = evolving.or(base_state)",
-                            "at": ":213"
+                            "at": ":224"
                           },
                           {
                             "label": "▸ output_key(…)",
-                            "at": ":217",
+                            "at": ":234",
                             "mark": "P1"
                           },
                           {
-                            "label": "cache hit → counters only",
-                            "at": ":220",
-                            "mark": "warn",
-                            "debt": "D-11",
-                            "trail": "(!) no event"
+                            "label": "▸ probe_cache(…)  → tally, no per-chunk span",
+                            "at": ":239",
+                            "sym": "probe_cache",
+                            "mark": "P4",
+                            "note": [
+                              "totals reported once, by finish() → NodeCacheSummary"
+                            ]
                           },
                           {
                             "label": "▸ compute_node(…)",
-                            "at": ":233",
+                            "at": ":253",
                             "mark": "P2"
                           },
                           {
                             "label": "▸ store_output(…); evolving update",
-                            "at": ":239",
+                            "at": ":259",
                             "mark": "P3"
                           }
                         ]
@@ -494,24 +505,24 @@
               },
               {
                 "label": "run.flush(ctx, cache)  → materialize_buffer per barrier node",
-                "at": "stream.rs:152"
+                "at": "stream.rs:154"
               },
               {
-                "label": "run.finish(ctx)  → one NodeCompleted per node,",
-                "at": "stream.rs:167",
+                "label": "run.finish(ctx)  → NodeCacheSummary + NodeCompleted per node",
+                "at": "stream.rs:169",
                 "note": [
-                  "\"stream: N chunks, H hits, M misses\""
+                  "counts as data, and \"stream: N chunks, H hits, M misses\" as prose"
                 ]
               },
               {
                 "label": "ctx.set(last_id, output.finish())",
-                "at": "stream.rs:310"
+                "at": "executor.rs:1241"
               }
             ]
           }
         }
       ],
-      "after": "`FixedState` keys are **identical** to the batch path's, so a single-chunk stream\nand a plain `forward` share one cache line. That invariant is what makes the\nthree primitives worth having."
+      "after": "`FixedState` keys are **identical** to the batch path's, so a single-chunk stream\nand a plain `forward` share one cache line. That invariant is what makes the\nfour primitives worth having."
     },
     {
       "id": "e",

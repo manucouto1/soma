@@ -118,6 +118,29 @@ pub enum Event {
         key: CacheKey,
     },
 
+    /// A node's cache probes, in aggregate.
+    ///
+    /// A streamed node probes the cache once per chunk, and emitting
+    /// hundreds of standalone [`Event::NodeCacheHit`] spans would drown a
+    /// reader — so the stream driver tallies and reports once, here, when
+    /// the node is done. The counts used to travel only inside
+    /// `NodeCompleted`'s human summary string, which meant a reader could
+    /// see them and not use them: `RunReader::cache_activity` reported
+    /// zero cache activity for every streamed run.
+    ///
+    /// A batch run does not emit this — it emits the per-node events,
+    /// which carry the key and the tier as well.
+    NodeCacheSummary {
+        /// The run this event belongs to.
+        run_id: RunId,
+        /// The node this event concerns.
+        node_id: NodeId,
+        /// Probes served from the cache.
+        hits: u64,
+        /// Probes that had to compute.
+        misses: u64,
+    },
+
     /// A filter node completed successfully.
     NodeCompleted {
         /// The run this event belongs to.

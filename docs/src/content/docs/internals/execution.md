@@ -176,14 +176,14 @@ is 2 472 lines of which 1 184 are tests (they start at `:1289`);
 Six domain folders, named as they are in `soma-core` and `soma-python`.
 Each folder's `mod.rs` opens by saying what the domain is; the two written
 for this crate are `execution/mod.rs`, which describes the stack from
-`GraphSession` down to `run_node`'s three primitives, and `optimizer/mod.rs`,
+`GraphSession` down to `run_node`'s four primitives, and `optimizer/mod.rs`,
 which says what this crate adds to the search space `soma-core` defines.
 
 **`execution/` — turning a plan into results.**
 
 | File | Lines (code) | Owns |
 |---|---|---|
-| `soma-runtime/src/execution/executor.rs` | 2 371 (1 187) | The plan walker: `GraphInfo`, `RunMode`, `Context`, `execute`, the three primitives, `run_node`, per-variant handlers |
+| `soma-runtime/src/execution/executor.rs` | 2 452 (1 270) | The plan walker: `GraphInfo`, `RunMode`, `Context`, `execute`, the four primitives, `run_node`, per-variant handlers |
 | `soma-runtime/src/execution/graph_session.rs` | 835 (485) | `GraphSession` — the top orchestrator; `run` / `fit` / `forward` |
 | `soma-runtime/src/execution/stream.rs` | 699 (355) | `StreamRun`, `StreamOutput`, `materialize_buffer` |
 | `soma-runtime/src/execution/node_catalog.rs` | 446 (228) | `NodeImpl`, `NodeCatalog` — the one registry |
@@ -474,10 +474,12 @@ Graph ──▷ compile() ──▷ ExecutionPlan ──▷ LocalRunner::walk �
                             Filter → forward | Step → EffectDriver::run
 ```
 
-The three primitives are the whole point: `run_node` composes them once for the
-batch path, `StreamRun` composes them per chunk. `(!)` But everything *around*
-them is written twice, and the two copies have drifted —
-[D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted).
+The four primitives are the whole point: `run_node` composes them once for the
+batch path, `StreamRun` composes them per chunk. What is left outside them is
+reporting, and the two differ there on purpose — a stream probes once per chunk,
+so it tallies and emits one `NodeCacheSummary` per node rather than hundreds of
+spans ([D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted),
+resolved).
 
 ---
 
@@ -559,7 +561,7 @@ GraphSession::forward(x)                                      graph_session.rs:3
 `Stream` diverges only at `soma-runtime/src/execution/forward.rs:65` (`compile_stream`); `Batched` at
 `soma-runtime/src/execution/forward.rs:107` (its own `get_rows` loop calling `run_forward` per batch).
 
-### (b) `execute` → `run_node` → the three primitives
+### (b) `execute` → `run_node` → the four primitives
 
 ```
 execute(plan, ctx, catalog, cache)                              executor.rs:367
@@ -587,8 +589,10 @@ run_node(node_id, ctx, catalog, cache)                            executor.rs:81
 │     hit → reuse | miss → catch_unwind(filter.fit) → put_computed
 ├─ ▸ PRIMITIVE 1  output_key(node, meta, state, input_hash, seed) :670
 │     guard: !(meta.cacheable && meta.deterministic) → None
-├─ cache.get_located(key) hit → emit NodeCacheHit, return Produced  :862
-├─ miss → emit NodeCacheMiss, emit NodeStarted                    :876
+├─ ▸ PRIMITIVE 4  probe_cache(cache, key) → Probe                 :696
+│     Hit(value, tier, load_time) | Miss  — the lookup only
+├─ Hit  → emit NodeCacheHit, return Produced                      :856
+├─ Miss → emit NodeCacheMiss, emit NodeStarted                    :867
 ├─ ▸ PRIMITIVE 2  compute_node(…) = catch_unwind(run_node_inner)  :692
 │  └─ run_node_inner                                              :1058
 │     ├─ NodeImpl::Filter(f) → f.forward(input, state) → Produced :1066
@@ -656,29 +660,30 @@ Two entry points into one object. Locally, `execute_stream`
 between WebSocket messages and calls the same three methods itself.
 
 ```
-execute_stream                                              executor.rs:1208
-├─ refuse if mode is Fit                                    :1220
-├─ chunks = chunk_value(input, chunk_size)                  :1264
-├─ run = StreamRun::new(node_ids, catalog)   (steps → Err)  stream.rs:83
-├─ per chunk: run.process_chunk(chunk, ctx, cache)          stream.rs:130
+execute_stream                                                   executor.rs:1208
+├─ refuse if mode is Fit                                         :1220
+├─ chunks = chunk_value(input, chunk_size)                       :1264
+├─ run = StreamRun::new(node_ids, catalog)   (steps → Err)       stream.rs:85
+├─ per chunk: run.process_chunk(chunk, ctx, cache)               stream.rs:132
 │  └─ per node i:
-│     ├─ Barrier  → buffer the value, stop the cascade      :140
-│     └─ else     → current = run_compute(i, current, …)    :194
-│        ├─ first touch → emit NodeStarted                  :203
-│        ├─ state = evolving.or(base_state)                 :213
-│        ├─ ▸ output_key(…)                                 :217
-│        ├─ cache hit → counters only  (!) no event         :220
-│        ├─ ▸ compute_node(…)                               :233
-│        └─ ▸ store_output(…); evolving update              :239
-├─ run.flush(ctx, cache)  → materialize_buffer per barrier node  stream.rs:152
-├─ run.finish(ctx)  → one NodeCompleted per node,           stream.rs:167
-│     "stream: N chunks, H hits, M misses"
-└─ ctx.set(last_id, output.finish())                        stream.rs:310
+│     ├─ Barrier  → buffer the value, stop the cascade           :142
+│     └─ else     → current = run_compute(i, current, …)         :206
+│        ├─ first touch → emit NodeStarted                       :217
+│        ├─ state = evolving.or(base_state)                      :224
+│        ├─ ▸ output_key(…)                                      :234
+│        ├─ ▸ probe_cache(…)  → tally, no per-chunk span         :239
+│        │     totals reported once, by finish() → NodeCacheSummary
+│        ├─ ▸ compute_node(…)                                    :253
+│        └─ ▸ store_output(…); evolving update                   :259
+├─ run.flush(ctx, cache)  → materialize_buffer per barrier node  stream.rs:154
+├─ run.finish(ctx)  → NodeCacheSummary + NodeCompleted per node  stream.rs:169
+│     counts as data, and "stream: N chunks, H hits, M misses" as prose
+└─ ctx.set(last_id, output.finish())                             executor.rs:1241
 ```
 
 `FixedState` keys are **identical** to the batch path's, so a single-chunk stream
 and a plain `forward` share one cache line. That invariant is what makes the
-three primitives worth having.
+four primitives worth having.
 
 ### (e) `StudyRunner` and `PbtRunner`
 
@@ -766,7 +771,6 @@ GraphHandler ──◆ NodeCatalog
 ### Debt
 
 **High**
-- [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) — stream path re-implements `run_node`; emits no cache events
 - [D-21](/soma/internals/debt/#d-21--mean_by_key-panics-on-an-empty-slice) — `mean_by_key` panics on an empty slice, reachable from Python
 - [D-41](/soma/internals/debt/#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) — remotes run with an empty catalog and unsalted keys
 

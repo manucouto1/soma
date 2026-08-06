@@ -43,7 +43,7 @@ is what keeps those anchors honest.
 |---|---|---|
 | [D-31](#d-31--zarrstores-chunk-cache-is-write-only) | ~~`ZarrStore`'s local chunk cache is never read — every `get` goes back to S3~~ — **Resolved** | High |
 | [D-01](#d-01--pygraph-is-the-workspaces-god-object) | ~~`PyGraph`: 2 458 lines, 19 fields, ~47 public methods~~ — **Resolved** | High |
-| [D-11](#d-11--the-stream-path-re-implements-run_node-and-has-drifted) | Stream execution re-implements `run_node` and has drifted — no cache events | High |
+| [D-11](#d-11--the-stream-path-re-implements-run_node-and-has-drifted) | ~~Stream execution re-implements `run_node` and has drifted — no cache events~~ — **Resolved** | High |
 | [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | `mean_by_key` panics on an empty slice, reachable from Python | High |
 | [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | Compiler never descends into `Loop`/`Branch` for distribution or fusion | High |
 | [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | `Transport::execute_node` runs every remote node with an empty catalog and an unsalted key | High |
@@ -267,6 +267,32 @@ exist on the stream path.
 so both callers get them, or lift a fourth primitive (`observe_node`) that both
 paths call. The remote worker drives the same `StreamRun`
 (`soma-worker/src/worker.rs`), so the fix repairs remote streaming too.
+
+**Resolved — and one of the rows above was the wrong complaint.**
+
+`probe_cache` (`soma-runtime/src/execution/executor.rs:672`) is the fourth
+primitive: the lookup, returning a `Probe`. Both sites call it, so the two can
+no longer disagree about *what* a hit is. What they still do differently is
+report it, and that difference is deliberate, not drift: a streamed node probes
+once per chunk, and hundreds of standalone hit spans would drown a reader —
+`soma-runtime/src/execution/stream.rs:12` has said so since the driver was
+written.
+
+The consequence was real, though, and the fix is that the counts now travel as
+data: `Event::NodeCacheSummary` (`soma-core/src/tracking/event.rs:121`), emitted
+once per node by `StreamRun::finish`, and folded into `cache_activity`
+(`soma-runtime/src/tracking/reader.rs:445`). They used to exist only inside
+`NodeCompleted`'s human summary string, which a person could read and the reader
+could not — so a streamed run showed node spans and zero cache activity.
+
+**The input-hash row was wrong.** `Context::input_hash` memoizes a *shared
+predecessor's* output hash, which only pays off on a diamond — and
+`compile_stream` refuses DAGs, so a stream plan cannot contain one. There is
+nothing to memoize; each chunk is a genuinely different input. Stated at
+`soma-runtime/src/execution/stream.rs:214` rather than left as a to-do.
+
+Two tests: the stream emits one aggregate carrying the real counts, and
+`RunReader::cache_activity` reads it.
 
 ### D-12 · Four `write_atomic` implementations, two of them unsafe
 

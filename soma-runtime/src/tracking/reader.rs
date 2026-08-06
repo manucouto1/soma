@@ -441,6 +441,21 @@ impl RunReader {
                     activity.misses += 1;
                     activity.by_node.entry(node_id.clone()).or_default().misses += 1;
                 }
+                // A streamed node probes once per chunk and reports the
+                // total, once. Without this arm a streamed run read as
+                // zero cache activity while its node spans said otherwise.
+                Event::NodeCacheSummary {
+                    node_id,
+                    hits,
+                    misses,
+                    ..
+                } => {
+                    activity.hits += hits;
+                    activity.misses += misses;
+                    let counts = activity.by_node.entry(node_id.clone()).or_default();
+                    counts.hits += hits;
+                    counts.misses += misses;
+                }
                 _ => {}
             }
         }
