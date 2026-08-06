@@ -47,9 +47,8 @@ class MyScaler(Filter):
 | `forward` | `(x, state) -> list` | Transform data using learned state |
 | `kwargs` | `() -> dict` | Constructor kwargs (used by `Graph.save`/`Graph.load`) |
 | `class_path` | `() -> str` | Class method. Fully-qualified import path (`"module.Class"`) |
-| `to` | `(other) -> Chain` | Chain this filter to another (fluent builder) |
-| `>>` | `filter >> other` | Chain operator (same as `.to()`) |
-| `\|` | `filter \| other` | Fork operator (parallel branches) |
+| `>>` | `filter >> other` | Chain operator — linear topology |
+| `\|` | `filter \| other` | Fork operator — parallel branches, merged by the next step |
 
 #### Class attributes
 
@@ -139,12 +138,11 @@ g = Graph.somatize(
     >> (ClassA() | ClassB())
 )
 
-# .to() / .collect() method syntax
+# Branches are chains too, and the step after the fork merges them
 g = Graph.somatize(
-    Scaler().to([
-        PCA() >> ClassA(),
-        UMAP() >> ClassB(),
-    ]).collect(Ensemble())
+    Scaler()
+    >> ((PCA() >> ClassA()) | (UMAP() >> ClassB()))
+    >> Ensemble()
 )
 ```
 
@@ -152,7 +150,7 @@ g = Graph.somatize(
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `somatize` | `(topology) -> Graph` | Class method. Materialize a Chain/Fork into a graph |
+| `somatize` | `(topology) -> Graph` | Class method. Materialize a `>>`/`\|` expression into a graph |
 | `node` | `(filter, target=None) -> str` or `(node_id, filter)` | Add a filter node, returns its id (snake_case class name, deduped with `_2`). `target="local"` pins it off remote workers |
 | `edge` | `(source, target)` | Connect two nodes with a data edge |
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |

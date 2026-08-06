@@ -29,7 +29,7 @@ from __future__ import annotations
 from soma._soma import Graph as _RustGraph
 
 from soma import _audit, _checkpoint, _compile, _orchestrator, _study, _tracking
-from soma.builder import somatize as _somatize
+from soma._builder import somatize as _somatize
 
 
 class Graph(_RustGraph):

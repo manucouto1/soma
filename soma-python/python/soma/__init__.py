@@ -22,10 +22,8 @@ from soma._study import Study
 from soma.filter import Filter
 from soma._identity import CacheConfigError
 from soma.search import search
-from soma.chain import Chain, Fork
 from soma import agentic
 from soma import library
-from soma.builder import somatize as _somatize
 
 try:
     from soma._composite import DifferentiableFilter
@@ -95,8 +93,6 @@ __all__ = [
     "Worker",
     "Filter",
     "DifferentiableFilter",
-    "Chain",
-    "Fork",
     "search",
     "experiments",
     "checkout",

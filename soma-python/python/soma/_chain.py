@@ -1,7 +1,14 @@
-"""Lazy graph builders: Chain, Fork, and operator overloads.
+"""The AST behind ``>>`` and ``|``.
 
-These types describe graph topology without materializing it.
-Use ``Graph.somatize(chain)`` to turn them into an executable graph.
+``Chain`` and ``Fork`` describe topology without materializing it, and
+``Graph.somatize`` walks the tree into nodes and edges. They are internal:
+a user writes the operators and never the constructors, which is why this
+module is private and neither type is exported.
+
+The operators are sugar for the linear case and nothing more. They cannot
+express loops, branches, steps, optional edges or ``target=`` — two of the
+five node kinds — so the graph methods stay the model and this stays a
+shorthand.
 
 Examples::
 
@@ -10,7 +17,7 @@ Examples::
     # Linear chain with >>
     g = Graph.somatize(Scaler() >> PCA() >> Model())
 
-    # Fork with |, auto-collect with >>
+    # Fork with |, merged by the next step
     g = Graph.somatize(
         Scaler() >> (HeadA() | HeadB()) >> Ensemble()
     )
@@ -22,41 +29,19 @@ Examples::
         >> Backbone()
         >> (ClassA() | ClassB())
     )
-
-    # Method syntax
-    g = Graph.somatize(
-        Scaler().to(PCA()).to([
-            PCA() >> ClassA(),
-            UMAP() >> ClassB(),
-        ]).collect(Ensemble())
-    )
 """
 
 
 class Chain:
     """A lazy linear sequence of steps (filters, forks, or nested chains).
 
-    Created by ``filter >> other`` or ``filter.to(other)``.
+    Created by ``filter >> other``.
     """
 
     __slots__ = ("steps",)
 
     def __init__(self, steps=None):
         self.steps = list(steps) if steps else []
-
-    def to(self, other):
-        """Append a step. Accepts a Filter, list (fork), Chain, or Fork."""
-        if isinstance(other, list):
-            return Chain([*self.steps, Fork.from_list(other)])
-        if isinstance(other, (Chain, Fork)):
-            return Chain([*self.steps, other])
-        # Assume it's a Filter
-        return Chain([*self.steps, other])
-
-    def collect(self, filter):
-        """After a fork, merge all branches into this filter."""
-        # Find the last Fork in steps and wrap it
-        return Chain([*self.steps, filter])
 
     def __rshift__(self, other):
         """chain >> other"""
@@ -83,7 +68,7 @@ class Chain:
 
 
 class Fork:
-    """Parallel branches that will be merged by a subsequent collect/>> step.
+    """Parallel branches, merged by whatever step follows.
 
     Created by ``chain | chain`` or ``filter | filter``.
     """
@@ -105,10 +90,6 @@ class Fork:
             else:
                 branches.append(Chain([item]))
         return cls(branches)
-
-    def collect(self, filter):
-        """Merge all branches into this filter."""
-        return Chain([self, filter])
 
     def __rshift__(self, other):
         """fork >> filter = auto-collect"""

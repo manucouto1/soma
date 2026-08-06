@@ -17,19 +17,22 @@ Every process in Soma, from a simple data normalization to a multi-stage ML expe
 
 There is no separate concept for "pipeline", "workflow", or "DAG". A pipeline is just a graph. A workflow is just a graph. Composition is recursive.
 
-### Lazy by Default, Eager by Request
+### The Whole Graph Before the First Node
 
-Values in Soma are virtual references until someone needs the actual data. This means:
+`g.forward(x)` is eager: it returns the value. What is deferred is not the
+call but the *work inside it*, and the deferral is the compiler's, not the
+caller's:
 
-- No computation happens until `materialize()` is called
-- The compiler can inspect the entire graph before executing anything
-- Intermediate results that nobody reads are never computed
-- Cache lookups happen before any real work
+- The graph is compiled before anything runs, so schema mismatches and cycles
+  are errors before the first `forward`, not during it
+- Every node's cache key is derived and looked up **before** its work is
+  attempted, so a warm node costs a hash and a read
+- A downstream key is derived from the *content* that arrived, so a node whose
+  output did not change stops the invalidation there — an ancestor recomputing
+  does not force its descendants to
 
-```
-g.forward(x)           # lazy: returns VirtualValue
-g.forward(x).collect() # eager: materializes the result
-```
+Values do travel through the executor as `VirtualValue`s, but that is how the
+run's store holds them; it is not an API you call `.collect()` on.
 
 ### Co-location of Concerns
 

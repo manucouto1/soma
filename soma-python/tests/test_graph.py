@@ -188,7 +188,9 @@ def test_every_graph_a_user_receives_has_the_same_surface():
         [soma.Agent(model="mock/x", system="be terse") for _ in range(2)],
         rounds=1,
     )
-    from_builder = soma.Graph.somatize(soma.chain.Chain([]))
+    from soma._chain import Chain
+
+    from_builder = soma.Graph.somatize(Chain([]))
 
     for g in (built, from_pattern, from_builder):
         assert isinstance(g, soma.Graph), type(g)

@@ -336,10 +336,8 @@ class TestSomatizeEdgeCases:
         )
         assert len(g) == 6  # 1 doubler + 4 adders + 1 merge
 
-    def test_to_with_list_and_collect(self):
-        g = Graph.somatize(
-            Doubler().to([Adder(), Adder()]).collect(Merge())
-        )
+    def test_fork_of_two_merged_by_the_next_step(self):
+        g = Graph.somatize(Doubler() >> (Adder() | Adder()) >> Merge())
         assert len(g) == 4
 
     def test_duplicate_filter_classes(self):

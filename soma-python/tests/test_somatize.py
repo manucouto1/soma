@@ -1,4 +1,4 @@
-"""Tests for the fluent Graph builder API: >>, |, .to(), .collect(), Graph.somatize()."""
+"""Tests for the fluent Graph builder API: >>, |, Graph.somatize()."""
 from soma import Graph, Filter
 
 
@@ -59,23 +59,15 @@ class TestOperatorChain:
         assert "merge" in text.lower()
 
 
-class TestMethodSyntax:
-    def test_to_linear(self):
-        g = Graph.somatize(Doubler().to(Adder()).to(Merge()))
-        assert len(g) == 3
-
-    def test_to_fork_collect(self):
+class TestNesting:
+    def test_chains_inside_a_fork(self):
+        """Each branch is itself a chain, and the step after the fork
+        merges all of them — the shape `.to([...]).collect(...)` used to
+        spell before the operators were the only way to say it."""
         g = Graph.somatize(
-            Doubler().to([Adder(), Adder()]).collect(Merge())
-        )
-        assert len(g) == 4
-
-    def test_to_with_chains_in_fork(self):
-        g = Graph.somatize(
-            Doubler().to([
-                Adder() >> Merge(),
-                Adder() >> Merge(),
-            ]).collect(Doubler())
+            Doubler()
+            >> ((Adder() >> Merge()) | (Adder() >> Merge()))
+            >> Doubler()
         )
         assert len(g) == 6
 

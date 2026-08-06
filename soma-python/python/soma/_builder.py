@@ -5,7 +5,7 @@ to produce an executable Graph.
 """
 
 from soma._soma import Graph as _RustGraph
-from soma.chain import Chain, Fork
+from soma._chain import Chain, Fork
 
 
 def somatize(topology):

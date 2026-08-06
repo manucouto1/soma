@@ -156,22 +156,9 @@ class Filter(metaclass=FilterMeta):
 
     # ── Fluent graph building ──
 
-    def to(self, other):
-        """Chain this filter to another. Returns a Chain.
-
-        Usage::
-
-            Scaler().to(PCA()).to(Model())
-            Scaler().to([HeadA(), HeadB()]).collect(Ensemble())
-        """
-        from soma.chain import Chain, Fork
-        if isinstance(other, list):
-            return Chain([self, Fork.from_list(other)])
-        return Chain([self, other])
-
     def __rshift__(self, other):
         """filter >> other → Chain"""
-        from soma.chain import Chain, Fork
+        from soma._chain import Chain, Fork
         if isinstance(other, (Chain, Fork)):
             return Chain([self]) >> other
         if isinstance(other, list):
@@ -180,7 +167,7 @@ class Filter(metaclass=FilterMeta):
 
     def __or__(self, other):
         """filter | other → Fork (parallel branches)"""
-        from soma.chain import Chain, Fork
+        from soma._chain import Chain, Fork
         self_chain = Chain([self])
         other_chain = other if isinstance(other, Chain) else Chain([other])
         return Fork([self_chain, other_chain])
