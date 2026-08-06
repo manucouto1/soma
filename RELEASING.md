@@ -7,11 +7,37 @@ the first one was not like the ones after it.
 
 | | Published | At | Next |
 |---|---|---|---|
-| PyPI `somatize` | yes | 0.5.0 | **0.5.1** |
-| crates.io — all eleven | yes | 0.5.0 | **0.5.1** |
+| PyPI `somatize` | yes | 0.5.1 | **0.6.0** |
+| crates.io — all eleven | yes | 0.5.1 | **0.6.0** |
 | crates.io `somatize-mcp` | never, deliberately | — | — |
 
-### What 0.5.1 carries
+Verified against both registries on 2026-08-06: all eleven crates and the
+wheel are at 0.5.1, with no crate lagging behind the others this time.
+
+### What 0.6.0 carries
+
+Breaking, so the minor digit is the one that moves. `Runner::fit` and
+`GraphSession::fit` return `Fitted` instead of `(Value, HashMap<NodeId,
+Value>)` — a tuple whose two halves nothing distinguished. Rust callers
+have to destructure a struct; the Python surface is untouched.
+
+Three corrections ride along, and none of them was being looked for —
+each surfaced while giving a type a name:
+
+- **`fit` stored one node's output as another node's state.** Persisted
+  state from 0.5.x on the differentiable path came from the wrong place;
+  re-fit.
+- **The zarr chunk cache was written and never read.** Cost and latency
+  only, no result changes.
+- **A `Remote` node inside a `Loop` ran locally, in silence.** The
+  compiler did not descend into loop bodies, so distribution was dropped
+  with no error and no warning.
+
+The rest is structural: nine domain folders across `soma-core`,
+`soma-runtime` and `soma-python`, and `graph/mod.rs` down from 2 371 to
+798 LOC.
+
+### What 0.5.1 carried
 
 A patch: one behaviour fix, one panic, and the READMEs.
 

@@ -7,7 +7,68 @@ and each one says what to do about it.
 Versions follow [semantic versioning](https://semver.org/). Pre-1.0, a
 minor bump may break API — and this one does, extensively.
 
-## [0.4.0] — unreleased
+## [0.6.0] — unreleased
+
+The release where the Python surface became nine domains instead of one
+2 371-line module, and naming the types that made it possible found three
+bugs nobody was looking for.
+
+### Breaking
+
+**`Runner::fit` and `GraphSession::fit` return `Fitted`.** They returned
+`(Value, HashMap<NodeId, Value>)` — an output and a bag of states, with
+nothing saying which was which. Rust callers must destructure the struct
+instead of the tuple; the Python surface is unchanged.
+
+Naming that type is what exposed the first fix below: with the two halves
+distinguishable, the differentiable path was visibly storing one node's
+*output* where another node's *state* belonged.
+
+### Fixed
+
+**`fit` stored one node's output as another node's state.** Trained state
+on the differentiable path was wrong, and nothing downstream could tell —
+a graph fitted before this loads state that never came from `fit`. Re-fit
+any graph whose states were persisted by 0.5.x.
+
+**The zarr chunk cache was written and never read.** Every chunk read went
+to the store; the cache filled up and no lookup ever consulted it. Purely
+a cost and latency fix — no result changes.
+
+**A `Remote` node inside a `Loop` ran locally, in silence.** The compiler
+did not descend into loop bodies, so distribution was dropped for any node
+nested in one, with no error and no warning. If you relied on remote
+execution inside a loop, it never happened.
+
+**`forward` dispatched on a method name and had three shapes.** Which of
+the three you got depended on how the node was defined.
+
+### Changed
+
+- `soma-core`, `soma-runtime` and `soma-python` are organised as nine
+  domain folders rather than flat modules.
+- `soma-python/src/graph/mod.rs`: 2 371 → 798 LOC, one module per thing a
+  `Graph` owns.
+- Topology is declared with operators, actions with methods; one name for
+  an edge; one lever for the cache; one objective vocabulary.
+- A run parses its events once instead of per query.
+- `internals/capabilities.md` documents the 15 capabilities, with guards
+  in `npm run check` so the table cannot rot.
+
+## [0.5.1] — 2026-08-06
+
+### Fixed
+
+- A missing `safetensors` silently erased every channel snapshot.
+- Zero replicas reached a panic instead of an error.
+
+### Documentation
+
+- Every crate has a README, because none of them did.
+- A crate-by-crate type reference under `internals/`, generated where it
+  can be.
+
+## [0.5.0] — 2026-08-06
 
 The release where the agentic layer arrived, the runtime grew one
 execution site instead of four, and the Python bindings stopped lying
