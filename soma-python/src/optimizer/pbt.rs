@@ -130,7 +130,7 @@ impl PyPbt {
         // dicts would be a second definition of what a dimension is.
         let mut space = SearchSpace::new();
         for item in search_space.try_iter()? {
-            space.add(crate::study::parse_py_search_dim(py, &item?)?);
+            space.add(crate::optimizer::study::parse_py_search_dim(py, &item?)?);
         }
         if space.dimensions.is_empty() {
             return Err(PyValueError::new_err(

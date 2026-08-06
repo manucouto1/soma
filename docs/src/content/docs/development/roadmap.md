@@ -30,7 +30,7 @@ registry-side before the next tag.
 
 | What | Where | Behaviour |
 |---|---|---|
-| `mode="differentiable"` with workers | `soma-python/src/graph.rs` | Refused, and the message names the path that works. That mode *is* the local loop — the caller drives `context`/`backward`/`step` and owns when the parameters move — and driving it remotely would need distributed autograd. Training a differentiable graph on workers is `set_strategy("data_parallel")`, which is a complete round |
+| `mode="differentiable"` with workers | `soma-python/src/graph/mod.rs` | Refused, and the message names the path that works. That mode *is* the local loop — the caller drives `context`/`backward`/`step` and owns when the parameters move — and driving it remotely would need distributed autograd. Training a differentiable graph on workers is `set_strategy("data_parallel")`, which is a complete round |
 | ~~A backward pass on a worker~~ | `soma-worker/src/python_process.rs` | **Fixed 2026-08-05.** A remote fit of a `DifferentiableFilter` runs forward/loss/backward and leaves the gradients on the parameters, so `data_parallel` trains. Verified against a hand-computed reference: same init, each shard's gradient taken separately, the two averaged, one SGD step — an exact match, and different from what either shard alone gives |
 | ~~Gradients as an opaque torch blob~~ | `soma-worker/src/python_process.rs` | **Fixed 2026-08-05.** They cross the wire as JSON. The aggregator is in Rust, and the mean of two pickles is not a thing that can be computed: the round died at the aggregation step having done all the work |
 | ~~Targets not sharded~~ | `soma-runtime/src/distributed.rs` | **Fixed 2026-08-05.** `shard_pair` splits inputs and targets together. Sharding only `x` sent each replica the whole `y` — shapes that broadcast rather than fail, so every replica trained on pairs that were never pairs and the round reported success |
@@ -45,7 +45,7 @@ worker rebuilds a Python filter by unpickling
 Python layer. A `NodeCatalog` holds live filters and their states, never
 the pickle, so this transport cannot supply them and sending empty
 pickles would be worse than sending none. The path that can supply them
-builds its own `SerializedPlan` in `soma-python/src/graph.rs`.
+builds its own `SerializedPlan` in `soma-python/src/graph/mod.rs`.
 
 The strategy layer is no longer a blank: `Federated`, `DataParallel` and
 `ModelParallel` all run across workers, with the caller in `GraphSession::fit`, a

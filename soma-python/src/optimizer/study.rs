@@ -1,7 +1,7 @@
 //! `Study` and `Trial`: hyperparameter search from Python.
 
 use crate::prelude::*;
-use crate::run::append_run_record;
+use crate::tracking::run::append_run_record;
 
 // ── Search dimension parsing ──
 

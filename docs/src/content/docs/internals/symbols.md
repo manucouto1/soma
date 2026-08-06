@@ -298,17 +298,17 @@ fails the build rather than quietly misleading a reader.
 | [`Pruner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/optimizer/pruner.rs:10` |
 | [`PruningStrategy`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/optimizer/study.rs:156` |
 | [`PyAgent`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:283` |
-| [`PyGraph`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/graph.rs:28` |
+| [`PyGraph`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/graph/mod.rs:30` |
 | [`PyJudge`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:422` |
-| [`PyPbt`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/pbt.rs:35` |
-| [`PyRun`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/run.rs:13` |
+| [`PyPbt`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/optimizer/pbt.rs:35` |
+| [`PyRun`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/tracking/run.rs:13` |
 | [`PyStepCtx`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:506` |
-| [`PyStudy`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/study.rs:173` |
+| [`PyStudy`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/optimizer/study.rs:173` |
 | [`PythonPipelineJob`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/protocol.rs:451` |
 | [`PythonProcess`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/python_process.rs:538` |
 | [`PyTool`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:47` |
-| [`PyTrial`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/study.rs:112` |
-| [`PyWorker`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/worker.rs:54` |
+| [`PyTrial`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/optimizer/study.rs:112` |
+| [`PyWorker`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/distributed.rs:54` |
 
 ### Q
 

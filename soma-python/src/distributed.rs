@@ -140,7 +140,7 @@ impl PyWorker {
     ) -> PyResult<()> {
         // Built once here as well, so a bad configuration is refused at the
         // call rather than inside a thread nobody is watching.
-        crate::store::build_data_store(
+        crate::data::store::build_data_store(
             &store_type,
             path.clone(),
             bucket.clone(),
@@ -184,7 +184,7 @@ impl PyWorker {
         let worker_id = self.worker_id.clone();
         let coordinator = self.coordinator.clone();
         let store = match &self.data_store {
-            Some(c) => Some(crate::store::build_data_store(
+            Some(c) => Some(crate::data::store::build_data_store(
                 &c.store_type,
                 c.path.clone(),
                 c.bucket.clone(),

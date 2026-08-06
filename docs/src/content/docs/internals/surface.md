@@ -107,22 +107,22 @@ on the public module and carry its maintenance cost while serving one caller:
 | `SomaSchemaMismatch` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 3 | 0 | 3 |
 | `SomaNodeNotFound` | `soma-python/python/soma/__init__.py` |  | 0 | 0 | 1 | 0 | 3 |
 | `Judge` | `soma-python/python/soma/__init__.py` |  | 12 | 4 | 14 | 1 | 8 |
-| `agentic` | `soma-python/python/soma/__init__.py` |  | 41 | 19 | 278 | 4 | 24 |
+| `agentic` | `soma-python/python/soma/__init__.py` |  | 41 | 19 | 280 | 4 | 24 |
 | `library` | `soma-python/python/soma/__init__.py` |  | 5 | 2 | 34 | 0 | 10 |
 | `Tool` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 33 | 0 | 11 |
 | `tool` | `soma-python/python/soma/__init__.py` |  | 32 | 9 | 65 | 9 | 16 |
 | `providers` | `soma-python/python/soma/__init__.py` |  | 17 | 7 | 15 | 0 | 9 |
-| `models` | `soma-python/python/soma/__init__.py` |  | 1 | 4 | 19 | 2 | 6 |
+| `models` | `soma-python/python/soma/__init__.py` |  | 1 | 4 | 20 | 2 | 6 |
 | `Run` | `soma-python/python/soma/__init__.py` |  | 6 | 0 | 38 | 7 | 14 |
 | `Pbt` | `soma-python/python/soma/__init__.py` |  | 10 | 0 | 7 | 0 | 5 |
 | `Study` | `soma-python/python/soma/__init__.py` |  | 84 | 20 | 101 | 1 | 29 |
 | `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 39 | 0 | 13 |
 | `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 59 | 4 | 7 |
-| `Filter` | `soma-python/python/soma/__init__.py` |  | 109 | 49 | 139 | 20 | 34 |
+| `Filter` | `soma-python/python/soma/__init__.py` |  | 109 | 49 | 140 | 20 | 34 |
 | `DifferentiableFilter` | `soma-python/python/soma/__init__.py` |  | 38 | 8 | 22 | 7 | 19 |
 | `Chain` | `soma-python/python/soma/__init__.py` |  | 3 | 0 | 13 | 0 | 50 |
 | `Fork` | `soma-python/python/soma/__init__.py` |  | 0 | 0 | 8 | 0 | 33 |
-| `search` | `soma-python/python/soma/__init__.py` |  | 45 | 19 | 146 | 2 | 47 |
+| `search` | `soma-python/python/soma/__init__.py` |  | 45 | 19 | 149 | 2 | 47 |
 | `experiments` | `soma-python/python/soma/__init__.py` |  | 25 | 7 | 36 | 4 | 20 |
 | `checkout` | `soma-python/python/soma/__init__.py` |  | 4 | 3 | 12 | 2 | 7 |
 | `head` | `soma-python/python/soma/__init__.py` |  | 30 | 13 | 17 | 12 | 23 |
@@ -217,56 +217,56 @@ on the public module and carry its maintenance cost while serving one caller:
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
-| `new` | `soma-python/src/graph.rs:818` | new | 0 | 0 | 1 | 0 | 0 |
-| `node` | `soma-python/src/graph.rs:897` |  | 293 | 50 | 33 | 28 | 19 |
-| `register_graph` | `soma-python/src/graph.rs:962` |  | 4 | 2 | 6 | 0 | 1 |
-| `register_step` | `soma-python/src/graph.rs:990` |  | 5 | 0 | 5 | 0 | 1 |
-| `branch` | `soma-python/src/graph.rs:1024` |  | 4 | 0 | 0 | 0 | 3 |
-| `loop` | `soma-python/src/graph.rs:1091` |  | 5 | 2 | 1 | 0 | 5 |
-| `use_provider` | `soma-python/src/graph.rs:1159` |  | 1 | 0 | 1 | 0 | 1 |
-| `optional` | `soma-python/src/graph.rs:1175` |  | 8 | 1 | 3 | 0 | 0 |
-| `optional_edges` | `soma-python/src/graph.rs:1203` |  | 1 | 0 | 0 | 0 | 1 |
-| `set_edge` | `soma-python/src/graph.rs:1212` |  | 1 | 0 | 0 | 0 | 1 |
-| `steps` | `soma-python/src/graph.rs:1248` |  | 0 | 0 | 1 | 0 | 16 |
-| `add_tool` | `soma-python/src/graph.rs:1259` |  | 0 | 0 | 1 | 0 | 0 |
-| `add_mcp_server` | `soma-python/src/graph.rs:1268` |  | 0 | 0 | 1 | 0 | 0 |
-| `edge` | `soma-python/src/graph.rs:1288` |  | 21 | 5 | 3 | 0 | 0 |
-| `connect` | `soma-python/src/graph.rs:1294` | **alias of `edge`** | 62 | 12 | 8 | 10 | 17 |
-| `handoff` | `soma-python/src/graph.rs:1312` |  | 1 | 0 | 4 | 0 | 0 |
-| `fit` | `soma-python/src/graph.rs:1325` |  | 73 | 21 | 29 | 13 | 0 |
-| `forward` | `soma-python/src/graph.rs:1589` |  | 231 | 49 | 39 | 41 | 16 |
-| `resume` | `soma-python/src/graph.rs:1633` |  | 4 | 1 | 5 | 0 | 1 |
-| `compile` | `soma-python/src/graph.rs:1668` |  | 11 | 4 | 10 | 6 | 7 |
-| `to_mermaid` | `soma-python/src/graph.rs:1730` |  | 25 | 5 | 5 | 2 | 3 |
-| `to_svg` | `soma-python/src/graph.rs:1741` |  | 7 | 9 | 1 | 15 | 3 |
-| `_repr_html_` | `soma-python/src/graph.rs:1750` |  | 9 | 0 | 0 | 0 | 0 |
-| `to_text` | `soma-python/src/graph.rs:1767` |  | 5 | 1 | 0 | 10 | 0 |
-| `on_event` | `soma-python/src/graph.rs:1785` |  | 5 | 0 | 1 | 0 | 0 |
-| `emit_event` | `soma-python/src/graph.rs:1810` |  | 13 | 0 | 1 | 0 | 1 |
-| `graph_json` | `soma-python/src/graph.rs:1823` |  | 6 | 0 | 0 | 0 | 0 |
-| `begin_run` | `soma-python/src/graph.rs:1846` |  | 19 | 0 | 1 | 0 | 2 |
-| `add_worker` | `soma-python/src/graph.rs:1906` |  | 15 | 0 | 14 | 2 | 0 |
-| `set_data_store` | `soma-python/src/graph.rs:1923` |  | 5 | 0 | 4 | 2 | 1 |
-| `set_strategy` | `soma-python/src/graph.rs:1959` |  | 11 | 0 | 6 | 1 | 0 |
-| `strategy` | `soma-python/src/graph.rs:2084` |  | 3 | 0 | 0 | 0 | 0 |
-| `shutdown_worker` | `soma-python/src/graph.rs:2103` |  | 0 | 0 | 1 | 0 | 0 |
-| `shutdown_workers` | `soma-python/src/graph.rs:2118` |  | 0 | 0 | 1 | 0 | 0 |
-| `set_coordinator` | `soma-python/src/graph.rs:2133` |  | 2 | 0 | 3 | 0 | 0 |
-| `workers` | `soma-python/src/graph.rs:2140` |  | 5 | 0 | 4 | 0 | 0 |
-| `filter_source` | `soma-python/src/graph.rs:2180` |  | 1 | 0 | 1 | 0 | 0 |
-| `filter_requirements` | `soma-python/src/graph.rs:2191` |  | 3 | 0 | 0 | 0 | 0 |
-| `filter_sources_dict` | `soma-python/src/graph.rs:2198` |  | 1 | 0 | 1 | 0 | 0 |
-| `filter` | `soma-python/src/graph.rs:2215` |  | 0 | 1 | 7 | 0 | 4 |
-| `filter_ids` | `soma-python/src/graph.rs:2225` |  | 3 | 1 | 0 | 0 | 2 |
-| `filters` | `soma-python/src/graph.rs:2251` |  | 39 | 5 | 2 | 7 | 23 |
-| `set_node_state` | `soma-python/src/graph.rs:2268` |  | 0 | 0 | 0 | 0 | 2 |
-| `edges` | `soma-python/src/graph.rs:2286` |  | 1 | 0 | 0 | 5 | 3 |
-| `get_node_state` | `soma-python/src/graph.rs:2298` |  | 1 | 0 | 0 | 0 | 3 |
-| `mark_fitted` | `soma-python/src/graph.rs:2313` |  | 0 | 0 | 0 | 0 | 2 |
-| `py_state` | `soma-python/src/graph.rs:2324` | property, read-only | 12 | 0 | 0 | 0 | 29 |
-| `__len__` | `soma-python/src/graph.rs:2332` |  | 0 | 0 | 0 | 0 | 0 |
-| `__repr__` | `soma-python/src/graph.rs:2336` |  | 0 | 0 | 0 | 0 | 0 |
-| `__str__` | `soma-python/src/graph.rs:2345` |  | 0 | 0 | 0 | 0 | 0 |
+| `new` | `soma-python/src/graph/mod.rs:820` | new | 0 | 0 | 1 | 0 | 0 |
+| `node` | `soma-python/src/graph/mod.rs:899` |  | 293 | 50 | 33 | 28 | 19 |
+| `register_graph` | `soma-python/src/graph/mod.rs:964` |  | 4 | 2 | 6 | 0 | 1 |
+| `register_step` | `soma-python/src/graph/mod.rs:992` |  | 5 | 0 | 5 | 0 | 1 |
+| `branch` | `soma-python/src/graph/mod.rs:1026` |  | 4 | 0 | 0 | 0 | 3 |
+| `loop` | `soma-python/src/graph/mod.rs:1093` |  | 5 | 2 | 1 | 0 | 5 |
+| `use_provider` | `soma-python/src/graph/mod.rs:1161` |  | 1 | 0 | 1 | 0 | 1 |
+| `optional` | `soma-python/src/graph/mod.rs:1177` |  | 8 | 1 | 3 | 0 | 0 |
+| `optional_edges` | `soma-python/src/graph/mod.rs:1205` |  | 1 | 0 | 0 | 0 | 1 |
+| `set_edge` | `soma-python/src/graph/mod.rs:1214` |  | 1 | 0 | 0 | 0 | 1 |
+| `steps` | `soma-python/src/graph/mod.rs:1250` |  | 0 | 0 | 1 | 0 | 16 |
+| `add_tool` | `soma-python/src/graph/mod.rs:1261` |  | 0 | 0 | 1 | 0 | 0 |
+| `add_mcp_server` | `soma-python/src/graph/mod.rs:1270` |  | 0 | 0 | 1 | 0 | 0 |
+| `edge` | `soma-python/src/graph/mod.rs:1290` |  | 21 | 5 | 3 | 0 | 0 |
+| `connect` | `soma-python/src/graph/mod.rs:1296` | **alias of `edge`** | 62 | 12 | 8 | 10 | 17 |
+| `handoff` | `soma-python/src/graph/mod.rs:1314` |  | 1 | 0 | 4 | 0 | 0 |
+| `fit` | `soma-python/src/graph/mod.rs:1327` |  | 73 | 21 | 29 | 13 | 0 |
+| `forward` | `soma-python/src/graph/mod.rs:1591` |  | 231 | 49 | 39 | 41 | 16 |
+| `resume` | `soma-python/src/graph/mod.rs:1635` |  | 4 | 1 | 5 | 0 | 1 |
+| `compile` | `soma-python/src/graph/mod.rs:1670` |  | 11 | 4 | 10 | 6 | 7 |
+| `to_mermaid` | `soma-python/src/graph/mod.rs:1732` |  | 25 | 5 | 5 | 2 | 3 |
+| `to_svg` | `soma-python/src/graph/mod.rs:1743` |  | 7 | 9 | 1 | 15 | 3 |
+| `_repr_html_` | `soma-python/src/graph/mod.rs:1752` |  | 9 | 0 | 0 | 0 | 0 |
+| `to_text` | `soma-python/src/graph/mod.rs:1769` |  | 5 | 1 | 0 | 10 | 0 |
+| `on_event` | `soma-python/src/graph/mod.rs:1787` |  | 5 | 0 | 1 | 0 | 0 |
+| `emit_event` | `soma-python/src/graph/mod.rs:1812` |  | 13 | 0 | 1 | 0 | 1 |
+| `graph_json` | `soma-python/src/graph/mod.rs:1825` |  | 6 | 0 | 0 | 0 | 0 |
+| `begin_run` | `soma-python/src/graph/mod.rs:1848` |  | 19 | 0 | 1 | 0 | 2 |
+| `add_worker` | `soma-python/src/graph/mod.rs:1908` |  | 15 | 0 | 14 | 2 | 0 |
+| `set_data_store` | `soma-python/src/graph/mod.rs:1925` |  | 5 | 0 | 4 | 2 | 1 |
+| `set_strategy` | `soma-python/src/graph/mod.rs:1961` |  | 11 | 0 | 6 | 1 | 0 |
+| `strategy` | `soma-python/src/graph/mod.rs:2086` |  | 3 | 0 | 0 | 0 | 0 |
+| `shutdown_worker` | `soma-python/src/graph/mod.rs:2105` |  | 0 | 0 | 1 | 0 | 0 |
+| `shutdown_workers` | `soma-python/src/graph/mod.rs:2120` |  | 0 | 0 | 1 | 0 | 0 |
+| `set_coordinator` | `soma-python/src/graph/mod.rs:2135` |  | 2 | 0 | 3 | 0 | 0 |
+| `workers` | `soma-python/src/graph/mod.rs:2142` |  | 5 | 0 | 4 | 0 | 0 |
+| `filter_source` | `soma-python/src/graph/mod.rs:2182` |  | 1 | 0 | 1 | 0 | 0 |
+| `filter_requirements` | `soma-python/src/graph/mod.rs:2193` |  | 3 | 0 | 0 | 0 | 0 |
+| `filter_sources_dict` | `soma-python/src/graph/mod.rs:2200` |  | 1 | 0 | 1 | 0 | 0 |
+| `filter` | `soma-python/src/graph/mod.rs:2217` |  | 0 | 1 | 7 | 0 | 4 |
+| `filter_ids` | `soma-python/src/graph/mod.rs:2227` |  | 3 | 1 | 0 | 0 | 2 |
+| `filters` | `soma-python/src/graph/mod.rs:2253` |  | 39 | 5 | 2 | 7 | 23 |
+| `set_node_state` | `soma-python/src/graph/mod.rs:2270` |  | 0 | 0 | 0 | 0 | 2 |
+| `edges` | `soma-python/src/graph/mod.rs:2288` |  | 1 | 0 | 0 | 5 | 3 |
+| `get_node_state` | `soma-python/src/graph/mod.rs:2300` |  | 1 | 0 | 0 | 0 | 3 |
+| `mark_fitted` | `soma-python/src/graph/mod.rs:2315` |  | 0 | 0 | 0 | 0 | 2 |
+| `py_state` | `soma-python/src/graph/mod.rs:2326` | property, read-only | 12 | 0 | 0 | 0 | 29 |
+| `__len__` | `soma-python/src/graph/mod.rs:2334` |  | 0 | 0 | 0 | 0 | 0 |
+| `__repr__` | `soma-python/src/graph/mod.rs:2338` |  | 0 | 0 | 0 | 0 | 0 |
+| `__str__` | `soma-python/src/graph/mod.rs:2347` |  | 0 | 0 | 0 | 0 | 0 |
 | `materialize` | `soma-python/python/soma/_graph.py:44` | python · `_orchestrator.materialize` | 50 | 8 | 8 | 8 | 11 |
 | `train` | `soma-python/python/soma/_graph.py:45` | python · `_orchestrator.train` | 42 | 9 | 9 | 7 | 6 |
 | `eval` | `soma-python/python/soma/_graph.py:46` | python · `_orchestrator.eval` | 2 | 3 | 6 | 7 | 7 |
@@ -299,17 +299,17 @@ on the public module and carry its maintenance cost while serving one caller:
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
-| `new` | `soma-python/src/study.rs:283` |  | 0 | 0 | 1 | 0 | 0 |
-| `load` | `soma-python/src/study.rs:393` | static | 15 | 6 | 14 | 7 | 11 |
-| `save` | `soma-python/src/study.rs:413` |  | 7 | 2 | 8 | 3 | 11 |
-| `run` | `soma-python/src/study.rs:433` |  | 72 | 13 | 29 | 1 | 10 |
-| `best_trial` | `soma-python/src/study.rs:646` | property, read-only | 16 | 11 | 8 | 1 | 1 |
-| `trials` | `soma-python/src/study.rs:655` | property, read-only | 18 | 3 | 4 | 0 | 9 |
-| `n_trials` | `soma-python/src/study.rs:664` | property, read-only | 15 | 2 | 0 | 0 | 3 |
-| `progress` | `soma-python/src/study.rs:669` | property, read-only | 3 | 1 | 2 | 0 | 0 |
-| `objectives` | `soma-python/src/study.rs:677` | property, read-only | 1 | 0 | 0 | 0 | 4 |
-| `name` | `soma-python/src/study.rs:696` | property, read-only | 35 | 2 | 3 | 0 | 21 |
-| `run_dir` | `soma-python/src/study.rs:703` | property, read-only | 14 | 2 | 1 | 0 | 1 |
+| `new` | `soma-python/src/optimizer/study.rs:283` |  | 0 | 0 | 1 | 0 | 0 |
+| `load` | `soma-python/src/optimizer/study.rs:393` | static | 15 | 6 | 14 | 7 | 11 |
+| `save` | `soma-python/src/optimizer/study.rs:413` |  | 7 | 2 | 8 | 3 | 11 |
+| `run` | `soma-python/src/optimizer/study.rs:433` |  | 72 | 13 | 29 | 1 | 10 |
+| `best_trial` | `soma-python/src/optimizer/study.rs:646` | property, read-only | 16 | 11 | 8 | 1 | 1 |
+| `trials` | `soma-python/src/optimizer/study.rs:655` | property, read-only | 18 | 3 | 4 | 0 | 9 |
+| `n_trials` | `soma-python/src/optimizer/study.rs:664` | property, read-only | 15 | 2 | 0 | 0 | 3 |
+| `progress` | `soma-python/src/optimizer/study.rs:669` | property, read-only | 3 | 1 | 2 | 0 | 0 |
+| `objectives` | `soma-python/src/optimizer/study.rs:677` | property, read-only | 1 | 0 | 0 | 0 | 4 |
+| `name` | `soma-python/src/optimizer/study.rs:696` | property, read-only | 35 | 2 | 3 | 0 | 21 |
+| `run_dir` | `soma-python/src/optimizer/study.rs:703` | property, read-only | 14 | 2 | 1 | 0 | 1 |
 
 #### `Agent` — 10 methods
 
@@ -326,31 +326,31 @@ on the public module and carry its maintenance cost while serving one caller:
 | `search_space` | `soma-python/src/agentic.rs:411` |  | 8 | 3 | 8 | 0 | 4 |
 | `__repr__` | `soma-python/src/agentic.rs:415` |  | 0 | 0 | 0 | 0 | 0 |
 
-#### `Run` — 8 methods
-
-| Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
-|---|---|---|---|---|---|---|---|
-| `id` | `soma-python/src/run.rs:26` | property, read-only | 19 | 3 | 33 | 1 | 14 |
-| `dir` | `soma-python/src/run.rs:32` | property, read-only | 41 | 8 | 0 | 9 | 14 |
-| `log` | `soma-python/src/run.rs:38` |  | 20 | 5 | 4 | 6 | 2 |
-| `log_epoch` | `soma-python/src/run.rs:58` |  | 1 | 1 | 1 | 0 | 1 |
-| `log_epoch_completed` | `soma-python/src/run.rs:70` |  | 1 | 0 | 0 | 0 | 0 |
-| `step_completed` | `soma-python/src/run.rs:102` |  | 2 | 0 | 0 | 0 | 1 |
-| `heartbeat` | `soma-python/src/run.rs:112` |  | 1 | 0 | 0 | 0 | 0 |
-| `finish` | `soma-python/src/run.rs:120` |  | 20 | 0 | 5 | 0 | 2 |
-
 #### `Trial` — 8 methods
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
-| `params` | `soma-python/src/study.rs:121` | property, read-only | 5 | 2 | 5 | 0 | 1 |
-| `id` | `soma-python/src/study.rs:131` | property, read-only | 19 | 3 | 33 | 1 | 14 |
-| `report` | `soma-python/src/study.rs:137` |  | 43 | 10 | 12 | 6 | 6 |
-| `should_prune` | `soma-python/src/study.rs:142` |  | 0 | 0 | 0 | 0 | 0 |
-| `__getitem__` | `soma-python/src/study.rs:146` |  | 0 | 0 | 0 | 0 | 1 |
-| `__contains__` | `soma-python/src/study.rs:153` |  | 0 | 0 | 0 | 0 | 0 |
-| `get` | `soma-python/src/study.rs:158` |  | 44 | 14 | 19 | 25 | 151 |
-| `keys` | `soma-python/src/study.rs:165` |  | 6 | 1 | 2 | 0 | 1 |
+| `params` | `soma-python/src/optimizer/study.rs:121` | property, read-only | 5 | 2 | 5 | 0 | 1 |
+| `id` | `soma-python/src/optimizer/study.rs:131` | property, read-only | 19 | 3 | 33 | 1 | 14 |
+| `report` | `soma-python/src/optimizer/study.rs:137` |  | 43 | 10 | 12 | 6 | 6 |
+| `should_prune` | `soma-python/src/optimizer/study.rs:142` |  | 0 | 0 | 0 | 0 | 0 |
+| `__getitem__` | `soma-python/src/optimizer/study.rs:146` |  | 0 | 0 | 0 | 0 | 1 |
+| `__contains__` | `soma-python/src/optimizer/study.rs:153` |  | 0 | 0 | 0 | 0 | 0 |
+| `get` | `soma-python/src/optimizer/study.rs:158` |  | 44 | 14 | 19 | 25 | 151 |
+| `keys` | `soma-python/src/optimizer/study.rs:165` |  | 6 | 1 | 2 | 0 | 1 |
+
+#### `Run` — 8 methods
+
+| Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
+|---|---|---|---|---|---|---|---|
+| `id` | `soma-python/src/tracking/run.rs:26` | property, read-only | 19 | 3 | 33 | 1 | 14 |
+| `dir` | `soma-python/src/tracking/run.rs:32` | property, read-only | 41 | 8 | 0 | 9 | 14 |
+| `log` | `soma-python/src/tracking/run.rs:38` |  | 20 | 5 | 4 | 6 | 2 |
+| `log_epoch` | `soma-python/src/tracking/run.rs:58` |  | 1 | 1 | 1 | 0 | 1 |
+| `log_epoch_completed` | `soma-python/src/tracking/run.rs:70` |  | 1 | 0 | 0 | 0 | 0 |
+| `step_completed` | `soma-python/src/tracking/run.rs:102` |  | 2 | 0 | 0 | 0 | 1 |
+| `heartbeat` | `soma-python/src/tracking/run.rs:112` |  | 1 | 0 | 0 | 0 | 0 |
+| `finish` | `soma-python/src/tracking/run.rs:120` |  | 20 | 0 | 5 | 0 | 2 |
 
 #### `Judge` — 6 methods
 
@@ -377,19 +377,19 @@ on the public module and carry its maintenance cost while serving one caller:
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
-| `new` | `soma-python/src/worker.rs:88` | new | 0 | 0 | 1 | 0 | 0 |
-| `set_data_store` | `soma-python/src/worker.rs:130` |  | 5 | 0 | 4 | 2 | 1 |
-| `serve` | `soma-python/src/worker.rs:166` |  | 2 | 0 | 0 | 1 | 1 |
-| `info` | `soma-python/src/worker.rs:283` |  | 1 | 0 | 0 | 1 | 3 |
-| `__repr__` | `soma-python/src/worker.rs:288` |  | 0 | 0 | 0 | 0 | 0 |
+| `new` | `soma-python/src/distributed.rs:88` | new | 0 | 0 | 1 | 0 | 0 |
+| `set_data_store` | `soma-python/src/distributed.rs:130` |  | 5 | 0 | 4 | 2 | 1 |
+| `serve` | `soma-python/src/distributed.rs:166` |  | 2 | 0 | 0 | 1 | 1 |
+| `info` | `soma-python/src/distributed.rs:283` |  | 1 | 0 | 0 | 1 | 3 |
+| `__repr__` | `soma-python/src/distributed.rs:288` |  | 0 | 0 | 0 | 0 | 0 |
 
 #### `Pbt` — 3 methods
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
-| `new` | `soma-python/src/pbt.rs:113` |  | 0 | 0 | 1 | 0 | 0 |
-| `run` | `soma-python/src/pbt.rs:177` |  | 72 | 13 | 29 | 1 | 10 |
-| `__repr__` | `soma-python/src/pbt.rs:201` |  | 0 | 0 | 0 | 0 | 0 |
+| `new` | `soma-python/src/optimizer/pbt.rs:113` |  | 0 | 0 | 1 | 0 | 0 |
+| `run` | `soma-python/src/optimizer/pbt.rs:177` |  | 72 | 13 | 29 | 1 | 10 |
+| `__repr__` | `soma-python/src/optimizer/pbt.rs:201` |  | 0 | 0 | 0 | 0 | 0 |
 
 #### `StepCtx` — 2 methods
 
@@ -400,7 +400,7 @@ on the public module and carry its maintenance cost while serving one caller:
 
 ### Free functions in `soma._soma`
 
-33 functions, 10 classes and 5 values are registered on the extension module.
+33 functions, 9 classes and 5 values are registered on the extension module.
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
@@ -419,7 +419,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `kb_record_conclusion` | `soma-python/src/lib.rs` |  | 0 | 1 | 6 | 0 | 2 |
 | `kb_reindex` | `soma-python/src/lib.rs` |  | 0 | 0 | 1 | 0 | 3 |
 | `list_runs_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 1 | 0 | 4 |
-| `models` | `soma-python/src/lib.rs` |  | 1 | 4 | 19 | 2 | 6 |
+| `models` | `soma-python/src/lib.rs` |  | 1 | 4 | 20 | 2 | 6 |
 | `providers` | `soma-python/src/lib.rs` |  | 17 | 7 | 15 | 0 | 9 |
 | `read_head_run` | `soma-python/src/lib.rs` |  | 0 | 0 | 1 | 0 | 3 |
 | `run_agentic_activity_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |

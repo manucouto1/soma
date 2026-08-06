@@ -63,7 +63,7 @@ that touching one forces you to read all of them.
 
 **Class** God object · **Severity** High · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph.rs:27` — 2 458 lines, **19 fields**,
+**Evidence** `soma-python/src/graph/mod.rs:29` — 2 458 lines, **19 fields**,
 ~47 public `#[pymethods]` plus 22 private helpers. It is simultaneously the
 graph builder, the filter registry, the cache owner, the event-bus owner, the
 worker-pool manager, the coordinator client, the data-store owner, the renderer,
@@ -71,11 +71,11 @@ the run tracker and the executor.
 
 Five of the 19 fields are **parallel maps keyed by node id** — `pickled_filters`,
 `filter_sources`, `filter_trainable`, `live_filters`, `live_steps` — all written
-together in `register_behaviour` (`soma-python/src/graph.rs:256`) and never
+together in `register_behaviour` (`soma-python/src/graph/mod.rs:258`) and never
 removed from. There is no node-removal API, which is the only reason they cannot
 drift apart.
 
-`PyGraph::fit` (`soma-python/src/graph.rs:1371`) is **262 lines** with five
+`PyGraph::fit` (`soma-python/src/graph/mod.rs:1373`) is **262 lines** with five
 distinct execution paths, and the tail
 
 ```rust
@@ -323,10 +323,10 @@ Truncation is written twice: `soma-core/src/util.rs:62` `truncate` and
 **Class** Duplication · **Severity** Medium · **Crates** `soma-mcp`, `soma-python`
 
 **Evidence** `soma-mcp/src/tools/knowledge.rs:24` (`find_similar`) and
-`soma-python/src/readers.rs:85` (`kb_find_similar_json`) build the same
+`soma-python/src/tracking/readers.rs:85` (`kb_find_similar_json`) build the same
 `RetrievalQuery` from the same parameter names — and have already drifted. MCP
 clamps `limit` to `1..=50` (`soma-mcp/src/tools/knowledge.rs:41`); Python clamps
-to `1..=100` (`soma-python/src/readers.rs:103`). The error texts differ too. The
+to `1..=100` (`soma-python/src/tracking/readers.rs:103`). The error texts differ too. The
 same pairing exists for `kb_lineage`, `kb_diff` and `kb_record_conclusion`.
 
 **Fix shape** One query-building function in `soma-memory`, called by both.
@@ -396,7 +396,7 @@ falls straight through.
 Reachable path: `TrainingStrategy::DataParallel { num_replicas: 0, .. }` →
 `soma-runtime/src/distributed.rs:163` computes `n = 0` → the fit and gradient loops
 never run → `aggregate(&[])` panics. `num_replicas` is user-supplied from Python
-(`soma-python/src/graph.rs:2094`, `num_replicas.unwrap_or(1)` — an explicit `0`
+(`soma-python/src/graph/mod.rs:2096`, `num_replicas.unwrap_or(1)` — an explicit `0`
 passes straight through) and is validated nowhere.
 
 **Fix shape** Reject `num_replicas == 0` at the Python boundary *and* return an
@@ -456,7 +456,7 @@ the reason, which reads exactly like a genuine rejection.
 
 **Class** Latent panic · **Severity** Medium · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/worker.rs:202` `Runtime::new().unwrap()`, `:262` and
+**Evidence** `soma-python/src/distributed.rs:202` `Runtime::new().unwrap()`, `:262` and
 `:266` `serve_worker*(…).await.unwrap()` — all inside `std::thread::spawn`. A port
 already in use surfaces at `:290` as `"worker thread panicked"` with no cause.
 
@@ -601,7 +601,7 @@ decision](/soma/design/decisions) and is not debt.
 
 **Resolved** All nine deleted. Two consequences worth naming: `SearchStrategy`
 and `PruningStrategy` are now exhaustive at every Python call site, so the
-`_ => "Unsupported strategy"` arm in `soma-python/src/study.rs` is gone and a
+`_ => "Unsupported strategy"` arm in `soma-python/src/optimizer/study.rs` is gone and a
 new variant would fail to compile rather than fail at runtime; and
 `soma.Pbt(threshold=…)` no longer exists, because the argument reached a field
 nothing read. `ExploitStrategy::Binary` is now a unit variant.
@@ -632,7 +632,7 @@ writes `MedianPruner { min_trials: 5, .. }` and loses nothing),
 collapses `resolve_value` to its materialized arm.
 
 Kept, because "never called anywhere" was not true of either:
-`TrialContext::metrics` is called from `soma-python/src/study.rs:586`, on the
+`TrialContext::metrics` is called from `soma-python/src/optimizer/study.rs:586`, on the
 path that turns a trial's reported metrics into a Python dict; and
 `NodeCatalog::with_state_store` is the only way to inject the failing store in
 `a_failing_state_store_is_reported_not_fatal`, the test that holds the line
@@ -644,7 +644,7 @@ the method or something the method makes reachable.
 
 **Class** Dead code · **Severity** Low · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph.rs:466` — `#[allow(dead_code)] fn
+**Evidence** `soma-python/src/graph/mod.rs:468` — `#[allow(dead_code)] fn
 split_value_into_batches`, 52 lines, zero callers. `chunk_value` at `:821` is the
 live one. This is the only `#[allow(dead_code)]` in the workspace.
 
@@ -734,7 +734,7 @@ discarded too.
 
 **Class** Leaky abstraction · **Severity** Low · **Crates** `soma-python`, `soma-worker`
 
-**Evidence** `soma-python/src/worker.rs:42` — `unsafe { std::env::set_var(
+**Evidence** `soma-python/src/distributed.rs:42` — `unsafe { std::env::set_var(
 "SOMA_LOCAL_PACKAGE", parent) }`, called from `PyWorker::new`, so that
 `soma-worker/src/env_manager.rs:117` `link_local_package` can `pip install -e`
 the caller's own build. A process-global written by a constructor is how two
@@ -815,10 +815,10 @@ encodes a count inside the string: `"DEAD_CHANNELS(3)"`.
 
 **Class** Stringly-typed · **Severity** Medium · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph.rs:2093` (`kind` — 5 strategies, with nested
+**Evidence** `soma-python/src/graph/mod.rs:2095` (`kind` — 5 strategies, with nested
 `aggregation` matches at `:2095` and `:2109`); `:1465` / `:1470`
-(`"differentiable"` / `"inference"`); `soma-python/src/store.rs:30`
-(`store_type`); `soma-python/src/study.rs:44` (`dtype`) and `:52` (`scale`) and
+(`"differentiable"` / `"inference"`); `soma-python/src/data/store.rs:30`
+(`store_type`); `soma-python/src/optimizer/study.rs:44` (`dtype`) and `:52` (`scale`) and
 `:184` (`parse_pruning`); `soma-python/src/agentic.rs:610` (5 transitions) and
 `:660` (3 join policies) and `:766` (5 effects) and `:850` (`mode`) and `:729`
 (schema shorthands).
@@ -835,7 +835,7 @@ name in Python.
 
 **Class** Stringly-typed · **Severity** Low · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph.rs:2079` returns only the discriminant name,
+**Evidence** `soma-python/src/graph/mod.rs:2081` returns only the discriminant name,
 so `set_strategy("data_parallel", num_replicas=8)` followed by `strategy()`
 yields `"data_parallel"` with the parameters gone. The `_ => "unknown"`
 catch-all remains, because `TrainingStrategy` is `#[non_exhaustive]` and lives
@@ -1043,9 +1043,9 @@ line counts mislead.
 | Function | Location | Lines |
 |---|---|---|
 | `Worker::execute_plan` | `soma-worker/src/worker.rs:275` | 324 |
-| `PyGraph::fit` | `soma-python/src/graph.rs:1371` | 262 |
+| `PyGraph::fit` | `soma-python/src/graph/mod.rs:1373` | 262 |
 | `handle_ws` | `soma-worker/src/server.rs:353` | 215 |
-| `PyStudy::run` | `soma-python/src/study.rs:433` | 213 |
+| `PyStudy::run` | `soma-python/src/optimizer/study.rs:433` | 213 |
 | `StudyRunner::run` | `soma-runtime/src/optimizer/study.rs:187` | 194 |
 | `Graph::to_svg_with` | `soma-core/src/viz/svg.rs:65` | 206 |
 | `schedule_plan` | `soma-compiler/src/scheduler.rs:197` | 185 |
@@ -1057,7 +1057,7 @@ line counts mislead.
 | `TrainingStrategy::fit` | `soma-runtime/src/distributed.rs:146` | 134 |
 | `run_node` | `soma-runtime/src/execution/executor.rs:816` | 131 |
 | `parse_effect` | `soma-python/src/agentic.rs:755` | 129 |
-| `PyGraph::forward_local` | `soma-python/src/graph.rs:99` | 127 |
+| `PyGraph::forward_local` | `soma-python/src/graph/mod.rs:101` | 127 |
 | `agentic_activity` | `soma-runtime/src/tracking/reader.rs:507` | 125 |
 | `EffectDriver::spawn_all` | `soma-runtime/src/agentic/mod.rs:316` | 121 |
 | `all_tools` | `soma-mcp/src/tools/mod.rs:13` | 349 (inline JSON schemas) |
@@ -1177,7 +1177,7 @@ implementor must know about `CacheKey` whether or not it is ever cached.
 **Still true.** The review proposed splitting into `Compute` + `Describable` +
 `Cacheable`. Deferred then, deferred now — but note that `config_hash` is
 derived by macro for Rust filters (`soma-macros/src/lib.rs:30`) and computed
-in Python for Python ones (`soma-python/src/bridge.rs:27`), so in practice no
+in Python for Python ones (`soma-python/src/graph/bridge.rs:27`), so in practice no
 hand-written implementor writes it. That weakens the case for splitting.
 
 ### D-92 · `Graph::predecessors` / `successors` are linear scans
@@ -1254,10 +1254,10 @@ is unavoidable — the axum server — it is correctly isolated with `spawn_bloc
 `on_own_runtime` (`soma-worker/src/ws_transport.rs:42`), which explicitly refuses
 to assume it is outside a runtime.
 
-**No panic crosses the FFI.** `soma-python/src/study.rs:9` documents the
+**No panic crosses the FFI.** `soma-python/src/optimizer/study.rs:9` documents the
 deliberate de-`unwrap`ing of `parse_py_search_dim`, because PyO3's
 `PanicException` does not inherit `Exception` and would be uncatchable from
-Python. The three remaining `unwrap`s in `soma-python/src/worker.rs` are in a
+Python. The three remaining `unwrap`s in `soma-python/src/distributed.rs` are in a
 detached thread ([D-27](#d-27--unwrap-inside-a-detached-thread-makes-bind-failures-unreportable)),
 not on a call path.
 

@@ -67,10 +67,10 @@ the system is crossed, and there are more instances than of any other pattern.
 | Adapter | file:line | Adapts |
 |---|---|---|
 | `NodeMeta` | `soma-core/src/graph/node.rs:72` | `FilterMeta` **and** `StepMeta` into one shape — the workspace's central adapter |
-| `PyFilterBridge` | `soma-python/src/bridge.rs:224` | A Python object → `Filter` |
+| `PyFilterBridge` | `soma-python/src/graph/bridge.rs:224` | A Python object → `Filter` |
 | `PyStepBridge` | `soma-python/src/agentic.rs:883` | Anything with `poll(ctx)` → `Step` |
 | `PyToolAdapter` | `soma-python/src/agentic.rs:198` | A Python callable → `Tool` |
-| `PyPbtExecutor` | `soma-python/src/pbt.rs:40` | Python callables → `PbtExecutor` |
+| `PyPbtExecutor` | `soma-python/src/optimizer/pbt.rs:40` | Python callables → `PbtExecutor` |
 | `SubprocessFilter` | `soma-worker/src/python_process.rs:1025` | A pipe to another interpreter → `Filter` |
 | `WsTransport` | `soma-worker/src/ws_transport.rs:404` | A WebSocket → `Transport` |
 | `McpTool` | `soma-llm/src/tools.rs:212` | An MCP server → `Tool` |
@@ -407,7 +407,7 @@ the `somatize[viz]` extra.
 
 ### Rich-repr protocol
 
-Five `_repr_html_` implementations — `PyGraph` (`soma-python/src/graph.rs:1856`),
+Five `_repr_html_` implementations — `PyGraph` (`soma-python/src/graph/mod.rs:1858`),
 `RunView`, `RunList`, `CompileInfo`, `DifferentiableFilter`. Evaluating an object
 in a notebook draws it. `Graph::to_svg` (`soma-core/src/viz/svg.rs`) exists
 specifically because notebooks sanitize `<script>`, so a mermaid block would not

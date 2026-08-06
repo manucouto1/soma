@@ -1,8 +1,10 @@
 //! `Graph` — the primary API.
 
+pub(crate) mod bridge;
+
 use crate::prelude::*;
-use crate::readers::py_overlay;
-use crate::run::PyRun;
+use crate::tracking::readers::py_overlay;
+use crate::tracking::run::PyRun;
 
 // ── PyGraph ──
 
@@ -1931,7 +1933,7 @@ impl PyGraph {
         secret_key: Option<String>,
         cache_dir: Option<String>,
     ) -> PyResult<()> {
-        self.data_store = Some(crate::store::build_data_store(
+        self.data_store = Some(crate::data::store::build_data_store(
             &store_type,
             path,
             bucket,

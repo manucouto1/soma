@@ -17,7 +17,7 @@ from the file names:
          │                                  duck-typed steps, viz, CLI
    soma/_soma (extension)                ← built by maturin from:
          │
-   soma-python/src/*.rs    6 720 lines   ← the bridge: pyclass wrappers + trait impls
+   soma-python/src/*.rs    6 605 lines   ← the bridge: pyclass wrappers + trait impls
          │
    the Rust workspace
 ```
@@ -77,24 +77,55 @@ Expose the workspace to Python and let Python objects re-enter it as filters,
 steps and tools. It owns no domain logic — everything here either wraps a Rust
 type for Python or wraps a Python object for Rust.
 
-`6 720 lines across 12 files · 0 traits defined · 10 #[pyclass] · 33 #[pyfunction] · 4 bridge impls`
+`6 605 lines across 15 files in 6 domains · 0 traits defined · 10 #[pyclass] · 33 #[pyfunction] · 4 bridge impls`
 
 ### Modules
 
+The same domain names as `soma-core` and `soma-runtime`, so the three layers
+of one capability line up: `optimizer/` here is what a user types, in
+`soma-runtime` what walks a space, in `soma-core` what a space *is*. Three
+domains are a single module and stay a file rather than a folder.
+
+`graph/` is also where [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object)
+gets fixed: the folder exists, and `PyGraph`'s 2 362 lines have somewhere to
+be broken into.
+
 | File | Lines | Owns |
 |---|---|---|
-| `soma-python/src/graph.rs` | 2 458 | `PyGraph` — the whole primary API `(!)` |
+| `soma-python/src/lib.rs` | 228 | `prelude`, exceptions, `#[pymodule] _soma` |
 | `soma-python/src/agentic.rs` | 1 224 | `PyTool`, `PyAgent`, `PyJudge`, `PyStepCtx`, `PyStepBridge`, transition/effect parsers |
-| `soma-python/src/study.rs` | 706 | `PyStudy`, `PyTrial`, search-dimension parsing |
-| `soma-python/src/readers.rs` | 467 | 25 JSON readers over run dirs and the experiment pool |
-| `soma-python/src/bridge.rs` | 437 | `PyFilterBridge` |
-| `soma-python/src/worker.rs` | 296 | `PyWorker` |
-| `soma-python/src/lib.rs` | 233 | `prelude`, exceptions, `#[pymodule] _soma` |
-| `soma-python/src/convert.rs` | 228 | `py_to_value` / `value_to_py` / `json_to_py` / `py_any_to_json` / `as_json` |
-| `soma-python/src/pbt.rs` | 211 | `PyPbt`, `PyPbtExecutor` |
-| `soma-python/src/run.rs` | 205 | `PyRun` |
+| `soma-python/src/distributed.rs` | 296 | `PyWorker` |
 | `soma-python/src/cache.rs` | 182 | 5 cache functions |
-| `soma-python/src/store.rs` | 73 | `build_data_store` — shared by `Graph` and `Worker` |
+
+**`graph/` — the primary API and the filter bridge.**
+
+| File | Lines | Owns |
+|---|---|---|
+| `soma-python/src/graph/mod.rs` | 2 362 | `PyGraph` — the whole primary API `(!)` |
+| `soma-python/src/graph/bridge.rs` | 437 | `PyFilterBridge` |
+
+**`optimizer/` — search, as Python types.**
+
+| File | Lines | Owns |
+|---|---|---|
+| `soma-python/src/optimizer/study.rs` | 706 | `PyStudy`, `PyTrial`, search-dimension parsing |
+| `soma-python/src/optimizer/pbt.rs` | 209 | `PyPbt`, `PyPbtExecutor` |
+
+**`tracking/` — writing a run, and reading one back.**
+
+| File | Lines | Owns |
+|---|---|---|
+| `soma-python/src/tracking/readers.rs` | 449 | 24 JSON readers over run dirs and the experiment pool |
+| `soma-python/src/tracking/run.rs` | 209 | `PyRun` |
+
+**`data/` — the boundary itself.** `convert.rs` is the narrowest and most
+consequential surface in the crate: `py_to_value` decides that a numeric list
+is a tensor, and that decision lands in every cache key derived from it.
+
+| File | Lines | Owns |
+|---|---|---|
+| `soma-python/src/data/convert.rs` | 228 | `py_to_value` / `value_to_py` / `json_to_py` / `py_any_to_json` / `as_json` |
+| `soma-python/src/data/store.rs` | 73 | `build_data_store` — shared by `Graph` and `Worker` |
 
 ### The `#[pyclass]` surface
 
@@ -102,16 +133,16 @@ Registered in `#[pymodule] fn _soma` at `soma-python/src/lib.rs:178`.
 
 | Rust type | Python name | file:line | Notes |
 |---|---|---|---|
-| `PyGraph` | `Graph` | `soma-python/src/graph.rs:27` | `subclass` — required by `soma._graph.Graph` |
+| `PyGraph` | `Graph` | `soma-python/src/graph/mod.rs:29` | `subclass` — required by `soma._graph.Graph` |
 | `PyAgent` | `Agent` | `soma-python/src/agentic.rs:282` | model / system / max_turns / max_tokens / effort settable; `search_space()` |
 | `PyJudge` | `Judge` | `soma-python/src/agentic.rs:421` | model / rubric / threshold; `search_space()` |
 | `PyTool` | `Tool` | `soma-python/src/agentic.rs:46` | manual `impl Clone` via `clone_ref` (`:54`) |
 | `PyStepCtx` | `StepCtx` | `soma-python/src/agentic.rs:505` | all fields `#[pyo3(get)]` — what a Python `poll` receives |
-| `PyStudy` | `Study` | `soma-python/src/study.rs:172` | `subclass` — `soma._study.Study` adds the plots |
-| `PyTrial` | `Trial` | `soma-python/src/study.rs:111` | `__getitem__` / `__contains__` / `report` / `should_prune` |
-| `PyRun` | `Run` | `soma-python/src/run.rs:12` | `log`, `log_epoch`, `step_completed`, `heartbeat`, `finish` |
-| `PyWorker` | `Worker` | `soma-python/src/worker.rs:53` | `(!)` `#[allow(too_many_arguments)]` on the whole impl block |
-| `PyPbt` | `Pbt` | `soma-python/src/pbt.rs:34` | `run(train, evaluate)` |
+| `PyStudy` | `Study` | `soma-python/src/optimizer/study.rs:172` | `subclass` — `soma._study.Study` adds the plots |
+| `PyTrial` | `Trial` | `soma-python/src/optimizer/study.rs:111` | `__getitem__` / `__contains__` / `report` / `should_prune` |
+| `PyRun` | `Run` | `soma-python/src/tracking/run.rs:12` | `log`, `log_epoch`, `step_completed`, `heartbeat`, `finish` |
+| `PyWorker` | `Worker` | `soma-python/src/distributed.rs:53` | `(!)` `#[allow(too_many_arguments)]` on the whole impl block |
+| `PyPbt` | `Pbt` | `soma-python/src/optimizer/pbt.rs:34` | `run(train, evaluate)` |
 
 Three of these are **subclassable on purpose**, and that is the assembly
 mechanism: `PyGraph` and `PyStudy` are subclassed in Python to attach the pure-
@@ -120,15 +151,15 @@ Python methods (below).
 Non-`#[pyclass]` types that still cross the boundary: `PyFilterBridge`,
 `PyStepBridge`, `PyToolAdapter`, `PyPbtExecutor` (see [D6](#d6--the-ffi-bridge)),
 plus three private enums — `StepSpec` (`soma-python/src/agentic.rs:936`),
-`Behaviour` (`soma-python/src/graph.rs:11`) and `StoreConfig`
-(`soma-python/src/worker.rs:72`, deferred configuration held until `serve`).
+`Behaviour` (`soma-python/src/graph/mod.rs:13`) and `StoreConfig`
+(`soma-python/src/distributed.rs:72`, deferred configuration held until `serve`).
 
 ### `PyGraph` — the full method surface
 
 **~47 public methods and 22 private helpers on one type.** Grouped so it is
 navigable:
 
-| Group | Methods (all `soma-python/src/graph.rs`) |
+| Group | Methods (all `soma-python/src/graph/mod.rs`) |
 |---|---|
 | Construction & topology | `__new__` `:864`, `node` `:943`, `edge` `:1334`, `connect` `:1340`, `branch` `:1070`, `loop_` `:1137`, `handoff` `:1358`, `optional` `:1221`, `optional_edges` `:1249`, `set_edge` `:1258` |
 | Agentic registration | `register_graph` `:959`, `register_step` `:987`, `use_provider` `:1156`, `add_tool` `:1256`, `add_mcp_server` `:1265`, `steps` `:1245` |
@@ -138,7 +169,7 @@ navigable:
 | Distribution | `add_worker` `:1901`, `set_data_store` `:1918`, `set_strategy` `:1954` `(!)`, `strategy` `:2079` `(!)`, `shutdown_worker` `:2099`, `shutdown_workers` `:2114`, `set_coordinator` `:2129`, `workers` `:2136` |
 | Introspection | `filter_source` `:2278`, `filter_requirements` `:2289`, `filter_sources_dict` `:2296`, `filter` `:2313`, `filter_ids` `:2323`, `filters` `:2349`, `set_node_state` `:2366`, `edges` `:2384`, `get_node_state` `:2396`, `mark_fitted` `:2411`, `py_state` `:2422`, `__len__` `:2430`, `__repr__` `:2434`, `__str__` `:2443` |
 
-**19 fields** (`soma-python/src/graph.rs:28`–`:84`), five of them parallel maps
+**19 fields** (`soma-python/src/graph/mod.rs:30`–`:84`), five of them parallel maps
 keyed by node id:
 
 ```
@@ -160,7 +191,7 @@ See [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object).
 
 Thirty-three functions, and one convention worth knowing: **everything in
 `readers.rs` returns a JSON `String`** which the Python wrapper `json.loads`.
-That is a deliberate FFI simplification, argued at `soma-python/src/readers.rs:7`
+That is a deliberate FFI simplification, argued at `soma-python/src/tracking/readers.rs:7`
 — one conversion path instead of twenty-five hand-written `IntoPy` impls. `(!)`
 It also means every `RunView` property pays a serialize→parse round trip —
 [D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor).
@@ -169,33 +200,33 @@ It also means every `RunView` property pays a serialize→parse round trip —
 |---|---|
 | `soma-python/src/agentic.rs` | `tool` `:1147`, `providers` `:1179`, `models` `:1200` |
 | `soma-python/src/cache.rs` | `cache_stats` `:24`, `cache_gc` `:64`, `cache_pin` `:89`, `cache_verify` `:109`, `cache_purge_v1` `:146` |
-| `soma-python/src/readers.rs` | 24 functions: 4 run/HEAD (`run_summary_json` `:38`, `checkout_run` `:51`, `read_head_run` `:59`, `clear_head_run` `:66`), 5 knowledge-base (`kb_find_similar_json` `:85`, `kb_record_conclusion` `:144`, `kb_lineage_json` `:176`, `kb_diff_json` `:196`, `kb_reindex` `:220`), 11 run readers (`list_runs_json` `:271` … `run_overlay_json` `:373`), 4 renderers (`run_to_mermaid` `:383`, `graph_json_to_mermaid` `:403`, `graph_json_to_svg` `:420`, `run_to_svg` `:436`) |
+| `soma-python/src/tracking/readers.rs` | 24 functions: 4 run/HEAD (`run_summary_json` `:38`, `checkout_run` `:51`, `read_head_run` `:59`, `clear_head_run` `:66`), 5 knowledge-base (`kb_find_similar_json` `:85`, `kb_record_conclusion` `:144`, `kb_lineage_json` `:176`, `kb_diff_json` `:196`, `kb_reindex` `:220`), 11 run readers (`list_runs_json` `:271` … `run_overlay_json` `:373`), 4 renderers (`run_to_mermaid` `:383`, `graph_json_to_mermaid` `:403`, `graph_json_to_svg` `:420`, `run_to_svg` `:436`) |
 
 ### Conversions across the boundary
 
 | Direction | Mechanism | file:line |
 |---|---|---|
-| Python object → `Value` | `py_to_value` | `soma-python/src/convert.rs` |
-| `Value` → Python | `value_to_py` | `soma-python/src/convert.rs` |
-| Python → `serde_json::Value` | `py_any_to_json`, via `json.dumps` | `soma-python/src/convert.rs:5` |
-| `serde_json::Value` → Python | `json_to_py`, via `json.loads` | `soma-python/src/convert.rs:20` |
-| Python → JSON, lossless only | `as_json` | `soma-python/src/convert.rs:56` |
+| Python object → `Value` | `py_to_value` | `soma-python/src/data/convert.rs` |
+| `Value` → Python | `value_to_py` | `soma-python/src/data/convert.rs` |
+| Python → `serde_json::Value` | `py_any_to_json`, via `json.dumps` | `soma-python/src/data/convert.rs:5` |
+| `serde_json::Value` → Python | `json_to_py`, via `json.loads` | `soma-python/src/data/convert.rs:20` |
+| Python → JSON, lossless only | `as_json` | `soma-python/src/data/convert.rs:56` |
 | `SomaError` → `PyErr` | `soma_err_to_py` | `soma-python/src/lib.rs:129` |
 | `PyErr` → `SomaError` | `py_err_to_soma` `(!)` **lossy** | `soma-python/src/lib.rs:158` |
 | Python dict → `Transition` | `parse_transition` | `soma-python/src/agentic.rs:582` |
 | Python dict → `Effect` | `parse_effect` | `soma-python/src/agentic.rs:755` |
 | `_input_schema` / `_output_schema` → `Schema` | `parse_schema_attr` | `soma-python/src/agentic.rs:719` |
-| Python dict → `SearchDimension` | `parse_py_search_dim` | `soma-python/src/study.rs:16` |
-| Python args → `Arc<dyn DataStore>` | `build_data_store` | `soma-python/src/store.rs:20` |
+| Python dict → `SearchDimension` | `parse_py_search_dim` | `soma-python/src/optimizer/study.rs:16` |
+| Python args → `Arc<dyn DataStore>` | `build_data_store` | `soma-python/src/data/store.rs:20` |
 
 Two of these are more interesting than they look.
 
-`json_to_py` (`soma-python/src/convert.rs:20`) routes through `json.loads`
+`json_to_py` (`soma-python/src/data/convert.rs:20`) routes through `json.loads`
 rather than a hand-written match, and the doc records why: the hand-written
 version returned arrays and objects **as strings**. Round-tripping through the
 `json` module is slower and correct.
 
-`as_json` (`soma-python/src/convert.rs:56`) walks the object in Rust and
+`as_json` (`soma-python/src/data/convert.rs:56`) walks the object in Rust and
 *rejects* tuples, integer keys, `NaN`/`±inf`, and integers outside `i64`/`u64` —
 explicitly replacing a `dumps → loads → ==` round-trip check. It is the strictest
 conversion in the file, and it is the one used where a wrong answer would become
@@ -365,11 +396,11 @@ the last column.
 
 | Concept | Rust | Python | Verdict |
 |---|---|---|---|
-| Filter identity | `PyFilterBridge::new` (`soma-python/src/bridge.rs:27`) | delegates to `soma._identity.filter_identity` (`_identity.py:124`) | ✅ **Correctly not duplicated** — Rust calls into Python |
-| Data-store config | `build_data_store` (`soma-python/src/store.rs:20`) | — | ✅ Shared by `Graph.set_data_store` and `Worker.set_data_store`; the file docstring says the sharing is the point |
+| Filter identity | `PyFilterBridge::new` (`soma-python/src/graph/bridge.rs:27`) | delegates to `soma._identity.filter_identity` (`_identity.py:124`) | ✅ **Correctly not duplicated** — Rust calls into Python |
+| Data-store config | `build_data_store` (`soma-python/src/data/store.rs:20`) | — | ✅ Shared by `Graph.set_data_store` and `Worker.set_data_store`; the file docstring says the sharing is the point |
 | Agentic patterns | `ReactStep` (`soma-llm/src/steps.rs:32`) is the loop | `agentic.react()` builds a Graph around `Agent`, which *is* a `ReactStep` | ✅ Layering, not duplication |
 | Knowledge-base retrieval | `readers.rs:85` | `_lineage.py:62` — a thin `json.loads` | ✅ on the Python side; ❌ `readers.rs` duplicates `soma-mcp` — [D-16](/soma/internals/debt/#d-16--two-knowledge-base-front-ends-already-divergent) |
-| Search dimension | `parse_py_search_dim` (`soma-python/src/study.rs:16`), `searchable` (`soma-python/src/agentic.rs:212`) | `SearchDescriptor` + `search()` (`search.py:4`) | ❌ **Three** encodings, counting `_searchable` inside the MCP driver string (`soma-mcp/src/exec.rs:96`) |
+| Search dimension | `parse_py_search_dim` (`soma-python/src/optimizer/study.rs:16`), `searchable` (`soma-python/src/agentic.rs:212`) | `SearchDescriptor` + `search()` (`search.py:4`) | ❌ **Three** encodings, counting `_searchable` inside the MCP driver string (`soma-mcp/src/exec.rs:96`) |
 | Step/effect vocabulary | `Transition`, `Effect` enums | 11 dict constructors (`agentic.py:123`) | ❌ Kept in sync **by string literals only** — [D-54](/soma/internals/debt/#d-54--nine-string-match-dispatch-sites-across-the-ffi) |
 | Graph rendering | `PyGraph::to_mermaid` `:1836`, `run_to_mermaid` (`readers.rs:382`), `graph_json_to_mermaid` (`readers.rs:435`) | `_runs.py:151`/`:233`/`:238` plus `_inner_overlay` `:178` | ❌ Three entry points into one renderer, with overlay assembly on both sides |
 | Report rendering | `soma-mcp/src/render.rs` — Markdown for models | `viz/_report.py` — HTML for humans | ⚠️ Different audiences, but three duration formatters between them — [D-15](/soma/internals/debt/#d-15--five-formatters-for-a-duration-two-for-a-truncation) |
@@ -409,7 +440,7 @@ the last column.
 [D-55](/soma/internals/debt/#d-55--set_strategy--strategy-is-a-lossy-round-trip) lossy strategy round trip
 
 Plus two Python-specific observations not severe enough for their own entries:
-`eprintln!` is used as the logging strategy in `soma-python/src/worker.rs` (7
+`eprintln!` is used as the logging strategy in `soma-python/src/distributed.rs` (7
 occurrences) and `run.rs` (4), where the rest of the workspace uses `tracing` and
 these go to stderr uncontrollably from Python; and 9 of the workspace's 10
 `#[allow(...)]` live in this crate, all `clippy::too_many_arguments` on PyO3

@@ -76,6 +76,57 @@ of them would rot in one commit.
 
 ---
 
+## The domain vocabulary
+
+Nine names, used the same way everywhere. They are directory names first and
+a documentation device second: if you can guess what `optimizer/` holds, you
+did not need this page.
+
+| Domain | What lives there |
+|---|---|
+| `graph` | what the user builds — nodes, edges, `Filter`, `Step` |
+| `data` | the values and their stores |
+| `cache` | memoizing by content |
+| `execution` | compiling a graph and running a plan |
+| `agentic` | effects, messages, tools, models |
+| `optimizer` | hyperparameter search |
+| `tracking` | what a run records |
+| `distributed` | the same work, on another machine |
+| `viz` | drawing it |
+
+The vocabulary applies at **two levels**, and the second is the one that
+makes it useful. Four crates span several domains and carry the names as
+folders. The rest each *are* one domain — there, wrapping the whole crate in
+a folder of the same name would add a level that says nothing, so the crate
+is the unit and its subdivisions are the domain's own.
+
+```
+                  graph  data  cache  exec  agentic  optim  track  distrib  viz
+soma-core           ●     ●      ●      ·      ●       ●      ●       ●      ●
+soma-runtime        ·     ·      ●      ●      ●       ●      ●       ●      ·
+soma-python         ●     ●      ●      ·      ●       ●      ●       ●      ·
+─────────── crates that ARE one domain ──────────────────────────────────────
+soma-compiler                            ●
+soma-llm                                          ●
+soma-agent                                        ●
+soma-memory                                       ●            ●
+soma-mcp                                          ●
+soma-worker                                                             ●
+soma-coordinator                                                        ●
+soma-store                ●
+```
+
+Reading down a column is how a capability is read across its layers. For
+`optimizer`: `soma-core` says what a search space and a study *are*,
+`soma-runtime` holds what walks one — samplers, pruners, the trial loop —
+and `soma-python` is what a user types. Three folders, one name, one
+capability.
+
+Each domain folder's `mod.rs` opens by saying what the domain is, so that
+answer lives beside the code rather than only here.
+
+---
+
 ## The workspace at a glance
 
 ~70 000 lines of Rust across 13 crates, plus a 7 400-line pure-Python package.

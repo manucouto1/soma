@@ -202,7 +202,7 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   RUN; `PopulationBased` refuses **by design** — each member needs its own hyperparameters
   applied to the graph, and a worker is sent a plan, not a way to build one. PBT is therefore
   an executor with callbacks, like `Study`: `soma.Pbt(search_space=…).run(train, evaluate)`
-  (soma-python/src/pbt.rs over the long-unreachable `PbtRunner`). DataParallel is a real
+  (soma-python/src/optimizer/pbt.rs over the long-unreachable `PbtRunner`). DataParallel is a real
   synchronous SGD round: remote fit leaves gradients on the parameters, they cross the wire as
   JSON (a torch pickle cannot be averaged in Rust), `shard_pair` splits x AND y together, and
   the stepped weights are read back over the wire — `get_state` would return the pre-step ones.

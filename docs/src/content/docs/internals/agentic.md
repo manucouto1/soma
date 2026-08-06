@@ -377,7 +377,7 @@ inferred from timestamps.
 
 ### Debt {#debt-3}
 
-- **O(n) materialization behind every defaulted query** — `soma-memory/src/knowledge_base.rs:76` (`get`), `:89`, `:95`, `:101`, `:105`, `:120`, `:139`, `:146`, `:186` all call `self.all()?`. With `FileKnowledgeBase` the journal is already in memory, so this is a `Vec` clone per call rather than I/O — but `kb.get(a)` followed by `kb.get(b)` in `soma-python/src/readers.rs:203` clones it twice.
+- **O(n) materialization behind every defaulted query** — `soma-memory/src/knowledge_base.rs:76` (`get`), `:89`, `:95`, `:101`, `:105`, `:120`, `:139`, `:146`, `:186` all call `self.all()?`. With `FileKnowledgeBase` the journal is already in memory, so this is a `Vec` clone per call rather than I/O — but `kb.get(a)` followed by `kb.get(b)` in `soma-python/src/tracking/readers.rs:203` clones it twice.
 - `rank()` (`soma-memory/src/retrieval.rs:200`) is 91 lines combining five scoring concerns.
 - `ChronosKnowledgeBase` adds a `semantic_search` (`soma-memory/src/chronos_kb.rs:112`) with no counterpart in the trait, so a caller holding `Box<dyn KnowledgeBase>` cannot reach it.
 - ~150 lines of hand-rolled IR primitives (`tokenize` `:467`, `Bm25Index` `:499`) inside a domain crate.

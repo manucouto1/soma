@@ -14,16 +14,12 @@
 //! because there was no boundary to be private to.
 
 mod agentic;
-mod bridge;
 mod cache;
-mod convert;
+mod data;
+mod distributed;
 mod graph;
-mod pbt;
-mod readers;
-mod run;
-mod store;
-mod study;
-mod worker;
+mod optimizer;
+mod tracking;
 
 /// What every binding module needs.
 ///
@@ -34,8 +30,8 @@ pub(crate) mod prelude {
     pub(crate) use super::agentic::{
         PyAgent, PyJudge, PyStepCtx, PyTool, PyToolAdapter, to_step_spec,
     };
-    pub(crate) use super::bridge::PyFilterBridge;
-    pub(crate) use super::convert::{json_to_py, py_any_to_json, py_to_value, value_to_py};
+    pub(crate) use super::data::convert::{json_to_py, py_any_to_json, py_to_value, value_to_py};
+    pub(crate) use super::graph::bridge::PyFilterBridge;
     pub(crate) use super::{default_cache_dir, py_err_to_soma, soma_err_to_py};
     pub(crate) use pyo3::exceptions::PyRuntimeError;
     pub(crate) use pyo3::exceptions::PyValueError;
@@ -75,9 +71,11 @@ pub(crate) mod prelude {
 }
 
 use crate::cache::{cache_gc, cache_pin, cache_purge_v1, cache_stats, cache_verify};
+use crate::distributed::PyWorker;
 use crate::graph::PyGraph;
+use crate::optimizer::study::{PyStudy, PyTrial};
 use crate::prelude::*;
-use crate::readers::{
+use crate::tracking::readers::{
     checkout_run, clear_head_run, graph_json_to_mermaid, graph_json_to_svg, kb_diff_json,
     kb_find_similar_json, kb_lineage_json, kb_record_conclusion, kb_reindex, list_runs_json,
     read_head_run, run_agentic_activity_json, run_agentic_timeline_json, run_cache_activity_json,
@@ -85,9 +83,7 @@ use crate::readers::{
     run_metric_series_json, run_node_timings_json, run_overlay_json, run_summary_json,
     run_to_mermaid, run_to_svg, run_trial_timeline_json,
 };
-use crate::run::PyRun;
-use crate::study::{PyStudy, PyTrial};
-use crate::worker::PyWorker;
+use crate::tracking::run::PyRun;
 
 // All four derive from `RuntimeError`, which is what every `SomaError`
 // used to become. Adding a more specific type should let a caller catch
@@ -186,7 +182,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agentic::providers, m)?)?;
     m.add_function(wrap_pyfunction!(agentic::models, m)?)?;
     m.add_class::<PyStudy>()?;
-    m.add_class::<crate::pbt::PyPbt>()?;
+    m.add_class::<crate::optimizer::pbt::PyPbt>()?;
     m.add_class::<PyTrial>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorker>()?;

@@ -146,7 +146,7 @@ so a normal filter never mentions it.
 
 | Implementor | Crate | Distinguishing behaviour |
 |---|---|---|
-| `PyFilterBridge` | `soma-python/src/bridge.rs:224` | Calls into a live Python object; identity delegated to `soma._identity` |
+| `PyFilterBridge` | `soma-python/src/graph/bridge.rs:224` | Calls into a live Python object; identity delegated to `soma._identity` |
 | `SubprocessFilter` | `soma-worker/src/python_process.rs:1025` | Delegates over a pipe to an out-of-process interpreter |
 
 Roughly 40 further implementations exist in tests and fixtures. `(!)` The trait
@@ -257,7 +257,7 @@ that the derive is the right interface.
 `fn as_any(&self) -> &dyn Any`, with a blanket `impl<T: Any> AsAny for T`, used
 only as a supertrait of `Filter` and `Step` so that a concrete type can be
 recovered from a trait object. Exactly three downcast sites exist workspace-wide:
-`soma-python/src/bridge.rs:355`, `soma-worker/src/worker.rs:158` and `:482`.
+`soma-python/src/graph/bridge.rs:355`, `soma-worker/src/worker.rs:158` and `:482`.
 
 ### Types — structs
 
