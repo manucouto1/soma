@@ -450,7 +450,7 @@ def test_compile_reports_step_schema_mismatch():
     g.node("chat", Chat())
     g.edge("numbers", "chat")
     with pytest.raises(Exception, match="no conversion"):
-        g.compile("no_cache")
+        g.compile()
 
 
 def test_filter_schema_attrs_flow():
@@ -477,7 +477,7 @@ def test_filter_schema_attrs_flow():
     g.node("tensor", WantsTensor())
     g.edge("text", "tensor")
     with pytest.raises(Exception, match="no conversion"):
-        g.compile("no_cache")
+        g.compile()
 
 
 def test_a_schema_typo_fails_at_registration():

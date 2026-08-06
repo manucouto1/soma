@@ -306,3 +306,49 @@ def test_memory_cache_opt_out_disables_persistence(tmp_path):
         assert proc.returncode == 0, proc.stderr
 
     assert _counts(counters).get("fit") == 2
+
+
+# ── one lever: "memory", or where to keep it ────────────────
+
+
+def test_cache_accepts_a_path_and_persists_there(tmp_path):
+    """`cache=<dir>` is the whole answer to "where do I want this kept".
+
+    It used to take three arguments — a kind (`"local"` / `"tiered"`) and
+    a separate `cache_path` — to say this, and `"local"` asked for a disk
+    store with no LRU in front, which is strictly worse than the default
+    and was never what anyone wanted.
+    """
+    import soma
+
+    class Counting(soma.Filter):
+        _kind = "stateless"
+        _cache_version = "1"
+        calls = 0
+
+        def forward(self, x, state):
+            type(self).calls += 1
+            return [v + 1 for v in x]
+
+    store = tmp_path / "store"
+
+    g1 = soma.Graph(cache=str(store))
+    g1.node("n", Counting())
+    assert g1.forward([1.0]) == [2.0]
+    assert Counting.calls == 1
+    assert store.exists(), "the directory was created and written to"
+
+    # A different Graph over the same directory reuses the work.
+    g2 = soma.Graph(cache=str(store))
+    g2.node("n", Counting())
+    assert g2.forward([1.0]) == [2.0]
+    assert Counting.calls == 1, "served from the store on disk"
+
+
+def test_cache_memory_does_not_touch_the_disk(tmp_path, monkeypatch):
+    import soma
+
+    monkeypatch.setenv("SOMA_CACHE_DIR", str(tmp_path / "unused"))
+    g = soma.Graph(cache="memory")
+    g.node("n", soma.Filter())
+    assert not (tmp_path / "unused").exists()

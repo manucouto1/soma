@@ -161,10 +161,14 @@ class TestCompilation:
         assert "plan_text" in info
         assert "plan_mermaid" in info
 
-    def test_compile_no_cache_mode(self):
+    def test_a_compiled_plan_never_contains_cached_nodes(self):
+        """Not a mode, a property. Cache keys are derived at run time from
+        the content that arrived, so there is nothing for the compiler to
+        resolve — which is why `compile("no_cache")` was deleted rather
+        than kept: its only effect was to suppress the diagnostic saying
+        exactly this."""
         g = Graph.somatize(Doubler() >> Adder())
-        info = g.compile("no_cache")
-        assert info["cached_nodes"] == 0
+        assert g.compile()["cached_nodes"] == 0
 
     def test_compile_differentiable_mode(self):
         g = Graph.somatize(Scaler() >> Doubler())
@@ -211,7 +215,7 @@ class TestVisualization:
 
     def test_compile_plan_mermaid(self):
         g = Graph.somatize(Doubler() >> Adder())
-        info = g.compile("no_cache")
+        info = g.compile()
         assert "graph TD" in info["plan_mermaid"]
 
 

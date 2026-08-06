@@ -113,10 +113,10 @@ By default every `Graph()` shares a **persistent cache** at
 survive crashes and are reused across processes and projects. Options:
 
 ```python
-g = Graph()                                   # persistent tiered cache (default)
-g = Graph(cache="memory")                     # process-local, nothing persists
-g = Graph(cache="local", cache_path="/data")  # explicit store directory
-g = Graph(cache_max_bytes=2 * 2**30)          # in-memory LRU tier budget
+g = Graph()                            # persistent, at $SOMA_CACHE_DIR (default)
+g = Graph(cache="memory")              # process-local, nothing persists
+g = Graph(cache="/data")               # persistent, kept here instead
+g = Graph(cache_max_bytes=2 * 2**30)   # in-memory LRU tier budget
 ```
 
 #### Fluent Operators
@@ -211,13 +211,16 @@ g = Graph.somatize(
 #### Compile Modes
 
 ```python
-info = g.compile("inference")       # Full caching
-info = g.compile("differentiable")  # Cache states, re-execute forwards
-info = g.compile("no_cache")        # Force re-execution
+info = g.compile("inference")       # the default
+info = g.compile("differentiable")  # fuse differentiable runs into a Composite
+# The same two modes `fit` takes. There was a third, "no_cache", sold as
+# "force re-execution"; it never did that. Cache keys are derived at RUNTIME
+# from the content that arrived, so the plan contains no cached nodes to
+# suppress — all the mode ever did was hide the diagnostic saying so.
+#
 # Returns CompileInfo (a dict): {total_nodes, cached_nodes, parallel_branches,
 #   diagnostics: [{node, level, message}], plan_text, plan_mermaid, plan_svg}
-# cached_nodes is always 0: cache hits are resolved at RUNTIME per node
-# (key = hash(config + state + input)), not baked into the plan.
+# cached_nodes is always 0, for the reason above.
 ```
 
 #### Events

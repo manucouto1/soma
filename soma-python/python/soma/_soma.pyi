@@ -65,10 +65,9 @@ class Graph:
         cls,
         *,
         cache: str | None = ...,
-        cache_path: str | None = ...,
         cache_max_bytes: int | None = ...,
     ) -> Graph:
-        """`cache` is "memory" | "local" | "tiered"; the default is a persistent tiered cache."""
+        """`cache` is `"memory"` or a directory path; the default is a persistent store."""
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
@@ -135,7 +134,7 @@ class Graph:
         """Add a routing node: runs `condition` and executes only the arm its output names."""
 
     def compile(self, mode: str = ...) -> dict[str, Any]:
-        """Compile and return diagnostics; mode is "inference" | "differentiable" | "no_cache"."""
+        """Compile and return diagnostics; mode is "inference" | "differentiable"."""
 
     def edge(self, source: str, target: str) -> None:
         """Connect two nodes with a data edge."""

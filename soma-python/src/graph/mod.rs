@@ -815,61 +815,43 @@ impl PyGraph {
     ///
     /// Optional keyword arguments:
     ///
-    /// * `cache` — cache backend: `"memory"`, `"local"`, or `"tiered"`.
-    ///   Default: a persistent tiered cache (memory LRU over a shared
-    ///   on-disk store at `$SOMA_CACHE_DIR` or `~/.soma/cache`), so fit
-    ///   states and forward outputs survive crashes and are shared
-    ///   across processes and projects. Pass `cache="memory"` to opt out.
-    /// * `cache_path` — directory for `"local"` / `"tiered"` cache (required for those).
+    /// * `cache` — `"memory"` for an in-process LRU that dies with the
+    ///   process, or a **directory path** for a persistent store with that
+    ///   LRU in front of it. The default is the same persistent store at
+    ///   `$SOMA_CACHE_DIR`, or `~/.soma/cache`, so fit states and forward
+    ///   outputs survive crashes and are shared across processes and
+    ///   projects.
+    ///
+    ///   There used to be a `cache` *kind* (`"local"`, `"tiered"`) and a
+    ///   separate `cache_path`, which made three arguments out of one
+    ///   question — where do I want this kept? A memory LRU in front of a
+    ///   disk store costs nothing and is what the default already did, so
+    ///   `"local"` was a way to ask for something strictly worse.
     /// * `cache_max_bytes` — max bytes for the in-memory LRU (default 1 GB).
     #[new]
-    #[pyo3(signature = (*, cache=None, cache_path=None, cache_max_bytes=None))]
-    fn new(
-        cache: Option<&str>,
-        cache_path: Option<String>,
-        cache_max_bytes: Option<usize>,
-    ) -> PyResult<Self> {
+    #[pyo3(signature = (*, cache=None, cache_max_bytes=None))]
+    fn new(cache: Option<&str>, cache_max_bytes: Option<usize>) -> PyResult<Self> {
         let max_bytes = cache_max_bytes.unwrap_or(1024 * 1024 * 1024);
+        let tiered = |dir: &str| -> PyResult<Arc<dyn somatize_core::cache::CacheStore>> {
+            let local = FsActionStore::new(dir)
+                .map_err(|e| PyRuntimeError::new_err(format!("cache init at {dir:?}: {e}")))?;
+            Ok(Arc::new(TieredCache::memory_and_local(
+                Box::new(MemoryCache::new(max_bytes)),
+                Box::new(local),
+            )))
+        };
         let cache_store: Arc<dyn somatize_core::cache::CacheStore> = match cache {
-            None => match default_cache_dir().and_then(|dir| FsActionStore::new(dir).ok()) {
-                Some(local) => Arc::new(TieredCache::memory_and_local(
-                    Box::new(MemoryCache::new(max_bytes)),
-                    Box::new(local),
-                )),
-                // No writable cache dir (sandbox, read-only home):
-                // degrade to memory-only rather than failing.
+            Some("memory") => Arc::new(MemoryCache::new(max_bytes)),
+            Some(path) => tiered(path)?,
+            // No writable cache dir (sandbox, read-only home): degrade to
+            // memory-only rather than failing.
+            None => match default_cache_dir() {
+                Some(dir) => match tiered(&dir.to_string_lossy()) {
+                    Ok(store) => store,
+                    Err(_) => Arc::new(MemoryCache::new(max_bytes)),
+                },
                 None => Arc::new(MemoryCache::new(max_bytes)),
             },
-            Some("memory") => Arc::new(MemoryCache::new(max_bytes)),
-            Some("local") => {
-                let path = cache_path.ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(
-                        "cache_path is required for cache=\"local\"",
-                    )
-                })?;
-                Arc::new(
-                    FsActionStore::new(path)
-                        .map_err(|e| PyRuntimeError::new_err(format!("cache init: {e}")))?,
-                )
-            }
-            Some("tiered") => {
-                let path = cache_path.ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(
-                        "cache_path is required for cache=\"tiered\"",
-                    )
-                })?;
-                let local = FsActionStore::new(path)
-                    .map_err(|e| PyRuntimeError::new_err(format!("cache init: {e}")))?;
-                Arc::new(TieredCache::memory_and_local(
-                    Box::new(MemoryCache::new(max_bytes)),
-                    Box::new(local),
-                ))
-            }
-            Some(other) => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "unknown cache type: {other:?} (expected \"memory\", \"local\", or \"tiered\")"
-                )));
-            }
         };
 
         Ok(Self {
@@ -1698,10 +1680,10 @@ impl PyGraph {
         let compile_mode = match mode {
             "inference" => CompileMode::Inference,
             "differentiable" => CompileMode::Differentiable,
-            "no_cache" => CompileMode::NoCache,
             _ => {
                 return Err(PyRuntimeError::new_err(format!(
-                    "Unknown mode: {mode}. Use 'inference', 'differentiable', or 'no_cache'."
+                    "Unknown mode: {mode}. Use 'inference' or 'differentiable' — \
+                     the same two `fit` takes."
                 )));
             }
         };

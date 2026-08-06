@@ -93,7 +93,7 @@ class TestGraphExecution:
         g.node(Adder())
         g.edge("doubler", "adder")
 
-        info = g.compile("no_cache")
+        info = g.compile()
         assert isinstance(info, dict)
         assert info["total_nodes"] == 2
 
