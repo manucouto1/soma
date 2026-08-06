@@ -17,7 +17,7 @@ from the file names:
          │                                  duck-typed steps, viz, CLI
    soma/_soma (extension)                ← built by maturin from:
          │
-   soma-python/src/*.rs    6 605 lines   ← the bridge: pyclass wrappers + trait impls
+   soma-python/src/*.rs    7 072 lines   ← the bridge: pyclass wrappers + trait impls
          │
    the Rust workspace
 ```
@@ -77,7 +77,7 @@ Expose the workspace to Python and let Python objects re-enter it as filters,
 steps and tools. It owns no domain logic — everything here either wraps a Rust
 type for Python or wraps a Python object for Rust.
 
-`6 605 lines across 15 files in 6 domains · 0 traits defined · 10 #[pyclass] · 33 #[pyfunction] · 4 bridge impls`
+`7 072 lines across 22 files in 6 domains · 0 traits defined · 10 #[pyclass] · 33 #[pyfunction] · 4 bridge impls`
 
 ### Modules
 
@@ -86,9 +86,10 @@ of one capability line up: `optimizer/` here is what a user types, in
 `soma-runtime` what walks a space, in `soma-core` what a space *is*. Three
 domains are a single module and stay a file rather than a folder.
 
-`graph/` is also where [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object)
-gets fixed: the folder exists, and `PyGraph`'s 2 362 lines have somewhere to
-be broken into.
+`graph/` is where [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object)
+was fixed: the same domain names again, one module down, so `PyGraph`'s 2 362
+lines became a 798-line `mod.rs` of signatures over seven modules that each own
+one thing the type holds.
 
 | File | Lines | Owns |
 |---|---|---|
@@ -97,12 +98,21 @@ be broken into.
 | `soma-python/src/distributed.rs` | 296 | `PyWorker` |
 | `soma-python/src/cache.rs` | 182 | 5 cache functions |
 
-**`graph/` — the primary API and the filter bridge.**
+**`graph/` — the primary API and the filter bridge.** One module per thing
+`PyGraph` owns; `mod.rs` is the struct and one `#[pymethods]` block of
+signatures, because pyo3 allows only one such block per class.
 
 | File | Lines | Owns |
 |---|---|---|
-| `soma-python/src/graph/mod.rs` | 2 362 | `PyGraph` — the whole primary API `(!)` |
+| `soma-python/src/graph/mod.rs` | 798 | `PyGraph` — the struct, `new`, and the `#[pymethods]` surface |
+| `soma-python/src/graph/execution.rs` | 513 | `fit` (three paths), `forward`, `compile`, `FittedStates` |
+| `soma-python/src/graph/distributed.rs` | 502 | workers, coordinator, data store, dispatch, `set_strategy` |
 | `soma-python/src/graph/bridge.rs` | 437 | `PyFilterBridge` |
+| `soma-python/src/graph/registry.rs` | 355 | `NodeRecord`, `Registry`, registration, the rebuilt catalog |
+| `soma-python/src/graph/topology.rs` | 318 | nodes, edges, `branch`, `loop`, the optional edges |
+| `soma-python/src/graph/agentic.rs` | 144 | the toolbox, the router, the `EffectDriver`, `resume` |
+| `soma-python/src/graph/tracking.rs` | 131 | `begin_run`, the topology snapshot, the event bridge |
+| `soma-python/src/graph/viz.rs` | 61 | mermaid, SVG, text, `_repr_html_`, `graph_json` |
 
 **`optimizer/` — search, as Python types.**
 
@@ -151,41 +161,51 @@ Python methods (below).
 Non-`#[pyclass]` types that still cross the boundary: `PyFilterBridge`,
 `PyStepBridge`, `PyToolAdapter`, `PyPbtExecutor` (see [D6](#d6--the-ffi-bridge)),
 plus three private enums — `StepSpec` (`soma-python/src/agentic.rs:936`),
-`Behaviour` (`soma-python/src/graph/mod.rs:13`) and `StoreConfig`
+`Behaviour` (`soma-python/src/graph/registry.rs:12`) and `StoreConfig`
 (`soma-python/src/distributed.rs:72`, deferred configuration held until `serve`).
 
 ### `PyGraph` — the full method surface
 
-**~47 public methods and 22 private helpers on one type.** Grouped so it is
-navigable:
+**~47 public methods on one type**, and one `#[pymethods]` block: pyo3 without
+`multiple-pymethods` allows no more. The bodies live one module down, so the
+block in `mod.rs` is signatures, documentation and a delegation each — the doc
+comments have to stay there because they are what `help(soma.Graph)` prints.
+The `Where` column is where the code actually is.
 
-| Group | Methods (all `soma-python/src/graph/mod.rs`) |
-|---|---|
-| Construction & topology | `__new__` `:820`, `node` `:899`, `edge` `:1290`, `branch` `:1026`, `loop_` `:1093`, `handoff` `:1308`, `optional` `:1177`, `optional_edges` `:1205`, `set_edge` `:1214` |
-| Agentic registration | `register_graph` `:959`, `register_step` `:987`, `use_provider` `:1156`, `add_tool` `:1256`, `add_mcp_server` `:1265`, `steps` `:1245` |
-| Execution | `fit` `:1322` `(!)`, `forward` `:1584`, `resume` `:1628`, `compile` `:1663` |
-| Rendering | `to_mermaid` `:1725`, `to_svg` `:1736`, `_repr_html_` `:1745`, `to_text` `:1762`, `graph_json` `:1818` |
-| Events & tracking | `on_event` `:1780`, `emit_event` `:1805`, `begin_run` `:1841` |
-| Distribution | `add_worker` `:1901`, `set_data_store` `:1918`, `set_strategy` `:1954` `(!)`, `strategy` `:2079` `(!)`, `shutdown_worker` `:2099`, `shutdown_workers` `:2114`, `set_coordinator` `:2129`, `workers` `:2136` |
-| Introspection | `filter_source` `:2278`, `filter_requirements` `:2289`, `filter_sources_dict` `:2296`, `filter` `:2313`, `filter_ids` `:2323`, `filters` `:2349`, `set_node_state` `:2366`, `edges` `:2384`, `get_node_state` `:2396`, `mark_fitted` `:2411`, `py_state` `:2422`, `__len__` `:2430`, `__repr__` `:2434`, `__str__` `:2443` |
+| Group | Methods (signatures in `soma-python/src/graph/mod.rs`) | Where |
+|---|---|---|
+| Construction | `__new__` `:101` | here |
+| Topology | `node` `:154`, `edge` `:164`, `edges` `:173`, `handoff` `:191`, `branch` `:212`, `loop_` `:249`, `optional` `:272`, `optional_edges` `:277`, `set_edge` `:286` | `topology.rs` |
+| What a node is | `register_graph` `:313`, `register_step` `:331`, `filter_source` `:342`, `filter_requirements` `:353`, `filter_sources_dict` `:358`, `filter` `:371`, `filter_ids` `:381`, `filters` `:390`, `steps` `:398`, `set_node_state` `:408`, `get_node_state` `:421`, `mark_fitted` `:433` | `registry.rs` |
+| Agentic | `use_provider` `:445`, `add_tool` `:450`, `add_mcp_server` `:459`, `resume` `:482` | `agentic.rs` |
+| Execution | `fit` `:505`, `forward` `:525`, `compile` `:539` | `execution.rs` |
+| Rendering | `to_mermaid` `:551`, `to_svg` `:559`, `to_text` `:564`, `_repr_html_` `:570`, `graph_json` `:576` | `viz.rs` |
+| Events & tracking | `on_event` `:594`, `emit_event` `:605`, `begin_run` `:627` | `tracking.rs` |
+| Distribution | `add_worker` `:648`, `set_coordinator` `:657`, `workers` `:664`, `shutdown_worker` `:674`, `shutdown_workers` `:684`, `set_data_store` `:700`, `set_strategy` `:736` `(!)`, `strategy` `:761` `(!)` | `distributed.rs` |
+| Python-side | `py_state` `:774`, `__len__` `:782`, `__repr__` `:786`, `__str__` `:795` | here |
 
-**19 fields** (`soma-python/src/graph/mod.rs:30`–`:84`), five of them parallel maps
-keyed by node id:
+**15 fields** (`soma-python/src/graph/mod.rs:33`), one of them the registry that
+replaced five parallel node-keyed maps:
 
 ```
 graph: Graph                    library: NodeCatalog        cache: Arc<dyn CacheStore>
 event_bus: Arc<EventBus>        fitted: bool                data_store: Option<Arc<dyn DataStore>>
-workers: Vec<(addr, token, tags)>                           coordinator: Option<(url, token)>
+nodes: Registry                 workers: Vec<RemoteWorker>  coordinator: Option<(url, token)>
 tools: HashMap<String, PyTool>  default_provider: Option<String>
 mcp_toolboxes: Vec<Toolbox>     py_state: Option<Py<PyDict>>
 optional_edges: Vec<(String, String)>
 cut_edges: HashMap<(String, String), (usize, Edge)>
-
-(!) five parallel node-keyed maps, written together, never removed from:
-    pickled_filters · filter_sources · filter_trainable · live_filters · live_steps
 ```
 
-See [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object).
+`Registry` (`soma-python/src/graph/registry.rs:67`) is `HashMap<String,
+NodeRecord>`, where `NodeRecord` is `Filter { live, pickled, requirements,
+source, trainable }` or `Step(live)`. It was `pickled_filters`,
+`filter_sources`, `filter_trainable`, `live_filters` and `live_steps`, written
+together in one function and never removed from — an invariant that held only
+because nothing deletes a node.
+
+See [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object),
+now resolved.
 
 ### The `#[pyfunction]` surface
 
@@ -418,7 +438,7 @@ the last column.
 - **Operator DSL** — `Filter.__rshift__` / `__or__` (`filter.py:172`, `:181`), `Chain` / `Fork` (`chain.py:36`, `:85`), `builder.somatize` (`builder.py:11`).
 - **Data-as-JSON-string across the FFI** — the 25 `*_json` functions.
 - **Facade + lazy view** — `RunView` (`_runs.py:30`) with cached properties and `refresh()`.
-- **Rich-repr protocol** — five `_repr_html_` implementations: `PyGraph` (`graph.rs:1856`), `RunView` (`_runs.py:260`), `RunList` (`:386`), `CompileInfo` (`_compile.py:26`), `DifferentiableFilter` (`_composite.py:179`).
+- **Rich-repr protocol** — five `_repr_html_` implementations: `PyGraph` (`graph/viz.rs:44`), `RunView` (`_runs.py:260`), `RunList` (`:386`), `CompileInfo` (`_compile.py:26`), `DifferentiableFilter` (`_composite.py:179`).
 - **Context manager** — `track_run` (`_tracking.py:36`), `Graph.context` (`_orchestrator.py:461`), `audit_modules` (`_audit.py:1016`), `gradient_audit` (`_audit.py:1239`).
 - **Deferred configuration** — `StoreConfig` (`worker.rs:72`) held until `serve` can build the store on its own thread.
 - **Null-object degradation** on missing optional dependencies.
@@ -426,7 +446,9 @@ the last column.
 
 ## Debt
 
-**High** — [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object) `PyGraph` god object, including the 262-line `fit` with a five-times-duplicated tail
+**High** — none. [D-01](/soma/internals/debt/#d-01--pygraph-is-the-workspaces-god-object)
+(`PyGraph` god object, the five parallel maps, and the 262-line `fit` with a
+five-times-duplicated tail) is resolved.
 
 **Medium** — [D-09](/soma/internals/debt/#d-09--audit-is-a-30-method-class-in-a-1-338-line-module) `Audit` ·
 [D-27](/soma/internals/debt/#d-27--unwrap-inside-a-detached-thread-makes-bind-failures-unreportable) `unwrap` in a detached thread ·

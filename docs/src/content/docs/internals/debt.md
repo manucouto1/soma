@@ -42,7 +42,7 @@ is what keeps those anchors honest.
 | ID | Finding | Severity |
 |---|---|---|
 | [D-31](#d-31--zarrstores-chunk-cache-is-write-only) | `ZarrStore`'s local chunk cache is never read — every `get` goes back to S3 | High |
-| [D-01](#d-01--pygraph-is-the-workspaces-god-object) | `PyGraph`: 2 458 lines, 19 fields, ~47 public methods | High |
+| [D-01](#d-01--pygraph-is-the-workspaces-god-object) | ~~`PyGraph`: 2 458 lines, 19 fields, ~47 public methods~~ — **Resolved** | High |
 | [D-11](#d-11--the-stream-path-re-implements-run_node-and-has-drifted) | Stream execution re-implements `run_node` and has drifted — no cache events | High |
 | [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | `mean_by_key` panics on an empty slice, reachable from Python | High |
 | [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | Compiler never descends into `Loop`/`Branch` for distribution or fusion | High |
@@ -63,36 +63,52 @@ that touching one forces you to read all of them.
 
 **Class** God object · **Severity** High · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph/mod.rs:29` — 2 458 lines, **19 fields**,
-~47 public `#[pymethods]` plus 22 private helpers. It is simultaneously the
-graph builder, the filter registry, the cache owner, the event-bus owner, the
-worker-pool manager, the coordinator client, the data-store owner, the renderer,
-the run tracker and the executor.
+**Evidence (as found)** `soma-python/src/graph/mod.rs` — 2 458 lines, **19
+fields**, ~47 public `#[pymethods]` plus 22 private helpers. It was
+simultaneously the graph builder, the filter registry, the cache owner, the
+event-bus owner, the worker-pool manager, the coordinator client, the
+data-store owner, the renderer, the run tracker and the executor.
 
-Five of the 19 fields are **parallel maps keyed by node id** — `pickled_filters`,
-`filter_sources`, `filter_trainable`, `live_filters`, `live_steps` — all written
-together in `register_behaviour` (`soma-python/src/graph/mod.rs:258`) and never
-removed from. There is no node-removal API, which is the only reason they cannot
+Five of the 19 fields were **parallel maps keyed by node id** —
+`pickled_filters`, `filter_sources`, `filter_trainable`, `live_filters`,
+`live_steps` — all written together in `register_behaviour` and never removed
+from. There is no node-removal API, which was the only reason they could not
 drift apart.
 
-`PyGraph::fit` (`soma-python/src/graph/mod.rs:1373`) is **262 lines** with five
-distinct execution paths, and the tail
+`PyGraph::fit` was **262 lines** with five distinct execution paths, and the
+tail
 
 ```rust
 for (node_id, state) in states { self.library.try_set_state(node_id, state)?; }
 self.fitted = true;
 ```
 
-appears **five times** in it (`:1460`, `:1498`, `:1518`, `:1534`, `:1616`).
+appeared **five times** in it.
 
-**Consequence** Any change to how a graph is built, run or distributed lands in
-this one file. It is the single biggest obstacle to understanding the Python
-API from the Rust side.
+**Consequence** Any change to how a graph was built, run or distributed landed
+in this one file. It was the single biggest obstacle to understanding the
+Python API from the Rust side.
 
-**Fix shape** Extract the node registry (the five maps) into one `NodeRecord`
-struct in its own module; extract the worker/coordinator fields into a
-`Distribution` struct; give `fit` one outcome-handling tail instead of five.
-None of these is behaviour-changing.
+**Resolution** `soma-python/src/graph/` is now one module per thing the type
+owns — `topology`, `registry`, `execution`, `agentic`, `distributed`,
+`tracking`, `viz` — and `mod.rs` (`soma-python/src/graph/mod.rs:32`) is the
+struct plus one `#[pymethods]` block of signatures and documentation, 798
+lines. pyo3 without `multiple-pymethods` allows exactly one such block per
+class, so the bodies move and the signatures delegate; the doc comments stay
+in `mod.rs` because they are what `help(soma.Graph)` prints.
+
+The five maps are one `HashMap<String, NodeRecord>`
+(`soma-python/src/graph/registry.rs:64`): an unwritten invariant became a type.
+`fit` has one tail (`absorb`, `soma-python/src/graph/execution.rs:35`) over a
+`FittedStates` that names the two key shapes a fit can answer with — and
+naming them found a real bug, since the differentiable path had been reading a
+runner's map as though it were a worker's and filing each node's *output* as
+its state.
+
+Three further duplications went with it: the `SerializedFilter` vector built
+inline at three call sites, the "which worker gets this plan" policy written
+out in both dispatches, and the batched/unbatched remote fit, which differed
+only in a field that travels inside `ExecutionMode::Fit`.
 
 ### D-02 · `Worker` and `Worker::execute_plan`
 
@@ -816,8 +832,8 @@ encodes a count inside the string: `"DEAD_CHANNELS(3)"`.
 **Class** Stringly-typed · **Severity** Medium · **Crate** `soma-python`
 
 **Evidence** `soma-python/src/graph/distributed.rs:405` (`kind` — 5 strategies, with
-nested `aggregation` matches at `:409` and `:423`); `soma-python/src/graph/mod.rs:955`
-/ `:1184`
+nested `aggregation` matches at `:409` and `:423`);
+`soma-python/src/graph/execution.rs:78` / `:468`
 (`"differentiable"` / `"inference"`); `soma-python/src/data/store.rs:30`
 (`store_type`); `soma-python/src/optimizer/study.rs:44` (`dtype`) and `:52` (`scale`) and
 `:184` (`parse_pruning`); `soma-python/src/agentic.rs:610` (5 transitions) and
@@ -1057,7 +1073,6 @@ line counts mislead.
 | Function | Location | Lines |
 |---|---|---|
 | `Worker::execute_plan` | `soma-worker/src/worker.rs:275` | 324 |
-| `PyGraph::fit` | `soma-python/src/graph/mod.rs:1373` | 262 |
 | `handle_ws` | `soma-worker/src/server.rs:353` | 215 |
 | `PyStudy::run` | `soma-python/src/optimizer/study.rs:433` | 213 |
 | `StudyRunner::run` | `soma-runtime/src/optimizer/study.rs:187` | 194 |
