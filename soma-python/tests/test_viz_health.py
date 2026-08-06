@@ -27,7 +27,7 @@ def _run_with_diagnostics(tmp_path, *, flags=(), audit_steps=(), snapshots=()):
     g = Graph()
     g.node("enc", _Plain())
     g.node("head", _Plain())
-    g.connect("enc", "head")
+    g.edge("enc", "head")
     with g.track_run("diag", root=str(tmp_path)) as run:
         g.fit([1.0])
         for f in flags:

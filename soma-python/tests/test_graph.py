@@ -62,7 +62,7 @@ class TestGraphExecution:
         g = Graph()
         g.node(Doubler())
         g.node(Adder(amount=5.0))
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
 
         g.fit([1.0, 2.0, 3.0])
         result = g.forward([10.0, 20.0])
@@ -80,7 +80,7 @@ class TestGraphExecution:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
 
         info = g.compile()
         assert "total_nodes" in info
@@ -91,7 +91,7 @@ class TestGraphExecution:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
 
         info = g.compile("no_cache")
         assert isinstance(info, dict)
@@ -105,7 +105,7 @@ class TestCompileInfo:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
         return g.compile()
 
     def test_diagnostics_are_structured(self):

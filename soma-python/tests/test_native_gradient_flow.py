@@ -83,7 +83,7 @@ def _build_two_filter_graph(seed: int = 0):
     b = Dense(out_dim=2)
     g.node("a", a)
     g.node("b", b)
-    g.connect("a", "b")
+    g.edge("a", "b")
     return g, a, b
 
 
@@ -152,7 +152,7 @@ def test_aux_dict_flows_through_forward_and_into_loss():
     head = GatedClassifier(out_dim=2)
     g.node("enc", enc)
     g.node("head", head)
-    g.connect("enc", "head")
+    g.edge("enc", "head")
 
     x, _ = _learnable_data()  # inputs only; targets aren't aligned with this head
     target = torch.randint(0, 2, (x.shape[0],))
@@ -311,8 +311,8 @@ def test_filter_ids_topologically_sorted():
     g.node("c", Dense(out_dim=2))
     g.node("a", Dense(out_dim=8))
     g.node("b", Dense(out_dim=4))
-    g.connect("a", "b")
-    g.connect("b", "c")
+    g.edge("a", "b")
+    g.edge("b", "c")
     assert g.filter_ids() == ["a", "b", "c"]
 
 
@@ -542,8 +542,8 @@ class TestMaterializeUsesTopology:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("sink", Mlp("sink"))
-        g.connect("a", "sink")
-        g.connect("b", "sink")
+        g.edge("a", "sink")
+        g.edge("b", "sink")
 
         g.materialize(torch.randn(8, 10))
 
@@ -587,8 +587,8 @@ class TestMaterializeUsesTopology:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("gate", Gate())
-        g.connect("a", "gate")
-        g.connect("b", "gate")
+        g.edge("a", "gate")
+        g.edge("b", "gate")
         g.materialize(torch.randn(8, 10))
         g.train()
 
@@ -635,8 +635,8 @@ class TestMaterializeUsesTopology:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("gate", Gate())
-        g.connect("a", "gate")
-        g.connect("b", "gate")
+        g.edge("a", "gate")
+        g.edge("b", "gate")
 
         x = torch.randn(16, 10)
         y = torch.randint(0, 3, (16,))
@@ -717,8 +717,8 @@ class TestLazyConstructionCompletesItself:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("gate", Gate())
-        g.connect("a", "gate")
-        g.connect("b", "gate")
+        g.edge("a", "gate")
+        g.edge("b", "gate")
         return g
 
     def test_materialize_builds_the_fan_in_too(self):
@@ -816,7 +816,7 @@ class TestArchitectureAsData:
         g = Graph()
         g.node("a", Plain())
         g.node("b", Plain())
-        g.connect("a", "b")
+        g.edge("a", "b")
 
         arch = g.architecture()
         assert arch["total_trainable"] == 0

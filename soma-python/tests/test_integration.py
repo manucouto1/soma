@@ -112,7 +112,7 @@ class TestGraphTopologies:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
         g.fit([1.0, 2.0])
         result = g.forward([5.0])
         assert result == [20.0]  # doubler: [5]→[10], adder: [10+10]=[20]
@@ -120,7 +120,7 @@ class TestGraphTopologies:
     def test_mixed_somatize_and_manual(self):
         g = Graph.somatize(Doubler() >> Adder(amount=0.0))
         g.node(Identity())
-        g.connect("adder", "identity")
+        g.edge("adder", "identity")
         assert len(g) == 3
 
 

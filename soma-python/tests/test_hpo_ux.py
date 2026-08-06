@@ -273,7 +273,7 @@ def _two_node_graph():
     g = Graph()
     g.node("embed", _Embed())
     g.node("encoder", _Encoder())
-    g.connect("embed", "encoder")
+    g.edge("embed", "encoder")
     return g
 
 

@@ -134,7 +134,7 @@ def _build(spec, overrides=None):
         else:
             g.node(node["id"], instance)
     for edge in spec.get("edges", []):
-        g.connect(edge[0], edge[1])
+        g.edge(edge[0], edge[1])
     return g
 
 def _run_once(spec, g):

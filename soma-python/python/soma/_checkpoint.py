@@ -263,10 +263,10 @@ def load(cls: type, path: str, strict: bool = True) -> Graph:
         edges = manifest["topology"].get("edges") or []
         if edges:
             for e in edges:
-                graph.connect(e["source"], e["target"])
+                graph.edge(e["source"], e["target"])
         else:
             for prev, nxt in zip(nodes, nodes[1:]):
-                graph.connect(prev["id"], nxt["id"])
+                graph.edge(prev["id"], nxt["id"])
 
         # Restore state.
         sd: dict[str, Any] = {}

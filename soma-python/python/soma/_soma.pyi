@@ -137,9 +137,6 @@ class Graph:
     def compile(self, mode: str = ...) -> dict[str, Any]:
         """Compile and return diagnostics; mode is "inference" | "differentiable" | "no_cache"."""
 
-    def connect(self, source: str, target: str) -> None:
-        """Alias for `edge`."""
-
     def edge(self, source: str, target: str) -> None:
         """Connect two nodes with a data edge."""
 

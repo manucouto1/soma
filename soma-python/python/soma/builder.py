@@ -65,5 +65,5 @@ def _walk(graph, obj, sources=None):
         # Single filter — add node and connect from all sources
         node_id = graph.node(obj)
         for src in sources:
-            graph.connect(src, node_id)
+            graph.edge(src, node_id)
         return [node_id]

@@ -203,7 +203,7 @@ def test_goto_to_an_undeclared_target_is_refused():
     g = soma.Graph(cache="memory")
     g.node("start", Wanderer())
     g.node("elsewhere", Square())
-    g.connect("start", "elsewhere")      # data, not control
+    g.edge("start", "elsewhere")      # data, not control
     with pytest.raises(RuntimeError, match="handoff"):
         g.forward("x")
 
@@ -448,7 +448,7 @@ def test_compile_reports_step_schema_mismatch():
     g = soma.Graph(cache="memory")
     g.node("numbers", Numbers())
     g.node("chat", Chat())
-    g.connect("numbers", "chat")
+    g.edge("numbers", "chat")
     with pytest.raises(Exception, match="no conversion"):
         g.compile("no_cache")
 
@@ -475,7 +475,7 @@ def test_filter_schema_attrs_flow():
     g = soma.Graph(cache="memory")
     g.node("text", Text())
     g.node("tensor", WantsTensor())
-    g.connect("text", "tensor")
+    g.edge("text", "tensor")
     with pytest.raises(Exception, match="no conversion"):
         g.compile("no_cache")
 

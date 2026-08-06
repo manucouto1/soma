@@ -1069,7 +1069,7 @@ impl PyGraph {
     /// ```python
     /// g.node("draft", Draft())
     /// g.node("critic", soma.Judge(model="ollama/llama3.2", rubric="..."))
-    /// g.connect("draft", "critic")
+    /// g.edge("draft", "critic")
     /// g.loop("refine", body="draft", until="critic", max_iterations=3)
     /// ```
     ///
@@ -1291,12 +1291,6 @@ impl PyGraph {
         let id = format!("e_{}", self.graph.edges.len());
         self.graph.add_edge(Edge::data(id, source, target));
     }
-
-    /// Alias for edge().
-    fn connect(&mut self, source: String, target: String) {
-        self.edge(source, target);
-    }
-
     /// Declare that `source` may hand control to `target`.
     ///
     /// This is what `soma.Goto(target)` needs: a handoff transfers control

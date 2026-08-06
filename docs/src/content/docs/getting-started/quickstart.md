@@ -60,7 +60,7 @@ Two equivalent ways to compose. Explicit:
 g = Graph()
 g.node("normalizer", Normalizer())
 g.node("scale", Scale(factor=3.0))
-g.connect("normalizer", "scale")
+g.edge("normalizer", "scale")
 ```
 
 Or the fluent DSL — `>>` chains, `|` forks:

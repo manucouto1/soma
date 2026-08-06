@@ -109,7 +109,7 @@ def _refine_graph():
         ),
     )
     g.node("critic", soma.Judge(model="mock/any", rubric="Is it useful?"))
-    g.connect("writer", "critic")
+    g.edge("writer", "critic")
     return g
 
 

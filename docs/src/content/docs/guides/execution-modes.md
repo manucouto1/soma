@@ -250,7 +250,7 @@ it was pinned, and hands its activation to the next one.
 g = Graph()
 g.node("encoder", Encoder(), target="gpu-0")
 g.node("classifier", Classifier(), target="gpu-1")
-g.connect("encoder", "classifier")
+g.edge("encoder", "classifier")
 
 g.add_worker("ws://gpu-0:8080", tags=["gpu-0"])
 g.add_worker("ws://gpu-1:8080", tags=["gpu-1"])

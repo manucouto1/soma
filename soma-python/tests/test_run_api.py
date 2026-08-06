@@ -24,7 +24,7 @@ def _graph():
     g = Graph()
     g.node("a", _Plain())
     g.node("b", _Plain())
-    g.connect("a", "b")
+    g.edge("a", "b")
     return g
 
 

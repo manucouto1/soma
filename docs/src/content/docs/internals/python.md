@@ -161,7 +161,7 @@ navigable:
 
 | Group | Methods (all `soma-python/src/graph/mod.rs`) |
 |---|---|
-| Construction & topology | `__new__` `:864`, `node` `:943`, `edge` `:1334`, `connect` `:1340`, `branch` `:1070`, `loop_` `:1137`, `handoff` `:1358`, `optional` `:1221`, `optional_edges` `:1249`, `set_edge` `:1258` |
+| Construction & topology | `__new__` `:820`, `node` `:899`, `edge` `:1290`, `branch` `:1026`, `loop_` `:1093`, `handoff` `:1308`, `optional` `:1177`, `optional_edges` `:1205`, `set_edge` `:1214` |
 | Agentic registration | `register_graph` `:959`, `register_step` `:987`, `use_provider` `:1156`, `add_tool` `:1256`, `add_mcp_server` `:1265`, `steps` `:1245` |
 | Execution | `fit` `:1322` `(!)`, `forward` `:1584`, `resume` `:1628`, `compile` `:1663` |
 | Rendering | `to_mermaid` `:1725`, `to_svg` `:1736`, `_repr_html_` `:1745`, `to_text` `:1762`, `graph_json` `:1818` |

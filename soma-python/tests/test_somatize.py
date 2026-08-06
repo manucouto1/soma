@@ -85,7 +85,7 @@ class TestMixedAPI:
         """somatize creates initial topology, then add nodes manually."""
         g = Graph.somatize(Doubler() >> Adder())
         g.node(Merge())
-        g.connect("adder", "merge")
+        g.edge("adder", "merge")
         assert len(g) == 3
 
     def test_single_filter(self):

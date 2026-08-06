@@ -106,7 +106,7 @@ g = Graph.somatize(Scaler() >> Model())
 g = Graph()
 g.node(Scaler())
 g.node(Model())
-g.connect("scaler", "model")
+g.edge("scaler", "model")
 ```
 
 By default every `Graph()` shares a **persistent cache** at
@@ -154,7 +154,7 @@ g = Graph.somatize(
 |--------|-----------|-------------|
 | `somatize` | `(topology) -> Graph` | Class method. Materialize a Chain/Fork into a graph |
 | `node` | `(filter, target=None) -> str` or `(node_id, filter)` | Add a filter node, returns its id (snake_case class name, deduped with `_2`). `target="local"` pins it off remote workers |
-| `edge` / `connect` | `(source, target)` | Connect two nodes with a data edge |
+| `edge` | `(source, target)` | Connect two nodes with a data edge |
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
 | `forward` | `(x, stream=False, chunk_size=1024, seed=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns a list for pure-inference graphs; `(out, aux_by_node)` while any differentiable filter is in `train()` mode |
 | `compile` | `(mode="inference") -> CompileInfo` | Compile and return diagnostics (a dict that renders as tiles + callouts + plan diagram in notebooks) |

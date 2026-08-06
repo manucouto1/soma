@@ -193,7 +193,7 @@ is read, with an error message that names the helper to use.
 **Decided.** `react`, `route`, `refine`, `debate`, `board`,
 `parallel_vote`, `self_consistency` and `orchestrate` are functions in
 `soma.agentic`, each returning an ordinary `Graph` built from the same
-`node`, `connect`, `branch` and `loop` anyone can call.
+`node`, `edge`, `branch` and `loop` anyone can call.
 
 Rejected: **patterns as engine variants or node types.** A framework
 whose patterns are enum variants has to grow its core for every idea

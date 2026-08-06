@@ -49,7 +49,7 @@ def _graph():
     g = Graph(cache="memory")
     g.node("a", _Plain("a"))
     g.node("b", _Plain("b"))
-    g.connect("a", "b")
+    g.edge("a", "b")
     return g
 
 

@@ -35,7 +35,7 @@ def _build():
     a, b = Dense(out_dim=8), Dense(out_dim=2)
     g.node("a", a)
     g.node("b", b)
-    g.connect("a", "b")
+    g.edge("a", "b")
     W = torch.randn(2, 4)
     x = torch.randn(64, 4)
     y = x @ W.T
@@ -460,7 +460,7 @@ def test_inside_errors():
     g4 = Graph()
     g4.node("a", Deep(layers=1))
     g4.node("a/0", Dense(out_dim=4))
-    g4.connect("a", "a/0")
+    g4.edge("a", "a/0")
     g4.materialize(torch.randn(4, 4))
     with pytest.raises(ValueError, match="collision"):
         with g4.gradient_audit(inside={"a": ["0"]}):

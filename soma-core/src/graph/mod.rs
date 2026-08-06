@@ -376,12 +376,6 @@ impl Graph {
         self.edges.push(edge);
     }
 
-    /// Connect two nodes with a data edge (auto-generates edge id).
-    pub fn connect(&mut self, source: impl Into<String>, target: impl Into<String>) {
-        let id = format!("e_{}", self.edges.len());
-        self.edges.push(Edge::data(id, source, target));
-    }
-
     /// Get a node by its ID.
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|n| n.id == id)
@@ -844,7 +838,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_filter("Scaler");
         g.add_filter("PCA");
-        g.connect("Scaler", "PCA");
+        g.add_edge(Edge::data("e0", "Scaler", "PCA"));
 
         assert!(g.validate().is_ok());
         assert_eq!(g.nodes.len(), 2);

@@ -67,7 +67,7 @@ def _build_and_train(Dense, seed: int = 0, n_iter: int = 150):
     g = Graph()
     g.node("a", Dense(out_dim=8))
     g.node("b", Dense(out_dim=2))
-    g.connect("a", "b")
+    g.edge("a", "b")
 
     W = torch.randn(2, 4)
     x = torch.randn(64, 4)
@@ -121,7 +121,7 @@ def test_state_load_state_round_trip(filter_mod):
     g2 = Graph()
     g2.node("a", Dense(out_dim=8))
     g2.node("b", Dense(out_dim=2))
-    g2.connect("a", "b")
+    g2.edge("a", "b")
     g2.load_state(sd)
 
     out2 = torch.as_tensor(g2.forward(x.tolist()), dtype=torch.float32)
@@ -137,7 +137,7 @@ def test_load_state_strict_rejects_unknown_keys(filter_mod):
     g2 = Graph()
     g2.node("a", Dense(out_dim=8))
     g2.node("b", Dense(out_dim=2))
-    g2.connect("a", "b")
+    g2.edge("a", "b")
 
     with pytest.raises(KeyError, match="not in this graph"):
         g2.load_state(sd_bad, strict=True)
@@ -152,7 +152,7 @@ def test_load_state_non_strict_warns_on_missing(filter_mod):
     g2 = Graph()
     g2.node("a", Dense(out_dim=8))
     g2.node("b", Dense(out_dim=2))
-    g2.connect("a", "b")
+    g2.edge("a", "b")
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -227,7 +227,7 @@ def test_save_and_restore_optimizer(filter_mod):
     g = Graph()
     g.node("a", Dense(out_dim=4))
     g.node("b", Dense(out_dim=2))
-    g.connect("a", "b")
+    g.edge("a", "b")
     x = torch.randn(16, 4)
     y = torch.randn(16, 2)
 

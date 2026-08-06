@@ -90,8 +90,8 @@ class Eval(Filter):
     Input is a mapping holding both sides — ``{"prediction": …,
     "reference": …}`` by default, or the node ids of a fan-in::
 
-        g.connect("model", "score")
-        g.connect("truth", "score")
+        g.edge("model", "score")
+        g.edge("truth", "score")
         g.node("score", Eval(metrics=["accuracy"], prediction="model",
                              reference="truth"))
 
@@ -234,7 +234,7 @@ class Accumulator(Filter):
 
     Put it at the end of the body, so its output becomes the carry::
 
-        g.connect("judge", "remember")
+        g.edge("judge", "remember")
         g.loop("refine", body="revise", until="judge", max_iterations=5)
 
     Output is the value it was handed, plus ``history`` (oldest first).
