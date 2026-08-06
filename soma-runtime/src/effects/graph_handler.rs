@@ -14,8 +14,8 @@ use crate::effects::{EffectDriver, EffectHandler, EffectJournal};
 use crate::event_bus::EventBus;
 use crate::graph_session::GraphSession;
 use crate::node_catalog::NodeCatalog;
+use somatize_core::agentic::effect::{Effect, EffectResult, GraphEffectMode};
 use somatize_core::cache::CacheStore;
-use somatize_core::effect::{Effect, EffectResult, GraphEffectMode};
 use somatize_core::error::{Result, SomaError};
 use std::sync::Arc;
 
@@ -176,7 +176,7 @@ impl EffectHandler for GraphHandler {
         let outcome = match mode {
             GraphEffectMode::Fit => session
                 .fit(input, None)
-                .map(|outputs| somatize_core::value::Value::json(outputs_summary(&outputs))),
+                .map(|outputs| somatize_core::data::value::Value::json(outputs_summary(&outputs))),
             // `GraphEffectMode` is `#[non_exhaustive]`; anything added later
             // is a mode this build does not know how to run, and guessing
             // `forward` would silently skip a fit.
@@ -209,7 +209,7 @@ impl EffectHandler for GraphHandler {
 /// The runtime's own bookkeeping keys (`__input_*`, `__state_*`) are not
 /// results and do not belong in front of a model.
 fn outputs_summary(
-    outputs: &std::collections::HashMap<String, somatize_core::value::Value>,
+    outputs: &std::collections::HashMap<String, somatize_core::data::value::Value>,
 ) -> serde_json::Value {
     let mut summary = serde_json::Map::new();
     for (node_id, value) in outputs {
@@ -224,7 +224,7 @@ fn outputs_summary(
 /// How many elements a learned array can have before it counts as weights.
 const WEIGHTS_THRESHOLD: usize = 32;
 
-fn summarize_state(state: &somatize_core::value::Value) -> serde_json::Value {
+fn summarize_state(state: &somatize_core::data::value::Value) -> serde_json::Value {
     let json = state.to_plain_json();
     if is_bulk(&json) {
         return serde_json::json!({ "fitted": true });
@@ -245,9 +245,9 @@ fn is_bulk(json: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::data::value::Value;
+    use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     use somatize_core::graph::{Graph, Node};
-    use somatize_core::value::Value;
 
     struct Doubler;
 
@@ -260,7 +260,7 @@ mod tests {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -331,9 +331,9 @@ mod tests {
         assert!(matches!(result, EffectResult::Failed { .. }));
     }
 
-    use somatize_core::effect::{LlmRequest, LlmResponse, StopReason};
-    use somatize_core::message::Message;
-    use somatize_core::step::{StepCtx, StepMeta, Transition};
+    use somatize_core::agentic::effect::{LlmRequest, LlmResponse, StopReason};
+    use somatize_core::agentic::message::Message;
+    use somatize_core::graph::step::{StepCtx, StepMeta, Transition};
 
     /// Answers every model call with a fixed string.
     struct CannedLlm(&'static str);
@@ -355,7 +355,7 @@ mod tests {
     /// Asks the model once, then hands back what it said.
     struct AskOnce;
 
-    impl somatize_core::step::Step for AskOnce {
+    impl somatize_core::graph::step::Step for AskOnce {
         fn config_hash(&self) -> somatize_core::cache::CacheKey {
             somatize_core::cache::CacheKey::from_parts(&[b"AskOnce"])
         }
@@ -444,7 +444,7 @@ mod tests {
     /// overflow.
     struct Recurse;
 
-    impl somatize_core::step::Step for Recurse {
+    impl somatize_core::graph::step::Step for Recurse {
         fn config_hash(&self) -> somatize_core::cache::CacheKey {
             somatize_core::cache::CacheKey::from_parts(&[b"Recurse"])
         }
@@ -539,7 +539,7 @@ mod tests {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -549,7 +549,7 @@ mod tests {
     /// Awaits one filter-only Forward graph effect, then reports its output.
     struct RunsPipeline;
 
-    impl somatize_core::step::Step for RunsPipeline {
+    impl somatize_core::graph::step::Step for RunsPipeline {
         fn config_hash(&self) -> somatize_core::cache::CacheKey {
             somatize_core::cache::CacheKey::from_parts(&[b"RunsPipeline"])
         }
@@ -652,7 +652,7 @@ mod tests {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }

@@ -5,13 +5,13 @@
 
 use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::MetricRecord;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
-use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
-use somatize_core::value::Value;
+use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::optimizer::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::tracking::event::MetricRecord;
 use somatize_runtime::*;
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ impl Filter for Normalizer {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -118,7 +118,7 @@ impl Filter for LinearModel {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -146,7 +146,7 @@ impl Filter for FailingFilter {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -425,7 +425,12 @@ fn study_continues_after_failed_trials() {
     let failed = study
         .trials
         .iter()
-        .filter(|t| matches!(t.state, somatize_core::study::TrialState::Failed { .. }))
+        .filter(|t| {
+            matches!(
+                t.state,
+                somatize_core::optimizer::study::TrialState::Failed { .. }
+            )
+        })
         .count();
     assert!(completed > 0, "some trials should succeed");
     assert!(failed > 0, "some trials should fail");

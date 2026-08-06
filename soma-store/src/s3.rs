@@ -12,9 +12,9 @@
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::store::{DataRef, DataStore, StorageConfig};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::store::{DataRef, DataStore, StorageConfig};
-use somatize_core::value::Value;
 use std::path::PathBuf;
 
 /// S3-compatible data store with AWS Signature V4 authentication.

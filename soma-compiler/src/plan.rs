@@ -4,9 +4,9 @@
 //! Plans are data-free (no filter implementations) and serializable.
 
 use serde::{Deserialize, Serialize};
-use somatize_core::control::LoopCondition;
-use somatize_core::filter::RemoteTarget;
 use somatize_core::graph::NodeId;
+use somatize_core::graph::control::LoopCondition;
+use somatize_core::graph::filter::RemoteTarget;
 use std::fmt;
 
 /// A compiled execution plan produced by the compiler.
@@ -217,8 +217,8 @@ impl ExecutionPlan {
     }
 
     /// Create a PlanSummary for event payloads.
-    pub fn summary(&self) -> somatize_core::event::PlanSummary {
-        somatize_core::event::PlanSummary {
+    pub fn summary(&self) -> somatize_core::tracking::event::PlanSummary {
+        somatize_core::tracking::event::PlanSummary {
             total_nodes: self.node_count(),
             // Cache resolution moved to runtime; plans carry no cached nodes.
             cached_nodes: 0,
@@ -601,7 +601,7 @@ mod tests {
     fn a_remote_node_is_listed_once() {
         let plan = ExecutionPlan::Remote {
             node_id: "n".into(),
-            target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+            target: somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
             plan: Box::new(ExecutionPlan::Execute {
                 node_id: "n".into(),
             }),
@@ -659,7 +659,7 @@ mod tests {
                         node_id: "draft".into(),
                     }),
                     max_iterations: Some(3),
-                    until: somatize_core::control::LoopCondition::Exhaust,
+                    until: somatize_core::graph::control::LoopCondition::Exhaust,
                     carry_from: None,
                 },
             ]),

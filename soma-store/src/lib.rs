@@ -14,7 +14,7 @@
 //! and the trait itself stay in `soma-core`, so a caller that only needs
 //! local storage never reaches this crate at all.
 //!
-//! [`DataStore`]: somatize_core::store::DataStore
+//! [`DataStore`]: somatize_core::data::store::DataStore
 
 #[cfg(feature = "s3")]
 pub mod s3;

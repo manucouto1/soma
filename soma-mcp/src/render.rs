@@ -20,7 +20,7 @@
 //! Every function here is pure — a value in, a `String` out — so the
 //! output is snapshot-tested rather than merely eyeballed.
 
-use somatize_core::summary::{RunSummary, human_duration, round4};
+use somatize_core::tracking::summary::{RunSummary, human_duration, round4};
 use somatize_memory::knowledge_base::Lineage;
 use somatize_memory::{
     Change, DerivationMove, ExperimentRecord, ResearchLine, ScoredRecord, is_dead_end,
@@ -320,7 +320,7 @@ pub fn summarize_run(summary: &RunSummary) -> String {
             let _ = writeln!(out, "- best {objective} = {}", round4(best));
         }
     }
-    let flags = somatize_core::summary::FlagCount::merge_all(
+    let flags = somatize_core::tracking::summary::FlagCount::merge_all(
         &summary.conclusion.health_flags,
         &summary.conclusion.audit_flags,
     );
@@ -512,7 +512,10 @@ fn params_line(record: &ExperimentRecord) -> String {
                 serde_json::Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            format!("{name}={}", somatize_core::summary::one_line(&text, 40))
+            format!(
+                "{name}={}",
+                somatize_core::tracking::summary::one_line(&text, 40)
+            )
         })
         .collect();
     if names.len() > MAX_METRICS {
@@ -695,7 +698,7 @@ pub fn render_study_run(payload: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use somatize_core::summary::{RunConclusion, RunOutcome, TrialSummary};
+    use somatize_core::tracking::summary::{RunConclusion, RunOutcome, TrialSummary};
     use somatize_memory::knowledge_base::LineageNode;
     use somatize_memory::{MetricDelta, RetrievalQuery, Trend, rank};
     use std::collections::BTreeMap;

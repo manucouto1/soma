@@ -10,10 +10,10 @@ use crate::node_catalog::NodeCatalog;
 use crate::runner::{RunContext, Runner};
 use somatize_compiler::{CompileMode, CompileResult, compile, compile_stream};
 use somatize_core::cache::CacheStore;
+use somatize_core::data::store::{DataRef, DataStore};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::graph::Graph;
-use somatize_core::store::{DataRef, DataStore};
-use somatize_core::value::Value;
 use std::sync::Arc;
 
 /// What a forward pass runs against, besides the graph and the data.
@@ -158,7 +158,7 @@ mod tests {
     use crate::node_catalog::NodeCatalog;
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result as SomaResult;
-    use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
     use somatize_core::graph::{Graph, Node};
 
     struct DoublerFilter;

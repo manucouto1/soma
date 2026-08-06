@@ -371,7 +371,7 @@ execution site, and exactly one `match` that tells a filter from a step.
 
 ```
       «trait» Filter                    «trait» Step
-      (soma-core/src/filter.rs:120)     (soma-core/src/step.rs:250)
+      (soma-core/src/graph/filter.rs:120)     (soma-core/src/graph/step.rs:250)
          fit / forward                     poll -> Transition
               ▲                                 ▲
               │                                 │
@@ -397,10 +397,10 @@ execution site, and exactly one `match` that tells a filter from a step.
              ▼                       run_node_inner   « THE match »
      NodeMeta ◁── From<FilterMeta>   soma-runtime/src/executor.rs:1058
               ◁── From<StepMeta>       Filter → forward()
-     soma-core/src/node.rs:72          Step   → driver.run()
+     soma-core/src/graph/node.rs:72          Step   → driver.run()
 ```
 
-`From<StepMeta> for NodeMeta` (`soma-core/src/node.rs:132`) sets
+`From<StepMeta> for NodeMeta` (`soma-core/src/graph/node.rs:132`) sets
 `cacheable: false, deterministic: false`, which is why "a step is not
 output-cacheable" needs no `if is_step` anywhere — the executor's existing
 cacheability guard (`soma-runtime/src/executor.rs:677`) reads it as data.
@@ -448,7 +448,7 @@ Two content-addressed systems that look similar and are not. A filter
 **memoizes by content**; a step **journals by site**.
 
 ```
-                    «trait» CacheStore              soma-core/src/cache.rs:204
+                    «trait» CacheStore              soma-core/src/cache/mod.rs:204
                      get/put/exists/remove/metadata
                      + put_computed, get_located, tier   « defaulted »
                               ▲
@@ -462,7 +462,7 @@ Two content-addressed systems that look similar and are not. A filter
                                                              └──▷ «trait» BlobStore
                                                                   BLAKE3 CAS, evictable by gc.rs
 
-  CacheKey derivation                       soma-core/src/cache.rs:18
+  CacheKey derivation                       soma-core/src/cache/mod.rs:18
      state  = hash(config ‖ x ‖ y)                for_state
      output = hash(config ‖ state ‖ input_hash)   for_output
      + salt_with_seed(seed)                       executor.rs:634

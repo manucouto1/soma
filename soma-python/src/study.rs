@@ -230,7 +230,7 @@ pub(crate) fn record_study_experiment(run_dir: &std::path::Path, study: &Study) 
 
 pub(crate) fn trial_to_py(
     py: Python<'_>,
-    trial: &somatize_core::study::Trial,
+    trial: &somatize_core::optimizer::study::Trial,
 ) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("id", &trial.id)?;
@@ -242,11 +242,11 @@ pub(crate) fn trial_to_py(
     dict.set_item(
         "state",
         match &trial.state {
-            somatize_core::study::TrialState::Pending => "pending".to_string(),
-            somatize_core::study::TrialState::Running => "running".to_string(),
-            somatize_core::study::TrialState::Completed => "completed".to_string(),
-            somatize_core::study::TrialState::Pruned { .. } => "pruned".to_string(),
-            somatize_core::study::TrialState::Failed { .. } => "failed".to_string(),
+            somatize_core::optimizer::study::TrialState::Pending => "pending".to_string(),
+            somatize_core::optimizer::study::TrialState::Running => "running".to_string(),
+            somatize_core::optimizer::study::TrialState::Completed => "completed".to_string(),
+            somatize_core::optimizer::study::TrialState::Pruned { .. } => "pruned".to_string(),
+            somatize_core::optimizer::study::TrialState::Failed { .. } => "failed".to_string(),
         },
     )?;
     let metrics_dict = PyDict::new(py);
@@ -482,10 +482,11 @@ impl PyStudy {
                             manifest.seeds.insert(format!("seed_{i}"), *s);
                         }
                         match &self.study.strategy {
-                            somatize_core::study::SearchStrategy::Random {
-                                seed: Some(s), ..
+                            somatize_core::optimizer::study::SearchStrategy::Random {
+                                seed: Some(s),
+                                ..
                             }
-                            | somatize_core::study::SearchStrategy::Bayesian {
+                            | somatize_core::optimizer::study::SearchStrategy::Bayesian {
                                 seed: Some(s),
                                 ..
                             } => {
@@ -674,9 +675,9 @@ impl PyStudy {
     /// `("score", direction)`.
     #[getter]
     fn objectives(&self) -> Vec<(String, String)> {
-        let dir_str = |d: &somatize_core::study::Direction| match d {
-            somatize_core::study::Direction::Maximize => "maximize".to_string(),
-            somatize_core::study::Direction::Minimize => "minimize".to_string(),
+        let dir_str = |d: &somatize_core::optimizer::study::Direction| match d {
+            somatize_core::optimizer::study::Direction::Maximize => "maximize".to_string(),
+            somatize_core::optimizer::study::Direction::Minimize => "minimize".to_string(),
         };
         if self.study.objectives.is_empty()
             && let Some(composite) = &self.study.composite

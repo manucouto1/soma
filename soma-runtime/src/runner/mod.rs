@@ -9,8 +9,8 @@ pub mod remote;
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::value::Value;
 use std::collections::HashMap;
 
 use crate::EventBus;

@@ -8,9 +8,13 @@
 //! (`LocalTracker`), and a future remote backend implements the same
 //! [`Tracker`] trait.
 
+pub mod event;
+pub mod fingerprint;
+pub mod summary;
+
 use crate::error::Result;
-use crate::event::Event;
-use crate::study::Study;
+use crate::optimizer::study::Study;
+use crate::tracking::event::Event;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -284,7 +288,7 @@ pub trait Tracker: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::MetricRecord;
+    use crate::tracking::event::MetricRecord;
 
     #[test]
     fn manifest_roundtrip_and_defaults() {

@@ -13,8 +13,8 @@ Four pieces on top of the existing runtime:
 
 | Piece | What it is | Where |
 |---|---|---|
-| `Step` | An effectful node: `poll()` returns a `Transition` | `soma-core/src/step.rs` |
-| `Effect` | What a step asks the world for: LLM, tool, graph, sleep | `soma-core/src/effect.rs` |
+| `Step` | An effectful node: `poll()` returns a `Transition` | `soma-core/src/graph/step.rs` |
+| `Effect` | What a step asks the world for: LLM, tool, graph, sleep | `soma-core/src/agentic/effect.rs` |
 | Effect journal | Record-once, replay-on-resume, over the existing cache | `soma-runtime/src/effects/` |
 | Provider layer | OpenAI-compatible access to ~12 providers, as data | `soma-llm/` |
 

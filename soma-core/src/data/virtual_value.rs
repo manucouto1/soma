@@ -5,8 +5,8 @@
 //! materializes when a filter actually needs the data.
 
 use crate::cache::CacheKey;
-use crate::schema::Schema;
-use crate::value::Value;
+use crate::data::schema::Schema;
+use crate::data::value::Value;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -187,18 +187,18 @@ impl VirtualValue {
     fn infer_schema(value: &Value) -> Schema {
         match value {
             Value::Tensor { values: _, shape } => Schema {
-                dtype: crate::schema::DataType::Float64,
+                dtype: crate::data::schema::DataType::Float64,
                 shape: Some(
                     shape
                         .iter()
-                        .map(|&d| crate::schema::Dimension::Fixed(d))
+                        .map(|&d| crate::data::schema::Dimension::Fixed(d))
                         .collect(),
                 ),
             },
             Value::Text(_) => Schema::text(),
             Value::Json(_) => Schema::json(),
             Value::Bytes(_) | Value::Object(_) => Schema::bytes(),
-            Value::Empty => Schema::dynamic(crate::schema::DataType::Float64),
+            Value::Empty => Schema::dynamic(crate::data::schema::DataType::Float64),
         }
     }
 }
@@ -236,7 +236,7 @@ impl From<Value> for VirtualValue {
 mod tests {
     use super::*;
     use crate::cache::CacheKey;
-    use crate::schema::{DataType, Schema};
+    use crate::data::schema::{DataType, Schema};
 
     #[test]
     fn materialized_from_value() {

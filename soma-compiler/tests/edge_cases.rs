@@ -2,11 +2,11 @@
 
 use somatize_compiler::{CompileMode, DiagnosticLevel, SimpleNodeRegistry, compile};
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta};
+use somatize_core::data::schema::{DataType, Schema};
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
-use somatize_core::schema::{DataType, Schema};
-use somatize_core::value::Value;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
@@ -18,7 +18,7 @@ fn make_meta(kind: FilterKind, differentiable: bool) -> FilterMeta {
         differentiable,
         deterministic: true,
         stream_mode: StreamMode::FixedState,
-        distribution: somatize_core::filter::Distribution::Local,
+        distribution: somatize_core::graph::filter::Distribution::Local,
         input_schema: None,
         output_schema: None,
     }
@@ -295,7 +295,7 @@ fn meta_with_schemas(output: Option<Schema>, input: Option<Schema>) -> FilterMet
         differentiable: true,
         deterministic: true,
         stream_mode: StreamMode::FixedState,
-        distribution: somatize_core::filter::Distribution::Local,
+        distribution: somatize_core::graph::filter::Distribution::Local,
         input_schema: input,
         output_schema: output,
     }

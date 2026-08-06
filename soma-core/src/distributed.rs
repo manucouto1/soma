@@ -11,8 +11,8 @@
 //!
 //! Subgraphs inherit the parent's strategy unless overridden.
 
-use crate::filter::RemoteTarget;
 use crate::graph::NodeId;
+use crate::graph::filter::RemoteTarget;
 use serde::{Deserialize, Serialize};
 
 /// Training strategy — graph-level attribute, inherited by subgraphs.

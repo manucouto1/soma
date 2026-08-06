@@ -7,14 +7,14 @@ use crate::event_bus::EventBus;
 use crate::node_catalog::{NodeCatalog, NodeImpl};
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
-use somatize_core::control::{
+use somatize_core::data::value::Value;
+use somatize_core::data::virtual_value::VirtualValue;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::graph::control::{
     LoopCondition, LoopSignal, is_default_arm, read_arm_selector, read_loop_signal,
 };
-use somatize_core::error::{Result, SomaError};
-use somatize_core::event::Event;
-use somatize_core::node::NodeOutcome;
-use somatize_core::value::Value;
-use somatize_core::virtual_value::VirtualValue;
+use somatize_core::graph::node::NodeOutcome;
+use somatize_core::tracking::event::Event;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -208,9 +208,9 @@ impl Context {
     /// write: that list is how `execute_parallel` works out what a branch
     /// contributed, so a state written inside a branch that skipped it
     /// would be dropped at the join. Readers asking "which node ran last"
-    /// filter reserved keys out — see [`somatize_core::keys::is_reserved`].
+    /// filter reserved keys out — see [`somatize_core::data::keys::is_reserved`].
     pub fn record_state(&mut self, node_id: &str, state: Value) {
-        self.set(somatize_core::keys::state_key(node_id), state);
+        self.set(somatize_core::data::keys::state_key(node_id), state);
     }
 
     /// Set the experiment seed (hashed into every cache key).
@@ -227,7 +227,7 @@ impl Context {
 
     /// The nodes that ran, in the order they ran.
     ///
-    /// Includes the run's reserved keys (see [`somatize_core::keys`]);
+    /// Includes the run's reserved keys (see [`somatize_core::data::keys`]);
     /// filter them out with `keys::is_reserved` if you want node ids only.
     pub fn execution_order(&self) -> &[String] {
         &self.execution_order
@@ -622,7 +622,7 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 /// result would silently freeze what the user expects to vary.
 pub(crate) fn output_key(
     node: &NodeImpl,
-    meta: &somatize_core::node::NodeMeta,
+    meta: &somatize_core::graph::node::NodeMeta,
     state: &Value,
     input_key: &somatize_core::cache::CacheKey,
     seed: Option<i64>,
@@ -758,7 +758,7 @@ fn select_handoff<'p>(
 /// the stored output is used and the node never runs.
 ///
 /// A step never reaches that path, and not because of a check here: its
-/// [`NodeMeta`](somatize_core::node::NodeMeta) declares
+/// [`NodeMeta`](somatize_core::graph::node::NodeMeta) declares
 /// `cacheable: false`, so the guard below skips it the way it skips a
 /// filter that declared the same. What makes a step re-runnable instead is
 /// the effect journal, which the driver consults per effect.
@@ -917,7 +917,7 @@ fn composite_fit(node_ids: &[String], ctx: &mut Context, catalog: &NodeCatalog) 
                 .into(),
         });
     }
-    let peers: Option<Vec<(String, Arc<dyn somatize_core::filter::Filter>)>> = node_ids
+    let peers: Option<Vec<(String, Arc<dyn somatize_core::graph::filter::Filter>)>> = node_ids
         .iter()
         .map(|id| catalog.get(id).map(|f| (id.clone(), f)))
         .collect();
@@ -954,7 +954,7 @@ fn composite_fit(node_ids: &[String], ctx: &mut Context, catalog: &NodeCatalog) 
 fn fit_state_if_needed(
     node_id: &str,
     node: &NodeImpl,
-    meta: &somatize_core::node::NodeMeta,
+    meta: &somatize_core::graph::node::NodeMeta,
     input: &Value,
     ctx: &mut Context,
     cache: &dyn CacheStore,
@@ -1232,7 +1232,7 @@ mod tests {
     use super::*;
     use crate::cache::MemoryCache;
     use somatize_core::cache::CacheKey;
-    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 
     /// Panics in `meta()`, which — unlike `forward()` — runs outside the
     /// `catch_unwind` in `execute_node`, so the unwind reaches the thread
@@ -1319,7 +1319,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -1354,7 +1354,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -1386,7 +1386,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -1767,7 +1767,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -1961,7 +1961,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -2054,7 +2054,7 @@ mod tests {
                     differentiable: false,
                     deterministic: false, // declared nondeterministic
                     stream_mode: StreamMode::FixedState,
-                    distribution: somatize_core::filter::Distribution::Local,
+                    distribution: somatize_core::graph::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }

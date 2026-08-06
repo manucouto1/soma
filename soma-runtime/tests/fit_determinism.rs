@@ -2,9 +2,9 @@
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_runtime::runner::{LocalRunner, RunContext, Runner};
 use somatize_runtime::{EventBus, MemoryCache, NodeCatalog};
 use std::sync::Arc;

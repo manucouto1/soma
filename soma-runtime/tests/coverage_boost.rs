@@ -2,12 +2,12 @@
 
 use somatize_compiler::{CompileMode, ExecutionPlan};
 use somatize_core::cache::CacheKey;
-use somatize_core::control::LoopCondition;
+use somatize_core::data::store::{DataStore, LocalDataStore};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::control::LoopCondition;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::store::{DataStore, LocalDataStore};
-use somatize_core::value::Value;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::executor::Context;
 use somatize_runtime::graph_session::GraphSession;
@@ -43,7 +43,7 @@ impl Filter for Doubler {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -83,7 +83,7 @@ impl Filter for MeanFilter {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -110,7 +110,7 @@ impl Filter for BranchCondition {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -146,7 +146,7 @@ impl Filter for StopFilter {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -477,7 +477,7 @@ impl Filter for Grow {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -695,7 +695,7 @@ fn executor_remote_falls_back_to_local() {
     // No remote executor set → should fall back to local
     let plan = ExecutionPlan::Remote {
         node_id: "doubler".into(),
-        target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+        target: somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
         plan: Box::new(ExecutionPlan::Execute {
             node_id: "doubler".into(),
         }),
@@ -770,7 +770,7 @@ fn executor_remote_with_transport() {
 
     let plan = ExecutionPlan::Remote {
         node_id: "remote_node".into(),
-        target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+        target: somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
         plan: Box::new(ExecutionPlan::Execute {
             node_id: "remote_node".into(),
         }),

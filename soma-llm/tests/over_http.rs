@@ -5,12 +5,12 @@
 //! agentic step through the effect driver to a socket and back. No network,
 //! so they run anywhere CI runs.
 
+use somatize_core::agentic::effect::{Effect, EffectResult, LlmRequest, StopReason};
+use somatize_core::agentic::message::Message;
 use somatize_core::cache::CacheKey;
-use somatize_core::effect::{Effect, EffectResult, LlmRequest, StopReason};
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::message::Message;
-use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
-use somatize_core::value::Value;
+use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_llm::{
     Auth, Catalog, LlmHandler, LlmProvider, OpenAiCompatible, ProviderConfig, Router,
 };

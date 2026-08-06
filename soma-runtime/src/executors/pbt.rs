@@ -9,11 +9,11 @@
 
 use crate::event_bus::EventBus;
 use crate::sampler::{hash_u64, pseudo_random};
+use somatize_core::data::value::Value;
+use somatize_core::distributed::{ExploitStrategy, ExploreStrategy};
 use somatize_core::error::Result;
-use somatize_core::event::Event;
-use somatize_core::search::{SearchDimension, SearchSpace};
-use somatize_core::strategy::{ExploitStrategy, ExploreStrategy};
-use somatize_core::value::Value;
+use somatize_core::optimizer::search::{SearchDimension, SearchSpace};
+use somatize_core::tracking::event::Event;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -350,7 +350,7 @@ fn perturb_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::search::Scale;
+    use somatize_core::optimizer::search::Scale;
 
     fn test_config() -> PbtConfig {
         let mut space = SearchSpace::new();

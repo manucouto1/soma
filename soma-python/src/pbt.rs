@@ -13,7 +13,7 @@
 //! than as a strategy that cannot see the graph it is evolving.
 
 use crate::prelude::*;
-use somatize_core::strategy::{ExploitStrategy, ExploreStrategy};
+use somatize_core::distributed::{ExploitStrategy, ExploreStrategy};
 use somatize_runtime::{EventBus, PbtConfig, PbtExecutor, PbtRunner, PopulationMember};
 use std::sync::Arc;
 

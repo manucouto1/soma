@@ -23,15 +23,15 @@
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use somatize_core::cache::CacheKey;
-use somatize_core::effect::{
+use somatize_core::agentic::effect::{
     Effect, EffectResult, GraphEffectMode, JoinPolicy, LlmRequest, NodeSpec, SuspendReason,
 };
+use somatize_core::agentic::message::Message;
+use somatize_core::agentic::tool::ToolSpec;
+use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result as SomaResult, SomaError};
-use somatize_core::message::Message;
-use somatize_core::step::{Step, StepMeta, Transition};
-use somatize_core::tool::ToolSpec;
-use somatize_core::value::Value;
+use somatize_core::graph::step::{Step, StepMeta, Transition};
 use somatize_llm::tools::ToolOutcome;
 use somatize_llm::{JudgeStep, ReactStep};
 use std::sync::Arc;
@@ -721,15 +721,15 @@ fn parse_transition(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Transiti
 /// Python node (filter or step).
 ///
 /// Accepts the shorthand strings `"text"`, `"json"`, `"messages"`,
-/// `"bytes"`, or a mapping in the [`somatize_core::schema::Schema`] serde
+/// `"bytes"`, or a mapping in the [`somatize_core::data::schema::Schema`] serde
 /// shape. This is what makes the compiler's edge check reachable from
 /// Python: without a declared schema an edge is unchecked, silently.
 pub(crate) fn parse_schema_attr(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     attr: &str,
-) -> PyResult<Option<somatize_core::schema::Schema>> {
-    use somatize_core::schema::Schema;
+) -> PyResult<Option<somatize_core::data::schema::Schema>> {
+    use somatize_core::data::schema::Schema;
     let value = match obj.getattr(attr) {
         Ok(v) if !v.is_none() => v,
         _ => return Ok(None),
@@ -876,8 +876,8 @@ struct PyStepBridge {
     max_turns: usize,
     /// Declared via the `_input_schema` / `_output_schema` class attributes;
     /// parsed once at registration so a typo fails at build time, not here.
-    input_schema: Option<somatize_core::schema::Schema>,
-    output_schema: Option<somatize_core::schema::Schema>,
+    input_schema: Option<somatize_core::data::schema::Schema>,
+    output_schema: Option<somatize_core::data::schema::Schema>,
 }
 
 impl Step for PyStepBridge {
@@ -896,7 +896,7 @@ impl Step for PyStepBridge {
         meta
     }
 
-    fn poll(&self, ctx: &somatize_core::step::StepCtx<'_>) -> SomaResult<Transition> {
+    fn poll(&self, ctx: &somatize_core::graph::step::StepCtx<'_>) -> SomaResult<Transition> {
         Python::with_gil(|py| {
             // Build the context, then poll. Everything Python-side is fallible
             // in PyErr terms, so it is assembled in one closure and converted

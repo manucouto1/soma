@@ -1,8 +1,8 @@
 //! Integration tests for the local tracking backend: JSONL sink,
 //! LocalTracker run directories, and EventBus sink wiring.
 
-use somatize_core::event::{Event, MetricRecord};
-use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::optimizer::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::tracking::event::{Event, MetricRecord};
 use somatize_core::tracking::{EventSink, RunKind, RunState, Tracker};
 use somatize_runtime::EventBus;
 use somatize_runtime::tracking::{JsonlEventSink, LocalTracker, load_manifest, load_status};
@@ -288,7 +288,7 @@ fn save_study_is_atomic_and_readable() {
 
     let study = Study::new(
         "grid",
-        somatize_core::search::SearchSpace::new(),
+        somatize_core::optimizer::search::SearchSpace::new(),
         SearchStrategy::Random {
             n_trials: 4,
             seed: Some(1),
@@ -337,9 +337,9 @@ fn open_resumes_sequence_and_status() {
 #[test]
 fn graph_fit_events_reach_the_run_dir() {
     use somatize_core::cache::CacheKey;
-    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::data::value::Value;
+    use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     use somatize_core::graph::{Edge, Graph, Node};
-    use somatize_core::value::Value;
     use somatize_runtime::{GraphSession, NodeCatalog};
 
     struct Doubler;
@@ -365,7 +365,7 @@ fn graph_fit_events_reach_the_run_dir() {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -586,7 +586,7 @@ fn run_reader_aggregates_a_tracked_run() {
 
     sink.record(&Event::RunStarted {
         run_id: rid.clone(),
-        plan_summary: somatize_core::event::PlanSummary {
+        plan_summary: somatize_core::tracking::event::PlanSummary {
             total_nodes: 2,
             cached_nodes: 0,
             parallel_branches: 0,
@@ -595,7 +595,7 @@ fn run_reader_aggregates_a_tracked_run() {
     sink.record(&Event::NodeStarted {
         run_id: rid.clone(),
         node_id: "scaler".into(),
-        kind: somatize_core::filter::FilterKind::Trainable,
+        kind: somatize_core::graph::filter::FilterKind::Trainable,
         effectful: false,
     });
     sink.record(&Event::NodeCompleted {
@@ -697,7 +697,7 @@ fn run_reader_aggregates_agent_events() {
     sink.record(&Event::NodeStarted {
         run_id: rid.clone(),
         node_id: "planner".into(),
-        kind: somatize_core::filter::FilterKind::Opaque,
+        kind: somatize_core::graph::filter::FilterKind::Opaque,
         effectful: true,
     });
     sink.record(&Event::AgentTurnStarted {
@@ -979,9 +979,9 @@ fn list_runs_orders_and_detects_crashes() {
 #[test]
 fn session_fit_and_run_emit_matching_run_bracket() {
     use somatize_core::cache::CacheKey;
-    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::data::value::Value;
+    use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     use somatize_core::graph::{Edge, Graph, Node};
-    use somatize_core::value::Value;
     use somatize_runtime::tracking::RunReader;
     use somatize_runtime::{GraphSession, NodeCatalog};
 
@@ -1004,7 +1004,7 @@ fn session_fit_and_run_emit_matching_run_bracket() {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -1101,7 +1101,7 @@ fn run_reader_overlay_and_annotated_mermaid() {
         sink.record(&Event::NodeStarted {
             run_id: rid.clone(),
             node_id: "scaler".into(),
-            kind: somatize_core::filter::FilterKind::Trainable,
+            kind: somatize_core::graph::filter::FilterKind::Trainable,
             effectful: false,
         });
         sink.record(&Event::NodeCompleted {

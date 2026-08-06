@@ -9,8 +9,8 @@
 use somatize_compiler::plan::ExecutionPlan;
 use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
-use somatize_core::control::LoopCondition;
-use somatize_core::filter::{Distribution, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::control::LoopCondition;
+use somatize_core::graph::filter::{Distribution, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
 
 fn meta(name: &str) -> FilterMeta {

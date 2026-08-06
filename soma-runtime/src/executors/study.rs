@@ -12,9 +12,9 @@ use crate::pruner::{MedianPruner, PercentilePruner, Pruner, TrialMetricHistory};
 use crate::sampler::Sampler;
 use chrono::Utc;
 use somatize_core::error::Result;
-use somatize_core::event::{Event, MetricRecord};
-use somatize_core::study::{Direction, PruningStrategy, Study, Trial, TrialState};
+use somatize_core::optimizer::study::{Direction, PruningStrategy, Study, Trial, TrialState};
 use somatize_core::tracking::Tracker;
+use somatize_core::tracking::event::{Event, MetricRecord};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -450,8 +450,8 @@ mod tests {
     use crate::study_io::StudyIo;
     use chrono::Utc;
     use somatize_core::error::SomaError;
-    use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-    use somatize_core::study::{Direction, Objective, SearchStrategy};
+    use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+    use somatize_core::optimizer::study::{Direction, Objective, SearchStrategy};
 
     fn sample_space() -> SearchSpace {
         let mut space = SearchSpace::new();
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn composite_objective_selects_best_trial() {
-        use somatize_core::study::{CompositeObjective, Scalarizer};
+        use somatize_core::optimizer::study::{CompositeObjective, Scalarizer};
 
         let bus = Arc::new(EventBus::new(256));
         let runner = StudyRunner::new(bus);
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn pruning_watches_first_composite_term_when_no_objectives() {
-        use somatize_core::study::{CompositeObjective, Scalarizer};
+        use somatize_core::optimizer::study::{CompositeObjective, Scalarizer};
         use std::sync::atomic::AtomicUsize;
 
         let bus = Arc::new(EventBus::new(256));

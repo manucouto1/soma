@@ -3,8 +3,8 @@
 //! Emits [`Event`]s (node started/completed/failed, cache hits, run lifecycle)
 //! to all subscribers via a tokio broadcast channel.
 
-use somatize_core::event::Event;
 use somatize_core::tracking::EventSink;
+use somatize_core::tracking::event::Event;
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
@@ -98,7 +98,7 @@ impl Default for EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::event::PlanSummary;
+    use somatize_core::tracking::event::PlanSummary;
     use std::time::Duration;
 
     #[tokio::test]

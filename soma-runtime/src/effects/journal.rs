@@ -25,9 +25,9 @@
 //! Scoping the key to `(run, node, turn)` means a resumed run sees exactly
 //! what the original saw, while a fresh run asks afresh.
 
-use somatize_core::action::{ActionCache, ActionResult, BlobStore, ContentHash};
+use somatize_core::agentic::effect::{Effect, EffectResult};
+use somatize_core::cache::action::{ActionCache, ActionResult, BlobStore, ContentHash};
 use somatize_core::cache::{CacheKey, Origin};
-use somatize_core::effect::{Effect, EffectResult};
 use somatize_core::error::{Result, SomaError};
 use std::sync::Arc;
 
@@ -52,7 +52,7 @@ pub struct EffectJournal {
     actions: Arc<dyn ActionCache>,
     blobs: Arc<dyn BlobStore>,
     /// When false, nothing is written or read. Set per step by
-    /// [`somatize_core::step::StepMeta::journal`], for work whose payloads
+    /// [`somatize_core::graph::step::StepMeta::journal`], for work whose payloads
     /// must not reach disk.
     enabled: bool,
 }
@@ -187,9 +187,9 @@ impl EffectJournal {
 mod tests {
     use super::*;
     use crate::cache::fs_store::FsActionStore;
-    use somatize_core::effect::{LlmRequest, LlmResponse, StopReason, Usage};
-    use somatize_core::message::Message;
-    use somatize_core::value::Value;
+    use somatize_core::agentic::effect::{LlmRequest, LlmResponse, StopReason, Usage};
+    use somatize_core::agentic::message::Message;
+    use somatize_core::data::value::Value;
 
     fn store() -> (Arc<FsActionStore>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -298,7 +298,7 @@ mod tests {
         let effect = Effect::Graph {
             graph: Box::new(somatize_core::graph::Graph::new()),
             input: Value::tensor(vec![1.0], vec![1]),
-            mode: somatize_core::effect::GraphEffectMode::Forward,
+            mode: somatize_core::agentic::effect::GraphEffectMode::Forward,
         };
         assert!(effect.is_pure());
 
@@ -412,7 +412,7 @@ mod tests {
             Effect::Graph {
                 graph: Box::new(somatize_core::graph::Graph::new()),
                 input: Value::tensor(vec![1.0], vec![1]),
-                mode: somatize_core::effect::GraphEffectMode::Forward,
+                mode: somatize_core::agentic::effect::GraphEffectMode::Forward,
             }
         }
 

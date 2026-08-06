@@ -1,6 +1,6 @@
 //! Effects: the things a step can ask the runtime to do for it.
 //!
-//! A [`crate::filter::Filter`] computes. A step *decides*, and the deciding
+//! A [`crate::graph::filter::Filter`] computes. A step *decides*, and the deciding
 //! needs the world: a model call, a tool, another graph. Rather than let a
 //! step reach out and do that itself, it **describes** what it wants and
 //! hands the description back. The runtime performs it.
@@ -18,10 +18,10 @@
 //! - **Testability.** A fake effect handler is a `match` — no network, no
 //!   mocking framework.
 
+use crate::agentic::message::Messages;
 use crate::cache::CacheKey;
+use crate::data::value::Value;
 use crate::graph::{Graph, NodeId};
-use crate::message::Messages;
-use crate::value::Value;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -122,7 +122,7 @@ impl Effect {
     /// would then serve one effect's recorded result to another. A key that
     /// cannot be computed has to mean "not journalable", never a guess.
     pub fn cache_key(&self) -> crate::error::Result<CacheKey> {
-        let encoded = crate::canon::canonical_bytes(self)?;
+        let encoded = crate::cache::canon::canonical_bytes(self)?;
         Ok(CacheKey::from_parts(&[b"soma-effect-v2", &encoded]))
     }
 }
@@ -166,7 +166,7 @@ pub struct LlmRequest {
     /// A request, not a guarantee: endpoints that support constrained
     /// decoding enforce it, and the rest are asked in the prompt and may
     /// still answer with prose. Whoever consumes the reply validates it —
-    /// see [`crate::schema::Schema`] for the graph-level contract, which is
+    /// see [`crate::data::schema::Schema`] for the graph-level contract, which is
     /// a different thing: this constrains one model call, that one
     /// constrains an edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -249,7 +249,7 @@ impl LlmRequest {
     }
 }
 
-pub use crate::tool::ToolSpec;
+pub use crate::agentic::tool::ToolSpec;
 
 /// Performs one kind of effect.
 ///
@@ -289,7 +289,7 @@ pub enum EffectResult {
     },
     /// The output of the sub-graph run requested by [`Effect::Graph`].
     Graph(Value),
-    /// What a node spawned by [`crate::step::Transition::Spawn`] produced.
+    /// What a node spawned by [`crate::graph::step::Transition::Spawn`] produced.
     Node(Value),
     /// The sleep elapsed — or was replayed from the journal, and nobody slept.
     Slept,
@@ -329,7 +329,7 @@ impl EffectResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmResponse {
     /// The assistant turn, blocks intact — prose and tool calls together.
-    pub message: crate::message::Message,
+    pub message: crate::agentic::message::Message,
     /// Why generation ended. Checked before the text is trusted —
     /// see [`Self::reject_non_answers`].
     pub stop_reason: StopReason,
@@ -541,7 +541,7 @@ impl SuspendReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Message;
+    use crate::agentic::message::Message;
 
     fn llm() -> Effect {
         Effect::Llm(LlmRequest::new(

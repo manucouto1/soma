@@ -5,7 +5,7 @@ description: Boundaries the code is expected to keep, why they were chosen, and 
 
 ## Why this page exists
 
-A comment in `soma-core/src/graph.rs` pointed at an `architecture-review.md`
+A comment in `soma-core/src/graph/mod.rs` pointed at an `architecture-review.md`
 that did not exist. This is that file, and it is a decision record rather
 than a plan: each entry says what was chosen, what it was chosen *over*,
 and what would have to change for the answer to be different.

@@ -211,12 +211,12 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
 - **Partition**: Maps arbitrary node subsets to RemoteTargets for model parallelism.
 - **PbtRunner**: Population-Based Training — cyclic train→evaluate→exploit/explore per generation.
 - **Graph visualization**: `to_mermaid()`, `to_text()`, `to_svg()` — pure data→string,
-  no runtime deps. `to_svg` (soma-core/src/svg.rs, longest-path layering) exists because notebooks
+  no runtime deps. `to_svg` (soma-core/src/viz/svg.rs, longest-path layering) exists because notebooks
   sanitize `<script>`: it backs `Graph._repr_html_` (evaluate `g` → diagram),
   `DifferentiableFilter._repr_html_` (inner layers + θ counts), `RunView.to_svg(node=...)` and the
   --inline report diagrams.
   `to_mermaid_with(&GraphOverlay)` / `to_svg_with` fold per-node status/duration/cache/health-flag
-  annotations in (soma-core/src/viz.rs); empty overlay ⇒ byte-identical plain output.
+  annotations in (soma-core/src/viz/mod.rs); empty overlay ⇒ byte-identical plain output.
 - **Visualization (3 layers, GUI reuse at the DATA layer)**: `RunReader` (soma-runtime/src/tracking/reader.rs)
   aggregates run dirs into chart-ready serde structs (node_timings, cache_activity, metric_series,
   health_flags, trial_timeline, overlay); Python `soma.runs()`/`RunView`; `soma.viz` = optional

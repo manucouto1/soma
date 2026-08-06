@@ -4,8 +4,8 @@
 //! objectives, and tracks trials. The `StudyRunner` in soma-runtime
 //! orchestrates execution.
 
-use crate::event::MetricRecord;
-use crate::search::SearchSpace;
+use crate::optimizer::search::SearchSpace;
+use crate::tracking::event::MetricRecord;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -307,7 +307,7 @@ pub struct Study {
     pub trials: Vec<Trial>,
     /// Study-level fixed parameters, injected into every trial's
     /// params by the runner (same mechanism as
-    /// [`SearchSpace::freeze`](crate::search::SearchSpace::freeze),
+    /// [`SearchSpace::freeze`](crate::optimizer::search::SearchSpace::freeze),
     /// but settable after the space was built).
     pub frozen: HashMap<String, serde_json::Value>,
     /// Experiment seeds: when non-empty, every sampled configuration is
@@ -493,7 +493,7 @@ mod tests {
         assert!(study.planned_trials.is_none());
     }
     use super::*;
-    use crate::search::{Scale, SearchDimension};
+    use crate::optimizer::search::{Scale, SearchDimension};
     use chrono::Utc;
     use serde_json::json;
 

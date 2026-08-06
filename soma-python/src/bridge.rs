@@ -19,8 +19,8 @@ pub(crate) struct PyFilterBridge {
     /// Declared via `_input_schema` / `_output_schema`; parsed once at
     /// registration so a typo fails at build time, and `meta()` — which
     /// cannot fail — just clones.
-    input_schema: Option<somatize_core::schema::Schema>,
-    output_schema: Option<somatize_core::schema::Schema>,
+    input_schema: Option<somatize_core::data::schema::Schema>,
+    output_schema: Option<somatize_core::data::schema::Schema>,
 }
 
 impl PyFilterBridge {
@@ -324,7 +324,7 @@ impl Filter for PyFilterBridge {
             differentiable,
             deterministic,
             stream_mode,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: self.input_schema.clone(),
             output_schema: self.output_schema.clone(),
         }

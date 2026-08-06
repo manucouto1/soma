@@ -1,13 +1,13 @@
 //! Integration tests: PBT with real trainable filters and GraphSession.
 
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
+use somatize_core::distributed::{ExploitStrategy, ExploreStrategy};
 use somatize_core::error::Result;
-use somatize_core::event::Event;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-use somatize_core::strategy::{ExploitStrategy, ExploreStrategy};
-use somatize_core::value::Value;
+use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::tracking::event::Event;
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::executors::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
@@ -50,7 +50,7 @@ impl Filter for TrainableScaler {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }

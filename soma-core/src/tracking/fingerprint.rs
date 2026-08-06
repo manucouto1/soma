@@ -21,7 +21,7 @@
 //!
 //! [`edge_tokens`]: ArchitectureFingerprint::edge_tokens
 
-use crate::canon::hash_canonical;
+use crate::cache::canon::hash_canonical;
 use crate::error::Result;
 use crate::graph::{EdgeKind, Graph, NodeKind};
 use serde::{Deserialize, Serialize};

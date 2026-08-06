@@ -8,17 +8,19 @@
 //! ever emitted while fitting. These check that none of them is true now.
 
 use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
+use somatize_core::agentic::effect::{
+    Effect, EffectResult, LlmRequest, LlmResponse, StopReason, Usage,
+};
+use somatize_core::agentic::message::Message;
 use somatize_core::cache::CacheKey;
-use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse, StopReason, Usage};
+use somatize_core::data::keys::node_of_state_key;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::event::Event;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::keys::node_of_state_key;
-use somatize_core::message::Message;
-use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::tracking::EventSink;
-use somatize_core::value::Value;
+use somatize_core::tracking::event::Event;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::cache::fs_store::FsActionStore;
 use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal};
@@ -292,7 +294,7 @@ fn both_branches_of_a_fan_out_are_fitted_from_their_own_predecessor() {
     // mean 3. A chain would have fitted `right` on `left`'s output (mean 0).
     for id in ["left", "right"] {
         let state = produced
-            .get(&somatize_core::keys::state_key(id))
+            .get(&somatize_core::data::keys::state_key(id))
             .expect("state");
         let mean = state.as_json().and_then(|j| j["mean"].as_f64()).unwrap();
         assert_eq!(mean, 3.0, "`{id}` was fitted on the wrong predecessor");

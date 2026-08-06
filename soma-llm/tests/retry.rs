@@ -5,8 +5,8 @@
 //! being tested is *how many times* the client knocks, which means the test
 //! has to count the knocks itself.
 
-use somatize_core::effect::LlmRequest;
-use somatize_core::message::{Message, Messages};
+use somatize_core::agentic::effect::LlmRequest;
+use somatize_core::agentic::message::{Message, Messages};
 use somatize_llm::LlmProvider;
 use somatize_llm::catalog::{ProviderConfig, RetryPolicy};
 use somatize_llm::openai_compat::OpenAiCompatible;

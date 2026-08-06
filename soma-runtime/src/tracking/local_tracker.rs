@@ -3,7 +3,7 @@
 use super::JsonlEventSink;
 use chrono::Utc;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::study::Study;
+use somatize_core::optimizer::study::Study;
 use somatize_core::tracking::{
     EventSink, GitInfo, RunKind, RunManifest, RunState, RunStatus, Tracker,
 };

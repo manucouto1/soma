@@ -3,10 +3,10 @@
 use crate::error::{Result, WorkerError};
 use crate::protocol::*;
 use somatize_core::cache::CacheStore;
-use somatize_core::event::Event;
-use somatize_core::filter::Filter;
-use somatize_core::store::{DataStore, LocalDataStore};
-use somatize_core::value::Value;
+use somatize_core::data::store::{DataStore, LocalDataStore};
+use somatize_core::data::value::Value;
+use somatize_core::graph::filter::Filter;
+use somatize_core::tracking::event::Event;
 use somatize_runtime::{EventBus, MemoryCache, NodeCatalog, Runner};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -239,7 +239,7 @@ impl Worker {
     /// Wrap output in the right delivery: inline for small, DataRef for large.
     pub fn wrap_output(&self, output: Value) -> OutputDelivery {
         let size = serde_json::to_vec(&output).map(|v| v.len()).unwrap_or(0);
-        if size >= somatize_core::store::INLINE_THRESHOLD_BYTES {
+        if size >= somatize_core::data::store::INLINE_THRESHOLD_BYTES {
             let key = somatize_core::cache::CacheKey::hash_data(
                 &serde_json::to_vec(&output).unwrap_or_default(),
             );
@@ -536,7 +536,9 @@ impl Worker {
                             // Extract trained states (prefixed __state_) and store in library
                             let mut trained_states = std::collections::HashMap::new();
                             for (key, value) in &all_outputs {
-                                if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
+                                if let Some(node_id) =
+                                    somatize_core::data::keys::node_of_state_key(key)
+                                {
                                     if let Err(e) =
                                         self.catalog.try_set_state(node_id, value.clone())
                                     {
@@ -600,8 +602,8 @@ impl Worker {
         &mut self,
         plan: &SerializedPlan,
         store: &Arc<dyn DataStore>,
-        data_ref: &somatize_core::store::DataRef,
-        meta: &somatize_core::store::StoreMeta,
+        data_ref: &somatize_core::data::store::DataRef,
+        meta: &somatize_core::data::store::StoreMeta,
         start: Instant,
     ) -> PlanResult {
         use somatize_runtime::{Context, StreamOutput, StreamRun};
@@ -631,7 +633,7 @@ impl Worker {
 
         self.event_bus.emit(Event::RunStarted {
             run_id: run_id.clone(),
-            plan_summary: somatize_core::event::PlanSummary {
+            plan_summary: somatize_core::tracking::event::PlanSummary {
                 total_nodes: node_ids.len(),
                 cached_nodes: 0,
                 parallel_branches: 0,
@@ -705,10 +707,12 @@ impl Worker {
     }
 
     /// Check if this worker matches a remote target.
-    pub fn matches_target(&self, target: &somatize_core::filter::RemoteTarget) -> bool {
+    pub fn matches_target(&self, target: &somatize_core::graph::filter::RemoteTarget) -> bool {
         match target {
-            somatize_core::filter::RemoteTarget::WorkerId(id) => &self.id == id,
-            somatize_core::filter::RemoteTarget::Tag(tag) => self.capabilities.tags.contains(tag),
+            somatize_core::graph::filter::RemoteTarget::WorkerId(id) => &self.id == id,
+            somatize_core::graph::filter::RemoteTarget::Tag(tag) => {
+                self.capabilities.tags.contains(tag)
+            }
         }
     }
 }
@@ -718,9 +722,9 @@ mod tests {
     use super::*;
     use somatize_compiler::ExecutionPlan;
     use somatize_core::cache::CacheKey;
+    use somatize_core::data::value::Value;
     use somatize_core::error::Result as SomaResult;
-    use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
-    use somatize_core::value::Value;
+    use somatize_core::graph::filter::{FilterKind, FilterMeta, StreamMode};
 
     struct TestDoubler;
 
@@ -748,7 +752,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -850,12 +854,12 @@ mod tests {
     fn worker_matches_target_by_id() {
         let worker = make_worker();
         assert!(
-            worker.matches_target(&somatize_core::filter::RemoteTarget::WorkerId(
+            worker.matches_target(&somatize_core::graph::filter::RemoteTarget::WorkerId(
                 "test_worker".into()
             ))
         );
         assert!(
-            !worker.matches_target(&somatize_core::filter::RemoteTarget::WorkerId(
+            !worker.matches_target(&somatize_core::graph::filter::RemoteTarget::WorkerId(
                 "other".into()
             ))
         );
@@ -864,9 +868,21 @@ mod tests {
     #[test]
     fn worker_matches_target_by_tag() {
         let worker = make_worker();
-        assert!(worker.matches_target(&somatize_core::filter::RemoteTarget::Tag("cpu".into())));
-        assert!(worker.matches_target(&somatize_core::filter::RemoteTarget::Tag("test".into())));
-        assert!(!worker.matches_target(&somatize_core::filter::RemoteTarget::Tag("gpu".into())));
+        assert!(
+            worker.matches_target(&somatize_core::graph::filter::RemoteTarget::Tag(
+                "cpu".into()
+            ))
+        );
+        assert!(
+            worker.matches_target(&somatize_core::graph::filter::RemoteTarget::Tag(
+                "test".into()
+            ))
+        );
+        assert!(
+            !worker.matches_target(&somatize_core::graph::filter::RemoteTarget::Tag(
+                "gpu".into()
+            ))
+        );
     }
 
     #[test]
@@ -983,7 +999,7 @@ mod tests {
                     differentiable: false,
                     deterministic: true,
                     stream_mode: StreamMode::FixedState,
-                    distribution: somatize_core::filter::Distribution::Local,
+                    distribution: somatize_core::graph::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }
@@ -1076,7 +1092,7 @@ mod tests {
                     differentiable: false,
                     deterministic: true,
                     stream_mode: StreamMode::FixedState,
-                    distribution: somatize_core::filter::Distribution::Local,
+                    distribution: somatize_core::graph::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }

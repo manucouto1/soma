@@ -10,8 +10,8 @@
 //! wrong answer that surfaces hours later as a bad result rather than a
 //! stack trace.
 
+use crate::data::value::Value;
 use crate::graph::NodeId;
-use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
 /// What ends a loop.

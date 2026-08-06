@@ -2,9 +2,9 @@
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result as SomaResult;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_worker::protocol::*;
 use somatize_worker::worker::Worker;
 use somatize_worker::{worker_router, worker_router_authenticated};
@@ -37,7 +37,7 @@ impl Filter for TestDoubler {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }

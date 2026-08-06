@@ -12,8 +12,8 @@ pub const INLINE_THRESHOLD_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 // that depends on it.
 
 use crate::cache::CacheKey;
+use crate::data::value::Value;
 use crate::error::{Result, SomaError};
-use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
 /// Metadata about a stored value, queryable without loading data.

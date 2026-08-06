@@ -4,7 +4,7 @@
 //! intermediate metric values. Implementations: [`MedianPruner`],
 //! [`PercentilePruner`].
 
-use somatize_core::event::MetricRecord;
+use somatize_core::tracking::event::MetricRecord;
 
 /// A pruner decides whether to stop a trial early based on intermediate metrics.
 pub trait Pruner: Send + Sync {

@@ -7,9 +7,9 @@ use super::{RunContext, Runner};
 use crate::executor::{Context, RunMode};
 
 use somatize_compiler::ExecutionPlan;
+use somatize_core::data::keys::{GRAPH_INPUT, input_key};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::keys::{GRAPH_INPUT, input_key};
-use somatize_core::value::Value;
 use std::collections::HashMap;
 
 /// Executes plans locally — same logic for local and remote execution.
@@ -52,7 +52,7 @@ impl LocalRunner {
         exec.execution_order()
             .iter()
             .rev()
-            .find(|id| !somatize_core::keys::is_reserved(id))
+            .find(|id| !somatize_core::data::keys::is_reserved(id))
             .and_then(|id| exec.get(id).cloned())
     }
 }
@@ -73,7 +73,7 @@ impl Runner for LocalRunner {
         let last = Self::last_output(&exec).unwrap_or(Value::Empty);
         let mut produced = exec.into_outputs();
         // The run's own inputs are not something a node produced.
-        produced.retain(|id, _| !somatize_core::keys::is_input_key(id));
+        produced.retain(|id, _| !somatize_core::data::keys::is_input_key(id));
 
         Ok((last, produced))
     }
@@ -92,7 +92,7 @@ mod tests {
     use crate::executor::GraphInfo;
     use crate::node_catalog::NodeCatalog;
     use somatize_core::cache::{CacheKey, CacheStore};
-    use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+    use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -120,7 +120,7 @@ mod tests {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }

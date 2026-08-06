@@ -13,8 +13,8 @@
 //! facts, same string, no model in the loop. That is what makes a
 //! headline safe to hash, snapshot-test and index for retrieval.
 
-use crate::fingerprint::ArchitectureFingerprint;
 use crate::tracking::GitInfo;
+use crate::tracking::fingerprint::ArchitectureFingerprint;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

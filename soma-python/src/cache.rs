@@ -39,7 +39,7 @@ pub(crate) fn cache_stats(py: Python<'_>, path: Option<String>) -> PyResult<PyOb
     for record in &actions {
         for hash in record.outputs.values() {
             if blob_hashes.insert(*hash)
-                && somatize_core::action::BlobStore::contains(&store, hash).unwrap_or(false)
+                && somatize_core::cache::action::BlobStore::contains(&store, hash).unwrap_or(false)
             {
                 available += 1;
             }
@@ -107,7 +107,7 @@ pub(crate) fn cache_pin(name: &str, key_hex: &str, path: Option<String>) -> PyRe
 #[pyfunction]
 #[pyo3(signature = (path=None))]
 pub(crate) fn cache_verify(py: Python<'_>, path: Option<String>) -> PyResult<PyObject> {
-    use somatize_core::action::BlobStore;
+    use somatize_core::cache::action::BlobStore;
     let store = open_store(path)?;
     let actions = store
         .actions()

@@ -4,9 +4,9 @@
 
 //! Autonomous research over Soma pipelines.
 //!
-//! One thing lives here: [`ResearchStep`], a [`Step`](somatize_core::step::Step)
+//! One thing lives here: [`ResearchStep`], a [`Step`](somatize_core::graph::step::Step)
 //! that proposes an experiment, runs it as an
-//! [`Effect::Graph`](somatize_core::effect::Effect), reads the metrics, and
+//! [`Effect::Graph`](somatize_core::agentic::effect::Effect), reads the metrics, and
 //! decides whether to keep going.
 //!
 //! Everything else it needs already exists elsewhere and is not

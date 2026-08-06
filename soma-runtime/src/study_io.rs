@@ -12,7 +12,7 @@
 //! ```
 
 use somatize_core::error::{Result, SomaError};
-use somatize_core::study::Study;
+use somatize_core::optimizer::study::Study;
 use std::path::Path;
 
 /// Persist a [`Study`] as JSON.
@@ -42,8 +42,8 @@ impl StudyIo for Study {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::search::SearchSpace;
-    use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
+    use somatize_core::optimizer::search::SearchSpace;
+    use somatize_core::optimizer::study::{Direction, Objective, SearchStrategy, Study};
 
     fn study() -> Study {
         Study::new(

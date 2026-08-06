@@ -14,11 +14,11 @@
 //! implemented.)
 
 use crate::mcp_client::McpClient;
-use somatize_core::effect::EffectHandler;
-use somatize_core::effect::{Effect, EffectResult};
+use somatize_core::agentic::effect::EffectHandler;
+use somatize_core::agentic::effect::{Effect, EffectResult};
+use somatize_core::agentic::tool::ToolSpec;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::tool::ToolSpec;
-use somatize_core::value::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

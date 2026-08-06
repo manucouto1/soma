@@ -6,7 +6,7 @@
 //! of the contract being tested here.
 
 use serde_json::json;
-use somatize_core::summary::{RunConclusion, RunOutcome};
+use somatize_core::tracking::summary::{RunConclusion, RunOutcome};
 use somatize_mcp::SomaContext;
 use somatize_mcp::tools::dispatch;
 use somatize_memory::{DerivationMove, ExperimentRecord, MetricDelta};

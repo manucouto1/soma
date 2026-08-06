@@ -5,9 +5,9 @@
 //! independently cacheable via content-addressable keys.
 
 use crate::cache::CacheKey;
+use crate::data::schema::Schema;
+use crate::data::value::Value;
 use crate::error::Result;
-use crate::schema::Schema;
-use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
 /// Classification of filter behavior.
@@ -117,7 +117,7 @@ fn default_deterministic() -> bool {
 /// Each phase is independently cacheable:
 /// - State cache: `hash(config + training_data)`
 /// - Output cache: `hash(config + state + input_data)`
-pub trait Filter: crate::any::AsAny + Send + Sync {
+pub trait Filter: crate::graph::any::AsAny + Send + Sync {
     /// Compute a hash of this filter's configuration.
     /// Same config must always produce the same hash.
     /// Only public constructor parameters contribute.
@@ -159,8 +159,8 @@ pub trait Filter: crate::any::AsAny + Send + Sync {
 mod tests {
     use super::*;
     use crate::cache::CacheKey;
+    use crate::data::value::Value;
     use crate::error::SomaError;
-    use crate::value::Value;
 
     /// A test filter: multiplies tensor by a scale factor.
     struct TestScaler {

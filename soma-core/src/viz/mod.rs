@@ -10,6 +10,8 @@
 //! [`Graph::to_mermaid_with`]: crate::graph::Graph::to_mermaid_with
 //! [`Graph::to_svg_with`]: crate::graph::Graph::to_svg_with
 
+pub mod svg;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -43,7 +43,7 @@ worker path did.
 
 ### 2. Graph overlays (Rust, `soma-core`)
 
-`GraphOverlay` (`soma-core/src/viz.rs`) carries per-node execution
+`GraphOverlay` (`soma-core/src/viz/mod.rs`) carries per-node execution
 facts — status, total duration, cache tier, health flags — and
 `Graph::to_mermaid_with` / `svg::to_svg_with` fold them into the
 rendering: a second label line (`1.2s · mem hit · ⚠ LEAKAGE`) plus a
@@ -52,7 +52,7 @@ output byte-for-byte, and rendering stays a dependency-free
 data→string transform (the overlay is computed elsewhere and passed
 in).
 
-`Graph::to_svg` / `to_svg_with` (`soma-core/src/svg.rs`) render the
+`Graph::to_svg` / `to_svg_with` (`soma-core/src/viz/svg.rs`) render the
 same graph + overlay as a **self-contained SVG** — no JavaScript, no
 external tools — because notebook front-ends sanitize `<script>` out of
 outputs, so mermaid cannot render inline there. Layout is longest-path

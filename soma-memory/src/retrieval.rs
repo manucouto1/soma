@@ -34,8 +34,8 @@
 
 use crate::record::ExperimentRecord;
 use chrono::{DateTime, Utc};
-use somatize_core::fingerprint::{ArchitectureFingerprint, structural_similarity};
-use somatize_core::summary::RunOutcome;
+use somatize_core::tracking::fingerprint::{ArchitectureFingerprint, structural_similarity};
+use somatize_core::tracking::summary::RunOutcome;
 use std::collections::HashMap;
 
 /// BM25 term-frequency saturation.
@@ -558,7 +558,7 @@ mod tests {
     use super::*;
     use crate::derivation::{DerivationMove, MetricDelta};
     use chrono::Duration;
-    use somatize_core::summary::RunConclusion;
+    use somatize_core::tracking::summary::RunConclusion;
     use std::collections::BTreeMap;
 
     fn now() -> DateTime<Utc> {

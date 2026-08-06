@@ -8,8 +8,8 @@
 #![cfg(feature = "zarr")]
 
 use somatize_core::cache::CacheKey;
-use somatize_core::store::{DataRef, DataStore};
-use somatize_core::value::Value;
+use somatize_core::data::store::{DataRef, DataStore};
+use somatize_core::data::value::Value;
 use somatize_store::ZarrStore;
 
 fn store() -> Option<ZarrStore> {

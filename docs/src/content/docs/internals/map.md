@@ -70,7 +70,7 @@ are the diagram at finer granularity:
 | **D5** | What crosses the wire | [Distribution](/soma/internals/distribution/#d5--what-crosses-the-wire) |
 | **D6** | The FFI bridge | [Python Bridge](/soma/internals/python/#d6--the-ffi-bridge) |
 
-A `file:line` reference is written as plain inline code — `` `soma-core/src/filter.rs:120` ``
+A `file:line` reference is written as plain inline code — `` `soma-core/src/graph/filter.rs:120` ``
 — never as a link. A GitHub permalink would need a pinned commit, and two hundred
 of them would rot in one commit.
 
@@ -83,18 +83,18 @@ Published names are prefixed `somatize-`; directory names drop the prefix.
 
 | Crate | Lines | Traits | Page |
 |---|---|---|---|
-| `soma-core` | 11 590 | 12 | [Foundation](/soma/internals/foundation/#soma-core-somatize-core) |
+| `soma-core` | 11 463 | 12 | [Foundation](/soma/internals/foundation/#soma-core-somatize-core) |
 | `soma-macros` | 607 | 0 | [Foundation](/soma/internals/foundation/#soma-macros-somatize-macros) |
-| `soma-compiler` | 3 118 | 1 | [Execution](/soma/internals/execution/#soma-compiler-somatize-compiler) |
-| `soma-runtime` | 17 449 | 12 | [Execution](/soma/internals/execution/#soma-runtime-somatize-runtime) |
+| `soma-compiler` | 3 120 | 1 | [Execution](/soma/internals/execution/#soma-compiler-somatize-compiler) |
+| `soma-runtime` | 17 290 | 12 | [Execution](/soma/internals/execution/#soma-runtime-somatize-runtime) |
 | `soma-llm` | 3 848 | 2 | [Agentic](/soma/internals/agentic/#soma-llm-somatize-llm) |
 | `soma-agent` | 620 | 0 | [Agentic](/soma/internals/agentic/#soma-agent-somatize-agent) |
 | `soma-memory` | 3 746 | 2 | [Agentic](/soma/internals/agentic/#soma-memory-somatize-memory) |
-| `soma-mcp` | 3 267 | 0 | [Agentic](/soma/internals/agentic/#soma-mcp-somatize-mcp) |
-| `soma-worker` | 5 903 | 0 | [Distribution](/soma/internals/distribution/#soma-worker-somatize-worker) |
+| `soma-mcp` | 3 270 | 0 | [Agentic](/soma/internals/agentic/#soma-mcp-somatize-mcp) |
+| `soma-worker` | 5 922 | 0 | [Distribution](/soma/internals/distribution/#soma-worker-somatize-worker) |
 | `soma-coordinator` | 949 | 0 | [Distribution](/soma/internals/distribution/#soma-coordinator-somatize-coordinator) |
 | `soma-store` | 1 285 | 0 | [Distribution](/soma/internals/distribution/#soma-store-somatize-store) |
-| `soma-python` | 6 720 | 0 | [Python Bridge](/soma/internals/python/) |
+| `soma-python` | 6 605 | 0 | [Python Bridge](/soma/internals/python/) |
 | `soma` (facade) | 124 | 0 | [Foundation](/soma/internals/foundation/#soma-somatize--the-facade) |
 
 **29 public traits total.** Not one of them declares an associated type or a
@@ -202,16 +202,16 @@ If you learn these, most of the rest follows.
 
 | # | Type | file:line | Why it matters |
 |---|---|---|---|
-| 1 | `Filter` | `soma-core/src/filter.rs:120` | `fit()` learns state, `forward()` transforms. Both independently cacheable. Everything pipeline-shaped is this |
-| 2 | `Step` | `soma-core/src/step.rs:250` | `poll(ctx) -> Transition`. Everything agent-shaped is this. Holds no state between turns — history arrives through `StepCtx` |
-| 3 | `NodeMeta` | `soma-core/src/node.rs:72` | The adapter that erases the Filter/Step distinction. `From<StepMeta>` sets `cacheable: false`, so "a step is not cacheable" is *data*, not a branch |
+| 1 | `Filter` | `soma-core/src/graph/filter.rs:120` | `fit()` learns state, `forward()` transforms. Both independently cacheable. Everything pipeline-shaped is this |
+| 2 | `Step` | `soma-core/src/graph/step.rs:250` | `poll(ctx) -> Transition`. Everything agent-shaped is this. Holds no state between turns — history arrives through `StepCtx` |
+| 3 | `NodeMeta` | `soma-core/src/graph/node.rs:72` | The adapter that erases the Filter/Step distinction. `From<StepMeta>` sets `cacheable: false`, so "a step is not cacheable" is *data*, not a branch |
 | 4 | `NodeCatalog` | `soma-runtime/src/node_catalog.rs:79` | One registry for both kinds, and the compiler's `NodeRegistry`. Two registries joined by an adapter is what made `.compile()` skip step schemas |
-| 5 | `Value` | `soma-core/src/value.rs:15` | Six variants, all `Arc`-backed, so `Clone` is a refcount bump |
-| 6 | `CacheKey` | `soma-core/src/cache.rs:18` | `state = hash(config‖x‖y)`, `output = hash(config‖state‖input_hash)`. Downstream keys use input **content**, so an unchanged intermediate cuts off the rest of the graph |
+| 5 | `Value` | `soma-core/src/data/value.rs:15` | Six variants, all `Arc`-backed, so `Clone` is a refcount bump |
+| 6 | `CacheKey` | `soma-core/src/cache/mod.rs:21` | `state = hash(config‖x‖y)`, `output = hash(config‖state‖input_hash)`. Downstream keys use input **content**, so an unchanged intermediate cuts off the rest of the graph |
 | 7 | `ExecutionPlan` | `soma-compiler/src/plan.rs:19` | What the compiler produces and the executor walks. Recursive in four shapes; `children()` is the one traversal |
 | 8 | `Context` | `soma-runtime/src/executor.rs:124` | The executor's mutable state through the whole walk. `(!)` Also the biggest god object in the runtime |
-| 9 | `Transition` | `soma-core/src/step.rs:43` | `Await` / `Spawn` / `Goto` / `Suspend` / `Done`. Deliberately **not** `#[non_exhaustive]` — every consumer must decide |
-| 10 | `Effect` / `EffectJournal` | `soma-core/src/effect.rs:35`, `soma-runtime/src/effects/journal.rs:51` | An effect is data; the journal keys pure ones by content and impure ones by site. That is the whole durability story |
+| 9 | `Transition` | `soma-core/src/graph/step.rs:43` | `Await` / `Spawn` / `Goto` / `Suspend` / `Done`. Deliberately **not** `#[non_exhaustive]` — every consumer must decide |
+| 10 | `Effect` / `EffectJournal` | `soma-core/src/agentic/effect.rs:35`, `soma-runtime/src/effects/journal.rs:51` | An effect is data; the journal keys pure ones by content and impure ones by site. That is the whole durability story |
 
 ### The one distinction to internalize
 

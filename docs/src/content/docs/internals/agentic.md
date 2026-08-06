@@ -160,7 +160,7 @@ violation would cost a real model call to "fix" a correct answer.
 
 And one rule that shows up as a bug if you do not know it: `finish_reason:
 length` and `content_filter` are **errors** in `ReactStep`, not empty replies
-(`LlmResponse::reject_non_answers`, `soma-core/src/effect.rs`).
+(`LlmResponse::reject_non_answers`, `soma-core/src/agentic/effect.rs`).
 
 ### Patterns
 

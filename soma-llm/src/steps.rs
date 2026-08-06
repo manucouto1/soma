@@ -9,14 +9,14 @@
 //! They are deliberately plain `Step` implementations with no privileged
 //! access. Anything they do, a user's own step can do.
 
+use somatize_core::agentic::effect::{Effect, EffectResult, LlmRequest, StopReason, ToolSpec};
+use somatize_core::agentic::message::{ContentBlock, Message, Messages, Role};
 use somatize_core::cache::CacheKey;
-use somatize_core::effect::{Effect, EffectResult, LlmRequest, StopReason, ToolSpec};
+use somatize_core::data::schema::Schema;
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::message::{ContentBlock, Message, Messages, Role};
-use somatize_core::schema::Schema;
-use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::util::{extract_json, truncate};
-use somatize_core::value::Value;
 
 /// Ask the model; run whatever tools it asks for; repeat until it stops.
 ///
@@ -148,7 +148,7 @@ impl ReactStep {
     fn on_reply(
         &self,
         ctx: &StepCtx<'_>,
-        response: &somatize_core::effect::LlmResponse,
+        response: &somatize_core::agentic::effect::LlmResponse,
         mut conversation: Messages,
     ) -> Result<Transition> {
         response.reject_non_answers(ctx.node_id)?;
@@ -648,7 +648,7 @@ impl Step for JudgeStep {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::effect::{LlmResponse, Usage};
+    use somatize_core::agentic::effect::{LlmResponse, Usage};
 
     /// An effect result a ReactStep never asked for used to come back as
     /// `Done(Value::text("unexpected effect result: …"))` — an error
@@ -971,8 +971,8 @@ mod tests {
                 // refine loop terminates on a passing grade with no glue.
                 assert_eq!(json["done"], true);
                 assert_eq!(
-                    somatize_core::control::read_loop_signal(&v),
-                    Some(somatize_core::control::LoopSignal::Stop)
+                    somatize_core::graph::control::read_loop_signal(&v),
+                    Some(somatize_core::graph::control::LoopSignal::Stop)
                 );
             }
             other => panic!("{other:?}"),
@@ -992,8 +992,8 @@ mod tests {
         match judge.poll(&ctx).unwrap() {
             Transition::Done(v) => {
                 assert_eq!(
-                    somatize_core::control::read_loop_signal(&v),
-                    Some(somatize_core::control::LoopSignal::Continue)
+                    somatize_core::graph::control::read_loop_signal(&v),
+                    Some(somatize_core::graph::control::LoopSignal::Continue)
                 );
             }
             other => panic!("{other:?}"),

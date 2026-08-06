@@ -7,9 +7,9 @@ use crate::error::{Result, WorkerError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use somatize_compiler::ExecutionPlan;
-use somatize_core::event::Event;
-use somatize_core::store::{DataRef, DataStore};
-use somatize_core::value::Value;
+use somatize_core::data::store::{DataRef, DataStore};
+use somatize_core::data::value::Value;
+use somatize_core::tracking::event::Event;
 
 /// Unique worker identifier.
 pub type WorkerId = String;
@@ -104,7 +104,7 @@ impl InputSource {
     /// Tries the persistent [`DataStore`] first, then the temp store that
     /// HTTP uploads land in.
     ///
-    /// [`DataStore`]: somatize_core::store::DataStore
+    /// [`DataStore`]: somatize_core::data::store::DataStore
     ///
     /// A reference that resolves nowhere is an **error**, and it did not
     /// used to be: this logged a warning and returned [`Value::Empty`].
@@ -115,8 +115,8 @@ impl InputSource {
     /// to a store the worker was never given.
     pub fn resolve(
         &self,
-        data_store: Option<&dyn somatize_core::store::DataStore>,
-        temp_store: &somatize_core::store::LocalDataStore,
+        data_store: Option<&dyn somatize_core::data::store::DataStore>,
+        temp_store: &somatize_core::data::store::LocalDataStore,
     ) -> Result<Value> {
         match self {
             InputSource::Inline { value } => Ok(value.clone()),
@@ -567,7 +567,7 @@ pub enum OutputDelivery {
     Reference {
         /// The download key; `WsTransport::resolve_output` turns it back
         /// into a value.
-        data_ref: somatize_core::store::DataRef,
+        data_ref: somatize_core::data::store::DataRef,
     },
 }
 
@@ -673,11 +673,11 @@ mod tests {
         // into the filter, so the failure surfaced as a TypeError inside
         // the user's own fit — long after the real problem and pointing at
         // their code.
-        let temp = somatize_core::store::LocalDataStore::new(
+        let temp = somatize_core::data::store::LocalDataStore::new(
             std::env::temp_dir().join("soma-resolve-test-empty"),
         );
         let source = InputSource::Reference {
-            data_ref: somatize_core::store::DataRef::S3 {
+            data_ref: somatize_core::data::store::DataRef::S3 {
                 bucket: "nowhere".into(),
                 key: "missing".into(),
                 region: None,
@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn an_inline_input_resolves_to_itself() {
-        let temp = somatize_core::store::LocalDataStore::new(
+        let temp = somatize_core::data::store::LocalDataStore::new(
             std::env::temp_dir().join("soma-resolve-test-inline"),
         );
         let source = InputSource::Inline {
@@ -705,7 +705,7 @@ mod tests {
     }
 
     use super::*;
-    use somatize_core::event::PlanSummary;
+    use somatize_core::tracking::event::PlanSummary;
 
     fn sample_plan() -> SerializedPlan {
         SerializedPlan::new(

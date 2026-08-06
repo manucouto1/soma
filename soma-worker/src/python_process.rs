@@ -7,9 +7,9 @@
 use crate::error::{Result, WorkerError};
 use base64::engine::{Engine, general_purpose::STANDARD};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::SomaError;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -1055,7 +1055,7 @@ impl Filter for SubprocessFilter {
             differentiable: self.trainable,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -1063,7 +1063,10 @@ impl Filter for SubprocessFilter {
 
     fn composite_fit(
         &self,
-        peers: &[(String, std::sync::Arc<dyn somatize_core::filter::Filter>)],
+        peers: &[(
+            String,
+            std::sync::Arc<dyn somatize_core::graph::filter::Filter>,
+        )],
         x: &Value,
         y: Option<&Value>,
     ) -> Option<somatize_core::error::Result<(Value, HashMap<String, Value>)>> {

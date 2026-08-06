@@ -13,12 +13,12 @@ use crate::executor::RunMode;
 use crate::node_catalog::NodeCatalog;
 use crate::runner::Transport;
 use somatize_compiler::ExecutionPlan;
-use somatize_core::error::{Result, SomaError};
-use somatize_core::filter::RemoteTarget;
-use somatize_core::strategy::{
+use somatize_core::data::value::Value;
+use somatize_core::distributed::{
     FederatedAggregation, GradientAggregation, Partition, TrainingStrategy,
 };
-use somatize_core::value::Value;
+use somatize_core::error::{Result, SomaError};
+use somatize_core::graph::filter::RemoteTarget;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -907,7 +907,7 @@ fn shard_value(value: &Value, n: usize) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::strategy::ClientSelection;
+    use somatize_core::distributed::ClientSelection;
 
     fn one(node: &str, values: Vec<f64>) -> HashMap<String, Value> {
         let n = values.len();
@@ -1050,7 +1050,7 @@ mod tests {
         let ctx = Chain::default();
         let states = TrainingStrategy::ModelParallel {
             partitions: vec![part(&["a"], "gpu0"), part(&["b"], "gpu1")],
-            communication: somatize_core::strategy::CommunicationProtocol::DataStore,
+            communication: somatize_core::distributed::CommunicationProtocol::DataStore,
         }
         .fit(
             &ctx,

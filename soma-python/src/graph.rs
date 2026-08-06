@@ -42,7 +42,7 @@ pub(crate) struct PyGraph {
     /// node_id → full module source (imports + classes + helpers)
     filter_sources: std::collections::HashMap<String, String>,
     /// Optional DataStore for persistent data transport (opt-in, costs storage).
-    data_store: Option<Arc<dyn somatize_core::store::DataStore>>,
+    data_store: Option<Arc<dyn somatize_core::data::store::DataStore>>,
     /// Whether each filter is trainable (node_id → bool).
     filter_trainable: std::collections::HashMap<String, bool>,
     /// Live Python filter instances retained by node id. Used by the
@@ -173,9 +173,12 @@ impl PyGraph {
 
         let roots = self.graph.roots();
         if roots.len() == 1 {
-            ctx.set(somatize_core::keys::input_key(roots[0]), x_val.clone());
+            ctx.set(
+                somatize_core::data::keys::input_key(roots[0]),
+                x_val.clone(),
+            );
         }
-        ctx.set(somatize_core::keys::GRAPH_INPUT, x_val);
+        ctx.set(somatize_core::data::keys::GRAPH_INPUT, x_val);
 
         // Release the GIL: Parallel plans run branches on scoped threads
         // whose Python filters must acquire it — holding it here would
@@ -209,7 +212,7 @@ impl PyGraph {
                 ctx.execution_order()
                     .iter()
                     .rev()
-                    .find(|id| !somatize_core::keys::is_reserved(id))
+                    .find(|id| !somatize_core::data::keys::is_reserved(id))
                     .and_then(|id| ctx.get(id).cloned())
             })
             .unwrap_or(Value::Empty);
@@ -401,7 +404,7 @@ impl PyGraph {
         // The base handlers, shared with the graph handler below so a
         // sub-pipeline's own agents reach the same providers, tools and
         // journal — that is what makes agent → pipeline → agent one run.
-        let base: Vec<Arc<dyn somatize_core::effect::EffectHandler>> = vec![
+        let base: Vec<Arc<dyn somatize_core::agentic::effect::EffectHandler>> = vec![
             Arc::new(somatize_llm::LlmHandler::new(router)),
             Arc::new(toolbox),
             Arc::new(somatize_runtime::effects::SleepHandler),
@@ -586,7 +589,7 @@ impl PyGraph {
 
         // Estimate payload size
         let size_bytes = serde_json::to_vec(x).map(|v| v.len()).unwrap_or(0);
-        if size_bytes >= somatize_core::store::INLINE_THRESHOLD_BYTES {
+        if size_bytes >= somatize_core::data::store::INLINE_THRESHOLD_BYTES {
             let data_ref = transport.upload(x).map_err(|e| soma_err_to_py(e.into()))?;
             return Ok(InputSource::Reference { data_ref });
         }
@@ -1108,7 +1111,7 @@ impl PyGraph {
         }
 
         let actual_id = self.free_id(&node_id);
-        use somatize_core::control::LoopCondition;
+        use somatize_core::graph::control::LoopCondition;
         let until = match until {
             None => LoopCondition::BodyTerminal,
             // `False` is the only bool that means anything here: "run the
@@ -1372,7 +1375,7 @@ impl PyGraph {
             let runner = LocalRunner;
             let run_id = somatize_core::util::timestamp_id("fit");
             self.event_bus
-                .emit(somatize_core::event::Event::RunStarted {
+                .emit(somatize_core::tracking::event::Event::RunStarted {
                     run_id: run_id.clone(),
                     plan_summary: compile_result.plan.summary(),
                 });
@@ -1388,24 +1391,25 @@ impl PyGraph {
             let (_output, states) = match result {
                 Ok(out) => {
                     self.event_bus
-                        .emit(somatize_core::event::Event::RunCompleted {
+                        .emit(somatize_core::tracking::event::Event::RunCompleted {
                             run_id,
                             duration: run_start.elapsed(),
                         });
                     out
                 }
                 Err(e) => {
-                    self.event_bus.emit(somatize_core::event::Event::RunFailed {
-                        run_id,
-                        error: e.to_string(),
-                    });
+                    self.event_bus
+                        .emit(somatize_core::tracking::event::Event::RunFailed {
+                            run_id,
+                            error: e.to_string(),
+                        });
                     return Err(soma_err_to_py(e));
                 }
             };
             // LocalRunner tags composite-produced states with "__state_{id}".
             // Regular sequential states appear under the bare node_id.
             for (key, state) in states {
-                let node_id = somatize_core::keys::node_of_state_key(&key)
+                let node_id = somatize_core::data::keys::node_of_state_key(&key)
                     .unwrap_or(&key)
                     .to_string();
                 if let Err(e) = self.library.try_set_state(node_id, state) {
@@ -1509,7 +1513,7 @@ impl PyGraph {
 
         let run_id = somatize_core::util::timestamp_id("graph_fit");
         self.event_bus
-            .emit(somatize_core::event::Event::RunStarted {
+            .emit(somatize_core::tracking::event::Event::RunStarted {
                 run_id: run_id.clone(),
                 plan_summary: compile_result.plan.summary(),
             });
@@ -1541,17 +1545,18 @@ impl PyGraph {
         let (_output, states) = match result {
             Ok(out) => {
                 self.event_bus
-                    .emit(somatize_core::event::Event::RunCompleted {
+                    .emit(somatize_core::tracking::event::Event::RunCompleted {
                         run_id,
                         duration: run_start.elapsed(),
                     });
                 out
             }
             Err(e) => {
-                self.event_bus.emit(somatize_core::event::Event::RunFailed {
-                    run_id,
-                    error: e.to_string(),
-                });
+                self.event_bus
+                    .emit(somatize_core::tracking::event::Event::RunFailed {
+                        run_id,
+                        error: e.to_string(),
+                    });
                 return Err(soma_err_to_py(e));
             }
         };
@@ -1562,7 +1567,7 @@ impl PyGraph {
         // on `HashMap` order, so a scaler ends up with no learned mean
         // roughly half the time.
         for (key, state) in states {
-            if let Some(node_id) = somatize_core::keys::node_of_state_key(&key) {
+            if let Some(node_id) = somatize_core::data::keys::node_of_state_key(&key) {
                 self.library
                     .try_set_state(node_id, state)
                     .map_err(soma_err_to_py)?;
@@ -1634,7 +1639,7 @@ impl PyGraph {
         reason: &Bound<'_, PyAny>,
         answer: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let reason: somatize_core::effect::SuspendReason =
+        let reason: somatize_core::agentic::effect::SuspendReason =
             serde_json::from_value(py_any_to_json(reason)?).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!(
                     "`reason` should be the one from the SomaSuspended exception: {e}"
@@ -1807,7 +1812,7 @@ impl PyGraph {
         let json_str: String = json_mod.call_method1("dumps", (event,))?.extract()?;
         let value: serde_json::Value = serde_json::from_str(&json_str)
             .map_err(|e| PyRuntimeError::new_err(format!("invalid event JSON: {e}")))?;
-        let event: somatize_core::event::Event = serde_json::from_value(value)
+        let event: somatize_core::tracking::event::Event = serde_json::from_value(value)
             .map_err(|e| PyRuntimeError::new_err(format!("unknown or malformed event: {e}")))?;
         self.event_bus.emit(event);
         Ok(())
@@ -1962,11 +1967,11 @@ impl PyGraph {
         population_size: Option<usize>,
         partitions: Option<&Bound<'_, pyo3::types::PyAny>>,
     ) -> PyResult<()> {
-        use somatize_core::filter::RemoteTarget;
-        use somatize_core::strategy::{
+        use somatize_core::distributed::{
             ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy,
             FederatedAggregation, GradientAggregation, Partition, TrainingStrategy,
         };
+        use somatize_core::graph::filter::RemoteTarget;
         // A count of zero is never what anyone meant, and it used to
         // travel all the way in: `num_replicas: 0` made the fit and
         // gradient loops run zero times and then handed an empty slice to
@@ -2077,7 +2082,7 @@ impl PyGraph {
 
     /// The graph's training strategy, as the string `set_strategy` takes.
     fn strategy(&self) -> String {
-        use somatize_core::strategy::TrainingStrategy as T;
+        use somatize_core::distributed::TrainingStrategy as T;
         match self.graph.effective_strategy() {
             T::Local => "local",
             T::DataParallel { .. } => "data_parallel",

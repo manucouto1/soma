@@ -1,9 +1,9 @@
 //! What the compiler and executor need to know about a node, whichever
 //! kind it is.
 //!
-//! A graph has two sorts of node. A [`Filter`](crate::filter::Filter) is a
+//! A graph has two sorts of node. A [`Filter`](crate::graph::filter::Filter) is a
 //! function: same config, same state, same input, same output, which is
-//! what makes content-addressed caching sound. A [`Step`](crate::step::Step)
+//! what makes content-addressed caching sound. A [`Step`](crate::graph::step::Step)
 //! calls models, reads the world and may pause for a person.
 //!
 //! That difference matters to *them*. It should not reach the machinery
@@ -18,12 +18,12 @@
 //! the cache guard the executor already runs skips a step without anyone
 //! writing `if is_step`.
 
-use crate::effect::SuspendReason;
-use crate::filter::{Distribution, FilterKind, FilterMeta};
+use crate::agentic::effect::SuspendReason;
+use crate::data::schema::Schema;
+use crate::data::value::Value;
 use crate::graph::NodeId;
-use crate::schema::Schema;
-use crate::step::StepMeta;
-use crate::value::Value;
+use crate::graph::filter::{Distribution, FilterKind, FilterMeta};
+use crate::graph::step::StepMeta;
 use serde::{Deserialize, Serialize};
 
 /// How a node finished.
@@ -164,7 +164,7 @@ impl NodeMeta {
             cacheable: self.cacheable,
             differentiable: self.differentiable,
             deterministic: self.deterministic,
-            stream_mode: crate::filter::StreamMode::FixedState,
+            stream_mode: crate::graph::filter::StreamMode::FixedState,
             distribution: self.distribution.clone(),
             input_schema: self.input_schema.clone(),
             output_schema: self.output_schema.clone(),
@@ -183,7 +183,7 @@ mod tests {
             cacheable: true,
             differentiable: false,
             deterministic: true,
-            stream_mode: crate::filter::StreamMode::FixedState,
+            stream_mode: crate::graph::filter::StreamMode::FixedState,
             distribution: Distribution::Local,
             input_schema: None,
             output_schema: None,

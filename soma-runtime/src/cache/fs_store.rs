@@ -21,11 +21,11 @@
 //! (Nectar: eviction degrades performance, never correctness).
 
 use chrono::Utc;
-use somatize_core::action::{ActionCache, ActionResult, BlobStore, ContentHash};
+use somatize_core::cache::action::{ActionCache, ActionResult, BlobStore, ContentHash};
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta, Origin};
-use somatize_core::codec::{decode_value, encode_and_hash};
+use somatize_core::data::codec::{decode_value, encode_and_hash};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::value::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -18,7 +18,7 @@
 //! See the "Errors: typed at the edges, shared at the seams" entry in the
 //! design decisions.
 //!
-//! [`EffectHandler`]: somatize_core::effect::EffectHandler
+//! [`EffectHandler`]: somatize_core::agentic::effect::EffectHandler
 //! [`LlmProvider`]: crate::LlmProvider
 
 use somatize_core::error::SomaError;

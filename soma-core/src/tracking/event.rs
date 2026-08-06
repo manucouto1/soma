@@ -4,8 +4,8 @@
 //! broadcast via the runtime's `EventBus` for observability and debugging.
 
 use crate::cache::{CacheKey, CacheTier};
-use crate::filter::FilterKind;
 use crate::graph::NodeId;
+use crate::graph::filter::FilterKind;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -696,9 +696,9 @@ mod tests {
     /// journal, which honours `StepMeta::journal`; an event stream does not.
     #[test]
     fn effect_events_carry_labels_not_payloads() {
-        let effect = crate::effect::Effect::Llm(crate::effect::LlmRequest::new(
+        let effect = crate::agentic::effect::Effect::Llm(crate::agentic::effect::LlmRequest::new(
             "claude-opus-5",
-            vec![crate::message::Message::user("my secret prompt")].into(),
+            vec![crate::agentic::message::Message::user("my secret prompt")].into(),
         ));
         let event = Event::EffectRequested {
             run_id: "r".into(),

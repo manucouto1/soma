@@ -28,11 +28,11 @@ pub use journal::{EffectJournal, EffectSite};
 pub use sleep_handler::SleepHandler;
 
 use crate::event_bus::EventBus;
-use somatize_core::effect::{Effect, EffectResult, Usage};
+use somatize_core::agentic::effect::{Effect, EffectResult, Usage};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::Event;
-use somatize_core::step::{Step, StepCtx, Transition};
-use somatize_core::value::Value;
+use somatize_core::graph::step::{Step, StepCtx, Transition};
+use somatize_core::tracking::event::Event;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -41,16 +41,16 @@ use std::time::Instant;
 /// Modelling the pause as an effect is what makes resuming free: it lands in
 /// the same store, under the same site key, and replays by the same rule as
 /// a model call.
-fn suspension_effect(reason: &somatize_core::effect::SuspendReason) -> Effect {
+fn suspension_effect(reason: &somatize_core::agentic::effect::SuspendReason) -> Effect {
     Effect::Custom {
         kind: "soma.suspend".into(),
         payload: Value::json(serde_json::to_value(reason).unwrap_or(serde_json::Value::Null)),
     }
 }
 
-pub use somatize_core::effect::EffectHandler;
+pub use somatize_core::agentic::effect::EffectHandler;
 
-pub use somatize_core::node::NodeOutcome;
+pub use somatize_core::graph::node::NodeOutcome;
 
 /// Drives steps: performs their effects, journals them, emits their events.
 #[derive(Clone)]
@@ -101,7 +101,7 @@ impl EffectDriver {
 
     /// Run a step to completion.
     ///
-    /// Bounded by [`somatize_core::step::StepMeta::max_turns`]: a step that
+    /// Bounded by [`somatize_core::graph::step::StepMeta::max_turns`]: a step that
     /// has not finished by then is looping, and stopping with a clear error
     /// beats burning tokens until something else gives out.
     pub fn run(
@@ -281,7 +281,7 @@ impl EffectDriver {
         run_id: &str,
         node_id: &str,
         turn: usize,
-        reason: &somatize_core::effect::SuspendReason,
+        reason: &somatize_core::agentic::effect::SuspendReason,
         answer: Value,
     ) -> Result<()> {
         if !self.journal.is_enabled() {
@@ -318,10 +318,10 @@ impl EffectDriver {
         run_id: &str,
         node_id: &str,
         turn: usize,
-        specs: &[somatize_core::effect::NodeSpec],
-        join: somatize_core::effect::JoinPolicy,
+        specs: &[somatize_core::agentic::effect::NodeSpec],
+        join: somatize_core::agentic::effect::JoinPolicy,
     ) -> Result<Vec<EffectResult>> {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let catalog = self.catalog.as_ref().ok_or_else(|| SomaError::Execution {
             node_id: node_id.to_string(),
@@ -551,10 +551,10 @@ impl EffectDriver {
 mod tests {
     use super::*;
     use crate::cache::fs_store::FsActionStore;
+    use somatize_core::agentic::effect::{LlmRequest, LlmResponse, StopReason};
+    use somatize_core::agentic::message::Message;
     use somatize_core::cache::CacheKey;
-    use somatize_core::effect::{LlmRequest, LlmResponse, StopReason};
-    use somatize_core::message::Message;
-    use somatize_core::step::StepMeta;
+    use somatize_core::graph::step::StepMeta;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Counts calls, so tests can prove a replay performed none.
@@ -887,7 +887,7 @@ mod tests {
     /// the orchestrator-workers shape, where the width is only known once
     /// the input is in hand and so cannot be pre-declared as topology.
     struct Orchestrator {
-        join: somatize_core::effect::JoinPolicy,
+        join: somatize_core::agentic::effect::JoinPolicy,
     }
 
     impl Step for Orchestrator {
@@ -906,7 +906,7 @@ mod tests {
                     .split(',')
                     .enumerate()
                     .map(|(i, part)| {
-                        somatize_core::effect::NodeSpec::new("worker", Value::text(part))
+                        somatize_core::agentic::effect::NodeSpec::new("worker", Value::text(part))
                             .with_label(format!("w{i}"))
                     })
                     .collect();
@@ -929,7 +929,7 @@ mod tests {
     }
 
     fn spawning_driver(
-        join: somatize_core::effect::JoinPolicy,
+        join: somatize_core::agentic::effect::JoinPolicy,
     ) -> (EffectDriver, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn spawns_a_worker_per_item_and_joins_in_order() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let (d, _dir) = spawning_driver(JoinPolicy::All);
         let out = d
@@ -971,7 +971,7 @@ mod tests {
     /// joined how. The children's own costs arrive under those ids.
     #[test]
     fn spawning_emits_the_fan_out() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let bus = Arc::new(EventBus::new(64));
         let mut rx = bus.subscribe();
@@ -1013,7 +1013,7 @@ mod tests {
     /// than the first one's.
     #[test]
     fn spawned_siblings_journal_separately() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let (d, _dir) = spawning_driver(JoinPolicy::All);
         let orch = Orchestrator {
@@ -1045,16 +1045,16 @@ mod tests {
             }
             fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
                 Ok(Transition::Spawn {
-                    specs: vec![somatize_core::effect::NodeSpec::new(
+                    specs: vec![somatize_core::agentic::effect::NodeSpec::new(
                         "nonexistent",
                         Value::Empty,
                     )],
-                    join: somatize_core::effect::JoinPolicy::All,
+                    join: somatize_core::agentic::effect::JoinPolicy::All,
                 })
             }
         }
 
-        let (d, _dir) = spawning_driver(somatize_core::effect::JoinPolicy::All);
+        let (d, _dir) = spawning_driver(somatize_core::agentic::effect::JoinPolicy::All);
         let err = d
             .run(&BadOrchestrator, "r", "orch", &Value::Empty)
             .unwrap_err();
@@ -1064,7 +1064,7 @@ mod tests {
     /// Spawning without a step library explains what is missing.
     #[test]
     fn spawning_without_a_library_explains_itself() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1086,7 +1086,7 @@ mod tests {
     /// Spawning nothing would spin; say so.
     #[test]
     fn spawning_nothing_is_an_error() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let (d, _dir) = spawning_driver(JoinPolicy::All);
 
@@ -1136,7 +1136,9 @@ mod tests {
     }
 
     /// A driver whose spawn target is flaky, for exercising join policies.
-    fn flaky_driver(join: somatize_core::effect::JoinPolicy) -> (EffectDriver, tempfile::TempDir) {
+    fn flaky_driver(
+        join: somatize_core::agentic::effect::JoinPolicy,
+    ) -> (EffectDriver, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
         let journal = EffectJournal::new(store.clone(), store);
@@ -1157,7 +1159,7 @@ mod tests {
     /// would lose nine good answers to one flaky worker.
     #[test]
     fn all_settled_keeps_what_succeeded() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let (d, _dir) = flaky_driver(JoinPolicy::AllSettled);
         let out = d
@@ -1188,7 +1190,7 @@ mod tests {
     /// sibling's failure does not poison the join.
     #[test]
     fn first_returns_the_first_answer() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let (d, _dir) = flaky_driver(JoinPolicy::First);
         let orch = Orchestrator {
@@ -1238,7 +1240,7 @@ mod tests {
     /// A spawned child's `Goto` is refused with the reason spelled out.
     #[test]
     fn a_spawned_child_that_hands_off_is_an_error() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1289,7 +1291,7 @@ mod tests {
     /// scoped thread taking the whole join (and process) with it.
     #[test]
     fn a_spawned_child_that_panics_is_contained() {
-        use somatize_core::effect::JoinPolicy;
+        use somatize_core::agentic::effect::JoinPolicy;
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1329,7 +1331,7 @@ mod tests {
         fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
             match ctx.result() {
                 None => Ok(Transition::Suspend {
-                    reason: somatize_core::effect::SuspendReason::Human {
+                    reason: somatize_core::agentic::effect::SuspendReason::Human {
                         prompt: "Approve deleting 3 files?".into(),
                         schema: None,
                     },
@@ -1343,8 +1345,8 @@ mod tests {
         }
     }
 
-    fn reason() -> somatize_core::effect::SuspendReason {
-        somatize_core::effect::SuspendReason::Human {
+    fn reason() -> somatize_core::agentic::effect::SuspendReason {
+        somatize_core::agentic::effect::SuspendReason::Human {
             prompt: "Approve deleting 3 files?".into(),
             schema: None,
         }

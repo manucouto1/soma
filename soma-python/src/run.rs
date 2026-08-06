@@ -39,27 +39,29 @@ impl PyRun {
         if let Ok(mut summary) = self.summary.lock() {
             summary.insert(name.clone(), value);
         }
-        self.bus.emit(somatize_core::event::Event::MetricReported {
-            run_id: self.tracker.run_id().to_string(),
-            metric: MetricRecord {
-                name,
-                value,
-                step: step.unwrap_or(0),
-                timestamp: chrono::Utc::now(),
-            },
-            node_id: node,
-            trial_id: None,
-        });
+        self.bus
+            .emit(somatize_core::tracking::event::Event::MetricReported {
+                run_id: self.tracker.run_id().to_string(),
+                metric: MetricRecord {
+                    name,
+                    value,
+                    step: step.unwrap_or(0),
+                    timestamp: chrono::Utc::now(),
+                },
+                node_id: node,
+                trial_id: None,
+            });
     }
 
     /// Mark the start of an epoch.
     #[pyo3(signature = (epoch, total=None))]
     fn log_epoch(&self, epoch: usize, total: Option<usize>) {
-        self.bus.emit(somatize_core::event::Event::EpochStarted {
-            run_id: self.tracker.run_id().to_string(),
-            epoch,
-            total_epochs: total,
-        });
+        self.bus
+            .emit(somatize_core::tracking::event::Event::EpochStarted {
+                run_id: self.tracker.run_id().to_string(),
+                epoch,
+                total_epochs: total,
+            });
         let _ = self.tracker.heartbeat();
     }
 
@@ -86,22 +88,24 @@ impl PyRun {
                 }
             })
             .collect();
-        self.bus.emit(somatize_core::event::Event::EpochCompleted {
-            run_id: self.tracker.run_id().to_string(),
-            epoch,
-            metrics: records,
-        });
+        self.bus
+            .emit(somatize_core::tracking::event::Event::EpochCompleted {
+                run_id: self.tracker.run_id().to_string(),
+                epoch,
+                metrics: records,
+            });
         let _ = self.tracker.heartbeat();
     }
 
     /// Mark one optimizer step (used by the native training loop).
     #[pyo3(signature = (step, epoch=None))]
     fn step_completed(&self, step: usize, epoch: Option<usize>) {
-        self.bus.emit(somatize_core::event::Event::StepCompleted {
-            run_id: self.tracker.run_id().to_string(),
-            step,
-            epoch,
-        });
+        self.bus
+            .emit(somatize_core::tracking::event::Event::StepCompleted {
+                run_id: self.tracker.run_id().to_string(),
+                step,
+                epoch,
+            });
     }
 
     /// Refresh the run's heartbeat (liveness for external readers).

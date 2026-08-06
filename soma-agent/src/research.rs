@@ -20,13 +20,13 @@
 //! would go here. This is that.
 
 use crate::action::Action;
-use somatize_core::effect::{Effect, EffectResult, GraphEffectMode, LlmRequest};
+use somatize_core::agentic::effect::{Effect, EffectResult, GraphEffectMode, LlmRequest};
+use somatize_core::agentic::message::{Message, Messages};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::graph::Graph;
-use somatize_core::message::{Message, Messages};
-use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::util::{extract_json, truncate};
-use somatize_core::value::Value;
 use somatize_memory::ExperimentRecord;
 
 /// How much of the pool to put in front of the model each turn.
@@ -268,7 +268,7 @@ impl Step for ResearchStep {
     fn meta(&self) -> StepMeta {
         StepMeta::new("research")
             .with_max_turns(self.max_iterations * 2 + 2)
-            .with_output_schema(somatize_core::schema::Schema::json())
+            .with_output_schema(somatize_core::data::schema::Schema::json())
     }
 
     fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {

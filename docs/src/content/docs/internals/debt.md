@@ -158,12 +158,12 @@ explicit enum naming the two modes.
 
 **Class** God object · **Severity** Medium · **Crate** `soma-core`
 
-**Evidence** `soma-core/src/event.rs:54` — 30 variants spanning pipeline
+**Evidence** `soma-core/src/tracking/event.rs:54` — 30 variants spanning pipeline
 execution, trials, studies, PBT generations, training telemetry and the agentic
 loop. Every consumer either matches all 30 or writes `_ => {}`; the readers do
 the latter (`soma-runtime/src/tracking/reader.rs:520`,
 `soma-runtime/src/tracking/jsonl_sink.rs:79`). The naming collision it has already
-had to work around is documented at `soma-core/src/event.rs:376` —
+had to work around is documented at `soma-core/src/tracking/event.rs:376` —
 `StepCompleted` is an optimizer step, `AgentStepCompleted` is an agent step.
 
 **Consequence** The one enum is also the JSONL wire format, so splitting it is a
@@ -172,16 +172,16 @@ is real but the fix is expensive.
 
 **Fix shape** If it is ever split, split it into `RunEvent` / `StudyEvent` /
 `AgentEvent` with a wrapper enum for the sink, and bump `RUN_SCHEMA_VERSION`
-(`soma-core/src/tracking.rs:14`).
+(`soma-core/src/tracking/mod.rs:18`).
 
 ### D-06 · Wide data structs with no builder
 
 **Class** God object · **Severity** Low · **Crate** `soma-core`
 
-**Evidence** `RunManifest` (`soma-core/src/tracking.rs:93`) — 20 fields, one
+**Evidence** `RunManifest` (`soma-core/src/tracking/mod.rs:97`) — 20 fields, one
 3-argument constructor; the other 17 are set by field assignment.
-`RunSummary` (`soma-core/src/summary.rs:331`) — 17 fields.
-`Study` (`soma-core/src/study.rs:319`) — 15 fields mixing definition, results and
+`RunSummary` (`soma-core/src/tracking/summary.rs:331`) — 17 fields.
+`Study` (`soma-core/src/optimizer/study.rs:319`) — 15 fields mixing definition, results and
 provenance, with builders covering 2 of them.
 `ExperimentRecord` (`soma-memory/src/record.rs:53`) — 26 fields, but this one
 *does* have 12 `with_*` builders and is the model the others should follow.
@@ -308,15 +308,15 @@ with slightly different clamping.
 
 **Class** Duplication · **Severity** Low · **Crate** cross-cutting
 
-**Evidence** `soma-core/src/viz.rs:138` `format_duration_ms` and
-`soma-core/src/summary.rs:393` `human_duration` **disagree on the same input**:
+**Evidence** `soma-core/src/viz/mod.rs:140` `format_duration_ms` and
+`soma-core/src/tracking/summary.rs:393` `human_duration` **disagree on the same input**:
 187 000 ms renders as `"3.1m"` from one and `"3m 07s"` from the other. Python adds
 three more: `soma-python/python/soma/_runs.py:372` `_fmt_ms_html`,
 `soma-python/python/soma/viz/_report.py:123` `_fmt_ms`,
 `soma-python/python/soma/_cache_cli.py:44` `_fmt_duration`.
 
 Truncation is written twice: `soma-core/src/util.rs:62` `truncate` and
-`soma-core/src/summary.rs:422` `one_line`.
+`soma-core/src/tracking/summary.rs:422` `one_line`.
 
 ### D-16 · Two knowledge-base front-ends, already divergent
 
@@ -335,8 +335,8 @@ same pairing exists for `kb_lineage`, `kb_diff` and `kb_record_conclusion`.
 
 **Class** Duplication · **Severity** Low · **Crate** `soma-core`
 
-**Evidence** `Graph::to_mermaid_with` (`soma-core/src/graph.rs:547`),
-`to_text` (`:628`) and `svg::to_svg_with` (`soma-core/src/svg.rs:65`) each
+**Evidence** `Graph::to_mermaid_with` (`soma-core/src/graph/mod.rs:553`),
+`to_text` (`:628`) and `svg::to_svg_with` (`soma-core/src/viz/svg.rs:65`) each
 map the five `NodeKind`s to a shape independently. `ExecutionPlan` repeats the pattern: `mermaid_nodes`
 (`soma-compiler/src/plan.rs:271`) and `graph_nodes` (`:407`) duplicate a whole
 recursive walk, and the 10-line comment at `soma-compiler/src/plan.rs:264`
@@ -416,7 +416,7 @@ suspension.
 
 **Class** Silent failure · **Severity** Medium · **Crate** `soma-core`
 
-**Evidence** `soma-core/src/cache.rs:108` —
+**Evidence** `soma-core/src/cache/mod.rs:111` —
 `serde_json::to_vec(json).unwrap_or_default()` inside `CacheKey::absorb`. Any
 JSON value that fails to serialize contributes the empty byte string to the hash,
 so all of them collide. The adjacent comment argues this is unreachable; it is
@@ -541,7 +541,7 @@ functions do not use it.
 
 **Class** Correctness · **Severity** Medium · **Crate** `soma-core`
 
-**Evidence** `soma-core/src/value.rs:111` documents "This is what a
+**Evidence** `soma-core/src/data/value.rs:111` documents "This is what a
 multi-predecessor node receives per upstream branch — never the internal
 serde-tagged encoding". At `:139`:
 
@@ -584,16 +584,16 @@ pattern.
 
 | Item | Evidence |
 |---|---|
-| `DataRef::Stream` | `soma-core/src/store/mod.rs:119` — zero constructions; only reachable through `_ =>` arms |
-| `StreamFormat` (whole enum) | `soma-core/src/store/mod.rs:145` — referenced only by the unused `DataRef::Stream` |
-| `CacheTier::Remote` | `soma-core/src/cache.rs:156` — never produced |
-| `Origin::Streamed` | `soma-core/src/cache.rs:174` — never produced |
-| `SearchStrategy::Hyperband` | `soma-core/src/study.rs:144` — self-documented "no sampler implements it yet" |
-| `SearchStrategy::MultiObjective` | `soma-core/src/study.rs:155` — same |
-| `PruningStrategy::Hyperband` | `soma-core/src/study.rs:204` — "behaves like `None`" |
-| `TrainingStrategy::Custom` | `soma-core/src/strategy.rs:74` — the executor refuses it |
-| `ExploitStrategy::Binary.threshold` | `soma-core/src/strategy.rs:188` — "the current `PbtRunner` does not read this field yet" |
-| `ExploitStrategy::Binary.threshold` | `soma-core/src/strategy.rs:188` — "the current `PbtRunner` does not read this field yet" |
+| `DataRef::Stream` | `soma-core/src/data/store.rs:119` — zero constructions; only reachable through `_ =>` arms |
+| `StreamFormat` (whole enum) | `soma-core/src/data/store.rs:145` — referenced only by the unused `DataRef::Stream` |
+| `CacheTier::Remote` | `soma-core/src/cache/mod.rs:159` — never produced |
+| `Origin::Streamed` | `soma-core/src/cache/mod.rs:177` — never produced |
+| `SearchStrategy::Hyperband` | `soma-core/src/optimizer/study.rs:144` — self-documented "no sampler implements it yet" |
+| `SearchStrategy::MultiObjective` | `soma-core/src/optimizer/study.rs:155` — same |
+| `PruningStrategy::Hyperband` | `soma-core/src/optimizer/study.rs:204` — "behaves like `None`" |
+| `TrainingStrategy::Custom` | `soma-core/src/distributed.rs:74` — the executor refuses it |
+| `ExploitStrategy::Binary.threshold` | `soma-core/src/distributed.rs:188` — "the current `PbtRunner` does not read this field yet" |
+| `ExploitStrategy::Binary.threshold` | `soma-core/src/distributed.rs:188` — "the current `PbtRunner` does not read this field yet" |
 
 `TrainingStrategy::PopulationBased` (`soma-runtime/src/strategy.rs:246`) is a
 deliberate permanent error arm — that one is [documented as a design
@@ -772,16 +772,16 @@ answer.
 
 **Class** Stringly-typed · **Severity** Medium · **Crate** `soma-core`
 
-**Evidence** `NodeOverlay::style_class()` (`soma-core/src/viz.rs:98`) returns one
+**Evidence** `NodeOverlay::style_class()` (`soma-core/src/viz/mod.rs:100`) returns one
 of five `&'static str` values. Two separate functions then re-match those
 strings, each with a silent `_` fallback meaning "flagged":
-`viz::mermaid_class_style` (`soma-core/src/viz.rs:114`) and `svg::class_colors`
-(`soma-core/src/svg.rs:27`). It was three until `viz::dot_class_style` went with
+`viz::mermaid_class_style` (`soma-core/src/viz/mod.rs:116`) and `svg::class_colors`
+(`soma-core/src/viz/svg.rs:27`). It was three until `viz::dot_class_style` went with
 `to_graphviz`; the heading's "four" counts `style_class` itself.
 
 **Consequence** A new status requires four coordinated edits, and a typo in any
 of them falls through to the flagged colour rather than failing to compile — with
-`NodeStatus` (`soma-core/src/viz.rs:20`) sitting right there as the enum that
+`NodeStatus` (`soma-core/src/viz/mod.rs:22`) sitting right there as the enum that
 would make it a compile error.
 
 ### D-52 · Node placement has one typed mechanism and one stringly one
@@ -789,9 +789,9 @@ would make it a compile error.
 **Class** Primitive obsession · **Severity** Medium · **Crate** `soma-core`
 
 **Evidence** `Node.target: Option<String>` with the magic value `"local"`
-(`soma-core/src/graph.rs:76`, tested by `is_local()` at `:205`) coexists with the
+(`soma-core/src/graph/mod.rs:82`, tested by `is_local()` at `:205`) coexists with the
 typed `Distribution` / `RemoteTarget` on `FilterMeta`
-(`soma-core/src/filter.rs:53`, `:64`).
+(`soma-core/src/graph/filter.rs:53`, `:64`).
 
 ### D-53 · Typed enums shadowed by their own string forms
 
@@ -799,13 +799,13 @@ typed `Distribution` / `RemoteTarget` on `FilterMeta`
 
 | String field | Enum it shadows |
 |---|---|
-| `StoreMeta.dtype: String` (`soma-core/src/store/mod.rs:26`) | `DataType` |
-| `EdgeRef.kind: String` (`soma-core/src/fingerprint.rs:66`) | `EdgeKind` |
-| `RunSummary.kind: String` (`soma-core/src/summary.rs:338`) | `RunKind` |
-| `NodeOverlay.cache_tier: Option<String>` (`soma-core/src/viz.rs:42`) | `CacheTier` |
+| `StoreMeta.dtype: String` (`soma-core/src/data/store.rs:26`) | `DataType` |
+| `EdgeRef.kind: String` (`soma-core/src/tracking/fingerprint.rs:66`) | `EdgeKind` |
+| `RunSummary.kind: String` (`soma-core/src/tracking/summary.rs:338`) | `RunKind` |
+| `NodeOverlay.cache_tier: Option<String>` (`soma-core/src/viz/mod.rs:44`) | `CacheTier` |
 | `DataTransfer.transfer_type: String` (`soma-compiler/src/scheduler.rs:133`) | — (only `"s3"` is ever written, `:278`) |
 
-`Event::HealthFlag.flag: String` (`soma-core/src/event.rs:363`) goes further and
+`Event::HealthFlag.flag: String` (`soma-core/src/tracking/event.rs:363`) goes further and
 encodes a count inside the string: `"DEAD_CHANNELS(3)"`.
 
 `soma-runtime/src/tracking/reader.rs:345` and `:411` stringify an enum with
@@ -845,10 +845,10 @@ in another crate.
 
 **Class** Primitive obsession · **Severity** Low · **Crate** `soma-core`
 
-**Evidence** `NodeId` (`soma-core/src/graph.rs:17`), `EdgeId` (`:20`), `RunId` /
-`StudyId` / `TrialId` (`soma-core/src/event.rs:14`, `:17`, `:20`) are all
+**Evidence** `NodeId` (`soma-core/src/graph/mod.rs:23`), `EdgeId` (`:20`), `RunId` /
+`StudyId` / `TrialId` (`soma-core/src/tracking/event.rs:14`, `:17`, `:20`) are all
 `String` aliases, hence mutually assignable. The `NodeId` case is a knowing
-deferral, argued at `soma-core/src/graph.rs:14`.
+deferral, argued at `soma-core/src/graph/mod.rs:20`.
 
 ### D-57 · Prose parsing as control flow
 
@@ -874,7 +874,7 @@ output is available (`soma-llm/src/steps.rs:107`).
 `Parallel` over a graph holding a 1 GB intermediate materializes 4 GB. The
 comment at `:1090` explains the write-set merge but not the snapshot cost.
 
-**Mitigating** `Value` payloads are all `Arc`-backed (`soma-core/src/value.rs:15`),
+**Mitigating** `Value` payloads are all `Arc`-backed (`soma-core/src/data/value.rs:15`),
 so the clone is refcount bumps, not byte copies — but `VirtualValue::Materialized`
 holds the `Value` and the `HashMap` itself is rebuilt per branch.
 
@@ -1047,7 +1047,7 @@ line counts mislead.
 | `handle_ws` | `soma-worker/src/server.rs:353` | 215 |
 | `PyStudy::run` | `soma-python/src/study.rs:433` | 213 |
 | `StudyRunner::run` | `soma-runtime/src/executors/study.rs:187` | 194 |
-| `Graph::to_svg_with` | `soma-core/src/svg.rs:65` | 206 |
+| `Graph::to_svg_with` | `soma-core/src/viz/svg.rs:65` | 206 |
 | `schedule_plan` | `soma-compiler/src/scheduler.rs:197` | 185 |
 | `handle_stream_message` | `soma-worker/src/server.rs:568` | 163 |
 | `derive_soma_filter_impl` | `soma-macros/src/lib.rs:40` | 158 |
@@ -1138,12 +1138,12 @@ consequently mix both styles — `soma-runtime/src/cache/fs_store.rs:26` reaches
 Individually trivial; listed because they are cheap to fix while already in the
 file.
 
-- `soma-core/src/graph.rs:450` — `topological_sort` calls `queue.sort()` then `queue.pop()`, so roots come out in *descending* id order. The comment at `:462` describes an insertion that does not happen. Deterministic, just not what it says.
+- `soma-core/src/graph/mod.rs:456` — `topological_sort` calls `queue.sort()` then `queue.pop()`, so roots come out in *descending* id order. The comment at `:462` describes an insertion that does not happen. Deterministic, just not what it says.
 - `soma-compiler/src/scheduler.rs:341` — `let worker_id = worker.id.clone();` … `drop(worker_id);` with no use in between.
 - `soma-compiler/src/compiler.rs:552`, `:582`, `:604`, and `:290` — the same whole-graph `HashSet<&str>` is rebuilt four times; it never changes.
 - `soma-compiler/src/compiler.rs:534` — `plan_for_node` invents `ExecutionPlan::Execute` for an unknown node id, while the `other =>` arm 90 lines below (`:627`) argues at length that guessing is unacceptable.
 - `soma-compiler/src/compiler.rs:573` — sub-graph compilation drops the inner `diagnostics` entirely; every warning the inner graph raises is computed and thrown away.
-- `soma-core/src/svg.rs` declares no public type — it exists only to hang two methods on `Graph` from another module, which a reader of `graph.rs` will not find.
+- `soma-core/src/viz/svg.rs` declares no public type — it exists only to hang two methods on `Graph` from another module, which a reader of `graph.rs` will not find.
 - `soma-core/src/store/` is a directory containing exactly one file.
 - `soma-runtime/src/executor.rs:596` — the branch selector's value is overwritten by the branch's input, so a downstream node can never see which arm was chosen. Deliberate (`:590`), but it means the branch node's stored value is not the branch node's output.
 - `soma-runtime/src/executors/pbt.rs:117` — a training failure is warned and the member keeps its stale state; only *evaluation* failures are counted (`:133`). A member whose training always fails competes on stale weights forever.
@@ -1170,7 +1170,7 @@ register and the older one can stay historical.
 
 **Class** God object · **Severity** Low · **Crate** `soma-core`
 
-**Evidence** `soma-core/src/filter.rs:120` — `Filter` requires `fit`, `forward`
+**Evidence** `soma-core/src/graph/filter.rs:120` — `Filter` requires `fit`, `forward`
 (computation), `config_hash` (cache identity) and `meta` (description). Every
 implementor must know about `CacheKey` whether or not it is ever cached.
 
@@ -1184,7 +1184,7 @@ hand-written implementor writes it. That weakens the case for splitting.
 
 **Class** Performance · **Severity** Low · **Crate** `soma-core`
 
-**Evidence** `soma-core/src/graph.rs:390` and `:399` — both filter the entire
+**Evidence** `soma-core/src/graph/mod.rs:396` and `:399` — both filter the entire
 edge vector on every call, O(edges) each. The compiler calls them per node, so
 compilation is O(nodes × edges).
 
@@ -1270,8 +1270,8 @@ and it is the right call every time.
 
 **The `#[non_exhaustive]` policy is deliberate and documented.** Data enums get
 it; control-flow enums every consumer must decide over — `NodeOutcome`
-(`soma-core/src/node.rs:37`), `Transition` (`soma-core/src/step.rs:38`),
-`StreamMode` (`soma-core/src/filter.rs:32`) — deliberately do not, with the reason
+(`soma-core/src/graph/node.rs:37`), `Transition` (`soma-core/src/graph/step.rs:38`),
+`StreamMode` (`soma-core/src/graph/filter.rs:32`) — deliberately do not, with the reason
 in the doc comment, so adding a variant breaks every match.
 
 **Suppressions are almost absent.** Ten `#[allow(...)]` in ~70 000 lines, nine of

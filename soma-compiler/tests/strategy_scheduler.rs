@@ -3,13 +3,13 @@
 use somatize_compiler::scheduler::{WorkerInfo, schedule};
 use somatize_compiler::{CompileMode, compile};
 use somatize_core::cache::CacheKey;
-use somatize_core::error::Result;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::strategy::{
+use somatize_core::data::value::Value;
+use somatize_core::distributed::{
     CommunicationProtocol, GradientAggregation, Partition, TrainingStrategy,
 };
-use somatize_core::value::Value;
+use somatize_core::error::Result;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::{Edge, Graph, Node};
 
 struct DummyFilter(String);
 
@@ -31,7 +31,7 @@ impl Filter for DummyFilter {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -182,11 +182,11 @@ fn model_parallel_partition_validates() {
         partitions: vec![
             Partition {
                 node_ids: vec!["embed".into(), "backbone".into()],
-                target: somatize_core::filter::RemoteTarget::Tag("gpu-0".into()),
+                target: somatize_core::graph::filter::RemoteTarget::Tag("gpu-0".into()),
             },
             Partition {
                 node_ids: vec!["head".into()],
-                target: somatize_core::filter::RemoteTarget::Tag("gpu-1".into()),
+                target: somatize_core::graph::filter::RemoteTarget::Tag("gpu-1".into()),
             },
         ],
         communication: CommunicationProtocol::Pipeline {

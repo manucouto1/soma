@@ -12,10 +12,10 @@
 
 use somatize_compiler::{CompileMode, DiagnosticLevel, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
-use somatize_core::filter::{Distribution, FilterKind, FilterMeta, StreamMode};
+use somatize_core::data::schema::{DataType, Schema};
+use somatize_core::graph::filter::{Distribution, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::step::StepMeta;
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::schema::{DataType, Schema};
-use somatize_core::step::StepMeta;
 
 fn filter_meta(name: &str, input: Option<Schema>, output: Option<Schema>) -> FilterMeta {
     FilterMeta {

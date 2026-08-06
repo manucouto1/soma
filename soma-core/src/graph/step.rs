@@ -1,4 +1,4 @@
-//! The effectful counterpart to [`crate::filter::Filter`].
+//! The effectful counterpart to [`crate::graph::filter::Filter`].
 //!
 //! A `Filter` is a function: same config, same state, same input, same
 //! output — which is what makes content-addressed caching sound. A `Step` is
@@ -25,18 +25,18 @@
 //! primitives every agent framework converges on: awaiting work, dynamic
 //! fan-out, handoff, interrupt, and finishing.
 
+use crate::agentic::effect::{Effect, EffectResult, JoinPolicy, NodeSpec, SuspendReason};
 use crate::cache::CacheKey;
-use crate::effect::{Effect, EffectResult, JoinPolicy, NodeSpec, SuspendReason};
+use crate::data::schema::Schema;
+use crate::data::value::Value;
 use crate::error::Result;
 use crate::graph::NodeId;
-use crate::schema::Schema;
-use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
 /// What a step wants to happen next.
 ///
 /// Deliberately NOT `#[non_exhaustive]`, for the same reason as
-/// [`crate::node::NodeOutcome`], its other half: the driver decides control
+/// [`crate::graph::node::NodeOutcome`], its other half: the driver decides control
 /// flow off this value, and a wildcard arm there is a silent wrong answer.
 /// Adding a variant *should* break every consumer — each one has to decide
 /// what the new transition means for it.
@@ -198,7 +198,7 @@ pub struct StepMeta {
     pub output_schema: Option<Schema>,
 
     /// Where it may run.
-    pub distribution: crate::filter::Distribution,
+    pub distribution: crate::graph::filter::Distribution,
 }
 
 impl StepMeta {
@@ -211,7 +211,7 @@ impl StepMeta {
             journal: true,
             input_schema: None,
             output_schema: None,
-            distribution: crate::filter::Distribution::Local,
+            distribution: crate::graph::filter::Distribution::Local,
         }
     }
 
@@ -247,7 +247,7 @@ impl StepMeta {
 ///
 /// Implementors are registered in the runtime's step library by node id, the
 /// same way filters are.
-pub trait Step: crate::any::AsAny + Send + Sync {
+pub trait Step: crate::graph::any::AsAny + Send + Sync {
     /// Hash of this step's configuration. Same config, same hash — it is part
     /// of every journal key this step writes.
     fn config_hash(&self) -> CacheKey;
@@ -268,8 +268,8 @@ pub trait Step: crate::any::AsAny + Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effect::LlmRequest;
-    use crate::message::Message;
+    use crate::agentic::effect::LlmRequest;
+    use crate::agentic::message::Message;
 
     /// A step that asks a model once and returns its text.
     struct Once;
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn second_poll_finishes_with_the_reply() {
-        use crate::effect::{LlmResponse, StopReason, Usage};
+        use crate::agentic::effect::{LlmResponse, StopReason, Usage};
 
         let input = Value::text("hello");
         let results = [EffectResult::Llm(LlmResponse {

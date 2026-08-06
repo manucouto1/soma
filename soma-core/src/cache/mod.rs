@@ -6,8 +6,11 @@
 //!
 //! [`CacheStore`] is the K/V interface; implementations live in soma-runtime.
 
+pub mod action;
+pub mod canon;
+
+use crate::data::value::Value;
 use crate::error::Result;
-use crate::value::Value;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

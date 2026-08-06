@@ -137,7 +137,7 @@ async fn main() {
         worker = worker.with_temp_dir(temp_dir.into());
     }
     if let Some(store_path) = &args.data_store {
-        let store = somatize_core::store::LocalDataStore::new(store_path);
+        let store = somatize_core::data::store::LocalDataStore::new(store_path);
         worker = worker.with_data_store(std::sync::Arc::new(store));
         tracing::info!("DataStore configured: {store_path}");
     }

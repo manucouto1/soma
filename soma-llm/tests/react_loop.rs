@@ -5,7 +5,7 @@
 //! tool, journaled so the second run performs nothing. If this passes, the
 //! agentic layer is usable rather than merely present.
 
-use somatize_core::value::Value;
+use somatize_core::data::value::Value;
 use somatize_llm::{Catalog, LlmHandler, ProviderConfig, ReactStep, Router, ToolOutcome, Toolbox};
 use somatize_runtime::cache::fs_store::FsActionStore;
 use somatize_runtime::effects::{EffectDriver, EffectJournal, NodeOutcome};
@@ -121,7 +121,7 @@ fn final_answer() -> String {
 fn weather_toolbox() -> Toolbox {
     let mut toolbox = Toolbox::new();
     toolbox.add_fn(
-        somatize_core::tool::ToolSpec::new(
+        somatize_core::agentic::tool::ToolSpec::new(
             "weather",
             "Current weather for a city. Call this when asked about conditions somewhere.",
             serde_json::json!({

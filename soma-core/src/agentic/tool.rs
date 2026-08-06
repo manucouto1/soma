@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 /// A tool's name, purpose, and argument schema.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
-    /// The name a model calls it by — what [`crate::effect::Effect::Tool`]
-    /// and a [`crate::message::ContentBlock::ToolUse`] carry.
+    /// The name a model calls it by — what [`crate::agentic::effect::Effect::Tool`]
+    /// and a [`crate::agentic::message::ContentBlock::ToolUse`] carry.
     pub name: String,
 
     /// What it does — this is the text a model reads to decide whether to

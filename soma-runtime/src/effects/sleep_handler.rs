@@ -1,8 +1,8 @@
 //! Waiting, as an effect.
 
-use somatize_core::effect::{Effect, EffectHandler, EffectResult};
+use somatize_core::agentic::effect::{Effect, EffectHandler, EffectResult};
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::value::Value;
 
 /// Performs [`Effect::Sleep`].
 ///

@@ -43,17 +43,17 @@ pub(crate) mod prelude {
     pub(crate) use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList};
     pub(crate) use somatize_compiler::{CompileMode, compile};
     pub(crate) use somatize_core::cache::CacheKey;
+    pub(crate) use somatize_core::data::value::Value;
     pub(crate) use somatize_core::error::{Result as SomaResult, SomaError};
-    pub(crate) use somatize_core::event::MetricRecord;
-    pub(crate) use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-    pub(crate) use somatize_core::fingerprint::ArchitectureFingerprint;
+    pub(crate) use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     pub(crate) use somatize_core::graph::{Edge, Graph, Node};
-    pub(crate) use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-    pub(crate) use somatize_core::study::{
+    pub(crate) use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+    pub(crate) use somatize_core::optimizer::study::{
         Direction, Objective, PruningStrategy, SearchStrategy, Study,
     };
+    pub(crate) use somatize_core::tracking::event::MetricRecord;
+    pub(crate) use somatize_core::tracking::fingerprint::ArchitectureFingerprint;
     pub(crate) use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
-    pub(crate) use somatize_core::value::Value;
     pub(crate) use somatize_runtime::EventBus;
     pub(crate) use somatize_runtime::StudyIo;
     pub(crate) use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};

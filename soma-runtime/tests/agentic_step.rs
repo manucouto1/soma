@@ -6,14 +6,16 @@
 //! effects without either half knowing about the other.
 
 use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
+use somatize_core::agentic::effect::{
+    Effect, EffectResult, LlmRequest, LlmResponse, StopReason, Usage,
+};
+use somatize_core::agentic::message::Message;
 use somatize_core::cache::CacheKey;
-use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse, StopReason, Usage};
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::message::Message;
-use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
-use somatize_core::value::Value;
 use somatize_runtime::cache::MemoryCache;
 use somatize_runtime::cache::fs_store::FsActionStore;
 use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal};
@@ -435,7 +437,7 @@ impl Step for NeedsApproval {
     fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition> {
         match ctx.result() {
             None => Ok(Transition::Suspend {
-                reason: somatize_core::effect::SuspendReason::Human {
+                reason: somatize_core::agentic::effect::SuspendReason::Human {
                     prompt: "approve?".into(),
                     schema: None,
                 },
@@ -498,7 +500,7 @@ fn a_suspended_run_halts_the_plan_and_then_resumes() {
             "run-approve",
             "approve",
             *turn,
-            &somatize_core::effect::SuspendReason::Human {
+            &somatize_core::agentic::effect::SuspendReason::Human {
                 prompt: "approve?".into(),
                 schema: None,
             },
@@ -518,7 +520,7 @@ fn a_suspended_run_halts_the_plan_and_then_resumes() {
 /// Steps emit the agent-level events, on the same bus as everything else.
 #[test]
 fn a_step_emits_agent_events() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let h = harness();
     let bus = Arc::new(EventBus::new(256));
@@ -592,8 +594,8 @@ impl Filter for Numeric {
     }
     fn meta(&self) -> FilterMeta {
         FilterMeta {
-            output_schema: Some(somatize_core::schema::Schema::scalar(
-                somatize_core::schema::DataType::Float64,
+            output_schema: Some(somatize_core::data::schema::Schema::scalar(
+                somatize_core::data::schema::DataType::Float64,
             )),
             ..Shout.meta()
         }
@@ -608,7 +610,8 @@ impl Step for WantsMessages {
         CacheKey::from_parts(&[b"WantsMessages"])
     }
     fn meta(&self) -> StepMeta {
-        StepMeta::new("WantsMessages").with_input_schema(somatize_core::schema::Schema::messages())
+        StepMeta::new("WantsMessages")
+            .with_input_schema(somatize_core::data::schema::Schema::messages())
     }
     fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
         Ok(Transition::Done(Value::Empty))
@@ -652,8 +655,9 @@ fn a_remote_step_is_wrapped_for_dispatch() {
         }
         fn meta(&self) -> StepMeta {
             let mut m = StepMeta::new("RemoteStep");
-            m.distribution =
-                Distribution::Remote(somatize_core::filter::RemoteTarget::Tag("gpu".into()));
+            m.distribution = Distribution::Remote(somatize_core::graph::filter::RemoteTarget::Tag(
+                "gpu".into(),
+            ));
             m
         }
         fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition> {
@@ -824,7 +828,7 @@ fn memoized_graph() -> Graph {
 /// by content — the frozen-answer foot-gun — and fail here first.
 #[test]
 fn the_output_cache_never_touches_a_step() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let h = harness();
     let mut catalog = h.catalog.clone();
@@ -873,7 +877,7 @@ fn the_output_cache_never_touches_a_step() {
 /// an existing experiment would silently recompute every filter.
 #[test]
 fn a_filter_cache_key_ignores_its_agentic_neighbours() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let h = harness();
     let mut catalog = h.catalog.clone();
@@ -927,7 +931,7 @@ fn a_filter_cache_key_ignores_its_agentic_neighbours() {
 /// every event consumer saw a filter it could not look inside.
 #[test]
 fn a_step_and_a_filter_start_with_their_own_kind() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let h = harness();
     let bus = Arc::new(EventBus::new(256));
@@ -996,7 +1000,7 @@ impl Step for FailingStep {
 /// died silently would show as a run that never finished.
 #[test]
 fn a_failing_step_emits_node_failed() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1038,7 +1042,7 @@ fn a_failing_step_emits_node_failed() {
 /// record claiming the node is still running.
 #[test]
 fn a_panicking_step_emits_node_failed() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1084,7 +1088,7 @@ fn a_panicking_step_emits_node_failed() {
 /// conversation to whom.
 #[test]
 fn a_handoff_emits_its_event() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1123,7 +1127,7 @@ fn a_handoff_emits_its_event() {
 /// to; without them the only sign of a suspension is an error type.
 #[test]
 fn a_suspension_emits_suspended_and_resuming_emits_resumed() {
-    use somatize_core::event::Event;
+    use somatize_core::tracking::event::Event;
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
@@ -1181,7 +1185,7 @@ fn a_suspension_emits_suspended_and_resuming_emits_resumed() {
             "run-suspend-events",
             "approve",
             0,
-            &somatize_core::effect::SuspendReason::Human {
+            &somatize_core::agentic::effect::SuspendReason::Human {
                 prompt: "approve?".into(),
                 schema: None,
             },

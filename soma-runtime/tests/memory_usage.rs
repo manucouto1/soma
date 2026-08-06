@@ -60,9 +60,9 @@ fn peak_allocated() -> usize {
 // ── Test filters ──
 
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use std::sync::Arc;
 
 /// Stateless filter that doubles tensor values. Allocates a new output

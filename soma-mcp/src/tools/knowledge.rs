@@ -14,7 +14,7 @@ use crate::context::SomaContext;
 use crate::protocol::ToolCallResult;
 use crate::render;
 use chrono::Utc;
-use somatize_core::fingerprint::ArchitectureFingerprint;
+use somatize_core::tracking::fingerprint::ArchitectureFingerprint;
 use somatize_memory::{ExperimentRecord, RetrievalQuery, derive};
 use somatize_runtime::tracking::{RunReader, summarize};
 use std::path::PathBuf;

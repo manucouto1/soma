@@ -33,11 +33,11 @@
 use crate::executor::{Context, compute_node, output_key, store_output};
 use crate::node_catalog::{NodeCatalog, NodeImpl};
 use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::Event;
-use somatize_core::filter::StreamMode;
-use somatize_core::node::{NodeMeta, NodeOutcome};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::StreamMode;
+use somatize_core::graph::node::{NodeMeta, NodeOutcome};
+use somatize_core::tracking::event::Event;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -359,7 +359,7 @@ mod tests {
     use crate::cache::memory::MemoryCache;
     use crate::event_bus::EventBus;
     use somatize_core::error::Result as SomaResult;
-    use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta};
+    use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta};
 
     fn meta(name: &str, stream_mode: StreamMode, cacheable: bool) -> FilterMeta {
         FilterMeta {

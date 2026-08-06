@@ -3,9 +3,15 @@
 //! The graph is the user-facing representation of a pipeline topology.
 //! It gets compiled into an `ExecutionPlan` by the compiler.
 
-use crate::control::LoopCondition;
+pub mod any;
+pub mod control;
+pub mod filter;
+pub mod node;
+pub mod step;
+
+use crate::distributed::TrainingStrategy;
 use crate::error::{Result, SomaError};
-use crate::strategy::TrainingStrategy;
+use crate::graph::control::LoopCondition;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -56,7 +62,7 @@ pub enum NodeKind {
         arms: Vec<String>,
     },
     /// An effectful node: calls models, tools, or other graphs, and decides
-    /// what happens next. See [`crate::step::Step`].
+    /// what happens next. See [`crate::graph::step::Step`].
     Step {
         /// Name the step is registered under in the `NodeCatalog`.
         step_name: String,
@@ -512,7 +518,7 @@ impl Graph {
     /// Does this graph — or any sub-graph nested inside it — contain a step?
     ///
     /// A step calls models and tools, so a graph that contains one is not a
-    /// deterministic function of its input. [`crate::effect::Effect::is_pure`]
+    /// deterministic function of its input. [`crate::agentic::effect::Effect::is_pure`]
     /// asks this before memoizing a graph effect by content.
     pub fn contains_steps(&self) -> bool {
         self.nodes.iter().any(|node| match &node.kind {

@@ -24,7 +24,7 @@ pub enum DataType {
     Bytes,
     /// Structured JSON (any shape).
     Json,
-    /// A conversation: a list of [`crate::message::Message`].
+    /// A conversation: a list of [`crate::agentic::message::Message`].
     ///
     /// Distinct from `Json` so the compiler can reject an edge that hands a
     /// tensor, or an arbitrary document, to a node expecting a conversation.

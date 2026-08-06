@@ -20,9 +20,9 @@
 //! bytes (deterministic — the default map is sorted). Bytes/Object:
 //! raw bytes.
 
-use crate::action::ContentHash;
+use crate::cache::action::ContentHash;
+use crate::data::value::Value;
 use crate::error::{Result, SomaError};
-use crate::value::Value;
 use std::sync::Arc;
 
 /// Frame magic: the first six bytes of every `SOMA1`-encoded value.

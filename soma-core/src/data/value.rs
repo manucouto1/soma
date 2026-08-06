@@ -27,7 +27,7 @@ pub enum Value {
     /// Distinct from `Json(String)`: a prompt or completion is text, not a
     /// JSON document that happens to be a string. Keeping them apart means
     /// no round-trip through quoting/escaping on every hop, and lets a
-    /// schema say "this edge carries text" — see [`crate::schema::DataType`].
+    /// schema say "this edge carries text" — see [`crate::data::schema::DataType`].
     Text(Arc<str>),
 
     /// Structured JSON data (Arc-wrapped for cheap cloning).

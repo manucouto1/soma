@@ -13,14 +13,14 @@ use crate::runner::Transport;
 use crate::strategy::StrategyExecutor;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
+use somatize_core::data::store::{DataRef, DataStore};
+use somatize_core::data::value::Value;
+use somatize_core::distributed::TrainingStrategy;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::Event;
-use somatize_core::fingerprint::ArchitectureFingerprint;
 use somatize_core::graph::Graph;
-use somatize_core::store::{DataRef, DataStore};
-use somatize_core::strategy::TrainingStrategy;
+use somatize_core::tracking::event::Event;
+use somatize_core::tracking::fingerprint::ArchitectureFingerprint;
 use somatize_core::util::timestamp_id;
-use somatize_core::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -288,13 +288,13 @@ impl GraphSession {
 
         // Store trained states from __state_ keys into NodeCatalog
         for (key, value) in &all_outputs {
-            if let Some(node_id) = somatize_core::keys::node_of_state_key(key) {
+            if let Some(node_id) = somatize_core::data::keys::node_of_state_key(key) {
                 self.catalog.try_set_state(node_id, value.clone())?;
             }
         }
 
         // Remove __state_ keys from returned outputs (callers expect node IDs only)
-        all_outputs.retain(|k, _| somatize_core::keys::node_of_state_key(k).is_none());
+        all_outputs.retain(|k, _| somatize_core::data::keys::node_of_state_key(k).is_none());
 
         self.fitted = true;
         Ok(all_outputs)
@@ -486,13 +486,13 @@ mod tests {
     use somatize_compiler::NodeRegistry;
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result;
-    use somatize_core::filter::{FilterKind, FilterMeta, StreamMode};
+    use somatize_core::graph::filter::{FilterKind, FilterMeta, StreamMode};
     use somatize_core::graph::{Edge, Node};
 
     // ── Test filters ──
 
     struct DoublerFilter;
-    impl somatize_core::filter::Filter for DoublerFilter {
+    impl somatize_core::graph::filter::Filter for DoublerFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Doubler"])
         }
@@ -516,7 +516,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -524,7 +524,7 @@ mod tests {
     }
 
     struct AdderFilter(f64);
-    impl somatize_core::filter::Filter for AdderFilter {
+    impl somatize_core::graph::filter::Filter for AdderFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Adder", &self.0.to_le_bytes()])
         }
@@ -548,7 +548,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -556,7 +556,7 @@ mod tests {
     }
 
     struct MeanFilter;
-    impl somatize_core::filter::Filter for MeanFilter {
+    impl somatize_core::graph::filter::Filter for MeanFilter {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[b"Mean"])
         }
@@ -588,7 +588,7 @@ mod tests {
                 differentiable: true,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -626,7 +626,7 @@ mod tests {
         let mut ctx =
             Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(session.graph()));
         ctx.set(
-            somatize_core::keys::GRAPH_INPUT,
+            somatize_core::data::keys::GRAPH_INPUT,
             Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
         );
         executor::execute(&plan, &mut ctx, session.catalog(), &MemoryCache::default()).unwrap();
@@ -687,7 +687,7 @@ mod tests {
             let bus = Arc::new(EventBus::new(64));
             let mut ctx = Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(&graph));
             ctx.set(
-                somatize_core::keys::GRAPH_INPUT,
+                somatize_core::data::keys::GRAPH_INPUT,
                 Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
             );
             executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();
@@ -713,7 +713,7 @@ mod tests {
         lib.register("add", Box::new(AdderFilter(100.0)));
 
         struct MergeFilter;
-        impl somatize_core::filter::Filter for MergeFilter {
+        impl somatize_core::graph::filter::Filter for MergeFilter {
             fn config_hash(&self) -> CacheKey {
                 CacheKey::from_parts(&[b"Merge"])
             }
@@ -731,7 +731,7 @@ mod tests {
                     differentiable: false,
                     deterministic: true,
                     stream_mode: StreamMode::FixedState,
-                    distribution: somatize_core::filter::Distribution::Local,
+                    distribution: somatize_core::graph::filter::Distribution::Local,
                     input_schema: None,
                     output_schema: None,
                 }
@@ -745,7 +745,7 @@ mod tests {
         let bus = Arc::new(EventBus::new(64));
         let mut ctx = Context::new(bus, "test").with_graph_info(GraphInfo::from_graph(&graph));
         ctx.set(
-            somatize_core::keys::GRAPH_INPUT,
+            somatize_core::data::keys::GRAPH_INPUT,
             Value::tensor(vec![5.0], vec![1]),
         );
         executor::execute(&plan, &mut ctx, &lib, &cache).unwrap();

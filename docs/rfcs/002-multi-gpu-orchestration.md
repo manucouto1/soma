@@ -51,9 +51,9 @@ The 5-15x gap dictates which parallelism strategies are viable over PCIe:
 
 These already exist and form the foundation:
 
-- **`TrainingStrategy`** (`soma-core/src/strategy.rs`): `DataParallel`, `ModelParallel`,
+- **`TrainingStrategy`** (`soma-core/src/distributed.rs`): `DataParallel`, `ModelParallel`,
   `Federated`, `PopulationBased`, `Custom` — graph-level attribute.
-- **`Distribution`** (`soma-core/src/filter.rs`): `Local | Remote(WorkerId | Tag) | Any`
+- **`Distribution`** (`soma-core/src/graph/filter.rs`): `Local | Remote(WorkerId | Tag) | Any`
   — per-filter placement hint.
 - **`ExecutionPlan::Remote`** (`soma-compiler/src/plan.rs`): wraps a sub-plan for remote execution.
 - **`ExecutionPlan::Composite`** : groups differentiable nodes into indivisible blocks

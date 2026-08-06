@@ -310,7 +310,7 @@ lie, so it gets its own shape: `poll()` advances one turn and returns a
 The two are **peer node kinds in the same graph**, registered in the same
 `NodeCatalog` and executed through the same single site (`run_node`).
 What the machinery around them needs to know collapses into one metadata
-type, `NodeMeta` (`soma-core/src/node.rs`): input resolution, panic
+type, `NodeMeta` (`soma-core/src/graph/node.rs`): input resolution, panic
 containment, the start/complete/fail events and the cache guard all read
 `NodeMeta`, not "which kind is this". `From<StepMeta>` sets
 `cacheable: false, deterministic: false`, so the difference survives as

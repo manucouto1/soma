@@ -11,7 +11,7 @@
 //! one execution site: input resolution, the output cache, panic
 //! containment and the start/complete/fail events happen once, for both
 //! kinds — whether a node is cacheable is *data* on its
-//! [`NodeMeta`](somatize_core::node::NodeMeta), not a branch on its kind.
+//! [`NodeMeta`](somatize_core::graph::node::NodeMeta), not a branch on its kind.
 //!
 //! The pieces:
 //! - [`runner`] — trait-based execution: LocalRunner, StudyRunner, PbtRunner

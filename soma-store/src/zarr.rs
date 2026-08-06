@@ -23,9 +23,9 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::store::{DataRef, DataStore, StorageConfig, StoreMeta};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::store::{DataRef, DataStore, StorageConfig, StoreMeta};
-use somatize_core::value::Value;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -687,7 +687,7 @@ impl DataStore for ZarrStore {
             }
             _ => {
                 let value = self.get(data_ref)?;
-                somatize_core::store::slice_tensor_rows(&value, start, len)
+                somatize_core::data::store::slice_tensor_rows(&value, start, len)
             }
         }
     }

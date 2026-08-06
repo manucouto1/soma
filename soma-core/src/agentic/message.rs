@@ -11,8 +11,8 @@
 //! A shared message type plus a schema that can say "this edge carries
 //! messages" moves a chunk of that from runtime surprise to compile error.
 
+use crate::data::value::Value;
 use crate::error::{Result, SomaError};
-use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
 /// Who produced a message.
@@ -67,7 +67,7 @@ pub enum ContentBlock {
     ToolUse {
         /// Correlates with the matching [`ContentBlock::ToolResult`].
         id: String,
-        /// Which tool — a [`crate::tool::ToolSpec::name`].
+        /// Which tool — a [`crate::agentic::tool::ToolSpec::name`].
         name: String,
         /// Arguments, shaped by the tool's declared schema.
         input: serde_json::Value,

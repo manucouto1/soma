@@ -20,8 +20,8 @@
 
 use crate::record::ExperimentRecord;
 use serde::{Deserialize, Serialize};
-use somatize_core::fingerprint::ArchitectureFingerprint;
-use somatize_core::summary::round4;
+use somatize_core::tracking::fingerprint::ArchitectureFingerprint;
+use somatize_core::tracking::summary::round4;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One atomic difference between a parent experiment and its child.
@@ -409,7 +409,7 @@ fn compact(value: &serde_json::Value) -> String {
         serde_json::Value::Number(n) => n.to_string(),
         other => {
             let text = other.to_string();
-            somatize_core::summary::one_line(&text, 40)
+            somatize_core::tracking::summary::one_line(&text, 40)
         }
     }
 }
@@ -417,9 +417,9 @@ fn compact(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::fingerprint::EdgeRef;
     use somatize_core::graph::{Node, linear_pipeline};
     use somatize_core::tracking::GitInfo;
+    use somatize_core::tracking::fingerprint::EdgeRef;
 
     fn fingerprint(nodes: &[(&str, &str)], edges: &[(&str, &str)]) -> ArchitectureFingerprint {
         ArchitectureFingerprint {

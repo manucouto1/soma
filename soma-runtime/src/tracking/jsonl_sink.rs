@@ -1,7 +1,7 @@
 //! Append-only JSONL event sink.
 
 use chrono::Utc;
-use somatize_core::event::Event;
+use somatize_core::tracking::event::Event;
 use somatize_core::tracking::{EventEnvelope, EventSink};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};

@@ -11,8 +11,8 @@
 //! `Arc<Value>` so the hot forward path can borrow them (`&*arc`) without
 //! cloning potentially-large tensors.
 
+use crate::data::value::Value;
 use crate::error::Result;
-use crate::value::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

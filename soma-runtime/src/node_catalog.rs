@@ -17,14 +17,14 @@
 
 use somatize_compiler::NodeRegistry;
 use somatize_core::cache::CacheKey;
+use somatize_core::data::state::{MemoryStateStore, StateStore};
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::Filter;
+use somatize_core::graph::filter::Filter;
 #[cfg(test)]
-use somatize_core::filter::FilterMeta;
-use somatize_core::node::NodeMeta;
-use somatize_core::state::{MemoryStateStore, StateStore};
-use somatize_core::step::Step;
-use somatize_core::value::Value;
+use somatize_core::graph::filter::FilterMeta;
+use somatize_core::graph::node::NodeMeta;
+use somatize_core::graph::step::Step;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -230,7 +230,7 @@ impl NodeRegistry for NodeCatalog {
 mod tests {
     use super::*;
     use somatize_core::error::Result;
-    use somatize_core::filter::{FilterKind, StreamMode};
+    use somatize_core::graph::filter::{FilterKind, StreamMode};
 
     struct DummyFilter {
         name: String,
@@ -254,7 +254,7 @@ mod tests {
                 differentiable: false,
                 deterministic: true,
                 stream_mode: StreamMode::FixedState,
-                distribution: somatize_core::filter::Distribution::Local,
+                distribution: somatize_core::graph::filter::Distribution::Local,
                 input_schema: None,
                 output_schema: None,
             }
@@ -333,14 +333,14 @@ mod tests {
         fn config_hash(&self) -> CacheKey {
             CacheKey::from_parts(&[self.name.as_bytes()])
         }
-        fn meta(&self) -> somatize_core::step::StepMeta {
-            somatize_core::step::StepMeta::new(&self.name)
+        fn meta(&self) -> somatize_core::graph::step::StepMeta {
+            somatize_core::graph::step::StepMeta::new(&self.name)
         }
         fn poll(
             &self,
-            _ctx: &somatize_core::step::StepCtx<'_>,
-        ) -> Result<somatize_core::step::Transition> {
-            Ok(somatize_core::step::Transition::Done(Value::Empty))
+            _ctx: &somatize_core::graph::step::StepCtx<'_>,
+        ) -> Result<somatize_core::graph::step::Transition> {
+            Ok(somatize_core::graph::step::Transition::Done(Value::Empty))
         }
     }
 

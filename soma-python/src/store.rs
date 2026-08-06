@@ -9,7 +9,7 @@
 use pyo3::prelude::*;
 use std::sync::Arc;
 
-use somatize_core::store::DataStore;
+use somatize_core::data::store::DataStore;
 
 /// Construct a store from `(store_type, …)`, or explain what is missing.
 ///
@@ -32,7 +32,7 @@ pub(crate) fn build_data_store(
             let p = path.ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("local store requires 'path'")
             })?;
-            Ok(Arc::new(somatize_core::store::LocalDataStore::new(p)))
+            Ok(Arc::new(somatize_core::data::store::LocalDataStore::new(p)))
         }
         "s3" => {
             let bucket = bucket.ok_or_else(|| {

@@ -1,12 +1,14 @@
 //! Core-type edge cases: odd values, degenerate graphs, boundary shapes.
 
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::SomaError;
-use somatize_core::event::MetricRecord;
 use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
-use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-use somatize_core::study::{Direction, Objective, SearchStrategy, Study, Trial, TrialState};
-use somatize_core::value::Value;
+use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::optimizer::study::{
+    Direction, Objective, SearchStrategy, Study, Trial, TrialState,
+};
+use somatize_core::tracking::event::MetricRecord;
 
 // ── Value edge cases ──
 

@@ -46,8 +46,8 @@ pub use openai_compat::OpenAiCompatible;
 pub use steps::{JudgeStep, LlmStep, ReactStep, Verdict};
 pub use tools::{FnTool, Tool, ToolOutcome, Toolbox};
 
-use somatize_core::effect::EffectHandler;
-use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse};
+use somatize_core::agentic::effect::EffectHandler;
+use somatize_core::agentic::effect::{Effect, EffectResult, LlmRequest, LlmResponse};
 use somatize_core::error::Result;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -226,8 +226,8 @@ impl EffectHandler for LlmHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::effect::{StopReason, Usage};
-    use somatize_core::message::Message;
+    use somatize_core::agentic::effect::{StopReason, Usage};
+    use somatize_core::agentic::message::Message;
     use std::sync::Mutex;
 
     /// Records what it was asked, answers with its own id.
@@ -352,7 +352,7 @@ mod tests {
         assert!(handler.handles(&Effect::Llm(ask("m"))));
         assert!(!handler.handles(&Effect::Tool {
             name: "search".into(),
-            args: somatize_core::value::Value::Empty,
+            args: somatize_core::data::value::Value::Empty,
         }));
     }
 
