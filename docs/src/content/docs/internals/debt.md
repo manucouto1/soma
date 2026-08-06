@@ -89,7 +89,7 @@ appeared **five times** in it.
 in this one file. It was the single biggest obstacle to understanding the
 Python API from the Rust side.
 
-**Resolution** `soma-python/src/graph/` is now one module per thing the type
+**Resolved** `soma-python/src/graph/` is now one module per thing the type
 owns — `topology`, `registry`, `execution`, `agentic`, `distributed`,
 `tracking`, `viz` — and `mod.rs` (`soma-python/src/graph/mod.rs:32`) is the
 struct plus one `#[pymethods]` block of signatures and documentation, 798
