@@ -88,7 +88,7 @@ output-cacheable" as **data**. There is no `if is_step` anywhere in the executor
 
 A recursive tree walked uniformly.
 
-- `ExecutionPlan` (`soma-compiler/src/plan.rs:19`) — recursive in four shapes; `children()` (`:142`) is the single traversal, written per variant so a new variant breaks the build. `(!)` Two functions in the same crate do not use it and are wrong as a result — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch).
+- `ExecutionPlan` (`soma-compiler/src/plan.rs:19`) — recursive in four shapes; `children()` (`:142`) traverses it for a pass that reads and `map_children()` (`:194`) for one that rewrites, both written per variant so a new variant breaks the build. The two passes that walked by hand were wrong as a result — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch), resolved.
 - `NodeKind::SubGraph` (`soma-core/src/graph/mod.rs:32`) — a graph inside a node.
 - `SearchDimension::Conditional` (`soma-core/src/optimizer/search.rs:36`) — a dimension gated on another.
 - `TieredCache` (`soma-runtime/src/cache/tiered.rs:11`) — a `CacheStore` made of `CacheStore`s.
@@ -439,7 +439,7 @@ short version, organized by which pattern failed.
 
 | Pattern | Where it broke |
 |---|---|
-| Composite | `resolve_distribution` / `collapse_differentiable` do not use `children()` and skip `Loop`/`Branch` — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) |
+| Composite | `resolve_distribution` / `collapse_differentiable` walked by hand and skipped `Loop`/`Branch`; they use `map_children()` now — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) |
 | Template method | `Transport::execute_node`'s default is wrong for every caller, and its own doc says so — [D-41](/soma/internals/debt/#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) |
 | Strategy | `Runner` — a strategy interface that had one live implementation and one dead one; the dead one is deleted — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
 | Shared primitives | `run_node` and `StreamRun::run_compute` share four primitives; what still differs between them is reporting, and it is a decision rather than drift — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |

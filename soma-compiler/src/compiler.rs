@@ -717,8 +717,15 @@ impl<'a> Compiler<'a> {
     /// collide. The executor computes the real key
     /// `hash(config + state + input)` per node with the materialized
     /// input in hand, and skips execution on a hit.
-    /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
+    /// Wrap nodes with Remote distribution in `ExecutionPlan::Remote`.
+    ///
+    /// Descends through everything that owns a sub-plan — including a
+    /// loop body and a branch arm, which this pass used to fall past with
+    /// `other => other`. A `Remote` node inside a loop ran locally, in
+    /// silence: the plan was well-formed, the node executed, and nothing
+    /// said the target had been ignored.
     fn resolve_distribution(&self, plan: ExecutionPlan) -> ExecutionPlan {
+        let plan = plan.map_children(&mut |p| self.resolve_distribution(p));
         match plan {
             ExecutionPlan::Execute { ref node_id } | ExecutionPlan::Step { ref node_id, .. } => {
                 if let Some(meta) = self.registry.node_meta(node_id) {
@@ -736,18 +743,6 @@ impl<'a> Compiler<'a> {
                     plan
                 }
             }
-            ExecutionPlan::Sequence(steps) => ExecutionPlan::Sequence(
-                steps
-                    .into_iter()
-                    .map(|s| self.resolve_distribution(s))
-                    .collect(),
-            ),
-            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches
-                    .into_iter()
-                    .map(|b| self.resolve_distribution(b))
-                    .collect(),
-            ),
             ExecutionPlan::Composite { ref node_ids } => {
                 // If ALL nodes in the composite have a Remote target, wrap the
                 // entire composite in a single Remote (using the first node's
@@ -783,8 +778,15 @@ impl<'a> Compiler<'a> {
 
     /// Collapse consecutive differentiable Execute nodes into Composite blocks.
     ///
-    /// A `Composite` groups nodes that should share a PyTorch autograd session.
-    /// Only groups 2+ consecutive `Execute` nodes where `meta.differentiable == true`.
+    /// A `Composite` groups nodes that should share a PyTorch autograd
+    /// session. Only groups 2+ consecutive `Execute` nodes where
+    /// `meta.differentiable == true`.
+    ///
+    /// Grouping is a `Sequence` question, so that variant is handled here
+    /// and everything else just descends — including a loop body and a
+    /// branch arm, which this pass used to fall past. A differentiable
+    /// pair inside a loop was never fused, so gradients did not flow
+    /// through it and the loop trained nothing.
     fn collapse_differentiable(&self, plan: ExecutionPlan) -> ExecutionPlan {
         match plan {
             ExecutionPlan::Sequence(steps) => {
@@ -814,22 +816,7 @@ impl<'a> Compiler<'a> {
                     ExecutionPlan::Sequence(result)
                 }
             }
-            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches
-                    .into_iter()
-                    .map(|b| self.collapse_differentiable(b))
-                    .collect(),
-            ),
-            ExecutionPlan::Remote {
-                node_id,
-                target,
-                plan,
-            } => ExecutionPlan::Remote {
-                node_id,
-                target,
-                plan: Box::new(self.collapse_differentiable(*plan)),
-            },
-            other => other,
+            other => other.map_children(&mut |p| self.collapse_differentiable(p)),
         }
     }
 

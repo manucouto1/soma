@@ -45,7 +45,7 @@ is what keeps those anchors honest.
 | [D-01](#d-01--pygraph-is-the-workspaces-god-object) | ~~`PyGraph`: 2 458 lines, 19 fields, ~47 public methods~~ — **Resolved** | High |
 | [D-11](#d-11--the-stream-path-re-implements-run_node-and-has-drifted) | ~~Stream execution re-implements `run_node` and has drifted — no cache events~~ — **Resolved** | High |
 | [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | `mean_by_key` panics on an empty slice, reachable from Python | High |
-| [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | Compiler never descends into `Loop`/`Branch` for distribution or fusion | High |
+| [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | ~~Compiler never descends into `Loop`/`Branch` for distribution or fusion~~ — **Resolved** | High |
 | [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | `Transport::execute_node` runs every remote node with an empty catalog and an unsalted key | High |
 | [D-02](#d-02--worker-and-worker-execute_plan) | `Worker::execute_plan`: 324 lines across nine responsibilities | High |
 | [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
@@ -617,6 +617,21 @@ This is exactly the class of bug `ExecutionPlan::children()`
 functions do not use it.
 
 **Fix shape** Rewrite both as walks over `children()`.
+
+**Resolved** `children()` reads; a rewriting pass needs the mirror of it, so
+`ExecutionPlan::map_children` (`soma-compiler/src/plan.rs:194`) rebuilds a plan
+with every sub-plan transformed. Exhaustive, for the same reason `children()`
+is: a wildcard makes a new variant's sub-plans invisible to every pass at once,
+and the compiler cannot warn about a case that is already handled.
+
+`resolve_distribution` (`soma-compiler/src/compiler.rs:728`) descends first and
+then decides about itself. `collapse_differentiable`
+(`soma-compiler/src/compiler.rs:800`) keeps its `Sequence` arm — grouping
+consecutive nodes is a `Sequence` question — and everything else descends.
+
+Three tests in `soma-compiler/tests/control_flow.rs`, each of which fails
+against the previous compiler: a remote node inside a loop, a remote node
+inside a branch arm, and a differentiable pair inside a loop.
 
 ### D-33 · `Value::to_plain_json` contradicts its own contract
 

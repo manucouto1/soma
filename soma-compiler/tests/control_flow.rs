@@ -472,3 +472,120 @@ fn branch_arm_chain_is_fully_contained() {
     );
     assert_eq!(execute_count(arm_a, "b1"), 0);
 }
+
+// ── Descending into control flow ──
+//
+// Both compiler passes over the finished plan used to end in
+// `other => other`, so a `Loop` body and a `Branch` arm were opaque to
+// them. Neither failure showed up as an error: a `Remote` node inside a
+// loop simply ran locally, and a differentiable pair inside one simply
+// never fused — so no gradients flowed through it. See D-32.
+
+fn remote_meta(name: &str) -> FilterMeta {
+    FilterMeta {
+        distribution: Distribution::Remote(somatize_core::graph::filter::RemoteTarget::Tag(
+            "gpu".into(),
+        )),
+        ..meta(name)
+    }
+}
+
+fn differentiable_meta(name: &str) -> FilterMeta {
+    FilterMeta {
+        kind: FilterKind::Trainable,
+        differentiable: true,
+        ..meta(name)
+    }
+}
+
+/// Is there a `Remote` naming `node_id` anywhere in the plan?
+fn has_remote(plan: &ExecutionPlan, node_id: &str) -> bool {
+    match plan {
+        ExecutionPlan::Remote { node_id: n, .. } if n == node_id => true,
+        other => other.children().any(|(_, p)| has_remote(p, node_id)),
+    }
+}
+
+/// The node ids of every `Composite` block in the plan.
+fn composites(plan: &ExecutionPlan) -> Vec<Vec<String>> {
+    let mut found = match plan {
+        ExecutionPlan::Composite { node_ids } => vec![node_ids.clone()],
+        _ => Vec::new(),
+    };
+    for (_, child) in plan.children() {
+        found.extend(composites(child));
+    }
+    found
+}
+
+#[test]
+fn a_remote_node_inside_a_loop_is_still_remote() {
+    let mut g = Graph::new();
+    g.add_node(Node::loop_node("refine", Some(3)));
+    g.add_node(Node::filter_with_id("heavy", "heavy"));
+    g.add_edge(Edge::control("e1", "refine", "heavy"));
+
+    let mut reg = SimpleNodeRegistry::new();
+    reg.register_meta(
+        "heavy",
+        remote_meta("heavy"),
+        CacheKey::from_parts(&[b"heavy"]),
+    );
+
+    let result = compile(&g, &reg, CompileMode::Inference, None).expect("compiles");
+    assert!(
+        has_remote(&result.plan, "heavy"),
+        "a node that declared a remote target ran locally, in silence:\n{}",
+        result.plan
+    );
+}
+
+#[test]
+fn a_remote_node_inside_a_branch_arm_is_still_remote() {
+    let mut g = Graph::new();
+    g.add_node(Node::branch("router"));
+    g.add_node(Node::filter_with_id("heavy", "heavy"));
+    g.add_edge(Edge::control("e1", "router", "heavy").with_label("heavy"));
+
+    let mut reg = SimpleNodeRegistry::new();
+    reg.register_meta("router", meta("router"), CacheKey::from_parts(&[b"router"]));
+    reg.register_meta(
+        "heavy",
+        remote_meta("heavy"),
+        CacheKey::from_parts(&[b"heavy"]),
+    );
+
+    let result = compile(&g, &reg, CompileMode::Inference, None).expect("compiles");
+    assert!(
+        has_remote(&result.plan, "heavy"),
+        "the arm's remote target was discarded:\n{}",
+        result.plan
+    );
+}
+
+#[test]
+fn differentiable_nodes_inside_a_loop_are_fused() {
+    let mut g = Graph::new();
+    g.add_node(Node::loop_node("train", Some(3)));
+    g.add_node(Node::filter_with_id("enc", "enc"));
+    g.add_node(Node::filter_with_id("head", "head"));
+    g.add_edge(Edge::control("e1", "train", "enc"));
+    g.add_edge(Edge::data("e2", "enc", "head"));
+
+    let mut reg = SimpleNodeRegistry::new();
+    for id in ["enc", "head"] {
+        reg.register_meta(
+            id,
+            differentiable_meta(id),
+            CacheKey::from_parts(&[id.as_bytes()]),
+        );
+    }
+
+    let result = compile(&g, &reg, CompileMode::Differentiable, None).expect("compiles");
+    assert_eq!(
+        composites(&result.plan),
+        vec![vec!["enc".to_string(), "head".to_string()]],
+        "the pair was never fused, so no gradient flows between them:\n{}",
+        result.plan
+    );
+}

@@ -189,6 +189,60 @@ impl ExecutionPlan {
             .chain(single.map(|p| (None, p)))
     }
 
+    /// Rebuild this plan with `f` applied to every sub-plan.
+    ///
+    /// The mirror of [`children`](Self::children), for a pass that
+    /// rewrites rather than reads. Two compiler passes used to walk with
+    /// an arm per variant and `other => other` at the end, which is how a
+    /// `Remote` node inside a loop body came to run locally in silence,
+    /// and a differentiable node inside one never got fused into a
+    /// `Composite` — so gradients did not flow through it.
+    ///
+    /// Exhaustive for the same reason `children` is: a wildcard here
+    /// makes a new variant's sub-plans invisible to every pass, and the
+    /// compiler cannot warn about a case that is already handled.
+    pub fn map_children(self, f: &mut impl FnMut(ExecutionPlan) -> ExecutionPlan) -> ExecutionPlan {
+        match self {
+            Self::Sequence(steps) => Self::Sequence(steps.into_iter().map(&mut *f).collect()),
+            Self::Parallel(branches) => Self::Parallel(branches.into_iter().map(&mut *f).collect()),
+            Self::Step { node_id, handoffs } => Self::Step {
+                node_id,
+                handoffs: handoffs.into_iter().map(|(t, p)| (t, f(p))).collect(),
+            },
+            Self::Branch { node_id, arms } => Self::Branch {
+                node_id,
+                arms: arms.into_iter().map(|(l, p)| (l, f(p))).collect(),
+            },
+            Self::Loop {
+                node_id,
+                body,
+                max_iterations,
+                until,
+                carry_from,
+            } => Self::Loop {
+                node_id,
+                body: Box::new(f(*body)),
+                max_iterations,
+                until,
+                carry_from,
+            },
+            Self::Remote {
+                node_id,
+                target,
+                plan,
+            } => Self::Remote {
+                node_id,
+                target,
+                plan: Box::new(f(*plan)),
+            },
+            // No sub-plans: a leaf, a fused block, a chunked chain, nothing.
+            plan @ (Self::Execute { .. }
+            | Self::Composite { .. }
+            | Self::Stream { .. }
+            | Self::Empty) => plan,
+        }
+    }
+
     /// Count total nodes in the plan.
     pub fn node_count(&self) -> usize {
         self.own_node_ids().len() + self.children().map(|(_, p)| p.node_count()).sum::<usize>()

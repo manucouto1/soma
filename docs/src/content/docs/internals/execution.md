@@ -100,10 +100,13 @@ ExecutionPlan
   └──◆ Vec<(String, ExecutionPlan)>  Branch.arms
 ```
 
-`ExecutionPlan::children()` (`soma-compiler/src/plan.rs:142`) is that traversal,
-written out per variant on purpose so a new variant fails to compile — see the
-comment at `:143`. Two functions in the same crate do **not** use it and are
-wrong as a direct result: `(!)` [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch).
+`ExecutionPlan::children()` (`soma-compiler/src/plan.rs:142`) is that
+traversal for a pass that *reads*; `map_children()` (`:194`) is the mirror for
+one that rewrites. Both are written out per variant on purpose so a new variant
+fails to compile — see the comment at `:143`. The two compiler passes that used
+to walk by hand, and were wrong as a direct result, now use `map_children`:
+[D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch),
+resolved.
 
 ### Ownership and relationships
 
@@ -145,7 +148,6 @@ schedule(plan, workers)                              soma-compiler/src/scheduler
 
 ### Debt
 
-- [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) — `resolve_distribution` / `collapse_differentiable` skip `Loop` and `Branch` bodies **(High)**
 - [D-65](/soma/internals/debt/#d-65--the-schedulers-capability-model-is-unimplemented) — the scheduler's capability model is defined and unused
 - [D-17](/soma/internals/debt/#d-17--four-renderers-four-independent-match-nodekind) — `mermaid_nodes` and `graph_nodes` duplicate a whole recursive walk
 - [D-18](/soma/internals/debt/#d-18--two-worker-capability-models-in-one-workspace) — two worker-capability models in one workspace
