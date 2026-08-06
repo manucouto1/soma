@@ -13,11 +13,11 @@ use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
 use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Graph, Node};
-use somatize_runtime::cache::FsActionStore;
-use somatize_runtime::effects::{
+use somatize_runtime::agentic::{
     EffectDriver, EffectHandler, EffectJournal, GraphHandler, NodeOutcome,
 };
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::cache::FsActionStore;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
 use std::sync::{Arc, Mutex};
 
 // ── A model that answers from a script ──

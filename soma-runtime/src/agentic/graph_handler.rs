@@ -9,11 +9,11 @@
 //! research loop that crashes after its fourth experiment replays the first
 //! three from the journal instead of paying for them again.
 
+use crate::agentic::{EffectDriver, EffectHandler, EffectJournal};
 use crate::cache::MemoryCache;
-use crate::effects::{EffectDriver, EffectHandler, EffectJournal};
-use crate::event_bus::EventBus;
-use crate::graph_session::GraphSession;
-use crate::node_catalog::NodeCatalog;
+use crate::execution::graph_session::GraphSession;
+use crate::execution::node_catalog::NodeCatalog;
+use crate::tracking::event_bus::EventBus;
 use somatize_core::agentic::effect::{Effect, EffectResult, GraphEffectMode};
 use somatize_core::cache::CacheStore;
 use somatize_core::error::{Result, SomaError};
@@ -502,7 +502,7 @@ mod tests {
         }
     }
 
-    use crate::effects::NodeOutcome;
+    use crate::agentic::NodeOutcome;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Doubles, counting how often the graph actually runs it.

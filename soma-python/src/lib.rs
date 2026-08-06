@@ -56,16 +56,16 @@ pub(crate) mod prelude {
     pub(crate) use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
     pub(crate) use somatize_runtime::EventBus;
     pub(crate) use somatize_runtime::StudyIo;
+    pub(crate) use somatize_runtime::agentic::{EffectDriver, EffectJournal};
     pub(crate) use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};
-    pub(crate) use somatize_runtime::effects::{EffectDriver, EffectJournal};
-    pub(crate) use somatize_runtime::executor::{self, Context, GraphInfo};
-    pub(crate) use somatize_runtime::executors::study::{
-        FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
-    };
-    pub(crate) use somatize_runtime::node_catalog::NodeCatalog;
-    pub(crate) use somatize_runtime::runner::{LocalRunner, Runner};
-    pub(crate) use somatize_runtime::sampler::{
+    pub(crate) use somatize_runtime::execution::executor::{self, Context, GraphInfo};
+    pub(crate) use somatize_runtime::execution::node_catalog::NodeCatalog;
+    pub(crate) use somatize_runtime::execution::runner::{LocalRunner, Runner};
+    pub(crate) use somatize_runtime::optimizer::sampler::{
         BayesianSampler, GridSampler, RandomSampler, Sampler,
+    };
+    pub(crate) use somatize_runtime::optimizer::study::{
+        FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
     };
     pub(crate) use somatize_runtime::tracking::{
         LocalTracker, RunReader, advance_head, load_manifest, resolve_parent, summarize,

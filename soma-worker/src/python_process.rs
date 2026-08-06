@@ -904,7 +904,7 @@ impl PythonProcess {
     ///
     /// Returns `Value::Json({param_name: nested list})` rather than the
     /// torch pickle this used to send. The aggregator is in Rust
-    /// ([`somatize_runtime::strategy`]), and a pickle is opaque to it: the
+    /// ([`somatize_runtime::distributed`]), and a pickle is opaque to it: the
     /// average of two `Value::Bytes` blobs is not a thing that can be
     /// computed, so the round died at the aggregation step having done all
     /// the work. Plain JSON also makes the average independent of the

@@ -20,7 +20,7 @@ the topological walk: `output_key` (the `cacheable && deterministic`
 guard and the one key derivation, salted with the run seed),
 `compute_node` (panic containment around the only filter-vs-step
 match), and `store_output` (provenance on every cache write). The
-stream driver (`StreamRun`, in `soma-runtime/src/executors/stream.rs`)
+stream driver (`StreamRun`, in `soma-runtime/src/execution/stream.rs`)
 owns only what is genuinely streaming's: chunk flow per `StreamMode`,
 the state carried between chunks, barrier buffers and their flush, and
 the per-node event bracket.

@@ -17,9 +17,9 @@ use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta,
 use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::graph::{Edge, Graph, Node};
 use somatize_runtime::GraphSession;
+use somatize_runtime::agentic::{EffectDriver, EffectHandler, EffectJournal};
 use somatize_runtime::cache::fs_store::FsActionStore;
-use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal};
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
 use std::sync::Arc;
 
 // ── Test doubles ──

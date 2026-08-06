@@ -10,7 +10,7 @@
 //! ```
 //!
 //! **On concurrency.** Effects within a turn run on scoped OS threads, the
-//! same mechanism [`crate::executor`] already uses for parallel branches —
+//! same mechanism [`crate::execution::executor`] already uses for parallel branches —
 //! not an async runtime. A model call is a blocking socket read; a handful
 //! of them in flight is a handful of parked threads, which costs nothing and
 //! keeps `Step::poll` synchronous, the Python bridge a plain call, and the
@@ -27,7 +27,7 @@ pub use graph_handler::GraphHandler;
 pub use journal::{EffectJournal, EffectSite};
 pub use sleep_handler::SleepHandler;
 
-use crate::event_bus::EventBus;
+use crate::tracking::event_bus::EventBus;
 use somatize_core::agentic::effect::{Effect, EffectResult, Usage};
 use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
@@ -60,7 +60,7 @@ pub struct EffectDriver {
     event_bus: Option<Arc<EventBus>>,
     /// Needed only to satisfy [`Transition::Spawn`], which names nodes to
     /// create mid-run.
-    catalog: Option<Arc<crate::node_catalog::NodeCatalog>>,
+    catalog: Option<Arc<crate::execution::node_catalog::NodeCatalog>>,
 }
 
 impl EffectDriver {
@@ -76,7 +76,10 @@ impl EffectDriver {
     }
 
     /// Provide the step library that dynamic fan-out draws from.
-    pub fn with_catalog(mut self, catalog: Arc<crate::node_catalog::NodeCatalog>) -> Self {
+    pub fn with_catalog(
+        mut self,
+        catalog: Arc<crate::execution::node_catalog::NodeCatalog>,
+    ) -> Self {
         self.catalog = Some(catalog);
         self
     }
@@ -935,7 +938,7 @@ mod tests {
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
         let journal = EffectJournal::new(store.clone(), store);
 
-        let mut steps = crate::node_catalog::NodeCatalog::new();
+        let mut steps = crate::execution::node_catalog::NodeCatalog::new();
         steps.register_step("worker", Box::new(Worker));
         steps.register_step("orchestrator", Box::new(Orchestrator { join }));
 
@@ -1143,7 +1146,7 @@ mod tests {
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
         let journal = EffectJournal::new(store.clone(), store);
 
-        let mut steps = crate::node_catalog::NodeCatalog::new();
+        let mut steps = crate::execution::node_catalog::NodeCatalog::new();
         steps.register_step("worker", Box::new(FlakyWorker));
         steps.register_step("orchestrator", Box::new(Orchestrator { join }));
 
@@ -1244,7 +1247,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
-        let mut steps = crate::node_catalog::NodeCatalog::new();
+        let mut steps = crate::execution::node_catalog::NodeCatalog::new();
         steps.register_step("worker", Box::new(Defector));
         steps.register_step(
             "orchestrator",
@@ -1295,7 +1298,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(FsActionStore::new(dir.path()).unwrap());
-        let mut steps = crate::node_catalog::NodeCatalog::new();
+        let mut steps = crate::execution::node_catalog::NodeCatalog::new();
         steps.register_step("worker", Box::new(PanickingWorker));
         let d = EffectDriver::new(EffectJournal::new(store.clone(), store))
             .with_catalog(Arc::new(steps));

@@ -17,14 +17,14 @@
     "can verify them. 105 hops, 99 with an anchor; before this file, zero checked."
   ],
   "files": {
-    "graph_session.rs": "soma-runtime/src/graph_session.rs",
-    "forward.rs": "soma-runtime/src/forward.rs",
-    "runner/local.rs": "soma-runtime/src/runner/local.rs",
-    "executor.rs": "soma-runtime/src/executor.rs",
-    "effects/mod.rs": "soma-runtime/src/effects/mod.rs",
-    "stream.rs": "soma-runtime/src/executors/stream.rs",
-    "executors/study.rs": "soma-runtime/src/executors/study.rs",
-    "executors/pbt.rs": "soma-runtime/src/executors/pbt.rs"
+    "graph_session.rs": "soma-runtime/src/execution/graph_session.rs",
+    "forward.rs": "soma-runtime/src/execution/forward.rs",
+    "runner/local.rs": "soma-runtime/src/execution/runner/local.rs",
+    "executor.rs": "soma-runtime/src/execution/executor.rs",
+    "effects/mod.rs": "soma-runtime/src/agentic/mod.rs",
+    "stream.rs": "soma-runtime/src/execution/stream.rs",
+    "executors/study.rs": "soma-runtime/src/optimizer/study.rs",
+    "executors/pbt.rs": "soma-runtime/src/optimizer/pbt.rs"
   },
   "traces": [
     {
@@ -108,7 +108,7 @@
           }
         }
       ],
-      "after": "`Stream` diverges only at `soma-runtime/src/forward.rs:65` (`compile_stream`); `Batched` at\n`soma-runtime/src/forward.rs:107` (its own `get_rows` loop calling `run_forward` per batch)."
+      "after": "`Stream` diverges only at `soma-runtime/src/execution/forward.rs:65` (`compile_stream`); `Batched` at\n`soma-runtime/src/execution/forward.rs:107` (its own `get_rows` loop calling `run_forward` per batch)."
     },
     {
       "id": "b",
@@ -287,7 +287,7 @@
           }
         }
       ],
-      "after": "`execute_parallel` (`soma-runtime/src/executor.rs:1084`) is worth reading in full: it marks\n`execution_order.len()`, opens a `std::thread::scope`, gives each branch a\n`ctx.snapshot()` `(!)` [D-61](/soma/internals/debt/#d-61--contextsnapshot-deep-clones-the-value-store-per-branch),\nthen merges back only the *write set* — the entries each branch appended past\nthe mark."
+      "after": "`execute_parallel` (`soma-runtime/src/execution/executor.rs:1084`) is worth reading in full: it marks\n`execution_order.len()`, opens a `std::thread::scope`, gives each branch a\n`ctx.snapshot()` `(!)` [D-61](/soma/internals/debt/#d-61--contextsnapshot-deep-clones-the-value-store-per-branch),\nthen merges back only the *write set* — the entries each branch appended past\nthe mark."
     },
     {
       "id": "c",
@@ -415,13 +415,13 @@
           ]
         }
       ],
-      "after": "`resume_with(run_id, node_id, turn, reason, answer)`\n(`soma-runtime/src/effects/mod.rs:279`) writes the answer at the *same site*, so\nthe next run replays into it. That is the whole resume mechanism — there is no\nseparate checkpoint format."
+      "after": "`resume_with(run_id, node_id, turn, reason, answer)`\n(`soma-runtime/src/agentic/mod.rs:279`) writes the answer at the *same site*, so\nthe next run replays into it. That is the whole resume mechanism — there is no\nseparate checkpoint format."
     },
     {
       "id": "d",
       "title": "`StreamRun`",
       "entry": "execute_stream",
-      "before": "Two entry points into one object. Locally, `execute_stream`\n(`soma-runtime/src/executor.rs:1208`) chunks the input and drives it. Remotely,\n`soma-worker` holds the `StreamRun` *and its `Context`* alive in `active_streams`\nbetween WebSocket messages and calls the same three methods itself.",
+      "before": "Two entry points into one object. Locally, `execute_stream`\n(`soma-runtime/src/execution/executor.rs:1208`) chunks the input and drives it. Remotely,\n`soma-worker` holds the `StreamRun` *and its `Context`* alive in `active_streams`\nbetween WebSocket messages and calls the same three methods itself.",
       "blocks": [
         {
           "root": {

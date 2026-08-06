@@ -115,8 +115,8 @@ pub mod prelude {
 
     // Runtime
     pub use somatize_runtime::cache::MemoryCache;
-    pub use somatize_runtime::graph_session::GraphSession;
-    pub use somatize_runtime::node_catalog::NodeCatalog;
+    pub use somatize_runtime::execution::graph_session::GraphSession;
+    pub use somatize_runtime::execution::node_catalog::NodeCatalog;
     pub use somatize_runtime::{EventBus, execute};
 
     // Derive macros

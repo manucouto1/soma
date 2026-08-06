@@ -147,8 +147,8 @@ impl Filter for MeanNormalizer {
 
 use somatize_core::graph::{Graph, Node};
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::execution::graph_session::GraphSession;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
 
 fn make_doubler_session() -> GraphSession {
     let mut graph = Graph::new();
@@ -195,7 +195,7 @@ fn make_pipeline_session() -> GraphSession {
 )]
 fn stream_memory_does_not_grow_with_chunks() {
     let _serial = serial_guard();
-    use somatize_runtime::forward::Stream;
+    use somatize_runtime::execution::forward::Stream;
 
     let session = make_doubler_session();
 
@@ -320,7 +320,7 @@ fn repeated_forward_memory_does_not_grow() {
 )]
 fn stream_peak_memory_bounded() {
     let _serial = serial_guard();
-    use somatize_runtime::forward::Stream;
+    use somatize_runtime::execution::forward::Stream;
 
     let session = make_doubler_session();
 

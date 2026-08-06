@@ -6,8 +6,8 @@
 //! nothing for its whole life, and the compiler's `ExecutionPlan::Remote`
 //! arm is what actually sends work out.
 
-use crate::executor::RunMode;
-use crate::node_catalog::NodeCatalog;
+use crate::execution::executor::RunMode;
+use crate::execution::node_catalog::NodeCatalog;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::data::value::Value;
 use somatize_core::error::Result;
@@ -63,7 +63,7 @@ pub trait Transport: Send + Sync {
             node_id: node_id.to_string(),
         };
         let input_val = input.cloned().unwrap_or(Value::Empty);
-        let filters = crate::node_catalog::NodeCatalog::new();
+        let filters = crate::execution::node_catalog::NodeCatalog::new();
         let (output, _) = self.execute(&plan, &filters, &input_val, &RunMode::Forward, None)?;
         Ok(output)
     }

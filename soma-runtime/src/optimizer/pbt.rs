@@ -7,8 +7,8 @@
 //!
 //! Each generation's training phase uses the existing sampler infrastructure.
 
-use crate::event_bus::EventBus;
-use crate::sampler::{hash_u64, pseudo_random};
+use crate::optimizer::sampler::{hash_u64, pseudo_random};
+use crate::tracking::event_bus::EventBus;
 use somatize_core::data::value::Value;
 use somatize_core::distributed::{ExploitStrategy, ExploreStrategy};
 use somatize_core::error::Result;

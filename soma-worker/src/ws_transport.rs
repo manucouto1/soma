@@ -6,9 +6,9 @@
 use crate::error::{Result, WorkerError};
 use somatize_compiler::ExecutionPlan;
 use somatize_core::data::value::Value;
-use somatize_runtime::executor::RunMode;
-use somatize_runtime::node_catalog::NodeCatalog;
-use somatize_runtime::runner::Transport;
+use somatize_runtime::execution::executor::RunMode;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
+use somatize_runtime::execution::runner::Transport;
 use std::collections::HashMap;
 
 use crate::protocol::*;
@@ -300,7 +300,9 @@ impl WsTransport {
             match results.len() {
                 0 => Ok(Value::Empty),
                 1 => Ok(results.into_iter().next().unwrap()),
-                _ => Ok(somatize_runtime::executors::materialize_buffer(&results)?),
+                _ => Ok(somatize_runtime::execution::stream::materialize_buffer(
+                    &results,
+                )?),
             }
         })
     }

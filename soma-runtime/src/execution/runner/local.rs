@@ -4,7 +4,7 @@
 //! after preparing the environment (deserializing filters, resolving input).
 
 use super::{RunContext, Runner};
-use crate::executor::{Context, RunMode};
+use crate::execution::executor::{Context, RunMode};
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::data::keys::{GRAPH_INPUT, input_key};
@@ -41,7 +41,7 @@ impl LocalRunner {
         }
         exec.set(GRAPH_INPUT, input.clone());
 
-        crate::executor::execute(plan, &mut exec, ctx.catalog, ctx.cache)?;
+        crate::execution::executor::execute(plan, &mut exec, ctx.catalog, ctx.cache)?;
         Ok(exec)
     }
 
@@ -89,8 +89,8 @@ mod tests {
     use super::*;
     use crate::EventBus;
     use crate::cache::MemoryCache;
-    use crate::executor::GraphInfo;
-    use crate::node_catalog::NodeCatalog;
+    use crate::execution::executor::GraphInfo;
+    use crate::execution::node_catalog::NodeCatalog;
     use somatize_core::cache::{CacheKey, CacheStore};
     use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     use std::sync::Arc;

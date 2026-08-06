@@ -1,6 +1,6 @@
 //! [`BayesianSampler`] — simplified TPE (Tree-Parzen Estimator).
 
-use crate::sampler::{Sampler, hash_u64, pseudo_random, sample_float};
+use crate::optimizer::sampler::{Sampler, hash_u64, pseudo_random, sample_float};
 use somatize_core::error::Result;
 use somatize_core::optimizer::search::{SearchDimension, SearchSpace};
 use std::collections::HashMap;
@@ -259,14 +259,14 @@ mod tests {
         // Through &mut dyn Sampler — the exact call path StudyRunner
         // uses. A sampler whose history grew must sample differently
         // from an identical one with no history at the same index.
-        use crate::sampler::Sampler as _;
+        use crate::optimizer::sampler::Sampler as _;
 
         let space = sample_space();
         let mut fed = BayesianSampler::new(40, 3, Some(42));
         let mut unfed = BayesianSampler::new(40, 3, Some(42));
 
         {
-            let as_dyn: &mut dyn crate::sampler::Sampler = &mut fed;
+            let as_dyn: &mut dyn crate::optimizer::sampler::Sampler = &mut fed;
             for i in 0..10 {
                 let params = as_dyn.sample(&space, i).unwrap().unwrap();
                 let lr = params["lr"].as_f64().unwrap();
@@ -286,7 +286,7 @@ mod tests {
         // Feed 20 observations peaked at lr = 0.01, then draw 20 TPE
         // samples and compare against a no-history control: the median
         // distance to the optimum must shrink. Deterministic (seeded).
-        use crate::sampler::Sampler as _;
+        use crate::optimizer::sampler::Sampler as _;
 
         let space = sample_space();
         let mut tpe = BayesianSampler::new(200, 3, Some(7));

@@ -120,7 +120,7 @@ becomes the pipeline it already is.
 
 **Class** God object · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executor.rs:124` — 12 fields: run mode; the value
+**Evidence** `soma-runtime/src/execution/executor.rs:124` — 12 fields: run mode; the value
 store + write order + input-hash memo; event bus + run id; graph topology;
 distributed transport; data store + spill threshold; effect driver. Eight
 consuming builders at `:195`–`:245`. It is a parameter of `execute`,
@@ -128,9 +128,9 @@ consuming builders at `:195`–`:245`. It is a parameter of `execute`,
 `execute_stream`, `run_node`, `fit_state_if_needed`, `composite_fit`,
 `run_node_inner`, `resolve_input` and `StreamRun::run_compute`.
 
-Worse, it overlaps `RunContext` (`soma-runtime/src/runner/mod.rs:32`) — five
-fields are copied across field-by-field at `soma-runtime/src/runner/local.rs:33`
-— and `ForwardEnv` (`soma-runtime/src/forward.rs:25`) is a third struct with the
+Worse, it overlaps `RunContext` (`soma-runtime/src/execution/runner/mod.rs:32`) — five
+fields are copied across field-by-field at `soma-runtime/src/execution/runner/local.rs:33`
+— and `ForwardEnv` (`soma-runtime/src/execution/forward.rs:25`) is a third struct with the
 same "avoid six parameters" justification.
 
 **Consequence** Three context types with overlapping contents; a reader has to
@@ -145,7 +145,7 @@ execution order, hash memo). `RunContext` and `ForwardEnv` then become views of
 
 **Class** God object · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/graph_session.rs:38` — 10 fields, 20 methods, and
+**Evidence** `soma-runtime/src/execution/graph_session.rs:38` — 10 fields, 20 methods, and
 both `transport: Option<Arc<dyn Transport>>` (`:44`, used by `ExecutionPlan::Remote`
 nodes) and `transports: Vec<Arc<dyn Transport>>` (`:50`, used by training
 strategies). No invariant ties them together; a caller can set one and not the
@@ -223,12 +223,12 @@ those lines.
 
 **Class** Duplication · **Severity** High · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executors/stream.rs:1` opens by claiming the three
+**Evidence** `soma-runtime/src/execution/stream.rs:1` opens by claiming the three
 shared primitives (`output_key` / `compute_node` / `store_output`) eliminate the
 duplication between batch and stream execution. They eliminate the *middle* of
-it. `StreamRun::run_compute` (`soma-runtime/src/executors/stream.rs:194`)
+it. `StreamRun::run_compute` (`soma-runtime/src/execution/stream.rs:194`)
 re-implements everything around them that `run_node`
-(`soma-runtime/src/executor.rs:816`) also does:
+(`soma-runtime/src/execution/executor.rs:816`) also does:
 
 | Step | `run_node` | `StreamRun::run_compute` |
 |---|---|---|
@@ -244,7 +244,7 @@ re-implements everything around them that `run_node`
 emits no cache events at all**, so `RunReader::cache_activity`
 (`soma-runtime/src/tracking/reader.rs:403`) reports zero cache activity for every
 streamed run while `node_timings` still produces spans. The diamond-sharing
-input-hash memoization at `soma-runtime/src/executor.rs:322` also simply does not
+input-hash memoization at `soma-runtime/src/execution/executor.rs:322` also simply does not
 exist on the stream path.
 
 **Fix shape** Push the event emission and the hash memo down into the primitives
@@ -279,7 +279,7 @@ sites.
 **Class** Duplication · **Severity** Medium · **Crate** `soma-runtime`
 
 **Evidence** `RunStarted` / `RunCompleted` / `RunFailed` is written by hand at
-`soma-runtime/src/graph_session.rs:186`, `:192`, `:198` (in `run`), then again at
+`soma-runtime/src/execution/graph_session.rs:186`, `:192`, `:198` (in `run`), then again at
 `:222`, `:248`, `:255` (the strategy branch of `fit`), then again at `:278`,
 `:285` (the local branch of `fit`).
 
@@ -296,12 +296,12 @@ what `fit` returns.
 
 **Class** Duplication · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `MedianPruner::should_prune` (`soma-runtime/src/pruner.rs:59`) and
-`PercentilePruner::should_prune` (`soma-runtime/src/pruner.rs:128`) are the same
+**Evidence** `MedianPruner::should_prune` (`soma-runtime/src/optimizer/pruner.rs:59`) and
+`PercentilePruner::should_prune` (`soma-runtime/src/optimizer/pruner.rs:128`) are the same
 20 lines differing only in the final statistic; their `values_at_step` collection
 loops are byte-identical. `RandomSampler::sample_dim`
-(`soma-runtime/src/sampler/mod.rs:190`) and `BayesianSampler::sample_uniform`
-(`soma-runtime/src/sampler/bayesian.rs:99`) are the same uniform-sampling switch
+(`soma-runtime/src/optimizer/sampler/mod.rs:190`) and `BayesianSampler::sample_uniform`
+(`soma-runtime/src/optimizer/sampler/bayesian.rs:99`) are the same uniform-sampling switch
 with slightly different clamping.
 
 ### D-15 · Five formatters for a duration, two for a truncation
@@ -379,7 +379,7 @@ linting for 740 lines that currently have neither.
 
 **Class** Latent panic · **Severity** High · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/strategy.rs:439`:
+**Evidence** `soma-runtime/src/distributed.rs:439`:
 
 ```rust
 fn mean_by_key(what: &str, entries: &[HashMap<String, Value>]) -> Result<...> {
@@ -388,13 +388,13 @@ fn mean_by_key(what: &str, entries: &[HashMap<String, Value>]) -> Result<...> {
 ```
 
 `StateAggregator for FederatedAggregation` guards it
-(`soma-runtime/src/strategy.rs:488`, "aggregation over zero clients").
+(`soma-runtime/src/distributed.rs:488`, "aggregation over zero clients").
 `GradientAggregator for GradientAggregation` does **not**
-(`soma-runtime/src/strategy.rs:461`): `len() == 1` short-circuits and `len() == 0`
+(`soma-runtime/src/distributed.rs:461`): `len() == 1` short-circuits and `len() == 0`
 falls straight through.
 
 Reachable path: `TrainingStrategy::DataParallel { num_replicas: 0, .. }` →
-`soma-runtime/src/strategy.rs:163` computes `n = 0` → the fit and gradient loops
+`soma-runtime/src/distributed.rs:163` computes `n = 0` → the fit and gradient loops
 never run → `aggregate(&[])` panics. `num_replicas` is user-supplied from Python
 (`soma-python/src/graph.rs:2094`, `num_replicas.unwrap_or(1)` — an explicit `0`
 passes straight through) and is validated nowhere.
@@ -406,7 +406,7 @@ error from `mean_by_key` on an empty slice. Both, not either.
 
 **Class** Silent failure · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/effects/mod.rs:47` —
+**Evidence** `soma-runtime/src/agentic/mod.rs:47` —
 `serde_json::to_value(reason).unwrap_or(Null)` builds the journal key for a
 suspension. Two different unserializable reasons produce the same `Null` payload,
 hence the same key, so a resume replays the wrong answer into the wrong
@@ -557,22 +557,22 @@ emit. The `unwrap_or(Null)` also turns any failure into `null`.
 
 **Class** Dead code · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/runner/remote.rs`, lines 73–114 as they stood —
+**Evidence** `soma-runtime/src/execution/runner/remote.rs`, lines 73–114 as they stood —
 every reference in the workspace was its own definition (73, 77, 91), the
-re-export chain (`soma-runtime/src/runner/mod.rs`, `soma-runtime/src/lib.rs`) or
+re-export chain (`soma-runtime/src/execution/runner/mod.rs`, `soma-runtime/src/lib.rs`) or
 a doc comment. The entire remote `Runner` implementation was unreachable. Line
 numbers are given plainly here because the code they pointed at is gone.
 
-Relatedly, the `Runner` trait itself (`soma-runtime/src/runner/mod.rs:124`) is
+Relatedly, the `Runner` trait itself (`soma-runtime/src/execution/runner/mod.rs:124`) is
 **never used as `dyn Runner`** — all call sites name `LocalRunner` concretely
-(`soma-runtime/src/forward.rs:94`, `soma-runtime/src/graph_session.rs:264`). The
+(`soma-runtime/src/execution/forward.rs:94`, `soma-runtime/src/execution/graph_session.rs:264`). The
 polymorphism its doc claims at `:122` is not exercised by anything.
 
 **Fix shape** Delete `RemoteRunner`, or wire it up. Keeping a second
 implementation of the central execution interface that nothing constructs is
 worse than either.
 
-**Resolved** Deleted. `soma-runtime/src/runner/remote.rs` now holds the
+**Resolved** Deleted. `soma-runtime/src/execution/runner/remote.rs` now holds the
 `Transport` trait alone; the compiler's `ExecutionPlan::Remote` arm is what
 sends work out. The `Runner` trait stays — it has one implementation and one
 caller shape, which is a trait carrying its own documentation, not a strategy
@@ -595,7 +595,7 @@ pattern.
 | `ExploitStrategy::Binary.threshold` | `soma-core/src/distributed.rs:188` — "the current `PbtRunner` does not read this field yet" |
 | `ExploitStrategy::Binary.threshold` | `soma-core/src/distributed.rs:188` — "the current `PbtRunner` does not read this field yet" |
 
-`TrainingStrategy::PopulationBased` (`soma-runtime/src/strategy.rs:246`) is a
+`TrainingStrategy::PopulationBased` (`soma-runtime/src/distributed.rs:246`) is a
 deliberate permanent error arm — that one is [documented as a design
 decision](/soma/design/decisions) and is not debt.
 
@@ -611,16 +611,16 @@ nothing read. `ExploitStrategy::Binary` is now a unit variant.
 **Class** Dead code · **Severity** Low · **Crate** `soma-runtime`
 
 **Evidence** Never called anywhere: `NodeCatalog::with_state_store`
-(`soma-runtime/src/node_catalog.rs:94`), `NodeCatalog::clear_states` (`:208`),
+(`soma-runtime/src/execution/node_catalog.rs:94`), `NodeCatalog::clear_states` (`:208`),
 `NodeCatalog::state_store` (`:214`), `MedianPruner::with_min_trials`
-(`soma-runtime/src/pruner.rs:52`), `EventBus::subscriber_count`
-(`soma-runtime/src/event_bus.rs:72`), `TrialContext::metrics`
-(`soma-runtime/src/executors/study.rs:107`).
+(`soma-runtime/src/optimizer/pruner.rs:52`), `EventBus::subscriber_count`
+(`soma-runtime/src/tracking/event_bus.rs:72`), `TrialContext::metrics`
+(`soma-runtime/src/optimizer/study.rs:107`).
 
 The `StateStore` seam the module docs advertise
-(`soma-runtime/src/node_catalog.rs:13`) has one implementation and no injection
+(`soma-runtime/src/execution/node_catalog.rs:13`) has one implementation and no injection
 site. The whole spill path (`Context::with_spill_threshold`,
-`soma-runtime/src/executor.rs:245`; `maybe_spill`, `:252`) defaults to disabled
+`soma-runtime/src/execution/executor.rs:245`; `maybe_spill`, `:252`) defaults to disabled
 and is set by nothing outside `tests/coverage_boost.rs`.
 
 **Resolved, and two of its six claims were wrong.** Deleted:
@@ -663,13 +663,13 @@ See [D-65](#d-65--the-schedulers-capability-model-is-unimplemented).
 
 **Class** Leaky abstraction · **Severity** High · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/runner/remote.rs:61` — the default implementation
+**Evidence** `soma-runtime/src/execution/runner/remote.rs:61` — the default implementation
 builds a throwaway `NodeCatalog::new()` and calls `execute` with `seed: None`.
 Its own doc comment (`:56`) says: "Unseeded, and it has to be… Callers that have
 a `RunContext` should go through `Transport::execute` with `ctx.seed` instead of
 reaching for this."
 
-`soma-runtime/src/executor.rs:616` reaches for it anyway.
+`soma-runtime/src/execution/executor.rs:616` reaches for it anyway.
 
 **Consequence** Every `ExecutionPlan::Remote` node executes with an empty filter
 catalog and an unsalted cache key. Seeded runs are not reproducible across the
@@ -679,20 +679,20 @@ remote boundary, and two runs with different seeds share cache lines.
 
 **Class** Leaky abstraction · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executor.rs:415` destructures
+**Evidence** `soma-runtime/src/execution/executor.rs:415` destructures
 `ExecutionPlan::Remote { node_id, target: _, plan }` — the `RemoteTarget` is
 thrown away. `execute_remote` (`:601`) sends to `ctx.transport` (the single one)
 or falls back to running locally (`:608`). The target-resolution machinery exists
-(`soma-runtime/src/strategy.rs:634`) but is wired only into `ModelParallel`.
+(`soma-runtime/src/distributed.rs:634`) but is wired only into `ModelParallel`.
 
 ### D-43 · `StrategyContext::execute_on_worker` has a dead JSON parameter
 
 **Class** Leaky abstraction · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/strategy.rs:38` declares
+**Evidence** `soma-runtime/src/distributed.rs:38` declares
 `fn execute_on_worker(&self, worker_idx, plan: &serde_json::Value, input, y)`.
 All three call sites pass `&serde_json::json!({})`
-(`soma-runtime/src/strategy.rs:156`, `:169`, `:204`), and the sole implementor
+(`soma-runtime/src/distributed.rs:156`, `:169`, `:204`), and the sole implementor
 ignores it — `_plan: &serde_json::Value` with the comment at `:597` naming it "a
 JSON placeholder every strategy passes as `{}`".
 
@@ -702,20 +702,20 @@ JSON placeholder every strategy passes as `{}`".
 
 **Class** Leaky abstraction · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executor.rs:1183` — a node with zero predecessors
+**Evidence** `soma-runtime/src/execution/executor.rs:1183` — a node with zero predecessors
 takes `ctx.execution_order.last()`. Combined with `GraphInfo::predecessors`
-returning `&[]` for an *unknown* node id (`soma-runtime/src/executor.rs:74`), a
+returning `&[]` for an *unknown* node id (`soma-runtime/src/execution/executor.rs:74`), a
 node missing from `GraphInfo` silently receives the previous node's output
 instead of producing an error.
 
 That is the exact bug class the `RunContext::graph_info` doc
-(`soma-runtime/src/runner/mod.rs:14`) says the field exists to prevent.
+(`soma-runtime/src/execution/runner/mod.rs:14`) says the field exists to prevent.
 
 ### D-45 · `RunMode` — an executor-internal enum — is a wire parameter
 
 **Class** Leaky abstraction · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/runner/remote.rs:34` — `Transport::execute` takes
+**Evidence** `soma-runtime/src/execution/runner/remote.rs:34` — `Transport::execute` takes
 `&RunMode`, which carries `Fit { y: Option<Value> }`, i.e. the entire label
 tensor, by value.
 
@@ -727,7 +727,7 @@ tensor, by value.
 &value);`. `put` (not `put_with_origin`) gives the promoted copy
 `Origin::Ingested { source: "unknown" }` (`soma-runtime/src/cache/memory.rs:146`),
 destroying the `Origin::Computed { node_id, run_id }` that `store_output`
-(`soma-runtime/src/executor.rs:726`) went out of its way to record. The error is
+(`soma-runtime/src/execution/executor.rs:726`) went out of its way to record. The error is
 discarded too.
 
 ### D-47 · A cross-crate contract carried by an environment variable
@@ -744,16 +744,16 @@ crates agree on something.
 
 **Class** Leaky abstraction · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executors/stream.rs:249` — in `StreamMode::Evolving`
+**Evidence** `soma-runtime/src/execution/stream.rs:249` — in `StreamMode::Evolving`
 the forward output *is* the next chunk's state. Documented at
-`soma-runtime/src/executors/stream.rs:23` as "a documented conflation", which is
+`soma-runtime/src/execution/stream.rs:23` as "a documented conflation", which is
 honest but does not make it typed.
 
 ### D-49 · `maybe_spill` mis-estimates bytes and swallows failure
 
 **Class** Leaky abstraction · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executor.rs:256` estimates size as
+**Evidence** `soma-runtime/src/execution/executor.rs:256` estimates size as
 `value.size() * 8` ("approximate bytes, f64 = 8 bytes") — wrong for `Text`,
 `Json` and `Bytes`. At `:264` a failed `store.put` is swallowed by `if let Ok(_)`
 with no log, silently keeping in memory a value the caller asked to spill.
@@ -869,7 +869,7 @@ output is available (`soma-llm/src/steps.rs:107`).
 
 **Class** Performance · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executor.rs:344`, called from `execute_parallel` at
+**Evidence** `soma-runtime/src/execution/executor.rs:344`, called from `execute_parallel` at
 `:1107` — one full clone of the value store per parallel branch. A 4-way
 `Parallel` over a graph holding a 1 GB intermediate materializes 4 GB. The
 comment at `:1090` explains the write-set merge but not the snapshot cost.
@@ -913,7 +913,7 @@ a slice.
 
 **Evidence** All four inside the per-trial loop:
 `normalized_histories(study, direction)` rebuilds every completed trial's history
-(`soma-runtime/src/executors/study.rs:275` → `:425`); `study.best_trial()` (`:340`),
+(`soma-runtime/src/optimizer/study.rs:275` → `:425`); `study.best_trial()` (`:340`),
 `study.best_value()` (`:342`, `:357`) and the terminal-trial count (`:352`) each
 scan all trials; `save_study` rewrites the entire `study.json` (`:361`).
 
@@ -952,11 +952,11 @@ possible `hostname` subprocess at `:188` — all synchronously, per
 **Class** Performance · **Severity** Low · **Crate** `soma-runtime`
 
 **Evidence** `Context::execution_order` grows on every `set` / `set_virtual`
-(`soma-runtime/src/executor.rs:305`, `:313`) with no dedup, so a 100-iteration
+(`soma-runtime/src/execution/executor.rs:305`, `:313`) with no dedup, so a 100-iteration
 loop appends 100 × body-size entries — and `last_output`
-(`soma-runtime/src/runner/local.rs:54`) reverse-scans it.
+(`soma-runtime/src/execution/runner/local.rs:54`) reverse-scans it.
 `EffectDriver::run` accumulates `history: Vec<Vec<EffectResult>>` for `max_turns`
-turns (`soma-runtime/src/effects/mod.rs:124`), which for an LLM agent is the
+turns (`soma-runtime/src/agentic/mod.rs:124`), which for an LLM agent is the
 whole conversation held in memory and re-borrowed into every `StepCtx`.
 
 ### D-69 · One MCP server serializes every tool call
@@ -965,14 +965,14 @@ whole conversation held in memory and re-borrowed into every `StepCtx`.
 
 **Evidence** `soma-llm/src/mcp_client.rs:31` — a `Mutex<Pipe>` per server, so
 fan-out across tools on one MCP server is effectively single-threaded even though
-`EffectDriver::perform_all` (`soma-runtime/src/effects/mod.rs:459`) runs each
+`EffectDriver::perform_all` (`soma-runtime/src/agentic/mod.rs:459`) runs each
 effect on its own thread.
 
 ### D-70 · `JoinPolicy::First` waits for everyone
 
 **Class** Performance · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/effects/mod.rs:417` returns the first `Ok`, but
+**Evidence** `soma-runtime/src/agentic/mod.rs:417` returns the first `Ok`, but
 only after `thread::scope` has joined every sibling. The code says so at `:415`:
 "Everything ran — these are threads, not cancellable tasks."
 
@@ -989,9 +989,9 @@ only after `thread::scope` has joined every sibling. The code says so at `:415`:
 | Site | Policy |
 |---|---|
 | `soma-runtime/src/cache/memory.rs:96` and 7 more | `unwrap_or_else(\|e\| e.into_inner())` — recover |
-| `soma-runtime/src/event_bus.rs:39`, `:49`, `:90` | recover |
-| `soma-runtime/src/strategy.rs:617` | **error** — `Other("state cache poisoned")` |
-| `soma-runtime/src/strategy.rs:611`, `:684`, `:699`, `:720` | **silently skip** — `if let Ok(mut cache) = self.states.lock()` |
+| `soma-runtime/src/tracking/event_bus.rs:39`, `:49`, `:90` | recover |
+| `soma-runtime/src/distributed.rs:617` | **error** — `Other("state cache poisoned")` |
+| `soma-runtime/src/distributed.rs:611`, `:684`, `:699`, `:720` | **silently skip** — `if let Ok(mut cache) = self.states.lock()` |
 
 **Consequence** The last group is the problem. `execute_on_worker` (`:611`) drops
 the just-returned worker states on a poisoned lock and `set_state` (`:720`) drops
@@ -1007,7 +1007,7 @@ discarding written state is not.
 
 **Class** Concurrency · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/event_bus.rs:89` — `snapshot_sinks` clones the whole
+**Evidence** `soma-runtime/src/tracking/event_bus.rs:89` — `snapshot_sinks` clones the whole
 `Vec<Arc<dyn EventSink>>` on every emission to avoid a reentrancy deadlock
 (documented at `:83`). Correct, but an atomic refcount bump per sink per event on
 the executor's hot path, and the sinks are then invoked **synchronously on the
@@ -1019,8 +1019,8 @@ every 20 events sit inside `run_node`.
 **Class** Concurrency · **Severity** Low · **Crate** `soma-runtime`
 
 **Evidence** `GraphSession::run_driver` clones the whole `NodeCatalog` per run
-(`soma-runtime/src/graph_session.rs:148`); `GraphHandler::child_driver` clones it
-**twice per nesting level** (`soma-runtime/src/effects/graph_handler.rs:120` and
+(`soma-runtime/src/execution/graph_session.rs:148`); `GraphHandler::child_driver` clones it
+**twice per nesting level** (`soma-runtime/src/agentic/graph_handler.rs:120` and
 `:122`), plus `(**graph).clone()` per `Effect::Graph` at `:148`.
 
 ### D-74 · The coordinator's reaper is a side effect of building a router
@@ -1046,20 +1046,20 @@ line counts mislead.
 | `PyGraph::fit` | `soma-python/src/graph.rs:1371` | 262 |
 | `handle_ws` | `soma-worker/src/server.rs:353` | 215 |
 | `PyStudy::run` | `soma-python/src/study.rs:433` | 213 |
-| `StudyRunner::run` | `soma-runtime/src/executors/study.rs:187` | 194 |
+| `StudyRunner::run` | `soma-runtime/src/optimizer/study.rs:187` | 194 |
 | `Graph::to_svg_with` | `soma-core/src/viz/svg.rs:65` | 206 |
 | `schedule_plan` | `soma-compiler/src/scheduler.rs:197` | 185 |
 | `handle_stream_message` | `soma-worker/src/server.rs:568` | 163 |
 | `derive_soma_filter_impl` | `soma-macros/src/lib.rs:40` | 158 |
-| `EffectDriver::run` | `soma-runtime/src/effects/mod.rs:107` | 143 |
+| `EffectDriver::run` | `soma-runtime/src/agentic/mod.rs:107` | 143 |
 | `execute_python_job_with_progress` | `soma-worker/src/server.rs:731` | 141 |
 | `parse_transition` | `soma-python/src/agentic.rs:587` | 140 |
-| `TrainingStrategy::fit` | `soma-runtime/src/strategy.rs:146` | 134 |
-| `run_node` | `soma-runtime/src/executor.rs:816` | 131 |
+| `TrainingStrategy::fit` | `soma-runtime/src/distributed.rs:146` | 134 |
+| `run_node` | `soma-runtime/src/execution/executor.rs:816` | 131 |
 | `parse_effect` | `soma-python/src/agentic.rs:755` | 129 |
 | `PyGraph::forward_local` | `soma-python/src/graph.rs:99` | 127 |
 | `agentic_activity` | `soma-runtime/src/tracking/reader.rs:507` | 125 |
-| `EffectDriver::spawn_all` | `soma-runtime/src/effects/mod.rs:316` | 121 |
+| `EffectDriver::spawn_all` | `soma-runtime/src/agentic/mod.rs:316` | 121 |
 | `all_tools` | `soma-mcp/src/tools/mod.rs:13` | 349 (inline JSON schemas) |
 
 `schedule_plan` is worth singling out: its 9-arm match repeats the same
@@ -1067,7 +1067,7 @@ line counts mislead.
 (`soma-compiler/src/scheduler.rs:204`, `:228`, `:297`, `:312`, `:329`).
 
 `EffectDriver::run`'s `Transition` match repeats `finish(..) + return Err(..)`
-five times (`soma-runtime/src/effects/mod.rs:141`, `:149`, `:161`, `:220`, `:232`)
+five times (`soma-runtime/src/agentic/mod.rs:141`, `:149`, `:161`, `:220`, `:232`)
 — an invariant nothing enforces.
 
 ---
@@ -1081,11 +1081,11 @@ five times (`soma-runtime/src/effects/mod.rs:141`, `:149`, `:161`, `:220`, `:232
 **Evidence** Roughly 20 `///` comments describe what the code *used to be* rather
 than what it does, and ship to docs.rs:
 
-- `soma-runtime/src/runner/mod.rs:14` — "Both runner methods **used to** build `GraphInfo::for_linear(…)` … On a diamond that is simply wrong"
-- `soma-runtime/src/executor.rs:82` — "They **used to be** two whole execution loops"
-- `soma-runtime/src/graph_session.rs:441` — "`graph_fit` **was the worst of them**: a topological loop written from scratch…"
-- `soma-runtime/src/effects/sleep_handler.rs:9` — "handled by nobody… The variant existed; the four lines that make it work did not"
-- plus `soma-runtime/src/executor.rs:129`, `:440`, `:1090`, `:1121`, `:1316`; `graph_session.rs:228`, `:429`; `strategy.rs:282`, `:520`, `:831`; `runner/local.rs:22`; `forward.rs:70`; `node_catalog.rs:3`; `cache/memory.rs:152`; `cache/tiered.rs:43`; `event_bus.rs:83`; `study_io.rs:3`
+- `soma-runtime/src/execution/runner/mod.rs:14` — "Both runner methods **used to** build `GraphInfo::for_linear(…)` … On a diamond that is simply wrong"
+- `soma-runtime/src/execution/executor.rs:82` — "They **used to be** two whole execution loops"
+- `soma-runtime/src/execution/graph_session.rs:441` — "`graph_fit` **was the worst of them**: a topological loop written from scratch…"
+- `soma-runtime/src/agentic/sleep_handler.rs:9` — "handled by nobody… The variant existed; the four lines that make it work did not"
+- plus `soma-runtime/src/execution/executor.rs:129`, `:440`, `:1090`, `:1121`, `:1316`; `graph_session.rs:228`, `:429`; `strategy.rs:282`, `:520`, `:831`; `runner/local.rs:22`; `forward.rs:70`; `node_catalog.rs:3`; `cache/memory.rs:152`; `cache/tiered.rs:43`; `event_bus.rs:83`; `study_io.rs:3`
 
 **Consequence** This rationale is genuinely load-bearing — it is *why* the code
 looks like it does, and losing it would cost more than keeping it. But as `///`
@@ -1145,9 +1145,9 @@ file.
 - `soma-compiler/src/compiler.rs:573` — sub-graph compilation drops the inner `diagnostics` entirely; every warning the inner graph raises is computed and thrown away.
 - `soma-core/src/viz/svg.rs` declares no public type — it exists only to hang two methods on `Graph` from another module, which a reader of `graph.rs` will not find.
 - `soma-core/src/store/` is a directory containing exactly one file.
-- `soma-runtime/src/executor.rs:596` — the branch selector's value is overwritten by the branch's input, so a downstream node can never see which arm was chosen. Deliberate (`:590`), but it means the branch node's stored value is not the branch node's output.
-- `soma-runtime/src/executors/pbt.rs:117` — a training failure is warned and the member keeps its stale state; only *evaluation* failures are counted (`:133`). A member whose training always fails competes on stale weights forever.
-- `soma-runtime/src/executors/pbt.rs:103` — `let mut rng_state: u64 = 42;` with no way to configure it; `PbtConfig` has no seed field.
+- `soma-runtime/src/execution/executor.rs:596` — the branch selector's value is overwritten by the branch's input, so a downstream node can never see which arm was chosen. Deliberate (`:590`), but it means the branch node's stored value is not the branch node's output.
+- `soma-runtime/src/optimizer/pbt.rs:117` — a training failure is warned and the member keeps its stale state; only *evaluation* failures are counted (`:133`). A member whose training always fails competes on stale weights forever.
+- `soma-runtime/src/optimizer/pbt.rs:103` — `let mut rng_state: u64 = 42;` with no way to configure it; `PbtConfig` has no seed field.
 - `soma-mcp/src/server.rs:60` — `notifications/initialized` returns a `JsonRpcResponse`. JSON-RPC notifications must not be answered; the comment at `:61` acknowledges it.
 - `soma-worker/src/server.rs:390` — `CancelPlan` exists in the protocol (`soma-worker/src/protocol.rs:503`) and is answered with "not implemented".
 - `soma-worker/src/lib.rs:29` — `pub use protocol::*` puts 15 wire types in the crate root, so the public API grows silently with the protocol.
@@ -1188,7 +1188,7 @@ hand-written implementor writes it. That weakens the case for splitting.
 edge vector on every call, O(edges) each. The compiler calls them per node, so
 compilation is O(nodes × edges).
 
-**Mitigating** `GraphInfo::from_graph` (`soma-runtime/src/executor.rs:46`)
+**Mitigating** `GraphInfo::from_graph` (`soma-runtime/src/execution/executor.rs:46`)
 precomputes the predecessor map once per run, so the *executor* does not pay
 this — only the compiler does, and only for graphs under ~100 nodes today.
 
@@ -1196,7 +1196,7 @@ this — only the compiler does, and only for graphs under ~100 nodes today.
 
 **Class** Performance · **Severity** Low · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/executors/study.rs:228` — a single `loop` running
+**Evidence** `soma-runtime/src/optimizer/study.rs:228` — a single `loop` running
 one trial per iteration. Nothing distributes trials across cores or workers,
 though `Phase::Trial` (`soma-compiler/src/scheduler.rs:83`) was defined for
 exactly that and is never constructed ([D-65](#d-65--the-schedulers-capability-model-is-unimplemented)).
@@ -1219,10 +1219,10 @@ compile time and little else.
 **Class** API inconsistency · **Severity** Low · **Crate** `soma-core`
 
 **Evidence** `soma-core/src/error.rs:43` still carries `Pruned { step, reason }`
-as an error variant, while `TrialOutcome` (`soma-runtime/src/executors/study.rs:24`)
+as an error variant, while `TrialOutcome` (`soma-runtime/src/optimizer/study.rs:24`)
 models pruning as a *non-error* outcome — which is the correct modelling, and
 the reason the enum exists. `StudyRunner` handles both
-(`soma-runtime/src/executors/study.rs:287`). The smell is narrowed, not removed.
+(`soma-runtime/src/optimizer/study.rs:287`). The smell is narrowed, not removed.
 
 Stringly-typed node ids, the review's finding 1.3, is
 [D-56](#d-56--nodeid-is-a-string-and-so-is-everything-else) here.
@@ -1247,8 +1247,8 @@ into `SomaError::Other(String)` erases the variant.
 
 **Nothing is async, on purpose, everywhere.** `rg async_trait` returns zero hits.
 Every trait is synchronous and the runtime uses `std::thread::scope`
-(`soma-runtime/src/executor.rs:1103`, `soma-runtime/src/effects/mod.rs:459`), with
-the rationale written down at `soma-runtime/src/effects/mod.rs:12`. Where async
+(`soma-runtime/src/execution/executor.rs:1103`, `soma-runtime/src/agentic/mod.rs:459`), with
+the rationale written down at `soma-runtime/src/agentic/mod.rs:12`. Where async
 is unavoidable — the axum server — it is correctly isolated with `spawn_blocking`
 (`soma-worker/src/server.rs:366`, `:396`, `:450`, `:535`) and
 `on_own_runtime` (`soma-worker/src/ws_transport.rs:42`), which explicitly refuses
@@ -1261,9 +1261,9 @@ Python. The three remaining `unwrap`s in `soma-python/src/worker.rs` are in a
 detached thread ([D-27](#d-27--unwrap-inside-a-detached-thread-makes-bind-failures-unreportable)),
 not on a call path.
 
-**Unknown variants refuse rather than guess.** `soma-runtime/src/executor.rs:445`,
-`soma-runtime/src/strategy.rs:274`,
-`soma-runtime/src/effects/graph_handler.rs:184` and
+**Unknown variants refuse rather than guess.** `soma-runtime/src/execution/executor.rs:445`,
+`soma-runtime/src/distributed.rs:274`,
+`soma-runtime/src/agentic/graph_handler.rs:184` and
 `soma-runtime/src/tracking/reader.rs:844` all return an error naming the
 situation instead of falling through to a default. That is applied consistently
 and it is the right call every time.

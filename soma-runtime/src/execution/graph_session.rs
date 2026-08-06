@@ -5,12 +5,12 @@
 //! that can compile, fit, and execute.
 
 use crate::cache::MemoryCache;
-use crate::event_bus::EventBus;
-use crate::executor::{self, Context, GraphInfo};
-use crate::node_catalog::NodeCatalog;
-use crate::runner::Runner;
-use crate::runner::Transport;
-use crate::strategy::StrategyExecutor;
+use crate::distributed::StrategyExecutor;
+use crate::execution::executor::{self, Context, GraphInfo};
+use crate::execution::node_catalog::NodeCatalog;
+use crate::execution::runner::Runner;
+use crate::execution::runner::Transport;
+use crate::tracking::event_bus::EventBus;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::data::store::{DataRef, DataStore};
@@ -51,11 +51,11 @@ pub struct GraphSession {
     /// Who each transport talks to, in transport order. Only model
     /// parallelism needs it — a partition is pinned to a worker by id or
     /// tag, where every other strategy treats workers as interchangeable.
-    worker_identities: Vec<crate::strategy::WorkerIdentity>,
+    worker_identities: Vec<crate::distributed::WorkerIdentity>,
     /// Performs and journals step effects. Only needed when the graph
     /// contains a step; a purely computational graph leaves it unset and
     /// keeps exactly the old behaviour.
-    driver: Option<crate::effects::EffectDriver>,
+    driver: Option<crate::agentic::EffectDriver>,
     fitted: bool,
 }
 
@@ -105,7 +105,7 @@ impl GraphSession {
     /// transports are present, hands execution to
     /// [`StrategyExecutor`].
     ///
-    /// [`StrategyExecutor`]: crate::strategy::StrategyExecutor
+    /// [`StrategyExecutor`]: crate::distributed::StrategyExecutor
     pub fn with_transports(mut self, transports: Vec<Arc<dyn Transport>>) -> Self {
         self.transports = transports;
         self
@@ -118,7 +118,7 @@ impl GraphSession {
     /// sending a partition to whichever worker happened to be first.
     pub fn with_worker_identities(
         mut self,
-        identities: Vec<crate::strategy::WorkerIdentity>,
+        identities: Vec<crate::distributed::WorkerIdentity>,
     ) -> Self {
         self.worker_identities = identities;
         self
@@ -136,13 +136,13 @@ impl GraphSession {
     /// that moment*, so filters or steps registered through
     /// [`Self::catalog_mut`] after this call still count. Without a driver,
     /// executing a step keeps failing with the executor's own explanation.
-    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+    pub fn with_driver(mut self, driver: crate::agentic::EffectDriver) -> Self {
         self.driver = Some(driver);
         self
     }
 
     /// The stored driver, armed with the catalog as it stands right now.
-    fn run_driver(&self) -> Option<crate::effects::EffectDriver> {
+    fn run_driver(&self) -> Option<crate::agentic::EffectDriver> {
         self.driver
             .as_ref()
             .map(|d| d.clone().with_catalog(Arc::new(self.catalog.clone())))
@@ -227,7 +227,7 @@ impl GraphSession {
         let strategy = self.graph.effective_strategy().clone();
         if !matches!(strategy, TrainingStrategy::Local) && !self.transports.is_empty() {
             let node_ids: Vec<String> = plan.node_ids().into_iter().map(String::from).collect();
-            let strategy_ctx = crate::strategy::TransportContext::new(
+            let strategy_ctx = crate::distributed::TransportContext::new(
                 self.transports.clone(),
                 &plan,
                 &self.catalog,
@@ -257,8 +257,8 @@ impl GraphSession {
             };
         }
 
-        let runner = crate::runner::LocalRunner;
-        let mut ctx = crate::runner::RunContext::new(
+        let runner = crate::execution::runner::LocalRunner;
+        let mut ctx = crate::execution::runner::RunContext::new(
             &self.catalog,
             self.cache.as_ref(),
             &self.event_bus,
@@ -303,18 +303,18 @@ impl GraphSession {
     /// Forward pass using the given strategy.
     ///
     /// Strategies define HOW data flows through the compiled graph:
-    /// - [`crate::forward::Standard`] — full input at once with inference caching (default)
-    /// - [`crate::forward::Stream`] — chunked input through StreamExecutor
-    /// - [`crate::forward::Batched`] — rows from DataStore, batch by batch
+    /// - [`crate::execution::forward::Standard`] — full input at once with inference caching (default)
+    /// - [`crate::execution::forward::Stream`] — chunked input through StreamExecutor
+    /// - [`crate::execution::forward::Batched`] — rows from DataStore, batch by batch
     pub fn forward_with(
         &self,
         x: &Value,
-        strategy: &dyn crate::forward::ForwardStrategy,
+        strategy: &dyn crate::execution::forward::ForwardStrategy,
     ) -> Result<Value> {
         let driver = self.run_driver();
         strategy.forward(
             &self.graph,
-            &crate::forward::ForwardEnv {
+            &crate::execution::forward::ForwardEnv {
                 catalog: &self.catalog,
                 cache: self.cache.as_ref(),
                 event_bus: &self.event_bus,
@@ -327,7 +327,7 @@ impl GraphSession {
 
     /// Standard forward pass (shortcut for `forward_with(x, &Standard)`).
     pub fn forward(&self, x: &Value) -> Result<Value> {
-        self.forward_with(x, &crate::forward::Standard)
+        self.forward_with(x, &crate::execution::forward::Standard)
     }
 
     // ── State persistence ──

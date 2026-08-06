@@ -14,8 +14,8 @@ use somatize_core::error::Result;
 use std::collections::HashMap;
 
 use crate::EventBus;
-use crate::executor::GraphInfo;
-use crate::node_catalog::NodeCatalog;
+use crate::execution::executor::GraphInfo;
+use crate::execution::node_catalog::NodeCatalog;
 use std::sync::Arc;
 
 /// Everything a runner needs besides the plan and the data.
@@ -55,7 +55,7 @@ pub struct RunContext<'a> {
     /// being built inside the runner because a driver carries the journal —
     /// which is what makes a resumed run replay instead of re-calling a
     /// model — and only the caller knows where that journal lives.
-    pub driver: Option<crate::effects::EffectDriver>,
+    pub driver: Option<crate::agentic::EffectDriver>,
 }
 
 impl<'a> RunContext<'a> {
@@ -88,11 +88,11 @@ impl<'a> RunContext<'a> {
     /// Register the effect driver a plan containing steps needs.
     ///
     /// The driver should already carry its catalog
-    /// ([`crate::effects::EffectDriver::with_catalog`]) if a step may fan
+    /// ([`crate::agentic::EffectDriver::with_catalog`]) if a step may fan
     /// out dynamically — the same rule as
-    /// [`crate::executor::Context::with_driver`], so the two entry points
+    /// [`crate::execution::executor::Context::with_driver`], so the two entry points
     /// cannot drift apart on who attaches it.
-    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+    pub fn with_driver(mut self, driver: crate::agentic::EffectDriver) -> Self {
         self.driver = Some(driver);
         self
     }
@@ -114,7 +114,7 @@ impl<'a> RunContext<'a> {
     }
 
     /// Clone the driver for a run's own context.
-    pub(crate) fn driver(&self) -> Option<crate::effects::EffectDriver> {
+    pub(crate) fn driver(&self) -> Option<crate::agentic::EffectDriver> {
         self.driver.clone()
     }
 }

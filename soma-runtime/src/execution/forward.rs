@@ -5,9 +5,9 @@
 //! - [`Stream`] — chunked input through [`crate::StreamRun`], respecting StreamMode
 //! - [`Batched`] — rows from a [`DataStore`], batch by batch (memory-bounded)
 
-use crate::event_bus::EventBus;
-use crate::node_catalog::NodeCatalog;
-use crate::runner::{RunContext, Runner};
+use crate::execution::node_catalog::NodeCatalog;
+use crate::execution::runner::{RunContext, Runner};
+use crate::tracking::event_bus::EventBus;
 use somatize_compiler::{CompileMode, CompileResult, compile, compile_stream};
 use somatize_core::cache::CacheStore;
 use somatize_core::data::store::{DataRef, DataStore};
@@ -33,7 +33,7 @@ pub struct ForwardEnv<'a> {
     pub data_store: Option<&'a Arc<dyn DataStore>>,
     /// Performs and journals step effects; a graph without steps ignores
     /// it, which is why it is an `Option` and not a requirement.
-    pub driver: Option<&'a crate::effects::EffectDriver>,
+    pub driver: Option<&'a crate::agentic::EffectDriver>,
 }
 
 /// How a forward pass feeds data through the compiled graph.
@@ -86,12 +86,12 @@ fn run_forward(
         env.cache,
         env.event_bus,
         &run_id,
-        crate::executor::GraphInfo::from_graph(graph),
+        crate::execution::executor::GraphInfo::from_graph(graph),
     );
     if let Some(driver) = env.driver {
         ctx = ctx.with_driver(driver.clone());
     }
-    crate::runner::LocalRunner.forward(plan, &ctx, x)
+    crate::execution::runner::LocalRunner.forward(plan, &ctx, x)
 }
 
 /// Batched forward: read rows from a DataStore in fixed-size batches.
@@ -155,7 +155,7 @@ impl ForwardStrategy for Batched<'_> {
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
-    use crate::node_catalog::NodeCatalog;
+    use crate::execution::node_catalog::NodeCatalog;
     use somatize_core::cache::CacheKey;
     use somatize_core::error::Result as SomaResult;
     use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};

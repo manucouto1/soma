@@ -282,7 +282,7 @@ pub enum Event {
 ### When the agent events fire
 
 All of these are emitted by the `EffectDriver`
-(`soma-runtime/src/effects/mod.rs`), riding the same bus and envelope as
+(`soma-runtime/src/agentic/mod.rs`), riding the same bus and envelope as
 everything else — that is the point of not building a second telemetry
 path:
 

@@ -450,7 +450,7 @@ impl Study {
 }
 
 // Reading and writing a study to disk is I/O, so it lives in the runtime
-// as `somatize_runtime::study_io::StudyIo`. Import that trait and
+// as `somatize_runtime::optimizer::study_io::StudyIo`. Import that trait and
 // `study.save(path)` / `Study::load(path)` read the same as they always
 // did. See design/decisions.
 

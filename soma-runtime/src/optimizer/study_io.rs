@@ -5,7 +5,7 @@
 //! and the calls read exactly as they did before the split.
 //!
 //! ```ignore
-//! use somatize_runtime::study_io::StudyIo;
+//! use somatize_runtime::optimizer::study_io::StudyIo;
 //!
 //! study.save(dir.join("study.json"))?;
 //! let study = Study::load(dir.join("study.json"))?;

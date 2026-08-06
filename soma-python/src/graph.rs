@@ -407,9 +407,9 @@ impl PyGraph {
         let base: Vec<Arc<dyn somatize_core::agentic::effect::EffectHandler>> = vec![
             Arc::new(somatize_llm::LlmHandler::new(router)),
             Arc::new(toolbox),
-            Arc::new(somatize_runtime::effects::SleepHandler),
+            Arc::new(somatize_runtime::agentic::SleepHandler),
         ];
-        let graph_handler = somatize_runtime::effects::GraphHandler::new((*node_catalog).clone())
+        let graph_handler = somatize_runtime::agentic::GraphHandler::new((*node_catalog).clone())
             .with_cache(self.cache.clone())
             .with_step_runtime(base.clone(), journal.clone())
             .with_event_bus(self.event_bus.clone());
@@ -524,7 +524,7 @@ impl PyGraph {
     /// `make_transport`.
     fn session_with_transports(
         &self,
-        transports: Vec<Arc<dyn somatize_runtime::runner::Transport>>,
+        transports: Vec<Arc<dyn somatize_runtime::execution::runner::Transport>>,
     ) -> somatize_core::error::Result<somatize_runtime::GraphSession> {
         let session = somatize_runtime::GraphSession::new(self.graph.clone(), self.library.clone())
             .with_cache(self.cache.clone())
@@ -537,7 +537,7 @@ impl PyGraph {
                 self.workers
                     .iter()
                     .map(
-                        |(addr, _, tags)| somatize_runtime::strategy::WorkerIdentity {
+                        |(addr, _, tags)| somatize_runtime::distributed::WorkerIdentity {
                             id: addr.clone(),
                             tags: tags.clone(),
                         },
@@ -548,7 +548,7 @@ impl PyGraph {
     }
 
     /// Build a transport from the first registered worker (if any).
-    fn make_transport(&self) -> Option<Arc<dyn somatize_runtime::runner::Transport>> {
+    fn make_transport(&self) -> Option<Arc<dyn somatize_runtime::execution::runner::Transport>> {
         if self.workers.is_empty() {
             return None;
         }
@@ -1380,7 +1380,7 @@ impl PyGraph {
                     plan_summary: compile_result.plan.summary(),
                 });
             let run_start = std::time::Instant::now();
-            let run_ctx = somatize_runtime::runner::RunContext::new(
+            let run_ctx = somatize_runtime::execution::runner::RunContext::new(
                 &catalog,
                 self.cache.as_ref(),
                 &self.event_bus,
@@ -1436,12 +1436,12 @@ impl PyGraph {
             for (addr, token, _) in &self.workers {
                 self.register_filters_on(addr, token.as_deref())?;
             }
-            let transports: Vec<Arc<dyn somatize_runtime::runner::Transport>> = self
+            let transports: Vec<Arc<dyn somatize_runtime::execution::runner::Transport>> = self
                 .workers
                 .iter()
                 .map(|(addr, token, _)| {
                     Arc::new(somatize_worker::WsTransport::new(addr, token.clone()))
-                        as Arc<dyn somatize_runtime::runner::Transport>
+                        as Arc<dyn somatize_runtime::execution::runner::Transport>
                 })
                 .collect();
             let states = py.allow_threads(|| {
@@ -1519,7 +1519,7 @@ impl PyGraph {
             });
         let run_start = std::time::Instant::now();
 
-        let mut run_ctx = somatize_runtime::runner::RunContext::new(
+        let mut run_ctx = somatize_runtime::execution::runner::RunContext::new(
             &catalog,
             self.cache.as_ref(),
             &self.event_bus,

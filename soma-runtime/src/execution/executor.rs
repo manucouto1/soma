@@ -3,8 +3,8 @@
 //! Handles sequential, parallel (scoped threads), cached, remote, loop,
 //! and branch execution. Uses [`GraphInfo`] for topology-aware input resolution.
 
-use crate::event_bus::EventBus;
-use crate::node_catalog::{NodeCatalog, NodeImpl};
+use crate::execution::node_catalog::{NodeCatalog, NodeImpl};
+use crate::tracking::event_bus::EventBus;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheStore;
 use somatize_core::data::value::Value;
@@ -140,7 +140,7 @@ pub struct Context {
     /// Graph topology for input resolution.
     pub graph_info: GraphInfo,
     /// Optional transport for distributed plans.
-    pub transport: Option<Arc<dyn crate::runner::Transport>>,
+    pub transport: Option<Arc<dyn crate::execution::runner::Transport>>,
     /// Memoized content hashes of node outputs, keyed by node id.
     /// Invalidated whenever a node's output is (re)stored, so Loop
     /// iterations that overwrite an output never reuse a stale hash.
@@ -157,7 +157,7 @@ pub struct Context {
     /// which the executor already receives. Keeping a second registry in
     /// the context is what let the branch arm decide a node's kind by
     /// asking whether it happened to be in it.
-    pub driver: Option<crate::effects::EffectDriver>,
+    pub driver: Option<crate::agentic::EffectDriver>,
 }
 
 impl Context {
@@ -181,10 +181,10 @@ impl Context {
     /// Register the effect driver an effectful plan needs.
     ///
     /// The driver should already carry its catalog
-    /// ([`crate::effects::EffectDriver::with_catalog`]) if a step may fan
+    /// ([`crate::agentic::EffectDriver::with_catalog`]) if a step may fan
     /// out dynamically — whoever builds the driver knows which catalog it
     /// serves; the context does not.
-    pub fn with_driver(mut self, driver: crate::effects::EffectDriver) -> Self {
+    pub fn with_driver(mut self, driver: crate::agentic::EffectDriver) -> Self {
         self.driver = Some(driver);
         self
     }
@@ -220,7 +220,10 @@ impl Context {
     }
 
     /// Set the transport a plan with `Remote` nodes executes through.
-    pub fn with_transport(mut self, transport: Arc<dyn crate::runner::Transport>) -> Self {
+    pub fn with_transport(
+        mut self,
+        transport: Arc<dyn crate::execution::runner::Transport>,
+    ) -> Self {
         self.transport = Some(transport);
         self
     }
@@ -1141,7 +1144,7 @@ pub(crate) fn resolve_input(node_id: &str, ctx: &Context) -> Value {
 }
 
 /// Execute a stream plan: chunk the input and drive it through
-/// [`StreamRun`](crate::executors::stream), which runs every chunk of
+/// [`StreamRun`](crate::execution::stream), which runs every chunk of
 /// every node through the same primitives `run_node` composes. Events
 /// are per node — `NodeStarted` at the first chunk, `NodeCompleted`
 /// after the flush with an aggregated summary, a real `NodeFailed` on
@@ -1153,7 +1156,7 @@ fn execute_stream(
     catalog: &NodeCatalog,
     cache: &dyn CacheStore,
 ) -> Result<()> {
-    use crate::executors::stream::StreamRun;
+    use crate::execution::stream::StreamRun;
 
     // Streaming has no training semantics; leaving this undefined would
     // silently skip every fit. Nothing invokes it today — keep it that
@@ -1180,7 +1183,7 @@ fn execute_stream(
     let mut run = StreamRun::new(node_ids, catalog)?;
 
     // Incremental concatenation — bounded memory, see `StreamOutput`.
-    let mut output = crate::executors::StreamOutput::new();
+    let mut output = crate::execution::stream::StreamOutput::new();
 
     for (i, chunk) in chunks.into_iter().enumerate() {
         tracing::debug!(node_id = %last_id, chunk = i, "streaming chunk");

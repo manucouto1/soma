@@ -9,10 +9,10 @@ use somatize_core::graph::control::LoopCondition;
 use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::executor::Context;
-use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::node_catalog::NodeCatalog;
-use somatize_runtime::runner::Transport;
+use somatize_runtime::execution::executor::Context;
+use somatize_runtime::execution::graph_session::GraphSession;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
+use somatize_runtime::execution::runner::Transport;
 use somatize_runtime::*;
 use std::sync::Arc;
 
@@ -244,7 +244,7 @@ fn session_with_transport() {
             _plan: &ExecutionPlan,
             _filters: &NodeCatalog,
             _input: &Value,
-            _mode: &somatize_runtime::executor::RunMode,
+            _mode: &somatize_runtime::execution::executor::RunMode,
             _seed: Option<i64>,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             Ok((
@@ -719,7 +719,7 @@ fn executor_remote_with_transport() {
             _plan: &ExecutionPlan,
             _filters: &NodeCatalog,
             input: &Value,
-            _mode: &somatize_runtime::executor::RunMode,
+            _mode: &somatize_runtime::execution::executor::RunMode,
             _seed: Option<i64>,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             // Remote "doubles" the input

@@ -10,9 +10,9 @@ use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
 use somatize_core::tracking::event::Event;
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::executors::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
-use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::execution::graph_session::GraphSession;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
+use somatize_runtime::optimizer::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
 use std::sync::Arc;
 
 /// Trainable scaler that learns mean from data.

@@ -7,9 +7,9 @@
 //! trial. Resume-aware: a study with N recorded trials continues at
 //! trial N.
 
-use crate::event_bus::EventBus;
-use crate::pruner::{MedianPruner, PercentilePruner, Pruner, TrialMetricHistory};
-use crate::sampler::Sampler;
+use crate::optimizer::pruner::{MedianPruner, PercentilePruner, Pruner, TrialMetricHistory};
+use crate::optimizer::sampler::Sampler;
+use crate::tracking::event_bus::EventBus;
 use chrono::Utc;
 use somatize_core::error::Result;
 use somatize_core::optimizer::study::{Direction, PruningStrategy, Study, Trial, TrialState};
@@ -446,8 +446,8 @@ fn normalized_histories(study: &Study, direction: Direction) -> Vec<TrialMetricH
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sampler::{BayesianSampler, GridSampler, RandomSampler};
-    use crate::study_io::StudyIo;
+    use crate::optimizer::sampler::{BayesianSampler, GridSampler, RandomSampler};
+    use crate::optimizer::study_io::StudyIo;
     use chrono::Utc;
     use somatize_core::error::SomaError;
     use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
@@ -1075,7 +1075,7 @@ mod tests {
 
     // ── TrialContext unit tests (direct construction) ──
 
-    use crate::pruner::TrialMetricHistory as History;
+    use crate::optimizer::pruner::TrialMetricHistory as History;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Spy pruner: counts consultations, prunes everything after warmup.

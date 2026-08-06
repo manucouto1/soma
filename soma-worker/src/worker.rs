@@ -522,7 +522,7 @@ impl Worker {
                     // plan and no graph, so it has no topology to consult.
                     // Correct for the pipelines that get dispatched, and
                     // stated here rather than assumed inside the runner.
-                    let mut ctx = somatize_runtime::runner::RunContext::linear(
+                    let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
                         &self.catalog,
                         self.cache.as_ref(),
                         &self.event_bus,
@@ -556,7 +556,7 @@ impl Worker {
             }
             ExecutionMode::Forward => {
                 let run_id = format!("worker_forward_{}", plan.plan_id);
-                let mut ctx = somatize_runtime::runner::RunContext::linear(
+                let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
                     &self.catalog,
                     self.cache.as_ref(),
                     &self.event_bus,

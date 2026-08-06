@@ -9,9 +9,9 @@
 //! See the "soma-core holds contracts, not execution" entry in the design
 //! decisions.
 
-use crate::executor::RunMode;
-use crate::node_catalog::NodeCatalog;
-use crate::runner::Transport;
+use crate::execution::executor::RunMode;
+use crate::execution::node_catalog::NodeCatalog;
+use crate::execution::runner::Transport;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::data::value::Value;
 use somatize_core::distributed::{

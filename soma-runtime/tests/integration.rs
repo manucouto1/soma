@@ -503,7 +503,7 @@ fn compile_then_execute_with_cache() {
 
     // Execute
     let bus = Arc::new(EventBus::new(64));
-    let graph_info = somatize_runtime::executor::GraphInfo::from_graph(&graph);
+    let graph_info = somatize_runtime::execution::executor::GraphInfo::from_graph(&graph);
     let mut ctx = Context::new(bus, "run_1").with_graph_info(graph_info);
     ctx.set("input", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
 

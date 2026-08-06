@@ -30,8 +30,8 @@
 //! is public and why the state that must survive between chunks lives
 //! here rather than in the plan walk.
 
-use crate::executor::{Context, compute_node, output_key, store_output};
-use crate::node_catalog::{NodeCatalog, NodeImpl};
+use crate::execution::executor::{Context, compute_node, output_key, store_output};
+use crate::execution::node_catalog::{NodeCatalog, NodeImpl};
 use somatize_core::cache::{CacheKey, CacheStore};
 use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
@@ -357,7 +357,7 @@ pub fn materialize_buffer(buffer: &[Value]) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::cache::memory::MemoryCache;
-    use crate::event_bus::EventBus;
+    use crate::tracking::event_bus::EventBus;
     use somatize_core::error::Result as SomaResult;
     use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta};
 

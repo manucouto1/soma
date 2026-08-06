@@ -205,13 +205,13 @@ If you learn these, most of the rest follows.
 | 1 | `Filter` | `soma-core/src/graph/filter.rs:120` | `fit()` learns state, `forward()` transforms. Both independently cacheable. Everything pipeline-shaped is this |
 | 2 | `Step` | `soma-core/src/graph/step.rs:250` | `poll(ctx) -> Transition`. Everything agent-shaped is this. Holds no state between turns — history arrives through `StepCtx` |
 | 3 | `NodeMeta` | `soma-core/src/graph/node.rs:72` | The adapter that erases the Filter/Step distinction. `From<StepMeta>` sets `cacheable: false`, so "a step is not cacheable" is *data*, not a branch |
-| 4 | `NodeCatalog` | `soma-runtime/src/node_catalog.rs:79` | One registry for both kinds, and the compiler's `NodeRegistry`. Two registries joined by an adapter is what made `.compile()` skip step schemas |
+| 4 | `NodeCatalog` | `soma-runtime/src/execution/node_catalog.rs:79` | One registry for both kinds, and the compiler's `NodeRegistry`. Two registries joined by an adapter is what made `.compile()` skip step schemas |
 | 5 | `Value` | `soma-core/src/data/value.rs:15` | Six variants, all `Arc`-backed, so `Clone` is a refcount bump |
 | 6 | `CacheKey` | `soma-core/src/cache/mod.rs:21` | `state = hash(config‖x‖y)`, `output = hash(config‖state‖input_hash)`. Downstream keys use input **content**, so an unchanged intermediate cuts off the rest of the graph |
 | 7 | `ExecutionPlan` | `soma-compiler/src/plan.rs:19` | What the compiler produces and the executor walks. Recursive in four shapes; `children()` is the one traversal |
-| 8 | `Context` | `soma-runtime/src/executor.rs:124` | The executor's mutable state through the whole walk. `(!)` Also the biggest god object in the runtime |
+| 8 | `Context` | `soma-runtime/src/execution/executor.rs:124` | The executor's mutable state through the whole walk. `(!)` Also the biggest god object in the runtime |
 | 9 | `Transition` | `soma-core/src/graph/step.rs:43` | `Await` / `Spawn` / `Goto` / `Suspend` / `Done`. Deliberately **not** `#[non_exhaustive]` — every consumer must decide |
-| 10 | `Effect` / `EffectJournal` | `soma-core/src/agentic/effect.rs:35`, `soma-runtime/src/effects/journal.rs:51` | An effect is data; the journal keys pure ones by content and impure ones by site. That is the whole durability story |
+| 10 | `Effect` / `EffectJournal` | `soma-core/src/agentic/effect.rs:35`, `soma-runtime/src/agentic/journal.rs:51` | An effect is data; the journal keys pure ones by content and impure ones by site. That is the whole durability story |
 
 ### The one distinction to internalize
 
