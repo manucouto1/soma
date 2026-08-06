@@ -379,14 +379,13 @@ class MyModel(Filter):
         # train with self.lr, self.hidden
         ...
 
-study = Study(
-    graph=g,
-    objective="minimize",
-    metric="loss",
+study = g.study(
+    "tuning",
+    objectives=[("loss", "minimize")],
     strategy="bayesian",
     n_trials=100,
 )
-study.run()
+study.run(train_and_evaluate)
 ```
 
 ### StreamExecutor (chunked processing)

@@ -276,7 +276,7 @@ pub(crate) fn trial_to_py(
 impl PyStudy {
     #[new]
     #[pyo3(signature = (name, search_space=None, strategy="grid".to_string(), n_trials=10,
-                        objectives=None, seed=None, objective=None, direction="maximize".to_string(),
+                        objectives=None, seed=None,
                         pruning=None, tracking=true, root=".soma".to_string(), tags=None,
                         seeds=None, frozen=None))]
     #[allow(clippy::too_many_arguments)]
@@ -286,10 +286,8 @@ impl PyStudy {
         search_space: Option<&Bound<'_, PyList>>,
         strategy: String,
         n_trials: usize,
-        objectives: Option<Vec<(String, String)>>,
+        objectives: Option<Vec<(PyObject, String)>>,
         seed: Option<u64>,
-        objective: Option<PyObject>,
-        direction: String,
         pruning: Option<&Bound<'_, PyAny>>,
         tracking: bool,
         root: String,
@@ -333,23 +331,46 @@ impl PyStudy {
             }
         };
 
-        // With a Python objective callable, the composite score is
-        // recorded as metric "score" — that becomes the objective.
-        let objs: Vec<Objective> = match (&objective, objectives) {
-            (Some(_), _) => vec![Objective {
-                metric: "score".into(),
-                direction: parse_dir(&direction)?,
-            }],
-            (None, Some(list)) => list
+        // An objective names a metric, or computes one. A callable is a
+        // *scalarizer*: it receives every metric the trial reported and
+        // returns the number to optimize, recorded as "score".
+        //
+        // These used to be two arguments — `objective=` for the callable
+        // and `objectives=` for the names — with `direction=` a third that
+        // only meant anything alongside the first, and a documented
+        // precedence rule for what happened when you passed both. One
+        // shape has no precedence to document.
+        let mut objective_cb: Option<PyObject> = None;
+        let objs: Vec<Objective> = match objectives {
+            None => vec![],
+            Some(list) => list
                 .into_iter()
                 .map(|(metric, dir)| {
+                    let bound = metric.bind(_py);
+                    let name = if bound.is_callable() {
+                        if objective_cb.is_some() {
+                            return Err(PyRuntimeError::new_err(
+                                "two callable objectives: a scalarizer already reduces \
+                                 every metric to one number, so a second has nothing \
+                                 left to reduce",
+                            ));
+                        }
+                        objective_cb = Some(metric.clone_ref(_py));
+                        "score".to_string()
+                    } else {
+                        bound.extract::<String>().map_err(|_| {
+                            PyRuntimeError::new_err(
+                                "an objective is a metric name or a callable over the \
+                                 metric dict, paired with 'maximize' or 'minimize'",
+                            )
+                        })?
+                    };
                     Ok(Objective {
-                        metric,
+                        metric: name,
                         direction: parse_dir(&dir)?,
                     })
                 })
                 .collect::<PyResult<Vec<_>>>()?,
-            (None, None) => vec![],
         };
 
         let mut study = Study::new(name, space, strat, objs);
@@ -371,7 +392,7 @@ impl PyStudy {
 
         Ok(Self {
             study,
-            objective_cb: objective,
+            objective_cb,
             tracking,
             root: std::path::PathBuf::from(root),
             run_dir: None,
@@ -385,12 +406,14 @@ impl PyStudy {
     ///     study = soma.Study.load(".soma/runs/study_.../")
     ///     study.run(train, resume=True)
     ///
-    /// A composite `objective=` callable cannot be persisted — re-pass
-    /// it here when resuming a study that was created with one, or the
-    /// new trials won't produce the "score" metric.
+    /// A callable objective cannot be persisted — re-pass it here when
+    /// resuming a study that was created with one, or the new trials
+    /// won't produce the "score" metric. It takes the same shape the
+    /// constructor does: `objectives=[(fn, "maximize")]`. Only the
+    /// callable is read; the direction is already on disk.
     #[staticmethod]
-    #[pyo3(signature = (run_dir, objective=None))]
-    fn load(run_dir: String, objective: Option<PyObject>) -> PyResult<Self> {
+    #[pyo3(signature = (run_dir, objectives=None))]
+    fn load(run_dir: String, objectives: Option<Vec<(PyObject, String)>>) -> PyResult<Self> {
         let dir = std::path::PathBuf::from(run_dir);
         let study = Study::load(dir.join("study.json")).map_err(soma_err_to_py)?;
         // <root>/runs/<run_id> → root
@@ -399,9 +422,14 @@ impl PyStudy {
             .and_then(|p| p.parent())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from(".soma"));
+        let objective_cb = objectives
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(f, _)| f)
+            .next();
         Ok(Self {
             study,
-            objective_cb: objective,
+            objective_cb,
             tracking: true,
             root,
             run_dir: Some(dir),
@@ -457,9 +485,9 @@ impl PyStudy {
             warnings.call_method1(
                 "warn",
                 (
-                    "this study scores on the 'score' metric but no objective= callable \
-                     is set — pass it to Study.load(run_dir, objective=...) when resuming, \
-                     or return a {'score': ...} dict from the executor",
+                    "this study scores on the 'score' metric but no callable objective \
+                     is set — pass it to Study.load(run_dir, objectives=[(fn, dir)]) when \
+                     resuming, or return a {'score': ...} dict from the executor",
                 ),
             )?;
         }

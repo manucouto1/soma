@@ -112,8 +112,8 @@ def apply_params(self: Graph, params: dict[str, Any]) -> None:
 def graph_study(self: Graph, name: str, **kwargs: Any) -> _Study:
     """Create a :class:`soma.Study` whose search space is aggregated
     from this graph's filters. Accepts every ``Study(...)`` keyword
-    (strategy, n_trials, objective, objectives, direction, pruning,
-    seed, tracking, root, tags)."""
+    (strategy, n_trials, objectives, pruning, seed, tracking, root,
+    tags)."""
     if "search_space" in kwargs:
         raise TypeError(
             "graph.study() builds the search space from the graph's filters; "

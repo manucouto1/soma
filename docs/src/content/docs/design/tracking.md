@@ -94,8 +94,9 @@ with g.track_run("mos-baseline", tags=["mos"]) as run:
 
 # Study — a study IS a run; follow or resume it from anywhere
 study = g.study("mos-grid", strategy="grid", n_trials=4,
-                objective=lambda m: 0.7 * m["val_f1"] - 0.3 * m["val_gap"],
-                direction="maximize", pruning=("median", 3))
+                objectives=[(lambda m: 0.7 * m["val_f1"] - 0.3 * m["val_gap"],
+                              "maximize")],
+                pruning=("median", 3))
 study.run(train, on_event=lambda e: print(e["event_type"]))
 
 study = soma.Study.load(".soma/runs/study_20260726T101502_a3f1")

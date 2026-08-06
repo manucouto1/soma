@@ -111,7 +111,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `models` | `soma-python/python/soma/__init__.py` |  | 1 | 4 | 20 | 2 | 6 |
 | `Run` | `soma-python/python/soma/__init__.py` |  | 6 | 0 | 38 | 7 | 14 |
 | `Pbt` | `soma-python/python/soma/__init__.py` |  | 10 | 0 | 7 | 0 | 5 |
-| `Study` | `soma-python/python/soma/__init__.py` |  | 84 | 20 | 101 | 1 | 29 |
+| `Study` | `soma-python/python/soma/__init__.py` |  | 85 | 20 | 100 | 1 | 29 |
 | `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 39 | 0 | 13 |
 | `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 59 | 4 | 7 |
 | `Filter` | `soma-python/python/soma/__init__.py` |  | 111 | 49 | 140 | 20 | 32 |
@@ -281,7 +281,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `restore_optimizer` | `soma-python/python/soma/_graph.py:64` | python · `_checkpoint.restore_optimizer` | 1 | 0 | 1 | 0 | 1 |
 | `search_space` | `soma-python/python/soma/_graph.py:67` | python · `_study.graph_search_space` | 8 | 3 | 8 | 0 | 4 |
 | `apply_params` | `soma-python/python/soma/_graph.py:68` | python · `_study.apply_params` | 15 | 4 | 5 | 0 | 2 |
-| `study` | `soma-python/python/soma/_graph.py:69` | python · `_study.graph_study` | 5 | 2 | 6 | 0 | 2 |
+| `study` | `soma-python/python/soma/_graph.py:69` | python · `_study.graph_study` | 5 | 2 | 7 | 0 | 2 |
 | `track_run` | `soma-python/python/soma/_graph.py:72` | python · `_tracking.track_run` | 32 | 12 | 9 | 9 | 10 |
 | `gradient_audit` | `soma-python/python/soma/_graph.py:73` | python · `_audit.gradient_audit` | 50 | 8 | 12 | 2 | 11 |
 | `compile` | `soma-python/python/soma/_graph.py:76` | python · `_compile.compile_with_repr` | 11 | 4 | 9 | 6 | 7 |
@@ -293,16 +293,16 @@ on the public module and carry its maintenance cost while serving one caller:
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
 | `new` | `soma-python/src/optimizer/study.rs:283` |  | 0 | 0 | 1 | 0 | 0 |
-| `load` | `soma-python/src/optimizer/study.rs:393` | static | 15 | 6 | 14 | 7 | 11 |
-| `save` | `soma-python/src/optimizer/study.rs:413` |  | 7 | 2 | 8 | 3 | 11 |
-| `run` | `soma-python/src/optimizer/study.rs:433` |  | 72 | 13 | 29 | 1 | 10 |
-| `best_trial` | `soma-python/src/optimizer/study.rs:646` | property, read-only | 16 | 11 | 8 | 1 | 1 |
-| `trials` | `soma-python/src/optimizer/study.rs:655` | property, read-only | 18 | 3 | 4 | 0 | 9 |
-| `n_trials` | `soma-python/src/optimizer/study.rs:664` | property, read-only | 15 | 2 | 0 | 0 | 3 |
-| `progress` | `soma-python/src/optimizer/study.rs:669` | property, read-only | 3 | 1 | 2 | 0 | 0 |
-| `objectives` | `soma-python/src/optimizer/study.rs:677` | property, read-only | 1 | 0 | 0 | 0 | 4 |
-| `name` | `soma-python/src/optimizer/study.rs:696` | property, read-only | 35 | 2 | 3 | 0 | 21 |
-| `run_dir` | `soma-python/src/optimizer/study.rs:703` | property, read-only | 14 | 2 | 1 | 0 | 1 |
+| `load` | `soma-python/src/optimizer/study.rs:416` | static | 15 | 6 | 14 | 7 | 11 |
+| `save` | `soma-python/src/optimizer/study.rs:441` |  | 7 | 2 | 8 | 3 | 11 |
+| `run` | `soma-python/src/optimizer/study.rs:461` |  | 72 | 13 | 29 | 1 | 10 |
+| `best_trial` | `soma-python/src/optimizer/study.rs:674` | property, read-only | 16 | 11 | 8 | 1 | 1 |
+| `trials` | `soma-python/src/optimizer/study.rs:683` | property, read-only | 18 | 3 | 4 | 0 | 9 |
+| `n_trials` | `soma-python/src/optimizer/study.rs:692` | property, read-only | 15 | 2 | 0 | 0 | 3 |
+| `progress` | `soma-python/src/optimizer/study.rs:697` | property, read-only | 3 | 1 | 2 | 0 | 0 |
+| `objectives` | `soma-python/src/optimizer/study.rs:705` | property, read-only | 2 | 0 | 0 | 0 | 4 |
+| `name` | `soma-python/src/optimizer/study.rs:724` | property, read-only | 35 | 2 | 3 | 0 | 21 |
+| `run_dir` | `soma-python/src/optimizer/study.rs:731` | property, read-only | 14 | 2 | 1 | 0 | 1 |
 
 #### `Agent` — 10 methods
 

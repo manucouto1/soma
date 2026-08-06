@@ -444,10 +444,8 @@ class Study:
         search_space: list[dict[str, Any]] | None = ...,
         strategy: str = ...,
         n_trials: int = ...,
-        objectives: list[tuple[str, str]] | None = ...,
+        objectives: list[tuple[str | Callable[[dict[str, float]], float], str]] | None = ...,
         seed: int | None = ...,
-        objective: Callable[[dict[str, float]], float] | None = ...,
-        direction: str = ...,
         pruning: str | tuple[str, int] | tuple[str, float, int] | None = ...,
         tracking: bool = ...,
         root: str = ...,
@@ -461,8 +459,9 @@ class Study:
     run_dir: str | None
     progress: float
     objectives: list[tuple[str, str]]
-    """(metric, direction) pairs. Not a mirror of the constructor argument: a
-    Python `objective=` collapses to a single `("score", direction)`."""
+    """(metric, direction) pairs. Not quite a mirror of the constructor
+    argument: a callable objective is recorded here as `("score", direction)`,
+    because that is the metric it writes."""
     n_trials: int
     """Trials recorded *so far* — not the constructor's planned count."""
     best_trial: dict[str, Any] | None
@@ -472,7 +471,8 @@ class Study:
 
     @staticmethod
     def load(
-        run_dir: str, objective: Callable[[dict[str, float]], float] | None = ...
+        run_dir: str,
+        objectives: list[tuple[str | Callable[[dict[str, float]], float], str]] | None = ...,
     ) -> Study:
         """Read a study back from a run directory.
 

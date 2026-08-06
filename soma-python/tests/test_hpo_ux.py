@@ -72,7 +72,6 @@ def test_float_return_becomes_score(tmp_path):
         strategy="random",
         n_trials=3,
         seed=1,
-        direction="maximize",
         objectives=[("score", "maximize")],
         root=str(tmp_path),
     )
@@ -121,8 +120,7 @@ def test_objective_callable(tmp_path):
         search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
         strategy="grid",
         n_trials=5,
-        objective=lambda m: m["a"] - m["b"],
-        direction="maximize",
+        objectives=[(lambda m: m["a"] - m["b"], "maximize")],
         root=str(tmp_path),
     )
     # a - b = x - x² → maximum at x = 0.5
@@ -415,8 +413,7 @@ def test_objective_callable_errors_fail_the_trial(tmp_path):
         search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
         strategy="random",
         n_trials=2,
-        objective=lambda m: m["missing_key"],
-        direction="maximize",
+        objectives=[(lambda m: m["missing_key"], "maximize")],
         seed=1,
         root=str(tmp_path),
     )
@@ -429,8 +426,7 @@ def test_objective_callable_errors_fail_the_trial(tmp_path):
         search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
         strategy="random",
         n_trials=1,
-        objective=lambda m: "not a number",
-        direction="maximize",
+        objectives=[(lambda m: "not a number", "maximize")],
         seed=1,
         root=str(tmp_path),
     )
@@ -530,7 +526,7 @@ def test_constructor_validation():
     # A typo must not silently maximize (it used to).
     with pytest.raises(RuntimeError, match="unknown direction"):
         Study("s", search_space=space, strategy="random", n_trials=2,
-              objective=lambda m: 0.0, direction="minimise")
+              objectives=[(lambda m: 0.0, "minimise")])
     with pytest.raises(RuntimeError, match="unknown direction"):
         Study("s", search_space=space, strategy="random", n_trials=2,
               objectives=[("f1", "MAX")])
@@ -583,23 +579,39 @@ def test_pruning_string_and_percentile_forms(tmp_path):
     assert [t["state"] for t in study2.trials].count("pruned") == 2
 
 
-def test_objective_callable_takes_precedence_over_objectives(tmp_path):
-    """CONTRACT: when both are passed, objective= wins and the study
-    scores on 'score'; the objectives list is ignored."""
+def test_a_callable_and_a_name_are_the_same_argument(tmp_path):
+    """There is nothing left to give precedence to.
+
+    `objective=` (a callable) and `objectives=` (names) used to be two
+    arguments with a documented rule for which won when both were passed.
+    One argument takes both kinds, so the question cannot be asked.
+    """
     study = Study(
-        "precedence",
+        "one-vocabulary",
         search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
         strategy="grid",
         n_trials=3,
-        objective=lambda m: -m["loss"],
-        objectives=[("loss", "minimize")],
-        direction="maximize",
+        objectives=[(lambda m: -m["loss"], "maximize")],
         root=str(tmp_path),
     )
     study.run(lambda trial: {"loss": abs(trial["x"] - 0.5)})
     best = study.best_trial
-    assert "score" in best["metrics"]
+    assert "score" in best["metrics"], "a callable writes the 'score' metric"
     assert abs(best["params"]["x"] - 0.5) < 1e-9
+    assert study.objectives == [("score", "maximize")]
+
+
+def test_two_callable_objectives_are_refused(tmp_path):
+    """A scalarizer already reduces every metric to one number."""
+    with pytest.raises(RuntimeError, match="nothing left to reduce"):
+        Study(
+            "two-scalarizers",
+            search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
+            strategy="grid",
+            n_trials=2,
+            objectives=[(lambda m: 1.0, "maximize"), (lambda m: 2.0, "minimize")],
+            root=str(tmp_path),
+        )
 
 
 def test_seed_reproducibility(tmp_path):
@@ -712,8 +724,7 @@ def test_objective_callable_survives_load_when_repassed(tmp_path):
         search_space=[{"type": "float", "name": "x", "low": 0.0, "high": 1.0}],
         strategy="grid",
         n_trials=4,
-        objective=objective,
-        direction="maximize",
+        objectives=[(objective, "maximize")],
         root=str(tmp_path),
     )
     study.run(executor)
@@ -724,7 +735,7 @@ def test_objective_callable_survives_load_when_repassed(tmp_path):
     (run_dir / "study.json").write_text(json.dumps(partial))
 
     # Re-passing the callable on load keeps scoring alive.
-    resumed = Study.load(str(run_dir), objective=objective)
+    resumed = Study.load(str(run_dir), objectives=[(objective, "maximize")])
     resumed.run(executor, resume=True)
     assert all("score" in t["metrics"] for t in resumed.trials)
 
@@ -732,7 +743,7 @@ def test_objective_callable_survives_load_when_repassed(tmp_path):
     partial["trials"] = partial["trials"][:1]
     (run_dir / "study.json").write_text(json.dumps(partial))
     naked = Study.load(str(run_dir))
-    with pytest.warns(UserWarning, match="objective="):
+    with pytest.warns(UserWarning, match="callable objective"):
         naked.run(executor, resume=True)
 
 

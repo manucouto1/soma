@@ -575,9 +575,14 @@ print(study.trials)         # every trial as a dict
 print(study.run_dir)        # .soma/runs/study_.../  (tracking=True default)
 ```
 
-Additional constructor keywords: `objective=` (a Python callable over
-the final metrics dict, recorded as metric `"score"`), `direction=`,
-`pruning=("median", warmup)` or `("percentile", pct, warmup)`,
+Each entry of `objectives=` is `(what, direction)`, where *what* is a
+metric name or a **callable** over the whole metrics dict — a scalarizer,
+whose result is recorded as the metric `"score"`. It used to be two
+arguments (`objective=` for the callable, `objectives=` for the names) plus
+a `direction=` that only meant anything with the first, and a rule for
+which won when you passed both.
+
+Additional constructor keywords: `pruning=("median", warmup)` or `("percentile", pct, warmup)`,
 `tracking=`, `root=".soma"`, `tags=[...]`, `frozen={...}` (fixed params
 injected into every trial), and `seeds=[...]` — **experiment seeds**:
 every sampled config runs once per seed, `trial["seed"]` carries it
@@ -610,7 +615,7 @@ study = g.study("tune", strategy="grid", n_trials=4,
 | Member | Signature | Description |
 |---|---|---|
 | `run` | `(executor, on_event=None, resume=False, progress=False)` | Run the study. `progress=True` draws a tqdm bar fed by live `StudyProgress` events (needs the `viz` extra) |
-| `load` | `(run_dir, objective=None) -> Study` | Static. Reload a study from its run directory |
+| `load` | `(run_dir, objectives=None) -> Study` | Static. Reload a study from its run directory |
 | `save` | `(path=None)` | Write `study.json` (also written automatically after every trial) |
 | `best_trial` | property `-> dict \| None` | Best trial as a dict (see below) |
 | `trials` | property `-> list[dict]` | Every trial |
