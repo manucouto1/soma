@@ -10,8 +10,8 @@ Usage::
         for x, y in batches:
             with g.context() as ctx:
                 g.zero_grad()
-                out, aux = g.forward(x)
-                loss = my_loss(out, y, aux)
+                out = g.forward(x)
+                loss = my_loss(out, y, g.py_state["last_aux"])
                 g.backward(ctx, loss)
             g.step(ctx)
 

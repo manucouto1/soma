@@ -1227,6 +1227,32 @@ the reason the enum exists. `StudyRunner` handles both
 Stringly-typed node ids, the review's finding 1.3, is
 [D-56](#d-56--nodeid-is-a-string-and-so-is-everything-else) here.
 
+### D-96 · `forward`'s payload type still depends on the mode
+
+**Class** API inconsistency · **Severity** Medium · **Crate** `soma-python`
+
+**Evidence** `Graph.forward` on a differentiable graph returns a
+`torch.Tensor` while training and a `list` in eval. Both come from the same
+Python walk (`soma-python/python/soma/_orchestrator.py:317`); the difference is
+`DifferentiableFilter.forward` itself, which runs `no_grad` and converts in
+eval (`soma-python/python/soma/_composite.py:259`).
+
+The intent is defensible — eval is shaped to match the Rust inference path, so
+a frozen graph and an eval graph agree — but the consequence is that
+`g.eval()` changes the *type* of what a caller already had working, at a call
+site the caller did not touch. It is the same class of problem as the return
+*arity*, which used to vary the same way and no longer does: `forward` returns
+one value in both modes now, and the auxiliaries live in
+`py_state["last_aux"]`.
+
+**Fix shape** Either eval returns tensors for a graph that still holds live
+modules (and only `freeze()` crosses back to lists), or `forward` converts on
+the way out in both modes. The first keeps `freeze()` as the one place the
+representation changes, which is the boundary users already have a name for.
+
+**Guarded by** `test_forward_returns_the_same_shape_in_both_modes`, which
+asserts the arity and names this entry for the part it does not.
+
 ---
 
 ## What is already healthy

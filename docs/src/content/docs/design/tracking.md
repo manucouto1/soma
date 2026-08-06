@@ -85,7 +85,8 @@ with g.track_run("mos-baseline", tags=["mos"]) as run:
             for x, y in batches:
                 with g.context() as ctx:
                     g.zero_grad()
-                    out, aux = g.forward(x)
+                    out = g.forward(x)
+                    aux = g.py_state["last_aux"]
                     g.backward(ctx, my_loss(out, y))   # audit + StepCompleted
                 g.step(ctx)
             run.log("val_f1", evaluate(g), step=epoch)

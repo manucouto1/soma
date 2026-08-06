@@ -10,12 +10,12 @@ drive a training loop natively without serialising parameters between filters:
         for x, y in batches:
             with graph.context() as ctx:
                 graph.zero_grad()
-                out, aux = graph.forward(x)
-                loss = compute_loss(out, y, aux)
+                out = graph.forward(x)
+                loss = compute_loss(out, y, graph.py_state["last_aux"])
                 graph.backward(ctx, loss)
             graph.step(ctx)
     graph.eval()
-    out, aux = graph.forward(x)        # delegates to Rust inference path
+    out = graph.forward(x)             # delegates to Rust inference path
 
 ``context()`` / ``backward(ctx, loss)`` / ``step(ctx)`` / ``zero_grad()`` are
 RPC-ready wrappers: locally they reduce to ``loss.backward()``,
@@ -330,8 +330,11 @@ def differentiable_forward(self: Graph, x: Any):
     The value returned is the last node in topological order — the same
     rule the chain version used, and still deterministic.
 
-    Returns ``(out, aux_by_node)`` while training and bare ``out`` in
-    eval, matching what the Rust path produces.
+    Returns the output, and only the output — the same shape the Rust
+    path produces, in both modes. Auxiliary signals land in
+    ``graph.py_state["last_aux"]`` as ``{node_id: aux_dict}``, so a loss
+    that needs them reads them from the graph rather than from a return
+    value whose arity depended on the mode.
 
     This used to be installed *over* ``Graph.forward`` at import time,
     which meant two implementations answered to one name and the choice
@@ -359,7 +362,7 @@ def differentiable_forward(self: Graph, x: Any):
                 mod.to(target_device, target_dtype)
             else:
                 mod.to(target_device)
-        if hasattr(f, "build_module"):
+        if getattr(f, "_differentiable", False):
             # DifferentiableFilter. In training, params live on the
             # module — state is irrelevant. In eval, pass state so that
             # a wiped/fresh module can reload weights_b64 from the
@@ -386,14 +389,15 @@ def differentiable_forward(self: Graph, x: Any):
         else:
             out = result
         outputs[node_id] = out
-    # Return shape matches the user's mode:
-    #   training (any filter has training=True) → (out, aux_by_node) so
-    #     callers can fold aux into the loss;
-    #   eval (no training, only inference) → just ``out`` to match the
-    #     legacy Rust-forward contract that pure-legacy graphs already
-    #     produce, so users don't have to special-case the return shape.
-    if _any_training(self):
-        return out, aux_by_node
+    # One return shape, always the output.
+    #
+    # This used to return `(out, aux_by_node)` while training and bare
+    # `out` in eval, so what `g.forward(x)` gave back depended on a mode
+    # set elsewhere — and a training loop written against one shape broke
+    # on the same graph after `g.eval()`. The auxiliaries are still
+    # produced; they are read from the graph, beside the context and the
+    # optimizer the same loop already reaches for.
+    self.py_state["last_aux"] = aux_by_node
     return out
 
 

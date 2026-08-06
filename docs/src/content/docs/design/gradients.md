@@ -53,7 +53,7 @@ Gradient flow is driven from Python, where the tensors and the optimizer live.
 | `g.parameters()` | Every parameter, in topological order, deduplicated |
 | `g.make_optimizer(cls, **kw)` | Build and attach an optimizer (default Adam) |
 | `g.context()` | Context manager scoping one training step |
-| `g.forward(x)` | Returns `(out, aux)` while training, `out` alone in eval |
+| `g.forward(x)` | Returns the output, in both modes. Auxiliaries land in `g.py_state["last_aux"]` |
 | `g.backward(ctx, loss)` | `loss.backward()`, plus the audit hook and step event |
 | `g.step(ctx)` | Optimizer step |
 | `g.freeze()` | Fold module weights into node state and switch to eval |
@@ -69,7 +69,8 @@ g.make_optimizer(torch.optim.Adam, lr=1e-2)
 for _ in range(epochs):
     with g.context() as ctx:
         g.zero_grad()
-        out, aux = g.forward(x)
+        out = g.forward(x)
+        aux = g.py_state["last_aux"]
         g.backward(ctx, nn.functional.mse_loss(out, y))
     g.step(ctx)
 ```
@@ -276,9 +277,12 @@ class Dense(DifferentiableFilter):
   `no_grad`, returns `(out_list, aux_dict)`. This is the path the Rust
   runtime uses for cached/distributable inference after `freeze()`.
 
-The contract is **always `(out, aux)`**; `aux` is an empty dict unless
-the filter override surfaces auxiliary signals (gates, routing weights,
-auxiliary losses).
+A **filter's** `forward` returns `(out, aux)`; `aux` is an empty dict
+unless the override surfaces auxiliary signals (gates, routing weights,
+auxiliary losses). The **graph's** `forward` does not pass that tuple on —
+it collects the auxiliaries by node into `g.py_state["last_aux"]` and
+returns the output alone, so the call has one shape whatever mode the
+graph is in.
 
 ### Graph orchestration API
 
@@ -287,7 +291,7 @@ auxiliary losses).
 | `g.materialize(sample_input)` | Walk topology, build every `_module` once, threading shapes through `output_shape`. |
 | `g.train()` / `g.eval()` | Toggle `training` on every live filter (and its `_module`). |
 | `g.parameters()` | Iterate `nn.Parameter`s of every materialised filter, in topological order, deduplicated. |
-| `g.forward(x)` | Polymorphic. If any filter is in training, walks live filters with autograd live and returns `(out, aux_by_node)`. Otherwise delegates to the Rust inference path. |
+| `g.forward(x)` | Dispatches on the `_differentiable` declaration: a graph holding differentiable filters is walked in Python with autograd live, otherwise it goes to the Rust path. Returns the output either way; auxiliaries are collected into `py_state["last_aux"]`. The Python walk refuses `stream`, `chunk_size`, `seed` and `run_id`, which it cannot honour. |
 | `g.make_optimizer(cls=Adam, **kw)` | Build and register an optimiser over `g.parameters()`. |
 | `g.set_optimizer(opt)` | Register an externally-built optimiser. |
 | `g.context()` | Autograd context manager. Local: no-op. RPC: `dist.autograd.context()`. |
@@ -311,7 +315,8 @@ for epoch in range(epochs):
     for x, y in batches:
         with g.context() as ctx:
             g.zero_grad()
-            out, aux = g.forward(x)
+            out = g.forward(x)
+            aux = g.py_state["last_aux"]
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)
@@ -329,7 +334,8 @@ graph's training-mode `forward` collects per-node aux into
 main loss explicitly:
 
 ```python
-out, aux = g.forward(x)
+out = g.forward(x)
+aux = g.py_state["last_aux"]
 main = nn.functional.cross_entropy(out, y)
 gate_l1 = aux["classifier"]["gate"].abs().mean()
 total = main + 0.1 * gate_l1
@@ -350,7 +356,8 @@ with g.gradient_audit() as audit:
     for x, y in batches:
         with g.context() as ctx:
             g.zero_grad()
-            out, aux = g.forward(x)
+            out = g.forward(x)
+            aux = g.py_state["last_aux"]
             loss = my_loss(out, y, aux)
             g.backward(ctx, loss)
         g.step(ctx)

@@ -154,7 +154,7 @@ g = Graph.somatize(
 | `node` | `(filter, target=None) -> str` or `(node_id, filter)` | Add a filter node, returns its id (snake_case class name, deduped with `_2`). `target="local"` pins it off remote workers |
 | `edge` | `(source, target)` | Connect two nodes with a data edge |
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
-| `forward` | `(x, stream=False, chunk_size=1024, seed=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns a list for pure-inference graphs; `(out, aux_by_node)` while any differentiable filter is in `train()` mode |
+| `forward` | `(x, stream=False, chunk_size=None, seed=None, run_id=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns the leaf's output. A graph holding differentiable filters is walked in Python for autograd and **refuses** `stream` / `chunk_size` / `seed` / `run_id`, which that walk cannot honour; its auxiliaries land in `g.py_state["last_aux"]` |
 | `compile` | `(mode="inference") -> CompileInfo` | Compile and return diagnostics (a dict that renders as tiles + callouts + plan diagram in notebooks) |
 | `to_mermaid` | `(overlay=None) -> str` | Mermaid diagram; `overlay=` annotates nodes (see [Visualization](/soma/design/visualization/)) |
 | `to_svg` | `(overlay=None) -> str` | Self-contained SVG — no JavaScript, renders inline anywhere |
@@ -508,7 +508,8 @@ g.make_optimizer(torch.optim.Adam, lr=1e-3)
 for x, y in batches:
     with g.context() as ctx:
         g.zero_grad()
-        out, aux = g.forward(x)
+        out = g.forward(x)
+        aux = g.py_state["last_aux"]
         loss = nn.functional.mse_loss(out, y)
         g.backward(ctx, loss)
     g.step(ctx)

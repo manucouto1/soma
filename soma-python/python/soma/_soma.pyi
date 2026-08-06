@@ -178,11 +178,15 @@ class Graph:
         self,
         x: Any,
         stream: bool = ...,
-        chunk_size: int = ...,
+        chunk_size: int | None = ...,
         seed: int | None = ...,
         run_id: str | None = ...,
     ) -> Any:
-        """Push data through the graph and return the output of the leaf that ran."""
+        """Push data through the graph and return the output of the leaf that ran.
+
+        A graph holding differentiable filters is walked in Python for
+        autograd, and that walk refuses `stream`, `chunk_size`, `seed` and
+        `run_id` rather than ignoring them."""
 
     def get_node_state(self, node_id: str) -> Any | None:
         """The stored state of a filter node."""

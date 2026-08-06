@@ -45,7 +45,7 @@ def _build():
 def _train_step(g, x, y):
     with g.context() as ctx:
         g.zero_grad()
-        out, _ = g.forward(x)
+        out = g.forward(x)
         loss = nn.functional.mse_loss(out, y)
         g.backward(ctx, loss)
     g.step(ctx)
@@ -110,7 +110,7 @@ def test_vanishing_flag_via_aggressive_grad_lo():
         # the aggressive threshold.
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y) * 1e-9
             g.backward(ctx, loss)
         g.step(ctx)
@@ -145,7 +145,7 @@ def test_nan_flag_when_param_set_to_nan():
     with g.gradient_audit() as audit:
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         # Skip optimizer step (would propagate NaN further).
@@ -706,7 +706,7 @@ def test_channel_snapshots_without_safetensors_warn_instead_of_vanishing(
             with g.gradient_audit(channels=True):
                 with g.context() as ctx:
                     g.zero_grad()
-                    out, _ = g.forward(x)
+                    out = g.forward(x)
                     g.backward(ctx, torch.nn.functional.mse_loss(out, y))
                 g.step(ctx)
 

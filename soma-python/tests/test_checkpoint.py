@@ -79,7 +79,7 @@ def _build_and_train(Dense, seed: int = 0, n_iter: int = 150):
     for _ in range(n_iter):
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)
@@ -237,7 +237,7 @@ def test_save_and_restore_optimizer(filter_mod):
     for _ in range(5):
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)

@@ -222,17 +222,24 @@ impl PyGraph {
         value_to_py(py, &output)
     }
 
-    /// Does any live filter carry a torch module?
+    /// Does any live filter declare itself differentiable?
     ///
-    /// `build_module` is the declaration (a `DifferentiableFilter` that has
-    /// not been materialised yet) and `_module` is the materialised one;
-    /// either means autograd has to survive this forward, so the Python
-    /// walk owns it.
+    /// `_differentiable` is a **declaration**, set by subclassing
+    /// `DifferentiableFilter`, and it sits beside `_kind`, `_cacheable`,
+    /// `_deterministic` and `_cache_version` — the class attributes this
+    /// package already uses to let a filter say what it is.
+    ///
+    /// This used to sniff for a `build_module` method. That made the name
+    /// of a method load-bearing for the whole graph: any filter that
+    /// happened to define `build_module` for its own reasons switched the
+    /// engine for every node beside it, silently, and the failure showed up
+    /// as a cache miss or a lost seed rather than as an error.
     fn has_differentiable_filters(&self, py: Python<'_>) -> bool {
         self.live_filters.values().any(|f| {
-            let f = f.bind(py);
-            f.hasattr("build_module").unwrap_or(false)
-                || f.getattr("_module").is_ok_and(|m| !m.is_none())
+            f.bind(py)
+                .getattr("_differentiable")
+                .and_then(|v| v.is_truthy())
+                .unwrap_or(false)
         })
     }
 
@@ -1581,13 +1588,13 @@ impl PyGraph {
     /// - No workers → local execution
     /// - Workers + all nodes non-local → entire plan dispatched to worker
     /// - Workers + mixed (some local) → local execution with remote fallback
-    #[pyo3(signature = (x, stream=false, chunk_size=1024, seed=None, run_id=None))]
+    #[pyo3(signature = (x, stream=false, chunk_size=None, seed=None, run_id=None))]
     fn forward(
         slf: PyRef<'_, Self>,
         py: Python<'_>,
         x: &Bound<'_, pyo3::types::PyAny>,
         stream: bool,
-        chunk_size: usize,
+        chunk_size: Option<usize>,
         seed: Option<i64>,
         run_id: Option<String>,
     ) -> PyResult<PyObject> {
@@ -1603,13 +1610,39 @@ impl PyGraph {
         // dispatch belongs here, where the graph knows what it holds; the
         // walk is a named function this calls.
         if slf.has_differentiable_filters(py) {
+            // The torch walk honours none of these: it does not chunk, it
+            // does not salt a cache key (nothing it produces is cached),
+            // and it emits no run bracket. They used to be accepted and
+            // discarded, so `g.forward(x, seed=42)` on a torch graph
+            // reported success having ignored the seed — and a seed that
+            // is silently ignored is worse than one that is refused,
+            // because the run looks reproducible.
+            let ignored: Vec<&str> = [
+                ("stream", stream),
+                ("chunk_size", chunk_size.is_some()),
+                ("seed", seed.is_some()),
+                ("run_id", run_id.is_some()),
+            ]
+            .iter()
+            .filter(|(_, given)| *given)
+            .map(|(name, _)| *name)
+            .collect();
+            if !ignored.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "this graph holds differentiable filters, so it is walked in \
+                     Python for autograd — and that walk cannot honour {}. Run the \
+                     graph in eval mode (`g.eval()`, after `g.freeze()`) to reach the \
+                     Rust path, which can.",
+                    ignored.join(", ")
+                )));
+            }
             let graph = Py::from(slf);
             let walk = py.import("soma._orchestrator")?;
             return walk
                 .call_method1("differentiable_forward", (graph, x))
                 .map(|v| v.unbind());
         }
-        slf.forward_local(py, x, stream, chunk_size, seed, run_id)
+        slf.forward_local(py, x, stream, chunk_size.unwrap_or(1024), seed, run_id)
     }
 
     /// Answer what a suspended run was waiting for.

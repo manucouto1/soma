@@ -12,7 +12,8 @@ with g.gradient_audit() as audit:
     for x, y in batches:
         with g.context() as ctx:
             g.zero_grad()
-            out, aux = g.forward(x)
+            out = g.forward(x)
+            aux = g.py_state["last_aux"]
             loss = compute_loss(out, y, aux)
             g.backward(ctx, loss)
         g.step(ctx)
