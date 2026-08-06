@@ -129,6 +129,7 @@ export default defineConfig({
 						{ label: 'Python Bridge', slug: 'internals/python' },
 						{ label: 'Design Patterns in Use', slug: 'internals/patterns' },
 						{ label: 'Known Debt', slug: 'internals/debt' },
+						{ label: 'Surface Census', slug: 'internals/surface' },
 						{ label: 'Symbol Index', slug: 'internals/symbols' },
 					],
 				},

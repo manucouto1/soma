@@ -30,6 +30,7 @@ will touch.
 | Work on remote execution | [Distribution](/soma/internals/distribution/) — start with [D5](/soma/internals/distribution/#d5--what-crosses-the-wire) |
 | Recognize an idiom you keep seeing | [Design Patterns](/soma/internals/patterns/) |
 | Plan a refactor | [Known Debt](/soma/internals/debt/) |
+| Know how big the user-facing API is, and what nothing calls | [Surface Census](/soma/internals/surface/) |
 | Find one symbol | [Symbol Index](/soma/internals/symbols/) |
 
 ---
