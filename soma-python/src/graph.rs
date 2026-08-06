@@ -461,55 +461,6 @@ impl PyGraph {
         Ok(())
     }
 
-    /// Split a Value into batches along the first axis.
-    /// For Tensor: splits rows. For Json dict with lists: splits list values.
-    #[allow(dead_code)]
-    fn split_value_into_batches(value: &Value, batch_size: usize) -> Vec<Value> {
-        match value {
-            Value::Tensor { values, shape } if !shape.is_empty() && shape[0] > batch_size => {
-                let rows = shape[0];
-                let row_size: usize = shape[1..].iter().product::<usize>().max(1);
-                let mut batches = Vec::new();
-                for start in (0..rows).step_by(batch_size) {
-                    let end = (start + batch_size).min(rows);
-                    let flat_start = start * row_size;
-                    let flat_end = end * row_size;
-                    let batch_vals = values[flat_start..flat_end].to_vec();
-                    let mut batch_shape = shape.clone();
-                    batch_shape[0] = end - start;
-                    batches.push(Value::tensor(batch_vals, batch_shape));
-                }
-                batches
-            }
-            Value::Json(json_val) if json_val.is_object() => {
-                let map = json_val.as_object().unwrap();
-                let total = map
-                    .values()
-                    .find_map(|v| v.as_array().map(|a| a.len()))
-                    .unwrap_or(0);
-                if total <= batch_size {
-                    return vec![value.clone()];
-                }
-                let mut batches = Vec::new();
-                for start in (0..total).step_by(batch_size) {
-                    let end = (start + batch_size).min(total);
-                    let mut batch_map = serde_json::Map::new();
-                    for (k, v) in map {
-                        if let Some(arr) = v.as_array() {
-                            let slice = arr[start..end.min(arr.len())].to_vec();
-                            batch_map.insert(k.clone(), serde_json::Value::Array(slice));
-                        } else {
-                            batch_map.insert(k.clone(), v.clone());
-                        }
-                    }
-                    batches.push(Value::json(serde_json::Value::Object(batch_map)));
-                }
-                batches
-            }
-            _ => vec![value.clone()],
-        }
-    }
-
     /// The graph's filters, serialized for the wire.
     ///
     /// Extracted because three call sites built the same vector; the
@@ -1660,68 +1611,6 @@ impl PyGraph {
         slf.forward_local(py, x, stream, chunk_size, seed, run_id)
     }
 
-    /// Compile and execute, returning all node outputs as a dict.
-    fn run(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let catalog = self.rebuild_catalog(py)?;
-        let compile_result = somatize_compiler::compile(
-            &self.graph,
-            &catalog,
-            CompileMode::NoCache,
-            Some(self.cache.as_ref()),
-        )
-        .map_err(soma_err_to_py)?;
-
-        let graph_info = GraphInfo::from_graph(&self.graph);
-        let run_id = somatize_core::util::timestamp_id("graph_run");
-        let mut ctx =
-            Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
-
-        if let Some(driver) = self.step_runtime(py, &catalog)? {
-            ctx = ctx.with_driver(driver);
-        }
-        if let Some(transport) = self.make_transport() {
-            ctx = ctx.with_transport(transport);
-        }
-
-        self.event_bus
-            .emit(somatize_core::event::Event::RunStarted {
-                run_id: run_id.clone(),
-                plan_summary: compile_result.plan.summary(),
-            });
-        let run_start = std::time::Instant::now();
-
-        // Release the GIL: Parallel plans run branches on scoped threads
-        // whose Python filters must acquire it — holding it here would
-        // deadlock the join.
-        let result = py.allow_threads(|| {
-            executor::execute(
-                &compile_result.plan,
-                &mut ctx,
-                &catalog,
-                self.cache.as_ref(),
-            )
-        });
-        match &result {
-            Ok(()) => self
-                .event_bus
-                .emit(somatize_core::event::Event::RunCompleted {
-                    run_id,
-                    duration: run_start.elapsed(),
-                }),
-            Err(e) => self.event_bus.emit(somatize_core::event::Event::RunFailed {
-                run_id,
-                error: e.to_string(),
-            }),
-        };
-        result.map_err(soma_err_to_py)?;
-
-        let dict = PyDict::new(py);
-        for (k, v) in ctx.into_outputs() {
-            dict.set_item(k, value_to_py(py, &v)?)?;
-        }
-        Ok(dict.into_any().unbind())
-    }
-
     /// Answer what a suspended run was waiting for.
     ///
     /// Every argument comes off the `SomaSuspended` exception that stopped
@@ -1867,16 +1756,6 @@ impl PyGraph {
             );
         }
         self.graph.to_svg()
-    }
-
-    /// Render the graph as a Graphviz DOT string (same optional
-    /// `overlay` as `to_mermaid`).
-    #[pyo3(signature = (overlay=None))]
-    fn to_graphviz(&self, py: Python<'_>, overlay: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
-        match overlay {
-            None => Ok(self.graph.to_graphviz()),
-            Some(ov) => Ok(self.graph.to_graphviz_with(&py_overlay(py, ov)?)),
-        }
     }
 
     /// Render the graph as an ASCII text tree.

@@ -131,11 +131,11 @@ navigable:
 | Group | Methods (all `soma-python/src/graph.rs`) |
 |---|---|
 | Construction & topology | `__new__` `:864`, `node` `:943`, `edge` `:1334`, `connect` `:1340`, `branch` `:1070`, `loop_` `:1137`, `handoff` `:1358`, `optional` `:1221`, `optional_edges` `:1249`, `set_edge` `:1258` |
-| Agentic registration | `register_graph` `:1008`, `register_step` `:1036`, `use_provider` `:1205`, `add_tool` `:1305`, `add_mcp_server` `:1314`, `steps` `:1294` |
-| Execution | `fit` `:1371` `(!)`, `forward` `:1633`, `run` `:1664`, `resume` `:1739`, `compile` `:1774` |
-| Rendering | `to_mermaid` `:1836`, `to_svg` `:1847`, `_repr_html_` `:1856`, `to_graphviz` `:1875`, `to_text` `:1883`, `graph_json` `:1939` |
-| Events & tracking | `on_event` `:1901`, `emit_event` `:1926`, `begin_run` `:1962` |
-| Distribution | `add_worker` `:2022`, `set_data_store` `:2039`, `set_strategy` `:2075` `(!)`, `strategy` `:2181` `(!)`, `shutdown_worker` `:2201`, `shutdown_workers` `:2216`, `set_coordinator` `:2231`, `workers` `:2238` |
+| Agentic registration | `register_graph` `:959`, `register_step` `:987`, `use_provider` `:1156`, `add_tool` `:1256`, `add_mcp_server` `:1265`, `steps` `:1245` |
+| Execution | `fit` `:1322` `(!)`, `forward` `:1584`, `resume` `:1628`, `compile` `:1663` |
+| Rendering | `to_mermaid` `:1725`, `to_svg` `:1736`, `_repr_html_` `:1745`, `to_text` `:1762`, `graph_json` `:1818` |
+| Events & tracking | `on_event` `:1780`, `emit_event` `:1805`, `begin_run` `:1841` |
+| Distribution | `add_worker` `:1901`, `set_data_store` `:1918`, `set_strategy` `:1954` `(!)`, `strategy` `:2079` `(!)`, `shutdown_worker` `:2099`, `shutdown_workers` `:2114`, `set_coordinator` `:2129`, `workers` `:2136` |
 | Introspection | `filter_source` `:2278`, `filter_requirements` `:2289`, `filter_sources_dict` `:2296`, `filter` `:2313`, `filter_ids` `:2323`, `filters` `:2349`, `set_node_state` `:2366`, `edges` `:2384`, `get_node_state` `:2396`, `mark_fitted` `:2411`, `py_state` `:2422`, `__len__` `:2430`, `__repr__` `:2434`, `__str__` `:2443` |
 
 **19 fields** (`soma-python/src/graph.rs:28`–`:84`), five of them parallel maps
@@ -169,7 +169,7 @@ It also means every `RunView` property pays a serialize→parse round trip —
 |---|---|
 | `soma-python/src/agentic.rs` | `tool` `:1147`, `providers` `:1179`, `models` `:1200` |
 | `soma-python/src/cache.rs` | `cache_stats` `:24`, `cache_gc` `:64`, `cache_pin` `:89`, `cache_verify` `:109`, `cache_purge_v1` `:146` |
-| `soma-python/src/readers.rs` | 25 functions: 4 run/HEAD (`run_summary_json` `:38`, `checkout_run` `:51`, `read_head_run` `:59`, `clear_head_run` `:66`), 5 knowledge-base (`kb_find_similar_json` `:85`, `kb_record_conclusion` `:144`, `kb_lineage_json` `:176`, `kb_diff_json` `:196`, `kb_reindex` `:220`), 11 run readers (`list_runs_json` `:271` … `run_overlay_json` `:373`), 5 renderers (`run_to_mermaid` `:382`, `run_to_graphviz` `:402`, `run_to_svg` `:419`, `graph_json_to_mermaid` `:435`, `graph_json_to_svg` `:453`) |
+| `soma-python/src/readers.rs` | 24 functions: 4 run/HEAD (`run_summary_json` `:38`, `checkout_run` `:51`, `read_head_run` `:59`, `clear_head_run` `:66`), 5 knowledge-base (`kb_find_similar_json` `:85`, `kb_record_conclusion` `:144`, `kb_lineage_json` `:176`, `kb_diff_json` `:196`, `kb_reindex` `:220`), 11 run readers (`list_runs_json` `:271` … `run_overlay_json` `:373`), 4 renderers (`run_to_mermaid` `:383`, `graph_json_to_mermaid` `:403`, `graph_json_to_svg` `:420`, `run_to_svg` `:436`) |
 
 ### Conversions across the boundary
 
@@ -275,7 +275,6 @@ constraint. It is the single best structural decision in the Python layer.
 | `builder.py` | 69 | `somatize(topology)` fluent builder |
 | `_tracking.py` | 67 | `track_run` context manager |
 | `viz/__init__.py` | 63 | 16 re-exports |
-| `lab.py` | 60 | `Lab` HTTP client |
 | `_experiments.py` | 30 | `experiments(root)` |
 | `_soma.pyi` | 738 | The hand-written stub for the extension |
 

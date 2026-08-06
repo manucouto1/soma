@@ -761,15 +761,6 @@ impl RunReader {
         Ok(graph.to_mermaid_with(&self.overlay()?))
     }
 
-    /// Graphviz rendering of the run's graph, annotated with this
-    /// run's overlay. Errors if the run has no `graph.json` snapshot.
-    pub fn to_graphviz(&self) -> Result<String> {
-        let graph = self.graph()?.ok_or_else(|| {
-            SomaError::Other(format!("run dir {} has no graph.json", self.dir.display()))
-        })?;
-        Ok(graph.to_graphviz_with(&self.overlay()?))
-    }
-
     /// Self-contained SVG rendering of the run's graph with this run's
     /// overlay — no JavaScript, safe for notebook/report embedding.
     /// Errors if the run has no `graph.json` snapshot.

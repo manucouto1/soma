@@ -384,7 +384,7 @@ impl ExecutionPlan {
     /// from this plan — the same node synthesis as [`Self::to_mermaid`]
     /// (fork nodes for `Parallel`, arm nodes for `Branch`, pills for
     /// streams) — so every Graph renderer applies: `to_svg()`,
-    /// `to_mermaid()`, `to_graphviz()`.
+    /// `to_mermaid()`, `to_text()`.
     pub fn to_graph(&self) -> somatize_core::graph::Graph {
         let mut g = somatize_core::graph::Graph::new();
         let mut counter = 0usize;

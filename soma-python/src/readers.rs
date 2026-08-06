@@ -447,21 +447,3 @@ pub(crate) fn run_to_svg(dir: String, overlay: bool) -> PyResult<String> {
         Ok(graph.to_svg())
     }
 }
-
-/// Graphviz DOT of the run's graph, annotated with its overlay.
-#[pyfunction]
-#[pyo3(signature = (dir, overlay=true))]
-pub(crate) fn run_to_graphviz(dir: String, overlay: bool) -> PyResult<String> {
-    let reader = open_run_reader(&dir)?;
-    if overlay {
-        reader
-            .to_graphviz()
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-    } else {
-        let graph = reader
-            .graph()
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
-            .ok_or_else(|| PyRuntimeError::new_err(format!("run dir {dir} has no graph.json")))?;
-        Ok(graph.to_graphviz())
-    }
-}

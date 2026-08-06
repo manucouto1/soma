@@ -183,12 +183,6 @@ class TestVisualization:
         assert "adder" in m
         assert "-->" in m
 
-    def test_graphviz_output(self):
-        g = Graph.somatize(Doubler() >> Adder())
-        dot = g.to_graphviz()
-        assert "digraph G" in dot
-        assert "rankdir=LR" in dot
-
     def test_text_output(self):
         g = Graph.somatize(Doubler() >> Adder())
         text = g.to_text()

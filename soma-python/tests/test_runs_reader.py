@@ -292,9 +292,6 @@ def test_graph_to_mermaid_accepts_overlay_kwarg(tmp_path):
     assert "class a soma_completed" in annotated
     assert "class b soma_cached" in annotated
 
-    dot = g.to_graphviz(overlay={"nodes": {"a": {"status": "failed"}}})
-    assert "fillcolor" in dot
-
     with pytest.raises(RuntimeError, match="invalid overlay"):
         g.to_mermaid(overlay={"nodes": {"a": {"status": "not-a-status"}}})
 
@@ -316,9 +313,6 @@ def test_runview_overlay_and_annotated_rendering(tmp_path):
     assert "classDef" not in plain
     assert plain == _graph().to_mermaid()
 
-    dot = view.to_graphviz()
-    assert "fillcolor" in dot
-
     # The overlay dict round-trips through the Graph kwarg path too.
     assert "class a soma_completed" in _graph().to_mermaid(overlay=overlay)
 
@@ -332,8 +326,8 @@ def test_cli_soma_graph(tmp_path, capsys):
     assert out.startswith("graph LR")
     assert "class a soma_completed" in out
 
-    assert cli_main(["graph", run.dir, "--format", "dot"]) == 0
-    assert capsys.readouterr().out.startswith("digraph G {")
+    assert cli_main(["graph", run.dir]) == 0
+    assert capsys.readouterr().out.startswith("graph LR")
 
     assert cli_main(["graph", run_id, "--root", str(tmp_path), "--no-overlay"]) == 0
     assert "classDef" not in capsys.readouterr().out

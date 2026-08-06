@@ -22,7 +22,6 @@ from soma._study import Study
 from soma.filter import Filter
 from soma._identity import CacheConfigError
 from soma.search import search
-from soma.lab import Lab
 from soma.chain import Chain, Fork
 from soma import agentic
 from soma import library
@@ -96,7 +95,6 @@ __all__ = [
     "Worker",
     "Filter",
     "DifferentiableFilter",
-    "Lab",
     "Chain",
     "Fork",
     "search",

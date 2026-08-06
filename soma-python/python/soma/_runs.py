@@ -230,11 +230,6 @@ class RunView:
                 nodes[mermaid_by_path[path]] = entry
         return {"nodes": nodes}
 
-    def to_graphviz(self, overlay: bool = True) -> str:
-        """Graphviz DOT of the graph this run executed, annotated with
-        per-node timing/cache/health."""
-        return _soma.run_to_graphviz(self._dir, overlay=overlay)
-
     def to_svg(self, overlay: bool = True, node: str | None = None) -> str:
         """Self-contained SVG diagram (no JavaScript — displays inline
         anywhere). Same semantics as ``to_mermaid``: the run's graph

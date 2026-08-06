@@ -31,7 +31,7 @@ serve PyO3, the CLI, and any future front-end:
 | `agentic_activity()` | agent-step totals and per-node breakdown: turns, tokens, effects by label, tools, replays, suspensions |
 | `agentic_timeline()` | per-effect execution spans (`EffectRequested`→`EffectCompleted`), the agent-run gantt substrate |
 | `overlay()` | a `GraphOverlay` folding all of the above per node |
-| `to_mermaid()` / `to_graphviz()` / `to_svg()` | the run's graph annotated with its overlay |
+| `to_mermaid()` / `to_svg()` | the run's graph annotated with its overlay |
 
 `list_runs(root)` scans `<root>/runs/*/` manifests; a `running` status
 with a stale heartbeat (> 300 s) reports as `crashed`.
@@ -45,7 +45,7 @@ worker path did.
 
 `GraphOverlay` (`soma-core/src/viz.rs`) carries per-node execution
 facts — status, total duration, cache tier, health flags — and
-`Graph::to_mermaid_with` / `to_graphviz_with` fold them into the
+`Graph::to_mermaid_with` / `svg::to_svg_with` fold them into the
 rendering: a second label line (`1.2s · mem hit · ⚠ LEAKAGE`) plus a
 status `classDef` per node. An empty overlay reproduces the plain
 output byte-for-byte, and rendering stays a dependency-free

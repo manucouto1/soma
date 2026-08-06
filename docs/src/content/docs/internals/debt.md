@@ -327,9 +327,8 @@ same pairing exists for `kb_lineage`, `kb_diff` and `kb_record_conclusion`.
 **Class** Duplication · **Severity** Low · **Crate** `soma-core`
 
 **Evidence** `Graph::to_mermaid_with` (`soma-core/src/graph.rs:547`),
-`to_graphviz_with` (`:634`), `to_text` (`:688`) and `svg::to_svg_with`
-(`soma-core/src/svg.rs:65`) each map the five `NodeKind`s to a shape
-independently. `ExecutionPlan` repeats the pattern: `mermaid_nodes`
+`to_text` (`:628`) and `svg::to_svg_with` (`soma-core/src/svg.rs:65`) each
+map the five `NodeKind`s to a shape independently. `ExecutionPlan` repeats the pattern: `mermaid_nodes`
 (`soma-compiler/src/plan.rs:271`) and `graph_nodes` (`:407`) duplicate a whole
 recursive walk, and the 10-line comment at `soma-compiler/src/plan.rs:264`
 acknowledges it and declines to unify.
@@ -851,7 +850,7 @@ opens and parses the whole file. It is called independently by `node_timings`
 
 `summarize` (`soma-runtime/src/tracking/summary.rs:33`) calls five of them, so a
 single summary is **five full reads and five full JSON parses of the same file**.
-`to_mermaid` / `to_graphviz` / `to_svg` add two more each via `overlay`.
+`to_mermaid` / `to_svg` add two more each via `overlay`.
 
 **Fix shape** Parse once into a `Vec<EventEnvelope>` and have the accessors take
 a slice.

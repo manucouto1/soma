@@ -2,13 +2,13 @@
 //!
 //! A [`GraphOverlay`] carries per-node execution facts (status, timing,
 //! cache tier, health flags) that [`Graph::to_mermaid_with`] and
-//! [`Graph::to_graphviz_with`] fold into the rendered diagram. The
-//! overlay is pure data — computed elsewhere (e.g. `soma-runtime`'s
-//! `RunReader` aggregates it from a run's event log) and passed in, so
-//! rendering stays a dependency-free data→string transform.
+//! [`Graph::to_svg_with`] fold into the rendered diagram. The overlay is
+//! pure data — computed elsewhere (e.g. `soma-runtime`'s `RunReader`
+//! aggregates it from a run's event log) and passed in, so rendering
+//! stays a dependency-free data→string transform.
 //!
 //! [`Graph::to_mermaid_with`]: crate::graph::Graph::to_mermaid_with
-//! [`Graph::to_graphviz_with`]: crate::graph::Graph::to_graphviz_with
+//! [`Graph::to_svg_with`]: crate::graph::Graph::to_svg_with
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -95,9 +95,9 @@ impl NodeOverlay {
         }
     }
 
-    /// The style class this node gets (mermaid classDef / graphviz
-    /// fillcolor). Flags win over status: an unhealthy node must stand
-    /// out even when it completed.
+    /// The style class this node gets (a mermaid `classDef`, an SVG
+    /// fill). Flags win over status: an unhealthy node must stand out
+    /// even when it completed.
     pub fn style_class(&self) -> Option<&'static str> {
         if !self.flags.is_empty() {
             return Some("soma_flagged");
@@ -120,18 +120,6 @@ pub(crate) fn mermaid_class_style(class: &str) -> &'static str {
         "soma_running" => "fill:#fff8e1,stroke:#f9a825,color:#f57f17;",
         _ => "fill:#fff3e0,stroke:#ef6c00,stroke-width:3px,color:#e65100;",
     }
-}
-
-/// Graphviz node attributes for a status class.
-pub(crate) fn dot_class_style(class: &str) -> String {
-    let (fill, border, extra) = match class {
-        "soma_completed" => ("#e8f5e9", "#2e7d32", ""),
-        "soma_cached" => ("#e3f2fd", "#1565c0", ""),
-        "soma_failed" => ("#ffebee", "#c62828", ""),
-        "soma_running" => ("#fff8e1", "#f9a825", ""),
-        _ => ("#fff3e0", "#ef6c00", " penwidth=3"),
-    };
-    format!(" style=filled fillcolor=\"{fill}\" color=\"{border}\"{extra}")
 }
 
 /// Compact human duration: `340ms`, `1.2s`, `3.5m`, `2.1h`.

@@ -216,6 +216,9 @@ print(study.best_trial.params)
 | `lab.run()` | Submit graphs for remote execution |
 | `lab.workers()` | List available workers |
 
+The `Lab` client shipped as a stub and was deleted; `Graph.add_worker` and
+`Graph.set_coordinator` are how a graph reaches a worker today.
+
 ### Phase 2 Deliverable
 
 ```python

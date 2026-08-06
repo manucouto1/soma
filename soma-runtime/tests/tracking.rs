@@ -1154,9 +1154,6 @@ fn run_reader_overlay_and_annotated_mermaid() {
     );
     assert!(mermaid.contains("class scaler soma_completed"), "{mermaid}");
     assert!(mermaid.contains("class model soma_flagged"), "{mermaid}");
-
-    let dot = reader.to_graphviz().unwrap();
-    assert!(dot.contains("fillcolor"), "{dot}");
 }
 
 #[test]

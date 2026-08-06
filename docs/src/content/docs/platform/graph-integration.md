@@ -10,8 +10,10 @@ thing: orchestration nodes are [steps in the same graph](/soma/design/agentic/),
 and running a pipeline from one is `Effect::Graph`, which is implemented.
 
 What remains unimplemented is the *hosted* half — `lab.publish`,
-`lab.get_graph`, `PublishedGraph`. `Lab` has only `connect`, `health`,
-`info` and `workers`. Read the rest of this page as history.
+`lab.get_graph`, `PublishedGraph`. The `Lab` client that once held
+`connect`/`health`/`info`/`workers` was deleted: nothing but its own test
+called it, and `Graph.add_worker` already talks to a worker. Read the rest
+of this page as history.
 :::
 
 ## The bridge, as it actually turned out

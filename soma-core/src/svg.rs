@@ -7,8 +7,8 @@
 //! render through this pure data→string layer instead. Layout is a
 //! simple longest-path layering (left→right), which fits Soma's small
 //! chain/fork DAGs; styling reuses the same status palette as the
-//! mermaid/graphviz overlay classes so a run reads identically in
-//! every rendering.
+//! mermaid overlay classes so a run reads identically in every
+//! rendering.
 
 use crate::graph::{EdgeKind, Graph, NodeKind};
 use crate::viz::GraphOverlay;

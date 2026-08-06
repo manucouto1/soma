@@ -157,10 +157,8 @@ g = Graph.somatize(
 | `edge` / `connect` | `(source, target)` | Connect two nodes with a data edge |
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
 | `forward` | `(x, stream=False, chunk_size=1024, seed=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns a list for pure-inference graphs; `(out, aux_by_node)` while any differentiable filter is in `train()` mode |
-| `run` | `() -> dict` | Compile and execute, return all outputs |
 | `compile` | `(mode="inference") -> CompileInfo` | Compile and return diagnostics (a dict that renders as tiles + callouts + plan diagram in notebooks) |
 | `to_mermaid` | `(overlay=None) -> str` | Mermaid diagram; `overlay=` annotates nodes (see [Visualization](/soma/design/visualization/)) |
-| `to_graphviz` | `(overlay=None) -> str` | Graphviz DOT, same `overlay=` |
 | `to_svg` | `(overlay=None) -> str` | Self-contained SVG — no JavaScript, renders inline anywhere |
 | `to_text` | `() -> str` | ASCII tree (what `print(g)` shows) |
 | `_repr_html_` | `() -> str` | Notebook display: evaluating `g` draws the architecture diagram |
@@ -725,7 +723,6 @@ view = soma.RunView(".soma/runs/train_20260728T093011_9c2e")   # or by path
 | `trial_timeline()` | `list[dict]` | Trial lifetimes (study runs) |
 | `overlay()` | `dict` | Per-node annotations for the renderers |
 | `to_mermaid(overlay=True, node=None)` | `str` | Annotated diagram; `node=` renders that node's inner architecture |
-| `to_graphviz(overlay=True)` | `str` | Same as DOT |
 | `to_svg(overlay=True, node=None)` | `str` | Self-contained SVG (no JavaScript) |
 
 With the `viz` extra it also gains `plot_metrics`, `plot_gantt`,
@@ -816,18 +813,6 @@ Both `depth` and `patterns` unset ⇒ automatic selection.
 
 `soma.audit_modules([(name, module), ...])` is the standalone form for
 code that does not drive training through a `Graph`.
-
-### Lab
-
-Connect to a remote Soma worker.
-
-```python
-from soma import Lab
-
-lab = Lab.connect("http://localhost:8080")
-lab.health()        # "ok"
-lab.info()          # Worker capabilities dict
-```
 
 ## Type checking
 

@@ -236,9 +236,6 @@ class Graph:
     ) -> None:
         """Answer what a suspended run was waiting for; every argument comes off `SomaSuspended`."""
 
-    def run(self) -> dict[str, Any]:
-        """Compile and execute, returning every node output."""
-
     def set_coordinator(self, url: str, token: str | None = ...) -> None:
         """Discover workers through a coordinator instead of naming them."""
 
@@ -269,9 +266,6 @@ class Graph:
 
     def steps(self) -> list[tuple[str, Any]]:
         """The live object behind each step node, as (node_id, obj), sorted by id."""
-
-    def to_graphviz(self, overlay: dict[str, Any] | None = ...) -> str:
-        """Graphviz DOT, optionally annotated per node."""
 
     def to_mermaid(self, overlay: dict[str, Any] | None = ...) -> str:
         """A Mermaid diagram, optionally annotated per node."""
@@ -724,9 +718,6 @@ def run_overlay_json(dir: str) -> str:
 
 def run_to_mermaid(dir: str, overlay: bool = ...) -> str:
     """The run's graph as Mermaid, annotated with how it went."""
-
-def run_to_graphviz(dir: str, overlay: bool = ...) -> str:
-    """The run's graph as Graphviz DOT, annotated with how it went."""
 
 def run_to_svg(dir: str, overlay: bool = ...) -> str:
     """The run's graph as a self-contained SVG, annotated with how it went."""

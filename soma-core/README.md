@@ -16,9 +16,8 @@ nothing. Verify the rule holds with:
 cargo tree -p somatize-core | grep tokio   # empty
 ```
 
-Graph visualization lives here too (`to_mermaid`, `to_graphviz`,
-`to_text`, `to_svg`), because it is pure data → string and needs no
-runtime.
+Graph visualization lives here too (`to_mermaid`, `to_text`,
+`to_svg`), because it is pure data → string and needs no runtime.
 
 ---
 

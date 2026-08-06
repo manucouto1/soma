@@ -623,67 +623,6 @@ impl Graph {
         out
     }
 
-    /// Render as Graphviz DOT format.
-    pub fn to_graphviz(&self) -> String {
-        self.to_graphviz_with(&crate::viz::GraphOverlay::default())
-    }
-
-    /// Render as Graphviz DOT with per-node execution annotations:
-    /// a second label line plus fill/border status colors. An empty
-    /// overlay produces exactly [`Graph::to_graphviz`]'s output.
-    pub fn to_graphviz_with(&self, overlay: &crate::viz::GraphOverlay) -> String {
-        use std::fmt::Write;
-        let mut out = String::from("digraph G {\n    rankdir=LR;\n");
-        for node in &self.nodes {
-            let shape = match &node.kind {
-                NodeKind::Filter { .. } => "box",
-                NodeKind::SubGraph { .. } => "doubleoctagon",
-                NodeKind::Loop { .. } => "ellipse",
-                NodeKind::Branch { .. } => "diamond",
-                NodeKind::Step { .. } => "parallelogram",
-            };
-            let ov = overlay.nodes.get(&node.id);
-            let label = match ov.and_then(|o| o.sublabel_text()) {
-                Some(sub) => format!("{}\\n{}", node.label, sub),
-                None => node.label.clone(),
-            };
-            let style = ov
-                .and_then(|o| o.style_class())
-                .map(crate::viz::dot_class_style)
-                .unwrap_or_default();
-            let _ = writeln!(
-                out,
-                "    \"{}\" [label=\"{}\" shape={}{}];",
-                node.id, label, shape, style
-            );
-        }
-        for edge in &self.edges {
-            let style = match edge.kind {
-                EdgeKind::Data => "",
-                EdgeKind::Control => " [style=dashed]",
-            };
-            let label = edge
-                .label
-                .as_ref()
-                .map(|l| format!(" [label=\"{l}\"]"))
-                .unwrap_or_default();
-            let attrs = if style.is_empty() && label.is_empty() {
-                String::new()
-            } else if label.is_empty() {
-                style.to_string()
-            } else {
-                label
-            };
-            let _ = writeln!(
-                out,
-                "    \"{}\" -> \"{}\"{};",
-                edge.source, edge.target, attrs
-            );
-        }
-        out.push_str("}\n");
-        out
-    }
-
     /// Render as an ASCII text tree for terminal display.
     pub fn to_text(&self) -> String {
         use std::fmt::Write;
@@ -985,28 +924,12 @@ mod tests {
     }
 
     #[test]
-    fn to_graphviz_output() {
-        let g = sample_linear_graph();
-        let dot = g.to_graphviz();
-        assert!(dot.starts_with("digraph G {"));
-        assert!(dot.contains("rankdir=LR"));
-        assert!(dot.contains("\"a\" [label=\"Scaler\" shape=box]"));
-        assert!(dot.contains("\"a\" -> \"b\""));
-        assert!(dot.ends_with("}\n"));
-    }
-
-    #[test]
     fn overlay_empty_is_identical_to_plain_rendering() {
         use crate::viz::GraphOverlay;
         let g = sample_linear_graph();
         assert_eq!(g.to_mermaid(), g.to_mermaid_with(&GraphOverlay::default()));
-        assert_eq!(
-            g.to_graphviz(),
-            g.to_graphviz_with(&GraphOverlay::default())
-        );
-        // No classDef/style leaks into the plain rendering.
+        // No classDef leaks into the plain rendering.
         assert!(!g.to_mermaid().contains("classDef"));
-        assert!(!g.to_graphviz().contains("fillcolor"));
     }
 
     #[test]
@@ -1068,36 +991,6 @@ mod tests {
         );
         let m = g.to_mermaid_with(&ov);
         assert_eq!(m, g.to_mermaid(), "unknown node ids change nothing");
-    }
-
-    #[test]
-    fn to_graphviz_with_overlay_annotates_and_styles() {
-        use crate::viz::{GraphOverlay, NodeOverlay, NodeStatus};
-        let g = sample_linear_graph();
-        let mut ov = GraphOverlay::default();
-        ov.nodes.insert(
-            "a".into(),
-            NodeOverlay {
-                status: Some(NodeStatus::Failed),
-                ..Default::default()
-            },
-        );
-        ov.nodes.insert(
-            "b".into(),
-            NodeOverlay {
-                flags: vec!["DEAD_CHANNELS".into()],
-                ..Default::default()
-            },
-        );
-        let dot = g.to_graphviz_with(&ov);
-        assert!(
-            dot.contains("\"a\" [label=\"Scaler\\nfailed\" shape=box"),
-            "{dot}"
-        );
-        assert!(dot.contains("fillcolor=\"#ffebee\""), "failed fill: {dot}");
-        assert!(dot.contains("penwidth=3"), "flagged border: {dot}");
-        // Unannotated node keeps the plain attribute set.
-        assert!(dot.contains("\"c\" [label=\"SVM\" shape=box];"));
     }
 
     #[test]
