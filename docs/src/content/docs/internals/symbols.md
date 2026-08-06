@@ -298,7 +298,7 @@ fails the build rather than quietly misleading a reader.
 | [`Pruner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/optimizer/pruner.rs:10` |
 | [`PruningStrategy`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/optimizer/study.rs:156` |
 | [`PyAgent`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:283` |
-| [`PyGraph`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/graph/mod.rs:30` |
+| [`PyGraph`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/graph/mod.rs:47` |
 | [`PyJudge`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:422` |
 | [`PyPbt`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/optimizer/pbt.rs:35` |
 | [`PyRun`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/tracking/run.rs:13` |

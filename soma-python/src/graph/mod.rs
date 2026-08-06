@@ -26,6 +26,23 @@ impl Behaviour {
     }
 }
 
+/// How a finished fit's learned states are keyed, which depends on who
+/// produced them.
+///
+/// The two shapes are not interchangeable, and reading one as the other is
+/// not a matter of taste: a runner's map carries every node's *output*
+/// under its bare id beside the states, so taking it whole files a
+/// scaler's transformed data as the scaler's learned mean — and which of
+/// the two wins depends on `HashMap` order.
+enum FittedStates {
+    /// A [`Runner`]'s output map: node outputs under bare ids, learned
+    /// state under `__state_<id>`. Only the prefixed entries are states.
+    Runner(HashMap<String, Value>),
+    /// A worker's `PlanResult`, or a strategy's round: states only, keyed
+    /// by node id — the producer strips the prefix before it answers.
+    Trained(HashMap<String, Value>),
+}
+
 #[pyclass(name = "Graph", subclass)]
 pub(crate) struct PyGraph {
     graph: Graph,
@@ -95,6 +112,36 @@ impl PyGraph {
     /// Does anything in this graph need fitting before it can run?
     fn has_trainable_filters(&self) -> bool {
         self.filter_trainable.values().any(|t| *t)
+    }
+
+    /// File what a fit learned, and mark the graph fitted.
+    ///
+    /// The tail of every `fit` path. It was written out at each of the five
+    /// returns, and the five copies had drifted: the local one filtered on
+    /// the `__state_` prefix, the differentiable one — reading a map from
+    /// the same runner — fell back to the bare key, which stored every
+    /// node's output as its state. [`FittedStates`] is what says which map
+    /// this is, so the answer is now the type's rather than each caller's.
+    fn absorb(&mut self, states: FittedStates) -> PyResult<()> {
+        let learned: Vec<(String, Value)> = match states {
+            FittedStates::Runner(map) => map
+                .into_iter()
+                .filter_map(|(key, state)| {
+                    Some((
+                        somatize_core::data::keys::node_of_state_key(&key)?.to_string(),
+                        state,
+                    ))
+                })
+                .collect(),
+            FittedStates::Trained(map) => map.into_iter().collect(),
+        };
+        for (node_id, state) in learned {
+            self.library
+                .try_set_state(node_id, state)
+                .map_err(soma_err_to_py)?;
+        }
+        self.fitted = true;
+        Ok(())
     }
 
     /// Rebuild plan and run it here (or on workers). The non-autograd path.
@@ -1391,18 +1438,7 @@ impl PyGraph {
                     return Err(soma_err_to_py(e));
                 }
             };
-            // LocalRunner tags composite-produced states with "__state_{id}".
-            // Regular sequential states appear under the bare node_id.
-            for (key, state) in states {
-                let node_id = somatize_core::data::keys::node_of_state_key(&key)
-                    .unwrap_or(&key)
-                    .to_string();
-                if let Err(e) = self.library.try_set_state(node_id, state) {
-                    return Err(soma_err_to_py(e));
-                }
-            }
-            self.fitted = true;
-            return Ok(());
+            return self.absorb(FittedStates::Runner(states));
         }
         if mode != "inference" {
             return Err(PyRuntimeError::new_err(format!(
@@ -1434,48 +1470,24 @@ impl PyGraph {
                     .and_then(|mut session| session.fit(&x_val, y_val.as_ref()))
             });
             let states = states.map_err(soma_err_to_py)?;
-            for (node_id, state) in states {
-                if let Err(e) = self.library.try_set_state(&node_id, state) {
-                    return Err(soma_err_to_py(e));
-                }
-            }
-            self.fitted = true;
-            return Ok(());
+            return self.absorb(FittedStates::Trained(states));
         }
 
-        // Dispatch fit to worker if possible.
-        // Release GIL during WS dispatch so worker thread can acquire it for Python execution.
+        // Dispatch fit to a worker if possible. Batching is the worker's
+        // business either way — `batch_size` travels inside the mode — so
+        // the batched and unbatched dispatches were the same call written
+        // twice.
+        //
+        // Release the GIL during WS dispatch so the worker thread can
+        // acquire it for Python execution.
         if !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
-            if let Some(bs) = batch_size {
-                // Batched fit: dispatch once with batch_size so the worker handles batching
-                let mode = somatize_worker::protocol::ExecutionMode::Fit {
-                    y: y_val.clone(),
-                    batch_size: Some(bs),
-                };
-                let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode, seed));
-                let (_output, states) = result?;
-                for (node_id, state) in states {
-                    if let Err(e) = self.library.try_set_state(&node_id, state) {
-                        return Err(soma_err_to_py(e));
-                    }
-                }
-                self.fitted = true;
-                return Ok(());
-            }
-
             let mode = somatize_worker::protocol::ExecutionMode::Fit {
                 y: y_val.clone(),
-                batch_size: None,
+                batch_size,
             };
             let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode, seed));
             let (_output, states) = result?;
-            for (node_id, state) in states {
-                if let Err(e) = self.library.try_set_state(&node_id, state) {
-                    return Err(soma_err_to_py(e));
-                }
-            }
-            self.fitted = true;
-            return Ok(());
+            return self.absorb(FittedStates::Trained(states));
         }
 
         // Local fit.
@@ -1546,21 +1558,7 @@ impl PyGraph {
             }
         };
 
-        // Only the `__state_` keys. The map also holds each node's
-        // *output* under its bare id, so stripping a prefix that is not
-        // there stores an output as a state — and which one wins depends
-        // on `HashMap` order, so a scaler ends up with no learned mean
-        // roughly half the time.
-        for (key, state) in states {
-            if let Some(node_id) = somatize_core::data::keys::node_of_state_key(&key) {
-                self.library
-                    .try_set_state(node_id, state)
-                    .map_err(soma_err_to_py)?;
-            }
-        }
-
-        self.fitted = true;
-        Ok(())
+        self.absorb(FittedStates::Runner(states))
     }
 
     /// Forward data through the compiled graph (inference mode).
