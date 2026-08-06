@@ -41,7 +41,7 @@ code is.
 | [D-02](#d-02--worker-and-worker-execute_plan) | `Worker::execute_plan`: 324 lines across nine responsibilities | High |
 | [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
 | [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | Four `write_atomic` implementations, two without fsync or unique temp names | Medium |
-| [D-51](#d-51--contextsnapshot-deep-clones-the-value-store-per-branch) | `Context::snapshot` deep-clones the whole value store per parallel branch | Medium |
+| [D-61](#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) | `Context::snapshot` deep-clones the whole value store per parallel branch | Medium |
 
 ---
 
@@ -182,7 +182,7 @@ provenance, with builders covering 2 of them.
 **Class** God object · **Severity** Low · **Crate** `soma-runtime`
 
 **Evidence** `soma-runtime/src/tracking/reader.rs:36` — one field, 17 public
-accessors, 10 distinct DTO shapes. See also [D-53](#d-53--runreader-re-parses-eventsjsonl-once-per-accessor),
+accessors, 10 distinct DTO shapes. See also [D-63](#d-63--runreader-re-parses-eventsjsonl-once-per-accessor),
 which is the performance consequence of the same design.
 
 ### D-08 · `SomaContext` mixes three subsystems
@@ -342,7 +342,7 @@ acknowledges it and declines to unify.
 (`soma-compiler/src/scheduler.rs:15`) and `WorkerStatus` with `has_capacity` /
 `matches_tags` (`soma-coordinator/src/registry.rs:22`). Two independent
 placement models; only one of them is wired to anything
-([D-63](#d-63--the-schedulers-capability-model-is-unimplemented)).
+([D-65](#d-65--the-schedulers-capability-model-is-unimplemented)).
 
 ### D-19 · Two embedded Python interpreters as Rust string constants
 
@@ -610,7 +610,7 @@ live one. This is the only `#[allow(dead_code)]` in the workspace.
 
 ### D-38 · `Phase::Trial` and the scheduler's capability model
 
-See [D-63](#d-63--the-schedulers-capability-model-is-unimplemented).
+See [D-65](#d-65--the-schedulers-capability-model-is-unimplemented).
 
 ---
 

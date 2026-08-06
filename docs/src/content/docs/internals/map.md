@@ -276,6 +276,14 @@ lines. That catches deletion and renaming — the failures that make a reference
 actively misleading — but it cannot tell you whether a description is still
 *true*.
 
+Links *within* the docs are checked separately, by
+`docs/scripts/check-debt-refs.mjs`: every `D-nn` reference must name an entry
+that exists, its slug must match that entry's heading, and where the link text
+says `D-mm`, mm must agree with the target. That guard was written after the
+register was renumbered in blocks of ten and five links kept the old ids, so
+`[D-51]` pointed at the text of D-61. Both halves of such a link read plausible
+in isolation, which is why nothing caught them for months.
+
 When you find a claim here that is wrong, fix it. A reference nobody trusts is
 worse than no reference, which is exactly what happened to
 [Architecture Review](/soma/development/architecture-review/), now kept as a

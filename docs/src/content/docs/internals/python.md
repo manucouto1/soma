@@ -163,7 +163,7 @@ Thirty-three functions, and one convention worth knowing: **everything in
 That is a deliberate FFI simplification, argued at `soma-python/src/readers.rs:7`
 — one conversion path instead of twenty-five hand-written `IntoPy` impls. `(!)`
 It also means every `RunView` property pays a serialize→parse round trip —
-[D-12 in the Python register](/soma/internals/debt/#d-16--two-knowledge-base-front-ends-already-divergent).
+[D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor).
 
 | Module | Functions |
 |---|---|
