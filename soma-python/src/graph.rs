@@ -2088,6 +2088,25 @@ impl PyGraph {
             ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy,
             FederatedAggregation, GradientAggregation, Partition, TrainingStrategy,
         };
+        // A count of zero is never what anyone meant, and it used to
+        // travel all the way in: `num_replicas: 0` made the fit and
+        // gradient loops run zero times and then handed an empty slice to
+        // an aggregator that indexed `[0]`. The panic named none of this.
+        for (name, value) in [
+            ("num_replicas", num_replicas),
+            ("num_clients", num_clients),
+            ("population_size", population_size),
+            ("rounds", rounds),
+            ("generations", generations),
+        ] {
+            if value == Some(0) {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "{name}=0: a strategy needs at least one. Leave it unset \
+                     for the default"
+                )));
+            }
+        }
+
         let strategy = match kind {
             "local" => TrainingStrategy::Local,
             "data_parallel" => TrainingStrategy::DataParallel {

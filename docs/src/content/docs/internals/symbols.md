@@ -407,7 +407,7 @@ fails the build rather than quietly misleading a reader.
 | [`TrainingStrategy`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/strategy.rs:22` |
 | [`Transition`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/step.rs:43` |
 | [`Transport`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/runner/remote.rs:18` |
-| [`TransportContext`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/strategy.rs:530` |
+| [`TransportContext`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/strategy.rs:541` |
 | [`Trend`](/soma/internals/agentic/#soma-memory-somatize-memory) | enum | `soma-memory` | `soma-memory/src/record.rs:370` |
 | [`Trial`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/study.rs:235` |
 | [`TrialContext`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/executors/study.rs:48` |
@@ -439,7 +439,7 @@ fails the build rather than quietly misleading a reader.
 |---|---|---|---|
 | [`Worker`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/worker.rs:16` |
 | [`WorkerError`](/soma/internals/distribution/#soma-worker-somatize-worker) | enum | `soma-worker` | `soma-worker/src/error.rs:24` |
-| [`WorkerIdentity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/strategy.rs:546` |
+| [`WorkerIdentity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/strategy.rs:557` |
 | [`WorkerInfo`](/soma/internals/execution/#soma-compiler-somatize-compiler) | struct | `soma-compiler` | `soma-compiler/src/scheduler.rs:15` |
 | [`WorkerRegistry`](/soma/internals/distribution/#soma-coordinator-somatize-coordinator) | struct | `soma-coordinator` | `soma-coordinator/src/registry.rs:73` |
 | [`WorkerStatus`](/soma/internals/distribution/#soma-coordinator-somatize-coordinator) | struct | `soma-coordinator` | `soma-coordinator/src/registry.rs:22` |

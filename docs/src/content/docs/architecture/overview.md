@@ -109,19 +109,29 @@ g.add_worker("ws://gpu-0:8080", token="sk-xxx")
 g.fit(train_data)
 ```
 
-:::caution[TrainingStrategy is recorded, not executed]
-`TrainingStrategy` (DataParallel, ModelParallel, Federated,
-PopulationBased) is a graph attribute set through the Rust API
-(`Graph::set_strategy`), and setting it is the whole of what happens: no
-scheduler and no runtime reads it back, so it changes nothing about how a
-graph runs. Python has no `set_strategy` at all.
+:::note[Placement and strategy are two different things]
+**Placement** is `add_worker` / `set_coordinator` and `target=` on a
+node: the scheduler assigns the compiled plan across the registered
+workers. That is what the snippet above uses, and it needs no strategy.
 
-What distributes work today is placement — `add_worker` /
-`set_coordinator` and `target=` on a node — and the scheduler assigns the
-compiled plan across the registered workers without consulting the
-strategy. See
-[Execution Modes](/soma/guides/execution-modes/) for exactly what is and
-is not wired.
+**A `TrainingStrategy`** changes what a fit *means*. Set one and
+`GraphSession::fit` hands execution to it instead of the local runner:
+
+```python
+g.set_strategy("data_parallel", num_replicas=2)
+g.fit(x, y)   # each replica fits a shard; the gradients are averaged
+```
+
+Three of the four run today — `federated`, `data_parallel` and
+`model_parallel`. `population_based` refuses on purpose, because a
+member's hyperparameters cannot be applied over the wire; PBT lives in
+`soma.Pbt` instead. [Execution Modes](/soma/guides/execution-modes/) has
+the verified account of each, including what data-parallel had to get
+right to be real training rather than a loop that reports success.
+
+Until 0.5.0 this note said the opposite, and was correct at the time:
+`set_strategy` did not exist in Python, and nothing in Rust read the
+attribute back.
 :::
 
 The graph is compiled locally, the plan is sent to workers, executed remotely, and results returned. Cache can be shared (S3) across workers.

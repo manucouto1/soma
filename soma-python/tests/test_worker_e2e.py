@@ -932,3 +932,16 @@ class TestFederatedStrategy:
         g = Graph(cache="memory")
         with pytest.raises(ValueError, match="model_parallel needs partitions"):
             g.set_strategy("model_parallel")
+
+    def test_a_strategy_count_of_zero_is_refused(self):
+        """Zero replicas travelled all the way to a panic.
+
+        `num_replicas=0` made both the fit and the gradient loop run zero
+        times, and handed an empty slice to an aggregator that indexed
+        `[0]`. The panic named neither the parameter nor the strategy.
+        """
+        g = Graph(cache="memory")
+        for name in ("num_replicas", "num_clients", "population_size",
+                     "rounds", "generations"):
+            with pytest.raises(ValueError, match=f"{name}=0"):
+                g.set_strategy("data_parallel", **{name: 0})

@@ -438,6 +438,14 @@ fn mean_json(label: &str, values: &[(usize, &serde_json::Value)]) -> Result<serd
 
 /// Average every node's entry across contributors, key by key.
 fn mean_by_key(what: &str, entries: &[HashMap<String, Value>]) -> Result<HashMap<String, Value>> {
+    // Guarded here as well as at both call sites: `entries[0]` below is a
+    // panic, and a panic is the one failure mode a caller cannot report.
+    if entries.is_empty() {
+        return Err(SomaError::Other(format!(
+            "averaging {what} over zero contributors: there is nothing to \
+             take a mean of"
+        )));
+    }
     let mut out = HashMap::new();
     for key in entries[0].keys() {
         let mut contributions = Vec::with_capacity(entries.len());
@@ -465,19 +473,22 @@ impl GradientAggregator for GradientAggregation {
         if gradients.len() == 1 {
             return Ok(gradients[0].clone());
         }
-        // The arithmetic below is the same mean AllReduce would compute,
-        // but nothing can reach it yet: gradients have to come off the
-        // worker first, and `soma-worker/src/server.rs` answers
-        // `GetGradients`/`ApplyGradients` with "not implemented for
-        // SubprocessFilter". Naming that is more useful than naming the
-        // averaging, which is right here.
+        // Zero contributors reached `mean_by_key`, which indexes
+        // `entries[0]` — a panic, from a `num_replicas` of 0 that nothing
+        // validated. The federated aggregator below has always guarded
+        // this; this one did not.
+        if gradients.is_empty() {
+            return Err(SomaError::Other(
+                "aggregating gradients from zero replicas: a data-parallel \
+                 round with no workers to average over"
+                    .into(),
+            ));
+        }
         match self {
             GradientAggregation::AllReduce => mean_by_key("gradients", gradients),
             other => Err(SomaError::Other(format!(
                 "{other:?} is not implemented; only AllReduce (an element-wise \
-                 mean) is. Note that no gradient can reach this function yet: \
-                 soma-worker/src/server.rs refuses GetGradients and \
-                 ApplyGradients for SubprocessFilter"
+                 mean) is"
             ))),
         }
     }
@@ -1100,6 +1111,30 @@ mod tests {
         assert!(err.contains("no registered worker"), "{err}");
     }
 
+    /// Zero contributors used to reach `mean_by_key`, which indexes
+    /// `entries[0]`. A panic is the one failure a caller cannot report,
+    /// and it was reachable from Python: `num_replicas=0` passed straight
+    /// through, both loops ran zero times, and the aggregator got `&[]`.
+    #[test]
+    fn aggregating_over_zero_contributors_errors_rather_than_panicking() {
+        let err = GradientAggregation::AllReduce
+            .aggregate(&[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("zero replicas"), "{err}");
+
+        let err = FederatedAggregation::FedAvg
+            .aggregate(&[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("zero clients"), "{err}");
+
+        // And the shared helper guards itself, so a third caller added
+        // later cannot reintroduce the panic.
+        let err = mean_by_key("things", &[]).unwrap_err().to_string();
+        assert!(err.contains("zero contributors"), "{err}");
+    }
+
     /// Inputs and targets split together. Sharding only `x` sent every
     /// replica the whole `y`: shapes that broadcast rather than fail, so
     /// each one trained on pairs that were never pairs.
@@ -1153,9 +1188,10 @@ mod tests {
         assert_eq!(out["w"], Value::tensor(vec![3.0], vec![1]));
     }
 
-    /// The same arithmetic for gradients. Nothing can reach it yet — the
-    /// worker refuses to hand gradients over — but the error must be about
-    /// that, not about the averaging.
+    /// The same arithmetic for gradients, and it is reached now: a
+    /// data-parallel round averages real gradients off real workers. The
+    /// doc comment here used to say nothing could reach it, which was
+    /// true until the worker learned to hand gradients over.
     #[test]
     fn allreduce_averages_and_the_others_say_what_they_are_not() {
         let out = GradientAggregation::AllReduce
@@ -1166,7 +1202,9 @@ mod tests {
         let err = GradientAggregation::ParameterServer
             .aggregate(&[one("w", vec![1.0]), one("w", vec![2.0])])
             .expect_err("only AllReduce is implemented");
-        assert!(err.to_string().contains("server.rs"), "{err}");
+        let err = err.to_string();
+        assert!(err.contains("ParameterServer"), "name the variant: {err}");
+        assert!(err.contains("AllReduce"), "name what does work: {err}");
     }
 
     /// A subset average is a wrong number that looks like a right one.
