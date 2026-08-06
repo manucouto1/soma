@@ -308,6 +308,24 @@ and trained states remotely.
 **Fix shape** One `with_run_bracket(run_id, || …)` helper, and one decision about
 what `fit` returns.
 
+**Resolved, and the second half was the real finding.** `EventBus::run_bracket`
+(`soma-runtime/src/tracking/event_bus.rs:71`) takes the body as a closure, so
+the bracket closes exactly once whichever way it ends — the failing arm is no
+longer something each site has to remember.
+
+The divergence was not accidental: the two branches returned *different data*
+under one type. `Runner::fit` now answers with `Fitted`
+(`soma-runtime/src/execution/runner/mod.rs:134`) — `last`, `outputs`, `states` —
+and the `__state_` prefix stops at `LocalRunner::fit`
+(`soma-runtime/src/execution/runner/local.rs:60`), which is where the value
+store is. Four callers used to re-derive that split from a key prefix in their
+own three lines, and one of them (the Python differentiable path) had it wrong.
+A strategy fit returns states and no outputs, which is the truth: the work
+happened on the workers.
+
+`soma-runtime/tests/fit_answer.rs` holds both halves — a fit says which half is
+which, and a failed fit and a failed run each close their bracket.
+
 ### D-14 · Two pruners, two samplers, one algorithm each
 
 **Class** Duplication · **Severity** Low · **Crate** `soma-runtime`

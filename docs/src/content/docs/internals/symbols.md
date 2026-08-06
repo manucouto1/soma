@@ -157,6 +157,7 @@ fails the build rather than quietly misleading a reader.
 | [`Filter`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/graph/filter.rs:120` |
 | [`FilterKind`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/graph/filter.rs:16` |
 | [`FilterMeta`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/graph/filter.rs:73` |
+| [`Fitted`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/runner/mod.rs:134` |
 | [`FlagCount`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/summary.rs:76` |
 | [`FnPbtExecutor`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/pbt.rs:63` |
 | [`FnTool`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/tools.rs:62` |
@@ -231,7 +232,7 @@ fails the build rather than quietly misleading a reader.
 | [`LoadMetrics`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/protocol.rs:68` |
 | [`LocalCache`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/cache/local.rs:15` |
 | [`LocalDataStore`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/data/store.rs:218` |
-| [`LocalRunner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/runner/local.rs:16` |
+| [`LocalRunner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/runner/local.rs:15` |
 | [`LocalTracker`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/local_tracker.rs:27` |
 | [`LoopCondition`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/graph/control.rs:28` |
 | [`LoopSignal`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/graph/control.rs:46` |
@@ -337,7 +338,7 @@ fails the build rather than quietly misleading a reader.
 | [`RunKind`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/tracking/mod.rs:31` |
 | [`RunManifest`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/mod.rs:97` |
 | [`RunMode`](/soma/internals/execution/#soma-runtime-somatize-runtime) | enum | `soma-runtime` | `soma-runtime/src/execution/executor.rs:91` |
-| [`Runner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/execution/runner/mod.rs:124` |
+| [`Runner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/execution/runner/mod.rs:156` |
 | [`RunOutcome`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/tracking/summary.rs:27` |
 | [`RunReader`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:44` |
 | [`RunState`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/tracking/mod.rs:50` |

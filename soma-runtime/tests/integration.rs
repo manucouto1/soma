@@ -239,8 +239,8 @@ fn cache_invalidation_on_config_change() {
     let r2 = s2.fit(&data, None).unwrap();
 
     // Both succeed independently
-    assert!(r1.get("model").unwrap().as_tensor().is_some());
-    assert!(r2.get("model").unwrap().as_tensor().is_some());
+    assert!(r1.outputs.get("model").unwrap().as_tensor().is_some());
+    assert!(r2.outputs.get("model").unwrap().as_tensor().is_some());
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn cache_invalidation_on_data_change() {
     // Fit with data A
     let data_a = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
     let r_a = s.fit(&data_a, None).unwrap();
-    let (a_vals, _) = r_a.get("normalizer").unwrap().as_tensor().unwrap();
+    let (a_vals, _) = r_a.outputs.get("normalizer").unwrap().as_tensor().unwrap();
 
     // Fit with data B
     let graph2 = make_linear_graph(&["normalizer"]);
@@ -265,7 +265,7 @@ fn cache_invalidation_on_data_change() {
 
     let data_b = Value::tensor(vec![100.0, 200.0, 300.0], vec![3]);
     let r_b = s2.fit(&data_b, None).unwrap();
-    let (b_vals, _) = r_b.get("normalizer").unwrap().as_tensor().unwrap();
+    let (b_vals, _) = r_b.outputs.get("normalizer").unwrap().as_tensor().unwrap();
 
     // Both normalize their respective means to ~0 (middle element)
     assert!(
@@ -327,7 +327,7 @@ fn study_with_graph_integration() {
             let train_y = Value::tensor(vec![2.0, 4.0, 6.0, 8.0], vec![4]);
             let outputs = session.fit(&train_x, Some(&train_y)).unwrap();
 
-            let pred = outputs.get("model").unwrap();
+            let pred = outputs.outputs.get("model").unwrap();
             let (pred_data, _) = pred.as_tensor().unwrap();
             let (y_data, _) = train_y.as_tensor().unwrap();
 
@@ -451,7 +451,7 @@ fn graph_single_filter() {
 
     let data = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
     let outputs = session.fit(&data, None).unwrap();
-    let result = outputs.get("normalizer").unwrap();
+    let result = outputs.outputs.get("normalizer").unwrap();
 
     let (vals, _) = result.as_tensor().unwrap();
     assert!((vals[1] - 0.0).abs() < 0.01, "middle value should be ~0");
@@ -469,7 +469,7 @@ fn graph_single_sample() {
 
     let data = Value::tensor(vec![42.0], vec![1]);
     let outputs = session.fit(&data, None).unwrap();
-    let result = outputs.get("normalizer").unwrap();
+    let result = outputs.outputs.get("normalizer").unwrap();
 
     let (vals, _) = result.as_tensor().unwrap();
     assert!((vals[0] - 0.0).abs() < 0.01);

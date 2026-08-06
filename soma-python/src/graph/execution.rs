@@ -7,45 +7,17 @@
 use super::{PyGraph, agentic, distributed, registry};
 use crate::prelude::*;
 
-/// How a finished fit's learned states are keyed, which depends on who
-/// produced them.
-///
-/// The two shapes are not interchangeable, and reading one as the other is
-/// not a matter of taste: a runner's map carries every node's *output*
-/// under its bare id beside the states, so taking it whole files a
-/// scaler's transformed data as the scaler's learned mean — and which of
-/// the two wins depends on `HashMap` order.
-enum FittedStates {
-    /// A `Runner`'s output map: node outputs under bare ids, learned state
-    /// under `__state_<id>`. Only the prefixed entries are states.
-    Runner(HashMap<String, Value>),
-    /// A worker's `PlanResult`, or a strategy's round: states only, keyed
-    /// by node id — the producer strips the prefix before it answers.
-    Trained(HashMap<String, Value>),
-}
-
 /// File what a fit learned, and mark the graph fitted.
 ///
-/// The tail of every `fit` path. It was written out at each of the five
-/// returns, and the five copies had drifted: the local one filtered on the
-/// `__state_` prefix, the differentiable one — reading a map from the same
-/// runner — fell back to the bare key, which stored every node's output as
-/// its state. [`FittedStates`] is what says which map this is, so the
-/// answer is the type's rather than each caller's.
-fn absorb(g: &mut PyGraph, states: FittedStates) -> PyResult<()> {
-    let learned: Vec<(String, Value)> = match states {
-        FittedStates::Runner(map) => map
-            .into_iter()
-            .filter_map(|(key, state)| {
-                Some((
-                    somatize_core::data::keys::node_of_state_key(&key)?.to_string(),
-                    state,
-                ))
-            })
-            .collect(),
-        FittedStates::Trained(map) => map.into_iter().collect(),
-    };
-    for (node_id, state) in learned {
+/// The tail of every `fit` path — it was written out at each of the five
+/// returns, and the five copies had drifted. All three producers now hand
+/// over states keyed by node id: `Fitted::states` from a runner, the
+/// worker's `PlanResult`, and a strategy's round. The `__state_` prefix is
+/// a key inside the runner's value store and no longer reaches here, which
+/// is what fixed the differentiable path reading each node's *output* as
+/// its learned state.
+fn absorb(g: &mut PyGraph, states: HashMap<String, Value>) -> PyResult<()> {
+    for (node_id, state) in states {
         g.library
             .try_set_state(node_id, state)
             .map_err(soma_err_to_py)?;
@@ -95,8 +67,8 @@ pub(super) fn fit(
             distributed::session_with_transports(g, transports)
                 .and_then(|mut session| session.fit(&x_val, y_val.as_ref()))
         });
-        let states = states.map_err(soma_err_to_py)?;
-        return absorb(g, FittedStates::Trained(states));
+        let fitted = states.map_err(soma_err_to_py)?;
+        return absorb(g, fitted.states);
     }
 
     // Dispatch fit to a worker if possible. Batching is the worker's
@@ -112,7 +84,7 @@ pub(super) fn fit(
         };
         let result = py.allow_threads(|| distributed::dispatch_to_worker(g, &x_val, mode, seed));
         let (_output, states) = result?;
-        return absorb(g, FittedStates::Trained(states));
+        return absorb(g, states);
     }
 
     fit_local(g, py, &x_val, y_val.as_ref(), seed)
@@ -144,13 +116,6 @@ fn fit_local(
     .map_err(soma_err_to_py)?;
 
     let run_id = somatize_core::util::timestamp_id("graph_fit");
-    g.event_bus
-        .emit(somatize_core::tracking::event::Event::RunStarted {
-            run_id: run_id.clone(),
-            plan_summary: compile_result.plan.summary(),
-        });
-    let run_start = std::time::Instant::now();
-
     let mut run_ctx = somatize_runtime::execution::runner::RunContext::new(
         &catalog,
         g.cache.as_ref(),
@@ -168,30 +133,16 @@ fn fit_local(
         run_ctx = run_ctx.with_driver(driver);
     }
 
-    // Release the GIL: a Parallel plan runs branches on scoped threads
-    // whose Python filters must acquire it.
-    let result = py.allow_threads(|| LocalRunner.fit(&compile_result.plan, &run_ctx, x, y));
+    // Release the GIL inside the bracket: a Parallel plan runs branches on
+    // scoped threads whose Python filters must acquire it.
+    let fitted = g
+        .event_bus
+        .run_bracket(&run_id, compile_result.plan.summary(), || {
+            py.allow_threads(|| LocalRunner.fit(&compile_result.plan, &run_ctx, x, y))
+        })
+        .map_err(soma_err_to_py)?;
 
-    let (_output, states) = match result {
-        Ok(out) => {
-            g.event_bus
-                .emit(somatize_core::tracking::event::Event::RunCompleted {
-                    run_id,
-                    duration: run_start.elapsed(),
-                });
-            out
-        }
-        Err(e) => {
-            g.event_bus
-                .emit(somatize_core::tracking::event::Event::RunFailed {
-                    run_id,
-                    error: e.to_string(),
-                });
-            return Err(soma_err_to_py(e));
-        }
-    };
-
-    absorb(g, FittedStates::Runner(states))
+    absorb(g, fitted.states)
 }
 
 /// The differentiable fit: compile with `CompileMode::Differentiable`,
@@ -235,12 +186,6 @@ fn fit_differentiable(
     .map_err(soma_err_to_py)?;
 
     let run_id = somatize_core::util::timestamp_id("fit");
-    g.event_bus
-        .emit(somatize_core::tracking::event::Event::RunStarted {
-            run_id: run_id.clone(),
-            plan_summary: compile_result.plan.summary(),
-        });
-    let run_start = std::time::Instant::now();
     let run_ctx = somatize_runtime::execution::runner::RunContext::new(
         &catalog,
         g.cache.as_ref(),
@@ -249,25 +194,14 @@ fn fit_differentiable(
         GraphInfo::from_graph(&g.graph),
     );
 
-    let (_output, states) = match LocalRunner.fit(&compile_result.plan, &run_ctx, x, y) {
-        Ok(out) => {
-            g.event_bus
-                .emit(somatize_core::tracking::event::Event::RunCompleted {
-                    run_id,
-                    duration: run_start.elapsed(),
-                });
-            out
-        }
-        Err(e) => {
-            g.event_bus
-                .emit(somatize_core::tracking::event::Event::RunFailed {
-                    run_id,
-                    error: e.to_string(),
-                });
-            return Err(soma_err_to_py(e));
-        }
-    };
-    absorb(g, FittedStates::Runner(states))
+    let fitted = g
+        .event_bus
+        .run_bracket(&run_id, compile_result.plan.summary(), || {
+            LocalRunner.fit(&compile_result.plan, &run_ctx, x, y)
+        })
+        .map_err(soma_err_to_py)?;
+
+    absorb(g, fitted.states)
 }
 
 // ── Forward ──

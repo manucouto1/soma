@@ -245,19 +245,25 @@ Twelve traits are defined here. **None uses an associated type or a generic
 method**, so all but `StudyIo` are object-safe by construction — a deliberate
 uniformity that makes every seam swappable at runtime.
 
-#### `Runner` — `soma-runtime/src/execution/runner/mod.rs:124`
+#### `Runner` — `soma-runtime/src/execution/runner/mod.rs:153`
 
 ```rust
 pub trait Runner: Send + Sync {
     fn fit(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value, y: Option<&Value>)
-        -> Result<(Value, HashMap<String, Value>)>;
+        -> Result<Fitted>;
     fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value>;
 }
 ```
 
+`Fitted` (`soma-runtime/src/execution/runner/mod.rs:134`) is `{ last, outputs,
+states }`. It used to be one `HashMap` holding both, told apart by a
+`__state_` prefix on the key — and all four callers separated them again in
+their own three lines, one of them wrongly. The prefix is a key inside the
+runner's value store, and it stops at `LocalRunner::fit`.
+
 | Implementor | file:line | Note |
 |---|---|---|
-| `LocalRunner` | `soma-runtime/src/execution/runner/local.rs:60` | The only one used. `walk()` builds a `Context` and calls `executor::execute` |
+| `LocalRunner` | `soma-runtime/src/execution/runner/local.rs:59` | The only one used. `walk()` builds a `Context` and calls `executor::execute` |
 
 `(!)` Never used as `dyn Runner` anywhere. Both call sites name `LocalRunner`
 concretely.
@@ -766,7 +772,7 @@ GraphHandler ──◆ NodeCatalog
 
 **Medium**
 - [D-03](/soma/internals/debt/#d-03--context-carries-five-unrelated-concerns) `Context` god object · [D-04](/soma/internals/debt/#d-04--graphsession-has-two-unrelated-transport-fields) two transport fields · [D-07](/soma/internals/debt/#d-07--runreader-is-17-methods-over-one-pathbuf) `RunReader`
-- [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) four `write_atomic`s · [D-13](/soma/internals/debt/#d-13--graphsession-emits-the-run-bracket-four-times) the run bracket ×4
+- [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) four `write_atomic`s · ~~[D-13](/soma/internals/debt/#d-13--graphsession-emits-the-run-bracket-four-times) the run bracket ×4~~ resolved
 - [D-22](/soma/internals/debt/#d-22--a-suspension-reason-that-fails-to-serialize-collides-with-every-other-one) suspension key collision
 - [D-42](/soma/internals/debt/#d-42--executionplanremote-discards-its-routing-target) `Remote` target discarded · [D-43](/soma/internals/debt/#d-43--strategycontextexecute_on_worker-has-a-dead-json-parameter) dead JSON param · [D-44](/soma/internals/debt/#d-44--resolve_input-falls-back-to-whatever-ran-last) `resolve_input` fallback · [D-46](/soma/internals/debt/#d-46--tieredcache-promotion-destroys-provenance) promotion loses provenance
 - [D-61](/soma/internals/debt/#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) snapshot cost · [D-62](/soma/internals/debt/#d-62--memorycaches-lru-touch-is-on-on-every-read) O(n) LRU · [D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor) reader re-parses · [D-64](/soma/internals/debt/#d-64--studyrunnerrun-is-otrials-in-four-places) O(trials²)

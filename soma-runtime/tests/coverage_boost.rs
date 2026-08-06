@@ -812,8 +812,8 @@ fn graph_fit_free_function_trainable() {
     let outputs =
         somatize_runtime::graph_fit(&graph, &lib, &x, None, std::sync::Arc::new(cache)).unwrap();
 
-    assert!(outputs.contains_key("mean"));
-    let (data, _) = outputs["mean"].as_tensor().unwrap();
+    assert!(outputs.outputs.contains_key("mean"));
+    let (data, _) = outputs.outputs["mean"].as_tensor().unwrap();
     // mean=15, forward: [10-15, 20-15] = [-5, 5]
     assert_eq!(data, &[-5.0, 5.0]);
 }

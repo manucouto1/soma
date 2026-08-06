@@ -530,28 +530,18 @@ impl Worker {
                         &plan.plan,
                     );
                     ctx.seed = plan.seed;
-                    runner
-                        .fit(&plan.plan, &ctx, &x, y.as_ref())
-                        .map(|(output, all_outputs)| {
-                            // Extract trained states (prefixed __state_) and store in library
-                            let mut trained_states = std::collections::HashMap::new();
-                            for (key, value) in &all_outputs {
-                                if let Some(node_id) =
-                                    somatize_core::data::keys::node_of_state_key(key)
-                                {
-                                    if let Err(e) =
-                                        self.catalog.try_set_state(node_id, value.clone())
-                                    {
-                                        tracing::error!(
-                                            node_id,
-                                            "storing filter state failed: {e}"
-                                        );
-                                    }
-                                    trained_states.insert(node_id.to_string(), value.clone());
-                                }
+                    runner.fit(&plan.plan, &ctx, &x, y.as_ref()).map(|fitted| {
+                        // Keep what was learned, and send it back. The
+                        // runner already told states and outputs apart —
+                        // this used to re-derive the split from a key
+                        // prefix, as did three other callers.
+                        for (node_id, state) in &fitted.states {
+                            if let Err(e) = self.catalog.try_set_state(node_id, state.clone()) {
+                                tracing::error!(node_id, "storing filter state failed: {e}");
                             }
-                            (output, trained_states)
-                        })
+                        }
+                        (fitted.last, fitted.states)
+                    })
                 }
             }
             ExecutionMode::Forward => {

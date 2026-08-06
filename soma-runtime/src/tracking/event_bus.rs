@@ -4,7 +4,7 @@
 //! to all subscribers via a tokio broadcast channel.
 
 use somatize_core::tracking::EventSink;
-use somatize_core::tracking::event::Event;
+use somatize_core::tracking::event::{Event, PlanSummary};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
@@ -68,6 +68,48 @@ impl EventBus {
         self.sender.subscribe()
     }
 
+    /// Run `body` inside a `RunStarted` … `RunCompleted`/`RunFailed`
+    /// bracket, all three carrying `run_id`.
+    ///
+    /// The three events always go together, always in this order, and the
+    /// duration is always measured from just after the first — so writing
+    /// them out is an invitation to get one of those wrong. Six sites did
+    /// write them out, and they had already drifted: some measured the
+    /// elapsed time from before the compile, and the worker's streaming
+    /// path needed a hand-rolled `fail` closure so that an early return
+    /// would not leave the bracket open forever.
+    ///
+    /// A reader can rely on the bracket being closed exactly once,
+    /// whichever way `body` ends.
+    pub fn run_bracket<T, E: std::fmt::Display>(
+        &self,
+        run_id: &str,
+        plan_summary: PlanSummary,
+        body: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E> {
+        self.emit(Event::RunStarted {
+            run_id: run_id.to_string(),
+            plan_summary,
+        });
+        let started = std::time::Instant::now();
+        match body() {
+            Ok(value) => {
+                self.emit(Event::RunCompleted {
+                    run_id: run_id.to_string(),
+                    duration: started.elapsed(),
+                });
+                Ok(value)
+            }
+            Err(error) => {
+                self.emit(Event::RunFailed {
+                    run_id: run_id.to_string(),
+                    error: error.to_string(),
+                });
+                Err(error)
+            }
+        }
+    }
+
     /// Flush all registered sinks.
     pub fn flush_sinks(&self) {
         for sink in self.snapshot_sinks() {
@@ -98,7 +140,6 @@ impl Default for EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::tracking::event::PlanSummary;
     use std::time::Duration;
 
     #[tokio::test]

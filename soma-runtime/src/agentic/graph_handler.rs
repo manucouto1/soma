@@ -174,9 +174,9 @@ impl EffectHandler for GraphHandler {
         }
 
         let outcome = match mode {
-            GraphEffectMode::Fit => session
-                .fit(input, None)
-                .map(|outputs| somatize_core::data::value::Value::json(outputs_summary(&outputs))),
+            GraphEffectMode::Fit => session.fit(input, None).map(|fitted| {
+                somatize_core::data::value::Value::json(outputs_summary(&fitted.outputs))
+            }),
             // `GraphEffectMode` is `#[non_exhaustive]`; anything added later
             // is a mode this build does not know how to run, and guessing
             // `forward` would silently skip a fit.

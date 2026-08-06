@@ -3,14 +3,13 @@
 //! This is the default runner. The worker delegates here
 //! after preparing the environment (deserializing filters, resolving input).
 
-use super::{RunContext, Runner};
+use super::{Fitted, RunContext, Runner};
 use crate::execution::executor::{Context, RunMode};
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::data::keys::{GRAPH_INPUT, input_key};
 use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use std::collections::HashMap;
 
 /// Executes plans locally — same logic for local and remote execution.
 pub struct LocalRunner;
@@ -64,18 +63,33 @@ impl Runner for LocalRunner {
         ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
-    ) -> Result<(Value, HashMap<String, Value>)> {
+    ) -> Result<Fitted> {
+        use somatize_core::data::keys;
+
         let exec = self.walk(plan, ctx, input, RunMode::Fit { y: y.cloned() })?;
-
-        // Node outputs plus the states that were learned. The `__state_*`
-        // entries travel in the same map because that is what the session
-        // and the worker already read out of it.
         let last = Self::last_output(&exec).unwrap_or(Value::Empty);
-        let mut produced = exec.into_outputs();
-        // The run's own inputs are not something a node produced.
-        produced.retain(|id, _| !somatize_core::data::keys::is_input_key(id));
 
-        Ok((last, produced))
+        // The value store holds three kinds of entry under one key space:
+        // the run's own inputs, what each node produced, and what each
+        // trainable node learned (under `__state_<id>`). Separating them
+        // is this function's job — every caller used to do it again, and
+        // one of them got it wrong.
+        let mut fitted = Fitted {
+            last,
+            ..Default::default()
+        };
+        for (key, value) in exec.into_outputs() {
+            match keys::node_of_state_key(&key) {
+                Some(node_id) => {
+                    fitted.states.insert(node_id.to_string(), value);
+                }
+                None if keys::is_input_key(&key) => {}
+                None => {
+                    fitted.outputs.insert(key, value);
+                }
+            }
+        }
+        Ok(fitted)
     }
 
     fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {

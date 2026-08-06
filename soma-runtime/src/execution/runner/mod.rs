@@ -119,18 +119,49 @@ impl<'a> RunContext<'a> {
     }
 }
 
+/// What a fit produced: what the nodes computed, and what they learned.
+///
+/// A fit used to answer with one `HashMap<String, Value>` holding both,
+/// telling them apart by a `__state_` prefix on the key — and every one of
+/// the four consumers separated them again, in its own three lines. They
+/// did not all agree: the differentiable path in the Python bindings read
+/// the map as though every entry were a state, so each node's *output* was
+/// filed as its learned state and which one survived depended on `HashMap`
+/// order.
+///
+/// The prefix is a key inside the runner's value store. It stops here.
+#[derive(Debug, Clone)]
+pub struct Fitted {
+    /// What the last node that ran produced — the fit's "result" for a
+    /// caller that wants one value.
+    pub last: Value,
+    /// What each node computed, by node id.
+    pub outputs: HashMap<String, Value>,
+    /// What each trainable node learned, by node id.
+    pub states: HashMap<String, Value>,
+}
+
+impl Default for Fitted {
+    fn default() -> Self {
+        Self {
+            last: Value::Empty,
+            outputs: HashMap::new(),
+            states: HashMap::new(),
+        }
+    }
+}
+
 /// Contract for executing plans. Every execution mode (local, remote, stream)
 /// implements this trait. One interface, polymorphic dispatch.
 pub trait Runner: Send + Sync {
     /// Train: fit each filter, forward to propagate outputs.
-    /// Returns (last output, all node outputs).
     fn fit(
         &self,
         plan: &ExecutionPlan,
         ctx: &RunContext<'_>,
         input: &Value,
         y: Option<&Value>,
-    ) -> Result<(Value, HashMap<String, Value>)>;
+    ) -> Result<Fitted>;
 
     /// Inference: forward data through the compiled plan.
     fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value>;

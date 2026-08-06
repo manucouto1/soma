@@ -163,7 +163,7 @@ fn graph_session_fit_drives_steps() {
 
     let outputs = session.fit(&Value::text("hi"), None).unwrap();
     assert_eq!(
-        outputs.get("shout").and_then(Value::as_text),
+        outputs.outputs.get("shout").and_then(Value::as_text),
         Some("ANSWER TO: HI"),
         "the whole chain should have run, got {outputs:?}"
     );

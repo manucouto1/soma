@@ -104,7 +104,11 @@ fn pbt_with_graph_session_converges() {
             let outputs = session.fit(&train_data, None)?;
 
             // Return the scaler output as state
-            Ok(outputs.get("scaler").cloned().unwrap_or(Value::Empty))
+            Ok(outputs
+                .outputs
+                .get("scaler")
+                .cloned()
+                .unwrap_or(Value::Empty))
         },
         eval_fn: |member: &PopulationMember| {
             // Fitness: scale closest to 2.0 is best
@@ -210,12 +214,12 @@ fn graph_session_fit_forward_roundtrip() {
     let outputs = session.fit(&train, None).unwrap();
 
     // scaler: mean=20, forward: [(10-20)*2, (20-20)*2, (30-20)*2] = [-20, 0, 20]
-    let scaler_out = outputs.get("scaler").unwrap();
+    let scaler_out = outputs.outputs.get("scaler").unwrap();
     let (data, _) = scaler_out.as_tensor().unwrap();
     assert_eq!(data, &[-20.0, 0.0, 20.0]);
 
     // scaler2: mean=0, forward: [(-20-0)*1, (0-0)*1, (20-0)*1] = [-20, 0, 20]
-    let scaler2_out = outputs.get("scaler2").unwrap();
+    let scaler2_out = outputs.outputs.get("scaler2").unwrap();
     let (data2, _) = scaler2_out.as_tensor().unwrap();
     assert_eq!(data2, &[-20.0, 0.0, 20.0]);
 

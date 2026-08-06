@@ -8,8 +8,8 @@ use crate::cache::MemoryCache;
 use crate::distributed::StrategyExecutor;
 use crate::execution::executor::{self, Context, GraphInfo};
 use crate::execution::node_catalog::NodeCatalog;
-use crate::execution::runner::Runner;
 use crate::execution::runner::Transport;
+use crate::execution::runner::{Fitted, Runner};
 use crate::tracking::event_bus::EventBus;
 use somatize_compiler::{CompileMode, CompileResult, compile};
 use somatize_core::cache::{CacheKey, CacheStore};
@@ -179,22 +179,9 @@ impl GraphSession {
             ctx = ctx.with_driver(driver);
         }
 
-        self.event_bus.emit(Event::RunStarted {
-            run_id: run_id.clone(),
-            plan_summary: plan.summary(),
-        });
-        let start = std::time::Instant::now();
-        if let Err(e) = executor::execute(&plan, &mut ctx, &self.catalog, self.cache.as_ref()) {
-            self.event_bus.emit(Event::RunFailed {
-                run_id,
-                error: e.to_string(),
-            });
-            return Err(e);
-        }
-        self.event_bus.emit(Event::RunCompleted {
-            run_id,
-            duration: start.elapsed(),
-        });
+        self.event_bus.run_bracket(&run_id, plan.summary(), || {
+            executor::execute(&plan, &mut ctx, &self.catalog, self.cache.as_ref())
+        })?;
 
         Ok(ctx.into_outputs())
     }
@@ -204,7 +191,13 @@ impl GraphSession {
     ///
     /// Emits a `RunStarted`/`RunCompleted` (or `RunFailed`) bracket
     /// tagged with the same run id as the node events inside it.
-    pub fn fit(&mut self, x: &Value, y: Option<&Value>) -> Result<HashMap<String, Value>> {
+    ///
+    /// The answer says which half is which. It used to be one map whose
+    /// meaning depended on the branch that ran: node outputs locally,
+    /// trained states through a strategy. A caller reading `.get("model")`
+    /// therefore got a prediction or a parameter vector depending on
+    /// whether workers happened to be registered.
+    pub fn fit(&mut self, x: &Value, y: Option<&Value>) -> Result<Fitted> {
         self.graph.validate()?;
 
         let CompileResult { plan, .. } = compile(
@@ -215,89 +208,48 @@ impl GraphSession {
         )?;
 
         let run_id = timestamp_id("fit");
-        self.event_bus.emit(Event::RunStarted {
-            run_id: run_id.clone(),
-            plan_summary: plan.summary(),
-        });
-        let start = std::time::Instant::now();
+        let fitted = self.event_bus.run_bracket(&run_id, plan.summary(), || {
+            // A graph carrying a strategy trains through it, when there
+            // are workers to run it on. This branch is what the type was
+            // missing: `set_strategy` recorded an attribute nothing read.
+            let strategy = self.graph.effective_strategy().clone();
+            if !matches!(strategy, TrainingStrategy::Local) && !self.transports.is_empty() {
+                let node_ids: Vec<String> = plan.node_ids().into_iter().map(String::from).collect();
+                let strategy_ctx = crate::distributed::TransportContext::new(
+                    self.transports.clone(),
+                    &plan,
+                    &self.catalog,
+                    None,
+                )
+                .with_targets(self.worker_identities.clone());
+                // A strategy fit has no local outputs: the work happened
+                // on the workers, and only the parameters come back.
+                return strategy
+                    .fit(&strategy_ctx, x, y, &node_ids)
+                    .map(|states| Fitted {
+                        states,
+                        ..Default::default()
+                    });
+            }
 
-        // A graph carrying a strategy trains through it, when there are
-        // workers to run it on. This branch is what the type was missing:
-        // `set_strategy` recorded an attribute nothing ever read.
-        let strategy = self.graph.effective_strategy().clone();
-        if !matches!(strategy, TrainingStrategy::Local) && !self.transports.is_empty() {
-            let node_ids: Vec<String> = plan.node_ids().into_iter().map(String::from).collect();
-            let strategy_ctx = crate::distributed::TransportContext::new(
-                self.transports.clone(),
-                &plan,
+            let mut ctx = crate::execution::runner::RunContext::new(
                 &self.catalog,
-                None,
-            )
-            .with_targets(self.worker_identities.clone());
-            let outcome = strategy.fit(&strategy_ctx, x, y, &node_ids);
-            return match outcome {
-                Ok(states) => {
-                    for (node_id, state) in &states {
-                        self.catalog.try_set_state(node_id.clone(), state.clone())?;
-                    }
-                    self.fitted = true;
-                    self.event_bus.emit(Event::RunCompleted {
-                        run_id,
-                        duration: start.elapsed(),
-                    });
-                    Ok(states)
-                }
-                Err(e) => {
-                    self.event_bus.emit(Event::RunFailed {
-                        run_id,
-                        error: e.to_string(),
-                    });
-                    Err(e)
-                }
-            };
-        }
-
-        let runner = crate::execution::runner::LocalRunner;
-        let mut ctx = crate::execution::runner::RunContext::new(
-            &self.catalog,
-            self.cache.as_ref(),
-            &self.event_bus,
-            &run_id,
-            GraphInfo::from_graph(&self.graph),
-        );
-        if let Some(driver) = self.run_driver() {
-            ctx = ctx.with_driver(driver);
-        }
-        let result = runner.fit(&plan, &ctx, x, y);
-        let (_last_output, mut all_outputs) = match result {
-            Ok(out) => {
-                self.event_bus.emit(Event::RunCompleted {
-                    run_id,
-                    duration: start.elapsed(),
-                });
-                out
+                self.cache.as_ref(),
+                &self.event_bus,
+                &run_id,
+                GraphInfo::from_graph(&self.graph),
+            );
+            if let Some(driver) = self.run_driver() {
+                ctx = ctx.with_driver(driver);
             }
-            Err(e) => {
-                self.event_bus.emit(Event::RunFailed {
-                    run_id,
-                    error: e.to_string(),
-                });
-                return Err(e);
-            }
-        };
+            crate::execution::runner::LocalRunner.fit(&plan, &ctx, x, y)
+        })?;
 
-        // Store trained states from __state_ keys into NodeCatalog
-        for (key, value) in &all_outputs {
-            if let Some(node_id) = somatize_core::data::keys::node_of_state_key(key) {
-                self.catalog.try_set_state(node_id, value.clone())?;
-            }
+        for (node_id, state) in &fitted.states {
+            self.catalog.try_set_state(node_id.clone(), state.clone())?;
         }
-
-        // Remove __state_ keys from returned outputs (callers expect node IDs only)
-        all_outputs.retain(|k, _| somatize_core::data::keys::node_of_state_key(k).is_none());
-
         self.fitted = true;
-        Ok(all_outputs)
+        Ok(fitted)
     }
 
     /// Forward pass using the given strategy.
@@ -454,14 +406,14 @@ pub fn graph_run(
         .run(mode)
 }
 
-/// Fit all trainable filters, returning every node's output.
+/// Fit all trainable filters, returning what they computed and learned.
 pub fn graph_fit(
     graph: &Graph,
     catalog: &NodeCatalog,
     x: &Value,
     y: Option<&Value>,
     cache: Arc<dyn CacheStore>,
-) -> Result<HashMap<String, Value>> {
+) -> Result<Fitted> {
     GraphSession::new(graph.clone(), catalog.clone())
         .with_cache(cache)
         .fit(x, y)
@@ -652,7 +604,7 @@ mod tests {
 
         // mean: fit learns mean=20, forward: [10-20, 20-20, 30-20] = [-10, 0, 10]
         // double: [-10, 0, 10] → [-20, 0, 20]
-        let result = outputs.get("double").unwrap();
+        let result = outputs.outputs.get("double").unwrap();
         let (data, _) = result.as_tensor().unwrap();
         assert_eq!(data, &[-20.0, 0.0, 20.0]);
 
@@ -769,7 +721,7 @@ mod tests {
 
         let outputs = graph_fit(&graph, &lib, &x, None, cache.clone()).unwrap();
 
-        let result = outputs.get("double").unwrap();
+        let result = outputs.outputs.get("double").unwrap();
         let (data, _) = result.as_tensor().unwrap();
         assert_eq!(data, &[-20.0, 0.0, 20.0]);
 
