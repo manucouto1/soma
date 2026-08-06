@@ -5,11 +5,32 @@ the first one was not like the ones after it.
 
 ## Where things stand
 
-| | Published | At |
-|---|---|---|
-| PyPI `somatize` | **yes** | **0.5.0** |
-| crates.io — all eleven | **yes** | **0.5.0** |
-| crates.io `somatize-mcp` | never, deliberately | — |
+| | Published | At | Next |
+|---|---|---|---|
+| PyPI `somatize` | yes | 0.5.0 | **0.5.1** |
+| crates.io — all eleven | yes | 0.5.0 | **0.5.1** |
+| crates.io `somatize-mcp` | never, deliberately | — | — |
+
+### What 0.5.1 carries
+
+A patch: one behaviour fix, one panic, and the READMEs.
+
+- **A missing `safetensors` silently erased every channel snapshot.**
+  `gradient_audit(channels=True)` recorded nothing and said nothing; the
+  symptom appeared much later as `plot_channels` reporting "no channel
+  snapshots (available: [])", a message about the filter rather than the
+  missing package. Found by running an example against the *published*
+  0.5.0 in a clean environment — the package is now declared in the `viz`
+  extra, and the ImportError warns.
+- **`num_replicas: 0` reached a panic.** It passed straight through
+  `unwrap_or(1)`, made both the data-parallel loops run zero times, and
+  handed an empty slice to an aggregator that indexed `[0]`. Guarded at
+  the Python boundary, in the aggregator, and in the shared helper.
+- **Every crate has a README.** All eleven rendered an empty one on
+  crates.io and always had: cargo uses `README.md` from the package root,
+  and only `soma-python` had one.
+
+Nothing breaking, so the patch digit is the right one to move.
 
 **Both halves are verified, not assumed.**
 
