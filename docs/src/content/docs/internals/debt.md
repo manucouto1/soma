@@ -28,6 +28,15 @@ code is.
 | **Medium** | Costs real time on every change to the area, or degrades silently in a way a user would not notice. |
 | **Low** | Friction, inconsistency, or rot. Worth fixing when already in the file. |
 
+### Resolved entries
+
+An entry that has been fixed keeps its heading and its number, and gains a
+**Resolved** line saying what changed. Nothing is renumbered and nothing is
+deleted: eleven pages link into this register by anchor, and a closed finding
+still answers "was this ever considered?" — which is most of what a register is
+for. [`check-debt-refs.mjs`](https://github.com/manucouto1/soma/blob/main/docs/scripts/check-debt-refs.mjs)
+is what keeps those anchors honest.
+
 ### The ten that matter most
 
 | ID | Finding | Severity |
@@ -548,10 +557,11 @@ emit. The `unwrap_or(Null)` also turns any failure into `null`.
 
 **Class** Dead code · **Severity** Medium · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/runner/remote.rs:73` — every reference in the
-workspace is its own definition (`:73`, `:77`, `:91`), the re-export chain
-(`soma-runtime/src/runner/mod.rs:140`, `soma-runtime/src/lib.rs:58`) or a doc
-comment. The entire remote `Runner` implementation is unreachable.
+**Evidence** `soma-runtime/src/runner/remote.rs`, lines 73–114 as they stood —
+every reference in the workspace was its own definition (73, 77, 91), the
+re-export chain (`soma-runtime/src/runner/mod.rs`, `soma-runtime/src/lib.rs`) or
+a doc comment. The entire remote `Runner` implementation was unreachable. Line
+numbers are given plainly here because the code they pointed at is gone.
 
 Relatedly, the `Runner` trait itself (`soma-runtime/src/runner/mod.rs:124`) is
 **never used as `dyn Runner`** — all call sites name `LocalRunner` concretely
@@ -561,6 +571,12 @@ polymorphism its doc claims at `:122` is not exercised by anything.
 **Fix shape** Delete `RemoteRunner`, or wire it up. Keeping a second
 implementation of the central execution interface that nothing constructs is
 worse than either.
+
+**Resolved** Deleted. `soma-runtime/src/runner/remote.rs` now holds the
+`Transport` trait alone; the compiler's `ExecutionPlan::Remote` arm is what
+sends work out. The `Runner` trait stays — it has one implementation and one
+caller shape, which is a trait carrying its own documentation, not a strategy
+pattern.
 
 ### D-35 · Enum variants that exist only to be refused or ignored
 
@@ -577,10 +593,18 @@ worse than either.
 | `PruningStrategy::Hyperband` | `soma-core/src/study.rs:204` — "behaves like `None`" |
 | `TrainingStrategy::Custom` | `soma-core/src/strategy.rs:74` — the executor refuses it |
 | `ExploitStrategy::Binary.threshold` | `soma-core/src/strategy.rs:188` — "the current `PbtRunner` does not read this field yet" |
+| `ExploitStrategy::Binary.threshold` | `soma-core/src/strategy.rs:188` — "the current `PbtRunner` does not read this field yet" |
 
 `TrainingStrategy::PopulationBased` (`soma-runtime/src/strategy.rs:246`) is a
 deliberate permanent error arm — that one is [documented as a design
 decision](/soma/design/decisions) and is not debt.
+
+**Resolved** All nine deleted. Two consequences worth naming: `SearchStrategy`
+and `PruningStrategy` are now exhaustive at every Python call site, so the
+`_ => "Unsupported strategy"` arm in `soma-python/src/study.rs` is gone and a
+new variant would fail to compile rather than fail at runtime; and
+`soma.Pbt(threshold=…)` no longer exists, because the argument reached a field
+nothing read. `ExploitStrategy::Binary` is now a unit variant.
 
 ### D-36 · Unreached methods and a pluggable seam with no injection site
 
@@ -599,6 +623,23 @@ site. The whole spill path (`Context::with_spill_threshold`,
 `soma-runtime/src/executor.rs:245`; `maybe_spill`, `:252`) defaults to disabled
 and is set by nothing outside `tests/coverage_boost.rs`.
 
+**Resolved, and two of its six claims were wrong.** Deleted:
+`NodeCatalog::clear_states`, `NodeCatalog::state_store`,
+`MedianPruner::with_min_trials` (a second path to a `pub` field — a test now
+writes `MedianPruner { min_trials: 5, .. }` and loses nothing),
+`EventBus::subscriber_count`, and the spill path entire — which takes
+`data_store` and `spill_threshold` off `Context`, leaving it eleven fields, and
+collapses `resolve_value` to its materialized arm.
+
+Kept, because "never called anywhere" was not true of either:
+`TrialContext::metrics` is called from `soma-python/src/study.rs:586`, on the
+path that turns a trial's reported metrics into a Python dict; and
+`NodeCatalog::with_state_store` is the only way to inject the failing store in
+`a_failing_state_store_is_reported_not_fatal`, the test that holds the line
+against a full disk aborting the host process. A method whose only caller is a
+test is not automatically dead — it depends on whether the test's subject is
+the method or something the method makes reachable.
+
 ### D-37 · Dead helper in the Python bindings
 
 **Class** Dead code · **Severity** Low · **Crate** `soma-python`
@@ -606,6 +647,9 @@ and is set by nothing outside `tests/coverage_boost.rs`.
 **Evidence** `soma-python/src/graph.rs:466` — `#[allow(dead_code)] fn
 split_value_into_batches`, 52 lines, zero callers. `chunk_value` at `:821` is the
 live one. This is the only `#[allow(dead_code)]` in the workspace.
+
+**Resolved** Deleted. The workspace now has no `#[allow(dead_code)]` at all,
+which makes the attribute's next appearance meaningful.
 
 ### D-38 · `Phase::Trial` and the scheduler's capability model
 
@@ -714,6 +758,12 @@ honest but does not make it typed.
 `Json` and `Bytes`. At `:264` a failed `store.put` is swallowed by `if let Ok(_)`
 with no log, silently keeping in memory a value the caller asked to spill.
 
+**Resolved by deletion** `maybe_spill` is gone with the rest of the spill path
+([D-36](#d-36--unreached-methods-and-a-pluggable-seam-with-no-injection-site)).
+Neither bug was ever reachable: nothing outside a test set a threshold. If
+spilling comes back it should come back measured — this entry is what it has to
+answer.
+
 ---
 
 ## Stringly-typed APIs and primitive obsession
@@ -722,11 +772,12 @@ with no log, silently keeping in memory a value the caller asked to spill.
 
 **Class** Stringly-typed · **Severity** Medium · **Crate** `soma-core`
 
-**Evidence** `NodeOverlay::style_class()` (`soma-core/src/viz.rs:101`) returns one
-of five `&'static str` values. Three separate functions then re-match those
+**Evidence** `NodeOverlay::style_class()` (`soma-core/src/viz.rs:98`) returns one
+of five `&'static str` values. Two separate functions then re-match those
 strings, each with a silent `_` fallback meaning "flagged":
-`viz::mermaid_class_style` (`soma-core/src/viz.rs:115`), `viz::dot_class_style`
-(`:126`), `svg::class_colors` (`soma-core/src/svg.rs:27`).
+`viz::mermaid_class_style` (`soma-core/src/viz.rs:114`) and `svg::class_colors`
+(`soma-core/src/svg.rs:27`). It was three until `viz::dot_class_style` went with
+`to_graphviz`; the heading's "four" counts `style_class` itself.
 
 **Consequence** A new status requires four coordinated edits, and a typo in any
 of them falls through to the flagged colour rather than failing to compile — with
@@ -784,10 +835,11 @@ name in Python.
 
 **Class** Stringly-typed · **Severity** Low · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph.rs:2181` returns only the discriminant name,
+**Evidence** `soma-python/src/graph.rs:2079` returns only the discriminant name,
 so `set_strategy("data_parallel", num_replicas=8)` followed by `strategy()`
-yields `"data_parallel"` with the parameters gone, and `TrainingStrategy::Custom`
-becomes `"custom"` under a `_ => "unknown"` catch-all.
+yields `"data_parallel"` with the parameters gone. The `_ => "unknown"`
+catch-all remains, because `TrainingStrategy` is `#[non_exhaustive]` and lives
+in another crate.
 
 ### D-56 · `NodeId` is a `String`, and so is everything else
 

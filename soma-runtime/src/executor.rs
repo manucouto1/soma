@@ -13,7 +13,6 @@ use somatize_core::control::{
 use somatize_core::error::{Result, SomaError};
 use somatize_core::event::Event;
 use somatize_core::node::NodeOutcome;
-use somatize_core::store::DataStore;
 use somatize_core::value::Value;
 use somatize_core::virtual_value::VirtualValue;
 use std::collections::HashMap;
@@ -142,11 +141,6 @@ pub struct Context {
     pub graph_info: GraphInfo,
     /// Optional transport for distributed plans.
     pub transport: Option<Arc<dyn crate::runner::Transport>>,
-    /// Optional data store for persisting intermediate results.
-    pub data_store: Option<Arc<dyn DataStore>>,
-    /// Minimum value size (bytes) to spill to DataStore instead of keeping in memory.
-    /// Default: 0 (disabled — all values stay in memory).
-    pub spill_threshold: usize,
     /// Memoized content hashes of node outputs, keyed by node id.
     /// Invalidated whenever a node's output is (re)stored, so Loop
     /// iterations that overwrite an output never reuse a stale hash.
@@ -178,8 +172,6 @@ impl Context {
             execution_order: Vec::new(),
             graph_info: GraphInfo::new(),
             transport: None,
-            data_store: None,
-            spill_threshold: 0,
             output_hashes: HashMap::new(),
             seed: None,
             driver: None,
@@ -231,43 +223,6 @@ impl Context {
     pub fn with_transport(mut self, transport: Arc<dyn crate::runner::Transport>) -> Self {
         self.transport = Some(transport);
         self
-    }
-
-    /// Set the data store used for spilling and remote data movement.
-    pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
-        self.data_store = Some(store);
-        self
-    }
-
-    /// Set spill threshold: values larger than this (in bytes) are offloaded
-    /// to the DataStore and replaced with a VirtualValue::Cached reference.
-    /// Requires a DataStore to be set via `with_data_store()`.
-    pub fn with_spill_threshold(mut self, bytes: usize) -> Self {
-        self.spill_threshold = bytes;
-        self
-    }
-
-    /// If a DataStore and spill threshold are configured, check if the value
-    /// should be offloaded. Returns VirtualValue (materialized or cached ref).
-    fn maybe_spill(&self, node_id: &str, value: Value) -> VirtualValue {
-        if self.spill_threshold > 0
-            && let Some(store) = &self.data_store
-        {
-            let size = value.size() * 8; // approximate bytes (f64 = 8 bytes)
-            if size >= self.spill_threshold {
-                let key = somatize_core::cache::CacheKey::from_parts(&[
-                    self.run_id.as_bytes(),
-                    node_id.as_bytes(),
-                ]);
-                let vv_for_schema = VirtualValue::materialized(value.clone());
-                let schema = vv_for_schema.schema().clone();
-                if let Ok(_data_ref) = store.put(&key, &value) {
-                    tracing::debug!("spilled node `{node_id}` ({size} bytes) to DataStore");
-                    return VirtualValue::cached(key, schema);
-                }
-            }
-        }
-        VirtualValue::materialized(value)
     }
 
     /// The nodes that ran, in the order they ran.
@@ -350,8 +305,6 @@ impl Context {
             execution_order: self.execution_order.clone(),
             graph_info: self.graph_info.clone(),
             transport: self.transport.clone(),
-            data_store: self.data_store.clone(),
-            spill_threshold: self.spill_threshold,
             output_hashes: self.output_hashes.clone(),
             seed: self.seed,
             driver: self.driver.clone(),
@@ -916,8 +869,7 @@ fn run_node(
                     meta.deterministic,
                 );
             }
-            let vv = ctx.maybe_spill(node_id, output.clone());
-            ctx.set_virtual(node_id, vv);
+            ctx.set_virtual(node_id, VirtualValue::materialized(output.clone()));
             ctx.event_bus.emit(Event::NodeCompleted {
                 run_id: ctx.run_id.clone(),
                 node_id: node_id.to_string(),
@@ -1149,35 +1101,24 @@ fn execute_parallel(
     Ok(())
 }
 
-/// Resolve a VirtualValue to a concrete Value, loading from DataStore if needed.
-fn resolve_value(vv: &VirtualValue, data_store: &Option<Arc<dyn DataStore>>) -> Option<Value> {
+/// Resolve a VirtualValue to a concrete Value.
+///
+/// Only the materialized case yields one here: the executor's store holds
+/// what nodes produced, and nothing in it is a reference. The lazy
+/// variants resolve against a cache, not against this store — see
+/// [`VirtualValue::resolve`].
+fn resolve_value(vv: &VirtualValue) -> Option<Value> {
     match vv {
         VirtualValue::Materialized { value, .. } => Some(value.clone()),
-        VirtualValue::Cached { key, .. } => {
-            // Try to load from DataStore
-            if let Some(store) = data_store {
-                let data_ref = somatize_core::store::DataRef::Cached {
-                    cache_key: key.clone(),
-                };
-                store.get(&data_ref).ok()
-            } else {
-                None
-            }
-        }
         _ => None,
     }
 }
 
 /// Resolve the input for a node from the context store using graph topology.
-/// If a predecessor was spilled to DataStore, loads it back.
 pub(crate) fn resolve_input(node_id: &str, ctx: &Context) -> Value {
     let preds = ctx.graph_info.predecessors(node_id);
 
-    let resolve_node = |id: &str| -> Option<Value> {
-        ctx.store
-            .get(id)
-            .and_then(|vv| resolve_value(vv, &ctx.data_store))
-    };
+    let resolve_node = |id: &str| -> Option<Value> { ctx.store.get(id).and_then(resolve_value) };
 
     match preds.len() {
         0 => ctx
@@ -1985,51 +1926,6 @@ mod tests {
             matches!(event, Event::NodeCacheHit { ref node_id, .. } if node_id == "a"),
             "expected NodeCacheHit for `a`, got: {event:?}"
         );
-    }
-
-    #[test]
-    fn spill_roundtrip_through_datastore() {
-        use somatize_core::store::LocalDataStore;
-        let dir = std::env::temp_dir().join(format!(
-            "soma_spill_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(&dir));
-
-        let (filters, _forwards, info) = counting_setup(true);
-        let bus = Arc::new(EventBus::new(64));
-        let mut ctx = Context::new(bus, "run_spill")
-            .with_graph_info(info.clone())
-            .with_data_store(store)
-            .with_spill_threshold(1); // spill everything
-        ctx.set("input", Value::tensor(vec![1.0, 2.0], vec![2]));
-
-        let plan = ExecutionPlan::Sequence(vec![
-            ExecutionPlan::Execute {
-                node_id: "a".into(),
-            },
-            ExecutionPlan::Execute {
-                node_id: "b".into(),
-            },
-        ]);
-        execute(&plan, &mut ctx, &filters, &cache_for_spill())
-            .expect("spilled intermediate must be readable downstream");
-
-        // `a`'s output was spilled; `b` must still have received it:
-        // input + 1.0 + 2.0 = [4.0, 5.0]
-        let out = resolve_value(ctx.get_virtual("b").unwrap(), &ctx.data_store).unwrap();
-        let (data, _) = out.as_tensor().unwrap();
-        assert_eq!(data, &[4.0, 5.0]);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn cache_for_spill() -> MemoryCache {
-        MemoryCache::default()
     }
 
     /// Config carries a salt that does NOT affect the output — models a

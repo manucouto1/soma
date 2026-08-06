@@ -172,10 +172,6 @@ impl GraphSession {
         let run_id = timestamp_id("graph_run");
         let mut ctx =
             Context::new(self.event_bus.clone(), run_id.clone()).with_graph_info(graph_info);
-
-        if let Some(store) = &self.data_store {
-            ctx = ctx.with_data_store(store.clone());
-        }
         if let Some(transport) = &self.transport {
             ctx = ctx.with_transport(transport.clone());
         }

@@ -783,41 +783,6 @@ fn executor_remote_with_transport() {
     assert_eq!(data, &[14.0]); // remote doubled it
 }
 
-// ── Executor coverage: DataStore spill ──
-
-#[test]
-fn executor_spills_large_values_to_datastore() {
-    let bus = Arc::new(EventBus::new(64));
-    let cache = MemoryCache::default();
-
-    let tmp = tempfile::tempdir().unwrap();
-    let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(tmp.path()));
-
-    // Create a "large" value (>100 bytes)
-    let large_input = Value::tensor(vec![1.0; 100], vec![100]);
-
-    let mut ctx = Context::new(bus, "spill_test")
-        .with_data_store(store)
-        .with_spill_threshold(100); // spill values > 100 bytes
-
-    ctx.set("input", large_input);
-    ctx.graph_info
-        .set_predecessors("doubler", vec!["input".into()]);
-
-    let mut lib = NodeCatalog::new();
-    lib.register("doubler", Box::new(Doubler));
-
-    let plan = ExecutionPlan::Execute {
-        node_id: "doubler".into(),
-    };
-
-    execute(&plan, &mut ctx, &lib, &cache).unwrap();
-
-    // The output should exist (either materialized or spilled)
-    let vv = ctx.get_virtual("doubler");
-    assert!(vv.is_some());
-}
-
 // ── Free functions coverage ──
 
 #[test]

@@ -406,7 +406,7 @@ fn objective_metric(study: &Study) -> Option<String> {
 
 fn build_pruner(strategy: &PruningStrategy) -> Option<Arc<dyn Pruner>> {
     match strategy {
-        PruningStrategy::None | PruningStrategy::Hyperband => None,
+        PruningStrategy::None => None,
         PruningStrategy::Median { n_warmup_steps } => {
             Some(Arc::new(MedianPruner::new(*n_warmup_steps)))
         }

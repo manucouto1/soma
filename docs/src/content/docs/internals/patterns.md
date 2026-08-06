@@ -55,8 +55,9 @@ The dyn census in `soma-runtime` alone: `CacheStore` 33 sites, `Transport` 13,
 `DataStore` 7, `EffectHandler` 6, `Step` 5, `EventSink` 9, `Filter` 5.
 
 `(!)` One trait is defined for this and never used polymorphically: `Runner`
-(`soma-runtime/src/runner/mod.rs:124`) — see
-[D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed).
+(`soma-runtime/src/runner/mod.rs:124`). Its second implementation went with
+[D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed); the trait
+stayed, now documenting one shape rather than abstracting two.
 
 ### Adapter / bridge
 
@@ -439,7 +440,7 @@ short version, organized by which pattern failed.
 |---|---|
 | Composite | `resolve_distribution` / `collapse_differentiable` do not use `children()` and skip `Loop`/`Branch` — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) |
 | Template method | `Transport::execute_node`'s default is wrong for every caller, and its own doc says so — [D-41](/soma/internals/debt/#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) |
-| Strategy | `Runner` and `RemoteRunner` — a strategy interface with one live implementation and one dead one — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
+| Strategy | `Runner` — a strategy interface that had one live implementation and one dead one; the dead one is deleted — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
 | Shared primitives | `run_node` and `StreamRun::run_compute` share three primitives and duplicate everything around them, and have drifted — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |
 | Newtype | Not applied to any id type — [D-56](/soma/internals/debt/#d-56--nodeid-is-a-string-and-so-is-everything-else) |
 | Builder | Three wide structs skipped it — [D-06](/soma/internals/debt/#d-06--wide-data-structs-with-no-builder) |

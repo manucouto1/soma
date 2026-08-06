@@ -177,8 +177,10 @@ Both are implemented by `FsActionStore`
 #### `StateStore` — `soma-core/src/state.rs:24`
 
 `get` / `set` / `remove` / `clear` / `keys`. One implementor
-(`MemoryStateStore`, `:68`), and `(!)` no injection site anywhere —
-[D-36](/soma/internals/debt/#d-36--unreached-methods-and-a-pluggable-seam-with-no-injection-site).
+(`MemoryStateStore`, `:68`). `NodeCatalog::with_state_store` is the only
+injection site, and only a test uses it — see
+[D-36](/soma/internals/debt/#d-36--unreached-methods-and-a-pluggable-seam-with-no-injection-site),
+which explains why it survived the deletion pass.
 
 #### `EventSink` and `Tracker` — `soma-core/src/tracking.rs:243`, `:255`
 
@@ -271,13 +273,13 @@ The five in **bold** are the ones worth memorizing.
 | `CacheTier` / `Origin` | memory/local/remote `(!)`; computed/ingested/streamed `(!)` | no | | `soma-core/src/cache.rs:150`, `:161` |
 | `TrainingStrategy` | `Local`, `DataParallel`, `ModelParallel`, `Federated`, `PopulationBased`, `Custom` | yes | Description only — execution lives in `soma-runtime` | `soma-core/src/strategy.rs:22` |
 | `GradientAggregation`, `CommunicationProtocol`, `FederatedAggregation`, `ClientSelection`, `ExploitStrategy`, `ExploreStrategy` | satellites of the above | yes | | `soma-core/src/strategy.rs:89`–`:200` |
-| `SearchStrategy` | `Grid`, `Random`, `Bayesian`, `Hyperband` `(!)`, `MultiObjective` `(!)` | no | | `soma-core/src/study.rs:113` |
-| `PruningStrategy` | `None`, `Median`, `Percentile`, `Hyperband` `(!)` | no | | `soma-core/src/study.rs:179` |
+| `SearchStrategy` | `Grid`, `Random`, `Bayesian` | no | | `soma-core/src/study.rs:113` |
+| `PruningStrategy` | `None`, `Median`, `Percentile` | no | | `soma-core/src/study.rs:156` |
 | `SearchDimension` | `Float`, `Int`, `Categorical`, `Conditional{parent, dimension}` | yes | Recursive through `Box` | `soma-core/src/search.rs:36` |
 | `TrialState` / `Direction` / `Scale` / `Scalarizer` | search vocabulary | mixed | | `soma-core/src/study.rs:210`, `:15`, `search.rs:17`, `study.rs:48` |
 | `RunKind` / `RunState` / `RunOutcome` / `NodeStatus` | tracking vocabulary | yes | `RunKind` has a `#[serde(other)]` catch-all | `soma-core/src/tracking.rs:27`, `:46`, `summary.rs:27`, `viz.rs:20` |
 | `HashAlgo` | `Blake3`, `Sha256` | yes | | `soma-core/src/action.rs:32` |
-| `LoopSignal` / `ValueStatus` / `StreamFormat` `(!)` | small vocabularies | mixed | | `control.rs:46`, `virtual_value.rs:65`, `store/mod.rs:145` |
+| `LoopSignal` / `ValueStatus` | small vocabularies | mixed | | `control.rs:46`, `virtual_value.rs:65` |
 
 **The `#[non_exhaustive]` policy is the thing to take away.** It is not applied
 uniformly, and the non-uniformity is the design: data enums get it so a consumer
@@ -382,7 +384,7 @@ public trait. That absence is what keeps everything `dyn`-able.
 
 - [D-05](/soma/internals/debt/#d-05--event-is-30-variants-across-six-unrelated-concerns) `Event` — 30 variants, six concerns · [D-06](/soma/internals/debt/#d-06--wide-data-structs-with-no-builder) wide structs with no builder
 - [D-23](/soma/internals/debt/#d-23--a-serialization-failure-gives-every-failing-value-the-same-cache-key) a serialization failure collides cache keys
-- [D-33](/soma/internals/debt/#d-33--value-to_plain_json-contradicts-its-own-contract) `to_plain_json` contradicts its contract · [D-35](/soma/internals/debt/#d-35--enum-variants-that-exist-only-to-be-refused-or-ignored) nine never-constructed variants
+- [D-33](/soma/internals/debt/#d-33--value-to_plain_json-contradicts-its-own-contract) `to_plain_json` contradicts its contract · [D-35](/soma/internals/debt/#d-35--enum-variants-that-exist-only-to-be-refused-or-ignored) nine never-constructed variants, now deleted
 - [D-51](/soma/internals/debt/#d-51--four-style-tables-keyed-by-the-same-magic-strings) four style tables keyed by magic strings · [D-52](/soma/internals/debt/#d-52--node-placement-has-one-typed-mechanism-and-one-stringly-one) two placement mechanisms · [D-53](/soma/internals/debt/#d-53--typed-enums-shadowed-by-their-own-string-forms) enums shadowed by strings · [D-56](/soma/internals/debt/#d-56--nodeid-is-a-string-and-so-is-everything-else) `NodeId = String`
 - [D-15](/soma/internals/debt/#d-15--five-formatters-for-a-duration-two-for-a-truncation) two duration formatters that disagree · [D-17](/soma/internals/debt/#d-17--four-renderers-four-independent-match-nodekind) four renderers
 - [D-84](/soma/internals/debt/#d-84--soma-cores-re-export-surface-is-asymmetric) asymmetric re-exports · [D-91](/soma/internals/debt/#d-91--the-filter-trait-mixes-computation-with-cache-identity), [D-92](/soma/internals/debt/#d-92--graphpredecessors--successors-are-linear-scans), [D-94](/soma/internals/debt/#d-94--soma-core-owns-seven-domains), [D-95](/soma/internals/debt/#d-95--somaerrorpruned-coexists-with-trialoutcomepruned)

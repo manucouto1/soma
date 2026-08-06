@@ -68,11 +68,6 @@ impl EventBus {
         self.sender.subscribe()
     }
 
-    /// Number of active subscribers.
-    pub fn subscriber_count(&self) -> usize {
-        self.sender.receiver_count()
-    }
-
     /// Flush all registered sinks.
     pub fn flush_sinks(&self) {
         for sink in self.snapshot_sinks() {
@@ -150,8 +145,6 @@ mod tests {
         let bus = EventBus::new(16);
         let mut rx1 = bus.subscribe();
         let mut rx2 = bus.subscribe();
-
-        assert_eq!(bus.subscriber_count(), 2);
 
         bus.emit(Event::RunCompleted {
             run_id: "r1".into(),

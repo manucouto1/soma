@@ -41,18 +41,30 @@
                 "label": "forward_with(x, &Standard)",
                 "at": "graph_session.rs:334",
                 "children": [
-                  { "label": "run_driver()  → driver.clone().with_catalog(…)", "at": "graph_session.rs:145" },
+                  {
+                    "label": "run_driver()  → driver.clone().with_catalog(…)",
+                    "at": "graph_session.rs:145"
+                  },
                   {
                     "label": "Standard::forward(graph, &ForwardEnv{…}, x)",
                     "at": "forward.rs:49",
                     "children": [
-                      { "label": "compile(graph, catalog, Inference, Some(cache))", "at": "forward.rs:51" },
+                      {
+                        "label": "compile(graph, catalog, Inference, Some(cache))",
+                        "at": "forward.rs:51"
+                      },
                       {
                         "label": "run_forward(graph, &plan, env, x)",
                         "at": "forward.rs:77",
                         "children": [
-                          { "label": "timestamp_id(\"forward\")", "at": "forward.rs:83" },
-                          { "label": "RunContext::new(…, GraphInfo::from_graph(graph))", "at": "forward.rs:84" },
+                          {
+                            "label": "timestamp_id(\"forward\")",
+                            "at": "forward.rs:83"
+                          },
+                          {
+                            "label": "RunContext::new(…, GraphInfo::from_graph(graph))",
+                            "at": "forward.rs:84"
+                          },
                           {
                             "label": "LocalRunner.forward(plan, &ctx, x)",
                             "at": "forward.rs:94",
@@ -61,13 +73,26 @@
                                 "label": "walk(plan, ctx, input, RunMode::Forward)",
                                 "at": "runner/local.rs:26",
                                 "children": [
-                                  { "label": "Context::new(…).with_graph_info(…).with_seed(…)", "at": "runner/local.rs:33" },
-                                  { "label": "exec.set(input_key(first), input)", "at": "runner/local.rs:40" },
-                                  { "label": "executor::execute(…)", "at": "runner/local.rs:44", "ref": "b", "sym": "execute" },
+                                  {
+                                    "label": "Context::new(…).with_graph_info(…).with_seed(…)",
+                                    "at": "runner/local.rs:33"
+                                  },
+                                  {
+                                    "label": "exec.set(input_key(first), input)",
+                                    "at": "runner/local.rs:40"
+                                  },
+                                  {
+                                    "label": "executor::execute(…)",
+                                    "at": "runner/local.rs:44",
+                                    "ref": "b",
+                                    "sym": "execute"
+                                  },
                                   {
                                     "label": "last_output(&exec)",
                                     "at": "runner/local.rs:51",
-                                    "note": ["execution_order().rev().find(!reserved)"]
+                                    "note": [
+                                      "execution_order().rev().find(!reserved)"
+                                    ]
                                   }
                                 ]
                               }
@@ -96,17 +121,55 @@
             "at": "executor.rs:367",
             "sym": "execute",
             "children": [
-              { "label": "Empty                → Ok(())", "at": ":374" },
-              { "label": "Execute{id}          → execute_node(id, &[], …)", "at": ":377" },
-              { "label": "Step{id, handoffs}   → execute_node(id, handoffs, …)", "at": ":379" },
-              { "label": "Sequence(v)          → for each: execute(…)", "at": ":383" },
-              { "label": "Parallel(b)          → execute_parallel", "at": ":1084" },
-              { "label": "Loop{…}              → execute_loop", "at": ":460" },
-              { "label": "Branch{…}            → execute_branch", "at": ":531" },
-              { "label": "Remote{…, target: _} → execute_remote", "at": ":601", "mark": "warn", "debt": "D-42", "trail": "(! target discarded)" },
-              { "label": "Composite{ids}       → composite_fit (fit) | per-node (fwd)", "at": ":953" },
-              { "label": "Stream{ids, size}    → execute_stream", "at": ":1208", "ref": "d", "sym": "execute_stream" },
-              { "label": "other                → Err(\"newer compiler\")", "at": ":445" }
+              {
+                "label": "Empty                → Ok(())",
+                "at": ":374"
+              },
+              {
+                "label": "Execute{id}          → execute_node(id, &[], …)",
+                "at": ":377"
+              },
+              {
+                "label": "Step{id, handoffs}   → execute_node(id, handoffs, …)",
+                "at": ":379"
+              },
+              {
+                "label": "Sequence(v)          → for each: execute(…)",
+                "at": ":383"
+              },
+              {
+                "label": "Parallel(b)          → execute_parallel",
+                "at": ":1084"
+              },
+              {
+                "label": "Loop{…}              → execute_loop",
+                "at": ":460"
+              },
+              {
+                "label": "Branch{…}            → execute_branch",
+                "at": ":531"
+              },
+              {
+                "label": "Remote{…, target: _} → execute_remote",
+                "at": ":601",
+                "mark": "warn",
+                "debt": "D-42",
+                "trail": "(! target discarded)"
+              },
+              {
+                "label": "Composite{ids}       → composite_fit (fit) | per-node (fwd)",
+                "at": ":953"
+              },
+              {
+                "label": "Stream{ids, size}    → execute_stream",
+                "at": ":1208",
+                "ref": "d",
+                "sym": "execute_stream"
+              },
+              {
+                "label": "other                → Err(\"newer compiler\")",
+                "at": ":445"
+              }
             ]
           }
         },
@@ -115,7 +178,10 @@
             "label": "run_node(node_id, ctx, catalog, cache)",
             "at": "executor.rs:816",
             "children": [
-              { "label": "node = catalog.node(id)?.clone(); meta = node.meta()", "at": ":824" },
+              {
+                "label": "node = catalog.node(id)?.clone(); meta = node.meta()",
+                "at": ":824"
+              },
               {
                 "label": "input = resolve_input(node_id, ctx)",
                 "at": ":1173",
@@ -140,10 +206,18 @@
                 "label": "▸ PRIMITIVE 1  output_key(node, meta, state, input_hash, seed)",
                 "at": ":670",
                 "mark": "P1",
-                "note": ["guard: !(meta.cacheable && meta.deterministic) → None"]
+                "note": [
+                  "guard: !(meta.cacheable && meta.deterministic) → None"
+                ]
               },
-              { "label": "cache.get_located(key) hit → emit NodeCacheHit, return Produced", "at": ":862" },
-              { "label": "miss → emit NodeCacheMiss, emit NodeStarted", "at": ":876" },
+              {
+                "label": "cache.get_located(key) hit → emit NodeCacheHit, return Produced",
+                "at": ":862"
+              },
+              {
+                "label": "miss → emit NodeCacheMiss, emit NodeStarted",
+                "at": ":876"
+              },
               {
                 "label": "▸ PRIMITIVE 2  compute_node(…) = catch_unwind(run_node_inner)",
                 "at": ":692",
@@ -154,8 +228,18 @@
                     "at": ":1058",
                     "dyn": "NodeImpl",
                     "children": [
-                      { "label": "NodeImpl::Filter(f) → f.forward(input, state) → Produced", "at": ":1066", "dyn": "Filter" },
-                      { "label": "NodeImpl::Step(s)   → driver.run(s, run_id, node_id, input)", "at": ":1069", "ref": "c", "dyn": "Step", "sym": "EffectDriver::run" }
+                      {
+                        "label": "NodeImpl::Filter(f) → f.forward(input, state) → Produced",
+                        "at": ":1066",
+                        "dyn": "Filter"
+                      },
+                      {
+                        "label": "NodeImpl::Step(s)   → driver.run(s, run_id, node_id, input)",
+                        "at": ":1069",
+                        "ref": "c",
+                        "dyn": "Step",
+                        "sym": "EffectDriver::run"
+                      }
                     ]
                   }
                 ]
@@ -168,10 +252,18 @@
                     "label": "Produced(out) → ▸ PRIMITIVE 3  store_output(…)",
                     "at": ":717",
                     "mark": "P3",
-                    "note": ["→ maybe_spill → set_virtual → NodeCompleted"]
+                    "note": [
+                      "→ maybe_spill → set_virtual → NodeCompleted"
+                    ]
                   },
-                  { "label": "HandOff{target, carry} → ctx.set(node, carry); NodeCompleted", "at": ":931" },
-                  { "label": "Paused{turn, reason}   → nothing stored", "at": ":942" }
+                  {
+                    "label": "HandOff{target, carry} → ctx.set(node, carry); NodeCompleted",
+                    "at": ":931"
+                  },
+                  {
+                    "label": "Paused{turn, reason}   → nothing stored",
+                    "at": ":942"
+                  }
                 ]
               }
             ]
@@ -182,9 +274,15 @@
             "label": "back in execute_node",
             "at": "executor.rs:748",
             "children": [
-              { "label": "Produced → Ok(())" },
-              { "label": "HandOff  → select_handoff(:770) → execute(that plan)" },
-              { "label": "Paused   → Err(SomaError::Suspended{…})" }
+              {
+                "label": "Produced → Ok(())"
+              },
+              {
+                "label": "HandOff  → select_handoff(:770) → execute(that plan)"
+              },
+              {
+                "label": "Paused   → Err(SomaError::Suspended{…})"
+              }
             ]
           }
         }
@@ -202,14 +300,26 @@
             "at": "effects/mod.rs:107",
             "sym": "EffectDriver::run",
             "children": [
-              { "label": "journal = self.journal.with_enabled(enabled && meta.journal)", "at": ":116" },
+              {
+                "label": "journal = self.journal.with_enabled(enabled && meta.journal)",
+                "at": ":116"
+              },
               {
                 "label": "for turn in 0..meta.max_turns",
                 "at": ":127",
                 "children": [
-                  { "label": "emit AgentTurnStarted" },
-                  { "label": "ctx = StepCtx::new(…).with_history(&history)", "at": ":134" },
-                  { "label": "transition = step.poll(&ctx)?", "at": ":138", "dyn": "Step" },
+                  {
+                    "label": "emit AgentTurnStarted"
+                  },
+                  {
+                    "label": "ctx = StepCtx::new(…).with_history(&history)",
+                    "at": ":134"
+                  },
+                  {
+                    "label": "transition = step.poll(&ctx)?",
+                    "at": ":138",
+                    "dyn": "Step"
+                  },
                   {
                     "label": "match transition",
                     "at": ":146",
@@ -218,7 +328,9 @@
                         "label": "Await(effects)  → perform_all(…)",
                         "at": ":440",
                         "children": [
-                          { "label": "emit EffectRequested per effect" },
+                          {
+                            "label": "emit EffectRequested per effect"
+                          },
                           {
                             "label": "thread::scope: one thread per effect",
                             "at": ":459",
@@ -227,28 +339,57 @@
                                 "label": "perform_one(journal, EffectSite{run,node,turn,i})",
                                 "at": ":519",
                                 "children": [
-                                  { "label": "journal.lookup(site, effect)? → replayed", "at": ":527" },
-                                  { "label": "handlers.iter().find(|h| h.handles(effect))", "at": ":531", "dyn": "EffectHandler" },
-                                  { "label": "handler.perform(effect)?", "at": ":543", "dyn": "EffectHandler" },
-                                  { "label": "journal.record(…)   (Failed is never recorded)", "at": ":545" }
+                                  {
+                                    "label": "journal.lookup(site, effect)? → replayed",
+                                    "at": ":527"
+                                  },
+                                  {
+                                    "label": "handlers.iter().find(|h| h.handles(effect))",
+                                    "at": ":531",
+                                    "dyn": "EffectHandler"
+                                  },
+                                  {
+                                    "label": "handler.perform(effect)?",
+                                    "at": ":543",
+                                    "dyn": "EffectHandler"
+                                  },
+                                  {
+                                    "label": "journal.record(…)   (Failed is never recorded)",
+                                    "at": ":545"
+                                  }
                                 ]
                               }
                             ]
                           },
-                          { "label": "usage += …; emit ToolCalled / EffectCompleted", "trail": "→ history.push(results)", "at": ":159" }
+                          {
+                            "label": "usage += …; emit ToolCalled / EffectCompleted",
+                            "trail": "→ history.push(results)",
+                            "at": ":159"
+                          }
                         ]
                       },
-                      { "label": "Done(v)             → Ok(NodeOutcome::Produced(v))", "at": ":167" },
-                      { "label": "Goto{target, carry} → Ok(NodeOutcome::HandOff{…})", "at": ":172" },
+                      {
+                        "label": "Done(v)             → Ok(NodeOutcome::Produced(v))",
+                        "at": ":167"
+                      },
+                      {
+                        "label": "Goto{target, carry} → Ok(NodeOutcome::HandOff{…})",
+                        "at": ":172"
+                      },
                       {
                         "label": "Suspend{reason}",
                         "at": ":187",
                         "children": [
                           {
                             "label": "journal.lookup(site, suspension_effect(reason))?",
-                            "note": ["Some → emit Resumed, continue   « the resume path »"]
+                            "note": [
+                              "Some → emit Resumed, continue   « the resume path »"
+                            ]
                           },
-                          { "label": "None → emit Suspended → Ok(NodeOutcome::Paused{…})", "at": ":206" }
+                          {
+                            "label": "None → emit Suspended → Ok(NodeOutcome::Paused{…})",
+                            "at": ":206"
+                          }
                         ]
                       },
                       {
@@ -266,7 +407,12 @@
               }
             ]
           },
-          "tail": [{ "label": "loop exhausted → Err(\"did not finish within N turns\")", "at": ":240" }]
+          "tail": [
+            {
+              "label": "loop exhausted → Err(\"did not finish within N turns\")",
+              "at": ":240"
+            }
+          ]
         }
       ],
       "after": "`resume_with(run_id, node_id, turn, reason, answer)`\n(`soma-runtime/src/effects/mod.rs:279`) writes the answer at the *same site*, so\nthe next run replays into it. That is the whole resume mechanism — there is no\nseparate checkpoint format."
@@ -283,9 +429,18 @@
             "at": "executor.rs:1208",
             "sym": "execute_stream",
             "children": [
-              { "label": "refuse if mode is Fit", "at": ":1220" },
-              { "label": "chunks = chunk_value(input, chunk_size)", "at": ":1264" },
-              { "label": "run = StreamRun::new(node_ids, catalog)   (steps → Err)", "at": "stream.rs:83" },
+              {
+                "label": "refuse if mode is Fit",
+                "at": ":1220"
+              },
+              {
+                "label": "chunks = chunk_value(input, chunk_size)",
+                "at": ":1264"
+              },
+              {
+                "label": "run = StreamRun::new(node_ids, catalog)   (steps → Err)",
+                "at": "stream.rs:83"
+              },
               {
                 "label": "per chunk: run.process_chunk(chunk, ctx, cache)",
                 "at": "stream.rs:130",
@@ -293,26 +448,65 @@
                   {
                     "label": "per node i:",
                     "children": [
-                      { "label": "Barrier  → buffer the value, stop the cascade", "at": ":140" },
+                      {
+                        "label": "Barrier  → buffer the value, stop the cascade",
+                        "at": ":140"
+                      },
                       {
                         "label": "else     → current = run_compute(i, current, …)",
                         "at": ":194",
                         "children": [
-                          { "label": "first touch → emit NodeStarted", "at": ":203" },
-                          { "label": "state = evolving.or(base_state)", "at": ":213" },
-                          { "label": "▸ output_key(…)", "at": ":217", "mark": "P1" },
-                          { "label": "cache hit → counters only", "at": ":220", "mark": "warn", "debt": "D-11", "trail": "(!) no event" },
-                          { "label": "▸ compute_node(…)", "at": ":233", "mark": "P2" },
-                          { "label": "▸ store_output(…); evolving update", "at": ":239", "mark": "P3" }
+                          {
+                            "label": "first touch → emit NodeStarted",
+                            "at": ":203"
+                          },
+                          {
+                            "label": "state = evolving.or(base_state)",
+                            "at": ":213"
+                          },
+                          {
+                            "label": "▸ output_key(…)",
+                            "at": ":217",
+                            "mark": "P1"
+                          },
+                          {
+                            "label": "cache hit → counters only",
+                            "at": ":220",
+                            "mark": "warn",
+                            "debt": "D-11",
+                            "trail": "(!) no event"
+                          },
+                          {
+                            "label": "▸ compute_node(…)",
+                            "at": ":233",
+                            "mark": "P2"
+                          },
+                          {
+                            "label": "▸ store_output(…); evolving update",
+                            "at": ":239",
+                            "mark": "P3"
+                          }
                         ]
                       }
                     ]
                   }
                 ]
               },
-              { "label": "run.flush(ctx, cache)  → materialize_buffer per barrier node", "at": "stream.rs:152" },
-              { "label": "run.finish(ctx)  → one NodeCompleted per node,", "at": "stream.rs:167", "note": ["\"stream: N chunks, H hits, M misses\""] },
-              { "label": "ctx.set(last_id, output.finish())", "at": "stream.rs:310" }
+              {
+                "label": "run.flush(ctx, cache)  → materialize_buffer per barrier node",
+                "at": "stream.rs:152"
+              },
+              {
+                "label": "run.finish(ctx)  → one NodeCompleted per node,",
+                "at": "stream.rs:167",
+                "note": [
+                  "\"stream: N chunks, H hits, M misses\""
+                ]
+              },
+              {
+                "label": "ctx.set(last_id, output.finish())",
+                "at": "stream.rs:310"
+              }
             ]
           }
         }
@@ -329,10 +523,24 @@
             "label": "StudyRunner::run(study, sampler, executor)",
             "at": "executors/study.rs:187",
             "children": [
-              { "label": "sampler.prepare(&study.search_space)", "at": ":193", "dyn": "Sampler" },
-              { "label": "RESUME: replay completed trials into sampler.record_result", "at": ":205" },
-              { "label": "pruner = build_pruner(&study.pruning)", "at": ":407", "dyn": "Pruner" },
-              { "label": "trial_index = study.trials.len()          « the resume point »", "at": ":218" },
+              {
+                "label": "sampler.prepare(&study.search_space)",
+                "at": ":193",
+                "dyn": "Sampler"
+              },
+              {
+                "label": "RESUME: replay completed trials into sampler.record_result",
+                "at": ":205"
+              },
+              {
+                "label": "pruner = build_pruner(&study.pruning)",
+                "at": ":407",
+                "dyn": "Pruner"
+              },
+              {
+                "label": "trial_index = study.trials.len()          « the resume point »",
+                "at": ":218"
+              },
               {
                 "label": "loop",
                 "at": ":228",
@@ -345,8 +553,14 @@
                       "else          → sampler.sample(space, config_index)?"
                     ]
                   },
-                  { "label": "params += {\"seed\": …} += study.frozen", "at": ":250" },
-                  { "label": "ctx = TrialContext{objective, pruner, history, bus, shared}", "at": ":270" },
+                  {
+                    "label": "params += {\"seed\": …} += study.frozen",
+                    "at": ":250"
+                  },
+                  {
+                    "label": "ctx = TrialContext{objective, pruner, history, bus, shared}",
+                    "at": ":270"
+                  },
                   {
                     "label": "outcome = executor.execute_trial(&params, &ctx)",
                     "at": ":281",
@@ -365,8 +579,17 @@
                       "(Err(e), _)                                → Failed"
                     ]
                   },
-                  { "label": "sampler.record_result(…); best-trial check; StudyProgress", "at": ":335" },
-                  { "label": "save_study(study)", "at": ":361", "mark": "warn", "debt": "D-64", "trail": "(! rewrites the whole file per trial)" }
+                  {
+                    "label": "sampler.record_result(…); best-trial check; StudyProgress",
+                    "at": ":335"
+                  },
+                  {
+                    "label": "save_study(study)",
+                    "at": ":361",
+                    "mark": "warn",
+                    "debt": "D-64",
+                    "trail": "(! rewrites the whole file per trial)"
+                  }
                 ]
               }
             ]
@@ -377,19 +600,42 @@
             "label": "PbtRunner::run(config, executor)",
             "at": "executors/pbt.rs:97",
             "children": [
-              { "label": "rng_state = 42", "at": ":103", "mark": "warn", "debt": "D-49", "trail": "(! hardcoded, no seed field)" },
-              { "label": "initialize_population", "at": ":195" },
+              {
+                "label": "rng_state = 42",
+                "at": ":103",
+                "mark": "warn",
+                "debt": "D-49",
+                "trail": "(! hardcoded, no seed field)"
+              },
+              {
+                "label": "initialize_population",
+                "at": ":195"
+              },
               {
                 "label": "for generation in 0..generations",
                 "at": ":108",
                 "children": [
-                  { "label": "TRAIN each member", "at": ":116", "mark": "warn", "trail": "(! failure → warn, keeps stale state)" },
-                  { "label": "EVAL each member", "at": ":135", "trail": "(failure → NEG_INFINITY, counted)" },
-                  { "label": "sort by fitness desc", "at": ":156" },
+                  {
+                    "label": "TRAIN each member",
+                    "at": ":116",
+                    "mark": "warn",
+                    "trail": "(! failure → warn, keeps stale state)"
+                  },
+                  {
+                    "label": "EVAL each member",
+                    "at": ":135",
+                    "trail": "(failure → NEG_INFINITY, counted)"
+                  },
+                  {
+                    "label": "sort by fitness desc",
+                    "at": ":156"
+                  },
                   {
                     "label": "evolve: exploit (truncation | binary tournament)",
                     "at": ":215",
-                    "note": ["then explore (perturbation | resample)"]
+                    "note": [
+                      "then explore (perturbation | resample)"
+                    ]
                   }
                 ]
               }

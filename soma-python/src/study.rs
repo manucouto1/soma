@@ -619,7 +619,6 @@ impl PyStudy {
                 seed,
                 ..
             } => Box::new(BayesianSampler::new(*n_trials, *n_startup, *seed)),
-            _ => return Err(PyRuntimeError::new_err("Unsupported strategy")),
         };
 
         // Release the GIL for the whole study: the executor re-acquires

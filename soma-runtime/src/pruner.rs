@@ -46,13 +46,6 @@ impl MedianPruner {
             min_trials: 1,
         }
     }
-
-    /// Require at least `min_trials` completed trials before pruning —
-    /// a median over one trial is that trial.
-    pub fn with_min_trials(mut self, min_trials: usize) -> Self {
-        self.min_trials = min_trials;
-        self
-    }
 }
 
 impl Pruner for MedianPruner {
@@ -225,7 +218,10 @@ mod tests {
 
     #[test]
     fn median_no_prune_insufficient_history() {
-        let pruner = MedianPruner::new(0).with_min_trials(5);
+        let pruner = MedianPruner {
+            n_warmup_steps: 0,
+            min_trials: 5,
+        };
         let history = make_history(&[vec![0.7, 0.8]]);
         // Only 2 trials, need 5
         assert!(pruner.should_prune("f1", 0.1, 0, &history).is_none());

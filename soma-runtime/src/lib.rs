@@ -55,7 +55,7 @@ pub use forward::{Batched, ForwardStrategy, Standard, Stream};
 pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
 pub use node_catalog::{NodeCatalog, NodeImpl};
 pub use pruner::{MedianPruner, PercentilePruner, Pruner};
-pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
+pub use runner::{LocalRunner, Runner, Transport};
 pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
 pub use study_io::StudyIo;
 pub use tracking::{

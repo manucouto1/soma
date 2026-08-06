@@ -152,8 +152,6 @@ pub enum CacheTier {
     Memory,
     /// Local disk (the persistent action-record + blob store).
     Local,
-    /// A remote backend shared across machines.
-    Remote,
 }
 
 /// Where a cached value originated.
@@ -170,13 +168,6 @@ pub enum Origin {
     Ingested {
         /// Where the value came from (path, URL, dataset name).
         source: String,
-    },
-    /// Produced by a stream executor over a time window.
-    Streamed {
-        /// Inclusive start of the window.
-        window_start: DateTime<Utc>,
-        /// Exclusive end of the window.
-        window_end: DateTime<Utc>,
     },
 }
 

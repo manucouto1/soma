@@ -416,7 +416,6 @@ class Pbt:
         explore: str = ...,
         fraction: float = ...,
         factor: float = ...,
-        threshold: float = ...,
         train_steps_per_generation: int = ...,
     ) -> Pbt:
         """`exploit` is "truncation" | "binary"; `explore` is "perturbation" | "resample"."""

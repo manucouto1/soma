@@ -262,10 +262,6 @@ impl StrategyExecutor for TrainingStrategy {
                 ))
             }
 
-            TrainingStrategy::Custom { .. } => Err(SomaError::Other(
-                "Custom strategy requires a user-provided coordinator".into(),
-            )),
-
             // `TrainingStrategy` is `#[non_exhaustive]` and now lives in
             // another crate, so this arm cannot be deleted. It refuses
             // rather than falling back to something plausible: running a

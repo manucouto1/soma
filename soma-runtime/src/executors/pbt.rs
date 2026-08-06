@@ -230,7 +230,7 @@ impl PbtRunner {
                 let c = ((n as f64) * fraction).ceil() as usize;
                 c.max(1).min(n / 2)
             }
-            ExploitStrategy::Binary { .. } => n / 2,
+            ExploitStrategy::Binary => n / 2,
             _ => n / 2,
         };
 
@@ -258,7 +258,7 @@ impl PbtRunner {
                     });
                 }
             }
-            ExploitStrategy::Binary { .. } => {
+            ExploitStrategy::Binary => {
                 for i in cutoff..n {
                     *rng_state = hash_u64(*rng_state, i as u64, generation as u64);
                     let opponent = (*rng_state as usize) % cutoff;

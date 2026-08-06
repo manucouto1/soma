@@ -1,13 +1,13 @@
-//! RemoteRunner — executes plans on remote workers via a Transport abstraction.
+//! `Transport` — how a plan reaches a remote worker.
 //!
-//! The Transport trait abstracts HOW to communicate with workers (WS, HTTP, gRPC, etc.).
-//! RemoteRunner implements Runner by serializing fit/forward calls and sending them
-//! through the transport layer.
-
-use super::{RunContext, Runner};
-use crate::node_catalog::NodeCatalog;
+//! The trait abstracts the wire (WebSocket today; HTTP or gRPC would fit
+//! the same shape) and nothing more. There is no `RemoteRunner`: the
+//! second `Runner` implementation that once sat here was constructed by
+//! nothing for its whole life, and the compiler's `ExecutionPlan::Remote`
+//! arm is what actually sends work out.
 
 use crate::executor::RunMode;
+use crate::node_catalog::NodeCatalog;
 use somatize_compiler::ExecutionPlan;
 use somatize_core::error::Result;
 use somatize_core::value::Value;
@@ -27,7 +27,7 @@ pub trait Transport: Send + Sync {
     ///
     /// `seed` is the run's experiment seed, and it is a parameter rather
     /// than something the transport digs out because the transport has no
-    /// [`RunContext`] to dig in. Without it the worker salts nothing, and a
+    /// [`RunContext`](super::RunContext) to dig in. Without it the worker salts nothing, and a
     /// five-seed sweep run remotely shares one cache line across all five —
     /// the worker protocol's `SerializedPlan::seed` documents that as the
     /// bug it exists to close, and this path was still passing `None`.
@@ -56,7 +56,7 @@ pub trait Transport: Send + Sync {
     ///
     /// Unseeded, and it has to be: this takes a node id and nothing else,
     /// so there is no run to take a seed from. Callers that have a
-    /// [`RunContext`] should go through [`Transport::execute`] with
+    /// [`RunContext`](super::RunContext) should go through [`Transport::execute`] with
     /// `ctx.seed` instead of reaching for this.
     fn execute_node(&self, node_id: &str, input: Option<&Value>) -> Result<Value> {
         let plan = ExecutionPlan::Execute {
@@ -65,50 +65,6 @@ pub trait Transport: Send + Sync {
         let input_val = input.cloned().unwrap_or(Value::Empty);
         let filters = crate::node_catalog::NodeCatalog::new();
         let (output, _) = self.execute(&plan, &filters, &input_val, &RunMode::Forward, None)?;
-        Ok(output)
-    }
-}
-
-/// A Runner that delegates execution to a remote worker via Transport.
-pub struct RemoteRunner {
-    transport: Box<dyn Transport>,
-}
-
-impl RemoteRunner {
-    /// A runner sending every fit/forward through `transport`.
-    pub fn new(transport: impl Transport + 'static) -> Self {
-        Self {
-            transport: Box::new(transport),
-        }
-    }
-
-    /// Access the underlying transport (for strategy methods).
-    pub fn transport(&self) -> &dyn Transport {
-        self.transport.as_ref()
-    }
-}
-
-impl Runner for RemoteRunner {
-    fn fit(
-        &self,
-        plan: &ExecutionPlan,
-        ctx: &RunContext<'_>,
-        input: &Value,
-        y: Option<&Value>,
-    ) -> Result<(Value, HashMap<String, Value>)> {
-        self.transport.execute(
-            plan,
-            ctx.catalog,
-            input,
-            &RunMode::Fit { y: y.cloned() },
-            ctx.seed,
-        )
-    }
-
-    fn forward(&self, plan: &ExecutionPlan, ctx: &RunContext<'_>, input: &Value) -> Result<Value> {
-        let (output, _states) =
-            self.transport
-                .execute(plan, ctx.catalog, input, &RunMode::Forward, ctx.seed)?;
         Ok(output)
     }
 }

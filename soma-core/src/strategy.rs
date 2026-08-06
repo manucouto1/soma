@@ -69,17 +69,6 @@ pub enum TrainingStrategy {
         /// How copied hyperparameters are mutated afterwards.
         explore: ExploreStrategy,
     },
-
-    /// User-defined strategy with a registered coordinator.
-    Custom {
-        /// Name identifying the user-provided coordinator. The
-        /// built-in strategy executor refuses this variant outright —
-        /// it never falls back to `Local` — so running it means
-        /// supplying your own coordination logic.
-        coordinator: String,
-        /// Opaque configuration passed through to the coordinator.
-        config: serde_json::Value,
-    },
 }
 
 /// How gradients are aggregated across workers in data-parallel training.
@@ -184,13 +173,9 @@ pub enum ExploitStrategy {
         /// `PbtRunner` clamps it to at most half the population).
         fraction: f64,
     },
-    /// Each member is compared to a random other; loser copies winner.
-    Binary {
-        /// Intended fitness margin the winner must exceed before the
-        /// loser copies it. The current `PbtRunner` copies on any
-        /// strict fitness loss and does not read this field yet.
-        threshold: f64,
-    },
+    /// Each member is compared to a random other; loser copies winner
+    /// on any strict fitness loss.
+    Binary,
 }
 
 /// PBT explore strategy: how hyperparameters are mutated after exploit.

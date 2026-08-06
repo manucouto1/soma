@@ -1,6 +1,6 @@
 //! LocalRunner — executes plans locally using the Executor.
 //!
-//! This is the default runner. The worker's RemoteRunner delegates here
+//! This is the default runner. The worker delegates here
 //! after preparing the environment (deserializing filters, resolving input).
 
 use super::{RunContext, Runner};

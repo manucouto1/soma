@@ -185,7 +185,7 @@ is 2 472 lines of which 1 184 are tests (they start at `:1289`);
 | `soma-runtime/src/study_io.rs` | 96 (41) | `StudyIo` extension trait — `Study::save` / `load` |
 | `soma-runtime/src/runner/mod.rs` | 140 | `RunContext<'a>`, `Runner` trait |
 | `soma-runtime/src/runner/local.rs` | 181 (86) | `LocalRunner` — the only real runner |
-| `soma-runtime/src/runner/remote.rs` | 114 | `Transport` trait, `RemoteRunner` `(!)` |
+| `soma-runtime/src/runner/remote.rs` | 71 | `Transport` trait |
 | `soma-runtime/src/executors/study.rs` | 1 915 (445) | `TrialOutcome`, `TrialContext`, `TrialExecutor`, `StudyRunner` |
 | `soma-runtime/src/executors/stream.rs` | 699 (355) | `StreamRun`, `StreamOutput`, `materialize_buffer` |
 | `soma-runtime/src/executors/pbt.rs` | 465 (349) | `PbtConfig`, `PopulationMember`, `PbtExecutor`, `PbtRunner` |
@@ -225,7 +225,6 @@ pub trait Runner: Send + Sync {
 | Implementor | file:line | Note |
 |---|---|---|
 | `LocalRunner` | `soma-runtime/src/runner/local.rs:60` | The only one used. `walk()` builds a `Context` and calls `executor::execute` |
-| `RemoteRunner` | `soma-runtime/src/runner/remote.rs:91` | `(!)` **never constructed** — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
 
 `(!)` Never used as `dyn Runner` anywhere. Both call sites name `LocalRunner`
 concretely.
@@ -736,7 +735,6 @@ GraphHandler ──◆ NodeCatalog
 - [D-03](/soma/internals/debt/#d-03--context-carries-five-unrelated-concerns) `Context` god object · [D-04](/soma/internals/debt/#d-04--graphsession-has-two-unrelated-transport-fields) two transport fields · [D-07](/soma/internals/debt/#d-07--runreader-is-17-methods-over-one-pathbuf) `RunReader`
 - [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) four `write_atomic`s · [D-13](/soma/internals/debt/#d-13--graphsession-emits-the-run-bracket-four-times) the run bracket ×4
 - [D-22](/soma/internals/debt/#d-22--a-suspension-reason-that-fails-to-serialize-collides-with-every-other-one) suspension key collision
-- [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) `RemoteRunner` dead · [D-36](/soma/internals/debt/#d-36--unreached-methods-and-a-pluggable-seam-with-no-injection-site) unreached methods
 - [D-42](/soma/internals/debt/#d-42--executionplanremote-discards-its-routing-target) `Remote` target discarded · [D-43](/soma/internals/debt/#d-43--strategycontextexecute_on_worker-has-a-dead-json-parameter) dead JSON param · [D-44](/soma/internals/debt/#d-44--resolve_input-falls-back-to-whatever-ran-last) `resolve_input` fallback · [D-46](/soma/internals/debt/#d-46--tieredcache-promotion-destroys-provenance) promotion loses provenance
 - [D-61](/soma/internals/debt/#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) snapshot cost · [D-62](/soma/internals/debt/#d-62--memorycaches-lru-touch-is-on-on-every-read) O(n) LRU · [D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor) reader re-parses · [D-64](/soma/internals/debt/#d-64--studyrunnerrun-is-otrials-in-four-places) O(trials²)
 - [D-71](/soma/internals/debt/#d-71--four-policies-for-a-poisoned-mutex-three-of-them-silent) four mutex-poison policies
@@ -752,7 +750,7 @@ which is the most useful thing a test file name can do.
 |---|---|---|
 | `soma-runtime/tests/agentic_step.rs` | 1 271 | The step-as-node seam: compile, `run_node`, handoffs, suspend/resume, journal replay, spawn fan-out |
 | `soma-runtime/tests/tracking.rs` | 1 175 | `JsonlEventSink` (seq, append, torn-tail repair), `LocalTracker`, `RunReader`, `summarize`, HEAD lineage |
-| `soma-runtime/tests/coverage_boost.rs` | 867 | Explicitly path-coverage-driven: spill, `get_virtual`, state persistence, remote fallback |
+| `soma-runtime/tests/coverage_boost.rs` | 845 | Explicitly path-coverage-driven: `get_virtual`, state persistence, remote fallback |
 | `soma-runtime/tests/integration.rs` | 529 | End-to-end fit → forward → cache hit → invalidation |
 | `soma-runtime/tests/memory_usage.rs` | 462 | A tracking allocator asserting `Batched` and `Stream` do not grow the heap with batch count |
 | `soma-runtime/tests/fit_through_run_node.rs` | 450 | Regression suite for the fit/forward unification |
@@ -761,7 +759,7 @@ which is the most useful thing a test file name can do.
 | `soma-runtime/tests/topology.rs` | 168 | Forward follows graph topology, not plan order — the diamond regression |
 | `soma-runtime/tests/fit_determinism.rs` | 87 | `fit` is reproducible |
 
-**Not covered by anything:** `RemoteRunner` (dead), `TieredCache` promotion
+**Not covered by anything:** `TieredCache` promotion
 provenance, `ModelParallel` against a real transport (unit tests use a mock
 `StrategyContext` at `soma-runtime/src/strategy.rs:996`), and `MemoryCache`
 eviction under concurrent parallel branches.

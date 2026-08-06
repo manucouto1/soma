@@ -115,13 +115,6 @@ pub enum DataRef {
         /// Key the value is cached under.
         cache_key: CacheKey,
     },
-    /// Data available as a stream endpoint
-    Stream {
-        /// URL the stream can be read from.
-        endpoint: String,
-        /// Wire format of the streamed records.
-        format: StreamFormat,
-    },
     /// Data materialized inline (small values only)
     Inline {
         /// The value itself, carried in the reference.
@@ -136,22 +129,6 @@ pub enum DataRef {
         /// AWS region, `None` for endpoints that don't need one.
         region: Option<String>,
     },
-}
-
-/// Stream data format.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum StreamFormat {
-    /// Newline-delimited JSON, one record per line (the default).
-    #[default]
-    JsonLines,
-    /// Comma-separated values.
-    Csv,
-    /// Apache Arrow IPC stream.
-    Arrow,
-    /// Length-prefixed protobuf messages.
-    Protobuf,
 }
 
 /// Storage configuration for an investigation/pipeline.

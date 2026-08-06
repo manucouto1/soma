@@ -2084,7 +2084,6 @@ impl PyGraph {
             T::Federated { .. } => "federated",
             T::ModelParallel { .. } => "model_parallel",
             T::PopulationBased { .. } => "population_based",
-            T::Custom { .. } => "custom",
             _ => "unknown",
         }
         .to_string()

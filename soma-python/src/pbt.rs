@@ -107,7 +107,6 @@ impl PyPbt {
         explore="perturbation",
         fraction=0.25,
         factor=0.2,
-        threshold=0.0,
         train_steps_per_generation=1,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -120,7 +119,6 @@ impl PyPbt {
         explore: &str,
         fraction: f64,
         factor: f64,
-        threshold: f64,
         train_steps_per_generation: usize,
     ) -> PyResult<Self> {
         if population_size == 0 {
@@ -143,7 +141,7 @@ impl PyPbt {
         }
         let exploit = match exploit {
             "truncation" => ExploitStrategy::Truncation { fraction },
-            "binary" => ExploitStrategy::Binary { threshold },
+            "binary" => ExploitStrategy::Binary,
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown exploit {other:?}. Available: truncation, binary"

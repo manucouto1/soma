@@ -137,27 +137,6 @@ pub enum SearchStrategy {
         /// RNG seed for reproducible sampling; `None` derives one.
         seed: Option<u64>,
     },
-
-    /// Successive halving with early stopping. Declared for forward
-    /// compatibility: no sampler implements it yet, and Python's
-    /// `Study.run` rejects it as unsupported.
-    Hyperband {
-        /// Budget (e.g. epochs) a surviving trial may consume.
-        max_resource: usize,
-        /// Fraction of trials kept per halving round (`3` keeps one
-        /// in three).
-        reduction_factor: usize,
-    },
-
-    /// Multi-objective optimization. Declared for forward
-    /// compatibility: no sampler implements it yet — for multiple
-    /// metrics today, scalarize via [`CompositeObjective`].
-    MultiObjective {
-        /// Number of configurations to sample.
-        n_trials: usize,
-        /// The objectives to trade off against each other.
-        objectives: Vec<Objective>,
-    },
 }
 
 impl SearchStrategy {
@@ -167,8 +146,6 @@ impl SearchStrategy {
             Self::Grid { .. } => None, // depends on search space
             Self::Random { n_trials, .. } => Some(*n_trials),
             Self::Bayesian { n_trials, .. } => Some(*n_trials),
-            Self::Hyperband { .. } => None, // depends on brackets
-            Self::MultiObjective { n_trials, .. } => Some(*n_trials),
         }
     }
 }
@@ -197,11 +174,6 @@ pub enum PruningStrategy {
         /// begin.
         n_warmup_steps: usize,
     },
-
-    /// Bracket-based pruning (used with Hyperband). Declared for
-    /// forward compatibility: the `StudyRunner` currently builds no
-    /// pruner for it, so it behaves like [`PruningStrategy::None`].
-    Hyperband,
 }
 
 /// State of a single trial.

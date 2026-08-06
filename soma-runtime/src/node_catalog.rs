@@ -203,17 +203,6 @@ impl NodeCatalog {
     pub fn get_state(&self, node_id: &str) -> Option<Arc<Value>> {
         self.states.get(node_id).ok().flatten()
     }
-
-    /// Drop all stored states (but keep the nodes).
-    pub fn clear_states(&self) {
-        let _ = self.states.clear();
-    }
-
-    /// Access the underlying [`StateStore`] (e.g. to share it across
-    /// sessions or inspect its contents).
-    pub fn state_store(&self) -> &Arc<dyn StateStore> {
-        &self.states
-    }
 }
 
 impl Default for NodeCatalog {
@@ -453,17 +442,5 @@ mod tests {
             .unwrap();
         let state = lib.get_state("a").unwrap();
         assert_eq!(state.as_json().unwrap()["mean"], 5.0);
-    }
-
-    #[test]
-    fn clear_states_keeps_filters() {
-        let mut lib = NodeCatalog::new();
-        lib.register("a", Box::new(DummyFilter { name: "A".into() }));
-        lib.try_set_state("a", Value::Empty).unwrap();
-
-        assert!(lib.get_state("a").is_some());
-        lib.clear_states();
-        assert!(lib.get_state("a").is_none());
-        assert!(lib.get("a").is_some());
     }
 }

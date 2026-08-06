@@ -21,8 +21,7 @@ Soma separates **WHERE** code runs (Runner) from **WHAT** runs (Executor) and **
               ┌──────────┴──────────┐
               │    Runner (WHERE)   │
               ├─────────────────────┤
-              │ LocalRunner         │ ← same machine
-              │ RemoteRunner        │ ← worker via WS
+              │ LocalRunner         │ ← same machine, always
               └──────────┬──────────┘
                          │
               ┌──────────┴──────────┐

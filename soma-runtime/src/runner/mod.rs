@@ -2,7 +2,7 @@
 //!
 //! A [`Runner`] defines the contract for executing plans (fit + forward).
 //! [`LocalRunner`] executes locally using the Executor.
-//! The worker's `RemoteRunner` prepares the environment and delegates to `LocalRunner`.
+//! The worker prepares the environment and delegates to `LocalRunner`.
 
 pub mod local;
 pub mod remote;
@@ -137,4 +137,4 @@ pub trait Runner: Send + Sync {
 }
 
 pub use local::LocalRunner;
-pub use remote::{RemoteRunner, Transport};
+pub use remote::Transport;
