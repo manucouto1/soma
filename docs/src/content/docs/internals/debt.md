@@ -49,7 +49,7 @@ is what keeps those anchors honest.
 | [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | `Transport::execute_node` runs every remote node with an empty catalog and an unsalted key | High |
 | [D-02](#d-02--worker-and-worker-execute_plan) | `Worker::execute_plan`: 324 lines across nine responsibilities | High |
 | [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
-| [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | Four `write_atomic` implementations, two without fsync or unique temp names | Medium |
+| [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | ~~Four `write_atomic` implementations, two without fsync or unique temp names~~ — **Resolved** | Medium |
 | [D-61](#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) | `Context::snapshot` deep-clones the whole value store per parallel branch | Medium |
 
 ---
@@ -289,6 +289,18 @@ right up to the tear.
 
 **Fix shape** One `soma-runtime/src/fsutil.rs` with the strong version; four call
 sites.
+
+**Resolved** `soma-runtime/src/fsutil.rs:31` is the one implementation, plus
+`write_json_atomic` for the JSON callers. Both halves the weak variants were
+missing are load-bearing and now say so in the doc comment: without a unique
+temp name two writers to one directory interleave into the same file and one of
+them renames the mixture into place; without `sync_all` the rename can reach
+the disk before the bytes do, leaving a file that is present, correctly named
+and truncated — which a JSON parser reads happily right up to the tear.
+
+Four tests, one of which is the point: twenty concurrent writes of two distinct
+64 KB payloads to one path, asserting the reader sees one or the other and never
+a mixture.
 
 ### D-13 · `GraphSession` emits the run bracket four times
 

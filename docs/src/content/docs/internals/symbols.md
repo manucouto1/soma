@@ -164,7 +164,7 @@ fails the build rather than quietly misleading a reader.
 | [`FnTrialExecutor`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/study.rs:144` |
 | [`ForwardEnv`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:25` |
 | [`ForwardStrategy`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/execution/forward.rs:40` |
-| [`FsActionStore`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/cache/fs_store.rs:40` |
+| [`FsActionStore`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/cache/fs_store.rs:41` |
 
 ### G
 
@@ -230,7 +230,7 @@ fails the build rather than quietly misleading a reader.
 | [`LlmResponse`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/agentic/effect.rs:330` |
 | [`LlmStep`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/steps.rs:459` |
 | [`LoadMetrics`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/protocol.rs:68` |
-| [`LocalCache`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/cache/local.rs:15` |
+| [`LocalCache`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/cache/local.rs:16` |
 | [`LocalDataStore`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/data/store.rs:218` |
 | [`LocalRunner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/runner/local.rs:15` |
 | [`LocalTracker`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/local_tracker.rs:27` |

@@ -36,6 +36,7 @@ pub mod agentic;
 pub mod cache;
 pub mod distributed;
 pub mod execution;
+pub mod fsutil;
 pub mod optimizer;
 pub mod tracking;
 

@@ -760,7 +760,7 @@ GraphHandler ──◆ NodeCatalog
 - **Decorator** — `TieredCache` is a `CacheStore` of `CacheStore`s that promotes on read.
 - **Callback adapter** — `FnTrialExecutor<F>`, `FnPbtExecutor<T, E>`.
 - **Scoped-thread fan-out** — three sites, no async runtime, rationale at `soma-runtime/src/agentic/mod.rs:12`.
-- **Two-phase commit** — temp + fsync + rename in four places (two of them weaker `(!)`).
+- **Two-phase commit** — temp + fsync + rename, once, in `soma-runtime/src/fsutil.rs:31`.
 - **Forward-compatible refusal** — unknown variants return an error naming the situation rather than guessing. Applied consistently; a genuine strength.
 
 ### Debt
@@ -772,7 +772,7 @@ GraphHandler ──◆ NodeCatalog
 
 **Medium**
 - [D-03](/soma/internals/debt/#d-03--context-carries-five-unrelated-concerns) `Context` god object · [D-04](/soma/internals/debt/#d-04--graphsession-has-two-unrelated-transport-fields) two transport fields · [D-07](/soma/internals/debt/#d-07--runreader-is-17-methods-over-one-pathbuf) `RunReader`
-- [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) four `write_atomic`s · ~~[D-13](/soma/internals/debt/#d-13--graphsession-emits-the-run-bracket-four-times) the run bracket ×4~~ resolved
+- ~~[D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) four `write_atomic`s~~ · ~~[D-13](/soma/internals/debt/#d-13--graphsession-emits-the-run-bracket-four-times) the run bracket ×4~~ — both resolved
 - [D-22](/soma/internals/debt/#d-22--a-suspension-reason-that-fails-to-serialize-collides-with-every-other-one) suspension key collision
 - [D-42](/soma/internals/debt/#d-42--executionplanremote-discards-its-routing-target) `Remote` target discarded · [D-43](/soma/internals/debt/#d-43--strategycontextexecute_on_worker-has-a-dead-json-parameter) dead JSON param · [D-44](/soma/internals/debt/#d-44--resolve_input-falls-back-to-whatever-ran-last) `resolve_input` fallback · [D-46](/soma/internals/debt/#d-46--tieredcache-promotion-destroys-provenance) promotion loses provenance
 - [D-61](/soma/internals/debt/#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) snapshot cost · [D-62](/soma/internals/debt/#d-62--memorycaches-lru-touch-is-on-on-every-read) O(n) LRU · [D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor) reader re-parses · [D-64](/soma/internals/debt/#d-64--studyrunnerrun-is-otrials-in-four-places) O(trials²)

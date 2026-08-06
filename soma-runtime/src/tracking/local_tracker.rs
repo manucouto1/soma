@@ -50,8 +50,8 @@ impl LocalTracker {
         if kind == RunKind::Study {
             manifest.study_path = Some(STUDY_FILE.to_string());
         }
-        atomic_write_json(&dir.join(MANIFEST_FILE), &manifest)?;
-        atomic_write_json(&dir.join(STATUS_FILE), &RunStatus::running())?;
+        crate::fsutil::write_json_atomic(&dir.join(MANIFEST_FILE), &manifest)?;
+        crate::fsutil::write_json_atomic(&dir.join(STATUS_FILE), &RunStatus::running())?;
 
         let sink = JsonlEventSink::create(
             &dir.join(EVENTS_FILE),
@@ -78,7 +78,7 @@ impl LocalTracker {
             FLUSH_EVERY,
             start_seq,
         )?;
-        atomic_write_json(&dir.join(STATUS_FILE), &RunStatus::running())?;
+        crate::fsutil::write_json_atomic(&dir.join(STATUS_FILE), &RunStatus::running())?;
         Ok(Self {
             run_id: manifest.run_id,
             dir,
@@ -101,7 +101,7 @@ impl Tracker for LocalTracker {
     }
 
     fn save_manifest(&self, manifest: &RunManifest) -> Result<()> {
-        atomic_write_json(&self.dir.join(MANIFEST_FILE), manifest)
+        crate::fsutil::write_json_atomic(&self.dir.join(MANIFEST_FILE), manifest)
     }
 
     fn save_artifact(&self, rel_path: &str, bytes: &[u8]) -> Result<()> {
@@ -114,7 +114,7 @@ impl Tracker for LocalTracker {
     }
 
     fn save_study(&self, study: &Study) -> Result<()> {
-        atomic_write_json(&self.dir.join(STUDY_FILE), study)
+        crate::fsutil::write_json_atomic(&self.dir.join(STUDY_FILE), study)
     }
 
     fn heartbeat(&self) -> Result<()> {
@@ -122,7 +122,7 @@ impl Tracker for LocalTracker {
         let now = Utc::now();
         status.heartbeat_at = Some(now);
         status.updated_at = now;
-        atomic_write_json(&self.dir.join(STATUS_FILE), &status)
+        crate::fsutil::write_json_atomic(&self.dir.join(STATUS_FILE), &status)
     }
 
     fn finalize(&self, state: RunState) -> Result<()> {
@@ -134,7 +134,7 @@ impl Tracker for LocalTracker {
             heartbeat_at: Some(now),
             finished_at: Some(now),
         };
-        atomic_write_json(&self.dir.join(STATUS_FILE), &status)
+        crate::fsutil::write_json_atomic(&self.dir.join(STATUS_FILE), &status)
     }
 }
 
@@ -207,17 +207,6 @@ fn new_run_id(kind: RunKind) -> String {
         Utc::now().format("%Y%m%dT%H%M%S"),
         (nanos & 0xffff) as u16
     )
-}
-
-/// Write JSON via tmp file + rename so readers never observe a partial
-/// file and a crash mid-write preserves the previous version.
-fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
-    let json =
-        serde_json::to_vec_pretty(value).map_err(|e| SomaError::Serialization(e.to_string()))?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, &json)?;
-    fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 /// Prepare the events log for appending: a crash mid-write leaves a

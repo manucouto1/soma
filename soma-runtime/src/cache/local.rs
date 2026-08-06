@@ -1,6 +1,7 @@
 //! [`LocalCache`] — filesystem-backed [`CacheStore`] with sharded
 //! directories and atomic writes.
 
+use crate::fsutil::write_atomic;
 use chrono::Utc;
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta, Origin};
 use somatize_core::data::value::Value;
@@ -60,35 +61,6 @@ impl LocalCache {
         Ok(())
     }
 
-    /// Write `data` to `path` atomically: temp file in the same directory
-    /// → fsync → rename. A crash mid-write leaves only an orphan temp
-    /// file (never read back: lookups go through the exact entry path),
-    /// so entry existence is the commit point. Renames are idempotent,
-    /// which makes concurrent same-key writers from multiple processes
-    /// safe on POSIX filesystems.
-    fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
-        use std::io::Write;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
-
-        let parent = path
-            .parent()
-            .ok_or_else(|| SomaError::Cache("cache path has no parent".into()))?;
-        fs::create_dir_all(parent)?;
-        let seq = WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
-        let tmp = path.with_extension(format!("tmp-{}-{seq}", std::process::id()));
-        {
-            let mut f = fs::File::create(&tmp)?;
-            f.write_all(data)?;
-            f.sync_all()?;
-        }
-        if let Err(e) = fs::rename(&tmp, path) {
-            let _ = fs::remove_file(&tmp);
-            return Err(e.into());
-        }
-        Ok(())
-    }
-
     fn write_entry(&self, key: &CacheKey, value: &Value, origin: &Origin) -> Result<()> {
         let data = serde_json::to_string(value)
             .map_err(|e| SomaError::Cache(format!("serialize error: {e}")))?;
@@ -106,8 +78,8 @@ impl LocalCache {
         };
         let meta_data = serde_json::to_string(&meta)
             .map_err(|e| SomaError::Cache(format!("meta serialize error: {e}")))?;
-        Self::write_atomic(&self.meta_path(key), meta_data.as_bytes())?;
-        Self::write_atomic(&self.key_path(key), data.as_bytes())?;
+        write_atomic(&self.meta_path(key), meta_data.as_bytes())?;
+        write_atomic(&self.key_path(key), data.as_bytes())?;
         Ok(())
     }
 }

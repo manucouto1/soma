@@ -109,7 +109,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `search` | `soma-python/python/soma/__init__.py` |  | 45 | 19 | 149 | 2 | 47 |
 | `experiments` | `soma-python/python/soma/__init__.py` |  | 25 | 7 | 36 | 4 | 20 |
 | `checkout` | `soma-python/python/soma/__init__.py` |  | 4 | 3 | 12 | 2 | 7 |
-| `head` | `soma-python/python/soma/__init__.py` |  | 30 | 13 | 17 | 12 | 23 |
+| `head` | `soma-python/python/soma/__init__.py` |  | 30 | 13 | 16 | 12 | 23 |
 | `detach` | `soma-python/python/soma/__init__.py` |  | 11 | 4 | 9 | 5 | 11 |
 | `reindex` | `soma-python/python/soma/__init__.py` |  | 2 | 2 | 9 | 0 | 5 |
 | `find_similar` | `soma-python/python/soma/__init__.py` |  | 5 | 2 | 7 | 3 | 6 |

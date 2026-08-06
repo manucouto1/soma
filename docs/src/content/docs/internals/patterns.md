@@ -233,14 +233,15 @@ philosophy rather than one clever file:
 
 ### Two-phase / atomic commit
 
-Temp file → `write_all` → `sync_all` → `rename`, at
-`soma-runtime/src/cache/local.rs:69`, `cache/fs_store.rs:232`,
-`tracking/local_tracker.rs:214` and `tracking/head.rs:46`. `FsActionStore` also
-commits blob-first, record-last (`soma-runtime/src/cache/fs_store.rs:194`), so a
-crash can leave an unreferenced blob but never a record pointing at nothing.
+Temp file → `write_all` → `sync_all` → `rename`, once, at
+`soma-runtime/src/fsutil.rs:31`; the four callers are the cache's blob and
+action stores, the run manifest and HEAD. `FsActionStore` also commits
+blob-first, record-last (`soma-runtime/src/cache/fs_store.rs:195`), so a crash
+can leave an unreferenced blob but never a record pointing at nothing.
 
-`(!)` Four implementations, two of them weaker —
-[D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe).
+It was four implementations, two of them missing the unique temp name and the
+fsync — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe),
+now resolved.
 
 ### Content-addressed pooling
 
@@ -444,6 +445,6 @@ short version, organized by which pattern failed.
 | Shared primitives | `run_node` and `StreamRun::run_compute` share three primitives and duplicate everything around them, and have drifted — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |
 | Newtype | Not applied to any id type — [D-56](/soma/internals/debt/#d-56--nodeid-is-a-string-and-so-is-everything-else) |
 | Builder | Three wide structs skipped it — [D-06](/soma/internals/debt/#d-06--wide-data-structs-with-no-builder) |
-| Atomic commit | Four implementations, two without fsync — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) |
+| Atomic commit | Was four implementations, two without fsync; now one — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) |
 | Decorator | `TieredCache` promotion discards the provenance it decorates — [D-46](/soma/internals/debt/#d-46--tieredcache-promotion-destroys-provenance) |
 | Facade | `soma` covers 10 of 13 crates — [D-83](/soma/internals/debt/#d-83--the-facade-covers-10-of-13-crates) |
