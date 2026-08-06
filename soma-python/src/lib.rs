@@ -78,10 +78,7 @@ use crate::prelude::*;
 use crate::tracking::readers::{
     checkout_run, clear_head_run, graph_json_to_mermaid, graph_json_to_svg, kb_diff_json,
     kb_find_similar_json, kb_lineage_json, kb_record_conclusion, kb_reindex, list_runs_json,
-    read_head_run, run_agentic_activity_json, run_agentic_timeline_json, run_cache_activity_json,
-    run_events_json, run_health_flags_json, run_info_json, run_manifest_json,
-    run_metric_series_json, run_node_timings_json, run_overlay_json, run_summary_json,
-    run_to_mermaid, run_to_svg, run_trial_timeline_json,
+    read_head_run, run_sections_json, run_summary_json, run_to_mermaid, run_to_svg,
 };
 use crate::tracking::run::PyRun;
 
@@ -193,6 +190,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache_purge_v1, m)?)?;
     m.add_function(wrap_pyfunction!(list_runs_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_summary_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_sections_json, m)?)?;
     m.add_function(wrap_pyfunction!(checkout_run, m)?)?;
     m.add_function(wrap_pyfunction!(read_head_run, m)?)?;
     m.add_function(wrap_pyfunction!(clear_head_run, m)?)?;
@@ -201,17 +199,6 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(kb_record_conclusion, m)?)?;
     m.add_function(wrap_pyfunction!(kb_lineage_json, m)?)?;
     m.add_function(wrap_pyfunction!(kb_diff_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_info_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_manifest_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_events_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_metric_series_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_node_timings_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_cache_activity_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_health_flags_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_trial_timeline_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_agentic_activity_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_agentic_timeline_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_overlay_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(graph_json_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(graph_json_to_svg, m)?)?;

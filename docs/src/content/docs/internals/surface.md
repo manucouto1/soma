@@ -55,10 +55,10 @@ They are rendered from `notebooks/`, and counting both doubles every number.
 |---|---|
 | Exported names across the four modules | 92 |
 | Methods on the extension classes | 134 |
-| Free functions in `soma._soma` | 33 |
+| Free functions in `soma._soma` | 23 |
 | Literal aliases | 0 |
 | Named by no user, and by nothing in the package either | 5 |
-| Named by no user, but live inside the package | 14 |
+| Named by no user, but live inside the package | 4 |
 
 **Unused** — nothing in tests, notebooks, docs, examples or the package
 itself names these. Dunders are excluded, since no grep can see `len(g)`
@@ -77,16 +77,6 @@ on the public module and carry its maintenance cost while serving one caller:
 - `soma.viz.study_to_html` — 4 uses inside the package
 - `Graph.set_node_state` — 2 uses inside the package
 - `Graph.mark_fitted` — 2 uses inside the package
-- `_soma.run_agentic_activity_json` — 2 uses inside the package
-- `_soma.run_agentic_timeline_json` — 2 uses inside the package
-- `_soma.run_cache_activity_json` — 2 uses inside the package
-- `_soma.run_events_json` — 2 uses inside the package
-- `_soma.run_health_flags_json` — 2 uses inside the package
-- `_soma.run_info_json` — 3 uses inside the package
-- `_soma.run_manifest_json` — 2 uses inside the package
-- `_soma.run_metric_series_json` — 2 uses inside the package
-- `_soma.run_node_timings_json` — 2 uses inside the package
-- `_soma.run_trial_timeline_json` — 2 uses inside the package
 
 
 ### Exported names
@@ -97,7 +87,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
 | `Graph` | `soma-python/python/soma/__init__.py` |  | 337 | 71 | 260 | 32 | 121 |
-| `Agent` | `soma-python/python/soma/__init__.py` |  | 47 | 17 | 47 | 5 | 12 |
+| `Agent` | `soma-python/python/soma/__init__.py` |  | 47 | 17 | 47 | 5 | 11 |
 | `SomaSuspended` | `soma-python/python/soma/__init__.py` |  | 5 | 3 | 6 | 0 | 4 |
 | `SomaPruned` | `soma-python/python/soma/__init__.py` |  | 0 | 0 | 1 | 0 | 3 |
 | `SomaSchemaMismatch` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 3 | 0 | 3 |
@@ -112,7 +102,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `Run` | `soma-python/python/soma/__init__.py` |  | 6 | 0 | 38 | 7 | 14 |
 | `Pbt` | `soma-python/python/soma/__init__.py` |  | 10 | 0 | 7 | 0 | 5 |
 | `Study` | `soma-python/python/soma/__init__.py` |  | 85 | 20 | 100 | 1 | 29 |
-| `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 39 | 0 | 13 |
+| `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 39 | 0 | 12 |
 | `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 59 | 4 | 7 |
 | `Filter` | `soma-python/python/soma/__init__.py` |  | 111 | 49 | 140 | 20 | 32 |
 | `DifferentiableFilter` | `soma-python/python/soma/__init__.py` |  | 39 | 8 | 23 | 7 | 19 |
@@ -126,8 +116,8 @@ on the public module and carry its maintenance cost while serving one caller:
 | `record_conclusion` | `soma-python/python/soma/__init__.py` |  | 2 | 1 | 6 | 1 | 4 |
 | `lineage` | `soma-python/python/soma/__init__.py` |  | 4 | 7 | 23 | 9 | 4 |
 | `diff` | `soma-python/python/soma/__init__.py` |  | 9 | 1 | 16 | 5 | 9 |
-| `runs` | `soma-python/python/soma/__init__.py` |  | 74 | 37 | 145 | 13 | 54 |
-| `RunView` | `soma-python/python/soma/__init__.py` |  | 21 | 14 | 18 | 9 | 20 |
+| `runs` | `soma-python/python/soma/__init__.py` |  | 74 | 37 | 145 | 13 | 53 |
+| `RunView` | `soma-python/python/soma/__init__.py` |  | 25 | 14 | 19 | 9 | 20 |
 | `experiments_dataframe` | `soma-python/python/soma/__init__.py` |  | 2 | 1 | 3 | 2 | 5 |
 | `__version__` | `soma-python/python/soma/__init__.py` |  | 1 | 3 | 0 | 0 | 5 |
 | `Audit` | `soma-python/python/soma/__init__.py` |  | 4 | 1 | 9 | 1 | 18 |
@@ -337,7 +327,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
 | `id` | `soma-python/src/tracking/run.rs:26` | property, read-only | 19 | 3 | 33 | 1 | 14 |
-| `dir` | `soma-python/src/tracking/run.rs:32` | property, read-only | 41 | 8 | 0 | 9 | 14 |
+| `dir` | `soma-python/src/tracking/run.rs:32` | property, read-only | 44 | 8 | 0 | 9 | 14 |
 | `log` | `soma-python/src/tracking/run.rs:38` |  | 20 | 5 | 4 | 6 | 2 |
 | `log_epoch` | `soma-python/src/tracking/run.rs:58` |  | 1 | 1 | 1 | 0 | 1 |
 | `log_epoch_completed` | `soma-python/src/tracking/run.rs:70` |  | 1 | 0 | 0 | 0 | 0 |
@@ -393,7 +383,7 @@ on the public module and carry its maintenance cost while serving one caller:
 
 ### Free functions in `soma._soma`
 
-33 functions, 9 classes and 5 values are registered on the extension module.
+23 functions, 9 classes and 5 values are registered on the extension module.
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
@@ -415,18 +405,8 @@ on the public module and carry its maintenance cost while serving one caller:
 | `models` | `soma-python/src/lib.rs` |  | 1 | 4 | 20 | 2 | 6 |
 | `providers` | `soma-python/src/lib.rs` |  | 17 | 7 | 15 | 0 | 9 |
 | `read_head_run` | `soma-python/src/lib.rs` |  | 0 | 0 | 1 | 0 | 3 |
-| `run_agentic_activity_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_agentic_timeline_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_cache_activity_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_events_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_health_flags_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_info_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 3 |
-| `run_manifest_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_metric_series_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_node_timings_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
-| `run_overlay_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 1 | 0 | 2 |
+| `run_sections_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 2 | 0 | 3 |
 | `run_summary_json` | `soma-python/src/lib.rs` |  | 1 | 0 | 1 | 0 | 1 |
 | `run_to_mermaid` | `soma-python/src/lib.rs` |  | 0 | 0 | 2 | 0 | 3 |
 | `run_to_svg` | `soma-python/src/lib.rs` |  | 0 | 0 | 1 | 0 | 2 |
-| `run_trial_timeline_json` | `soma-python/src/lib.rs` |  | 0 | 0 | 0 | 0 | 2 |
 | `tool` | `soma-python/src/lib.rs` |  | 32 | 9 | 65 | 9 | 16 |

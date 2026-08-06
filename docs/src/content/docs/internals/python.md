@@ -200,7 +200,7 @@ It also means every `RunView` property pays a serialize→parse round trip —
 |---|---|
 | `soma-python/src/agentic.rs` | `tool` `:1147`, `providers` `:1179`, `models` `:1200` |
 | `soma-python/src/cache.rs` | `cache_stats` `:24`, `cache_gc` `:64`, `cache_pin` `:89`, `cache_verify` `:109`, `cache_purge_v1` `:146` |
-| `soma-python/src/tracking/readers.rs` | 24 functions: 4 run/HEAD (`run_summary_json` `:38`, `checkout_run` `:51`, `read_head_run` `:59`, `clear_head_run` `:66`), 5 knowledge-base (`kb_find_similar_json` `:85`, `kb_record_conclusion` `:144`, `kb_lineage_json` `:176`, `kb_diff_json` `:196`, `kb_reindex` `:220`), 11 run readers (`list_runs_json` `:271` … `run_overlay_json` `:373`), 4 renderers (`run_to_mermaid` `:383`, `graph_json_to_mermaid` `:403`, `graph_json_to_svg` `:420`, `run_to_svg` `:436`) |
+| `soma-python/src/tracking/readers.rs` | 15 functions: 4 run/HEAD (`run_summary_json` `:38`, `checkout_run` `:52`, `read_head_run` `:60`, `clear_head_run` `:67`), 5 knowledge-base (`kb_find_similar_json` `:85`, `kb_record_conclusion` `:145`, `kb_lineage_json` `:177`, `kb_diff_json` `:197`, `kb_reindex` `:221`), 2 listing/sections (`list_runs_json` `:272`, `run_sections_json` `:297` — the twelve one-caller readers collapsed into it, closing [D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor)), 4 renderers (`run_to_mermaid` `:335`, `graph_json_to_mermaid` `:355`, `graph_json_to_svg` `:372`, `run_to_svg` `:388`) |
 
 ### Conversions across the boundary
 
@@ -402,7 +402,7 @@ the last column.
 | Knowledge-base retrieval | `readers.rs:85` | `_lineage.py:62` — a thin `json.loads` | ✅ on the Python side; ❌ `readers.rs` duplicates `soma-mcp` — [D-16](/soma/internals/debt/#d-16--two-knowledge-base-front-ends-already-divergent) |
 | Search dimension | `parse_py_search_dim` (`soma-python/src/optimizer/study.rs:16`), `searchable` (`soma-python/src/agentic.rs:212`) | `SearchDescriptor` + `search()` (`search.py:4`) | ❌ **Three** encodings, counting `_searchable` inside the MCP driver string (`soma-mcp/src/exec.rs:96`) |
 | Step/effect vocabulary | `Transition`, `Effect` enums | 11 dict constructors (`agentic.py:123`) | ❌ Kept in sync **by string literals only** — [D-54](/soma/internals/debt/#d-54--nine-string-match-dispatch-sites-across-the-ffi) |
-| Graph rendering | `PyGraph::to_mermaid` `:1836`, `run_to_mermaid` (`readers.rs:382`), `graph_json_to_mermaid` (`readers.rs:435`) | `_runs.py:151`/`:233`/`:238` plus `_inner_overlay` `:178` | ❌ Three entry points into one renderer, with overlay assembly on both sides |
+| Graph rendering | `PyGraph::to_mermaid` `:1836`, `run_to_mermaid` (`readers.rs:335`), `graph_json_to_mermaid` (`readers.rs:435`) | `_runs.py:151`/`:233`/`:238` plus `_inner_overlay` `:178` | ❌ Three entry points into one renderer, with overlay assembly on both sides |
 | Report rendering | `soma-mcp/src/render.rs` — Markdown for models | `viz/_report.py` — HTML for humans | ⚠️ Different audiences, but three duration formatters between them — [D-15](/soma/internals/debt/#d-15--five-formatters-for-a-duration-two-for-a-truncation) |
 | Training strategy | `TrainingStrategy` enum | `set_strategy(kind: str, …)` / `strategy() -> str` | ❌ Lossy round trip — [D-55](/soma/internals/debt/#d-55--set_strategy--strategy-is-a-lossy-round-trip) |
 | Study | `PyStudy` (`subclass`) | `class Study(_Study)` adding 8 plot methods | ✅ Mirrored for plotting only |

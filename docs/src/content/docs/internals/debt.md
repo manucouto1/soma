@@ -907,6 +907,19 @@ single summary is **five full reads and five full JSON parses of the same file**
 **Fix shape** Parse once into a `Vec<EventEnvelope>` and have the accessors take
 a slice.
 
+**Resolved, in both halves.** The reader memoizes: `RunReader` holds a
+`OnceCell<Vec<EventEnvelope>>`, `events()` clones from it, and every aggregate
+folds over the slice. A `summarize` is one read and one parse. The memo is
+per reader, so a reader is a snapshot — a run still being written needs a
+fresh one, which is what every caller already constructs.
+
+The Python half was the same bug in another shape: twelve `run_*_json`
+functions, one caller each, **each opening its own reader**. Those are one
+`run_sections_json(dir, sections)` now, so a `RunView` reading three
+aggregates is one call and one parse rather than three of each. Twelve FFI
+names became one, which is also why this entry appears in the surface census
+as eleven fewer symbols.
+
 ### D-64 · `StudyRunner::run` is O(trials²) in four places
 
 **Class** Performance · **Severity** Medium · **Crate** `soma-runtime`

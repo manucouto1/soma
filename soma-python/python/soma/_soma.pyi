@@ -677,41 +677,17 @@ def kb_diff_json(a: str, b: str, root: str = ...) -> str:
 
 # ── Reading a run directory ─────────────────────────────────────────
 
-def run_info_json(dir: str) -> str:
-    """Identity and derived state for one run."""
+def run_sections_json(
+    dir: str, sections: list[str], metric: str | None = ...
+) -> str:
+    """Every named aggregate of one run, from one reader, as one JSON object.
 
-def run_manifest_json(dir: str) -> str:
-    """The run's manifest."""
+    Replaced twelve `run_*_json` functions with one caller each. `metric`
+    filters the `"metric_series"` section and is ignored by the rest. An
+    unknown section name is a `ValueError`, not an omission."""
 
 def run_summary_json(dir: str) -> str:
     """One run folded down: identity, cost, metrics, conclusion."""
-
-def run_events_json(dir: str) -> str:
-    """Every parseable event, in log order."""
-
-def run_metric_series_json(dir: str, name: str | None = ...) -> str:
-    """Metric time series, optionally just one."""
-
-def run_node_timings_json(dir: str) -> str:
-    """Per-node execution spans."""
-
-def run_cache_activity_json(dir: str) -> str:
-    """Hits and misses, total and per node."""
-
-def run_health_flags_json(dir: str) -> str:
-    """Health flags with their wall time."""
-
-def run_trial_timeline_json(dir: str) -> str:
-    """Trial lifetimes. Empty for a run that is not a study."""
-
-def run_agentic_activity_json(dir: str) -> str:
-    """Agent-step activity per node: turns, tokens, effects, tools."""
-
-def run_agentic_timeline_json(dir: str) -> str:
-    """Per-effect execution spans for agent runs."""
-
-def run_overlay_json(dir: str) -> str:
-    """This run's events folded into a rendering overlay."""
 
 # ── Diagrams ────────────────────────────────────────────────────────
 

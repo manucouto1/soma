@@ -62,8 +62,8 @@ fails the build rather than quietly misleading a reader.
 | [`ActionCache`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/cache/action.rs:134` |
 | [`ActionResult`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/cache/action.rs:110` |
 | [`AgentCost`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/summary.rs:121` |
-| [`AgenticActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:149` |
-| [`AgentNodeActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:181` |
+| [`AgenticActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:158` |
+| [`AgentNodeActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:190` |
 | [`ArchitectureFingerprint`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/fingerprint.rs:36` |
 | [`AsAny`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/graph/any.rs:13` |
 | [`Assignment`](/soma/internals/execution/#soma-compiler-somatize-compiler) | struct | `soma-compiler` | `soma-compiler/src/scheduler.rs:57` |
@@ -81,7 +81,7 @@ fails the build rather than quietly misleading a reader.
 
 | Symbol | Kind | Crate | Defined at |
 |---|---|---|---|
-| [`CacheActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:89` |
+| [`CacheActivity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:98` |
 | [`CacheKey`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/cache/mod.rs:21` |
 | [`CacheStore`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/cache/mod.rs:198` |
 | [`CacheTier`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/cache/mod.rs:153` |
@@ -131,7 +131,7 @@ fails the build rather than quietly misleading a reader.
 | [`EffectJournal`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/agentic/journal.rs:51` |
 | [`EffectResult`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/agentic/effect.rs:278` |
 | [`EffectSite`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/agentic/journal.rs:36` |
-| [`EffectSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:218` |
+| [`EffectSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:227` |
 | [`Embedder`](/soma/internals/agentic/#soma-memory-somatize-memory) | «trait» | `soma-memory` | `soma-memory/src/retrieval.rs:64` |
 | [`Embedding`](/soma/internals/agentic/#soma-memory-somatize-memory) | struct | `soma-memory` | `soma-memory/src/record.rs:43` |
 | [`EntryMeta`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/cache/mod.rs:179` |
@@ -190,7 +190,7 @@ fails the build rather than quietly misleading a reader.
 | Symbol | Kind | Crate | Defined at |
 |---|---|---|---|
 | [`HashAlgo`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/cache/action.rs:32` |
-| [`HealthFlagRecord`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:130` |
+| [`HealthFlagRecord`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:139` |
 
 ### I
 
@@ -248,7 +248,7 @@ fails the build rather than quietly misleading a reader.
 | [`Message`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/agentic/message.rs:137` |
 | [`Messages`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/agentic/message.rs:189` |
 | [`MetricDelta`](/soma/internals/agentic/#soma-memory-somatize-memory) | struct | `soma-memory` | `soma-memory/src/derivation.rs:161` |
-| [`MetricPoint`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:111` |
+| [`MetricPoint`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:120` |
 | [`MetricRecord`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/event.rs:24` |
 | [`ModelInfo`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/lib.rs:57` |
 
@@ -257,7 +257,7 @@ fails the build rather than quietly misleading a reader.
 | Symbol | Kind | Crate | Defined at |
 |---|---|---|---|
 | [`Node`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/graph/mod.rs:74` |
-| [`NodeCacheCounts`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:100` |
+| [`NodeCacheCounts`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:109` |
 | [`NodeCatalog`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/node_catalog.rs:79` |
 | [`NodeCost`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/summary.rs:65` |
 | [`NodeImpl`](/soma/internals/execution/#soma-runtime-somatize-runtime) | enum | `soma-runtime` | `soma-runtime/src/execution/node_catalog.rs:37` |
@@ -266,7 +266,7 @@ fails the build rather than quietly misleading a reader.
 | [`NodeOutcome`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/graph/node.rs:44` |
 | [`NodeOverlay`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/viz/mod.rs:35` |
 | [`NodeRegistry`](/soma/internals/execution/#soma-compiler-somatize-compiler) | «trait» | `soma-compiler` | `soma-compiler/src/compiler.rs:65` |
-| [`NodeSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:66` |
+| [`NodeSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:75` |
 | [`NodeSpec`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/agentic/effect.rs:450` |
 | [`NodeStatus`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/viz/mod.rs:22` |
 
@@ -333,13 +333,13 @@ fails the build rather than quietly misleading a reader.
 | [`Router`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/lib.rs:93` |
 | [`RunConclusion`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/summary.rs:157` |
 | [`RunContext`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/runner/mod.rs:32` |
-| [`RunInfo`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:42` |
+| [`RunInfo`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:51` |
 | [`RunKind`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/tracking/mod.rs:31` |
 | [`RunManifest`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/mod.rs:97` |
 | [`RunMode`](/soma/internals/execution/#soma-runtime-somatize-runtime) | enum | `soma-runtime` | `soma-runtime/src/execution/executor.rs:91` |
 | [`Runner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/execution/runner/mod.rs:124` |
 | [`RunOutcome`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/tracking/summary.rs:27` |
-| [`RunReader`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:36` |
+| [`RunReader`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:44` |
 | [`RunState`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/tracking/mod.rs:50` |
 | [`RunStatus`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/mod.rs:197` |
 | [`RunSummary`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/summary.rs:331` |
@@ -412,7 +412,7 @@ fails the build rather than quietly misleading a reader.
 | [`TrialExecutor`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/optimizer/study.rs:133` |
 | [`TrialMetricHistory`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/pruner.rs:25` |
 | [`TrialOutcome`](/soma/internals/execution/#soma-runtime-somatize-runtime) | enum | `soma-runtime` | `soma-runtime/src/optimizer/study.rs:24` |
-| [`TrialSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:241` |
+| [`TrialSpan`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/tracking/reader.rs:250` |
 | [`TrialState`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/optimizer/study.rs:182` |
 | [`TrialSummary`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/tracking/summary.rs:138` |
 

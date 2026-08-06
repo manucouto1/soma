@@ -275,106 +275,58 @@ pub(crate) fn list_runs_json(root: String) -> PyResult<String> {
     to_json_py(&infos)
 }
 
-/// Listing entry (manifest identity + derived state) for one run dir.
+/// Every aggregate a `RunView` can ask for, from one reader, in one call.
+///
+/// This replaced twelve `run_*_json` functions that had exactly one caller
+/// each — the twelve accessors of `RunView`, which is what made them
+/// plumbing rather than an API. Twelve FFI names for one object's fields is
+/// twelve things to keep in the `#[pymodule]`, in the stub, and in the
+/// census.
+///
+/// The saving is not only the names. Each of those functions opened its own
+/// [`RunReader`], and each reader parsed `events.jsonl` for itself, so a
+/// `RunView` that read three sections read and parsed the file three times.
+/// One reader now parses once and every section folds over the same
+/// envelopes — the second half of D-63, whose first half is the memo inside
+/// the reader.
+///
+/// Unknown section names are an error rather than a silent omission: a typo
+/// that returns `{}` looks exactly like a run with nothing in it.
 #[pyfunction]
-pub(crate) fn run_info_json(dir: String) -> PyResult<String> {
-    let info = open_run_reader(&dir)?
-        .info()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&info)
-}
-
-/// The run's manifest.json contents.
-#[pyfunction]
-pub(crate) fn run_manifest_json(dir: String) -> PyResult<String> {
-    let manifest = open_run_reader(&dir)?
-        .manifest()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&manifest)
-}
-
-/// All parseable event envelopes from events.jsonl, in log order.
-#[pyfunction]
-pub(crate) fn run_events_json(dir: String) -> PyResult<String> {
-    let events = open_run_reader(&dir)?
-        .events()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&events)
-}
-
-/// Metric time series (optionally filtered by name).
-#[pyfunction]
-#[pyo3(signature = (dir, name=None))]
-pub(crate) fn run_metric_series_json(dir: String, name: Option<String>) -> PyResult<String> {
-    let points = open_run_reader(&dir)?
-        .metric_series(name.as_deref())
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&points)
-}
-
-/// Per-node execution spans (gantt/overlay substrate).
-#[pyfunction]
-pub(crate) fn run_node_timings_json(dir: String) -> PyResult<String> {
-    let spans = open_run_reader(&dir)?
-        .node_timings()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&spans)
-}
-
-/// Cache hit/miss counts, total and per node.
-#[pyfunction]
-pub(crate) fn run_cache_activity_json(dir: String) -> PyResult<String> {
-    let activity = open_run_reader(&dir)?
-        .cache_activity()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&activity)
-}
-
-/// HealthFlag events with wall time.
-#[pyfunction]
-pub(crate) fn run_health_flags_json(dir: String) -> PyResult<String> {
-    let flags = open_run_reader(&dir)?
-        .health_flags()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&flags)
-}
-
-/// Trial lifetimes from study.json (empty for non-study runs).
-#[pyfunction]
-pub(crate) fn run_trial_timeline_json(dir: String) -> PyResult<String> {
-    let spans = open_run_reader(&dir)?
-        .trial_timeline()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&spans)
-}
-
-/// Agent-level activity aggregated per step node (turns, tokens,
-/// effects by label, tool calls, suspensions).
-#[pyfunction]
-pub(crate) fn run_agentic_activity_json(dir: String) -> PyResult<String> {
-    let activity = open_run_reader(&dir)?
-        .agentic_activity()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&activity)
-}
-
-/// Per-effect execution spans (the gantt substrate for agent runs).
-#[pyfunction]
-pub(crate) fn run_agentic_timeline_json(dir: String) -> PyResult<String> {
-    let spans = open_run_reader(&dir)?
-        .agentic_timeline()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&spans)
-}
-
-/// Rendering overlay aggregated from this run's events (JSON
-/// GraphOverlay: per-node status, duration, cache tier, flags).
-#[pyfunction]
-pub(crate) fn run_overlay_json(dir: String) -> PyResult<String> {
-    let overlay = open_run_reader(&dir)?
-        .overlay()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    to_json_py(&overlay)
+#[pyo3(signature = (dir, sections, metric=None))]
+pub(crate) fn run_sections_json(
+    dir: String,
+    sections: Vec<String>,
+    metric: Option<String>,
+) -> PyResult<String> {
+    let reader = open_run_reader(&dir)?;
+    let err = |e: somatize_core::error::SomaError| PyRuntimeError::new_err(e.to_string());
+    let mut out = serde_json::Map::new();
+    for section in sections {
+        let value = match section.as_str() {
+            "info" => serde_json::to_value(reader.info().map_err(err)?),
+            "manifest" => serde_json::to_value(reader.manifest().map_err(err)?),
+            "events" => serde_json::to_value(reader.events().map_err(err)?),
+            "metric_series" => {
+                serde_json::to_value(reader.metric_series(metric.as_deref()).map_err(err)?)
+            }
+            "node_timings" => serde_json::to_value(reader.node_timings().map_err(err)?),
+            "cache_activity" => serde_json::to_value(reader.cache_activity().map_err(err)?),
+            "health_flags" => serde_json::to_value(reader.health_flags().map_err(err)?),
+            "trial_timeline" => serde_json::to_value(reader.trial_timeline().map_err(err)?),
+            "agentic_activity" => serde_json::to_value(reader.agentic_activity().map_err(err)?),
+            "agentic_timeline" => serde_json::to_value(reader.agentic_timeline().map_err(err)?),
+            "overlay" => serde_json::to_value(reader.overlay().map_err(err)?),
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "unknown run section {other:?}"
+                )));
+            }
+        }
+        .map_err(|e| PyRuntimeError::new_err(format!("serialize {section}: {e}")))?;
+        out.insert(section, value);
+    }
+    to_json_py(&serde_json::Value::Object(out))
 }
 
 /// Mermaid diagram of the run's graph, annotated with its overlay.
