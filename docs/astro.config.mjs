@@ -120,6 +120,7 @@ export default defineConfig({
 					collapsed: true,
 					items: [
 						{ label: 'Codebase Map', slug: 'internals/map' },
+						{ label: 'Capabilities', slug: 'internals/capabilities' },
 						{ label: 'Architecture Graph', slug: 'internals/graph' },
 						{ label: 'Call Paths', slug: 'internals/paths' },
 						{ label: 'Foundation — core, macros', slug: 'internals/foundation' },

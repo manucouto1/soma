@@ -21,6 +21,7 @@ will touch.
 | If you want to… | Read |
 |---|---|
 | Get oriented in one page | This page — the [spine](#d0--the-ownership-spine) and the [ten types](#the-ten-types-that-carry-the-system) |
+| Change one capability and know what it touches | [Capabilities](/soma/internals/capabilities/) — one row per thing Soma does: entry points, hops, types, debt, tests |
 | Explore instead of read | The [Architecture Graph](/soma/internals/graph/) — click a trait to see every implementor, a type to see what owns it |
 | Follow the code as it runs | [Call Paths](/soma/internals/paths/) — the five traces as one graph, with the hops they share |
 | Know the vocabulary | [Foundation](/soma/internals/foundation/) — `soma-core` is the dictionary every other crate speaks |
