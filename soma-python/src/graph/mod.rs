@@ -1,30 +1,14 @@
 //! `Graph` — the primary API.
 
 pub(crate) mod bridge;
+mod registry;
 
 use crate::prelude::*;
 use crate::tracking::readers::py_overlay;
 use crate::tracking::run::PyRun;
+use registry::Registry;
 
 // ── PyGraph ──
-
-/// What a registered node *does*, once `register_behaviour` has filed it
-/// away — enough to build the graph node, and nothing else.
-enum Behaviour {
-    /// An effectful step, carrying its `step_name`.
-    Step(String),
-    /// An ordinary filter, carrying its `filter_name`.
-    Filter(String),
-}
-
-impl Behaviour {
-    fn node(&self, id: &str) -> Node {
-        match self {
-            Behaviour::Step(kind) => Node::step(id, kind),
-            Behaviour::Filter(name) => Node::filter_with_id(id, name),
-        }
-    }
-}
 
 /// How a finished fit's learned states are keyed, which depends on who
 /// produced them.
@@ -50,34 +34,15 @@ pub(crate) struct PyGraph {
     cache: Arc<dyn somatize_core::cache::CacheStore>,
     event_bus: Arc<EventBus>,
     fitted: bool,
+    /// What each registered node id actually is, in Python — see
+    /// [`registry::NodeRecord`].
+    nodes: Registry,
     /// Registered remote workers: (address, token, tags).
     workers: Vec<(String, Option<String>, Vec<String>)>,
     /// Coordinator URL + token.
     coordinator: Option<(String, Option<String>)>,
-    /// Pickled filter bytes + requirements for remote serialization.
-    /// node_id → (cloudpickle bytes, pip requirements)
-    pickled_filters: std::collections::HashMap<String, (Vec<u8>, Vec<String>)>,
-    /// Module source code per filter for Nous agent introspection/editing.
-    /// node_id → full module source (imports + classes + helpers)
-    filter_sources: std::collections::HashMap<String, String>,
     /// Optional DataStore for persistent data transport (opt-in, costs storage).
     data_store: Option<Arc<dyn somatize_core::data::store::DataStore>>,
-    /// Whether each filter is trainable (node_id → bool).
-    filter_trainable: std::collections::HashMap<String, bool>,
-    /// Live Python filter instances retained by node id. Used by the
-    /// in-process training path (graph.train/forward/freeze) so that a
-    /// filter's persistent state (e.g. an nn.Module attached to self)
-    /// survives across forward calls instead of being deserialised each
-    /// time. Distinct from `pickled_filters`, which exists only for
-    /// remote-worker dispatch.
-    live_filters: std::collections::HashMap<String, Py<PyAny>>,
-    /// Effectful step nodes, by node id. Empty for a purely computational
-    /// graph, in which case none of the agentic machinery is built.
-    /// The live Python `Agent`/`Judge` behind each step node. A `Step` is
-    /// immutable once built, so a study that samples a new prompt or model
-    /// writes to these and the library is rebuilt from them — the same
-    /// arrangement `live_filters` has for the computational path.
-    live_steps: std::collections::HashMap<String, Py<PyAny>>,
     /// Data edges a study may cut, in declaration order.
     optional_edges: Vec<(String, String)>,
     /// Optional edges currently cut, held whole together with the position
@@ -107,11 +72,6 @@ impl PyGraph {
     /// by passing the live object.
     pub(crate) fn core_graph(&self) -> &Graph {
         &self.graph
-    }
-
-    /// Does anything in this graph need fitting before it can run?
-    fn has_trainable_filters(&self) -> bool {
-        self.filter_trainable.values().any(|t| *t)
     }
 
     /// File what a fit learned, and mark the graph fitted.
@@ -158,7 +118,7 @@ impl PyGraph {
         // prompt, not from learned state. A graph with nothing trainable in
         // it therefore has nothing to fit, and demanding a fit first would
         // be asking for a no-op.
-        if !self.fitted && self.has_trainable_filters() {
+        if !self.fitted && registry::has_trainable_filters(self) {
             return Err(PyRuntimeError::new_err(
                 "graph must be fitted before forward",
             ));
@@ -190,7 +150,7 @@ impl PyGraph {
         // transport, ignored a resumed run's id and picked its output
         // differently; now the ONLY difference is which compiler entry
         // produced the plan.
-        let catalog = self.rebuild_catalog(py)?;
+        let catalog = registry::rebuild_catalog(self, py)?;
         let compile_result = if stream {
             somatize_compiler::compile_stream(&self.graph, &catalog, chunk_size)
         } else {
@@ -269,27 +229,6 @@ impl PyGraph {
         value_to_py(py, &output)
     }
 
-    /// Does any live filter declare itself differentiable?
-    ///
-    /// `_differentiable` is a **declaration**, set by subclassing
-    /// `DifferentiableFilter`, and it sits beside `_kind`, `_cacheable`,
-    /// `_deterministic` and `_cache_version` — the class attributes this
-    /// package already uses to let a filter say what it is.
-    ///
-    /// This used to sniff for a `build_module` method. That made the name
-    /// of a method load-bearing for the whole graph: any filter that
-    /// happened to define `build_module` for its own reasons switched the
-    /// engine for every node beside it, silently, and the failure showed up
-    /// as a cache miss or a lost seed rather than as an error.
-    fn has_differentiable_filters(&self, py: Python<'_>) -> bool {
-        self.live_filters.values().any(|f| {
-            f.bind(py)
-                .getattr("_differentiable")
-                .and_then(|v| v.is_truthy())
-                .unwrap_or(false)
-        })
-    }
-
     /// A node id not yet taken, suffixing `_2`, `_3`, … as needed.
     fn free_id(&self, wanted: &str) -> String {
         if self.graph.node(wanted).is_none() {
@@ -303,52 +242,6 @@ impl PyGraph {
             }
             i += 1;
         }
-    }
-
-    /// Register what a node *does*, without saying what shape it has in the
-    /// graph. A branch node runs a classifier and routes; a plain node runs
-    /// the same classifier and stops. The behaviour registration is
-    /// identical, so it lives here and the two callers differ only in the
-    /// [`Node`] they add.
-    ///
-    /// Returns what the caller needs to build the graph node itself.
-    fn register_behaviour(
-        &mut self,
-        py: Python<'_>,
-        node_id: &str,
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<Behaviour> {
-        if let Ok(spec) = to_step_spec(py, obj) {
-            // Tools travel with the graph, not with the node: one agent may
-            // declare a tool and another list the same one, and both should
-            // reach the same implementation.
-            for tool in spec.tools() {
-                self.tools
-                    .insert(tool.tool_name().to_string(), tool.clone());
-            }
-            let kind = spec.kind().to_string();
-            self.library.register_step_arc(node_id, spec.step());
-            // Keep the live Agent/Judge: a study samples by writing to it,
-            // and the step is rebuilt from it before the next run.
-            self.live_steps
-                .insert(node_id.to_string(), obj.clone().unbind());
-            return Ok(Behaviour::Step(kind));
-        }
-
-        let bridge = PyFilterBridge::new(py, obj)?;
-        let name = bridge.name.clone();
-        self.pickled_filters.insert(
-            node_id.to_string(),
-            (bridge.pickled_bytes.clone(), bridge.requirements.clone()),
-        );
-        self.filter_sources
-            .insert(node_id.to_string(), bridge.source.clone());
-        self.filter_trainable
-            .insert(node_id.to_string(), bridge.trainable);
-        self.live_filters
-            .insert(node_id.to_string(), obj.clone().unbind());
-        self.library.register(node_id.to_string(), Box::new(bridge));
-        Ok(Behaviour::Filter(name))
     }
 
     /// Resolve one arm of a branch or one entry of a loop body: either the
@@ -370,7 +263,7 @@ impl PyGraph {
         }
 
         let id = self.free_id(fallback_id);
-        let node = self.register_behaviour(py, &id, obj)?.node(&id);
+        let node = registry::register_behaviour(self, py, &id, obj)?.node(&id);
         self.graph.add_node(node);
         Ok(id)
     }
@@ -391,27 +284,6 @@ impl PyGraph {
     /// Returns `None` for a graph with no steps, so a purely computational
     /// pipeline never constructs a provider router, reads a catalog, or
     /// touches an environment variable.
-    /// The catalog as it stands *now* — filters and steps together.
-    ///
-    /// A `Step` is immutable once built, so a study that samples a new
-    /// prompt or model has no way to change one in place — it writes to the
-    /// live `Agent` instead, and the steps are rebuilt from those here,
-    /// before every compile and every run. Cheap: rebuilding a step is
-    /// reading a handful of fields off a Python object.
-    ///
-    /// Every entry point passes this one value, which is what stops
-    /// `compile()` from type-checking a different graph than `run()` does.
-    fn rebuild_catalog(&self, py: Python<'_>) -> PyResult<NodeCatalog> {
-        if self.live_steps.is_empty() {
-            return Ok(self.library.clone());
-        }
-        let mut catalog = self.library.clone();
-        for (node_id, obj) in &self.live_steps {
-            catalog.register_step_arc(node_id, to_step_spec(py, obj.bind(py))?.step());
-        }
-        Ok(catalog)
-    }
-
     fn step_runtime(
         &self,
         py: Python<'_>,
@@ -431,7 +303,7 @@ impl PyGraph {
         for tool in self.tools.values() {
             toolbox.add(Arc::new(PyToolAdapter { tool: tool.clone() }));
         }
-        for obj in self.live_steps.values() {
+        for (_, obj) in self.nodes.steps() {
             for tool in to_step_spec(py, obj.bind(py))?.tools() {
                 toolbox.add(Arc::new(PyToolAdapter { tool: tool.clone() }));
             }
@@ -520,32 +392,6 @@ impl PyGraph {
         Ok(())
     }
 
-    /// The graph's filters, serialized for the wire.
-    ///
-    /// Extracted because three call sites built the same vector; the
-    /// strategy path needs it for a reason the others do not — see
-    /// `register_filters_on`.
-    fn serialized_filters(&self) -> Vec<somatize_worker::protocol::SerializedFilter> {
-        self.graph
-            .nodes
-            .iter()
-            .filter_map(|node| {
-                let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
-                let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
-                let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
-                let config_hash = self.library.get(&node.id).map(|f| f.config_hash());
-                Some(somatize_worker::protocol::SerializedFilter {
-                    node_id: node.id.clone(),
-                    pickled_filter: pickled.clone(),
-                    state,
-                    requirements: reqs.clone(),
-                    trainable,
-                    config_hash,
-                })
-            })
-            .collect()
-    }
-
     /// Put this graph's filters on every worker before a strategy runs.
     ///
     /// A strategy drives workers through `Transport::execute`, which
@@ -565,7 +411,7 @@ impl PyGraph {
             somatize_core::util::timestamp_id("register"),
             somatize_compiler::ExecutionPlan::Empty,
         );
-        plan.filters = self.serialized_filters();
+        plan.filters = registry::serialized_filters(self);
         let transport = somatize_worker::WsTransport::new(addr, token.map(str::to_string));
         transport
             .send_msg(&CoordinatorToWorker::AssignPlan { plan })
@@ -695,26 +541,9 @@ impl PyGraph {
             .map(|(a, t, _)| (a.clone(), t.clone()))
             .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
 
-        // Serialize filters with cloudpickle bytes so the worker can reconstruct them
-        let filters: Vec<SerializedFilter> = self
-            .graph
-            .nodes
-            .iter()
-            .filter_map(|node| {
-                let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
-                let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
-                let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
-                let config_hash = self.library.get(&node.id).map(|f| f.config_hash());
-                Some(SerializedFilter {
-                    node_id: node.id.clone(),
-                    pickled_filter: pickled.clone(),
-                    state,
-                    requirements: reqs.clone(),
-                    trainable,
-                    config_hash,
-                })
-            })
-            .collect();
+        // Cloudpickle bytes travel with the plan: they are the only way the
+        // worker can reconstruct a Python filter.
+        let filters = registry::serialized_filters(self);
 
         let transport = somatize_worker::WsTransport::new(&addr, token.clone());
         let input_source = self.resolve_transport(x, &transport)?;
@@ -788,25 +617,7 @@ impl PyGraph {
             .map(|(a, t, _)| (a.clone(), t.clone()))
             .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
 
-        let filters: Vec<SerializedFilter> = self
-            .graph
-            .nodes
-            .iter()
-            .filter_map(|node| {
-                let (pickled, reqs) = self.pickled_filters.get(&node.id)?;
-                let state = self.library.get_state(&node.id).map(|arc| (*arc).clone());
-                let trainable = self.filter_trainable.get(&node.id).copied().unwrap_or(true);
-                let config_hash = self.library.get(&node.id).map(|f| f.config_hash());
-                Some(SerializedFilter {
-                    node_id: node.id.clone(),
-                    pickled_filter: pickled.clone(),
-                    state,
-                    requirements: reqs.clone(),
-                    trainable,
-                    config_hash,
-                })
-            })
-            .collect();
+        let filters = registry::serialized_filters(self);
 
         let chunks = Self::chunk_value(x, chunk_size);
         let stream_id = somatize_core::util::timestamp_id("stream");
@@ -907,14 +718,10 @@ impl PyGraph {
             cache: cache_store,
             event_bus: Arc::new(EventBus::new(256)),
             fitted: false,
+            nodes: Registry::default(),
             workers: Vec::new(),
             coordinator: None,
-            pickled_filters: std::collections::HashMap::new(),
-            filter_sources: std::collections::HashMap::new(),
             data_store: None,
-            filter_trainable: std::collections::HashMap::new(),
-            live_filters: std::collections::HashMap::new(),
-            live_steps: std::collections::HashMap::new(),
             optional_edges: Vec::new(),
             cut_edges: std::collections::HashMap::new(),
             tools: std::collections::HashMap::new(),
@@ -965,9 +772,8 @@ impl PyGraph {
         // is one way to add a node rather than a second method whose name
         // would collide with the optimiser's `step()`.
         let actual_id = self.free_id(&node_id);
-        let mut node = self
-            .register_behaviour(py, &actual_id, &filter_obj)?
-            .node(&actual_id);
+        let mut node =
+            registry::register_behaviour(self, py, &actual_id, &filter_obj)?.node(&actual_id);
         if let Some(t) = target {
             node = node.with_target(t);
         }
@@ -998,17 +804,7 @@ impl PyGraph {
     /// Register after the sub-graph is fully built; nodes added to it later
     /// are not seen until it is registered again.
     fn register_graph(&mut self, py: Python<'_>, sub: PyRef<'_, PyGraph>) -> PyResult<()> {
-        let sub_catalog = sub.rebuild_catalog(py)?;
-        self.library
-            .merge_from(&sub_catalog)
-            .map_err(soma_err_to_py)?;
-        for (node_id, obj) in &sub.live_steps {
-            self.live_steps.insert(node_id.clone(), obj.clone_ref(py));
-        }
-        for (name, tool) in &sub.tools {
-            self.tools.insert(name.clone(), tool.clone());
-        }
-        Ok(())
+        registry::register_graph(self, py, sub)
     }
 
     /// Register a step that can be *spawned* but is not a node in the graph.
@@ -1031,15 +827,7 @@ impl PyGraph {
         step_id: &str,
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<String> {
-        let spec = to_step_spec(py, obj)?;
-        for tool in spec.tools() {
-            self.tools
-                .insert(tool.tool_name().to_string(), tool.clone());
-        }
-        self.library.register_step_arc(step_id, spec.step());
-        self.live_steps
-            .insert(step_id.to_string(), obj.clone().unbind());
-        Ok(step_id.to_string())
+        registry::register_step(self, py, step_id, obj)
     }
 
     /// Add a node that routes: it runs `condition`, reads the arm label out
@@ -1077,7 +865,7 @@ impl PyGraph {
         let actual_id = self.free_id(&node_id);
         // The branch node *is* the condition: the executor runs it and reads
         // the arm label from its output.
-        self.register_behaviour(py, &actual_id, condition)?;
+        registry::register_behaviour(self, py, &actual_id, condition)?;
 
         let labels: Vec<String> = arms
             .keys()
@@ -1284,13 +1072,7 @@ impl PyGraph {
     /// The counterpart of `filters()`. A study reads their search spaces and
     /// writes sampled values straight onto them.
     fn steps(&self, py: Python<'_>) -> Vec<(String, PyObject)> {
-        let mut items: Vec<(String, PyObject)> = self
-            .live_steps
-            .iter()
-            .map(|(id, obj)| (id.clone(), obj.clone_ref(py)))
-            .collect();
-        items.sort_by(|a, b| a.0.cmp(&b.0));
-        items
+        registry::steps(self, py)
     }
 
     /// Register a tool without attaching it to a particular agent.
@@ -1396,7 +1178,7 @@ impl PyGraph {
                 ));
             }
             self.graph.validate().map_err(soma_err_to_py)?;
-            let catalog = self.rebuild_catalog(py)?;
+            let catalog = registry::rebuild_catalog(self, py)?;
             let compile_result = compile(
                 &self.graph,
                 &catalog,
@@ -1499,7 +1281,7 @@ impl PyGraph {
         // only fit anywhere that salted its state keys with the seed. Now
         // the runner salts, and the loop is gone.
         self.graph.validate().map_err(soma_err_to_py)?;
-        let catalog = self.rebuild_catalog(py)?;
+        let catalog = registry::rebuild_catalog(self, py)?;
         let compile_result = compile(
             &self.graph,
             &catalog,
@@ -1589,7 +1371,7 @@ impl PyGraph {
         // `help(Graph.forward)` nor any static analysis could see it. The
         // dispatch belongs here, where the graph knows what it holds; the
         // walk is a named function this calls.
-        if slf.has_differentiable_filters(py) {
+        if registry::has_differentiable_filters(&slf, py) {
             // The torch walk honours none of these: it does not chunk, it
             // does not salt a cache key (nothing it produces is cached),
             // and it emits no run bracket. They used to be accepted and
@@ -1655,7 +1437,7 @@ impl PyGraph {
                 ))
             })?;
 
-        let catalog = self.rebuild_catalog(py)?;
+        let catalog = registry::rebuild_catalog(self, py)?;
         let driver = self.step_runtime(py, &catalog)?.ok_or_else(|| {
             PyRuntimeError::new_err(
                 "this graph has no effectful nodes, so nothing in it can suspend",
@@ -1689,7 +1471,7 @@ impl PyGraph {
         // The rebuilt catalog, not `self.library`: passing the filter half
         // alone is how `.compile()` came to skip every step's schema while
         // `.run()` checked them.
-        let catalog = self.rebuild_catalog(py)?;
+        let catalog = registry::rebuild_catalog(self, py)?;
         let result = somatize_compiler::compile(
             &self.graph,
             &catalog,
@@ -2187,7 +1969,7 @@ impl PyGraph {
     /// Get the full module source code for a filter node (for Nous agent introspection).
     /// Returns None if the node has no captured source.
     fn filter_source(&self, node_id: String) -> Option<String> {
-        self.filter_sources.get(&node_id).cloned()
+        registry::filter_source(self, &node_id)
     }
 
     /// Third-party distributions the worker must install to run `node_id`.
@@ -2198,18 +1980,12 @@ impl PyGraph {
     /// different dependency set can produce different results. Returns
     /// ``None`` for a node with no live Python filter.
     fn filter_requirements(&self, node_id: String) -> Option<Vec<String>> {
-        self.pickled_filters
-            .get(&node_id)
-            .map(|(_, reqs)| reqs.clone())
+        registry::filter_requirements(self, &node_id)
     }
 
     /// Get all filter sources as a dict: {node_id: source_code}.
     fn filter_sources_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let dict = PyDict::new(py);
-        for (node_id, source) in &self.filter_sources {
-            dict.set_item(node_id, source)?;
-        }
-        Ok(dict.into_any().unbind())
+        registry::filter_sources_dict(self, py)
     }
 
     /// Retrieve the live Python filter instance registered under `node_id`.
@@ -2222,7 +1998,7 @@ impl PyGraph {
     /// filter directly — e.g. toggle `self.training`, read `_module`, or
     /// extract `state_dict()` — without round-tripping through a pickle.
     fn filter(&self, py: Python<'_>, node_id: String) -> Option<PyObject> {
-        self.live_filters.get(&node_id).map(|o| o.clone_ref(py))
+        registry::filter(self, py, &node_id)
     }
 
     /// List node ids with live Python filter instances, in topological order.
@@ -2232,24 +2008,7 @@ impl PyGraph {
     /// Callers that drive training need the topo order so output of one
     /// filter feeds the next.
     fn filter_ids(&self) -> Vec<String> {
-        match self.graph.topological_sort() {
-            Ok(sorted) => sorted
-                .into_iter()
-                .filter(|id| self.live_filters.contains_key(*id))
-                .map(|id| id.to_string())
-                .collect(),
-            // Graph order, which is insertion order — `live_filters` is a
-            // `HashMap`, so returning its keys made the fallback
-            // nondeterministic, and the training walk that consumes this
-            // list chains filters in whatever order the hash landed in.
-            Err(_) => self
-                .graph
-                .nodes
-                .iter()
-                .map(|n| n.id.clone())
-                .filter(|id| self.live_filters.contains_key(id))
-                .collect(),
-        }
+        registry::filter_ids(self)
     }
 
     /// Return live Python filter instances as an ordered list of
@@ -2258,14 +2017,7 @@ impl PyGraph {
     /// Returning a list (vs. a dict) preserves the order — callers
     /// iterating to chain forwards get inputs threaded correctly.
     fn filters(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let list = PyList::empty(py);
-        for node_id in self.filter_ids() {
-            if let Some(obj) = self.live_filters.get(&node_id) {
-                let tuple = (node_id, obj.clone_ref(py));
-                list.append(tuple)?;
-            }
-        }
-        Ok(list.into_any().unbind())
+        registry::filters(self, py)
     }
 
     /// Store a Python state value for a filter node.
@@ -2280,11 +2032,7 @@ impl PyGraph {
         node_id: String,
         state: Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let value = py_to_value(py, &state)?;
-        self.library
-            .try_set_state(node_id, value)
-            .map_err(soma_err_to_py)?;
-        Ok(())
+        registry::set_node_state(self, py, node_id, state)
     }
 
     /// List data edges as ``[(source, target), ...]`` in insertion order.
@@ -2305,10 +2053,7 @@ impl PyGraph {
     /// Mirror of :meth:`set_node_state`. Used by ``Graph.state()`` to
     /// snapshot every node's state for checkpointing.
     fn get_node_state(&self, py: Python<'_>, node_id: String) -> PyResult<Option<PyObject>> {
-        match self.library.get_state(&node_id) {
-            Some(arc) => Ok(Some(value_to_py(py, arc.as_ref())?)),
-            None => Ok(None),
-        }
+        registry::get_node_state(self, py, &node_id)
     }
 
     /// Mark the graph as fitted without running ``fit()``.
