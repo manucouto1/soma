@@ -73,10 +73,35 @@ soma-coordinator→ worker registry + placement, with a `soma-coordinator` binar
 soma-python     → PyO3 bindings: Graph (primary API), Filter, Agent, Judge, Tool,
                   Study, Run, RunView, soma.viz, soma.agentic, soma.library
 soma/           → facade crate (`somatize`) re-exporting the workspace
-docs/           → 39 hand-written Starlight pages + the 15 tutorial pages
+docs/           → 48 hand-written Starlight pages + the 15 tutorial pages
                   rendered from notebooks/ by scripts/notebooks_to_docs.py
                   (an npm pre-hook; generated, gitignored — notebooks/ is the
-                  source of truth). Sidebar guard: `cd docs && npm run check`
+                  source of truth). Guards: `cd docs && npm run check` runs the
+                  sidebar guard AND check-anchors.mjs.
+                  docs/…/internals/ is the crate-by-crate type reference —
+                  every public trait/struct/enum with file:line, the ASCII
+                  "UML" seam diagrams (D0-D6), the pattern index, and debt.md,
+                  which is THE live technical-debt register (D-01…D-95;
+                  development/architecture-review.md is historical and points
+                  at it). graph.md is an explorable SVG graph (traits →
+                  implementors, ownership, crates) — NOT a call graph:
+                  cargo-call-stack cannot parse a virtual workspace or
+                  `version.workspace = true`, needs nightly-2023-11-13, and
+                  assumes statically-resolvable calls, which `dyn`-heavy Soma
+                  is not. paths.md draws the five execution traces as ONE
+                  graph: they share 6 hops, and that output_key/compute_node/
+                  store_output appear in exactly the batch and stream traces
+                  IS D-11. symbols.md, graph.md, and BOTH the ASCII traces in
+                  execution.md and paths.md are generated —
+                  `node scripts/gen-symbol-index.mjs`,
+                  `gen-arch-graph.mjs`, `gen-traces.mjs` (source:
+                  docs/data/traces.json) — or `npm run check` fails.
+                  Traces are hand-authored on purpose; the generator only does
+                  bookkeeping (expands short file:line so the guard sees all
+                  99 of them — it saw zero before). Both skip test code by
+                  cutting at `#[cfg(test)] mod`, NOT at a bare `#[cfg(test)]`
+                  — node_catalog.rs has a test-only `use` at line 22 and the
+                  naive rule hid NodeCatalog/NodeImpl entirely.
 examples/       → git submodule → github.com/manucouto1/soma-examples. Longer,
                   complete programs (not feature demos), each with its artifacts
                   committed so the README reads without running anything. It

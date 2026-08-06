@@ -111,6 +111,28 @@ export default defineConfig({
 					],
 				},
 				{
+					// The crate-by-crate type reference: traits, structs, enums,
+					// ownership, patterns, debt — with file:line throughout.
+					// Architecture is the shape and Design is the why; this is
+					// the what. Collapsed because it is a lookup surface, not a
+					// reading path. `check-anchors.mjs` guards its ~700 anchors.
+					label: 'Internals',
+					collapsed: true,
+					items: [
+						{ label: 'Codebase Map', slug: 'internals/map' },
+						{ label: 'Architecture Graph', slug: 'internals/graph' },
+						{ label: 'Call Paths', slug: 'internals/paths' },
+						{ label: 'Foundation — core, macros', slug: 'internals/foundation' },
+						{ label: 'Execution — compiler, runtime', slug: 'internals/execution' },
+						{ label: 'Agentic Stack — llm, agent, memory, mcp', slug: 'internals/agentic' },
+						{ label: 'Distribution — worker, coordinator, store', slug: 'internals/distribution' },
+						{ label: 'Python Bridge', slug: 'internals/python' },
+						{ label: 'Design Patterns in Use', slug: 'internals/patterns' },
+						{ label: 'Known Debt', slug: 'internals/debt' },
+						{ label: 'Symbol Index', slug: 'internals/symbols' },
+					],
+				},
+				{
 					label: 'Platform',
 					items: [
 						{ label: 'Agents & Memory', slug: 'platform/agents' },

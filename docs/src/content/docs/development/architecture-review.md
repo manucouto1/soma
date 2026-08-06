@@ -22,6 +22,13 @@ For decisions taken since, and what each was chosen *over*, see
 [Design Decisions](/soma/design/decisions/). For the current tree, see
 [Crates](/soma/architecture/crates/).
 
+**The live register is [Internals → Known Debt](/soma/internals/debt/).** The
+findings below that are still open — the `Filter` trait's mixed concerns, string
+node ids, `Graph`'s linear scans, serial trials, `soma-core`'s breadth, and
+`SomaError::Pruned` — were re-verified and carried over there as D-91 to D-95 and
+D-56, so there is exactly one page to keep true. This one is kept for the
+reasoning.
+
 Every **Status** line below was re-checked against the code on 2026-08-05,
 because several of them had drifted in the direction that matters least to
 a reader and most to an evaluator: they described as missing things that

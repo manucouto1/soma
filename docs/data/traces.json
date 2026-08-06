@@ -1,0 +1,402 @@
+{
+  "_comment": [
+    "THE source for the execution traces. `node scripts/gen-traces.mjs` renders",
+    "this twice: as the ASCII blocks inside src/content/docs/internals/execution.md,",
+    "and as the JSON blob behind the call-paths page. Editing either output by hand",
+    "is how the two drift apart — which is exactly the D-11 smell the register",
+    "documents, so do not.",
+    "",
+    "Hop fields: label (the code expression) · at ('file.rs:123', or ':123' to",
+    "inherit the nearest ancestor's file) · note (continuation lines, rendered",
+    "indented and not as tree children) · mark ('P1'|'P2'|'P3' for the three shared",
+    "primitives, 'warn' for a documented deviation) · ref (another trace id, drawn",
+    "as an arrow) · debt (a D-nn id) · dyn (trait name whose implementors this hop",
+    "fans out to) · children.",
+    "",
+    "`at` is short for display; `files` expands it to a repo path so check-anchors",
+    "can verify them. 105 hops, 99 with an anchor; before this file, zero checked."
+  ],
+  "files": {
+    "graph_session.rs": "soma-runtime/src/graph_session.rs",
+    "forward.rs": "soma-runtime/src/forward.rs",
+    "runner/local.rs": "soma-runtime/src/runner/local.rs",
+    "executor.rs": "soma-runtime/src/executor.rs",
+    "effects/mod.rs": "soma-runtime/src/effects/mod.rs",
+    "stream.rs": "soma-runtime/src/executors/stream.rs",
+    "executors/study.rs": "soma-runtime/src/executors/study.rs",
+    "executors/pbt.rs": "soma-runtime/src/executors/pbt.rs"
+  },
+  "traces": [
+    {
+      "id": "a",
+      "title": "`GraphSession::forward`",
+      "entry": "GraphSession::forward",
+      "blocks": [
+        {
+          "root": {
+            "label": "GraphSession::forward(x)",
+            "at": "graph_session.rs:333",
+            "children": [
+              {
+                "label": "forward_with(x, &Standard)",
+                "at": "graph_session.rs:334",
+                "children": [
+                  { "label": "run_driver()  → driver.clone().with_catalog(…)", "at": "graph_session.rs:145" },
+                  {
+                    "label": "Standard::forward(graph, &ForwardEnv{…}, x)",
+                    "at": "forward.rs:49",
+                    "children": [
+                      { "label": "compile(graph, catalog, Inference, Some(cache))", "at": "forward.rs:51" },
+                      {
+                        "label": "run_forward(graph, &plan, env, x)",
+                        "at": "forward.rs:77",
+                        "children": [
+                          { "label": "timestamp_id(\"forward\")", "at": "forward.rs:83" },
+                          { "label": "RunContext::new(…, GraphInfo::from_graph(graph))", "at": "forward.rs:84" },
+                          {
+                            "label": "LocalRunner.forward(plan, &ctx, x)",
+                            "at": "forward.rs:94",
+                            "children": [
+                              {
+                                "label": "walk(plan, ctx, input, RunMode::Forward)",
+                                "at": "runner/local.rs:26",
+                                "children": [
+                                  { "label": "Context::new(…).with_graph_info(…).with_seed(…)", "at": "runner/local.rs:33" },
+                                  { "label": "exec.set(input_key(first), input)", "at": "runner/local.rs:40" },
+                                  { "label": "executor::execute(…)", "at": "runner/local.rs:44", "ref": "b", "sym": "execute" },
+                                  {
+                                    "label": "last_output(&exec)",
+                                    "at": "runner/local.rs:51",
+                                    "note": ["execution_order().rev().find(!reserved)"]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "after": "`Stream` diverges only at `soma-runtime/src/forward.rs:65` (`compile_stream`); `Batched` at\n`soma-runtime/src/forward.rs:107` (its own `get_rows` loop calling `run_forward` per batch)."
+    },
+    {
+      "id": "b",
+      "title": "`execute` → `run_node` → the three primitives",
+      "entry": "execute",
+      "blocks": [
+        {
+          "root": {
+            "label": "execute(plan, ctx, catalog, cache)",
+            "at": "executor.rs:367",
+            "sym": "execute",
+            "children": [
+              { "label": "Empty                → Ok(())", "at": ":374" },
+              { "label": "Execute{id}          → execute_node(id, &[], …)", "at": ":377" },
+              { "label": "Step{id, handoffs}   → execute_node(id, handoffs, …)", "at": ":379" },
+              { "label": "Sequence(v)          → for each: execute(…)", "at": ":383" },
+              { "label": "Parallel(b)          → execute_parallel", "at": ":1084" },
+              { "label": "Loop{…}              → execute_loop", "at": ":460" },
+              { "label": "Branch{…}            → execute_branch", "at": ":531" },
+              { "label": "Remote{…, target: _} → execute_remote", "at": ":601", "mark": "warn", "debt": "D-42", "trail": "(! target discarded)" },
+              { "label": "Composite{ids}       → composite_fit (fit) | per-node (fwd)", "at": ":953" },
+              { "label": "Stream{ids, size}    → execute_stream", "at": ":1208", "ref": "d", "sym": "execute_stream" },
+              { "label": "other                → Err(\"newer compiler\")", "at": ":445" }
+            ]
+          }
+        },
+        {
+          "root": {
+            "label": "run_node(node_id, ctx, catalog, cache)",
+            "at": "executor.rs:816",
+            "children": [
+              { "label": "node = catalog.node(id)?.clone(); meta = node.meta()", "at": ":824" },
+              {
+                "label": "input = resolve_input(node_id, ctx)",
+                "at": ":1173",
+                "mark": "warn",
+                "debt": "D-44",
+                "note": [
+                  "0 preds → execution_order.last()  (!)  D-44",
+                  "1 pred  → that pred",
+                  "n preds → merged JSON object, keyed by predecessor"
+                ]
+              },
+              {
+                "label": "fitted = fit_state_if_needed(…)",
+                "at": ":1002",
+                "note": [
+                  "guard: mode.is_fit() && meta.trainable()",
+                  "key = salt_with_seed(CacheKey::for_state(config, x, y), seed)",
+                  "hit → reuse | miss → catch_unwind(filter.fit) → put_computed"
+                ]
+              },
+              {
+                "label": "▸ PRIMITIVE 1  output_key(node, meta, state, input_hash, seed)",
+                "at": ":670",
+                "mark": "P1",
+                "note": ["guard: !(meta.cacheable && meta.deterministic) → None"]
+              },
+              { "label": "cache.get_located(key) hit → emit NodeCacheHit, return Produced", "at": ":862" },
+              { "label": "miss → emit NodeCacheMiss, emit NodeStarted", "at": ":876" },
+              {
+                "label": "▸ PRIMITIVE 2  compute_node(…) = catch_unwind(run_node_inner)",
+                "at": ":692",
+                "mark": "P2",
+                "children": [
+                  {
+                    "label": "run_node_inner",
+                    "at": ":1058",
+                    "dyn": "NodeImpl",
+                    "children": [
+                      { "label": "NodeImpl::Filter(f) → f.forward(input, state) → Produced", "at": ":1066", "dyn": "Filter" },
+                      { "label": "NodeImpl::Step(s)   → driver.run(s, run_id, node_id, input)", "at": ":1069", "ref": "c", "dyn": "Step", "sym": "EffectDriver::run" }
+                    ]
+                  }
+                ]
+              },
+              {
+                "label": "match outcome",
+                "at": ":905",
+                "children": [
+                  {
+                    "label": "Produced(out) → ▸ PRIMITIVE 3  store_output(…)",
+                    "at": ":717",
+                    "mark": "P3",
+                    "note": ["→ maybe_spill → set_virtual → NodeCompleted"]
+                  },
+                  { "label": "HandOff{target, carry} → ctx.set(node, carry); NodeCompleted", "at": ":931" },
+                  { "label": "Paused{turn, reason}   → nothing stored", "at": ":942" }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "root": {
+            "label": "back in execute_node",
+            "at": "executor.rs:748",
+            "children": [
+              { "label": "Produced → Ok(())" },
+              { "label": "HandOff  → select_handoff(:770) → execute(that plan)" },
+              { "label": "Paused   → Err(SomaError::Suspended{…})" }
+            ]
+          }
+        }
+      ],
+      "after": "`execute_parallel` (`soma-runtime/src/executor.rs:1084`) is worth reading in full: it marks\n`execution_order.len()`, opens a `std::thread::scope`, gives each branch a\n`ctx.snapshot()` `(!)` [D-61](/soma/internals/debt/#d-61--contextsnapshot-deep-clones-the-value-store-per-branch),\nthen merges back only the *write set* — the entries each branch appended past\nthe mark."
+    },
+    {
+      "id": "c",
+      "title": "The `EffectDriver` turn loop",
+      "entry": "EffectDriver::run",
+      "blocks": [
+        {
+          "root": {
+            "label": "EffectDriver::run(step, run_id, node_id, input)",
+            "at": "effects/mod.rs:107",
+            "sym": "EffectDriver::run",
+            "children": [
+              { "label": "journal = self.journal.with_enabled(enabled && meta.journal)", "at": ":116" },
+              {
+                "label": "for turn in 0..meta.max_turns",
+                "at": ":127",
+                "children": [
+                  { "label": "emit AgentTurnStarted" },
+                  { "label": "ctx = StepCtx::new(…).with_history(&history)", "at": ":134" },
+                  { "label": "transition = step.poll(&ctx)?", "at": ":138", "dyn": "Step" },
+                  {
+                    "label": "match transition",
+                    "at": ":146",
+                    "children": [
+                      {
+                        "label": "Await(effects)  → perform_all(…)",
+                        "at": ":440",
+                        "children": [
+                          { "label": "emit EffectRequested per effect" },
+                          {
+                            "label": "thread::scope: one thread per effect",
+                            "at": ":459",
+                            "children": [
+                              {
+                                "label": "perform_one(journal, EffectSite{run,node,turn,i})",
+                                "at": ":519",
+                                "children": [
+                                  { "label": "journal.lookup(site, effect)? → replayed", "at": ":527" },
+                                  { "label": "handlers.iter().find(|h| h.handles(effect))", "at": ":531", "dyn": "EffectHandler" },
+                                  { "label": "handler.perform(effect)?", "at": ":543", "dyn": "EffectHandler" },
+                                  { "label": "journal.record(…)   (Failed is never recorded)", "at": ":545" }
+                                ]
+                              }
+                            ]
+                          },
+                          { "label": "usage += …; emit ToolCalled / EffectCompleted", "trail": "→ history.push(results)", "at": ":159" }
+                        ]
+                      },
+                      { "label": "Done(v)             → Ok(NodeOutcome::Produced(v))", "at": ":167" },
+                      { "label": "Goto{target, carry} → Ok(NodeOutcome::HandOff{…})", "at": ":172" },
+                      {
+                        "label": "Suspend{reason}",
+                        "at": ":187",
+                        "children": [
+                          {
+                            "label": "journal.lookup(site, suspension_effect(reason))?",
+                            "note": ["Some → emit Resumed, continue   « the resume path »"]
+                          },
+                          { "label": "None → emit Suspended → Ok(NodeOutcome::Paused{…})", "at": ":206" }
+                        ]
+                      },
+                      {
+                        "label": "Spawn{specs, join} → spawn_all(…)",
+                        "at": ":316",
+                        "note": [
+                          "child ids \"{node_id}/{label|turn.index}\"; thread::scope;",
+                          "RECURSES into self.run per child                         :365",
+                          "JoinPolicy: All | AllSettled | First  (! First still joins all)"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": [{ "label": "loop exhausted → Err(\"did not finish within N turns\")", "at": ":240" }]
+        }
+      ],
+      "after": "`resume_with(run_id, node_id, turn, reason, answer)`\n(`soma-runtime/src/effects/mod.rs:279`) writes the answer at the *same site*, so\nthe next run replays into it. That is the whole resume mechanism — there is no\nseparate checkpoint format."
+    },
+    {
+      "id": "d",
+      "title": "`StreamRun`",
+      "entry": "execute_stream",
+      "before": "Two entry points into one object. Locally, `execute_stream`\n(`soma-runtime/src/executor.rs:1208`) chunks the input and drives it. Remotely,\n`soma-worker` holds the `StreamRun` *and its `Context`* alive in `active_streams`\nbetween WebSocket messages and calls the same three methods itself.",
+      "blocks": [
+        {
+          "root": {
+            "label": "execute_stream",
+            "at": "executor.rs:1208",
+            "sym": "execute_stream",
+            "children": [
+              { "label": "refuse if mode is Fit", "at": ":1220" },
+              { "label": "chunks = chunk_value(input, chunk_size)", "at": ":1264" },
+              { "label": "run = StreamRun::new(node_ids, catalog)   (steps → Err)", "at": "stream.rs:83" },
+              {
+                "label": "per chunk: run.process_chunk(chunk, ctx, cache)",
+                "at": "stream.rs:130",
+                "children": [
+                  {
+                    "label": "per node i:",
+                    "children": [
+                      { "label": "Barrier  → buffer the value, stop the cascade", "at": ":140" },
+                      {
+                        "label": "else     → current = run_compute(i, current, …)",
+                        "at": ":194",
+                        "children": [
+                          { "label": "first touch → emit NodeStarted", "at": ":203" },
+                          { "label": "state = evolving.or(base_state)", "at": ":213" },
+                          { "label": "▸ output_key(…)", "at": ":217", "mark": "P1" },
+                          { "label": "cache hit → counters only", "at": ":220", "mark": "warn", "debt": "D-11", "trail": "(!) no event" },
+                          { "label": "▸ compute_node(…)", "at": ":233", "mark": "P2" },
+                          { "label": "▸ store_output(…); evolving update", "at": ":239", "mark": "P3" }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              { "label": "run.flush(ctx, cache)  → materialize_buffer per barrier node", "at": "stream.rs:152" },
+              { "label": "run.finish(ctx)  → one NodeCompleted per node,", "at": "stream.rs:167", "note": ["\"stream: N chunks, H hits, M misses\""] },
+              { "label": "ctx.set(last_id, output.finish())", "at": "stream.rs:310" }
+            ]
+          }
+        }
+      ],
+      "after": "`FixedState` keys are **identical** to the batch path's, so a single-chunk stream\nand a plain `forward` share one cache line. That invariant is what makes the\nthree primitives worth having."
+    },
+    {
+      "id": "e",
+      "title": "`StudyRunner` and `PbtRunner`",
+      "entry": "StudyRunner::run",
+      "blocks": [
+        {
+          "root": {
+            "label": "StudyRunner::run(study, sampler, executor)",
+            "at": "executors/study.rs:187",
+            "children": [
+              { "label": "sampler.prepare(&study.search_space)", "at": ":193", "dyn": "Sampler" },
+              { "label": "RESUME: replay completed trials into sampler.record_result", "at": ":205" },
+              { "label": "pruner = build_pruner(&study.pruning)", "at": ":407", "dyn": "Pruner" },
+              { "label": "trial_index = study.trials.len()          « the resume point »", "at": ":218" },
+              {
+                "label": "loop",
+                "at": ":228",
+                "children": [
+                  {
+                    "label": "config_index = i / n_seeds ; seed_slot = i % n_seeds",
+                    "at": ":229",
+                    "note": [
+                      "seed_slot > 0 → reuse the previous trial's params minus \"seed\"",
+                      "else          → sampler.sample(space, config_index)?"
+                    ]
+                  },
+                  { "label": "params += {\"seed\": …} += study.frozen", "at": ":250" },
+                  { "label": "ctx = TrialContext{objective, pruner, history, bus, shared}", "at": ":270" },
+                  {
+                    "label": "outcome = executor.execute_trial(&params, &ctx)",
+                    "at": ":281",
+                    "dyn": "TrialExecutor",
+                    "note": [
+                      "user code calls ctx.report(name, value, step)             :70",
+                      "  → push metric, emit TrialMetric, ask the pruner"
+                    ]
+                  },
+                  {
+                    "label": "match (outcome, pruned)",
+                    "at": ":287",
+                    "note": [
+                      "(Ok(_), Some(..)) | (Ok(Pruned{..}), None) → Pruned",
+                      "(Ok(Completed(m)), None)                   → Completed",
+                      "(Err(e), _)                                → Failed"
+                    ]
+                  },
+                  { "label": "sampler.record_result(…); best-trial check; StudyProgress", "at": ":335" },
+                  { "label": "save_study(study)", "at": ":361", "mark": "warn", "debt": "D-64", "trail": "(! rewrites the whole file per trial)" }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "root": {
+            "label": "PbtRunner::run(config, executor)",
+            "at": "executors/pbt.rs:97",
+            "children": [
+              { "label": "rng_state = 42", "at": ":103", "mark": "warn", "debt": "D-49", "trail": "(! hardcoded, no seed field)" },
+              { "label": "initialize_population", "at": ":195" },
+              {
+                "label": "for generation in 0..generations",
+                "at": ":108",
+                "children": [
+                  { "label": "TRAIN each member", "at": ":116", "mark": "warn", "trail": "(! failure → warn, keeps stale state)" },
+                  { "label": "EVAL each member", "at": ":135", "trail": "(failure → NEG_INFINITY, counted)" },
+                  { "label": "sort by fitness desc", "at": ":156" },
+                  {
+                    "label": "evolve: exploit (truncation | binary tournament)",
+                    "at": ":215",
+                    "note": ["then explore (perturbation | resample)"]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

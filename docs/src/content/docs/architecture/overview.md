@@ -140,6 +140,15 @@ Workers self-register with the coordinator. The client submits plans and the coo
 
 Soma uses Rust's type system to enforce correctness at compile time:
 
+:::caution[Illustrative, not current]
+The sketches below convey the *shape* of the type system and have drifted from
+the code — `Value` has no `DataFrame` or `Stream` variant, and
+`ExecutionPlan::Execute` carries only a `node_id`. For the actual definitions,
+with `file:line` for every public trait, struct and enum, see
+[Internals → Foundation](/soma/internals/foundation/) and the
+[Symbol Index](/soma/internals/symbols/).
+:::
+
 ```rust
 // Values flowing between filters
 enum Value {
