@@ -407,7 +407,7 @@ the `somatize[viz]` extra.
 
 ### Rich-repr protocol
 
-Five `_repr_html_` implementations — `PyGraph` (`soma-python/src/graph/mod.rs:1858`),
+Five `_repr_html_` implementations — `PyGraph` (`soma-python/src/graph/mod.rs:1263`),
 `RunView`, `RunList`, `CompileInfo`, `DifferentiableFilter`. Evaluating an object
 in a notebook draws it. `Graph::to_svg` (`soma-core/src/viz/svg.rs`) exists
 specifically because notebooks sanitize `<script>`, so a mermaid block would not

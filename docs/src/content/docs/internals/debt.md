@@ -396,7 +396,7 @@ falls straight through.
 Reachable path: `TrainingStrategy::DataParallel { num_replicas: 0, .. }` →
 `soma-runtime/src/distributed.rs:163` computes `n = 0` → the fit and gradient loops
 never run → `aggregate(&[])` panics. `num_replicas` is user-supplied from Python
-(`soma-python/src/graph/mod.rs:2096`, `num_replicas.unwrap_or(1)` — an explicit `0`
+(`soma-python/src/graph/distributed.rs:408`, `num_replicas.unwrap_or(1)` — an explicit `0`
 passes straight through) and is validated nowhere.
 
 **Fix shape** Reject `num_replicas == 0` at the Python boundary *and* return an
@@ -815,8 +815,9 @@ encodes a count inside the string: `"DEAD_CHANNELS(3)"`.
 
 **Class** Stringly-typed · **Severity** Medium · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph/mod.rs:2095` (`kind` — 5 strategies, with nested
-`aggregation` matches at `:2095` and `:2109`); `:1465` / `:1470`
+**Evidence** `soma-python/src/graph/distributed.rs:405` (`kind` — 5 strategies, with
+nested `aggregation` matches at `:409` and `:423`); `soma-python/src/graph/mod.rs:955`
+/ `:1184`
 (`"differentiable"` / `"inference"`); `soma-python/src/data/store.rs:30`
 (`store_type`); `soma-python/src/optimizer/study.rs:44` (`dtype`) and `:52` (`scale`) and
 `:184` (`parse_pruning`); `soma-python/src/agentic.rs:610` (5 transitions) and
@@ -835,7 +836,7 @@ name in Python.
 
 **Class** Stringly-typed · **Severity** Low · **Crate** `soma-python`
 
-**Evidence** `soma-python/src/graph/mod.rs:2081` returns only the discriminant name,
+**Evidence** `soma-python/src/graph/distributed.rs:491` returns only the discriminant name,
 so `set_strategy("data_parallel", num_replicas=8)` followed by `strategy()`
 yields `"data_parallel"` with the parameters gone. The `_ => "unknown"`
 catch-all remains, because `TrainingStrategy` is `#[non_exhaustive]` and lives

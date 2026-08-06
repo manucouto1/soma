@@ -1,11 +1,13 @@
 //! `Graph` — the primary API.
 
 pub(crate) mod bridge;
+mod distributed;
 mod registry;
 
 use crate::prelude::*;
 use crate::tracking::readers::py_overlay;
 use crate::tracking::run::PyRun;
+use distributed::RemoteWorker;
 use registry::Registry;
 
 // ── PyGraph ──
@@ -37,8 +39,8 @@ pub(crate) struct PyGraph {
     /// What each registered node id actually is, in Python — see
     /// [`registry::NodeRecord`].
     nodes: Registry,
-    /// Registered remote workers: (address, token, tags).
-    workers: Vec<(String, Option<String>, Vec<String>)>,
+    /// Workers this graph may dispatch to, in registration order.
+    workers: Vec<RemoteWorker>,
     /// Coordinator URL + token.
     coordinator: Option<(String, Option<String>)>,
     /// Optional DataStore for persistent data transport (opt-in, costs storage).
@@ -129,14 +131,16 @@ impl PyGraph {
         if stream && !self.workers.is_empty() {
             // Release GIL during WS dispatch so worker thread can acquire
             // it for Python execution.
-            let output = py.allow_threads(|| self.dispatch_streamed(&x_val, chunk_size, seed))?;
+            let output = py
+                .allow_threads(|| distributed::dispatch_streamed(self, &x_val, chunk_size, seed))?;
             return value_to_py(py, &output);
         }
 
         // Dispatch entire plan remotely if workers registered and no node forces local
         if !stream && !self.workers.is_empty() && self.graph.nodes.iter().all(|n| !n.is_local()) {
             let (output, _states) = py.allow_threads(|| {
-                self.dispatch_to_worker(
+                distributed::dispatch_to_worker(
+                    self,
                     &x_val,
                     somatize_worker::protocol::ExecutionMode::Forward,
                     seed,
@@ -176,7 +180,7 @@ impl PyGraph {
         if let Some(driver) = self.step_runtime(py, &catalog)? {
             ctx = ctx.with_driver(driver);
         }
-        if let Some(transport) = self.make_transport() {
+        if let Some(transport) = distributed::make_transport(self) {
             ctx = ctx.with_transport(transport);
         }
 
@@ -390,280 +394,6 @@ impl PyGraph {
             }
         }
         Ok(())
-    }
-
-    /// Put this graph's filters on every worker before a strategy runs.
-    ///
-    /// A strategy drives workers through `Transport::execute`, which
-    /// cannot carry them: the worker rebuilds a Python filter by
-    /// unpickling `SerializedFilter::pickled_filter`, and those bytes live
-    /// only here — a `NodeCatalog` holds live filters, never the pickle.
-    /// So the strategy's first call would arrive at a worker that has
-    /// never heard of the node, and fail with `node not found in graph`.
-    ///
-    /// An `ExecutionPlan::Empty` carrying the filters registers them and
-    /// executes nothing. The worker keeps its catalog between messages, so
-    /// every later call in the round loop finds them.
-    fn register_filters_on(&self, addr: &str, token: Option<&str>) -> PyResult<()> {
-        use somatize_worker::protocol::{CoordinatorToWorker, SerializedPlan};
-
-        let mut plan = SerializedPlan::new(
-            somatize_core::util::timestamp_id("register"),
-            somatize_compiler::ExecutionPlan::Empty,
-        );
-        plan.filters = registry::serialized_filters(self);
-        let transport = somatize_worker::WsTransport::new(addr, token.map(str::to_string));
-        transport
-            .send_msg(&CoordinatorToWorker::AssignPlan { plan })
-            .map_err(|e| soma_err_to_py(e.into()))?;
-        Ok(())
-    }
-
-    /// A session wired to one transport per registered worker.
-    ///
-    /// The strategy indexes its workers — `execute_on_worker(i, …)` — so a
-    /// single transport cannot serve it, which is why this exists beside
-    /// `make_transport`.
-    fn session_with_transports(
-        &self,
-        transports: Vec<Arc<dyn somatize_runtime::execution::runner::Transport>>,
-    ) -> somatize_core::error::Result<somatize_runtime::GraphSession> {
-        let session = somatize_runtime::GraphSession::new(self.graph.clone(), self.library.clone())
-            .with_cache(self.cache.clone())
-            .with_event_bus(self.event_bus.clone())
-            .with_transports(transports)
-            // In the same order the transports were built, which is the
-            // order `self.workers` is in — a strategy that pins a
-            // partition to a tag resolves it against these.
-            .with_worker_identities(
-                self.workers
-                    .iter()
-                    .map(
-                        |(addr, _, tags)| somatize_runtime::distributed::WorkerIdentity {
-                            id: addr.clone(),
-                            tags: tags.clone(),
-                        },
-                    )
-                    .collect(),
-            );
-        Ok(session)
-    }
-
-    /// Build a transport from the first registered worker (if any).
-    fn make_transport(&self) -> Option<Arc<dyn somatize_runtime::execution::runner::Transport>> {
-        if self.workers.is_empty() {
-            return None;
-        }
-        let (addr, token, _tags) = &self.workers[0];
-        let transport = somatize_worker::WsTransport::new(addr, token.clone());
-        Some(Arc::new(transport))
-    }
-
-    /// Send a Shutdown message to a worker via WebSocket.
-    fn send_shutdown(address: &str, token: Option<&str>, reason: &str) -> PyResult<()> {
-        somatize_worker::WsTransport::new(address, token.map(str::to_string))
-            .notify(&somatize_worker::protocol::CoordinatorToWorker::Shutdown {
-                reason: reason.to_string(),
-            })
-            .map_err(|e| soma_err_to_py(e.into()))
-    }
-
-    /// Decide how to transport input data to the worker.
-    ///
-    /// - DataStore configured → upload to store, return Reference
-    /// - Large payload (≥ 10MB) → HTTP bulk upload to worker, return Reference
-    /// - Small payload → Inline (current WS behavior)
-    fn resolve_transport(
-        &self,
-        x: &Value,
-        transport: &somatize_worker::WsTransport,
-    ) -> Result<somatize_worker::protocol::InputSource, PyErr> {
-        use somatize_core::cache::CacheKey;
-        use somatize_worker::protocol::InputSource;
-
-        // DataStore configured → always use it (user opted in)
-        if let Some(store) = &self.data_store {
-            let data_bytes = serde_json::to_vec(x).unwrap_or_default();
-            let key = CacheKey::hash_data(&data_bytes);
-            let data_ref = store.put(&key, x).map_err(soma_err_to_py)?;
-            return Ok(InputSource::Reference { data_ref });
-        }
-
-        // Estimate payload size
-        let size_bytes = serde_json::to_vec(x).map(|v| v.len()).unwrap_or(0);
-        if size_bytes >= somatize_core::data::store::INLINE_THRESHOLD_BYTES {
-            let data_ref = transport.upload(x).map_err(|e| soma_err_to_py(e.into()))?;
-            return Ok(InputSource::Reference { data_ref });
-        }
-
-        Ok(InputSource::Inline { value: x.clone() })
-    }
-
-    /// Send a plan to a remote worker via WebSocket.
-    /// Returns (output, trained_states) — states are non-empty after Fit mode.
-    fn dispatch_to_worker(
-        &self,
-        x: &Value,
-        mode: somatize_worker::protocol::ExecutionMode,
-        seed: Option<i64>,
-    ) -> Result<(Value, std::collections::HashMap<String, Value>), PyErr> {
-        use somatize_worker::protocol::*;
-
-        let compile_mode = match &mode {
-            ExecutionMode::Fit { .. } => CompileMode::NoCache,
-            ExecutionMode::Forward => CompileMode::Inference,
-            _ => CompileMode::Inference,
-        };
-
-        let compile_result = somatize_compiler::compile(
-            &self.graph,
-            &self.library,
-            compile_mode,
-            Some(self.cache.as_ref()),
-        )
-        .map_err(soma_err_to_py)?;
-
-        // Find the best worker by target tag or first available
-        let first_target = self
-            .graph
-            .nodes
-            .iter()
-            .find_map(|n| n.target.as_deref())
-            .unwrap_or("default");
-
-        let (addr, token) = self
-            .workers
-            .iter()
-            .find(|(_, _, tags)| {
-                first_target == "default" || tags.contains(&first_target.to_string())
-            })
-            .or_else(|| self.workers.first())
-            .map(|(a, t, _)| (a.clone(), t.clone()))
-            .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
-
-        // Cloudpickle bytes travel with the plan: they are the only way the
-        // worker can reconstruct a Python filter.
-        let filters = registry::serialized_filters(self);
-
-        let transport = somatize_worker::WsTransport::new(&addr, token.clone());
-        let input_source = self.resolve_transport(x, &transport)?;
-        let plan = SerializedPlan {
-            protocol_version: PROTOCOL_VERSION,
-            plan_id: somatize_core::util::timestamp_id("remote_plan"),
-            plan: compile_result.plan,
-            input: Some(input_source),
-            filters,
-            mode,
-            seed,
-            metadata: serde_json::json!({}),
-        };
-
-        // The socket, the framing and the size limits belong to the
-        // transport. This function decides *which* worker gets *which*
-        // filters — policy — and hands the result over.
-        let reply = transport
-            .send_msg(&CoordinatorToWorker::AssignPlan { plan })
-            .map_err(|e| soma_err_to_py(e.into()))?;
-
-        match reply {
-            WorkerToCoordinator::PlanResult { result, .. } => match result {
-                PlanResult::Success { output, states, .. } => {
-                    let value = transport
-                        .resolve_output(&output)
-                        .map_err(|e| soma_err_to_py(e.into()))?;
-                    Ok((value, states))
-                }
-                PlanResult::Failed { error, .. } => {
-                    Err(PyRuntimeError::new_err(format!("remote: {error}")))
-                }
-            },
-            other => Err(PyRuntimeError::new_err(format!(
-                "worker answered with {other:?} instead of a plan result"
-            ))),
-        }
-    }
-
-    /// Stream data to a worker in chunks via WebSocket Binary frames.
-    /// The worker drives a `StreamRun` — no full materialization.
-    fn dispatch_streamed(
-        &self,
-        x: &Value,
-        chunk_size: usize,
-        seed: Option<i64>,
-    ) -> Result<Value, PyErr> {
-        use somatize_worker::protocol::*;
-
-        // compile_stream, not compile: the remote chunk loop honours the
-        // same contract as the local one, so a diamond or a step is
-        // refused here, by name, before anything crosses the wire.
-        let compile_result =
-            somatize_compiler::compile_stream(&self.graph, &self.library, chunk_size)
-                .map_err(soma_err_to_py)?;
-
-        let first_target = self
-            .graph
-            .nodes
-            .iter()
-            .find_map(|n| n.target.as_deref())
-            .unwrap_or("default");
-
-        let (addr, token) = self
-            .workers
-            .iter()
-            .find(|(_, _, tags)| {
-                first_target == "default" || tags.contains(&first_target.to_string())
-            })
-            .or_else(|| self.workers.first())
-            .map(|(a, t, _)| (a.clone(), t.clone()))
-            .ok_or_else(|| PyRuntimeError::new_err("no workers available"))?;
-
-        let filters = registry::serialized_filters(self);
-
-        let chunks = Self::chunk_value(x, chunk_size);
-        let stream_id = somatize_core::util::timestamp_id("stream");
-
-        let plan = SerializedPlan {
-            protocol_version: PROTOCOL_VERSION,
-            plan_id: stream_id,
-            plan: compile_result.plan,
-            input: None, // input comes via chunks
-            filters,
-            mode: ExecutionMode::Forward,
-            seed,
-            metadata: serde_json::json!({}),
-        };
-
-        somatize_worker::WsTransport::new(&addr, token)
-            .stream_plan(plan, chunks)
-            .map_err(|e| soma_err_to_py(e.into()))
-    }
-
-    /// Split a Value into chunks for streaming.
-    fn chunk_value(x: &Value, chunk_size: usize) -> Vec<Value> {
-        match x {
-            Value::Tensor { values, shape } if !values.is_empty() => {
-                // Split along first dimension
-                let row_size = if shape.len() > 1 {
-                    shape[1..].iter().product()
-                } else {
-                    1
-                };
-                let n_rows = shape[0];
-                let mut chunks = Vec::new();
-                for start in (0..n_rows).step_by(chunk_size) {
-                    let end = (start + chunk_size).min(n_rows);
-                    let flat_start = start * row_size;
-                    let flat_end = end * row_size;
-                    let chunk_vals = values[flat_start..flat_end].to_vec();
-                    let mut chunk_shape = shape.clone();
-                    chunk_shape[0] = end - start;
-                    chunks.push(Value::tensor(chunk_vals, chunk_shape));
-                }
-                chunks
-            }
-            // For non-tensor or small data, single chunk
-            _ => vec![x.clone()],
-        }
     }
 }
 
@@ -1236,19 +966,10 @@ impl PyGraph {
             && self.workers.len() > 1
             && self.graph.nodes.iter().all(|n| !n.is_local())
         {
-            for (addr, token, _) in &self.workers {
-                self.register_filters_on(addr, token.as_deref())?;
-            }
-            let transports: Vec<Arc<dyn somatize_runtime::execution::runner::Transport>> = self
-                .workers
-                .iter()
-                .map(|(addr, token, _)| {
-                    Arc::new(somatize_worker::WsTransport::new(addr, token.clone()))
-                        as Arc<dyn somatize_runtime::execution::runner::Transport>
-                })
-                .collect();
+            distributed::register_filters_on_all(self)?;
+            let transports = distributed::transports(self);
             let states = py.allow_threads(|| {
-                self.session_with_transports(transports)
+                distributed::session_with_transports(self, transports)
                     .and_then(|mut session| session.fit(&x_val, y_val.as_ref()))
             });
             let states = states.map_err(soma_err_to_py)?;
@@ -1267,7 +988,8 @@ impl PyGraph {
                 y: y_val.clone(),
                 batch_size,
             };
-            let result = py.allow_threads(|| self.dispatch_to_worker(&x_val, mode, seed));
+            let result =
+                py.allow_threads(|| distributed::dispatch_to_worker(self, &x_val, mode, seed));
             let (_output, states) = result?;
             return self.absorb(FittedStates::Trained(states));
         }
@@ -1695,8 +1417,7 @@ impl PyGraph {
     ///   g.add_worker("ws://gpu-0:8080", token="sk-xxx", tags=["gpu"])
     #[pyo3(signature = (address, token=None, tags=None))]
     fn add_worker(&mut self, address: String, token: Option<String>, tags: Option<Vec<String>>) {
-        self.workers
-            .push((address, token, tags.unwrap_or_default()));
+        distributed::add_worker(self, address, token, tags)
     }
 
     /// Configure a DataStore for persistent data transport (opt-in).
@@ -1758,131 +1479,22 @@ impl PyGraph {
         population_size: Option<usize>,
         partitions: Option<&Bound<'_, pyo3::types::PyAny>>,
     ) -> PyResult<()> {
-        use somatize_core::distributed::{
-            ClientSelection, CommunicationProtocol, ExploitStrategy, ExploreStrategy,
-            FederatedAggregation, GradientAggregation, Partition, TrainingStrategy,
-        };
-        use somatize_core::graph::filter::RemoteTarget;
-        // A count of zero is never what anyone meant, and it used to
-        // travel all the way in: `num_replicas: 0` made the fit and
-        // gradient loops run zero times and then handed an empty slice to
-        // an aggregator that indexed `[0]`. The panic named none of this.
-        for (name, value) in [
-            ("num_replicas", num_replicas),
-            ("num_clients", num_clients),
-            ("population_size", population_size),
-            ("rounds", rounds),
-            ("generations", generations),
-        ] {
-            if value == Some(0) {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "{name}=0: a strategy needs at least one. Leave it unset \
-                     for the default"
-                )));
-            }
-        }
-
-        let strategy = match kind {
-            "local" => TrainingStrategy::Local,
-            "data_parallel" => TrainingStrategy::DataParallel {
-                num_replicas: num_replicas.unwrap_or(1),
-                aggregation: match aggregation.unwrap_or("all_reduce") {
-                    "all_reduce" => GradientAggregation::AllReduce,
-                    "parameter_server" => GradientAggregation::ParameterServer,
-                    other => {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "unknown gradient aggregation '{other}'. \
-                             Available: all_reduce, parameter_server"
-                        )));
-                    }
-                },
-            },
-            "federated" => TrainingStrategy::Federated {
-                num_clients: num_clients.unwrap_or(2),
-                rounds: rounds.unwrap_or(1),
-                aggregation: match aggregation.unwrap_or("fed_avg") {
-                    "fed_avg" => FederatedAggregation::FedAvg,
-                    other => {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "unknown federated aggregation '{other}'. Only fed_avg \
-                             runs today: fed_prox needs the previous global model \
-                             and fed_yogi needs optimizer moments, neither of which \
-                             the aggregator is given"
-                        )));
-                    }
-                },
-                client_selection: ClientSelection::All,
-            },
-            "model_parallel" => {
-                let Some(spec) = partitions else {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        "model_parallel needs partitions=[{\"nodes\": [...], \
-                         \"tag\": \"gpu0\"}, ...]: it splits the MODEL across \
-                         workers, so something has to say which nodes go where",
-                    ));
-                };
-                let mut parsed = Vec::new();
-                for (i, item) in spec.try_iter()?.enumerate() {
-                    let item = item?;
-                    let nodes: Vec<String> = item
-                        .get_item("nodes")
-                        .map_err(|_| {
-                            pyo3::exceptions::PyValueError::new_err(format!(
-                                "partition {i} has no \"nodes\""
-                            ))
-                        })?
-                        .extract()?;
-                    // A tag matches any worker carrying it; a worker names
-                    // exactly one. Both are how `add_worker` registers them.
-                    let target = if let Ok(tag) = item.get_item("tag") {
-                        RemoteTarget::Tag(tag.extract()?)
-                    } else if let Ok(worker) = item.get_item("worker") {
-                        RemoteTarget::WorkerId(worker.extract()?)
-                    } else {
-                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "partition {i} names neither a \"tag\" nor a \"worker\", \
-                             so its nodes have nowhere to run"
-                        )));
-                    };
-                    parsed.push(Partition {
-                        node_ids: nodes,
-                        target,
-                    });
-                }
-                TrainingStrategy::ModelParallel {
-                    partitions: parsed,
-                    communication: CommunicationProtocol::DataStore,
-                }
-            }
-            "population_based" => TrainingStrategy::PopulationBased {
-                population_size: population_size.unwrap_or(4),
-                generations: generations.unwrap_or(1),
-                exploit: ExploitStrategy::Truncation { fraction: 0.2 },
-                explore: ExploreStrategy::Perturbation { factor: 0.2 },
-            },
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "unknown strategy '{other}'. Available: local, data_parallel, \
-                     federated, model_parallel, population_based"
-                )));
-            }
-        };
-        self.graph.set_strategy(strategy);
-        Ok(())
+        distributed::set_strategy(
+            self,
+            kind,
+            num_replicas,
+            num_clients,
+            rounds,
+            aggregation,
+            generations,
+            population_size,
+            partitions,
+        )
     }
 
     /// The graph's training strategy, as the string `set_strategy` takes.
     fn strategy(&self) -> String {
-        use somatize_core::distributed::TrainingStrategy as T;
-        match self.graph.effective_strategy() {
-            T::Local => "local",
-            T::DataParallel { .. } => "data_parallel",
-            T::Federated { .. } => "federated",
-            T::ModelParallel { .. } => "model_parallel",
-            T::PopulationBased { .. } => "population_based",
-            _ => "unknown",
-        }
-        .to_string()
+        distributed::strategy(self)
     }
 
     /// Shutdown a specific worker by address.
@@ -1892,12 +1504,7 @@ impl PyGraph {
     ///   g.shutdown_worker("ws://worker:8080", reason="maintenance")
     #[pyo3(signature = (address, reason=None))]
     fn shutdown_worker(&self, address: String, reason: Option<String>) -> PyResult<()> {
-        let token = self
-            .workers
-            .iter()
-            .find(|(a, _, _)| *a == address)
-            .and_then(|(_, t, _)| t.clone());
-        Self::send_shutdown(&address, token.as_deref(), &reason.unwrap_or_default())
+        distributed::shutdown_worker(self, &address, reason)
     }
 
     /// Shutdown all registered workers.
@@ -1907,13 +1514,7 @@ impl PyGraph {
     ///   g.shutdown_workers(reason="end of experiment")
     #[pyo3(signature = (reason=None))]
     fn shutdown_workers(&self, reason: Option<String>) -> PyResult<()> {
-        let reason = reason.unwrap_or_default();
-        for (addr, token, _) in &self.workers {
-            if let Err(e) = Self::send_shutdown(addr, token.as_deref(), &reason) {
-                eprintln!("Warning: failed to shutdown {addr}: {e}");
-            }
-        }
-        Ok(())
+        distributed::shutdown_workers(self, reason)
     }
 
     /// Set a coordinator for auto-discovery (mode C).
@@ -1929,41 +1530,7 @@ impl PyGraph {
     ///
     /// Returns a list of dicts with worker info.
     fn workers(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let list = PyList::empty(py);
-
-        // Direct workers
-        for (addr, _token, tags) in &self.workers {
-            let dict = PyDict::new(py);
-            dict.set_item("address", addr)?;
-            dict.set_item("tags", tags)?;
-            dict.set_item("source", "direct")?;
-            list.append(dict)?;
-        }
-
-        // If coordinator is set, query it for registered workers
-        if let Some((url, token)) = &self.coordinator {
-            let workers_url = format!("{url}/workers");
-            // Synchronous HTTP request (blocking in Python context is fine)
-            let client = reqwest::blocking::Client::new();
-            let mut request = client.get(&workers_url);
-            if let Some(t) = token {
-                request = request.query(&[("token", t.as_str())]);
-            }
-            if let Ok(resp) = request.send()
-                && let Ok(text) = resp.text()
-            {
-                let json_mod = py.import("json")?;
-                if let Ok(parsed) = json_mod.call_method1("loads", (text,))
-                    && let Ok(items) = parsed.downcast::<PyList>()
-                {
-                    for item in items.iter() {
-                        list.append(item)?;
-                    }
-                }
-            }
-        }
-
-        Ok(list.into_any().unbind())
+        distributed::workers(self, py)
     }
 
     /// Get the full module source code for a filter node (for Nous agent introspection).
