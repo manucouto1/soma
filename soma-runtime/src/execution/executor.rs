@@ -568,9 +568,37 @@ fn execute_remote(
         .graph_info
         .predecessors(node_id)
         .first()
-        .and_then(|pred| ctx.get(pred));
-    let result = transport.execute_node(node_id, input)?;
-    ctx.set(node_id.to_string(), result);
+        .and_then(|pred| ctx.get(pred))
+        .cloned()
+        .unwrap_or(Value::Empty);
+
+    // `Transport::execute`, not the `execute_node` convenience beside it.
+    // That helper takes a node id and nothing else, so it rebuilt the plan
+    // from the id and defaulted everything it could not know — and this
+    // call site knows all four:
+    //
+    // - **The wrapped plan.** `Remote` wraps a `Composite` when every one
+    //   of its nodes was marked remote, or a `Step` with its handoffs.
+    //   Rebuilding `Execute { node_id }` from the id ran the *first* node
+    //   of a composite and dropped a step's handoffs.
+    // - **The mode.** Hardcoded `Forward`, so a remote node in a fit run
+    //   was executed as a forward: it learned nothing, and the states came
+    //   back empty from a fit that reported success.
+    // - **The seed.** Passed `None`, so the worker salted nothing and a
+    //   five-seed sweep shared one cache line across all five.
+    // - **The catalog.** A throwaway `NodeCatalog::new()`. The one
+    //   transport that ships ignores this argument (a catalog holds live
+    //   filters, not the pickle bytes a worker unpickles), so this half
+    //   changes nothing today — it is passed because the trait asks for
+    //   the run's catalog and inventing an empty one is a lie.
+    let (output, states) = transport.execute(plan, catalog, &input, &ctx.mode, ctx.seed)?;
+
+    // What a remote fit learned goes where a local one puts it, so
+    // `Runner::fit` finds it in the value store like any other.
+    for (id, state) in states {
+        ctx.set(somatize_core::data::keys::state_key(&id), state);
+    }
+    ctx.set(node_id.to_string(), output);
     Ok(())
 }
 
@@ -2448,5 +2476,129 @@ mod tests {
         };
         let err = execute(&plan, &mut ctx, &filters, &cache).unwrap_err();
         assert!(err.to_string().contains("fit"), "{err}");
+    }
+
+    /// D-41: a `Remote` node used to be handed to the transport as a plan
+    /// rebuilt from its id alone, with `Forward` and no seed.
+    ///
+    /// Four things were invented rather than passed. This asserts all four
+    /// arrive: the plan the compiler actually wrapped (a `Composite`, not
+    /// an `Execute` for its first node), the run's mode, the run's seed,
+    /// and the run's catalog.
+    #[test]
+    fn a_remote_node_is_sent_the_plan_mode_and_seed_of_its_run() {
+        use crate::execution::runner::Transport;
+        use std::sync::Mutex;
+
+        /// What the transport was handed — the four things the old path
+        /// invented instead of passing.
+        struct Sent {
+            plan: ExecutionPlan,
+            mode: RunMode,
+            seed: Option<i64>,
+            catalog_size: usize,
+        }
+
+        #[derive(Default)]
+        struct Spy {
+            seen: Mutex<Vec<Sent>>,
+        }
+        impl Transport for Spy {
+            fn execute(
+                &self,
+                plan: &ExecutionPlan,
+                filters: &NodeCatalog,
+                _input: &Value,
+                mode: &RunMode,
+                seed: Option<i64>,
+            ) -> Result<(Value, HashMap<String, Value>)> {
+                self.seen.lock().unwrap().push(Sent {
+                    plan: plan.clone(),
+                    mode: mode.clone(),
+                    seed,
+                    catalog_size: filters.node_ids().len(),
+                });
+                Ok((
+                    Value::tensor(vec![9.0], vec![1]),
+                    HashMap::from([("far".to_string(), Value::tensor(vec![4.0], vec![1]))]),
+                ))
+            }
+            fn get_state(&self, _: &[String]) -> Result<HashMap<String, Value>> {
+                Ok(HashMap::new())
+            }
+            fn set_state(&self, _: &HashMap<String, Value>) -> Result<()> {
+                Ok(())
+            }
+            fn get_gradients(&self, _: &[String]) -> Result<HashMap<String, Value>> {
+                Ok(HashMap::new())
+            }
+            fn apply_gradients(&self, _: &HashMap<String, Value>) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let (bus, cache) = setup();
+        let spy = Arc::new(Spy::default());
+        let mut ctx = Context::new(bus, "run_remote")
+            .with_transport(spy.clone())
+            .with_seed(Some(7));
+        ctx.mode = RunMode::Fit { y: None };
+        ctx.set("__input__", Value::tensor(vec![1.0], vec![1]));
+        ctx.graph_info
+            .set_predecessors("far", vec!["__input__".into()]);
+
+        let mut filters = NodeCatalog::new();
+        filters.register("far", Box::new(DoublerFilter));
+
+        // What the compiler produces when every node of a composite is
+        // marked remote: the wrapper names the first node, and the plan it
+        // wraps is the whole composite.
+        let inner = ExecutionPlan::Composite {
+            node_ids: vec!["far".into(), "beyond".into()],
+        };
+        let plan = ExecutionPlan::Remote {
+            node_id: "far".into(),
+            target: somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
+            plan: Box::new(inner),
+        };
+
+        execute(&plan, &mut ctx, &filters, &cache).unwrap();
+
+        let seen = spy.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "the transport should be called once");
+        let sent = &seen[0];
+        // `ExecutionPlan` has no `PartialEq`, so match its shape.
+        match &sent.plan {
+            ExecutionPlan::Composite { node_ids } => assert_eq!(
+                node_ids,
+                &vec!["far".to_string(), "beyond".to_string()],
+                "the whole composite must travel"
+            ),
+            other => panic!(
+                "the wrapped plan should travel, not an Execute rebuilt from \
+                 the id — that ran one node of the composite. Got: {other:?}"
+            ),
+        }
+        assert!(
+            matches!(sent.mode, RunMode::Fit { .. }),
+            "a remote node in a fit run must fit, not forward: {:?}",
+            sent.mode
+        );
+        assert_eq!(
+            sent.seed,
+            Some(7),
+            "an unsalted key shares a cache line per seed"
+        );
+        assert_eq!(
+            sent.catalog_size, 1,
+            "the run's catalog, not a throwaway empty one"
+        );
+
+        // And what it learned lands where a local fit puts it.
+        assert_eq!(
+            ctx.get(&somatize_core::data::keys::state_key("far")),
+            Some(&Value::tensor(vec![4.0], vec![1])),
+            "a remote fit's states were dropped on the floor"
+        );
     }
 }

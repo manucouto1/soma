@@ -28,6 +28,10 @@ distinguishable, the differentiable path was visibly storing one node's
 logged its failure, which is how three of the four sites in the fix below
 stayed invisible.
 
+**`Transport::execute_node` is removed.** It took a node id and nothing
+else, so it invented a plan, a mode and a seed; its own doc comment told
+callers with a `RunContext` not to use it. Call `Transport::execute`.
+
 ### Fixed
 
 **`fit` stored one node's output as another node's state.** Trained state
@@ -46,6 +50,15 @@ execution inside a loop, it never happened.
 
 **`forward` dispatched on a method name and had three shapes.** Which of
 the three you got depended on how the node was defined.
+
+**A remote node ran the wrong plan, in the wrong mode, with no seed.**
+`execute_remote` rebuilt an `Execute` from the node's id instead of
+sending the plan the compiler wrapped — so a `Composite` whose nodes were
+all marked remote ran only its **first** node, and a remote `Step` lost
+its handoffs. It also hardcoded `Forward`, so a remote node in a fit run
+learned nothing and returned no states from a fit that reported success;
+and passed no seed, so a five-seed sweep shared one cache line on the
+worker. `Transport::execute_node`, which did the inventing, is removed.
 
 **A worker that could not restore a trained state ran anyway, from random
 weights.** A resumed epoch silently became a cold one, and nothing in the

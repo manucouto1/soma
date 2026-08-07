@@ -51,20 +51,4 @@ pub trait Transport: Send + Sync {
 
     /// Apply aggregated gradients on the remote worker.
     fn apply_gradients(&self, gradients: &HashMap<String, Value>) -> Result<()>;
-
-    /// Convenience: execute a single node remotely (used by the plan executor).
-    ///
-    /// Unseeded, and it has to be: this takes a node id and nothing else,
-    /// so there is no run to take a seed from. Callers that have a
-    /// [`RunContext`](super::RunContext) should go through [`Transport::execute`] with
-    /// `ctx.seed` instead of reaching for this.
-    fn execute_node(&self, node_id: &str, input: Option<&Value>) -> Result<Value> {
-        let plan = ExecutionPlan::Execute {
-            node_id: node_id.to_string(),
-        };
-        let input_val = input.cloned().unwrap_or(Value::Empty);
-        let filters = crate::execution::node_catalog::NodeCatalog::new();
-        let (output, _) = self.execute(&plan, &filters, &input_val, &RunMode::Forward, None)?;
-        Ok(output)
-    }
 }

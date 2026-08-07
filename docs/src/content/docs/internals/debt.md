@@ -44,9 +44,9 @@ is what keeps those anchors honest.
 | [D-31](#d-31--zarrstores-chunk-cache-is-write-only) | ~~`ZarrStore`'s local chunk cache is never read — every `get` goes back to S3~~ — **Resolved** | High |
 | [D-01](#d-01--pygraph-is-the-workspaces-god-object) | ~~`PyGraph`: 2 458 lines, 19 fields, ~47 public methods~~ — **Resolved** | High |
 | [D-11](#d-11--the-stream-path-re-implements-run_node-and-has-drifted) | ~~Stream execution re-implements `run_node` and has drifted — no cache events~~ — **Resolved** | High |
-| [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | `mean_by_key` panics on an empty slice, reachable from Python | High |
+| [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | ~~`mean_by_key` panics on an empty slice, reachable from Python~~ — **Resolved** in v0.5.1; the entry was stale | High |
 | [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | ~~Compiler never descends into `Loop`/`Branch` for distribution or fusion~~ — **Resolved** | High |
-| [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | `Transport::execute_node` runs every remote node with an empty catalog and an unsalted key | High |
+| [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | ~~`Transport::execute_node` runs every remote node with an empty catalog and an unsalted key~~ — **Resolved**; the catalog was the harmless half | High |
 | [D-02](#d-02--worker-and-worker-execute_plan) | ~~`Worker::execute_plan`: 324 lines across nine responsibilities~~ — **Resolved** (44 lines; the `Worker` struct's 11 fields stand) | High |
 | [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
 | [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | ~~Four `write_atomic` implementations, two without fsync or unique temp names~~ — **Resolved** | Medium |
@@ -506,6 +506,27 @@ passes straight through) and is validated nowhere.
 **Fix shape** Reject `num_replicas == 0` at the Python boundary *and* return an
 error from `mean_by_key` on an empty slice. Both, not either.
 
+**Resolved — and this entry was stale, not the code.** All three pieces landed
+in `f69ae7f`, released as v0.5.1, and the register was never updated:
+
+- `soma-python/src/graph/distributed.rs:390` rejects `Some(0)` for
+  `num_replicas`, `num_clients`, `population_size`, `rounds` **and**
+  `generations` — the finding named one field; the guard covers the five that
+  share the failure.
+- `mean_by_key` (`soma-runtime/src/distributed.rs:437`) returns an error before
+  reaching `entries[0]`.
+- `GradientAggregator for GradientAggregation` (`:471`) guards the empty case
+  it was missing, beside the `len() == 1` short-circuit that hid it.
+
+`aggregating_over_zero_contributors_errors_rather_than_panicking`
+(`soma-runtime/src/distributed.rs:1114`) asserts all three, including the shared
+helper — so a fourth caller added later cannot reintroduce the panic.
+
+`mean_of` (`:290`) and `mean_json` (`:366`) still index `[0]`. They are private,
+reached only through `mean_by_key` after its guard, and their slice is built by
+iterating the keys of a non-empty entry — so it has one element per contributor,
+never zero.
+
 ### D-22 · A suspension reason that fails to serialize collides with every other one
 
 **Class** Silent failure · **Severity** Medium · **Crate** `soma-runtime`
@@ -821,17 +842,41 @@ See [D-65](#d-65--the-schedulers-capability-model-is-unimplemented).
 
 **Class** Leaky abstraction · **Severity** High · **Crate** `soma-runtime`
 
-**Evidence** `soma-runtime/src/execution/runner/remote.rs:61` — the default implementation
-builds a throwaway `NodeCatalog::new()` and calls `execute` with `seed: None`.
-Its own doc comment (`:56`) says: "Unseeded, and it has to be… Callers that have
-a `RunContext` should go through `Transport::execute` with `ctx.seed` instead of
-reaching for this."
+**Evidence** `Transport::execute_node`, a default method on the trait in
+`soma-runtime/src/execution/runner/remote.rs`, built a throwaway
+`NodeCatalog::new()` and called `execute` with `seed: None`. Its own doc comment
+said: "Unseeded, and it has to be… Callers that have a `RunContext` should go
+through `Transport::execute` with `ctx.seed` instead of reaching for this."
 
-`soma-runtime/src/execution/executor.rs:616` reaches for it anyway.
+`execute_remote` in `soma-runtime/src/execution/executor.rs` reached for it
+anyway. (No `file:line` here: the method is deleted, so there is no line left to
+point at — see the Resolved note.)
 
 **Consequence** Every `ExecutionPlan::Remote` node executes with an empty filter
 catalog and an unsalted cache key. Seeded runs are not reproducible across the
 remote boundary, and two runs with different seeds share cache lines.
+
+**Resolved — and the entry led with the harmless half.** `execute_remote` has
+the plan, the catalog, the mode and the seed; it passed none of them. Four
+things were invented, and the catalog is the one that changes nothing:
+
+| Invented | What it cost |
+|---|---|
+| `ExecutionPlan::Execute { node_id }` rebuilt from the id | `Remote` wraps a **`Composite`** when every one of its nodes is marked remote (`soma-compiler/src/compiler.rs:766`), or a `Step` with its handoffs. Only the first node of the composite ran; the rest never executed. |
+| `RunMode::Forward` | A remote node in a **fit** run was forwarded, so it learned nothing and the states came back empty — from a fit that reported success. |
+| `seed: None` | The worker salted nothing. A five-seed sweep shared one cache line across all five — the bug `SerializedPlan::seed` exists to close. |
+| `NodeCatalog::new()` | Nothing. `WsTransport::execute` ignores the argument, and `wire_plan_sends_no_filters` (`soma-worker/src/ws_transport.rs:529`) asserts that it must: a catalog holds live filters, not the pickle bytes a worker unpickles. Passed anyway, because inventing an empty one is a lie the type does not require. |
+
+A remote fit's returned states are now written under `keys::state_key(id)`,
+where a local fit puts them, so `Runner::fit` finds them like any other.
+
+`Transport::execute_node` — the convenience that did the inventing, and whose
+own doc comment told callers not to reach for it — had no callers left and is
+deleted.
+
+Covered by `a_remote_node_is_sent_the_plan_mode_and_seed_of_its_run`
+(`soma-runtime/src/execution/executor.rs`), which asserts all four arrive and
+that the states land.
 
 ### D-42 · `ExecutionPlan::Remote` discards its routing target
 
