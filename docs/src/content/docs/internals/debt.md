@@ -47,7 +47,7 @@ is what keeps those anchors honest.
 | [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | ~~`mean_by_key` panics on an empty slice, reachable from Python~~ — **Resolved** in v0.5.1; the entry was stale | High |
 | [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | ~~Compiler never descends into `Loop`/`Branch` for distribution or fusion~~ — **Resolved** | High |
 | [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | ~~`Transport::execute_node` runs every remote node with an empty catalog and an unsalted key~~ — **Resolved**; the catalog was the harmless half | High |
-| [D-02](#d-02--worker-and-worker-execute_plan) | ~~`Worker::execute_plan`: 324 lines across nine responsibilities~~ — **Resolved** (44 lines; the `Worker` struct's 11 fields stand) | High |
+| [D-02](#d-02--worker-and-worker-execute_plan) | ~~`Worker::execute_plan`: 324 lines across nine responsibilities~~ — **Resolved** (44 lines; the struct is 9 fields → 5) | High |
 | [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
 | [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | ~~Four `write_atomic` implementations, two without fsync or unique temp names~~ — **Resolved** | Medium |
 | [D-61](#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) | `Context::snapshot` deep-clones the whole value store per parallel branch | Medium |
@@ -114,9 +114,9 @@ only in a field that travels inside `ExecutionMode::Fit`.
 
 **Class** God object · **Severity** High · **Crate** `soma-worker`
 
-**Evidence** `soma-worker/src/worker.rs:16` — 11 fields covering identity,
-capabilities, event bus, cache, node catalog, *two* data stores, env manager and
-interpreter path. `Worker::execute_plan` (`soma-worker/src/worker.rs:275`) is
+**Evidence** `soma-worker/src/worker.rs:21` — **9** fields (this entry said 11;
+its own enumeration lists nine) covering identity, capabilities, event bus,
+cache, node catalog, *two* data stores, env manager and interpreter path. `Worker::execute_plan` (`soma-worker/src/worker.rs:275`) is
 **324 lines** performing: protocol version check → requirement collection → venv
 provisioning → subprocess spawn → state loading → filter registration → input
 resolution → mode dispatch → streaming decision → state harvesting → result
@@ -161,8 +161,19 @@ Two things fell out that were not the point:
   pointing the other way. They go through one `keep_what_was_learned`, which
   propagates. (Defensive today, for the reason given in D-25.)
 
-The `Worker` struct itself still has 11 fields. That is a separate finding and
-this entry stays open to it having been only half addressed.
+**The struct, too.** Nine fields become five, grouped by what each is *for*
+rather than left flat:
+
+| Field | Was | Why together |
+|---|---|---|
+| `execution` | `catalog`, `cache`, `event_bus` | Exactly what `RunContext::linear` is built from. No method ever wanted two of the three. |
+| `stores` | `data_store`, `temp_store` | Where a plan's data enters and leaves. The pair the evidence above called "*two* data stores" now says which is the user's and which is the worker's. |
+| `python` | `env_manager`, `python` | How an interpreter gets chosen and started. |
+
+Building a `RunContext` moved onto `Execution`, beside the three fields it
+reads, and the one-line delegator on `Worker` went with it. The four public
+accessors (`catalog()`, `cache()`, `event_bus()`, `temp_store()`) are unchanged,
+so nothing outside `worker.rs` moved — `server.rs` uses only those.
 
 ### D-03 · `Context` carries five unrelated concerns
 

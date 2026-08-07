@@ -13,21 +13,76 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Worker state: manages execution of plans received from a coordinator.
+///
+/// Five fields, grouped by what each is *for*. They used to be nine loose
+/// ones, and the three that a run needs sat beside the two that decide
+/// where data lives beside the two that start Python — so every method
+/// reached past the concerns it did not care about to find the one it did.
 pub struct Worker {
     /// The identity this worker registers and reports under.
     pub id: WorkerId,
     /// What this worker can run, announced to the coordinator at
     /// registration.
     pub capabilities: Capabilities,
-    event_bus: Arc<EventBus>,
-    cache: Arc<dyn CacheStore>,
+    execution: Execution,
+    stores: Stores,
+    python: PythonRuntime,
+}
+
+/// What running a plan needs.
+///
+/// Exactly the three things [`RunContext::linear`] is built from, which is
+/// why they are one field: no method has ever wanted two of them.
+///
+/// [`RunContext::linear`]: somatize_runtime::execution::runner::RunContext::linear
+struct Execution {
+    /// Implementations and trained states for every node the worker knows.
     catalog: NodeCatalog,
-    /// Optional persistent DataStore (S3, Zarr, etc.) — configured by user.
-    data_store: Option<Arc<dyn DataStore>>,
-    /// Temporary local store for HTTP bulk uploads — auto-created, auto-cleaned.
-    temp_store: Arc<LocalDataStore>,
-    /// Environment manager for creating venvs with filter dependencies.
-    env_manager: crate::env_manager::EnvManager,
+    /// Output cache consulted and filled by the runner.
+    cache: Arc<dyn CacheStore>,
+    /// Bus the worker's node events go out on.
+    events: Arc<EventBus>,
+}
+
+impl Execution {
+    /// A run over this worker's catalog, cache and bus.
+    ///
+    /// `linear`, explicitly: a worker receives a serialized plan and no
+    /// graph, so it has no topology to consult. Correct for the pipelines
+    /// that get dispatched, and stated here rather than assumed inside the
+    /// runner.
+    fn run_context<'a>(
+        &'a self,
+        plan: &'a SerializedPlan,
+        run_id: &'a str,
+    ) -> somatize_runtime::execution::runner::RunContext<'a> {
+        let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
+            &self.catalog,
+            self.cache.as_ref(),
+            &self.events,
+            run_id,
+            &plan.plan,
+        );
+        ctx.seed = plan.seed;
+        ctx
+    }
+}
+
+/// Where a plan's data comes from and where its output goes.
+///
+/// Two stores, and the difference matters: one is the user's and may not
+/// exist, the other is the worker's own and always does.
+struct Stores {
+    /// S3, Zarr, ... — configured by the user. `None` means inline only.
+    persistent: Option<Arc<dyn DataStore>>,
+    /// Backs the HTTP bulk-upload endpoint. Auto-created, auto-cleaned.
+    temp: Arc<LocalDataStore>,
+}
+
+/// How this worker runs Python.
+struct PythonRuntime {
+    /// Isolated environments per requirement set.
+    envs: crate::env_manager::EnvManager,
     /// Which interpreter to unpickle filters in, when no venv is needed.
     ///
     /// A cloudpickled filter can only be reconstructed by an interpreter
@@ -37,7 +92,7 @@ pub struct Worker {
     /// returns the class's `__dict__` instead of an instance — which
     /// surfaces as `'dict' object is not callable`, from inside a
     /// subprocess, with nothing pointing at the version gap.
-    python: String,
+    interpreter: String,
 }
 
 /// Rows per chunk when auto-streaming from a DataStore — and the threshold
@@ -73,16 +128,22 @@ impl Worker {
         Self {
             id: worker_id,
             capabilities,
-            event_bus: Arc::new(EventBus::new(256)),
-            cache: Arc::new(MemoryCache::default()),
-            catalog: NodeCatalog::new(),
-            data_store: None,
-            temp_store: Arc::new(temp_store),
-            env_manager: crate::env_manager::EnvManager::new(
-                env_path,
-                crate::env_manager::EnvType::Venv,
-            ),
-            python: default_python(),
+            execution: Execution {
+                catalog: NodeCatalog::new(),
+                cache: Arc::new(MemoryCache::default()),
+                events: Arc::new(EventBus::new(256)),
+            },
+            stores: Stores {
+                persistent: None,
+                temp: Arc::new(temp_store),
+            },
+            python: PythonRuntime {
+                envs: crate::env_manager::EnvManager::new(
+                    env_path,
+                    crate::env_manager::EnvType::Venv,
+                ),
+                interpreter: default_python(),
+            },
         }
     }
 
@@ -93,61 +154,62 @@ impl Worker {
     /// the interpreter that pickled the filters, so it is the only one
     /// certain to unpickle them.
     pub fn with_python(mut self, python: impl Into<String>) -> Self {
-        self.python = python.into();
+        self.python.interpreter = python.into();
         self
     }
 
     /// Set a custom cache store (e.g. tiered or shared).
     pub fn with_cache(mut self, cache: Arc<dyn CacheStore>) -> Self {
-        self.cache = cache;
+        self.execution.cache = cache;
         self
     }
 
     /// Set a persistent DataStore (S3, Zarr, etc.) for large data references.
     pub fn with_data_store(mut self, store: Arc<dyn DataStore>) -> Self {
-        self.data_store = Some(store);
+        self.stores.persistent = Some(store);
         self
     }
 
     /// Set a custom temp directory for HTTP bulk uploads.
     pub fn with_temp_dir(mut self, path: std::path::PathBuf) -> Self {
-        self.temp_store = Arc::new(LocalDataStore::new(path));
+        self.stores.temp = Arc::new(LocalDataStore::new(path));
         self
     }
 
     /// Get the temp store (for HTTP upload endpoint).
     pub fn temp_store(&self) -> &Arc<LocalDataStore> {
-        &self.temp_store
+        &self.stores.temp
     }
 
     /// Register a filter that this worker can execute.
     pub fn register_filter(&mut self, node_id: impl Into<String>, filter: Box<dyn Filter>) {
-        self.catalog.register(node_id, filter);
+        self.execution.catalog.register(node_id, filter);
     }
 
     /// Get a filter by node_id.
     pub fn get_filter(&self, node_id: &str) -> Option<Arc<dyn Filter>> {
-        self.catalog.get(node_id)
+        self.execution.catalog.get(node_id)
     }
 
     /// The node catalog — what a stream driver is built over.
     pub fn catalog(&self) -> &NodeCatalog {
-        &self.catalog
+        &self.execution.catalog
     }
 
     /// The worker's event bus.
     pub fn event_bus(&self) -> &Arc<EventBus> {
-        &self.event_bus
+        &self.execution.events
     }
 
     /// The worker's cache store.
     pub fn cache(&self) -> &Arc<dyn CacheStore> {
-        &self.cache
+        &self.execution.cache
     }
 
     /// Get trained state for a filter.
     pub fn get_filter_state(&self, node_id: &str) -> Arc<Value> {
-        self.catalog
+        self.execution
+            .catalog
             .get_state(node_id)
             .unwrap_or_else(|| Arc::new(Value::Empty))
     }
@@ -160,7 +222,7 @@ impl Worker {
         &self,
         node_id: &str,
     ) -> Option<Arc<std::sync::Mutex<crate::python_process::PythonProcess>>> {
-        let filter = self.catalog.get(node_id)?;
+        let filter = self.execution.catalog.get(node_id)?;
         let sf = filter
             .as_any()
             .downcast_ref::<crate::python_process::SubprocessFilter>()?;
@@ -239,12 +301,15 @@ impl Worker {
 
     /// Set trained state for a filter.
     pub fn set_filter_state(&mut self, node_id: &str, state: Value) -> Result<()> {
-        self.catalog.try_set_state(node_id, state).map_err(|e| {
-            WorkerError::Env(format!(
-                "could not store the trained state for `{node_id}`: {e}. \
+        self.execution
+            .catalog
+            .try_set_state(node_id, state)
+            .map_err(|e| {
+                WorkerError::Env(format!(
+                    "could not store the trained state for `{node_id}`: {e}. \
                  Refusing to continue: the node would run from random weights."
-            ))
-        })
+                ))
+            })
     }
 
     /// Wrap output in the right delivery: inline for small, DataRef for large.
@@ -254,7 +319,7 @@ impl Worker {
             let key = somatize_core::cache::CacheKey::hash_data(
                 &serde_json::to_vec(&output).unwrap_or_default(),
             );
-            if let Ok(data_ref) = self.temp_store.put(&key, &output) {
+            if let Ok(data_ref) = self.stores.temp.put(&key, &output) {
                 return OutputDelivery::Reference { data_ref };
             }
         }
@@ -263,7 +328,7 @@ impl Worker {
 
     /// Subscribe to execution events.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
-        self.event_bus.subscribe()
+        self.execution.events.subscribe()
     }
 
     /// Build a registration message.
@@ -348,7 +413,7 @@ impl Worker {
 
         // Create/reuse venv if there are pip requirements, otherwise use system python
         let python_path = if all_reqs.is_empty() {
-            self.python.clone()
+            self.python.interpreter.clone()
         } else {
             let reqs_str = all_reqs.join("\n");
             // Keyed by the requirements, not by the plan. A plan id is a
@@ -358,14 +423,14 @@ impl Worker {
             // share one environment, which is what the lockfile inside it
             // was already written to support.
             let env_id = crate::env_manager::EnvManager::env_id_for(&reqs_str);
-            match self.env_manager.ensure_env(&env_id, &reqs_str) {
+            match self.python.envs.ensure_env(&env_id, &reqs_str) {
                 Ok(path) => {
                     tracing::info!("Using venv {env_id} for plan {}: {:?}", plan.plan_id, path);
                     path.to_string_lossy().to_string()
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create venv, falling back to system python: {e}");
-                    self.python.clone()
+                    self.python.interpreter.clone()
                 }
             }
         };
@@ -457,7 +522,7 @@ impl Worker {
                     sf.trainable,
                     config_hash,
                 ));
-                self.catalog.register(&sf.node_id, filter);
+                self.execution.catalog.register(&sf.node_id, filter);
                 if let Some(state) = &sf.state
                     && let Err(e) = self.set_filter_state(&sf.node_id, state.clone())
                 {
@@ -487,7 +552,7 @@ impl Worker {
     ) -> std::result::Result<Option<Value>, Box<PlanResult>> {
         plan.input
             .as_ref()
-            .map(|src| src.resolve(self.data_store.as_deref(), &self.temp_store))
+            .map(|src| src.resolve(self.stores.persistent.as_deref(), &self.stores.temp))
             .transpose()
             .map_err(|e| {
                 Box::new(PlanResult::Failed {
@@ -519,7 +584,7 @@ impl Worker {
     ) -> Option<PlanResult> {
         if matches!(plan.mode, ExecutionMode::Forward)
             && let Some(InputSource::Reference { data_ref }) = &plan.input
-            && let Some(store) = self.data_store.clone()
+            && let Some(store) = self.stores.persistent.clone()
             && let Ok(meta) = store.meta(data_ref)
             && meta.total_rows > STREAM_CHUNK_ROWS
         {
@@ -567,7 +632,10 @@ impl Worker {
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
 
-        let Some(filter) = node_ids.first().and_then(|id| self.catalog.get(id)) else {
+        let Some(filter) = node_ids
+            .first()
+            .and_then(|id| self.execution.catalog.get(id))
+        else {
             return Err(somatize_core::error::SomaError::Other(
                 "no filters found".into(),
             ));
@@ -599,7 +667,7 @@ impl Worker {
         y: Option<&Value>,
     ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
         let run_id = format!("worker_fit_{}", plan.plan_id);
-        let ctx = self.run_context(plan, &run_id);
+        let ctx = self.execution.run_context(plan, &run_id);
         let fitted = somatize_runtime::LocalRunner.fit(&plan.plan, &ctx, x, y)?;
         // The runner already told states and outputs apart — this used to
         // re-derive the split from a key prefix, as did three other callers.
@@ -615,32 +683,9 @@ impl Worker {
         x: &Value,
     ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
         let run_id = format!("worker_forward_{}", plan.plan_id);
-        let ctx = self.run_context(plan, &run_id);
+        let ctx = self.execution.run_context(plan, &run_id);
         let output = somatize_runtime::LocalRunner.forward(&plan.plan, &ctx, x)?;
         Ok((output, HashMap::new()))
-    }
-
-    /// What a run of this plan needs, built the one way a worker can build
-    /// it.
-    ///
-    /// `linear`, explicitly: a worker receives a serialized plan and no
-    /// graph, so it has no topology to consult. Correct for the pipelines
-    /// that get dispatched, and stated here rather than assumed inside the
-    /// runner.
-    fn run_context<'a>(
-        &'a self,
-        plan: &'a SerializedPlan,
-        run_id: &'a str,
-    ) -> somatize_runtime::execution::runner::RunContext<'a> {
-        let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
-            &self.catalog,
-            self.cache.as_ref(),
-            &self.event_bus,
-            run_id,
-            &plan.plan,
-        );
-        ctx.seed = plan.seed;
-        ctx
     }
 
     /// Store what a fit learned, so a later plan on this worker sees it.
@@ -710,7 +755,7 @@ impl Worker {
         // StreamRun refuses a node the catalog does not know — a failed
         // plan, never a silently shorter chain (a `filter_map` here once
         // streamed a 3-node plan through 2 filters and reported success).
-        let mut run = match StreamRun::new(&node_ids, &self.catalog) {
+        let mut run = match StreamRun::new(&node_ids, &self.execution.catalog) {
             Ok(run) => run,
             Err(e) => {
                 return PlanResult::Failed {
@@ -722,9 +767,10 @@ impl Worker {
 
         let chunk_size = STREAM_CHUNK_ROWS;
         let run_id = format!("worker_stream_{}", plan.plan_id);
-        let mut ctx = Context::new(self.event_bus.clone(), run_id.clone()).with_seed(plan.seed);
+        let mut ctx =
+            Context::new(self.execution.events.clone(), run_id.clone()).with_seed(plan.seed);
 
-        self.event_bus.emit(Event::RunStarted {
+        self.execution.events.emit(Event::RunStarted {
             run_id: run_id.clone(),
             plan_summary: somatize_core::tracking::event::PlanSummary {
                 total_nodes: node_ids.len(),
@@ -755,16 +801,16 @@ impl Worker {
                 Ok(c) => c,
                 Err(e) => {
                     let error = format!("get_rows({row_start}..{}): {e}", row_start + len);
-                    return fail(&self.event_bus, error, start);
+                    return fail(&self.execution.events, error, start);
                 }
             };
 
-            match run.process_chunk(chunk, &mut ctx, self.cache.as_ref()) {
+            match run.process_chunk(chunk, &mut ctx, self.execution.cache.as_ref()) {
                 Ok(Some(out)) => output.push(out),
                 Ok(None) => {} // Barrier — accumulating
                 Err(e) => {
                     return fail(
-                        &self.event_bus,
+                        &self.execution.events,
                         format!("stream chunk {chunk_idx}: {e}"),
                         start,
                     );
@@ -774,11 +820,11 @@ impl Worker {
         }
 
         // Flush barrier filters.
-        match run.flush(&mut ctx, self.cache.as_ref()) {
+        match run.flush(&mut ctx, self.execution.cache.as_ref()) {
             Ok(Some(out)) => output.push(out),
             Ok(None) => {}
             Err(e) => {
-                return fail(&self.event_bus, format!("stream flush: {e}"), start);
+                return fail(&self.execution.events, format!("stream flush: {e}"), start);
             }
         }
         run.finish(&ctx);
@@ -788,7 +834,7 @@ impl Worker {
             start.elapsed().as_millis()
         );
 
-        self.event_bus.emit(Event::RunCompleted {
+        self.execution.events.emit(Event::RunCompleted {
             run_id,
             duration: start.elapsed(),
         });

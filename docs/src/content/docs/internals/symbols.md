@@ -436,7 +436,7 @@ fails the build rather than quietly misleading a reader.
 
 | Symbol | Kind | Crate | Defined at |
 |---|---|---|---|
-| [`Worker`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/worker.rs:16` |
+| [`Worker`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/worker.rs:21` |
 | [`WorkerError`](/soma/internals/distribution/#soma-worker-somatize-worker) | enum | `soma-worker` | `soma-worker/src/error.rs:24` |
 | [`WorkerIdentity`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/distributed.rs:553` |
 | [`WorkerInfo`](/soma/internals/execution/#soma-compiler-somatize-compiler) | struct | `soma-compiler` | `soma-compiler/src/scheduler.rs:15` |

@@ -76,7 +76,9 @@ stream. All four fail now.
 - `Worker::execute_plan`: 324 → 44 LOC. The nine stages it performed are
   nine named functions, and the streaming threshold is no longer a
   literal in a comment that had to agree with a `const` in another
-  function.
+  function. The `Worker` struct went from nine flat fields to five,
+  grouped as `execution` / `stores` / `python`; its public accessors are
+  unchanged.
 - Topology is declared with operators, actions with methods; one name for
   an edge; one lever for the cache; one objective vocabulary.
 - A run parses its events once instead of per query.
