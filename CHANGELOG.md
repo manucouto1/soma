@@ -56,6 +56,13 @@ did not descend into loop bodies, so distribution was dropped for any node
 nested in one, with no error and no warning. If you relied on remote
 execution inside a loop, it never happened.
 
+**`Value::to_plain_json` emitted the tagged encoding it documents never
+to emit.** `Bytes` and `Object` came out as `{"type":"Bytes","data":[…]}`
+instead of a plain number array, and any conversion failure became
+`null` — indistinguishable from `Empty`. Both are fixed, and the match
+is exhaustive now, so a new `Value` variant cannot slip through
+unconsidered.
+
 **`forward` dispatched on a method name and had three shapes.** Which of
 the three you got depended on how the node was defined.
 

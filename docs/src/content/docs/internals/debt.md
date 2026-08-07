@@ -48,9 +48,9 @@ is what keeps those anchors honest.
 | [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | ~~Compiler never descends into `Loop`/`Branch` for distribution or fusion~~ — **Resolved** | High |
 | [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | ~~`Transport::execute_node` runs every remote node with an empty catalog and an unsalted key~~ — **Resolved**; the catalog was the harmless half | High |
 | [D-02](#d-02--worker-and-worker-execute_plan) | ~~`Worker::execute_plan`: 324 lines across nine responsibilities~~ — **Resolved** (44 lines; the struct is 9 fields → 5) | High |
-| [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
+| [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | ~~`Value::to_plain_json` emits the tagged encoding it promises never to emit~~ — **Resolved** | Medium |
 | [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | ~~Four `write_atomic` implementations, two without fsync or unique temp names~~ — **Resolved** | Medium |
-| [D-61](#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) | `Context::snapshot` deep-clones the whole value store per parallel branch | Medium |
+| [D-61](#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) | ~~`Context::snapshot` deep-clones the whole value store per parallel branch~~ — **Not a finding**; measured at 7.8 KB, not 4 GB | Medium |
 
 ---
 
@@ -766,6 +766,20 @@ other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
 `{"type":"Bytes","data":[…]}` — precisely the encoding the doc promises never to
 emit. The `unwrap_or(Null)` also turns any failure into `null`.
 
+**Resolved** `Bytes` and `Object` become flat number arrays — the same rule that
+already turned a tensor into one, so no new dependency in the crate that is
+kept deliberately lean.
+
+The wildcard is gone, and that is the part worth keeping: `Value` is
+`#[non_exhaustive]` for *other* crates, not inside `soma-core`, so the match can
+be exhaustive. A new variant now breaks this function and whoever adds it has to
+say what its plain form is. A wildcard is exactly what let two variants go
+unconsidered for as long as they did — and it took `unwrap_or(Null)` with it, so
+only `Empty` is null.
+
+Three tests in `soma-core/src/data/value.rs`: no variant leaks a `type`/`data`
+pair, bytes and objects are number arrays, and only `Empty` is null.
+
 ### D-34 · `RemoteRunner` is never constructed
 
 **Class** Dead code · **Severity** Medium · **Crate** `soma-runtime`
@@ -1115,6 +1129,27 @@ comment at `:1090` explains the write-set merge but not the snapshot cost.
 **Mitigating** `Value` payloads are all `Arc`-backed (`soma-core/src/data/value.rs:15`),
 so the clone is refcount bumps, not byte copies — but `VirtualValue::Materialized`
 holds the `Value` and the `HashMap` itself is rebuilt per branch.
+
+**Not a finding — the consequence was wrong, and now it is measured.** The
+mitigating note had it right and the headline did not. A 4-way `Parallel` over
+an 8 MB tensor, under the tracking allocator in
+`soma-runtime/tests/memory_usage.rs`:
+
+```
+parallel: branches=4, tensor=8000000B, peak_growth=40007813B, ratio=5.00x
+snapshot overhead above the produced outputs: 7813B
+```
+
+40 MB is **exactly** the five tensors the graph legitimately produces — the
+source's output and one per branch. The four snapshots cost **7 813 bytes** in
+total: the map spines and the run's bookkeeping (execution order, output hashes,
+topology). O(nodes), not O(bytes). The claimed 4 GB would be off by a factor of
+about four thousand.
+
+Kept as a **regression guard** rather than deleted:
+`a_parallel_branch_does_not_copy_the_data_it_reads` fails if a `Value` ever
+stops being `Arc`-backed, which is the thing that would make the original
+finding true. No code changed.
 
 ### D-62 · `MemoryCache`'s LRU touch is O(n) on every read
 

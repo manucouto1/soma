@@ -112,6 +112,22 @@ impl Value {
     /// (nested) number arrays, Json unwraps, Empty is null. This is what
     /// a multi-predecessor node receives per upstream branch — never the
     /// internal serde-tagged encoding.
+    ///
+    /// `Bytes` and `Object` become flat number arrays, by the same rule
+    /// that turns a tensor into one. They used to fall through to
+    /// `serde_json::to_value(self)`, which emits exactly the
+    /// `{"type":"Bytes","data":[…]}` this doc comment promises never to
+    /// appear — and any failure became `null`, indistinguishable from
+    /// `Empty`.
+    ///
+    /// The match is **exhaustive**, deliberately. `Value` is
+    /// `#[non_exhaustive]` for other crates, but not inside this one, so
+    /// a new variant breaks here and whoever adds it has to say what its
+    /// plain form is. A wildcard is what let two variants go unconsidered.
+    ///
+    /// Lossy where JSON is: `Text` and a `Json` string both come out as
+    /// strings, `Bytes` and `Object` both as number arrays. A caller that
+    /// must tell them apart wants the `Value`, not its plain form.
     pub fn to_plain_json(&self) -> serde_json::Value {
         fn nest(values: &[f64], shape: &[usize]) -> serde_json::Value {
             if shape.len() <= 1 {
@@ -131,12 +147,15 @@ impl Value {
                     .collect(),
             )
         }
+        fn bytes(b: &[u8]) -> serde_json::Value {
+            serde_json::Value::Array(b.iter().map(|byte| serde_json::json!(byte)).collect())
+        }
         match self {
             Self::Tensor { values, shape } => nest(values, shape),
             Self::Text(s) => serde_json::Value::String(s.to_string()),
             Self::Json(v) => (**v).clone(),
+            Self::Bytes(b) | Self::Object(b) => bytes(b),
             Self::Empty => serde_json::Value::Null,
-            other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
         }
     }
 
@@ -263,5 +282,64 @@ mod tests {
         assert_eq!(Value::tensor(vec![1.0; 100], vec![10, 10]).size(), 100);
         assert_eq!(Value::bytes(vec![0; 50]).size(), 50);
         assert!(Value::json(json!({"key": "val"})).size() > 0);
+    }
+}
+
+#[cfg(test)]
+mod plain_json {
+    use super::*;
+
+    /// D-33: `to_plain_json` promised never to emit the internal tagged
+    /// encoding, and emitted it for the two variants nothing had thought
+    /// about.
+    #[test]
+    fn no_variant_leaks_the_tagged_encoding() {
+        let cases = [
+            Value::tensor(vec![1.0, 2.0], vec![2]),
+            Value::Text("hi".into()),
+            Value::json(serde_json::json!({"a": 1})),
+            Value::Bytes(Arc::new(vec![1, 2, 255])),
+            Value::Object(Arc::new(vec![7])),
+            Value::Empty,
+        ];
+        for v in &cases {
+            let plain = v.to_plain_json();
+            let tagged = plain
+                .get("type")
+                .zip(plain.get("data"))
+                .is_some_and(|(t, _)| t.is_string());
+            assert!(!tagged, "{} leaked the tagged form: {plain}", v.type_name());
+        }
+    }
+
+    /// Bytes follow the rule tensors follow: numbers become an array.
+    #[test]
+    fn bytes_and_objects_are_number_arrays() {
+        assert_eq!(
+            Value::Bytes(Arc::new(vec![1, 2, 255])).to_plain_json(),
+            serde_json::json!([1, 2, 255])
+        );
+        assert_eq!(
+            Value::Object(Arc::new(vec![7])).to_plain_json(),
+            serde_json::json!([7])
+        );
+    }
+
+    /// `unwrap_or(Null)` used to make an unrepresentable value look like
+    /// `Empty`. Only `Empty` is null now.
+    #[test]
+    fn only_empty_is_null() {
+        assert_eq!(Value::Empty.to_plain_json(), serde_json::Value::Null);
+        for v in [
+            Value::Bytes(Arc::new(vec![])),
+            Value::Object(Arc::new(vec![])),
+            Value::Text("".into()),
+        ] {
+            assert!(
+                !v.to_plain_json().is_null(),
+                "{} became null",
+                v.type_name()
+            );
+        }
     }
 }
