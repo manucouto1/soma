@@ -110,3 +110,31 @@ def test_gradient_flows_through_composite_block():
     # Random init loss is O(1); convergence below 1e-3 requires gradients
     # to have propagated all the way back to filter a.
     assert final_loss < 1e-3, f"expected training loss < 1e-3, got {final_loss:.4e}"
+
+
+def test_a_composite_fit_stores_states_not_outputs():
+    """The last node's *output* is not the last node's *state*.
+
+    A runner answers a fit with one map holding both: node outputs under
+    the bare id, learned state under ``__state_<id>``. The differentiable
+    path used to read that map with ``node_of_state_key(k).unwrap_or(k)``,
+    so the bare entry for the block's last node was filed as its state —
+    and which of the two survived depended on ``HashMap`` order.
+    """
+    x = [[(i - 8) / 8.0, (i - 7) / 8.0] for i in range(16)]
+    y = [[2.0 * xi[0] - xi[1]] for xi in x]
+
+    g = Graph()
+    g.node("a", LinearFilter(in_dim=2, out_dim=4, epochs=1))
+    g.node("b", LinearFilter(in_dim=4, out_dim=1, epochs=1))
+    g.edge("a", "b")
+
+    g.fit(x, y, mode="differentiable")
+
+    # What composite_fit returned, for every node in the block — including
+    # the last one, whose output shares the map with it.
+    for node_id in ("a", "b"):
+        assert g.get_node_state(node_id) == {"fitted": True}, (
+            f"{node_id}'s state is the block output, not what composite_fit "
+            f"returned: {g.get_node_state(node_id)!r}"
+        )

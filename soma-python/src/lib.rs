@@ -14,16 +14,12 @@
 //! because there was no boundary to be private to.
 
 mod agentic;
-mod bridge;
 mod cache;
-mod convert;
+mod data;
+mod distributed;
 mod graph;
-mod pbt;
-mod readers;
-mod run;
-mod store;
-mod study;
-mod worker;
+mod optimizer;
+mod tracking;
 
 /// What every binding module needs.
 ///
@@ -34,8 +30,8 @@ pub(crate) mod prelude {
     pub(crate) use super::agentic::{
         PyAgent, PyJudge, PyStepCtx, PyTool, PyToolAdapter, to_step_spec,
     };
-    pub(crate) use super::bridge::PyFilterBridge;
-    pub(crate) use super::convert::{json_to_py, py_any_to_json, py_to_value, value_to_py};
+    pub(crate) use super::data::convert::{json_to_py, py_any_to_json, py_to_value, value_to_py};
+    pub(crate) use super::graph::bridge::PyFilterBridge;
     pub(crate) use super::{default_cache_dir, py_err_to_soma, soma_err_to_py};
     pub(crate) use pyo3::exceptions::PyRuntimeError;
     pub(crate) use pyo3::exceptions::PyValueError;
@@ -43,29 +39,29 @@ pub(crate) mod prelude {
     pub(crate) use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList};
     pub(crate) use somatize_compiler::{CompileMode, compile};
     pub(crate) use somatize_core::cache::CacheKey;
+    pub(crate) use somatize_core::data::value::Value;
     pub(crate) use somatize_core::error::{Result as SomaResult, SomaError};
-    pub(crate) use somatize_core::event::MetricRecord;
-    pub(crate) use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-    pub(crate) use somatize_core::fingerprint::ArchitectureFingerprint;
+    pub(crate) use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
     pub(crate) use somatize_core::graph::{Edge, Graph, Node};
-    pub(crate) use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-    pub(crate) use somatize_core::study::{
+    pub(crate) use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+    pub(crate) use somatize_core::optimizer::study::{
         Direction, Objective, PruningStrategy, SearchStrategy, Study,
     };
+    pub(crate) use somatize_core::tracking::event::MetricRecord;
+    pub(crate) use somatize_core::tracking::fingerprint::ArchitectureFingerprint;
     pub(crate) use somatize_core::tracking::{GraphSummaryInfo, RunKind, RunState, Tracker};
-    pub(crate) use somatize_core::value::Value;
     pub(crate) use somatize_runtime::EventBus;
     pub(crate) use somatize_runtime::StudyIo;
+    pub(crate) use somatize_runtime::agentic::{EffectDriver, EffectJournal};
     pub(crate) use somatize_runtime::cache::{FsActionStore, MemoryCache, TieredCache};
-    pub(crate) use somatize_runtime::effects::{EffectDriver, EffectJournal};
-    pub(crate) use somatize_runtime::executor::{self, Context, GraphInfo};
-    pub(crate) use somatize_runtime::executors::study::{
-        FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
-    };
-    pub(crate) use somatize_runtime::node_catalog::NodeCatalog;
-    pub(crate) use somatize_runtime::runner::{LocalRunner, Runner};
-    pub(crate) use somatize_runtime::sampler::{
+    pub(crate) use somatize_runtime::execution::executor::{self, Context, GraphInfo};
+    pub(crate) use somatize_runtime::execution::node_catalog::NodeCatalog;
+    pub(crate) use somatize_runtime::execution::runner::{LocalRunner, Runner};
+    pub(crate) use somatize_runtime::optimizer::sampler::{
         BayesianSampler, GridSampler, RandomSampler, Sampler,
+    };
+    pub(crate) use somatize_runtime::optimizer::study::{
+        FnTrialExecutor, StudyRunner, TrialContext, TrialOutcome,
     };
     pub(crate) use somatize_runtime::tracking::{
         LocalTracker, RunReader, advance_head, load_manifest, resolve_parent, summarize,
@@ -75,19 +71,16 @@ pub(crate) mod prelude {
 }
 
 use crate::cache::{cache_gc, cache_pin, cache_purge_v1, cache_stats, cache_verify};
+use crate::distributed::PyWorker;
 use crate::graph::PyGraph;
+use crate::optimizer::study::{PyStudy, PyTrial};
 use crate::prelude::*;
-use crate::readers::{
+use crate::tracking::readers::{
     checkout_run, clear_head_run, graph_json_to_mermaid, graph_json_to_svg, kb_diff_json,
     kb_find_similar_json, kb_lineage_json, kb_record_conclusion, kb_reindex, list_runs_json,
-    read_head_run, run_agentic_activity_json, run_agentic_timeline_json, run_cache_activity_json,
-    run_events_json, run_health_flags_json, run_info_json, run_manifest_json,
-    run_metric_series_json, run_node_timings_json, run_overlay_json, run_summary_json,
-    run_to_graphviz, run_to_mermaid, run_to_svg, run_trial_timeline_json,
+    read_head_run, run_sections_json, run_summary_json, run_to_mermaid, run_to_svg,
 };
-use crate::run::PyRun;
-use crate::study::{PyStudy, PyTrial};
-use crate::worker::PyWorker;
+use crate::tracking::run::PyRun;
 
 // All four derive from `RuntimeError`, which is what every `SomaError`
 // used to become. Adding a more specific type should let a caller catch
@@ -186,7 +179,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(agentic::providers, m)?)?;
     m.add_function(wrap_pyfunction!(agentic::models, m)?)?;
     m.add_class::<PyStudy>()?;
-    m.add_class::<crate::pbt::PyPbt>()?;
+    m.add_class::<crate::optimizer::pbt::PyPbt>()?;
     m.add_class::<PyTrial>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorker>()?;
@@ -197,6 +190,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cache_purge_v1, m)?)?;
     m.add_function(wrap_pyfunction!(list_runs_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_summary_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_sections_json, m)?)?;
     m.add_function(wrap_pyfunction!(checkout_run, m)?)?;
     m.add_function(wrap_pyfunction!(read_head_run, m)?)?;
     m.add_function(wrap_pyfunction!(clear_head_run, m)?)?;
@@ -205,19 +199,7 @@ fn _soma(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(kb_record_conclusion, m)?)?;
     m.add_function(wrap_pyfunction!(kb_lineage_json, m)?)?;
     m.add_function(wrap_pyfunction!(kb_diff_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_info_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_manifest_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_events_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_metric_series_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_node_timings_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_cache_activity_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_health_flags_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_trial_timeline_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_agentic_activity_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_agentic_timeline_json, m)?)?;
-    m.add_function(wrap_pyfunction!(run_overlay_json, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_mermaid, m)?)?;
-    m.add_function(wrap_pyfunction!(run_to_graphviz, m)?)?;
     m.add_function(wrap_pyfunction!(graph_json_to_mermaid, m)?)?;
     m.add_function(wrap_pyfunction!(graph_json_to_svg, m)?)?;
     m.add_function(wrap_pyfunction!(run_to_svg, m)?)?;

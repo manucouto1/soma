@@ -14,8 +14,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use somatize_core::cache::CacheKey;
-use somatize_core::store::{DataStore, LocalDataStore};
-use somatize_core::value::Value;
+use somatize_core::data::store::{DataStore, LocalDataStore};
+use somatize_core::data::value::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -160,7 +160,7 @@ pub fn worker_router_with_shutdown(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 for key in &expired {
-                    let data_ref = somatize_core::store::DataRef::Cached {
+                    let data_ref = somatize_core::data::store::DataRef::Cached {
                         cache_key: key.clone(),
                     };
                     let _ = cleanup_state.temp_store.remove(&data_ref);
@@ -291,7 +291,7 @@ async fn download_data(
         }
     }
 
-    let data_ref: somatize_core::store::DataRef =
+    let data_ref: somatize_core::data::store::DataRef =
         serde_json::from_str(&params.data_ref).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let value = state
@@ -595,7 +595,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                             &sf.pickled_filter,
                         )
                     });
-                    let filter: Box<dyn somatize_core::filter::Filter> =
+                    let filter: Box<dyn somatize_core::graph::filter::Filter> =
                         Box::new(crate::python_process::SubprocessFilter::new(
                             process.clone(),
                             sf.node_id.clone(),
@@ -603,8 +603,20 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                             config_hash,
                         ));
                     worker.register_filter(&sf.node_id, filter);
-                    if let Some(s) = &sf.state {
-                        worker.set_filter_state(&sf.node_id, s.clone());
+                    // A stream that cannot restore the state it was sent is
+                    // the same failure as a plan that cannot (D-25): it would
+                    // run from random weights and report chunks that look
+                    // exactly like a correct run's.
+                    if let Some(s) = &sf.state
+                        && let Err(e) = worker.set_filter_state(&sf.node_id, s.clone())
+                    {
+                        return Some(StreamMessage::StreamComplete {
+                            stream_id,
+                            result: PlanResult::Failed {
+                                error: e.to_string(),
+                                duration_ms: 0,
+                            },
+                        });
                     }
                 }
             }
@@ -699,7 +711,7 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                 // bracket with its chunk/hit/miss aggregate.
                 let flushed = session.run.flush(&mut session.ctx, session.cache.as_ref());
                 let output = match flushed {
-                    Ok(v) => v.unwrap_or(somatize_core::value::Value::Empty),
+                    Ok(v) => v.unwrap_or(somatize_core::data::value::Value::Empty),
                     Err(e) => {
                         return Some(StreamMessage::StreamComplete {
                             stream_id,

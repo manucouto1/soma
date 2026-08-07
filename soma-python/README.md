@@ -39,7 +39,7 @@ soma-worker     → Worker, Coordinator, Protocol, EnvManager, token auth
                   Auto-detect capabilities, resource limits, CLI binary
 soma-agent      → Research agent loop (observe → hypothesize → experiment → conclude)
 soma-mcp        → MCP server (13 tools for code, execution, knowledge)
-soma-python     → PyO3 bindings: Graph, Filter, Study, Lab, Chain/Fork operators
+soma-python     → PyO3 bindings: Graph, Filter, Study, Chain/Fork operators
 ```
 
 ## Quick Start

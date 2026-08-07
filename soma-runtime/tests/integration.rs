@@ -5,13 +5,13 @@
 
 use somatize_compiler::{CompileMode, SimpleNodeRegistry, compile};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::MetricRecord;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
-use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-use somatize_core::study::{Direction, Objective, SearchStrategy, Study};
-use somatize_core::value::Value;
+use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::optimizer::study::{Direction, Objective, SearchStrategy, Study};
+use somatize_core::tracking::event::MetricRecord;
 use somatize_runtime::*;
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ impl Filter for Normalizer {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -118,7 +118,7 @@ impl Filter for LinearModel {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -146,7 +146,7 @@ impl Filter for FailingFilter {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -239,8 +239,8 @@ fn cache_invalidation_on_config_change() {
     let r2 = s2.fit(&data, None).unwrap();
 
     // Both succeed independently
-    assert!(r1.get("model").unwrap().as_tensor().is_some());
-    assert!(r2.get("model").unwrap().as_tensor().is_some());
+    assert!(r1.outputs.get("model").unwrap().as_tensor().is_some());
+    assert!(r2.outputs.get("model").unwrap().as_tensor().is_some());
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn cache_invalidation_on_data_change() {
     // Fit with data A
     let data_a = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
     let r_a = s.fit(&data_a, None).unwrap();
-    let (a_vals, _) = r_a.get("normalizer").unwrap().as_tensor().unwrap();
+    let (a_vals, _) = r_a.outputs.get("normalizer").unwrap().as_tensor().unwrap();
 
     // Fit with data B
     let graph2 = make_linear_graph(&["normalizer"]);
@@ -265,7 +265,7 @@ fn cache_invalidation_on_data_change() {
 
     let data_b = Value::tensor(vec![100.0, 200.0, 300.0], vec![3]);
     let r_b = s2.fit(&data_b, None).unwrap();
-    let (b_vals, _) = r_b.get("normalizer").unwrap().as_tensor().unwrap();
+    let (b_vals, _) = r_b.outputs.get("normalizer").unwrap().as_tensor().unwrap();
 
     // Both normalize their respective means to ~0 (middle element)
     assert!(
@@ -327,7 +327,7 @@ fn study_with_graph_integration() {
             let train_y = Value::tensor(vec![2.0, 4.0, 6.0, 8.0], vec![4]);
             let outputs = session.fit(&train_x, Some(&train_y)).unwrap();
 
-            let pred = outputs.get("model").unwrap();
+            let pred = outputs.outputs.get("model").unwrap();
             let (pred_data, _) = pred.as_tensor().unwrap();
             let (y_data, _) = train_y.as_tensor().unwrap();
 
@@ -425,7 +425,12 @@ fn study_continues_after_failed_trials() {
     let failed = study
         .trials
         .iter()
-        .filter(|t| matches!(t.state, somatize_core::study::TrialState::Failed { .. }))
+        .filter(|t| {
+            matches!(
+                t.state,
+                somatize_core::optimizer::study::TrialState::Failed { .. }
+            )
+        })
         .count();
     assert!(completed > 0, "some trials should succeed");
     assert!(failed > 0, "some trials should fail");
@@ -446,7 +451,7 @@ fn graph_single_filter() {
 
     let data = Value::tensor(vec![10.0, 20.0, 30.0], vec![3]);
     let outputs = session.fit(&data, None).unwrap();
-    let result = outputs.get("normalizer").unwrap();
+    let result = outputs.outputs.get("normalizer").unwrap();
 
     let (vals, _) = result.as_tensor().unwrap();
     assert!((vals[1] - 0.0).abs() < 0.01, "middle value should be ~0");
@@ -464,7 +469,7 @@ fn graph_single_sample() {
 
     let data = Value::tensor(vec![42.0], vec![1]);
     let outputs = session.fit(&data, None).unwrap();
-    let result = outputs.get("normalizer").unwrap();
+    let result = outputs.outputs.get("normalizer").unwrap();
 
     let (vals, _) = result.as_tensor().unwrap();
     assert!((vals[0] - 0.0).abs() < 0.01);
@@ -498,7 +503,7 @@ fn compile_then_execute_with_cache() {
 
     // Execute
     let bus = Arc::new(EventBus::new(64));
-    let graph_info = somatize_runtime::executor::GraphInfo::from_graph(&graph);
+    let graph_info = somatize_runtime::execution::executor::GraphInfo::from_graph(&graph);
     let mut ctx = Context::new(bus, "run_1").with_graph_info(graph_info);
     ctx.set("input", Value::tensor(vec![1.0, 2.0, 3.0], vec![3]));
 

@@ -1,10 +1,10 @@
 //! A forward pass must follow the graph, not the plan's node order.
 
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::value::Value;
 use somatize_runtime::{GraphSession, NodeCatalog};
 
 /// Reports what it received, so the shape of the answer shows the wiring.

@@ -4,9 +4,11 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use proptest::prelude::*;
-use somatize_core::event::{Event, MetricRecord};
-use somatize_core::study::{CompositeObjective, Direction, Scalarizer, Trial, TrialState};
+use somatize_core::optimizer::study::{
+    CompositeObjective, Direction, Scalarizer, Trial, TrialState,
+};
 use somatize_core::tracking::EventEnvelope;
+use somatize_core::tracking::event::{Event, MetricRecord};
 use std::collections::HashMap;
 
 fn arb_timestamp() -> impl Strategy<Value = DateTime<Utc>> {

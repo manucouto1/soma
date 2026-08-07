@@ -5,11 +5,11 @@
 
 use crate::plan::ExecutionPlan;
 use somatize_core::cache::{CacheKey, CacheStore};
-use somatize_core::control::LoopCondition;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::filter::{Filter, FilterMeta};
+use somatize_core::graph::control::LoopCondition;
+use somatize_core::graph::filter::{Filter, FilterMeta};
+use somatize_core::graph::node::NodeMeta;
 use somatize_core::graph::{Graph, NodeId};
-use somatize_core::node::NodeMeta;
 use std::collections::{HashMap, HashSet};
 
 /// Compilation mode affects caching behavior.
@@ -106,7 +106,7 @@ impl SimpleNodeRegistry {
     pub fn register_step_meta(
         &mut self,
         node_id: impl Into<String>,
-        meta: somatize_core::step::StepMeta,
+        meta: somatize_core::graph::step::StepMeta,
     ) {
         let id = node_id.into();
         // A step's config hash is not derivable from its metadata; the
@@ -354,7 +354,7 @@ impl<'a> Compiler<'a> {
 
                         for label in &seen {
                             if !declared_set.contains(label.as_str())
-                                && !somatize_core::control::is_default_arm(label)
+                                && !somatize_core::graph::control::is_default_arm(label)
                             {
                                 return Err(SomaError::Compilation(format!(
                                     "branch `{node_id}` has an edge labelled `{label}`, which \
@@ -717,13 +717,20 @@ impl<'a> Compiler<'a> {
     /// collide. The executor computes the real key
     /// `hash(config + state + input)` per node with the materialized
     /// input in hand, and skips execution on a hit.
-    /// Wrap nodes with Remote distribution in ExecutionPlan::Remote.
+    /// Wrap nodes with Remote distribution in `ExecutionPlan::Remote`.
+    ///
+    /// Descends through everything that owns a sub-plan — including a
+    /// loop body and a branch arm, which this pass used to fall past with
+    /// `other => other`. A `Remote` node inside a loop ran locally, in
+    /// silence: the plan was well-formed, the node executed, and nothing
+    /// said the target had been ignored.
     fn resolve_distribution(&self, plan: ExecutionPlan) -> ExecutionPlan {
+        let plan = plan.map_children(&mut |p| self.resolve_distribution(p));
         match plan {
             ExecutionPlan::Execute { ref node_id } | ExecutionPlan::Step { ref node_id, .. } => {
                 if let Some(meta) = self.registry.node_meta(node_id) {
                     match &meta.distribution {
-                        somatize_core::filter::Distribution::Remote(target) => {
+                        somatize_core::graph::filter::Distribution::Remote(target) => {
                             ExecutionPlan::Remote {
                                 node_id: node_id.clone(),
                                 target: target.clone(),
@@ -736,18 +743,6 @@ impl<'a> Compiler<'a> {
                     plan
                 }
             }
-            ExecutionPlan::Sequence(steps) => ExecutionPlan::Sequence(
-                steps
-                    .into_iter()
-                    .map(|s| self.resolve_distribution(s))
-                    .collect(),
-            ),
-            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches
-                    .into_iter()
-                    .map(|b| self.resolve_distribution(b))
-                    .collect(),
-            ),
             ExecutionPlan::Composite { ref node_ids } => {
                 // If ALL nodes in the composite have a Remote target, wrap the
                 // entire composite in a single Remote (using the first node's
@@ -758,7 +753,9 @@ impl<'a> Compiler<'a> {
                         self.registry
                             .node_meta(nid)
                             .and_then(|m| match &m.distribution {
-                                somatize_core::filter::Distribution::Remote(t) => Some(t.clone()),
+                                somatize_core::graph::filter::Distribution::Remote(t) => {
+                                    Some(t.clone())
+                                }
                                 _ => None,
                             })
                     })
@@ -781,8 +778,15 @@ impl<'a> Compiler<'a> {
 
     /// Collapse consecutive differentiable Execute nodes into Composite blocks.
     ///
-    /// A `Composite` groups nodes that should share a PyTorch autograd session.
-    /// Only groups 2+ consecutive `Execute` nodes where `meta.differentiable == true`.
+    /// A `Composite` groups nodes that should share a PyTorch autograd
+    /// session. Only groups 2+ consecutive `Execute` nodes where
+    /// `meta.differentiable == true`.
+    ///
+    /// Grouping is a `Sequence` question, so that variant is handled here
+    /// and everything else just descends — including a loop body and a
+    /// branch arm, which this pass used to fall past. A differentiable
+    /// pair inside a loop was never fused, so gradients did not flow
+    /// through it and the loop trained nothing.
     fn collapse_differentiable(&self, plan: ExecutionPlan) -> ExecutionPlan {
         match plan {
             ExecutionPlan::Sequence(steps) => {
@@ -812,22 +816,7 @@ impl<'a> Compiler<'a> {
                     ExecutionPlan::Sequence(result)
                 }
             }
-            ExecutionPlan::Parallel(branches) => ExecutionPlan::Parallel(
-                branches
-                    .into_iter()
-                    .map(|b| self.collapse_differentiable(b))
-                    .collect(),
-            ),
-            ExecutionPlan::Remote {
-                node_id,
-                target,
-                plan,
-            } => ExecutionPlan::Remote {
-                node_id,
-                target,
-                plan: Box::new(self.collapse_differentiable(*plan)),
-            },
-            other => other,
+            other => other.map_children(&mut |p| self.collapse_differentiable(p)),
         }
     }
 
@@ -847,14 +836,14 @@ impl<'a> Compiler<'a> {
     /// with B's input_schema. Emits warnings (not errors) for mismatches,
     /// since schemas are optional and None means "accepts anything".
     /// What a node accepts, whether it is a filter or a step.
-    fn input_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
+    fn input_schema_of(&self, node_id: &str) -> Option<somatize_core::data::schema::Schema> {
         self.registry
             .node_meta(node_id)
             .and_then(|m| m.input_schema)
     }
 
     /// What a node produces, whether it is a filter or a step.
-    fn output_schema_of(&self, node_id: &str) -> Option<somatize_core::schema::Schema> {
+    fn output_schema_of(&self, node_id: &str) -> Option<somatize_core::data::schema::Schema> {
         self.registry
             .node_meta(node_id)
             .and_then(|m| m.output_schema)
@@ -1106,10 +1095,10 @@ pub fn compile_stream(
 mod tests {
     use super::*;
     use somatize_core::cache::EntryMeta;
+    use somatize_core::data::value::Value;
     use somatize_core::error::SomaError;
-    use somatize_core::filter::{FilterKind, StreamMode};
+    use somatize_core::graph::filter::{FilterKind, StreamMode};
     use somatize_core::graph::{Edge, Graph, Node, linear_pipeline};
-    use somatize_core::value::Value;
     use std::collections::HashSet;
     use std::sync::Mutex;
 
@@ -1159,7 +1148,7 @@ mod tests {
             differentiable,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -1466,8 +1455,8 @@ mod tests {
         );
         // gpu_train: remote on GPU tag
         let mut gpu_meta = make_meta(FilterKind::Trainable, true);
-        gpu_meta.distribution = somatize_core::filter::Distribution::Remote(
-            somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+        gpu_meta.distribution = somatize_core::graph::filter::Distribution::Remote(
+            somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
         );
         registry.register_meta("gpu_train", gpu_meta, CacheKey::hash_data(b"gpu"));
         // evaluate: local
@@ -1488,7 +1477,7 @@ mod tests {
             assert!(
                 matches!(&steps[1], ExecutionPlan::Remote { node_id, target, .. }
                     if node_id == "gpu_train"
-                    && *target == somatize_core::filter::RemoteTarget::Tag("gpu".into())
+                    && *target == somatize_core::graph::filter::RemoteTarget::Tag("gpu".into())
                 ),
                 "expected Remote, got: {:?}",
                 steps[1]
@@ -1607,7 +1596,7 @@ mod tests {
             &["a"],
             make_meta(FilterKind::Stateless, false),
         );
-        registry.register_step_meta("s", somatize_core::step::StepMeta::new("S"));
+        registry.register_step_meta("s", somatize_core::graph::step::StepMeta::new("S"));
 
         let err = compile_stream(&graph, &registry, 64).unwrap_err();
         let msg = err.to_string();

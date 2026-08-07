@@ -7,57 +7,61 @@
 //! Two decisions shape this crate. [`NodeCatalog`] is THE registry — every
 //! node, filter or step, plus the trained states; the compiler and the
 //! executor read the same value, which is what keeps "what compiles" and
-//! "what runs" from drifting apart. And `run_node` (in [`executor`]) is the
-//! one execution site: input resolution, the output cache, panic
-//! containment and the start/complete/fail events happen once, for both
-//! kinds — whether a node is cacheable is *data* on its
-//! [`NodeMeta`](somatize_core::node::NodeMeta), not a branch on its kind.
+//! "what runs" from drifting apart. And `run_node` (in
+//! [`execution::executor`]) is the one execution site: input resolution,
+//! the output cache, panic containment and the start/complete/fail events
+//! happen once, for both kinds — whether a node is cacheable is *data* on
+//! its [`NodeMeta`](somatize_core::graph::node::NodeMeta), not a branch on
+//! its kind.
 //!
-//! The pieces:
-//! - [`runner`] — trait-based execution: LocalRunner, StudyRunner, PbtRunner
-//! - [`executor`] — walks `ExecutionPlan` trees (sequence, parallel, step, loop, remote)
-//! - [`GraphSession`] — the primary orchestrator: Graph + catalog → compile → execute;
-//!   give it an [`EffectDriver`] via `with_driver`
-//!   and it drives steps too
-//! - [`effects`] — [`EffectDriver`] performs what steps
-//!   ask for; [`EffectJournal`] records once and
-//!   replays on resume; [`GraphHandler`](effects::GraphHandler) runs a
-//!   pipeline on an agent's behalf
+//! Six domains, named as they are across the workspace. `soma-core` says
+//! what each of these *is*; this crate is where they run.
+//!
+//! - [`execution`] — the stack that turns a plan into results:
+//!   [`GraphSession`] on top, [`Runner`] deciding where, `execute` walking
+//!   the tree, `run_node` at every leaf, and the stream driver composing
+//!   the same three primitives per chunk
+//! - [`agentic`] — [`EffectDriver`] performs what steps ask for;
+//!   [`EffectJournal`] records once and replays on resume;
+//!   [`GraphHandler`](agentic::GraphHandler) runs a pipeline on an agent's
+//!   behalf
+//! - [`optimizer`] — samplers (Grid, Random, TPE), pruners, the study loop,
+//!   and population-based training
 //! - [`cache`] — LRU memory cache, local disk cache, tiered cache
-//! - [`sampler`] — hyperparameter samplers (Grid, Random, Bayesian/TPE)
-//! - [`pruner`] — early stopping strategies (Median, Percentile)
-//! - [`tracking`] — local run directories: JSONL event sink, LocalTracker
+//! - [`tracking`] — the event bus, local run directories, the JSONL sink,
+//!   and [`RunReader`], which aggregates a run back into chart-ready data
+//! - [`distributed`] — running a `TrainingStrategy` across workers
 
+pub mod agentic;
 pub mod cache;
-pub mod effects;
-pub mod event_bus;
-pub mod executor;
-pub mod executors;
-pub mod forward;
-pub mod graph_session;
-pub mod node_catalog;
-pub mod pruner;
-pub mod runner;
-pub mod sampler;
-pub mod strategy;
-pub mod study_io;
+pub mod distributed;
+pub mod execution;
+pub mod fsutil;
+pub mod optimizer;
 pub mod tracking;
 
+// ── The convenience surface ─────────────────────────────────────────
+//
+// Every type below is also reachable at its own path
+// (`execution::executor::Context`). These are the names used often enough
+// that the domain prefix is noise at the call site.
+
+pub use agentic::{EffectDriver, EffectHandler, EffectJournal, EffectSite, NodeOutcome};
 pub use cache::{LocalCache, MemoryCache, TieredCache};
-pub use effects::{EffectDriver, EffectHandler, EffectJournal, EffectSite, NodeOutcome};
-pub use event_bus::EventBus;
-pub use executor::{Context, GraphInfo, execute};
-pub use executors::{
-    FnPbtExecutor, FnTrialExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember,
-    StreamOutput, StreamRun, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
+pub use execution::executor::{Context, GraphInfo, execute};
+pub use execution::forward::{Batched, ForwardStrategy, Standard, Stream};
+pub use execution::graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
+pub use execution::node_catalog::{NodeCatalog, NodeImpl};
+pub use execution::runner::{LocalRunner, Runner, Transport};
+pub use execution::stream::{StreamOutput, StreamRun, materialize_buffer};
+pub use optimizer::pbt::{FnPbtExecutor, PbtConfig, PbtExecutor, PbtRunner, PopulationMember};
+pub use optimizer::pruner::{MedianPruner, PercentilePruner, Pruner};
+pub use optimizer::sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
+pub use optimizer::study::{
+    FnTrialExecutor, StudyRunner, TrialContext, TrialExecutor, TrialOutcome,
 };
-pub use forward::{Batched, ForwardStrategy, Standard, Stream};
-pub use graph_session::{GraphSession, graph_fit, graph_predict, graph_run};
-pub use node_catalog::{NodeCatalog, NodeImpl};
-pub use pruner::{MedianPruner, PercentilePruner, Pruner};
-pub use runner::{LocalRunner, RemoteRunner, Runner, Transport};
-pub use sampler::{BayesianSampler, GridSampler, RandomSampler, Sampler};
-pub use study_io::StudyIo;
+pub use optimizer::study_io::StudyIo;
+pub use tracking::event_bus::EventBus;
 pub use tracking::{
     JsonlEventSink, LocalTracker, RunInfo, RunReader, collect_git_info, list_runs, load_manifest,
     load_status,

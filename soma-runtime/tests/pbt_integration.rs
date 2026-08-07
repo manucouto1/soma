@@ -1,18 +1,18 @@
 //! Integration tests: PBT with real trainable filters and GraphSession.
 
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
+use somatize_core::distributed::{ExploitStrategy, ExploreStrategy};
 use somatize_core::error::Result;
-use somatize_core::event::Event;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::search::{Scale, SearchDimension, SearchSpace};
-use somatize_core::strategy::{ExploitStrategy, ExploreStrategy};
-use somatize_core::value::Value;
+use somatize_core::optimizer::search::{Scale, SearchDimension, SearchSpace};
+use somatize_core::tracking::event::Event;
 use somatize_runtime::EventBus;
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::executors::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
-use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::execution::graph_session::GraphSession;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
+use somatize_runtime::optimizer::pbt::{FnPbtExecutor, PbtConfig, PbtRunner, PopulationMember};
 use std::sync::Arc;
 
 /// Trainable scaler that learns mean from data.
@@ -50,7 +50,7 @@ impl Filter for TrainableScaler {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -104,7 +104,11 @@ fn pbt_with_graph_session_converges() {
             let outputs = session.fit(&train_data, None)?;
 
             // Return the scaler output as state
-            Ok(outputs.get("scaler").cloned().unwrap_or(Value::Empty))
+            Ok(outputs
+                .outputs
+                .get("scaler")
+                .cloned()
+                .unwrap_or(Value::Empty))
         },
         eval_fn: |member: &PopulationMember| {
             // Fitness: scale closest to 2.0 is best
@@ -210,12 +214,12 @@ fn graph_session_fit_forward_roundtrip() {
     let outputs = session.fit(&train, None).unwrap();
 
     // scaler: mean=20, forward: [(10-20)*2, (20-20)*2, (30-20)*2] = [-20, 0, 20]
-    let scaler_out = outputs.get("scaler").unwrap();
+    let scaler_out = outputs.outputs.get("scaler").unwrap();
     let (data, _) = scaler_out.as_tensor().unwrap();
     assert_eq!(data, &[-20.0, 0.0, 20.0]);
 
     // scaler2: mean=0, forward: [(-20-0)*1, (0-0)*1, (20-0)*1] = [-20, 0, 20]
-    let scaler2_out = outputs.get("scaler2").unwrap();
+    let scaler2_out = outputs.outputs.get("scaler2").unwrap();
     let (data2, _) = scaler2_out.as_tensor().unwrap();
     assert_eq!(data2, &[-20.0, 0.0, 20.0]);
 

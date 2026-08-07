@@ -47,9 +47,8 @@ class MyScaler(Filter):
 | `forward` | `(x, state) -> list` | Transform data using learned state |
 | `kwargs` | `() -> dict` | Constructor kwargs (used by `Graph.save`/`Graph.load`) |
 | `class_path` | `() -> str` | Class method. Fully-qualified import path (`"module.Class"`) |
-| `to` | `(other) -> Chain` | Chain this filter to another (fluent builder) |
-| `>>` | `filter >> other` | Chain operator (same as `.to()`) |
-| `\|` | `filter \| other` | Fork operator (parallel branches) |
+| `>>` | `filter >> other` | Chain operator — linear topology |
+| `\|` | `filter \| other` | Fork operator — parallel branches, merged by the next step |
 
 #### Class attributes
 
@@ -106,7 +105,7 @@ g = Graph.somatize(Scaler() >> Model())
 g = Graph()
 g.node(Scaler())
 g.node(Model())
-g.connect("scaler", "model")
+g.edge("scaler", "model")
 ```
 
 By default every `Graph()` shares a **persistent cache** at
@@ -114,10 +113,10 @@ By default every `Graph()` shares a **persistent cache** at
 survive crashes and are reused across processes and projects. Options:
 
 ```python
-g = Graph()                                   # persistent tiered cache (default)
-g = Graph(cache="memory")                     # process-local, nothing persists
-g = Graph(cache="local", cache_path="/data")  # explicit store directory
-g = Graph(cache_max_bytes=2 * 2**30)          # in-memory LRU tier budget
+g = Graph()                            # persistent, at $SOMA_CACHE_DIR (default)
+g = Graph(cache="memory")              # process-local, nothing persists
+g = Graph(cache="/data")               # persistent, kept here instead
+g = Graph(cache_max_bytes=2 * 2**30)   # in-memory LRU tier budget
 ```
 
 #### Fluent Operators
@@ -139,12 +138,11 @@ g = Graph.somatize(
     >> (ClassA() | ClassB())
 )
 
-# .to() / .collect() method syntax
+# Branches are chains too, and the step after the fork merges them
 g = Graph.somatize(
-    Scaler().to([
-        PCA() >> ClassA(),
-        UMAP() >> ClassB(),
-    ]).collect(Ensemble())
+    Scaler()
+    >> ((PCA() >> ClassA()) | (UMAP() >> ClassB()))
+    >> Ensemble()
 )
 ```
 
@@ -152,15 +150,13 @@ g = Graph.somatize(
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `somatize` | `(topology) -> Graph` | Class method. Materialize a Chain/Fork into a graph |
+| `somatize` | `(topology) -> Graph` | Class method. Materialize a `>>`/`\|` expression into a graph |
 | `node` | `(filter, target=None) -> str` or `(node_id, filter)` | Add a filter node, returns its id (snake_case class name, deduped with `_2`). `target="local"` pins it off remote workers |
-| `edge` / `connect` | `(source, target)` | Connect two nodes with a data edge |
+| `edge` | `(source, target)` | Connect two nodes with a data edge |
 | `fit` | `(x, y=None, batch_size=None, mode="inference", seed=None)` | Fit all trainable filters in topological order; `seed` is hashed into every cache key |
-| `forward` | `(x, stream=False, chunk_size=1024, seed=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns a list for pure-inference graphs; `(out, aux_by_node)` while any differentiable filter is in `train()` mode |
-| `run` | `() -> dict` | Compile and execute, return all outputs |
+| `forward` | `(x, stream=False, chunk_size=None, seed=None, run_id=None)` | Forward data through the fitted graph (`stream=True` chunks it). Returns the leaf's output. A graph holding differentiable filters is walked in Python for autograd and **refuses** `stream` / `chunk_size` / `seed` / `run_id`, which that walk cannot honour; its auxiliaries land in `g.py_state["last_aux"]` |
 | `compile` | `(mode="inference") -> CompileInfo` | Compile and return diagnostics (a dict that renders as tiles + callouts + plan diagram in notebooks) |
 | `to_mermaid` | `(overlay=None) -> str` | Mermaid diagram; `overlay=` annotates nodes (see [Visualization](/soma/design/visualization/)) |
-| `to_graphviz` | `(overlay=None) -> str` | Graphviz DOT, same `overlay=` |
 | `to_svg` | `(overlay=None) -> str` | Self-contained SVG — no JavaScript, renders inline anywhere |
 | `to_text` | `() -> str` | ASCII tree (what `print(g)` shows) |
 | `_repr_html_` | `() -> str` | Notebook display: evaluating `g` draws the architecture diagram |
@@ -215,13 +211,16 @@ g = Graph.somatize(
 #### Compile Modes
 
 ```python
-info = g.compile("inference")       # Full caching
-info = g.compile("differentiable")  # Cache states, re-execute forwards
-info = g.compile("no_cache")        # Force re-execution
+info = g.compile("inference")       # the default
+info = g.compile("differentiable")  # fuse differentiable runs into a Composite
+# The same two modes `fit` takes. There was a third, "no_cache", sold as
+# "force re-execution"; it never did that. Cache keys are derived at RUNTIME
+# from the content that arrived, so the plan contains no cached nodes to
+# suppress — all the mode ever did was hide the diagnostic saying so.
+#
 # Returns CompileInfo (a dict): {total_nodes, cached_nodes, parallel_branches,
 #   diagnostics: [{node, level, message}], plan_text, plan_mermaid, plan_svg}
-# cached_nodes is always 0: cache hits are resolved at RUNTIME per node
-# (key = hash(config + state + input)), not baked into the plan.
+# cached_nodes is always 0, for the reason above.
 ```
 
 #### Events
@@ -512,7 +511,8 @@ g.make_optimizer(torch.optim.Adam, lr=1e-3)
 for x, y in batches:
     with g.context() as ctx:
         g.zero_grad()
-        out, aux = g.forward(x)
+        out = g.forward(x)
+        aux = g.py_state["last_aux"]
         loss = nn.functional.mse_loss(out, y)
         g.backward(ctx, loss)
     g.step(ctx)
@@ -575,9 +575,14 @@ print(study.trials)         # every trial as a dict
 print(study.run_dir)        # .soma/runs/study_.../  (tracking=True default)
 ```
 
-Additional constructor keywords: `objective=` (a Python callable over
-the final metrics dict, recorded as metric `"score"`), `direction=`,
-`pruning=("median", warmup)` or `("percentile", pct, warmup)`,
+Each entry of `objectives=` is `(what, direction)`, where *what* is a
+metric name or a **callable** over the whole metrics dict — a scalarizer,
+whose result is recorded as the metric `"score"`. It used to be two
+arguments (`objective=` for the callable, `objectives=` for the names) plus
+a `direction=` that only meant anything with the first, and a rule for
+which won when you passed both.
+
+Additional constructor keywords: `pruning=("median", warmup)` or `("percentile", pct, warmup)`,
 `tracking=`, `root=".soma"`, `tags=[...]`, `frozen={...}` (fixed params
 injected into every trial), and `seeds=[...]` — **experiment seeds**:
 every sampled config runs once per seed, `trial["seed"]` carries it
@@ -610,7 +615,7 @@ study = g.study("tune", strategy="grid", n_trials=4,
 | Member | Signature | Description |
 |---|---|---|
 | `run` | `(executor, on_event=None, resume=False, progress=False)` | Run the study. `progress=True` draws a tqdm bar fed by live `StudyProgress` events (needs the `viz` extra) |
-| `load` | `(run_dir, objective=None) -> Study` | Static. Reload a study from its run directory |
+| `load` | `(run_dir, objectives=None) -> Study` | Static. Reload a study from its run directory |
 | `save` | `(path=None)` | Write `study.json` (also written automatically after every trial) |
 | `best_trial` | property `-> dict \| None` | Best trial as a dict (see below) |
 | `trials` | property `-> list[dict]` | Every trial |
@@ -725,7 +730,6 @@ view = soma.RunView(".soma/runs/train_20260728T093011_9c2e")   # or by path
 | `trial_timeline()` | `list[dict]` | Trial lifetimes (study runs) |
 | `overlay()` | `dict` | Per-node annotations for the renderers |
 | `to_mermaid(overlay=True, node=None)` | `str` | Annotated diagram; `node=` renders that node's inner architecture |
-| `to_graphviz(overlay=True)` | `str` | Same as DOT |
 | `to_svg(overlay=True, node=None)` | `str` | Self-contained SVG (no JavaScript) |
 
 With the `viz` extra it also gains `plot_metrics`, `plot_gantt`,
@@ -816,18 +820,6 @@ Both `depth` and `patterns` unset ⇒ automatic selection.
 
 `soma.audit_modules([(name, module), ...])` is the standalone form for
 code that does not drive training through a `Graph`.
-
-### Lab
-
-Connect to a remote Soma worker.
-
-```python
-from soma import Lab
-
-lab = Lab.connect("http://localhost:8080")
-lab.health()        # "ok"
-lab.info()          # Worker capabilities dict
-```
 
 ## Type checking
 

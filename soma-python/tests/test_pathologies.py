@@ -88,7 +88,7 @@ def chain(blocks):
         node_id = f"block{i}"
         g.node(node_id, b)
         if ids:
-            g.connect(ids[-1], node_id)
+            g.edge(ids[-1], node_id)
         ids.append(node_id)
     return g, ids
 

@@ -41,13 +41,13 @@ associated type or a generic parameter — every one of them stays object-safe.
 
 | Site | Trait | Implementations |
 |---|---|---|
-| Caching | `CacheStore` (`soma-core/src/cache.rs:204`) | `MemoryCache`, `LocalCache`, `TieredCache`, `FsActionStore` |
-| Data movement | `DataStore` (`soma-core/src/store/mod.rs:208`) | `LocalDataStore`, `S3DataStore`, `ZarrStore` |
+| Caching | `CacheStore` (`soma-core/src/cache/mod.rs:207`) | `MemoryCache`, `LocalCache`, `TieredCache`, `FsActionStore` |
+| Data movement | `DataStore` (`soma-core/src/data/store.rs:208`) | `LocalDataStore`, `S3DataStore`, `ZarrStore` |
 | Model access | `LlmProvider` (`soma-llm/src/lib.rs:72`) | `OpenAiCompatible` + a `Router` over `Arc<dyn LlmProvider>` |
-| Forward execution | `ForwardStrategy` (`soma-runtime/src/forward.rs:40`) | `Standard`, `Stream`, `Batched` |
-| Search | `Sampler` (`soma-runtime/src/sampler/mod.rs:22`) | `GridSampler`, `RandomSampler`, `BayesianSampler` |
-| Pruning | `Pruner` (`soma-runtime/src/pruner.rs:10`) | `MedianPruner`, `PercentilePruner` |
-| Distributed training | `StrategyExecutor` (`soma-runtime/src/strategy.rs:120`) | `TrainingStrategy` |
+| Forward execution | `ForwardStrategy` (`soma-runtime/src/execution/forward.rs:40`) | `Standard`, `Stream`, `Batched` |
+| Search | `Sampler` (`soma-runtime/src/optimizer/sampler/mod.rs:22`) | `GridSampler`, `RandomSampler`, `BayesianSampler` |
+| Pruning | `Pruner` (`soma-runtime/src/optimizer/pruner.rs:10`) | `MedianPruner`, `PercentilePruner` |
+| Distributed training | `StrategyExecutor` (`soma-runtime/src/distributed.rs:120`) | `TrainingStrategy` |
 | Compilation input | `NodeRegistry` (`soma-compiler/src/compiler.rs:65`) | `SimpleNodeRegistry`, `NodeCatalog` |
 | Knowledge storage | `KnowledgeBase` (`soma-memory/src/knowledge_base.rs:50`) | `MemoryKnowledgeBase`, `FileKnowledgeBase`, `ChronosKnowledgeBase` |
 
@@ -55,8 +55,9 @@ The dyn census in `soma-runtime` alone: `CacheStore` 33 sites, `Transport` 13,
 `DataStore` 7, `EffectHandler` 6, `Step` 5, `EventSink` 9, `Filter` 5.
 
 `(!)` One trait is defined for this and never used polymorphically: `Runner`
-(`soma-runtime/src/runner/mod.rs:124`) — see
-[D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed).
+(`soma-runtime/src/execution/runner/mod.rs:124`). Its second implementation went with
+[D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed); the trait
+stayed, now documenting one shape rather than abstracting two.
 
 ### Adapter / bridge
 
@@ -65,16 +66,16 @@ the system is crossed, and there are more instances than of any other pattern.
 
 | Adapter | file:line | Adapts |
 |---|---|---|
-| `NodeMeta` | `soma-core/src/node.rs:72` | `FilterMeta` **and** `StepMeta` into one shape — the workspace's central adapter |
-| `PyFilterBridge` | `soma-python/src/bridge.rs:224` | A Python object → `Filter` |
+| `NodeMeta` | `soma-core/src/graph/node.rs:72` | `FilterMeta` **and** `StepMeta` into one shape — the workspace's central adapter |
+| `PyFilterBridge` | `soma-python/src/graph/bridge.rs:224` | A Python object → `Filter` |
 | `PyStepBridge` | `soma-python/src/agentic.rs:883` | Anything with `poll(ctx)` → `Step` |
 | `PyToolAdapter` | `soma-python/src/agentic.rs:198` | A Python callable → `Tool` |
-| `PyPbtExecutor` | `soma-python/src/pbt.rs:40` | Python callables → `PbtExecutor` |
+| `PyPbtExecutor` | `soma-python/src/optimizer/pbt.rs:40` | Python callables → `PbtExecutor` |
 | `SubprocessFilter` | `soma-worker/src/python_process.rs:1025` | A pipe to another interpreter → `Filter` |
 | `WsTransport` | `soma-worker/src/ws_transport.rs:404` | A WebSocket → `Transport` |
 | `McpTool` | `soma-llm/src/tools.rs:212` | An MCP server → `Tool` |
 | `FnTool<F>` | `soma-llm/src/tools.rs:62` | A closure → `Tool` |
-| `FnTrialExecutor<F>` / `FnPbtExecutor<T,E>` | `soma-runtime/src/executors/study.rs:144`, `pbt.rs:63` | Closures → trait objects |
+| `FnTrialExecutor<F>` / `FnPbtExecutor<T,E>` | `soma-runtime/src/optimizer/study.rs:144`, `pbt.rs:63` | Closures → trait objects |
 
 `NodeMeta` deserves the emphasis. Filters and steps used to live in two
 registries joined by an adapter that a caller had to remember to build — which
@@ -87,14 +88,14 @@ output-cacheable" as **data**. There is no `if is_step` anywhere in the executor
 
 A recursive tree walked uniformly.
 
-- `ExecutionPlan` (`soma-compiler/src/plan.rs:19`) — recursive in four shapes; `children()` (`:142`) is the single traversal, written per variant so a new variant breaks the build. `(!)` Two functions in the same crate do not use it and are wrong as a result — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch).
-- `NodeKind::SubGraph` (`soma-core/src/graph.rs:26`) — a graph inside a node.
-- `SearchDimension::Conditional` (`soma-core/src/search.rs:36`) — a dimension gated on another.
+- `ExecutionPlan` (`soma-compiler/src/plan.rs:19`) — recursive in four shapes; `children()` (`:142`) traverses it for a pass that reads and `map_children()` (`:194`) for one that rewrites, both written per variant so a new variant breaks the build. The two passes that walked by hand were wrong as a result — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch), resolved.
+- `NodeKind::SubGraph` (`soma-core/src/graph/mod.rs:32`) — a graph inside a node.
+- `SearchDimension::Conditional` (`soma-core/src/optimizer/search.rs:36`) — a dimension gated on another.
 - `TieredCache` (`soma-runtime/src/cache/tiered.rs:11`) — a `CacheStore` made of `CacheStore`s.
 
 ### Facade
 
-- `GraphSession` (`soma-runtime/src/graph_session.rs:38`) over compile + execute + cache + events, plus the free functions `graph_run` / `graph_fit` / `graph_predict` (`:450`).
+- `GraphSession` (`soma-runtime/src/execution/graph_session.rs:38`) over compile + execute + cache + events, plus the free functions `graph_run` / `graph_fit` / `graph_predict` (`:450`).
 - `soma` (`soma/src/lib.rs`) — the crate facade. `(!)` [D-83](/soma/internals/debt/#d-83--the-facade-covers-10-of-13-crates).
 - `SomaContext` (`soma-mcp/src/context.rs:9`) over memory + filesystem + subprocess.
 - `RunView` (`soma-python/python/soma/_runs.py:30`) over the run-directory readers.
@@ -107,7 +108,7 @@ A recursive tree walked uniformly.
 
 ### Registry
 
-- `NodeCatalog` (`soma-runtime/src/node_catalog.rs:79`) — **the** registry, holding both node kinds and doubling as the compiler's `NodeRegistry`.
+- `NodeCatalog` (`soma-runtime/src/execution/node_catalog.rs:79`) — **the** registry, holding both node kinds and doubling as the compiler's `NodeRegistry`.
 - `Router` (`soma-llm/src/lib.rs:93`), `Toolbox` (`soma-llm/src/tools.rs:92`), `WorkerRegistry` (`soma-coordinator/src/registry.rs:73`).
 - `FilterMeta` metaclass (`soma-python/python/soma/filter.py:9`) — collects `SearchDescriptor`s into `_soma_search_space` at class-definition time.
 
@@ -117,12 +118,12 @@ A recursive tree walked uniformly.
 
 ### Chain of responsibility
 
-`EffectHandler` (`soma-core/src/effect.rs:262`) is two methods — `handles` and
+`EffectHandler` (`soma-core/src/agentic/effect.rs:262`) is two methods — `handles` and
 `perform` — and the contract is in the doc at `:256`: "Handlers are tried in
 order; the first that claims an effect wins."
 
 Dispatch happens in `EffectDriver::perform_one`
-(`soma-runtime/src/effects/mod.rs:531`). Handlers: `LlmHandler`, `Toolbox`,
+(`soma-runtime/src/agentic/mod.rs:531`). Handlers: `LlmHandler`, `Toolbox`,
 `GraphHandler`, `SleepHandler`.
 
 This is what makes `Effect::Custom { kind, payload }` work as an extension point
@@ -137,11 +138,11 @@ implementation is cheap and a sophisticated one can specialize.
 | Trait | Required | Provided | Payoff |
 |---|---|---|---|
 | `KnowledgeBase` (`soma-memory/src/knowledge_base.rs:50`) | 3 | **11** | A backend implements storage and inherits every analytic |
-| `CacheStore` (`soma-core/src/cache.rs:204`) | 5 | 4 | A simple store ignores origin and timing; a rich one records them |
-| `DataStore` (`soma-core/src/store/mod.rs:208`) | 5 | 2 | The defaults download everything and slice locally; `ZarrStore` overrides both to serve a row range remotely |
-| `Sampler` (`soma-runtime/src/sampler/mod.rs:22`) | 2 | 2 | `prepare` and `record_result` are no-ops unless the sampler learns |
-| `StrategyContext` (`soma-runtime/src/strategy.rs:33`) | 6 | 3 | Two of the provided methods default to *refusing* — an honest "not supported" |
-| `LocalRunner::walk` (`soma-runtime/src/runner/local.rs:26`) | — | — | Not a trait: one method shared by `fit` and `forward`, differing only by `RunMode`. Documented at `:22` as the fix for two divergent loops |
+| `CacheStore` (`soma-core/src/cache/mod.rs:207`) | 5 | 4 | A simple store ignores origin and timing; a rich one records them |
+| `DataStore` (`soma-core/src/data/store.rs:208`) | 5 | 2 | The defaults download everything and slice locally; `ZarrStore` overrides both to serve a row range remotely |
+| `Sampler` (`soma-runtime/src/optimizer/sampler/mod.rs:22`) | 2 | 2 | `prepare` and `record_result` are no-ops unless the sampler learns |
+| `StrategyContext` (`soma-runtime/src/distributed.rs:33`) | 6 | 3 | Two of the provided methods default to *refusing* — an honest "not supported" |
+| `LocalRunner::walk` (`soma-runtime/src/execution/runner/local.rs:26`) | — | — | Not a trait: one method shared by `fit` and `forward`, differing only by `RunMode`. Documented at `:22` as the fix for two divergent loops |
 
 ### Extension trait
 
@@ -151,28 +152,28 @@ without either crate depending on the other in the wrong direction.
 
 | Trait | Defined in | Implemented on | From |
 |---|---|---|---|
-| `StudyIo` | `soma-runtime/src/study_io.rs:19` | `Study` | `soma-core` |
-| `StrategyExecutor` | `soma-runtime/src/strategy.rs:120` | `TrainingStrategy` | `soma-core` |
-| `GradientAggregator` | `soma-runtime/src/strategy.rs:132` | `GradientAggregation` | `soma-core` |
-| `StateAggregator` | `soma-runtime/src/strategy.rs:139` | `FederatedAggregation` | `soma-core` |
+| `StudyIo` | `soma-runtime/src/optimizer/study_io.rs:19` | `Study` | `soma-core` |
+| `StrategyExecutor` | `soma-runtime/src/distributed.rs:120` | `TrainingStrategy` | `soma-core` |
+| `GradientAggregator` | `soma-runtime/src/distributed.rs:132` | `GradientAggregation` | `soma-core` |
+| `StateAggregator` | `soma-runtime/src/distributed.rs:139` | `FederatedAggregation` | `soma-core` |
 
 `StudyIo` is the clearest example of what it buys: `Study` gains `save` and
 `load` without `soma-core` gaining a filesystem.
 
 ### State machine / trampoline
 
-`Step::poll(&ctx) -> Transition` (`soma-core/src/step.rs:250`). A step never
+`Step::poll(&ctx) -> Transition` (`soma-core/src/graph/step.rs:250`). A step never
 blocks and never awaits — it returns a description of what it wants, and a driver
 performs the effects and calls it again with the results.
 
 The consequence is the whole agentic design: a step holds **no hidden state
 between turns**. Everything it knows arrives through `StepCtx::history`
-(`soma-core/src/step.rs:128`), which is what makes journal replay exact rather
+(`soma-core/src/graph/step.rs:128`), which is what makes journal replay exact rather
 than approximate, and what makes `async fn` in a trait unnecessary.
 
 ### Observer
 
-`EventBus` (`soma-runtime/src/event_bus.rs:22`) with two deliberately different
+`EventBus` (`soma-runtime/src/tracking/event_bus.rs:22`) with two deliberately different
 paths:
 
 - **lossy** — a tokio broadcast channel for live subscribers who may miss events
@@ -183,13 +184,13 @@ paths:
 
 ### Command / interpreter
 
-`Effect` (`soma-core/src/effect.rs:35`) describes work as data; the runtime
+`Effect` (`soma-core/src/agentic/effect.rs:35`) describes work as data; the runtime
 performs it. `Effect::label`, `is_pure` and `cache_key` (`:80`–`:127`) are what
 let the journal treat "what was asked" as a value.
 
 ### Memento
 
-- `Context::snapshot` (`soma-runtime/src/executor.rs:344`) — each parallel branch gets a copy, and only the write set (the entries appended past a mark) is merged back.
+- `Context::snapshot` (`soma-runtime/src/execution/executor.rs:344`) — each parallel branch gets a copy, and only the write set (the entries appended past a mark) is merged back.
 - `EffectJournal` — every effect result recorded so a resumed run replays rather than re-runs.
 
 ### Callback adapter
@@ -204,7 +205,7 @@ implemented by users; the only implementor wraps a closure.
 
 ### Content-addressed memoization
 
-The caching model in one line, from `soma-core/src/cache.rs:18`:
+The caching model in one line, from `soma-core/src/cache/mod.rs:21`:
 
 ```
 state  = hash(config ‖ x ‖ y)
@@ -226,20 +227,21 @@ qualname + canonical config + a source-hash ladder
 Three independent instances, which is how you know it is the codebase's actual
 philosophy rather than one clever file:
 
-- **`EffectJournal`** (`soma-runtime/src/effects/journal.rs:51`) — pure effects keyed by content, impure ones by `(run, node, turn, index)`. Record once, replay forever. Suspension is modelled as an effect, so resume needs no separate checkpoint format.
+- **`EffectJournal`** (`soma-runtime/src/agentic/journal.rs:51`) — pure effects keyed by content, impure ones by `(run, node, turn, index)`. Record once, replay forever. Suspension is modelled as an effect, so resume needs no separate checkpoint format.
 - **`ResearchStep::completed`** (`soma-agent/src/research.rs:87`) — reconstructs its record list from `ctx.history` rather than holding it in a field.
 - **The experiment pool** (`soma-memory/src/record.rs:26`) — append-only, with `RecordKind::Amendment` and an `amends` field. Nothing is ever rewritten.
 
 ### Two-phase / atomic commit
 
-Temp file → `write_all` → `sync_all` → `rename`, at
-`soma-runtime/src/cache/local.rs:69`, `cache/fs_store.rs:232`,
-`tracking/local_tracker.rs:214` and `tracking/head.rs:46`. `FsActionStore` also
-commits blob-first, record-last (`soma-runtime/src/cache/fs_store.rs:194`), so a
-crash can leave an unreferenced blob but never a record pointing at nothing.
+Temp file → `write_all` → `sync_all` → `rename`, once, at
+`soma-runtime/src/fsutil.rs:31`; the four callers are the cache's blob and
+action stores, the run manifest and HEAD. `FsActionStore` also commits
+blob-first, record-last (`soma-runtime/src/cache/fs_store.rs:195`), so a crash
+can leave an unreferenced blob but never a record pointing at nothing.
 
-`(!)` Four implementations, two of them weaker —
-[D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe).
+It was four implementations, two of them missing the unique temp name and the
+fsync — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe),
+now resolved.
 
 ### Content-addressed pooling
 
@@ -251,7 +253,7 @@ the cache, applied to venvs.
 
 `PROTOCOL_VERSION` + `check_version` (`soma-worker/src/protocol.rs:33`, `:311`),
 `RECORD_SCHEMA_VERSION` (`soma-memory/src/record.rs:20`),
-`RUN_SCHEMA_VERSION` (`soma-core/src/tracking.rs`), `FORMAT_VERSION`
+`RUN_SCHEMA_VERSION` (`soma-core/src/tracking/mod.rs`), `FORMAT_VERSION`
 (`soma-runtime/src/cache/fs_store.rs`). Every persisted or transmitted format
 carries a version and refuses a mismatch rather than guessing.
 
@@ -268,15 +270,15 @@ Not applied uniformly, and the non-uniformity **is** the design:
 | Applied to | Reason |
 |---|---|
 | Data enums — `Value`, `Effect`, `Event`, `SomaError`, `NodeKind`, `ExecutionPlan`, `DataRef` | A consumer need not have an opinion about a new variant, and an old worker must tolerate a new one on the wire |
-| **Not** applied to — `NodeOutcome` (`soma-core/src/node.rs:37`), `Transition` (`soma-core/src/step.rs:38`), `StreamMode` (`soma-core/src/filter.rs:32`) | Every consumer must decide over them. A wildcard arm there is a silent wrong answer, and adding a variant *should* break every match |
+| **Not** applied to — `NodeOutcome` (`soma-core/src/graph/node.rs:37`), `Transition` (`soma-core/src/graph/step.rs:38`), `StreamMode` (`soma-core/src/graph/filter.rs:32`) | Every consumer must decide over them. A wildcard arm there is a silent wrong answer, and adding a variant *should* break every match |
 
 The reason is written into each doc comment either way. This is the single most
 transferable convention in the codebase.
 
 ### Newtype
 
-`CacheKey([u8; 32])` (`soma-core/src/cache.rs:18`), `Messages(Vec<Message>)`
-(`soma-core/src/message.rs:189`), `ContentHash` (`soma-core/src/action.rs:52`),
+`CacheKey([u8; 32])` (`soma-core/src/cache/mod.rs:21`), `Messages(Vec<Message>)`
+(`soma-core/src/agentic/message.rs:189`), `ContentHash` (`soma-core/src/cache/action.rs:52`),
 `ShutdownSignal` (`soma-worker/src/server.rs:33`).
 
 `(!)` The idiom is *not* applied to `NodeId`, `EdgeId`, `RunId`, `StudyId` or
@@ -286,8 +288,8 @@ transferable convention in the codebase.
 ### Consuming builder
 
 `fn with_x(mut self, x: X) -> Self`. The crate's dominant construction idiom:
-`Context` has 8 (`soma-runtime/src/executor.rs:195`), `GraphSession` 7
-(`graph_session.rs:82`), `LlmRequest` 5 (`soma-core/src/effect.rs:201`),
+`Context` has 8 (`soma-runtime/src/execution/executor.rs:195`), `GraphSession` 7
+(`graph_session.rs:82`), `LlmRequest` 5 (`soma-core/src/agentic/effect.rs:201`),
 `ExperimentRecord` 12 (`soma-memory/src/record.rs`), plus `StepMeta`, `Node`,
 `Edge`, `Graph`, `StepCtx`, `Study`, `ArchitectureFingerprint`, `NodeSpec`,
 `EffectDriver`, `GraphHandler`, `Worker`, `ProviderConfig`, `RetryPolicy`,
@@ -299,24 +301,24 @@ constructor), `RunSummary` (17), `Study` (15 fields, 2 builders) —
 
 ### Flyweight via `Arc`
 
-Every `Value` payload is `Arc`-wrapped (`soma-core/src/value.rs:15`), so `Clone`
+Every `Value` payload is `Arc`-wrapped (`soma-core/src/data/value.rs:15`), so `Clone`
 is a refcount bump rather than a tensor copy. `Arc<dyn Filter>` and
 `Arc<dyn Step>` in the catalog; `Arc<Value>` for trained state; and a
 `NodeCatalog` clone deliberately **shares** its `StateStore`
-(`soma-runtime/src/node_catalog.rs:75`).
+(`soma-runtime/src/execution/node_catalog.rs:75`).
 
 ### Blanket impl as a marker
 
-`AsAny` (`soma-core/src/any.rs:13`) with `impl<T: Any> AsAny for T` — a supertrait
+`AsAny` (`soma-core/src/graph/any.rs:13`) with `impl<T: Any> AsAny for T` — a supertrait
 of `Filter` and `Step` that costs implementors nothing and buys three downcast
 sites.
 
 ### Scoped threads instead of async
 
 Three fan-out sites, all `std::thread::scope`, no runtime:
-`execute_parallel` (`soma-runtime/src/executor.rs:1103`), `perform_all`
-(`soma-runtime/src/effects/mod.rs:459`), `spawn_all` (`:355`). The rationale is
-at `soma-runtime/src/effects/mod.rs:12`.
+`execute_parallel` (`soma-runtime/src/execution/executor.rs:1103`), `perform_all`
+(`soma-runtime/src/agentic/mod.rs:459`), `spawn_all` (`:355`). The rationale is
+at `soma-runtime/src/agentic/mod.rs:12`.
 
 `rg async_trait` over the workspace returns **zero hits**. The only async code is
 the axum servers, and both isolate the boundary properly — `spawn_blocking` in
@@ -325,7 +327,7 @@ the axum servers, and both isolate the boundary properly — `spawn_blocking` in
 inside a runtime.
 
 `(!)` The cost is real and acknowledged: `JoinPolicy::First`
-(`soma-runtime/src/effects/mod.rs:417`) returns the first success only after every
+(`soma-runtime/src/agentic/mod.rs:417`) returns the first success only after every
 sibling has joined, because "these are threads, not cancellable tasks" (`:415`).
 
 ### Forward-compatible refusal
@@ -346,7 +348,7 @@ Applied consistently, and one of the codebase's genuine strengths.
 
 Where the consumer is a *model* rather than a program, a failure is a message
 rather than a `Result::Err`: `ToolOutcome` (`soma-llm/src/tools.rs:182`),
-`EffectResult::Failed` (`soma-core/src/effect.rs:278`), and every `soma-mcp`
+`EffectResult::Failed` (`soma-core/src/agentic/effect.rs:278`), and every `soma-mcp`
 handler returning `ToolCallResult::error(…)` instead of a JSON-RPC error
 (`soma-mcp/src/context.rs:100`). An agent that can read the failure can retry;
 one that gets a transport error cannot.
@@ -363,7 +365,7 @@ constants — [D-19](/soma/internals/debt/#d-19--two-embedded-python-interpreter
 
 `GraphHandler` → `EffectDriver` → `GraphHandler` is a real cycle — a graph can be
 a tool for an agent that is itself a node in a graph. It terminates because
-`MAX_GRAPH_DEPTH = 8` (`soma-runtime/src/effects/graph_handler.rs:28`) and
+`MAX_GRAPH_DEPTH = 8` (`soma-runtime/src/agentic/graph_handler.rs:28`) and
 `child_driver` (`:112`) refuses past it.
 
 ---
@@ -406,9 +408,9 @@ the `somatize[viz]` extra.
 
 ### Rich-repr protocol
 
-Five `_repr_html_` implementations — `PyGraph` (`soma-python/src/graph.rs:1856`),
+Five `_repr_html_` implementations — `PyGraph` (`soma-python/src/graph/viz.rs:44`),
 `RunView`, `RunList`, `CompileInfo`, `DifferentiableFilter`. Evaluating an object
-in a notebook draws it. `Graph::to_svg` (`soma-core/src/svg.rs`) exists
+in a notebook draws it. `Graph::to_svg` (`soma-core/src/viz/svg.rs`) exists
 specifically because notebooks sanitize `<script>`, so a mermaid block would not
 render.
 
@@ -437,12 +439,12 @@ short version, organized by which pattern failed.
 
 | Pattern | Where it broke |
 |---|---|
-| Composite | `resolve_distribution` / `collapse_differentiable` do not use `children()` and skip `Loop`/`Branch` — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) |
+| Composite | `resolve_distribution` / `collapse_differentiable` walked by hand and skipped `Loop`/`Branch`; they use `map_children()` now — [D-32](/soma/internals/debt/#d-32--the-compiler-never-descends-into-loop-or-branch) |
 | Template method | `Transport::execute_node`'s default is wrong for every caller, and its own doc says so — [D-41](/soma/internals/debt/#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) |
-| Strategy | `Runner` and `RemoteRunner` — a strategy interface with one live implementation and one dead one — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
-| Shared primitives | `run_node` and `StreamRun::run_compute` share three primitives and duplicate everything around them, and have drifted — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |
+| Strategy | `Runner` — a strategy interface that had one live implementation and one dead one; the dead one is deleted — [D-34](/soma/internals/debt/#d-34--remoterunner-is-never-constructed) |
+| Shared primitives | `run_node` and `StreamRun::run_compute` share four primitives; what still differs between them is reporting, and it is a decision rather than drift — [D-11](/soma/internals/debt/#d-11--the-stream-path-re-implements-run_node-and-has-drifted) |
 | Newtype | Not applied to any id type — [D-56](/soma/internals/debt/#d-56--nodeid-is-a-string-and-so-is-everything-else) |
 | Builder | Three wide structs skipped it — [D-06](/soma/internals/debt/#d-06--wide-data-structs-with-no-builder) |
-| Atomic commit | Four implementations, two without fsync — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) |
+| Atomic commit | Was four implementations, two without fsync; now one — [D-12](/soma/internals/debt/#d-12--four-write_atomic-implementations-two-of-them-unsafe) |
 | Decorator | `TieredCache` promotion discards the provenance it decorates — [D-46](/soma/internals/debt/#d-46--tieredcache-promotion-destroys-provenance) |
 | Facade | `soma` covers 10 of 13 crates — [D-83](/soma/internals/debt/#d-83--the-facade-covers-10-of-13-crates) |

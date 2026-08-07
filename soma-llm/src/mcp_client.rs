@@ -10,8 +10,8 @@
 //! needs no ports, no TLS and no service to be running first.
 
 use crate::error::{LlmError, Result};
-use somatize_core::tool::ToolSpec;
-use somatize_core::value::Value;
+use somatize_core::agentic::tool::ToolSpec;
+use somatize_core::data::value::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;

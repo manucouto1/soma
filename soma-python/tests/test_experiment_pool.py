@@ -41,7 +41,7 @@ def _graph(depth=1):
     g = Graph()
     g.node("scaler", _Plain())
     g.node("model", _Model(depth=depth))
-    g.connect("scaler", "model")
+    g.edge("scaler", "model")
     return g
 
 

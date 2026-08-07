@@ -40,17 +40,12 @@ pub fn read_head(root: impl AsRef<Path>) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// Point HEAD at `run_id`, atomically (write to a temp file, then
-/// rename) so a crash mid-write leaves the previous pointer intact
-/// rather than a truncated one.
+/// Point HEAD at `run_id`, atomically, so a crash mid-write leaves the
+/// previous pointer intact rather than a truncated one.
 pub fn write_head(root: impl AsRef<Path>, run_id: &str) -> Result<()> {
     let root = root.as_ref();
     fs::create_dir_all(root)?;
-    let final_path = head_path(root);
-    let tmp = final_path.with_extension("tmp");
-    fs::write(&tmp, format!("{run_id}\n"))?;
-    fs::rename(&tmp, &final_path)?;
-    Ok(())
+    crate::fsutil::write_atomic(&head_path(root), format!("{run_id}\n").as_bytes())
 }
 
 /// Detach HEAD: the next run starts a new line. Absent HEAD is fine.

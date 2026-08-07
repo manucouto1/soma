@@ -20,12 +20,13 @@
 //! entry is recomputed and re-fills the same content address
 //! (Nectar: eviction degrades performance, never correctness).
 
+use crate::fsutil::write_atomic;
 use chrono::Utc;
-use somatize_core::action::{ActionCache, ActionResult, BlobStore, ContentHash};
+use somatize_core::cache::action::{ActionCache, ActionResult, BlobStore, ContentHash};
 use somatize_core::cache::{CacheKey, CacheStore, EntryMeta, Origin};
-use somatize_core::codec::{decode_value, encode_and_hash};
+use somatize_core::data::codec::{decode_value, encode_and_hash};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::value::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -225,31 +226,6 @@ fn key_from_hex(hex: &str) -> Option<CacheKey> {
         *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(CacheKey(digest))
-}
-
-/// Temp file in the same directory → fsync → rename. Entry existence is
-/// the commit point; renames are idempotent for concurrent writers.
-fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
-    use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| SomaError::Cache("store path has no parent".into()))?;
-    fs::create_dir_all(parent)?;
-    let seq = WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = path.with_extension(format!("tmp-{}-{seq}", std::process::id()));
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(data)?;
-        f.sync_all()?;
-    }
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(e.into());
-    }
-    Ok(())
 }
 
 impl BlobStore for FsActionStore {

@@ -5,7 +5,7 @@ description: Boundaries the code is expected to keep, why they were chosen, and 
 
 ## Why this page exists
 
-A comment in `soma-core/src/graph.rs` pointed at an `architecture-review.md`
+A comment in `soma-core/src/graph/mod.rs` pointed at an `architecture-review.md`
 that did not exist. This is that file, and it is a decision record rather
 than a plan: each entry says what was chosen, what it was chosen *over*,
 and what would have to change for the answer to be different.
@@ -193,7 +193,7 @@ is read, with an error message that names the helper to use.
 **Decided.** `react`, `route`, `refine`, `debate`, `board`,
 `parallel_vote`, `self_consistency` and `orchestrate` are functions in
 `soma.agentic`, each returning an ordinary `Graph` built from the same
-`node`, `connect`, `branch` and `loop` anyone can call.
+`node`, `edge`, `branch` and `loop` anyone can call.
 
 Rejected: **patterns as engine variants or node types.** A framework
 whose patterns are enum variants has to grow its core for every idea

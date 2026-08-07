@@ -23,9 +23,9 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::store::{DataRef, DataStore, StorageConfig, StoreMeta};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::store::{DataRef, DataStore, StorageConfig, StoreMeta};
-use somatize_core::value::Value;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -511,11 +511,23 @@ impl ZarrStore {
         Ok(Value::tensor(result, new_shape))
     }
 
-    /// Extract CacheKey from array_path by parsing the hex suffix.
-    fn key_from_path(&self, array_path: &str) -> CacheKey {
+    /// The key a Zarr array path was built from.
+    ///
+    /// [`array_root`](Self::array_root) writes `prefix + key.to_hex()`, so
+    /// this is that step undone. It used to *hash* the hex rather than
+    /// decode it, which produced a perfectly valid key addressing nothing:
+    /// every read derived `local_cache/<sha256-of-the-hex>/…` while
+    /// `put_tensor` had written `local_cache/<hex>/…`. The chunk cache was
+    /// written and never read — every `get` went back to S3, and the LRU
+    /// accounted bytes no read could ever hit.
+    fn key_from_path(&self, array_path: &str) -> Result<CacheKey> {
         let hex = array_path.strip_prefix(&self.prefix).unwrap_or(array_path);
-        // Reconstruct key from hex (for local cache paths)
-        CacheKey::hash_data(hex.as_bytes())
+        CacheKey::from_hex(hex).ok_or_else(|| {
+            SomaError::DataStore(format!(
+                "`{array_path}` is not an array this store wrote: what follows \
+                 the prefix should be a 64-digit key"
+            ))
+        })
     }
 
     // ── Append ──
@@ -545,7 +557,7 @@ impl ZarrStore {
             ));
         };
 
-        let key = self.key_from_path(array_path);
+        let key = self.key_from_path(array_path)?;
         let mut meta = self.read_meta(&key, array_path)?;
         let chunk_rows = meta.chunk_rows();
         let cols = meta.cols();
@@ -666,7 +678,7 @@ impl DataStore for ZarrStore {
     fn get(&self, data_ref: &DataRef) -> Result<Value> {
         match data_ref {
             DataRef::Zarr { array_path, .. } => {
-                let key = self.key_from_path(array_path);
+                let key = self.key_from_path(array_path)?;
                 let meta = self.read_meta(&key, array_path)?;
                 let total_rows = meta.shape.first().copied().unwrap_or(0);
                 self.get_tensor_rows_impl(&key, array_path, 0, total_rows)
@@ -682,12 +694,12 @@ impl DataStore for ZarrStore {
     fn get_rows(&self, data_ref: &DataRef, start: usize, len: usize) -> Result<Value> {
         match data_ref {
             DataRef::Zarr { array_path, .. } => {
-                let key = self.key_from_path(array_path);
+                let key = self.key_from_path(array_path)?;
                 self.get_tensor_rows_impl(&key, array_path, start, len)
             }
             _ => {
                 let value = self.get(data_ref)?;
-                somatize_core::store::slice_tensor_rows(&value, start, len)
+                somatize_core::data::store::slice_tensor_rows(&value, start, len)
             }
         }
     }
@@ -695,7 +707,7 @@ impl DataStore for ZarrStore {
     fn meta(&self, data_ref: &DataRef) -> Result<StoreMeta> {
         match data_ref {
             DataRef::Zarr { array_path, .. } => {
-                let key = self.key_from_path(array_path);
+                let key = self.key_from_path(array_path)?;
                 let meta = self.read_meta(&key, array_path)?;
                 Ok(StoreMeta {
                     total_rows: meta.shape.first().copied().unwrap_or(0),
@@ -725,18 +737,16 @@ impl DataStore for ZarrStore {
         match data_ref {
             DataRef::Zarr { array_path, .. } => {
                 // Read meta to know how many chunks to delete
-                let key = self.key_from_path(array_path);
+                let key = self.key_from_path(array_path)?;
                 if let Ok(meta) = self.read_meta(&key, array_path) {
                     for ci in 0..meta.n_chunks() {
                         let _ = self.s3_delete(&format!("{array_path}/c/{ci}"));
                     }
                 }
                 let _ = self.s3_delete(&format!("{array_path}/zarr.json"));
-                // Clean local cache
-                let local_dir = self
-                    .local_cache
-                    .join(array_path.strip_prefix(&self.prefix).unwrap_or(array_path));
-                let _ = std::fs::remove_dir_all(&local_dir);
+                // The local directory the *writer* used, which is the one
+                // `local_chunk_path` and `local_meta_path` name.
+                let _ = std::fs::remove_dir_all(self.local_cache.join(key.to_hex()));
             }
             DataRef::S3 { key, .. } => {
                 let _ = self.s3_delete(key);
@@ -754,6 +764,40 @@ impl DataStore for ZarrStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A store pointed at a bucket that does not exist. Nothing here
+    /// touches the network: `new` builds a client, it does not connect.
+    fn offline_store(cache_dir: &std::path::Path) -> ZarrStore {
+        ZarrStore::new("bucket", "runs/", "s3.invalid", "ak", "sk", cache_dir, 256)
+            .expect("building a client is offline work")
+    }
+
+    #[test]
+    fn a_read_looks_where_the_write_put_it() {
+        // D-31: `key_from_path` hashed the hex instead of decoding it, so
+        // every read derived a *different* local directory from the one
+        // `put_tensor` had written. The cache was written and never read.
+        let dir = tempfile::tempdir().unwrap();
+        let store = offline_store(dir.path());
+
+        let key = CacheKey::hash_data(b"some tensor");
+        let written = store.local_chunk_path(&key, 0);
+
+        let recovered = store.key_from_path(&store.array_root(&key)).unwrap();
+        assert_eq!(recovered, key);
+        assert_eq!(store.local_chunk_path(&recovered, 0), written);
+        assert_eq!(
+            store.local_meta_path(&recovered),
+            store.local_meta_path(&key)
+        );
+    }
+
+    #[test]
+    fn a_path_this_store_did_not_write_is_an_error_not_a_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = offline_store(dir.path());
+        assert!(store.key_from_path("runs/not-a-key").is_err());
+    }
 
     #[test]
     fn zarr_meta_structure() {

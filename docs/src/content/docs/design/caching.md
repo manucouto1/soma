@@ -93,7 +93,7 @@ What the journal adds is the keying, and a distinction the filter cache cannot e
 
 The second row is the point. Asking a model the same question twice is genuinely two events, so memoizing by content would freeze the first answer forever — the `_deterministic = False` foot-gun wearing a hat. Scoping the key to `(run, node, turn, index)` means a resumed run sees exactly what the original saw, while a fresh run asks afresh. Failures are never recorded: a transport error is not a result, and a replay retries it.
 
-`Effect::Graph` — a step running a pipeline — sits on whichever side its content dictates: a **filter-only `forward`** is pure, because its nodes are deterministic and content-cached already; a sub-graph that **contains a step**, or any run in **`fit` mode**, is impure (the step calls a model; a replayed fit must re-write states, not serve a summary). This is decided by `Effect::is_pure()` in `soma-core/src/effect.rs`.
+`Effect::Graph` — a step running a pipeline — sits on whichever side its content dictates: a **filter-only `forward`** is pure, because its nodes are deterministic and content-cached already; a sub-graph that **contains a step**, or any run in **`fit` mode**, is impure (the step calls a model; a replayed fit must re-write states, not serve a summary). This is decided by `Effect::is_pure()` in `soma-core/src/agentic/effect.rs`.
 
 Two practical consequences: prompts land on disk under `$SOMA_CACHE_DIR` (set `journal = false` on a step's `StepMeta` for anything that must not persist), and GC marks impure blobs as expensive so a replay's record outlives an intermediate tensor of the same size — an evicted pure blob merely recomputes, an evicted impure one would make a replay diverge.
 

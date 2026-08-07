@@ -134,10 +134,10 @@ pub struct ServerInfo {
 
 /// What this server publishes, and what an agent consumes.
 ///
-/// The same type either way: [`somatize_core::tool::ToolSpec`]. Soma is both
+/// The same type either way: [`somatize_core::agentic::tool::ToolSpec`]. Soma is both
 /// a tool provider (here) and a tool caller (`soma-llm`), and describing a
 /// tool twice is how the two descriptions drift.
-pub use somatize_core::tool::ToolSpec as ToolDefinition;
+pub use somatize_core::agentic::tool::ToolSpec as ToolDefinition;
 
 /// What a `tools/call` returns: the text a model will read.
 ///

@@ -98,8 +98,8 @@ def test_it_can_read_from_a_fan_in():
     g.node("model", Const(["a", "b"]))
     g.node("truth", Const(["a", "c"]))
     g.node("score", Eval(["accuracy"], prediction="model", reference="truth"))
-    g.connect("model", "score")
-    g.connect("truth", "score")
+    g.edge("model", "score")
+    g.edge("truth", "score")
 
     assert g.forward("go")["accuracy"] == 0.5
 
@@ -206,7 +206,7 @@ def test_it_survives_a_loop_and_remembers_every_round():
     g = soma.Graph(cache="memory")
     g.node("judge", Judge())
     g.node("remember", acc)
-    g.connect("judge", "remember")
+    g.edge("judge", "remember")
     g.loop("loop", body="judge", until="judge", max_iterations=5)
     g.forward("go")
 

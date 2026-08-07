@@ -21,6 +21,7 @@ will touch.
 | If you want to… | Read |
 |---|---|
 | Get oriented in one page | This page — the [spine](#d0--the-ownership-spine) and the [ten types](#the-ten-types-that-carry-the-system) |
+| Change one capability and know what it touches | [Capabilities](/soma/internals/capabilities/) — one row per thing Soma does: entry points, hops, types, debt, tests |
 | Explore instead of read | The [Architecture Graph](/soma/internals/graph/) — click a trait to see every implementor, a type to see what owns it |
 | Follow the code as it runs | [Call Paths](/soma/internals/paths/) — the five traces as one graph, with the hops they share |
 | Know the vocabulary | [Foundation](/soma/internals/foundation/) — `soma-core` is the dictionary every other crate speaks |
@@ -30,6 +31,7 @@ will touch.
 | Work on remote execution | [Distribution](/soma/internals/distribution/) — start with [D5](/soma/internals/distribution/#d5--what-crosses-the-wire) |
 | Recognize an idiom you keep seeing | [Design Patterns](/soma/internals/patterns/) |
 | Plan a refactor | [Known Debt](/soma/internals/debt/) |
+| Know how big the user-facing API is, and what nothing calls | [Surface Census](/soma/internals/surface/) |
 | Find one symbol | [Symbol Index](/soma/internals/symbols/) |
 
 ---
@@ -69,9 +71,60 @@ are the diagram at finer granularity:
 | **D5** | What crosses the wire | [Distribution](/soma/internals/distribution/#d5--what-crosses-the-wire) |
 | **D6** | The FFI bridge | [Python Bridge](/soma/internals/python/#d6--the-ffi-bridge) |
 
-A `file:line` reference is written as plain inline code — `` `soma-core/src/filter.rs:120` ``
+A `file:line` reference is written as plain inline code — `` `soma-core/src/graph/filter.rs:120` ``
 — never as a link. A GitHub permalink would need a pinned commit, and two hundred
 of them would rot in one commit.
+
+---
+
+## The domain vocabulary
+
+Nine names, used the same way everywhere. They are directory names first and
+a documentation device second: if you can guess what `optimizer/` holds, you
+did not need this page.
+
+| Domain | What lives there |
+|---|---|
+| `graph` | what the user builds — nodes, edges, `Filter`, `Step` |
+| `data` | the values and their stores |
+| `cache` | memoizing by content |
+| `execution` | compiling a graph and running a plan |
+| `agentic` | effects, messages, tools, models |
+| `optimizer` | hyperparameter search |
+| `tracking` | what a run records |
+| `distributed` | the same work, on another machine |
+| `viz` | drawing it |
+
+The vocabulary applies at **two levels**, and the second is the one that
+makes it useful. Four crates span several domains and carry the names as
+folders. The rest each *are* one domain — there, wrapping the whole crate in
+a folder of the same name would add a level that says nothing, so the crate
+is the unit and its subdivisions are the domain's own.
+
+```
+                  graph  data  cache  exec  agentic  optim  track  distrib  viz
+soma-core           ●     ●      ●      ·      ●       ●      ●       ●      ●
+soma-runtime        ·     ·      ●      ●      ●       ●      ●       ●      ·
+soma-python         ●     ●      ●      ·      ●       ●      ●       ●      ·
+─────────── crates that ARE one domain ──────────────────────────────────────
+soma-compiler                            ●
+soma-llm                                          ●
+soma-agent                                        ●
+soma-memory                                       ●            ●
+soma-mcp                                          ●
+soma-worker                                                             ●
+soma-coordinator                                                        ●
+soma-store                ●
+```
+
+Reading down a column is how a capability is read across its layers. For
+`optimizer`: `soma-core` says what a search space and a study *are*,
+`soma-runtime` holds what walks one — samplers, pruners, the trial loop —
+and `soma-python` is what a user types. Three folders, one name, one
+capability.
+
+Each domain folder's `mod.rs` opens by saying what the domain is, so that
+answer lives beside the code rather than only here.
 
 ---
 
@@ -82,18 +135,18 @@ Published names are prefixed `somatize-`; directory names drop the prefix.
 
 | Crate | Lines | Traits | Page |
 |---|---|---|---|
-| `soma-core` | 11 590 | 12 | [Foundation](/soma/internals/foundation/#soma-core-somatize-core) |
+| `soma-core` | 11 463 | 12 | [Foundation](/soma/internals/foundation/#soma-core-somatize-core) |
 | `soma-macros` | 607 | 0 | [Foundation](/soma/internals/foundation/#soma-macros-somatize-macros) |
-| `soma-compiler` | 3 118 | 1 | [Execution](/soma/internals/execution/#soma-compiler-somatize-compiler) |
-| `soma-runtime` | 17 449 | 12 | [Execution](/soma/internals/execution/#soma-runtime-somatize-runtime) |
+| `soma-compiler` | 3 120 | 1 | [Execution](/soma/internals/execution/#soma-compiler-somatize-compiler) |
+| `soma-runtime` | 17 290 | 12 | [Execution](/soma/internals/execution/#soma-runtime-somatize-runtime) |
 | `soma-llm` | 3 848 | 2 | [Agentic](/soma/internals/agentic/#soma-llm-somatize-llm) |
 | `soma-agent` | 620 | 0 | [Agentic](/soma/internals/agentic/#soma-agent-somatize-agent) |
 | `soma-memory` | 3 746 | 2 | [Agentic](/soma/internals/agentic/#soma-memory-somatize-memory) |
-| `soma-mcp` | 3 267 | 0 | [Agentic](/soma/internals/agentic/#soma-mcp-somatize-mcp) |
-| `soma-worker` | 5 903 | 0 | [Distribution](/soma/internals/distribution/#soma-worker-somatize-worker) |
+| `soma-mcp` | 3 270 | 0 | [Agentic](/soma/internals/agentic/#soma-mcp-somatize-mcp) |
+| `soma-worker` | 5 922 | 0 | [Distribution](/soma/internals/distribution/#soma-worker-somatize-worker) |
 | `soma-coordinator` | 949 | 0 | [Distribution](/soma/internals/distribution/#soma-coordinator-somatize-coordinator) |
 | `soma-store` | 1 285 | 0 | [Distribution](/soma/internals/distribution/#soma-store-somatize-store) |
-| `soma-python` | 6 720 | 0 | [Python Bridge](/soma/internals/python/) |
+| `soma-python` | 6 605 | 0 | [Python Bridge](/soma/internals/python/) |
 | `soma` (facade) | 124 | 0 | [Foundation](/soma/internals/foundation/#soma-somatize--the-facade) |
 
 **29 public traits total.** Not one of them declares an associated type or a
@@ -201,16 +254,16 @@ If you learn these, most of the rest follows.
 
 | # | Type | file:line | Why it matters |
 |---|---|---|---|
-| 1 | `Filter` | `soma-core/src/filter.rs:120` | `fit()` learns state, `forward()` transforms. Both independently cacheable. Everything pipeline-shaped is this |
-| 2 | `Step` | `soma-core/src/step.rs:250` | `poll(ctx) -> Transition`. Everything agent-shaped is this. Holds no state between turns — history arrives through `StepCtx` |
-| 3 | `NodeMeta` | `soma-core/src/node.rs:72` | The adapter that erases the Filter/Step distinction. `From<StepMeta>` sets `cacheable: false`, so "a step is not cacheable" is *data*, not a branch |
-| 4 | `NodeCatalog` | `soma-runtime/src/node_catalog.rs:79` | One registry for both kinds, and the compiler's `NodeRegistry`. Two registries joined by an adapter is what made `.compile()` skip step schemas |
-| 5 | `Value` | `soma-core/src/value.rs:15` | Six variants, all `Arc`-backed, so `Clone` is a refcount bump |
-| 6 | `CacheKey` | `soma-core/src/cache.rs:18` | `state = hash(config‖x‖y)`, `output = hash(config‖state‖input_hash)`. Downstream keys use input **content**, so an unchanged intermediate cuts off the rest of the graph |
+| 1 | `Filter` | `soma-core/src/graph/filter.rs:120` | `fit()` learns state, `forward()` transforms. Both independently cacheable. Everything pipeline-shaped is this |
+| 2 | `Step` | `soma-core/src/graph/step.rs:250` | `poll(ctx) -> Transition`. Everything agent-shaped is this. Holds no state between turns — history arrives through `StepCtx` |
+| 3 | `NodeMeta` | `soma-core/src/graph/node.rs:72` | The adapter that erases the Filter/Step distinction. `From<StepMeta>` sets `cacheable: false`, so "a step is not cacheable" is *data*, not a branch |
+| 4 | `NodeCatalog` | `soma-runtime/src/execution/node_catalog.rs:79` | One registry for both kinds, and the compiler's `NodeRegistry`. Two registries joined by an adapter is what made `.compile()` skip step schemas |
+| 5 | `Value` | `soma-core/src/data/value.rs:15` | Six variants, all `Arc`-backed, so `Clone` is a refcount bump |
+| 6 | `CacheKey` | `soma-core/src/cache/mod.rs:21` | `state = hash(config‖x‖y)`, `output = hash(config‖state‖input_hash)`. Downstream keys use input **content**, so an unchanged intermediate cuts off the rest of the graph |
 | 7 | `ExecutionPlan` | `soma-compiler/src/plan.rs:19` | What the compiler produces and the executor walks. Recursive in four shapes; `children()` is the one traversal |
-| 8 | `Context` | `soma-runtime/src/executor.rs:124` | The executor's mutable state through the whole walk. `(!)` Also the biggest god object in the runtime |
-| 9 | `Transition` | `soma-core/src/step.rs:43` | `Await` / `Spawn` / `Goto` / `Suspend` / `Done`. Deliberately **not** `#[non_exhaustive]` — every consumer must decide |
-| 10 | `Effect` / `EffectJournal` | `soma-core/src/effect.rs:35`, `soma-runtime/src/effects/journal.rs:51` | An effect is data; the journal keys pure ones by content and impure ones by site. That is the whole durability story |
+| 8 | `Context` | `soma-runtime/src/execution/executor.rs:124` | The executor's mutable state through the whole walk. `(!)` Also the biggest god object in the runtime |
+| 9 | `Transition` | `soma-core/src/graph/step.rs:43` | `Await` / `Spawn` / `Goto` / `Suspend` / `Done`. Deliberately **not** `#[non_exhaustive]` — every consumer must decide |
+| 10 | `Effect` / `EffectJournal` | `soma-core/src/agentic/effect.rs:35`, `soma-runtime/src/agentic/journal.rs:51` | An effect is data; the journal keys pure ones by content and impure ones by site. That is the whole durability story |
 
 ### The one distinction to internalize
 
@@ -244,7 +297,7 @@ The narrative version of D2, for orientation. Every step links to the detail.
 Remote execution replaces step 5 with a serialized plan over a WebSocket
 ([D5](/soma/internals/distribution/#d5--what-crosses-the-wire)); the executor
 itself does not change. Streaming replaces it with `StreamRun`, which composes
-the *same three primitives* per chunk — which is why a single-chunk stream and a
+the *same four primitives* per chunk — which is why a single-chunk stream and a
 plain forward produce identical cache keys.
 
 ---
@@ -275,6 +328,14 @@ in it, and warns (without failing) when a line number has drifted more than 30
 lines. That catches deletion and renaming — the failures that make a reference
 actively misleading — but it cannot tell you whether a description is still
 *true*.
+
+Links *within* the docs are checked separately, by
+`docs/scripts/check-debt-refs.mjs`: every `D-nn` reference must name an entry
+that exists, its slug must match that entry's heading, and where the link text
+says `D-mm`, mm must agree with the target. That guard was written after the
+register was renumbered in blocks of ten and five links kept the old ids, so
+`[D-51]` pointed at the text of D-61. Both halves of such a link read plausible
+in isolation, which is why nothing caught them for months.
 
 When you find a claim here that is wrong, fix it. A reference nobody trusts is
 worse than no reference, which is exactly what happened to

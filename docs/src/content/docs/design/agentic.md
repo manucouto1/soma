@@ -13,8 +13,8 @@ Four pieces on top of the existing runtime:
 
 | Piece | What it is | Where |
 |---|---|---|
-| `Step` | An effectful node: `poll()` returns a `Transition` | `soma-core/src/step.rs` |
-| `Effect` | What a step asks the world for: LLM, tool, graph, sleep | `soma-core/src/effect.rs` |
+| `Step` | An effectful node: `poll()` returns a `Transition` | `soma-core/src/graph/step.rs` |
+| `Effect` | What a step asks the world for: LLM, tool, graph, sleep | `soma-core/src/agentic/effect.rs` |
 | Effect journal | Record-once, replay-on-resume, over the existing cache | `soma-runtime/src/effects/` |
 | Provider layer | OpenAI-compatible access to ~12 providers, as data | `soma-llm/` |
 
@@ -180,7 +180,7 @@ debate([alice, bob], rounds=3, judge=critic)
 board([solver, solver, solver], rounds=2)
 ```
 
-Each returns an ordinary `Graph`, built from the same `node`, `connect`, `branch` and `loop` anyone can call. Adding a pattern is adding a function.
+Each returns an ordinary `Graph`, built from the same `node`, `edge`, `branch` and `loop` anyone can call. Adding a pattern is adding a function.
 
 `board` is the one worth reading as an argument rather than a convenience. It is the multi-agent debate of [Du et al. (ICML 2024)](https://arxiv.org/abs/2305.14325): a panel answers independently, a chair reads every answer and records a decision, and the next round shows the panel what the chair recorded — the summarizer variant that paper introduces for larger panels, which is what makes the chair a moderator rather than a tallying clerk. The loop is `brief → members → chair`, the chair also reads the brief so the round after it still knows the question, and the chair's `done` is the exit condition: a panel that has converged stops instead of buying the rounds it was allowed.
 

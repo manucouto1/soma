@@ -1,9 +1,11 @@
 //! File-based tracking backend: run directories under `.soma/runs/`.
 //!
 //! [`JsonlEventSink`] is the lossless event consumer wired into
-//! [`EventBus`](crate::event_bus::EventBus); [`LocalTracker`] owns one
+//! [`EventBus`](crate::tracking::event_bus::EventBus); [`LocalTracker`] owns one
 //! run directory (manifest, status, logs). See
 //! `docs/src/content/docs/design/tracking.md` for the on-disk layout.
+
+pub mod event_bus;
 
 mod head;
 mod jsonl_sink;

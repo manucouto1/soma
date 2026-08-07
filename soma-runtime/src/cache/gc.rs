@@ -19,7 +19,7 @@
 
 use crate::cache::fs_store::FsActionStore;
 use chrono::Utc;
-use somatize_core::action::{BlobStore, ContentHash};
+use somatize_core::cache::action::{BlobStore, ContentHash};
 use somatize_core::error::Result;
 use std::collections::{HashMap, HashSet};
 
@@ -132,7 +132,7 @@ pub fn collect(store: &FsActionStore, policy: &GcPolicy) -> Result<GcReport> {
 mod tests {
     use super::*;
     use somatize_core::cache::{CacheKey, CacheStore, Origin};
-    use somatize_core::value::Value;
+    use somatize_core::data::value::Value;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
@@ -202,7 +202,7 @@ mod tests {
             "the cheap-per-byte bulk must go first"
         );
         // Records survive eviction — regenerable, not lost.
-        use somatize_core::action::ActionCache;
+        use somatize_core::cache::action::ActionCache;
         assert!(store.get_action(&cheap_key).unwrap().is_some());
 
         let _ = std::fs::remove_dir_all(&root);

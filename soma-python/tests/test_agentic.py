@@ -138,7 +138,7 @@ def test_agents_and_filters_compose_in_one_graph(providers_file):
         g = soma.Graph(cache="memory")
         g.node("assistant", soma.Agent(model="mock/any-model"))
         g.node("shout", Shout())
-        g.connect("assistant", "shout")
+        g.edge("assistant", "shout")
 
         # A step's output feeds an ordinary filter with no adapter between.
         assert g.forward("hello") == "QUIET ANSWER"
@@ -196,7 +196,7 @@ def test_a_step_node_is_visible_in_the_rendered_graph(providers_file, tmp_path):
     g = soma.Graph(cache="memory")
     g.node("assistant", soma.Agent(model="mock/any"))
     g.node("shout", _Identity())
-    g.connect("assistant", "shout")
+    g.edge("assistant", "shout")
 
     mermaid = g.to_mermaid()
     # Effectful nodes render as parallelograms — they reach outside the graph.

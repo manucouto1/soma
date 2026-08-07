@@ -18,7 +18,7 @@ Soma supports remote execution by serializing compiled graphs and sending them t
 ┌─────────────────┐         ┌──────────────┐
 │  User / Agent   │         │  Worker 1    │
 │                 │         │  (GPU, 32GB) │
-│  graph.run()    │────────►│              │
+│  graph.fit()    │────────►│              │
 │  lab.run(study) │         │  soma-worker │
 │                 │◄────────│  daemon      │
 │  ← events       │         └──────────────┘

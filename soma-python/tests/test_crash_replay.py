@@ -144,8 +144,8 @@ TWO_AGENT_SCRIPT = textwrap.dedent(
     g.node("first", soma.Agent(model="mock/any-model"))
     g.node("gate", Gate())
     g.node("second", soma.Agent(model="mock/any-model"))
-    g.connect("first", "gate")
-    g.connect("gate", "second")
+    g.edge("first", "gate")
+    g.edge("gate", "second")
     print(g.forward("start", run_id=RUN_ID))
     """
 )

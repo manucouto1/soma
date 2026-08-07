@@ -12,15 +12,16 @@
 //! timestamp. Unparseable lines — a torn tail from a crash, or an event
 //! kind written by a newer soma — are skipped, never an error.
 
-use crate::study_io::StudyIo;
+use crate::optimizer::study_io::StudyIo;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use somatize_core::error::{Result, SomaError};
-use somatize_core::event::Event;
 use somatize_core::graph::Graph;
-use somatize_core::study::{Study, TrialState};
+use somatize_core::optimizer::study::{Study, TrialState};
+use somatize_core::tracking::event::Event;
 use somatize_core::tracking::{EventEnvelope, RunManifest, RunState, RunStatus};
 use somatize_core::viz::{GraphOverlay, NodeStatus};
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -33,8 +34,16 @@ use super::local_tracker::{load_manifest, load_status};
 pub const STALE_HEARTBEAT_SECS: i64 = 300;
 
 /// Reader over one run directory.
+///
+/// `events.jsonl` is parsed **once** per reader and memoized. Every
+/// aggregate below is a fold over the same envelopes, and each used to
+/// re-open and re-parse the file for itself — so `summarize`, which calls
+/// five of them, was five full reads and five full parses of one file
+/// (D-63). The memo is per reader, so a reader is a snapshot: a run still
+/// being written needs a fresh one to see new events.
 pub struct RunReader {
     dir: PathBuf,
+    envelopes: OnceCell<Vec<EventEnvelope>>,
 }
 
 /// Listing entry for one run: manifest identity plus derived liveness.
@@ -257,7 +266,10 @@ impl RunReader {
     pub fn open(run_dir: impl AsRef<Path>) -> Result<Self> {
         let dir = run_dir.as_ref().to_path_buf();
         load_manifest(&dir)?;
-        Ok(Self { dir })
+        Ok(Self {
+            dir,
+            envelopes: OnceCell::new(),
+        })
     }
 
     /// The run directory this reader was opened on.
@@ -288,23 +300,38 @@ impl RunReader {
 
     /// All parseable event envelopes, in log order. Torn or unknown
     /// lines are skipped; `seq` gaps let a consumer detect the skips.
+    ///
+    /// Parsed once and memoized — see the type's note. This clones; the
+    /// aggregates below fold over the memo without one.
     pub fn events(&self) -> Result<Vec<EventEnvelope>> {
-        let path = self.dir.join("events.jsonl");
-        let file = match fs::File::open(&path) {
-            Ok(f) => f,
-            Err(_) => return Ok(Vec::new()), // no events yet
-        };
-        let mut envelopes = Vec::new();
-        for line in BufReader::new(file).lines() {
-            let line = line.map_err(SomaError::Io)?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(env) = serde_json::from_str::<EventEnvelope>(&line) {
-                envelopes.push(env);
-            }
+        self.envelopes().map(<[EventEnvelope]>::to_vec)
+    }
+
+    /// The memoized envelopes. A read error is not cached: an empty or
+    /// unreadable `events.jsonl` reads as no events, which is what an
+    /// unfinished run legitimately has.
+    fn envelopes(&self) -> Result<&[EventEnvelope]> {
+        if let Some(cached) = self.envelopes.get() {
+            return Ok(cached);
         }
-        Ok(envelopes)
+        let path = self.dir.join("events.jsonl");
+        let parsed = match fs::File::open(&path) {
+            Err(_) => Vec::new(), // no events yet
+            Ok(file) => {
+                let mut envelopes = Vec::new();
+                for line in BufReader::new(file).lines() {
+                    let line = line.map_err(SomaError::Io)?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if let Ok(env) = serde_json::from_str::<EventEnvelope>(&line) {
+                        envelopes.push(env);
+                    }
+                }
+                envelopes
+            }
+        };
+        Ok(self.envelopes.get_or_init(|| parsed))
     }
 
     /// Per-node execution spans in event order — the gantt/overlay
@@ -313,21 +340,21 @@ impl RunReader {
     pub fn node_timings(&self) -> Result<Vec<NodeSpan>> {
         let mut spans: Vec<NodeSpan> = Vec::new();
         let mut open: BTreeMap<String, usize> = BTreeMap::new();
-        for env in self.events()? {
-            match env.event {
+        for env in self.envelopes()? {
+            match &env.event {
                 Event::NodeStarted {
                     node_id, effectful, ..
                 } => {
                     open.insert(node_id.clone(), spans.len());
                     spans.push(NodeSpan {
-                        node_id,
+                        node_id: node_id.clone(),
                         started_ts: Some(env.ts),
                         finished_ts: None,
                         duration_ms: None,
                         outcome: "running".into(),
                         cache_tier: None,
                         error: None,
-                        effectful,
+                        effectful: *effectful,
                     });
                 }
                 Event::NodeCacheHit {
@@ -337,7 +364,7 @@ impl RunReader {
                     ..
                 } => {
                     spans.push(NodeSpan {
-                        node_id,
+                        node_id: node_id.clone(),
                         started_ts: Some(env.ts),
                         finished_ts: Some(env.ts),
                         duration_ms: Some(load_time.as_millis() as u64),
@@ -350,7 +377,7 @@ impl RunReader {
                 Event::NodeCompleted {
                     node_id, duration, ..
                 } => {
-                    let idx = open.remove(&node_id);
+                    let idx = open.remove(node_id.as_str());
                     let span = match idx {
                         Some(i) => &mut spans[i],
                         None => {
@@ -372,7 +399,7 @@ impl RunReader {
                     span.outcome = "completed".into();
                 }
                 Event::NodeFailed { node_id, error, .. } => {
-                    let idx = open.remove(&node_id);
+                    let idx = open.remove(node_id.as_str());
                     let span = match idx {
                         Some(i) => &mut spans[i],
                         None => {
@@ -391,7 +418,7 @@ impl RunReader {
                     };
                     span.finished_ts = Some(env.ts);
                     span.outcome = "failed".into();
-                    span.error = Some(error);
+                    span.error = Some(error.clone());
                 }
                 _ => {}
             }
@@ -402,17 +429,32 @@ impl RunReader {
     /// Cache hit/miss counts, total and per node.
     pub fn cache_activity(&self) -> Result<CacheActivity> {
         let mut activity = CacheActivity::default();
-        for env in self.events()? {
-            match env.event {
+        for env in self.envelopes()? {
+            match &env.event {
                 Event::NodeCacheHit { node_id, tier, .. } => {
                     activity.hits += 1;
-                    let counts = activity.by_node.entry(node_id).or_default();
+                    let counts = activity.by_node.entry(node_id.clone()).or_default();
                     counts.hits += 1;
                     counts.last_tier = Some(format!("{tier:?}").to_lowercase());
                 }
                 Event::NodeCacheMiss { node_id, .. } => {
                     activity.misses += 1;
-                    activity.by_node.entry(node_id).or_default().misses += 1;
+                    activity.by_node.entry(node_id.clone()).or_default().misses += 1;
+                }
+                // A streamed node probes once per chunk and reports the
+                // total, once. Without this arm a streamed run read as
+                // zero cache activity while its node spans said otherwise.
+                Event::NodeCacheSummary {
+                    node_id,
+                    hits,
+                    misses,
+                    ..
+                } => {
+                    activity.hits += hits;
+                    activity.misses += misses;
+                    let counts = activity.by_node.entry(node_id.clone()).or_default();
+                    counts.hits += hits;
+                    counts.misses += misses;
                 }
                 _ => {}
             }
@@ -437,16 +479,16 @@ impl RunReader {
                 }
             }
         } else {
-            for env in self.events()? {
-                match env.event {
+            for env in self.envelopes()? {
+                match &env.event {
                     Event::TrialMetric {
                         trial_id, metric, ..
                     } => points.push(MetricPoint {
                         ts: metric.timestamp,
-                        name: metric.name,
+                        name: metric.name.clone(),
                         value: metric.value,
                         step: metric.step as u64,
-                        trial_id: Some(trial_id),
+                        trial_id: Some(trial_id.clone()),
                         node_id: None,
                     }),
                     Event::MetricReported {
@@ -456,11 +498,11 @@ impl RunReader {
                         ..
                     } => points.push(MetricPoint {
                         ts: metric.timestamp,
-                        name: metric.name,
+                        name: metric.name.clone(),
                         value: metric.value,
                         step: metric.step as u64,
-                        trial_id,
-                        node_id,
+                        trial_id: trial_id.clone(),
+                        node_id: node_id.clone(),
                     }),
                     _ => {}
                 }
@@ -475,14 +517,14 @@ impl RunReader {
     /// All `HealthFlag` events with wall time.
     pub fn health_flags(&self) -> Result<Vec<HealthFlagRecord>> {
         let mut flags = Vec::new();
-        for env in self.events()? {
+        for env in self.envelopes()? {
             if let Event::HealthFlag {
                 node_id,
                 step,
                 flag,
                 detail,
                 ..
-            } = env.event
+            } = env.event.clone()
             {
                 flags.push(HealthFlagRecord {
                     ts: env.ts,
@@ -516,8 +558,8 @@ impl RunReader {
         let mut pending: BTreeMap<String, Pending> = BTreeMap::new();
         let mut observed_turns: BTreeMap<String, u64> = BTreeMap::new();
 
-        for env in self.events()? {
-            match env.event {
+        for env in self.envelopes()? {
+            match env.event.clone() {
                 Event::AgentTurnStarted { node_id, turn, .. } => {
                     let seen = observed_turns.entry(node_id).or_default();
                     *seen = (*seen).max(turn as u64 + 1);
@@ -637,8 +679,8 @@ impl RunReader {
     pub fn agentic_timeline(&self) -> Result<Vec<EffectSpan>> {
         let mut spans: Vec<EffectSpan> = Vec::new();
         let mut open: BTreeMap<(String, usize, String), Vec<usize>> = BTreeMap::new();
-        for env in self.events()? {
-            match env.event {
+        for env in self.envelopes()? {
+            match env.event.clone() {
                 Event::EffectRequested {
                     node_id,
                     turn,
@@ -759,15 +801,6 @@ impl RunReader {
             SomaError::Other(format!("run dir {} has no graph.json", self.dir.display()))
         })?;
         Ok(graph.to_mermaid_with(&self.overlay()?))
-    }
-
-    /// Graphviz rendering of the run's graph, annotated with this
-    /// run's overlay. Errors if the run has no `graph.json` snapshot.
-    pub fn to_graphviz(&self) -> Result<String> {
-        let graph = self.graph()?.ok_or_else(|| {
-            SomaError::Other(format!("run dir {} has no graph.json", self.dir.display()))
-        })?;
-        Ok(graph.to_graphviz_with(&self.overlay()?))
     }
 
     /// Self-contained SVG rendering of the run's graph with this run's

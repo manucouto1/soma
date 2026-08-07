@@ -60,7 +60,7 @@ Two equivalent ways to compose. Explicit:
 g = Graph()
 g.node("normalizer", Normalizer())
 g.node("scale", Scale(factor=3.0))
-g.connect("normalizer", "scale")
+g.edge("normalizer", "scale")
 ```
 
 Or the fluent DSL — `>>` chains, `|` forks:
@@ -82,7 +82,7 @@ execution plan plus diagnostics (also self-displaying):
 
 ```python
 g.compile()          # tiles, per-level diagnostics, the plan drawn
-print(g.to_mermaid())  # or to_graphviz() / to_svg() / to_text()
+print(g.to_mermaid())  # or to_svg() / to_text()
 ```
 
 ## 3. Caching is already on

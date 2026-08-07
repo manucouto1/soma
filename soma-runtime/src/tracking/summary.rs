@@ -17,8 +17,8 @@
 
 use serde::Deserialize;
 use somatize_core::error::Result;
-use somatize_core::fingerprint::{ArchitectureFingerprint, pipeline_summary};
-use somatize_core::summary::{
+use somatize_core::tracking::fingerprint::{ArchitectureFingerprint, pipeline_summary};
+use somatize_core::tracking::summary::{
     AgentCost, FlagCount, NodeCost, RunConclusion, RunOutcome, RunSummary, TrialSummary,
 };
 use std::collections::BTreeMap;
@@ -317,9 +317,9 @@ mod tests {
     use crate::tracking::LocalTracker;
     use chrono::Utc;
     use somatize_core::cache::CacheKey;
-    use somatize_core::event::{Event, MetricRecord};
-    use somatize_core::filter::FilterKind;
+    use somatize_core::graph::filter::FilterKind;
     use somatize_core::graph::{Node, linear_pipeline};
+    use somatize_core::tracking::event::{Event, MetricRecord};
     use somatize_core::tracking::{RunKind, RunState, Tracker};
     use std::time::Duration;
     use tempfile::TempDir;
@@ -577,8 +577,8 @@ mod tests {
 
     #[test]
     fn a_study_run_summarizes_its_trials() {
-        use somatize_core::search::SearchSpace;
-        use somatize_core::study::{
+        use somatize_core::optimizer::search::SearchSpace;
+        use somatize_core::optimizer::study::{
             Direction, Objective, SearchStrategy, Study, Trial, TrialState,
         };
 

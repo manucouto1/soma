@@ -62,7 +62,7 @@ class TestGraphExecution:
         g = Graph()
         g.node(Doubler())
         g.node(Adder(amount=5.0))
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
 
         g.fit([1.0, 2.0, 3.0])
         result = g.forward([10.0, 20.0])
@@ -80,7 +80,7 @@ class TestGraphExecution:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
 
         info = g.compile()
         assert "total_nodes" in info
@@ -91,9 +91,9 @@ class TestGraphExecution:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
 
-        info = g.compile("no_cache")
+        info = g.compile()
         assert isinstance(info, dict)
         assert info["total_nodes"] == 2
 
@@ -105,7 +105,7 @@ class TestCompileInfo:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
         return g.compile()
 
     def test_diagnostics_are_structured(self):
@@ -188,7 +188,9 @@ def test_every_graph_a_user_receives_has_the_same_surface():
         [soma.Agent(model="mock/x", system="be terse") for _ in range(2)],
         rounds=1,
     )
-    from_builder = soma.Graph.somatize(soma.chain.Chain([]))
+    from soma._chain import Chain
+
+    from_builder = soma.Graph.somatize(Chain([]))
 
     for g in (built, from_pattern, from_builder):
         assert isinstance(g, soma.Graph), type(g)

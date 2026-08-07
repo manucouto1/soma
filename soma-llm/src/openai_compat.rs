@@ -14,8 +14,8 @@ use crate::catalog::{ProviderConfig, RetryPolicy};
 use crate::error::{LlmError, Result};
 use crate::{LlmProvider, ModelInfo};
 use serde::{Deserialize, Serialize};
-use somatize_core::effect::{LlmRequest, LlmResponse, StopReason, ToolSpec, Usage};
-use somatize_core::message::{ContentBlock, Message, Role};
+use somatize_core::agentic::effect::{LlmRequest, LlmResponse, StopReason, ToolSpec, Usage};
+use somatize_core::agentic::message::{ContentBlock, Message, Role};
 use std::time::Duration;
 
 // ── Pushback ──

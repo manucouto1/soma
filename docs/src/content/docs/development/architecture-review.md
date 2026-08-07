@@ -135,7 +135,7 @@ enum RuntimeError { FilterFailed { node_id: String, source: Box<dyn Error> }, ..
 
 **Impact**: High. Touches every error site. Should be done before 1.0.
 
-**Status**: Half done. `TrialOutcome` exists (`soma-runtime/src/executors/study.rs`) and separates completion from pruning, and `soma-llm` and `soma-worker` carry their own error types. `SomaError::Pruned` still exists alongside it, so the smell is narrowed, not removed.
+**Status**: Half done. `TrialOutcome` exists (`soma-runtime/src/optimizer/study.rs`) and separates completion from pruning, and `soma-llm` and `soma-worker` carry their own error types. `SomaError::Pruned` still exists alongside it, so the smell is narrowed, not removed.
 
 ---
 

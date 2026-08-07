@@ -13,7 +13,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "check": "node scripts/check-sidebar.mjs && node scripts/check-anchors.mjs && astro build"
+    "check": "node scripts/check-sidebar.mjs && node scripts/check-anchors.mjs && node scripts/check-debt-refs.mjs && node scripts/gen-surface.mjs --check && node scripts/gen-capabilities.mjs --check && astro build"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.38.2",

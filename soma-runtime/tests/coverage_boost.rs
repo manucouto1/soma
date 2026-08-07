@@ -2,17 +2,17 @@
 
 use somatize_compiler::{CompileMode, ExecutionPlan};
 use somatize_core::cache::CacheKey;
-use somatize_core::control::LoopCondition;
+use somatize_core::data::store::{DataStore, LocalDataStore};
+use somatize_core::data::value::Value;
 use somatize_core::error::{Result, SomaError};
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::control::LoopCondition;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::store::{DataStore, LocalDataStore};
-use somatize_core::value::Value;
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::executor::Context;
-use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::node_catalog::NodeCatalog;
-use somatize_runtime::runner::Transport;
+use somatize_runtime::execution::executor::Context;
+use somatize_runtime::execution::graph_session::GraphSession;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
+use somatize_runtime::execution::runner::Transport;
 use somatize_runtime::*;
 use std::sync::Arc;
 
@@ -43,7 +43,7 @@ impl Filter for Doubler {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -83,7 +83,7 @@ impl Filter for MeanFilter {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -110,7 +110,7 @@ impl Filter for BranchCondition {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -146,7 +146,7 @@ impl Filter for StopFilter {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -244,7 +244,7 @@ fn session_with_transport() {
             _plan: &ExecutionPlan,
             _filters: &NodeCatalog,
             _input: &Value,
-            _mode: &somatize_runtime::executor::RunMode,
+            _mode: &somatize_runtime::execution::executor::RunMode,
             _seed: Option<i64>,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             Ok((
@@ -477,7 +477,7 @@ impl Filter for Grow {
             differentiable: false,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -695,7 +695,7 @@ fn executor_remote_falls_back_to_local() {
     // No remote executor set → should fall back to local
     let plan = ExecutionPlan::Remote {
         node_id: "doubler".into(),
-        target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+        target: somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
         plan: Box::new(ExecutionPlan::Execute {
             node_id: "doubler".into(),
         }),
@@ -719,7 +719,7 @@ fn executor_remote_with_transport() {
             _plan: &ExecutionPlan,
             _filters: &NodeCatalog,
             input: &Value,
-            _mode: &somatize_runtime::executor::RunMode,
+            _mode: &somatize_runtime::execution::executor::RunMode,
             _seed: Option<i64>,
         ) -> Result<(Value, std::collections::HashMap<String, Value>)> {
             // Remote "doubles" the input
@@ -770,7 +770,7 @@ fn executor_remote_with_transport() {
 
     let plan = ExecutionPlan::Remote {
         node_id: "remote_node".into(),
-        target: somatize_core::filter::RemoteTarget::Tag("gpu".into()),
+        target: somatize_core::graph::filter::RemoteTarget::Tag("gpu".into()),
         plan: Box::new(ExecutionPlan::Execute {
             node_id: "remote_node".into(),
         }),
@@ -781,41 +781,6 @@ fn executor_remote_with_transport() {
     let result = ctx.get("remote_node").unwrap();
     let (data, _) = result.as_tensor().unwrap();
     assert_eq!(data, &[14.0]); // remote doubled it
-}
-
-// ── Executor coverage: DataStore spill ──
-
-#[test]
-fn executor_spills_large_values_to_datastore() {
-    let bus = Arc::new(EventBus::new(64));
-    let cache = MemoryCache::default();
-
-    let tmp = tempfile::tempdir().unwrap();
-    let store: Arc<dyn DataStore> = Arc::new(LocalDataStore::new(tmp.path()));
-
-    // Create a "large" value (>100 bytes)
-    let large_input = Value::tensor(vec![1.0; 100], vec![100]);
-
-    let mut ctx = Context::new(bus, "spill_test")
-        .with_data_store(store)
-        .with_spill_threshold(100); // spill values > 100 bytes
-
-    ctx.set("input", large_input);
-    ctx.graph_info
-        .set_predecessors("doubler", vec!["input".into()]);
-
-    let mut lib = NodeCatalog::new();
-    lib.register("doubler", Box::new(Doubler));
-
-    let plan = ExecutionPlan::Execute {
-        node_id: "doubler".into(),
-    };
-
-    execute(&plan, &mut ctx, &lib, &cache).unwrap();
-
-    // The output should exist (either materialized or spilled)
-    let vv = ctx.get_virtual("doubler");
-    assert!(vv.is_some());
 }
 
 // ── Free functions coverage ──
@@ -847,8 +812,8 @@ fn graph_fit_free_function_trainable() {
     let outputs =
         somatize_runtime::graph_fit(&graph, &lib, &x, None, std::sync::Arc::new(cache)).unwrap();
 
-    assert!(outputs.contains_key("mean"));
-    let (data, _) = outputs["mean"].as_tensor().unwrap();
+    assert!(outputs.outputs.contains_key("mean"));
+    let (data, _) = outputs.outputs["mean"].as_tensor().unwrap();
     // mean=15, forward: [10-15, 20-15] = [-5, 5]
     assert_eq!(data, &[-5.0, 5.0]);
 }

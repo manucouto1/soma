@@ -170,12 +170,14 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   and the start/complete/fail events happen once for filters and steps alike;
   `run_node_inner` is the only `match` on the execution hot path that tells them apart
   (`fit_state_if_needed` and `composite_fit` also discriminate, on the fit side).
-  Its guts are three primitives — `output_key` (guard + derivation + seed salt),
-  `compute_node` (catch_unwind), `store_output` (provenance) — which `StreamRun`
+  Its guts are four primitives — `output_key` (guard + derivation + seed salt),
+  `probe_cache` (the lookup → `Probe::Hit|Miss`), `compute_node` (catch_unwind),
+  `store_output` (provenance) — which `StreamRun`
   composes per chunk, so local streaming is the same execution site too. Stream
   event shape: one bracket per NODE (started at first chunk, completed after
   flush with "stream: N chunks, H hits, M misses"), per-chunk hit/miss
-  aggregated, never emitted. FixedState keys are IDENTICAL to the batch path's
+  aggregated into ONE `NodeCacheSummary` per node at `finish` — never a span
+  per chunk, but the counts do reach `RunReader::cache_activity` as data. FixedState keys are IDENTICAL to the batch path's
   (single-chunk stream and plain forward share one cache line). compile_stream
   refuses DAGs, steps, chunk 0. Stream + fit = error. The worker's remote
   streaming drives the SAME StreamRun (sessions in active_streams keep driver +
@@ -202,7 +204,7 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   RUN; `PopulationBased` refuses **by design** — each member needs its own hyperparameters
   applied to the graph, and a worker is sent a plan, not a way to build one. PBT is therefore
   an executor with callbacks, like `Study`: `soma.Pbt(search_space=…).run(train, evaluate)`
-  (soma-python/src/pbt.rs over the long-unreachable `PbtRunner`). DataParallel is a real
+  (soma-python/src/optimizer/pbt.rs over the long-unreachable `PbtRunner`). DataParallel is a real
   synchronous SGD round: remote fit leaves gradients on the parameters, they cross the wire as
   JSON (a torch pickle cannot be averaged in Rust), `shard_pair` splits x AND y together, and
   the stepped weights are read back over the wire — `get_state` would return the pre-step ones.
@@ -210,13 +212,13 @@ cargo llvm-cov --workspace --summary-only           # needs cargo-llvm-cov
   are all errors. `TransportContext::with_targets` is what lets a partition find its worker.
 - **Partition**: Maps arbitrary node subsets to RemoteTargets for model parallelism.
 - **PbtRunner**: Population-Based Training — cyclic train→evaluate→exploit/explore per generation.
-- **Graph visualization**: `to_mermaid()`, `to_graphviz()`, `to_text()`, `to_svg()` — pure data→string,
-  no runtime deps. `to_svg` (soma-core/src/svg.rs, longest-path layering) exists because notebooks
+- **Graph visualization**: `to_mermaid()`, `to_text()`, `to_svg()` — pure data→string,
+  no runtime deps. `to_svg` (soma-core/src/viz/svg.rs, longest-path layering) exists because notebooks
   sanitize `<script>`: it backs `Graph._repr_html_` (evaluate `g` → diagram),
   `DifferentiableFilter._repr_html_` (inner layers + θ counts), `RunView.to_svg(node=...)` and the
   --inline report diagrams.
-  `to_mermaid_with(&GraphOverlay)` / `to_graphviz_with` fold per-node status/duration/cache/health-flag
-  annotations in (soma-core/src/viz.rs); empty overlay ⇒ byte-identical plain output.
+  `to_mermaid_with(&GraphOverlay)` / `to_svg_with` fold per-node status/duration/cache/health-flag
+  annotations in (soma-core/src/viz/mod.rs); empty overlay ⇒ byte-identical plain output.
 - **Visualization (3 layers, GUI reuse at the DATA layer)**: `RunReader` (soma-runtime/src/tracking/reader.rs)
   aggregates run dirs into chart-ready serde structs (node_timings, cache_activity, metric_series,
   health_flags, trial_timeline, overlay); Python `soma.runs()`/`RunView`; `soma.viz` = optional

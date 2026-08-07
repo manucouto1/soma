@@ -70,7 +70,7 @@ pub enum SomaError {
         /// Boxed: `SomaError` is returned from nearly every function in
         /// the workspace, and this is the only variant with a payload
         /// worth more than a pointer.
-        reason: Box<crate::effect::SuspendReason>,
+        reason: Box<crate::agentic::effect::SuspendReason>,
     },
 
     /// A value did not have the shape its consumer declared — raised both by
@@ -99,7 +99,7 @@ pub enum SomaError {
     #[error("serialization error: {0}")]
     Serialization(String),
 
-    /// A [`crate::store::DataStore`] backend failed to put, get, or move data.
+    /// A [`crate::data::store::DataStore`] backend failed to put, get, or move data.
     #[error("data store error: {0}")]
     DataStore(String),
 

@@ -65,10 +65,9 @@ class Graph:
         cls,
         *,
         cache: str | None = ...,
-        cache_path: str | None = ...,
         cache_max_bytes: int | None = ...,
     ) -> Graph:
-        """`cache` is "memory" | "local" | "tiered"; the default is a persistent tiered cache."""
+        """`cache` is `"memory"` or a directory path; the default is a persistent store."""
 
     def __repr__(self) -> str: ...
     def __str__(self) -> str: ...
@@ -135,10 +134,7 @@ class Graph:
         """Add a routing node: runs `condition` and executes only the arm its output names."""
 
     def compile(self, mode: str = ...) -> dict[str, Any]:
-        """Compile and return diagnostics; mode is "inference" | "differentiable" | "no_cache"."""
-
-    def connect(self, source: str, target: str) -> None:
-        """Alias for `edge`."""
+        """Compile and return diagnostics; mode is "inference" | "differentiable"."""
 
     def edge(self, source: str, target: str) -> None:
         """Connect two nodes with a data edge."""
@@ -181,11 +177,15 @@ class Graph:
         self,
         x: Any,
         stream: bool = ...,
-        chunk_size: int = ...,
+        chunk_size: int | None = ...,
         seed: int | None = ...,
         run_id: str | None = ...,
     ) -> Any:
-        """Push data through the graph and return the output of the leaf that ran."""
+        """Push data through the graph and return the output of the leaf that ran.
+
+        A graph holding differentiable filters is walked in Python for
+        autograd, and that walk refuses `stream`, `chunk_size`, `seed` and
+        `run_id` rather than ignoring them."""
 
     def get_node_state(self, node_id: str) -> Any | None:
         """The stored state of a filter node."""
@@ -236,9 +236,6 @@ class Graph:
     ) -> None:
         """Answer what a suspended run was waiting for; every argument comes off `SomaSuspended`."""
 
-    def run(self) -> dict[str, Any]:
-        """Compile and execute, returning every node output."""
-
     def set_coordinator(self, url: str, token: str | None = ...) -> None:
         """Discover workers through a coordinator instead of naming them."""
 
@@ -269,9 +266,6 @@ class Graph:
 
     def steps(self) -> list[tuple[str, Any]]:
         """The live object behind each step node, as (node_id, obj), sorted by id."""
-
-    def to_graphviz(self, overlay: dict[str, Any] | None = ...) -> str:
-        """Graphviz DOT, optionally annotated per node."""
 
     def to_mermaid(self, overlay: dict[str, Any] | None = ...) -> str:
         """A Mermaid diagram, optionally annotated per node."""
@@ -422,7 +416,6 @@ class Pbt:
         explore: str = ...,
         fraction: float = ...,
         factor: float = ...,
-        threshold: float = ...,
         train_steps_per_generation: int = ...,
     ) -> Pbt:
         """`exploit` is "truncation" | "binary"; `explore` is "perturbation" | "resample"."""
@@ -451,10 +444,8 @@ class Study:
         search_space: list[dict[str, Any]] | None = ...,
         strategy: str = ...,
         n_trials: int = ...,
-        objectives: list[tuple[str, str]] | None = ...,
+        objectives: list[tuple[str | Callable[[dict[str, float]], float], str]] | None = ...,
         seed: int | None = ...,
-        objective: Callable[[dict[str, float]], float] | None = ...,
-        direction: str = ...,
         pruning: str | tuple[str, int] | tuple[str, float, int] | None = ...,
         tracking: bool = ...,
         root: str = ...,
@@ -468,8 +459,9 @@ class Study:
     run_dir: str | None
     progress: float
     objectives: list[tuple[str, str]]
-    """(metric, direction) pairs. Not a mirror of the constructor argument: a
-    Python `objective=` collapses to a single `("score", direction)`."""
+    """(metric, direction) pairs. Not quite a mirror of the constructor
+    argument: a callable objective is recorded here as `("score", direction)`,
+    because that is the metric it writes."""
     n_trials: int
     """Trials recorded *so far* — not the constructor's planned count."""
     best_trial: dict[str, Any] | None
@@ -479,7 +471,8 @@ class Study:
 
     @staticmethod
     def load(
-        run_dir: str, objective: Callable[[dict[str, float]], float] | None = ...
+        run_dir: str,
+        objectives: list[tuple[str | Callable[[dict[str, float]], float], str]] | None = ...,
     ) -> Study:
         """Read a study back from a run directory.
 
@@ -684,49 +677,22 @@ def kb_diff_json(a: str, b: str, root: str = ...) -> str:
 
 # ── Reading a run directory ─────────────────────────────────────────
 
-def run_info_json(dir: str) -> str:
-    """Identity and derived state for one run."""
+def run_sections_json(
+    dir: str, sections: list[str], metric: str | None = ...
+) -> str:
+    """Every named aggregate of one run, from one reader, as one JSON object.
 
-def run_manifest_json(dir: str) -> str:
-    """The run's manifest."""
+    Replaced twelve `run_*_json` functions with one caller each. `metric`
+    filters the `"metric_series"` section and is ignored by the rest. An
+    unknown section name is a `ValueError`, not an omission."""
 
 def run_summary_json(dir: str) -> str:
     """One run folded down: identity, cost, metrics, conclusion."""
-
-def run_events_json(dir: str) -> str:
-    """Every parseable event, in log order."""
-
-def run_metric_series_json(dir: str, name: str | None = ...) -> str:
-    """Metric time series, optionally just one."""
-
-def run_node_timings_json(dir: str) -> str:
-    """Per-node execution spans."""
-
-def run_cache_activity_json(dir: str) -> str:
-    """Hits and misses, total and per node."""
-
-def run_health_flags_json(dir: str) -> str:
-    """Health flags with their wall time."""
-
-def run_trial_timeline_json(dir: str) -> str:
-    """Trial lifetimes. Empty for a run that is not a study."""
-
-def run_agentic_activity_json(dir: str) -> str:
-    """Agent-step activity per node: turns, tokens, effects, tools."""
-
-def run_agentic_timeline_json(dir: str) -> str:
-    """Per-effect execution spans for agent runs."""
-
-def run_overlay_json(dir: str) -> str:
-    """This run's events folded into a rendering overlay."""
 
 # ── Diagrams ────────────────────────────────────────────────────────
 
 def run_to_mermaid(dir: str, overlay: bool = ...) -> str:
     """The run's graph as Mermaid, annotated with how it went."""
-
-def run_to_graphviz(dir: str, overlay: bool = ...) -> str:
-    """The run's graph as Graphviz DOT, annotated with how it went."""
 
 def run_to_svg(dir: str, overlay: bool = ...) -> str:
     """The run's graph as a self-contained SVG, annotated with how it went."""

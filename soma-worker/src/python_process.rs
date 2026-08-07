@@ -7,9 +7,9 @@
 use crate::error::{Result, WorkerError};
 use base64::engine::{Engine, general_purpose::STANDARD};
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::SomaError;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -170,9 +170,15 @@ for line in sys.stdin:
             _reply(({"ok": True, "result": _encode(result)}))
 
         elif action == "FORWARD":
-            f = filters[cmd["node_id"]]["obj"]
+            _entry = filters[cmd["node_id"]]
+            f = _entry["obj"]
             data = _decode(cmd.get("data"))
-            state = _decode(cmd.get("state", {}))
+            # The call's own state wins; a state loaded by SET_STATE is the
+            # fallback, which is what makes SET_STATE mean anything for a
+            # filter that keeps its state as plain JSON.
+            state = (
+                _decode(cmd["state"]) if "state" in cmd else _entry.get("state", {})
+            )
             result = f.forward(data, state)
             _reply(({"ok": True, "result": _encode(result)}))
 
@@ -350,6 +356,22 @@ for line in sys.stdin:
                 _mod.load_state_dict(torch.load(
                     io.BytesIO(base64.b64decode(_state["weights_b64"])),
                     weights_only=True))
+                _reply(({"ok": True}))
+                continue
+            if "state_b64" not in cmd:
+                # A plain JSON state: not a torch state_dict, not a pickle.
+                # It is exactly what the filter's own `forward(x, state)`
+                # takes, so remember it and use it when a later FORWARD
+                # arrives without one.
+                #
+                # This branch did not exist. The Rust side sends `state` for
+                # a `Value::Json` and `state_b64` for bytes, and the line
+                # below read `cmd["state_b64"]` unconditionally — so every
+                # JSON state answered with a KeyError. Nothing noticed
+                # because the caller also passes the state on each FORWARD,
+                # and because the worker logged the failure and carried on.
+                # Making that failure fatal (D-25) is what surfaced it.
+                filters[nid]["state"] = _state
                 _reply(({"ok": True}))
                 continue
             state_bytes = base64.b64decode(cmd["state_b64"])
@@ -904,7 +926,7 @@ impl PythonProcess {
     ///
     /// Returns `Value::Json({param_name: nested list})` rather than the
     /// torch pickle this used to send. The aggregator is in Rust
-    /// ([`somatize_runtime::strategy`]), and a pickle is opaque to it: the
+    /// ([`somatize_runtime::distributed`]), and a pickle is opaque to it: the
     /// average of two `Value::Bytes` blobs is not a thing that can be
     /// computed, so the round died at the aggregation step having done all
     /// the work. Plain JSON also makes the average independent of the
@@ -1055,7 +1077,7 @@ impl Filter for SubprocessFilter {
             differentiable: self.trainable,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -1063,7 +1085,10 @@ impl Filter for SubprocessFilter {
 
     fn composite_fit(
         &self,
-        peers: &[(String, std::sync::Arc<dyn somatize_core::filter::Filter>)],
+        peers: &[(
+            String,
+            std::sync::Arc<dyn somatize_core::graph::filter::Filter>,
+        )],
         x: &Value,
         y: Option<&Value>,
     ) -> Option<somatize_core::error::Result<(Value, HashMap<String, Value>)>> {

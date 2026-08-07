@@ -21,8 +21,7 @@ Soma separates **WHERE** code runs (Runner) from **WHAT** runs (Executor) and **
               ┌──────────┴──────────┐
               │    Runner (WHERE)   │
               ├─────────────────────┤
-              │ LocalRunner         │ ← same machine
-              │ RemoteRunner        │ ← worker via WS
+              │ LocalRunner         │ ← same machine, always
               └──────────┬──────────┘
                          │
               ┌──────────┴──────────┐
@@ -251,7 +250,7 @@ it was pinned, and hands its activation to the next one.
 g = Graph()
 g.node("encoder", Encoder(), target="gpu-0")
 g.node("classifier", Classifier(), target="gpu-1")
-g.connect("encoder", "classifier")
+g.edge("encoder", "classifier")
 
 g.add_worker("ws://gpu-0:8080", tags=["gpu-0"])
 g.add_worker("ws://gpu-1:8080", tags=["gpu-1"])
@@ -380,14 +379,13 @@ class MyModel(Filter):
         # train with self.lr, self.hidden
         ...
 
-study = Study(
-    graph=g,
-    objective="minimize",
-    metric="loss",
+study = g.study(
+    "tuning",
+    objectives=[("loss", "minimize")],
     strategy="bayesian",
     n_trials=100,
 )
-study.run()
+study.run(train_and_evaluate)
 ```
 
 ### StreamExecutor (chunked processing)

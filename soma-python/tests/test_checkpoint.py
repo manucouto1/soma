@@ -67,7 +67,7 @@ def _build_and_train(Dense, seed: int = 0, n_iter: int = 150):
     g = Graph()
     g.node("a", Dense(out_dim=8))
     g.node("b", Dense(out_dim=2))
-    g.connect("a", "b")
+    g.edge("a", "b")
 
     W = torch.randn(2, 4)
     x = torch.randn(64, 4)
@@ -79,7 +79,7 @@ def _build_and_train(Dense, seed: int = 0, n_iter: int = 150):
     for _ in range(n_iter):
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)
@@ -121,7 +121,7 @@ def test_state_load_state_round_trip(filter_mod):
     g2 = Graph()
     g2.node("a", Dense(out_dim=8))
     g2.node("b", Dense(out_dim=2))
-    g2.connect("a", "b")
+    g2.edge("a", "b")
     g2.load_state(sd)
 
     out2 = torch.as_tensor(g2.forward(x.tolist()), dtype=torch.float32)
@@ -137,7 +137,7 @@ def test_load_state_strict_rejects_unknown_keys(filter_mod):
     g2 = Graph()
     g2.node("a", Dense(out_dim=8))
     g2.node("b", Dense(out_dim=2))
-    g2.connect("a", "b")
+    g2.edge("a", "b")
 
     with pytest.raises(KeyError, match="not in this graph"):
         g2.load_state(sd_bad, strict=True)
@@ -152,7 +152,7 @@ def test_load_state_non_strict_warns_on_missing(filter_mod):
     g2 = Graph()
     g2.node("a", Dense(out_dim=8))
     g2.node("b", Dense(out_dim=2))
-    g2.connect("a", "b")
+    g2.edge("a", "b")
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -179,6 +179,42 @@ def test_full_save_load_matches_reference_output(filter_mod):
         assert (out2 - ref).abs().max().item() < 1e-5
         assert g2.filter_ids() == ["a", "b"]
         assert g2.edges() == [("a", "b")]
+
+
+def test_non_linear_topology_survives_the_round_trip(filter_mod):
+    """A diamond must come back a diamond, not a chain.
+
+    `load` falls back to wiring nodes in manifest order when the manifest
+    carries no edges — and the only round-trip test was a two-node chain,
+    for which the fallback and the real edges are indistinguishable. So
+    `load`'s own docstring claimed edges were "currently empty until
+    Rust-side edge introspection lands", pointing at a TODO that is not
+    there: `_build_manifest` writes `graph.edges()` and has for a while.
+    This is the test that tells the two apart.
+    """
+    Dense = filter_mod.Dense
+    torch.manual_seed(0)
+    g = Graph()
+    g.node("a", Dense(out_dim=8))
+    g.node("b", Dense(out_dim=8))
+    g.node("c", Dense(out_dim=8))
+    g.node("d", Dense(out_dim=2))
+    g.edge("a", "b")
+    g.edge("a", "c")
+    g.edge("b", "d")
+    g.edge("c", "d")
+    g.materialize(torch.randn(8, 4))
+    g.freeze()
+
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "diamond.somack")
+        g.save(path)
+        g2 = Graph.load(path)
+
+    assert sorted(g2.edges()) == [("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")], (
+        "the saved edges were dropped and the linear fallback wired a chain: "
+        f"{g2.edges()}"
+    )
 
 
 def test_save_to_nonexistent_directory_errors_clean(filter_mod):
@@ -227,7 +263,7 @@ def test_save_and_restore_optimizer(filter_mod):
     g = Graph()
     g.node("a", Dense(out_dim=4))
     g.node("b", Dense(out_dim=2))
-    g.connect("a", "b")
+    g.edge("a", "b")
     x = torch.randn(16, 4)
     y = torch.randn(16, 2)
 
@@ -237,7 +273,7 @@ def test_save_and_restore_optimizer(filter_mod):
     for _ in range(5):
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)

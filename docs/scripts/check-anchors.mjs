@@ -1,6 +1,6 @@
 // Guard: the `file:line` anchors in the Internals pages must still resolve.
 //
-// Those pages carry ~700 references of the form `soma-core/src/filter.rs:120`.
+// Those pages carry ~700 references of the form `soma-core/src/graph/filter.rs:120`.
 // They are the whole value of the section — a reference whose anchors point at
 // deleted files is worse than no reference, which is exactly what happened to
 // development/architecture-review.md before it was demoted to a historical

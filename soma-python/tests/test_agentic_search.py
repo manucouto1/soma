@@ -150,7 +150,7 @@ def test_an_optional_edge_becomes_a_dimension():
     g = soma.Graph(cache="memory")
     g.node("a", Sink())
     g.node("b", Sink())
-    g.connect("a", "b")
+    g.edge("a", "b")
     g.optional("a", "b")
 
     assert _names(g.search_space()) == ["edge:a->b"]
@@ -166,8 +166,8 @@ def test_cutting_an_edge_changes_what_the_consumer_sees():
     g.node("a", Sink("[a]"))
     g.node("b", Sink("[b]"))
     g.node("merge", merge)
-    g.connect("a", "merge")
-    g.connect("b", "merge")
+    g.edge("a", "merge")
+    g.edge("b", "merge")
     g.optional("a", "merge")
 
     assert g.forward("x") == "a=x[a] b=x[b]"
@@ -188,8 +188,8 @@ def test_restoring_an_edge_restores_it_exactly():
     # More than one edge, and the optional one is not the last: restoring it
     # on the end would leave a graph that renders and fingerprints
     # differently from the one this trial started with.
-    g.connect("a", "b")
-    g.connect("b", "c")
+    g.edge("a", "b")
+    g.edge("b", "c")
     g.optional("a", "b")
 
     before = g.to_mermaid()
@@ -205,7 +205,7 @@ def test_cutting_twice_is_harmless():
     g = soma.Graph(cache="memory")
     g.node("a", Sink())
     g.node("b", Sink())
-    g.connect("a", "b")
+    g.edge("a", "b")
     g.optional("a", "b")
 
     g.apply_params({"edge:a->b": False})
@@ -234,7 +234,7 @@ def test_an_undeclared_edge_cannot_be_toggled():
     g = soma.Graph(cache="memory")
     g.node("a", Sink())
     g.node("b", Sink())
-    g.connect("a", "b")
+    g.edge("a", "b")
     with pytest.raises(ValueError, match="never declared optional"):
         g.set_edge("a", "b", False)
 
@@ -246,7 +246,7 @@ def test_a_study_over_an_agentic_graph_covers_both():
     g = soma.Graph(cache="memory")
     g.node("writer", soma.Agent(model=soma.search(choices=["mock/a", "mock/b"])))
     g.node("critic", soma.Judge(model="mock/m", rubric="r"))
-    g.connect("writer", "critic")
+    g.edge("writer", "critic")
     g.optional("writer", "critic")
 
     assert sorted(_names(g.search_space())) == [

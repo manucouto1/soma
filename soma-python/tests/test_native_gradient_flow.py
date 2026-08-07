@@ -6,7 +6,7 @@ Covers the public surface installed by ``soma._orchestrator``:
   - polymorphic ``forward`` (autograd-live in train, Rust path in eval)
   - training-loop primitives ``context`` / ``backward`` / ``step`` / ``zero_grad``
   - ``freeze`` (snapshot live ``_module`` weights → runtime state library)
-  - ``DifferentiableFilter`` ``(out, aux)`` contract + aux propagation
+  - ``DifferentiableFilter`` aux propagation into ``py_state["last_aux"]``
   - error messages for the common misuses
 """
 
@@ -83,7 +83,7 @@ def _build_two_filter_graph(seed: int = 0):
     b = Dense(out_dim=2)
     g.node("a", a)
     g.node("b", b)
-    g.connect("a", "b")
+    g.edge("a", "b")
     return g, a, b
 
 
@@ -110,7 +110,8 @@ def test_train_loop_decreases_loss():
     for _ in range(300):
         with g.context() as ctx:
             g.zero_grad()
-            out, aux = g.forward(x)
+            out = g.forward(x)
+            aux = g.py_state["last_aux"]
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)
@@ -132,7 +133,7 @@ def test_gradients_reach_every_filter():
     opt = torch.optim.Adam(list(g.parameters()), lr=1e-2)
 
     opt.zero_grad()
-    out, _ = g.forward(x)
+    out = g.forward(x)
     loss = nn.functional.mse_loss(out, y)
     loss.backward()
 
@@ -152,7 +153,7 @@ def test_aux_dict_flows_through_forward_and_into_loss():
     head = GatedClassifier(out_dim=2)
     g.node("enc", enc)
     g.node("head", head)
-    g.connect("enc", "head")
+    g.edge("enc", "head")
 
     x, _ = _learnable_data()  # inputs only; targets aren't aligned with this head
     target = torch.randint(0, 2, (x.shape[0],))
@@ -162,7 +163,8 @@ def test_aux_dict_flows_through_forward_and_into_loss():
     opt = torch.optim.Adam(list(g.parameters()), lr=1e-2)
 
     opt.zero_grad()
-    out, aux_by_node = g.forward(x)
+    out = g.forward(x)
+    aux_by_node = g.py_state["last_aux"]
     # aux is keyed by node id, only filters that produced aux appear.
     assert "head" in aux_by_node, "GatedClassifier must surface aux"
     assert "enc" not in aux_by_node, "Dense has no aux"
@@ -200,12 +202,12 @@ def test_freeze_then_eval_matches_training_forward():
     for _ in range(200):
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)
 
-    out_train, _ = g.forward(x)
+    out_train = g.forward(x)
     ref = out_train.detach().clone()
 
     g.freeze()
@@ -233,12 +235,12 @@ def test_freeze_survives_wiped_live_modules():
     for _ in range(150):
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         g.step(ctx)
 
-    out_train, _ = g.forward(x)
+    out_train = g.forward(x)
     ref = out_train.detach().clone()
     g.freeze()
 
@@ -271,7 +273,7 @@ def test_to_moves_modules_and_persists_for_lazy_builds():
     # target stored in py_state without another .to() call.
     a._module = None
     b._module = None
-    out, _ = g.forward(x)
+    out = g.forward(x)
     for f in (a, b):
         assert f._module is not None
         assert f._module.weight.device.type == "cpu"
@@ -311,8 +313,8 @@ def test_filter_ids_topologically_sorted():
     g.node("c", Dense(out_dim=2))
     g.node("a", Dense(out_dim=8))
     g.node("b", Dense(out_dim=4))
-    g.connect("a", "b")
-    g.connect("b", "c")
+    g.edge("a", "b")
+    g.edge("b", "c")
     assert g.filter_ids() == ["a", "b", "c"]
 
 
@@ -398,7 +400,7 @@ def test_a_fan_out_feeds_both_consumers_from_the_same_output():
     g.edge("root", "right")
     g.train()
 
-    out, _aux = g.forward(torch.randn(3, 8))
+    out = g.forward(torch.randn(3, 8))
     # `right` is last in topological order and reads root's 4 features,
     # so it produces its own 3 — not something shaped by `left`.
     assert out.shape == (3, 3)
@@ -413,7 +415,7 @@ def test_a_fan_in_receives_a_dict_keyed_by_predecessor():
     g.edge("ctx", "fuse")
     g.train()
 
-    out, _aux = g.forward(torch.randn(3, 8))
+    out = g.forward(torch.randn(3, 8))
     assert out.shape == (3, 2)
     assert out.requires_grad, "autograd survives the join"
 
@@ -442,7 +444,7 @@ def test_disconnected_components_each_get_the_graph_input():
     g.node("b1", Dense(6))
     g.train()
 
-    out, _aux = g.forward(torch.randn(3, 8))
+    out = g.forward(torch.randn(3, 8))
     assert out.shape in {(3, 2), (3, 6)}
 
 
@@ -454,7 +456,8 @@ def test_a_linear_chain_still_trains():
     g.edge("h", "out")
     g.train()
 
-    out, aux = g.forward(torch.randn(3, 8))
+    out = g.forward(torch.randn(3, 8))
+    aux = g.py_state["last_aux"]
     assert out.shape == (3, 2)
     assert isinstance(aux, dict)
 
@@ -493,7 +496,8 @@ def test_a_torch_graph_still_takes_the_python_walk():
     g.edge("h", "out")
     g.train()
 
-    out, aux = g.forward(torch.randn(3, 8))
+    out = g.forward(torch.randn(3, 8))
+    aux = g.py_state["last_aux"]
     assert out.requires_grad, "autograd must survive the forward"
     assert isinstance(aux, dict)
 
@@ -542,8 +546,8 @@ class TestMaterializeUsesTopology:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("sink", Mlp("sink"))
-        g.connect("a", "sink")
-        g.connect("b", "sink")
+        g.edge("a", "sink")
+        g.edge("b", "sink")
 
         g.materialize(torch.randn(8, 10))
 
@@ -587,12 +591,12 @@ class TestMaterializeUsesTopology:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("gate", Gate())
-        g.connect("a", "gate")
-        g.connect("b", "gate")
+        g.edge("a", "gate")
+        g.edge("b", "gate")
         g.materialize(torch.randn(8, 10))
         g.train()
 
-        out, _ = g.forward(torch.randn(8, 10))
+        out = g.forward(torch.randn(8, 10))
         # Two branches of 4, so the gate is 8 wide — not 4.
         assert seen["gate"] == (8,), seen
         assert out.shape[-1] == 3
@@ -635,8 +639,8 @@ class TestMaterializeUsesTopology:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("gate", Gate())
-        g.connect("a", "gate")
-        g.connect("b", "gate")
+        g.edge("a", "gate")
+        g.edge("b", "gate")
 
         x = torch.randn(16, 10)
         y = torch.randint(0, 3, (16,))
@@ -646,7 +650,7 @@ class TestMaterializeUsesTopology:
 
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             g.backward(ctx, nn.functional.cross_entropy(out, y))
 
         nodes = dict(g.filters())
@@ -717,8 +721,8 @@ class TestLazyConstructionCompletesItself:
         g.node("a", Mlp("a"))
         g.node("b", Mlp("b"))
         g.node("gate", Gate())
-        g.connect("a", "gate")
-        g.connect("b", "gate")
+        g.edge("a", "gate")
+        g.edge("b", "gate")
         return g
 
     def test_materialize_builds_the_fan_in_too(self):
@@ -761,7 +765,7 @@ class TestLazyConstructionCompletesItself:
         for _ in range(3):
             with g.context() as ctx:
                 g.zero_grad()
-                out, _ = g.forward(x)
+                out = g.forward(x)
                 g.backward(ctx, nn.functional.cross_entropy(out, y))
             g.step(ctx)
 
@@ -816,7 +820,7 @@ class TestArchitectureAsData:
         g = Graph()
         g.node("a", Plain())
         g.node("b", Plain())
-        g.connect("a", "b")
+        g.edge("a", "b")
 
         arch = g.architecture()
         assert arch["total_trainable"] == 0
@@ -844,3 +848,111 @@ class TestArchitectureAsData:
 
         mermaid = g.to_mermaid(overlay=overlay)
         assert "θ" in mermaid and "LEAKAGE" in mermaid
+
+
+# ── What the dispatch is allowed to look at ─────────────────
+
+
+class _NotDifferentiable:
+    """A plain filter that happens to define ``build_module``.
+
+    Nothing about it is differentiable: no torch module, no autograd, and
+    it never says it is one. The name is a coincidence, and coincidences
+    are exactly what the old dispatch read.
+    """
+
+    _kind = "stateless"
+    _cache_version = "1"
+
+    def build_module(self, input_shape):  # noqa: D102 — the whole point
+        raise AssertionError("nothing should call this")
+
+    def forward(self, x, state):
+        return [v * 2 for v in x]
+
+
+def test_a_method_name_does_not_switch_the_engine():
+    """`build_module` on an undeclared filter used to hijack the graph.
+
+    The dispatch sniffed for the method, so any filter defining one — for
+    its own reasons, in its own namespace — moved every node beside it
+    onto the Python walk. That walk does not consult the cache, does not
+    salt a seed and emits no run bracket, so the symptom was never an
+    error: it was a run that quietly stopped being cached.
+    """
+    g = Graph(cache="memory")
+    g.node("plain", _NotDifferentiable())
+    assert g.forward([1.0, 2.0]) == [2.0, 4.0]
+
+
+def test_the_declaration_is_what_switches_the_engine():
+    """`_differentiable` is the class attribute, beside `_kind` and friends."""
+    g = Graph()
+    g.node("h", Dense(4))
+    g.train()
+    out = g.forward(torch.randn(3, 8))
+    assert isinstance(out, torch.Tensor), "the Python walk kept the tensor"
+
+
+# ── Arguments the walk cannot honour ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"seed": 42}, {"stream": True}, {"chunk_size": 8}, {"run_id": "r1"}],
+    ids=["seed", "stream", "chunk_size", "run_id"],
+)
+def test_the_torch_walk_refuses_what_it_cannot_honour(kwargs):
+    """These used to be accepted and discarded.
+
+    `g.forward(x, seed=42)` on a torch graph returned successfully having
+    ignored the seed, which is worse than refusing: the run looks
+    reproducible and is not.
+    """
+    g = Graph()
+    g.node("h", Dense(4))
+    g.train()
+    with pytest.raises(ValueError, match="cannot honour"):
+        g.forward(torch.randn(3, 8), **kwargs)
+
+
+# ── One return shape ────────────────────────────────────────
+
+
+def test_forward_returns_the_same_shape_in_both_modes():
+    """The return arity used to depend on a mode set elsewhere.
+
+    A loop written against the training shape broke on the same graph
+    after `g.eval()`, which is a hard error at the call site for a change
+    the caller did not make there.
+    """
+    g = Graph()
+    g.node("h", Dense(4))
+    g.node("out", Dense(2))
+    g.edge("h", "out")
+    x = torch.randn(3, 8)
+
+    g.train()
+    trained = g.forward(x)
+    assert not isinstance(trained, tuple), "one value, not (out, aux)"
+
+    g.eval()
+    evaluated = g.forward(x)
+    assert not isinstance(evaluated, tuple), "the same one value"
+
+    # What is NOT yet uniform is the payload *type*: a tensor while
+    # training, a list in eval, because the eval branch is shaped to match
+    # the Rust inference path. That is D-96, and it is a deeper question
+    # than the arity — it reaches `DifferentiableFilter.forward` and the
+    # freeze story. This test asserts what this change actually bought.
+    assert torch.as_tensor(evaluated).shape == trained.shape
+
+
+def test_aux_lands_on_the_graph_not_in_the_return_value():
+    g = Graph()
+    g.node("gate", GatedClassifier(2))
+    g.train()
+    out = g.forward(torch.randn(4, 8))
+    assert isinstance(out, torch.Tensor)
+    aux = g.py_state["last_aux"]
+    assert "gate" in aux and "gate" in aux["gate"]

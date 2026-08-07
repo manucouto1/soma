@@ -565,8 +565,8 @@ def refine(
     g.node("revise", revise if revise is not None else Revise())
     g.node("worker", worker)
     g.node("judge", judge)
-    g.connect("revise", "worker")
-    g.connect("worker", "judge")
+    g.edge("revise", "worker")
+    g.edge("worker", "judge")
     g.loop("refine", body="revise", until="judge", max_iterations=max_rounds)
     return g
 
@@ -596,7 +596,7 @@ def debate(
     g = _graph(provider, cache)
     ids = [g.node(f"agent_{i}", a) for i, a in enumerate(agents)]
     for a, b in zip(ids, ids[1:]):
-        g.connect(a, b)
+        g.edge(a, b)
 
     if judge is None:
         # No judge: nothing can say the argument is settled, so run the full
@@ -604,7 +604,7 @@ def debate(
         g.loop("debate", body=ids[0], until=False, max_iterations=rounds)
     else:
         judge_id = g.node("judge", judge)
-        g.connect(ids[-1], judge_id)
+        g.edge(ids[-1], judge_id)
         g.loop("debate", body=ids[0], until=judge_id, max_iterations=rounds)
     return g
 
@@ -658,9 +658,9 @@ def board(
 
     for i, member in enumerate(members):
         member_id = g.node(f"member_{i}", member)
-        g.connect("brief", member_id)
-        g.connect(member_id, chair_id)
-    g.connect("brief", chair_id)
+        g.edge("brief", member_id)
+        g.edge(member_id, chair_id)
+    g.edge("brief", chair_id)
 
     g.loop("board", body="brief", until=chair_id, max_iterations=rounds)
     return g
@@ -707,7 +707,7 @@ def self_consistency(
         # they run in parallel, cache separately, and appear separately in
         # the report.
         sample_id = g.node(f"sample_{i}", agent)
-        g.connect(sample_id, vote_id)
+        g.edge(sample_id, vote_id)
     return g
 
 
@@ -733,7 +733,7 @@ def parallel_vote(
     ids = [g.node(f"voter_{i}", a) for i, a in enumerate(agents)]
     agg_id = g.node("aggregate", aggregator)
     for node_id in ids:
-        g.connect(node_id, agg_id)
+        g.edge(node_id, agg_id)
     return g
 
 
@@ -815,6 +815,6 @@ def orchestrate(
     g.node("fanout", Fanout(runs="worker", max_workers=max_workers))
     g.node("synthesize", synthesizer)
     g.register_step("worker", worker)
-    g.connect("planner", "fanout")
-    g.connect("fanout", "synthesize")
+    g.edge("planner", "fanout")
+    g.edge("fanout", "synthesize")
     return g

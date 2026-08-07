@@ -33,7 +33,7 @@ def _tracked_fit(tmp_path, name="viz-run"):
     g = Graph(cache="memory")
     g.node("a", _Plain("a"))
     g.node("b", _Plain("b"))
-    g.connect("a", "b")
+    g.edge("a", "b")
     with g.track_run(name, root=str(tmp_path), kind="fit") as run:
         g.fit([1.0, 2.0])
         for step in range(4):

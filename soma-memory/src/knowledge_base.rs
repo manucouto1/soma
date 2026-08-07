@@ -417,7 +417,7 @@ mod tests {
     fn search_reaches_the_conclusion_headline() {
         let mut kb = MemoryKnowledgeBase::new();
         let mut rec = make_experiment("e1", "line_a", 0.8);
-        rec.conclusion = Some(somatize_core::summary::RunConclusion {
+        rec.conclusion = Some(somatize_core::tracking::summary::RunConclusion {
             headline: "completed in 2m · flags: DEAD_CHANNELS".into(),
             ..Default::default()
         });

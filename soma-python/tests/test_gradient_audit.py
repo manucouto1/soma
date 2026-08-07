@@ -35,7 +35,7 @@ def _build():
     a, b = Dense(out_dim=8), Dense(out_dim=2)
     g.node("a", a)
     g.node("b", b)
-    g.connect("a", "b")
+    g.edge("a", "b")
     W = torch.randn(2, 4)
     x = torch.randn(64, 4)
     y = x @ W.T
@@ -45,7 +45,7 @@ def _build():
 def _train_step(g, x, y):
     with g.context() as ctx:
         g.zero_grad()
-        out, _ = g.forward(x)
+        out = g.forward(x)
         loss = nn.functional.mse_loss(out, y)
         g.backward(ctx, loss)
     g.step(ctx)
@@ -110,7 +110,7 @@ def test_vanishing_flag_via_aggressive_grad_lo():
         # the aggressive threshold.
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y) * 1e-9
             g.backward(ctx, loss)
         g.step(ctx)
@@ -145,7 +145,7 @@ def test_nan_flag_when_param_set_to_nan():
     with g.gradient_audit() as audit:
         with g.context() as ctx:
             g.zero_grad()
-            out, _ = g.forward(x)
+            out = g.forward(x)
             loss = nn.functional.mse_loss(out, y)
             g.backward(ctx, loss)
         # Skip optimizer step (would propagate NaN further).
@@ -460,7 +460,7 @@ def test_inside_errors():
     g4 = Graph()
     g4.node("a", Deep(layers=1))
     g4.node("a/0", Dense(out_dim=4))
-    g4.connect("a", "a/0")
+    g4.edge("a", "a/0")
     g4.materialize(torch.randn(4, 4))
     with pytest.raises(ValueError, match="collision"):
         with g4.gradient_audit(inside={"a": ["0"]}):
@@ -706,7 +706,7 @@ def test_channel_snapshots_without_safetensors_warn_instead_of_vanishing(
             with g.gradient_audit(channels=True):
                 with g.context() as ctx:
                     g.zero_grad()
-                    out, _ = g.forward(x)
+                    out = g.forward(x)
                     g.backward(ctx, torch.nn.functional.mse_loss(out, y))
                 g.step(ctx)
 

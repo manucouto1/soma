@@ -1,0 +1,570 @@
+{
+  "_comment": [
+    "THE source for internals/capabilities.md. `node scripts/gen-capabilities.mjs`",
+    "renders it and checks every cross-reference: entries against the surface",
+    "census, traces against data/traces.json, debt against the register's headings,",
+    "test paths against the disk.",
+    "",
+    "A row is a vertical cut: one thing a user can do, from the name they type to",
+    "the code that does it, the types they will have to look up, and what is known",
+    "to be wrong with it. The Internals section already cuts horizontally by crate",
+    "and the domain folders answer 'where does this live' — neither answers 'what",
+    "happens when I call g.fit()'.",
+    "",
+    "`trace: null` is honest and deliberate: it means no execution trace has been",
+    "written for this capability yet, not that it has no path. Do not invent one.",
+    "",
+    "`hops` are short (`executor.rs:816`) and expanded through `files` below, so",
+    "check-anchors.mjs verifies them. Keep them to the 3-6 that a reader would",
+    "actually set a breakpoint on."
+  ],
+  "files": {
+    "graph/mod.rs": "soma-python/src/graph/mod.rs",
+    "graph/execution.rs": "soma-python/src/graph/execution.rs",
+    "graph/registry.rs": "soma-python/src/graph/registry.rs",
+    "graph/topology.rs": "soma-python/src/graph/topology.rs",
+    "graph/agentic.rs": "soma-python/src/graph/agentic.rs",
+    "graph/distributed.rs": "soma-python/src/graph/distributed.rs",
+    "graph/tracking.rs": "soma-python/src/graph/tracking.rs",
+    "graph/viz.rs": "soma-python/src/graph/viz.rs",
+    "compiler.rs": "soma-compiler/src/compiler.rs",
+    "plan.rs": "soma-compiler/src/plan.rs",
+    "executor.rs": "soma-runtime/src/execution/executor.rs",
+    "local.rs": "soma-runtime/src/execution/runner/local.rs",
+    "runner/mod.rs": "soma-runtime/src/execution/runner/mod.rs",
+    "graph_session.rs": "soma-runtime/src/execution/graph_session.rs",
+    "stream.rs": "soma-runtime/src/execution/stream.rs",
+    "forward.rs": "soma-runtime/src/execution/forward.rs",
+    "tiered.rs": "soma-runtime/src/cache/tiered.rs",
+    "fs_store.rs": "soma-runtime/src/cache/fs_store.rs",
+    "cache/mod.rs": "soma-core/src/cache/mod.rs",
+    "keys.rs": "soma-core/src/data/keys.rs",
+    "local_tracker.rs": "soma-runtime/src/tracking/local_tracker.rs",
+    "jsonl_sink.rs": "soma-runtime/src/tracking/jsonl_sink.rs",
+    "reader.rs": "soma-runtime/src/tracking/reader.rs",
+    "event_bus.rs": "soma-runtime/src/tracking/event_bus.rs",
+    "study.rs": "soma-runtime/src/optimizer/study.rs",
+    "pbt.rs": "soma-runtime/src/optimizer/pbt.rs",
+    "search.rs": "soma-core/src/optimizer/search.rs",
+    "agentic/mod.rs": "soma-runtime/src/agentic/mod.rs",
+    "graph_handler.rs": "soma-runtime/src/agentic/graph_handler.rs",
+    "worker.rs": "soma-worker/src/worker.rs",
+    "distributed.rs": "soma-runtime/src/distributed.rs",
+    "svg.rs": "soma-core/src/viz/svg.rs",
+    "graph.rs": "soma-core/src/graph/mod.rs",
+    "record.rs": "soma-memory/src/record.rs",
+    "retrieval.rs": "soma-memory/src/retrieval.rs",
+    "file_kb.rs": "soma-memory/src/file_kb.rs",
+    "_checkpoint.py": "soma-python/python/soma/_checkpoint.py",
+    "_audit.py": "soma-python/python/soma/_audit.py",
+    "_report.py": "soma-python/python/soma/viz/_report.py"
+  },
+  "capabilities": [
+    {
+      "id": "build",
+      "title": "Build a graph",
+      "summary": "Nodes, edges, and the two shapes that are not edges — a loop and a branch. Adding a node registers *what it is* separately from *where it sits*, which is why an `Agent` and a `Filter` are added by the same method.",
+      "entry": [
+        "Graph.node",
+        "Graph.edge",
+        "Graph.branch",
+        "Graph.loop",
+        "Graph.handoff"
+      ],
+      "trace": "l",
+      "hops": [
+        "graph/topology.rs:68",
+        "graph/registry.rs:116",
+        "graph/topology.rs:56"
+      ],
+      "types": [
+        "Graph",
+        "Node",
+        "Edge",
+        "NodeKind",
+        "LoopCondition"
+      ],
+      "debt": [
+        "D-56"
+      ],
+      "tests": [
+        "soma-python/tests/test_graph.py",
+        "soma-compiler/tests/control_flow.rs"
+      ]
+    },
+    {
+      "id": "forward",
+      "title": "Run a graph",
+      "summary": "Compile to a plan, walk the plan, answer with the leaf that actually ran. One execution site for filters and steps alike; the only thing `fit` adds is that a trainable node learns before it computes.",
+      "entry": [
+        "Graph.forward",
+        "Graph.compile"
+      ],
+      "trace": "b",
+      "hops": [
+        "graph/execution.rs:220",
+        "compiler.rs:1009",
+        "executor.rs:323",
+        "executor.rs:811",
+        "executor.rs:648"
+      ],
+      "types": [
+        "ExecutionPlan",
+        "NodeCatalog",
+        "NodeOutcome",
+        "Runner",
+        "GraphInfo"
+      ],
+      "debt": [
+        "D-03",
+        "D-44",
+        "D-96"
+      ],
+      "tests": [
+        "soma-python/tests/test_integration.py",
+        "soma-runtime/tests/topology.rs"
+      ]
+    },
+    {
+      "id": "fit",
+      "title": "Learn state from data",
+      "summary": "The same walk as a forward, in `RunMode::Fit`. What comes back says which half is which: what each node computed, and what each trainable node learned.",
+      "entry": [
+        "Graph.fit",
+        "Filter",
+        "Graph.get_node_state"
+      ],
+      "trace": "b",
+      "hops": [
+        "graph/execution.rs:32",
+        "local.rs:25",
+        "executor.rs:995",
+        "runner/mod.rs:134"
+      ],
+      "types": [
+        "Filter",
+        "FilterKind",
+        "Fitted",
+        "RunMode",
+        "StateStore"
+      ],
+      "debt": [
+        "D-48",
+        "D-91"
+      ],
+      "tests": [
+        "soma-runtime/tests/fit_answer.rs",
+        "soma-runtime/tests/fit_through_run_node.rs",
+        "soma-python/tests/test_composite_fit.py"
+      ]
+    },
+    {
+      "id": "cache",
+      "title": "Memoize by content",
+      "summary": "The key is derived at runtime, per node, from the config, the state and the *content* of the input — so an unchanged upstream output cuts the run off early. A memory LRU in front of a persistent store, by default.",
+      "entry": [
+        "Graph(cache=)",
+        "Graph(cache_max_bytes=)",
+        "cache_stats",
+        "cache_gc"
+      ],
+      "trace": "b",
+      "hops": [
+        "executor.rs:626",
+        "executor.rs:696",
+        "executor.rs:712",
+        "tiered.rs:46",
+        "fs_store.rs:310"
+      ],
+      "types": [
+        "CacheKey",
+        "CacheStore",
+        "TieredCache",
+        "FsActionStore",
+        "MemoryCache",
+        "Origin",
+        "CacheTier"
+      ],
+      "debt": [
+        "D-46",
+        "D-62"
+      ],
+      "tests": [
+        "soma-python/tests/test_cache_resume.py",
+        "soma-python/tests/test_identity.py",
+        "soma-runtime/tests/integration.rs"
+      ]
+    },
+    {
+      "id": "stream",
+      "title": "Run without materializing",
+      "summary": "Chunks through the same four primitives, one node's worth at a time. A single-chunk stream and a plain forward share one cache line, which is what makes the two paths the same path.",
+      "entry": [
+        "Graph.forward"
+      ],
+      "trace": "d",
+      "hops": [
+        "compiler.rs:1034",
+        "stream.rs:132",
+        "stream.rs:206",
+        "stream.rs:169"
+      ],
+      "types": [
+        "StreamMode",
+        "StreamRun",
+        "StreamOutput",
+        "VirtualValue"
+      ],
+      "debt": [
+        "D-48"
+      ],
+      "tests": [
+        "soma-python/tests/test_worker_e2e.py",
+        "soma-runtime/tests/memory_usage.rs"
+      ]
+    },
+    {
+      "id": "control-flow",
+      "title": "Loop, branch, hand over",
+      "summary": "The compiler claims a loop body and a branch arm by dominance, so each is compiled once — inside the construct — and never again as a top-level step. What a loop *carries* is separate from what tells it to *stop*.",
+      "entry": [
+        "Graph.loop",
+        "Graph.branch",
+        "Graph.handoff",
+        "Goto"
+      ],
+      "trace": "l",
+      "hops": [
+        "compiler.rs:727",
+        "plan.rs:204",
+        "executor.rs:416",
+        "executor.rs:487"
+      ],
+      "types": [
+        "LoopCondition",
+        "ExecutionPlan",
+        "Transition",
+        "NodeOutcome"
+      ],
+      "debt": [
+        "D-42"
+      ],
+      "tests": [
+        "soma-compiler/tests/control_flow.rs",
+        "soma-python/tests/test_python_steps.py"
+      ]
+    },
+    {
+      "id": "agentic",
+      "title": "Run effectful nodes",
+      "summary": "A step polls and returns a transition; a driver performs the effects and journals them. A pure effect is keyed by content, an impure one by `(run, node, turn, index)` — which is what makes a resumed run replay instead of re-calling a model.",
+      "entry": [
+        "Agent",
+        "Judge",
+        "Tool",
+        "agentic",
+        "Graph.register_step"
+      ],
+      "trace": "c",
+      "hops": [
+        "graph/agentic.rs:15",
+        "agentic/mod.rs:110",
+        "agentic/mod.rs:522",
+        "graph_handler.rs:141"
+      ],
+      "types": [
+        "Step",
+        "StepCtx",
+        "Transition",
+        "Effect",
+        "EffectHandler",
+        "EffectJournal",
+        "EffectDriver"
+      ],
+      "debt": [
+        "D-22",
+        "D-54",
+        "D-57"
+      ],
+      "tests": [
+        "soma-python/tests/test_agentic.py",
+        "soma-python/tests/test_python_steps.py",
+        "soma-runtime/tests/agentic_step.rs"
+      ]
+    },
+    {
+      "id": "suspend",
+      "title": "Pause and resume",
+      "summary": "A step that needs an answer nobody can compute suspends. The journal is the checkpoint: running the graph again replays every prior effect from the record, reaches the pause, and finds the answer waiting.",
+      "entry": [
+        "Suspend",
+        "Graph.resume",
+        "SomaSuspended"
+      ],
+      "trace": "c",
+      "hops": [
+        "agentic/mod.rs:190",
+        "graph/agentic.rs:116",
+        "executor.rs:765"
+      ],
+      "types": [
+        "SuspendReason",
+        "NodeOutcome",
+        "EffectJournal",
+        "ActionCache"
+      ],
+      "debt": [
+        "D-22"
+      ],
+      "tests": [
+        "soma-python/tests/test_suspend_resume.py",
+        "soma-python/tests/test_crash_replay.py"
+      ]
+    },
+    {
+      "id": "search",
+      "title": "Search hyperparameters",
+      "summary": "A study samples a space, runs a trial, and reads what the trial reported. The space is collected from the graph — a filter's `search(...)` config, an agent's prompt, and an optional edge, which makes topology a dimension.",
+      "entry": [
+        "Study",
+        "search",
+        "Trial",
+        "Graph.study",
+        "Graph.search_space"
+      ],
+      "trace": "e",
+      "hops": [
+        "study.rs:187",
+        "search.rs:172",
+        "study.rs:281"
+      ],
+      "types": [
+        "Study",
+        "Trial",
+        "SearchSpace",
+        "SearchDimension",
+        "Sampler",
+        "Pruner",
+        "TrialOutcome",
+        "Searchable"
+      ],
+      "debt": [
+        "D-14",
+        "D-64",
+        "D-93"
+      ],
+      "tests": [
+        "soma-python/tests/test_study.py",
+        "soma-python/tests/test_hpo_ux.py",
+        "soma-python/tests/test_agentic_search.py"
+      ]
+    },
+    {
+      "id": "tracking",
+      "title": "Record what a run did",
+      "summary": "Every event goes to a lossless sink before it goes anywhere else. `begin_run` is the single writer of the topology snapshot — the one place where the graph and the catalog are both in scope, so the only place that can stamp per-node config hashes.",
+      "entry": [
+        "Graph.track_run",
+        "Graph.begin_run",
+        "Run",
+        "runs",
+        "RunView"
+      ],
+      "trace": "f",
+      "hops": [
+        "graph/tracking.rs:10",
+        "local_tracker.rs:36",
+        "event_bus.rs:59",
+        "jsonl_sink.rs:125",
+        "reader.rs:266"
+      ],
+      "types": [
+        "Event",
+        "EventSink",
+        "EventBus",
+        "Tracker",
+        "LocalTracker",
+        "JsonlEventSink",
+        "RunReader",
+        "RunManifest"
+      ],
+      "debt": [
+        "D-05",
+        "D-07",
+        "D-63"
+      ],
+      "tests": [
+        "soma-runtime/tests/tracking.rs",
+        "soma-python/tests/test_runs_reader.py",
+        "soma-python/tests/test_run_api.py"
+      ]
+    },
+    {
+      "id": "checkpoints",
+      "title": "Save and restore",
+      "summary": "A checkpoint is the learned state of every node plus the manifest needed to rebuild the topology — not a pickle of the graph. `save`/`load` round-trip through that, so a reloaded graph is the same graph and not a lookalike.",
+      "entry": [
+        "Graph.save",
+        "Graph.load",
+        "Graph.state",
+        "Graph.load_state",
+        "Graph.restore_optimizer"
+      ],
+      "trace": "g",
+      "hops": [
+        "_checkpoint.py:60",
+        "_checkpoint.py:166",
+        "_checkpoint.py:224",
+        "_checkpoint.py:75",
+        "graph/registry.rs:333"
+      ],
+      "types": [
+        "StateStore",
+        "NodeCatalog",
+        "ArchitectureFingerprint"
+      ],
+      "debt": [],
+      "tests": [
+        "soma-python/tests/test_checkpoint.py"
+      ]
+    },
+    {
+      "id": "viz",
+      "title": "See the graph and the run",
+      "summary": "Pure data → string: no runtime, no I/O. SVG exists because a notebook sanitizes `<script>`, so the Mermaid a terminal reader is happy with cannot be what `_repr_html_` returns. An overlay folds a run's status onto the same renderer.",
+      "entry": [
+        "Graph.to_mermaid",
+        "Graph.to_svg",
+        "Graph.to_text",
+        "Graph.architecture",
+        "RunView"
+      ],
+      "trace": "h",
+      "hops": [
+        "graph/viz.rs:12",
+        "graph.rs:547",
+        "svg.rs:65",
+        "reader.rs:763",
+        "_report.py:178"
+      ],
+      "types": [
+        "GraphOverlay",
+        "NodeStatus",
+        "RunReader"
+      ],
+      "debt": [
+        "D-17",
+        "D-15"
+      ],
+      "tests": [
+        "soma-python/tests/test_viz.py",
+        "soma-python/tests/test_viz_report.py",
+        "soma-python/tests/test_viz_health.py"
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "title": "Watch the gradients",
+      "summary": "Hooks under hierarchical ids (`node/module.path`), rolled up into one health flag per family. The ids are opaque strings end to end — the hierarchy travels in the report, never parsed back out of a name.",
+      "entry": [
+        "Graph.gradient_audit",
+        "audit_modules",
+        "Audit",
+        "AuditScope",
+        "Thresholds"
+      ],
+      "trace": "i",
+      "hops": [
+        "_audit.py:1239",
+        "_audit.py:1016",
+        "graph/tracking.rs:122",
+        "reader.rs:518"
+      ],
+      "types": [
+        "HealthFlagRecord",
+        "RunReader",
+        "Event"
+      ],
+      "debt": [
+        "D-09"
+      ],
+      "tests": [
+        "soma-python/tests/test_gradient_audit.py",
+        "soma-python/tests/test_diagnostics.py",
+        "soma-python/tests/test_pathologies.py"
+      ]
+    },
+    {
+      "id": "distributed",
+      "title": "Run it on another machine",
+      "summary": "A plan crosses the wire with the cloudpickle bytes of its filters, because a catalog holds live filters and never the pickle. A strategy is the other shape: the coordinator drives rounds and the workers keep their catalogs between messages.",
+      "entry": [
+        "Graph.add_worker",
+        "Graph.set_strategy",
+        "Graph.set_data_store",
+        "Worker"
+      ],
+      "trace": "k",
+      "hops": [
+        "graph/distributed.rs:171",
+        "worker.rs:275",
+        "graph/distributed.rs:114",
+        "distributed.rs:146"
+      ],
+      "types": [
+        "TrainingStrategy",
+        "Partition",
+        "RemoteTarget",
+        "Transport",
+        "DataStore",
+        "DataRef",
+        "StrategyExecutor"
+      ],
+      "debt": [
+        "D-02",
+        "D-41",
+        "D-42",
+        "D-55"
+      ],
+      "tests": [
+        "soma-python/tests/test_worker_e2e.py",
+        "soma-runtime/src/distributed.rs"
+      ]
+    },
+    {
+      "id": "pool",
+      "title": "Remember what was tried",
+      "summary": "Every tracked run appends a record with its conclusion, its architecture fingerprint and the move that derived it from its parent. Nodes are runs, edges are the changes — so retrieval can answer \"what did I already try that looked like this?\"",
+      "entry": [
+        "experiments",
+        "find_similar",
+        "lineage",
+        "diff",
+        "checkout",
+        "record_conclusion"
+      ],
+      "trace": "j",
+      "hops": [
+        "record.rs:169",
+        "file_kb.rs:128",
+        "retrieval.rs:200"
+      ],
+      "types": [
+        "ExperimentRecord",
+        "DerivationMove",
+        "RetrievalQuery",
+        "ScoreComponents",
+        "KnowledgeBase",
+        "ArchitectureFingerprint"
+      ],
+      "debt": [
+        "D-16"
+      ],
+      "tests": [
+        "soma-python/tests/test_experiment_pool.py",
+        "soma-python/tests/test_experiments.py",
+        "soma-memory/src/retrieval.rs"
+      ]
+    }
+  ]
+}

@@ -5,10 +5,10 @@
 
 use crate::error::{Result, WorkerError};
 use somatize_compiler::ExecutionPlan;
-use somatize_core::value::Value;
-use somatize_runtime::executor::RunMode;
-use somatize_runtime::node_catalog::NodeCatalog;
-use somatize_runtime::runner::Transport;
+use somatize_core::data::value::Value;
+use somatize_runtime::execution::executor::RunMode;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
+use somatize_runtime::execution::runner::Transport;
 use std::collections::HashMap;
 
 use crate::protocol::*;
@@ -172,7 +172,7 @@ impl WsTransport {
 
     /// Upload a value to the worker's `/upload` endpoint, for payloads too
     /// large to travel inline in a WebSocket message.
-    pub fn upload(&self, value: &Value) -> Result<somatize_core::store::DataRef> {
+    pub fn upload(&self, value: &Value) -> Result<somatize_core::data::store::DataRef> {
         let url = format!("{}/upload", self.http_addr());
         let body = serde_json::to_vec(value)
             .map_err(|e| WorkerError::Encoding(format!("serialize upload: {e}")))?;
@@ -198,7 +198,7 @@ impl WsTransport {
                     resp.status()
                 )));
             }
-            resp.json::<somatize_core::store::DataRef>()
+            resp.json::<somatize_core::data::store::DataRef>()
                 .map_err(|e| WorkerError::Encoding(format!("parse upload response: {e}")))
         })
         .join()
@@ -300,7 +300,9 @@ impl WsTransport {
             match results.len() {
                 0 => Ok(Value::Empty),
                 1 => Ok(results.into_iter().next().unwrap()),
-                _ => Ok(somatize_runtime::executors::materialize_buffer(&results)?),
+                _ => Ok(somatize_runtime::execution::stream::materialize_buffer(
+                    &results,
+                )?),
             }
         })
     }

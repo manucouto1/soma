@@ -112,7 +112,7 @@ class TestGraphTopologies:
         g = Graph()
         g.node(Doubler())
         g.node(Adder())
-        g.connect("doubler", "adder")
+        g.edge("doubler", "adder")
         g.fit([1.0, 2.0])
         result = g.forward([5.0])
         assert result == [20.0]  # doubler: [5]→[10], adder: [10+10]=[20]
@@ -120,7 +120,7 @@ class TestGraphTopologies:
     def test_mixed_somatize_and_manual(self):
         g = Graph.somatize(Doubler() >> Adder(amount=0.0))
         g.node(Identity())
-        g.connect("adder", "identity")
+        g.edge("adder", "identity")
         assert len(g) == 3
 
 
@@ -161,10 +161,14 @@ class TestCompilation:
         assert "plan_text" in info
         assert "plan_mermaid" in info
 
-    def test_compile_no_cache_mode(self):
+    def test_a_compiled_plan_never_contains_cached_nodes(self):
+        """Not a mode, a property. Cache keys are derived at run time from
+        the content that arrived, so there is nothing for the compiler to
+        resolve — which is why `compile("no_cache")` was deleted rather
+        than kept: its only effect was to suppress the diagnostic saying
+        exactly this."""
         g = Graph.somatize(Doubler() >> Adder())
-        info = g.compile("no_cache")
-        assert info["cached_nodes"] == 0
+        assert g.compile()["cached_nodes"] == 0
 
     def test_compile_differentiable_mode(self):
         g = Graph.somatize(Scaler() >> Doubler())
@@ -182,12 +186,6 @@ class TestVisualization:
         assert "doubler" in m
         assert "adder" in m
         assert "-->" in m
-
-    def test_graphviz_output(self):
-        g = Graph.somatize(Doubler() >> Adder())
-        dot = g.to_graphviz()
-        assert "digraph G" in dot
-        assert "rankdir=LR" in dot
 
     def test_text_output(self):
         g = Graph.somatize(Doubler() >> Adder())
@@ -217,7 +215,7 @@ class TestVisualization:
 
     def test_compile_plan_mermaid(self):
         g = Graph.somatize(Doubler() >> Adder())
-        info = g.compile("no_cache")
+        info = g.compile()
         assert "graph TD" in info["plan_mermaid"]
 
 
@@ -342,10 +340,8 @@ class TestSomatizeEdgeCases:
         )
         assert len(g) == 6  # 1 doubler + 4 adders + 1 merge
 
-    def test_to_with_list_and_collect(self):
-        g = Graph.somatize(
-            Doubler().to([Adder(), Adder()]).collect(Merge())
-        )
+    def test_fork_of_two_merged_by_the_next_step(self):
+        g = Graph.somatize(Doubler() >> (Adder() | Adder()) >> Merge())
         assert len(g) == 4
 
     def test_duplicate_filter_classes(self):

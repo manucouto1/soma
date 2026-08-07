@@ -93,30 +93,30 @@ pub use somatize_macros as macros;
 pub mod prelude {
     // Core types
     pub use somatize_core::cache::{CacheKey, CacheStore};
+    pub use somatize_core::data::schema::Schema;
+    pub use somatize_core::data::value::Value;
+    pub use somatize_core::data::virtual_value::VirtualValue;
+    pub use somatize_core::distributed::TrainingStrategy;
     pub use somatize_core::error::{Result, SomaError};
-    pub use somatize_core::event::Event;
-    pub use somatize_core::filter::{Filter, FilterKind, FilterMeta};
+    pub use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta};
     pub use somatize_core::graph::{Edge, Graph, Node, NodeKind, linear_pipeline};
-    pub use somatize_core::schema::Schema;
-    pub use somatize_core::strategy::TrainingStrategy;
-    pub use somatize_core::value::Value;
-    pub use somatize_core::virtual_value::VirtualValue;
+    pub use somatize_core::tracking::event::Event;
 
     // The effectful half. A `Step` sits beside a `Filter` and both are
     // nodes in the same graph — so both belong in the same prelude. These
     // were missing, which meant the one import line the docs recommend
     // reached only the computational half of the model.
-    pub use somatize_core::effect::{Effect, EffectResult};
-    pub use somatize_core::node::{NodeMeta, NodeOutcome};
-    pub use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
+    pub use somatize_core::agentic::effect::{Effect, EffectResult};
+    pub use somatize_core::graph::node::{NodeMeta, NodeOutcome};
+    pub use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 
     // Compiler
     pub use somatize_compiler::{CompileMode, ExecutionPlan};
 
     // Runtime
     pub use somatize_runtime::cache::MemoryCache;
-    pub use somatize_runtime::graph_session::GraphSession;
-    pub use somatize_runtime::node_catalog::NodeCatalog;
+    pub use somatize_runtime::execution::graph_session::GraphSession;
+    pub use somatize_runtime::execution::node_catalog::NodeCatalog;
     pub use somatize_runtime::{EventBus, execute};
 
     // Derive macros

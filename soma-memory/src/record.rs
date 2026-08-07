@@ -10,9 +10,9 @@
 use crate::derivation::DerivationMove;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use somatize_core::fingerprint::ArchitectureFingerprint;
-use somatize_core::summary::{RunConclusion, RunSummary};
 use somatize_core::tracking::GitInfo;
+use somatize_core::tracking::fingerprint::ArchitectureFingerprint;
+use somatize_core::tracking::summary::{RunConclusion, RunSummary};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -409,7 +409,7 @@ pub struct ChangePoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use somatize_core::summary::{RunOutcome, TrialSummary};
+    use somatize_core::tracking::summary::{RunOutcome, TrialSummary};
     use std::collections::BTreeMap;
 
     /// A byte-exact line as soma 0.3.0 wrote it, before any of the

@@ -60,9 +60,9 @@ fn peak_allocated() -> usize {
 // ── Test filters ──
 
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
 use std::sync::Arc;
 
 /// Stateless filter that doubles tensor values. Allocates a new output
@@ -147,8 +147,8 @@ impl Filter for MeanNormalizer {
 
 use somatize_core::graph::{Graph, Node};
 use somatize_runtime::cache::MemoryCache;
-use somatize_runtime::graph_session::GraphSession;
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::execution::graph_session::GraphSession;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
 
 fn make_doubler_session() -> GraphSession {
     let mut graph = Graph::new();
@@ -195,7 +195,7 @@ fn make_pipeline_session() -> GraphSession {
 )]
 fn stream_memory_does_not_grow_with_chunks() {
     let _serial = serial_guard();
-    use somatize_runtime::forward::Stream;
+    use somatize_runtime::execution::forward::Stream;
 
     let session = make_doubler_session();
 
@@ -320,7 +320,7 @@ fn repeated_forward_memory_does_not_grow() {
 )]
 fn stream_peak_memory_bounded() {
     let _serial = serial_guard();
-    use somatize_runtime::forward::Stream;
+    use somatize_runtime::execution::forward::Stream;
 
     let session = make_doubler_session();
 
@@ -459,4 +459,76 @@ fn value_clone_is_cheap() {
     );
 
     drop(clones);
+}
+
+/// D-61 claimed a 4-way `Parallel` over a graph holding a 1 GB intermediate
+/// materializes 4 GB, because `Context::snapshot` clones the value store
+/// per branch.
+///
+/// It does clone the store — but a `Value`'s payload is `Arc`-backed, so
+/// cloning one bumps a refcount. What a snapshot actually copies is the
+/// map's *spine* plus the run's bookkeeping (execution order, output
+/// hashes, topology): O(nodes), not O(bytes).
+///
+/// This measures it. If someone later makes a `Value` hold its payload
+/// inline, the peak jumps by a multiple of the tensor and this fails.
+#[test]
+#[cfg_attr(
+    coverage,
+    ignore = "allocation counts are meaningless under coverage instrumentation"
+)]
+fn a_parallel_branch_does_not_copy_the_data_it_reads() {
+    let _serial = serial_guard();
+    use somatize_core::graph::Edge;
+
+    const BRANCHES: usize = 4;
+    // 1M f64 = 8 MB. Big enough that a real copy per branch is unmistakable.
+    const ELEMS: usize = 1_000_000;
+
+    let mut graph = Graph::new();
+    graph.nodes.push(Node::new("src", "Double", "src"));
+    let mut lib = NodeCatalog::new();
+    lib.register("src", Box::new(Doubler));
+    for i in 0..BRANCHES {
+        let id = format!("b{i}");
+        graph.nodes.push(Node::new(&id, "Double", &id));
+        graph
+            .edges
+            .push(Edge::data(format!("src_to_{id}"), "src", &id));
+        lib.register(&id, Box::new(Doubler));
+    }
+    let session = GraphSession::new(graph, lib)
+        .with_cache(Arc::new(MemoryCache::new(8 * 1024 * 1024 * 1024)));
+
+    let input = Value::tensor(vec![1.0; ELEMS], vec![ELEMS]);
+    let _ = session.forward(&input); // warm up
+
+    reset_peak();
+    let before = current_allocated();
+    session.forward(&input).expect("parallel forward failed");
+    let peak_growth = peak_allocated().saturating_sub(before);
+
+    let tensor_bytes = ELEMS * std::mem::size_of::<f64>();
+    eprintln!(
+        "parallel: branches={BRANCHES}, tensor={tensor_bytes}B, peak_growth={peak_growth}B, \
+         ratio={:.2}x",
+        peak_growth as f64 / tensor_bytes as f64
+    );
+
+    // Each branch legitimately *produces* its own doubled output, so the
+    // floor is one tensor per branch plus the source's. Everything above
+    // that floor is what the snapshots cost.
+    let produced = tensor_bytes * (BRANCHES + 1);
+    let snapshot_overhead = peak_growth.saturating_sub(produced);
+    eprintln!("snapshot overhead above the produced outputs: {snapshot_overhead}B");
+
+    // Measured at ~7.8 KB for this graph — the map spines and the run's
+    // bookkeeping. A megabyte is two orders of magnitude of headroom and
+    // still four thousand times under a per-branch deep copy (which would
+    // add BRANCHES × 8 MB).
+    assert!(
+        snapshot_overhead < 1024 * 1024,
+        "snapshot looks like it is copying data, not refcounts: {snapshot_overhead}B \
+         above the {produced}B the branches actually produce"
+    );
 }

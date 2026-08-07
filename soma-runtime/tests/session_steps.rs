@@ -8,18 +8,18 @@
 //! reach the steps.
 
 use somatize_compiler::CompileMode;
+use somatize_core::agentic::effect::{Effect, EffectResult, LlmRequest, LlmResponse, StopReason};
+use somatize_core::agentic::message::Message;
 use somatize_core::cache::CacheKey;
-use somatize_core::effect::{Effect, EffectResult, LlmRequest, LlmResponse, StopReason};
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_core::graph::step::{Step, StepCtx, StepMeta, Transition};
 use somatize_core::graph::{Edge, Graph, Node};
-use somatize_core::message::Message;
-use somatize_core::step::{Step, StepCtx, StepMeta, Transition};
-use somatize_core::value::Value;
 use somatize_runtime::GraphSession;
+use somatize_runtime::agentic::{EffectDriver, EffectHandler, EffectJournal};
 use somatize_runtime::cache::fs_store::FsActionStore;
-use somatize_runtime::effects::{EffectDriver, EffectHandler, EffectJournal};
-use somatize_runtime::node_catalog::NodeCatalog;
+use somatize_runtime::execution::node_catalog::NodeCatalog;
 use std::sync::Arc;
 
 // ── Test doubles ──
@@ -163,7 +163,7 @@ fn graph_session_fit_drives_steps() {
 
     let outputs = session.fit(&Value::text("hi"), None).unwrap();
     assert_eq!(
-        outputs.get("shout").and_then(Value::as_text),
+        outputs.outputs.get("shout").and_then(Value::as_text),
         Some("ANSWER TO: HI"),
         "the whole chain should have run, got {outputs:?}"
     );

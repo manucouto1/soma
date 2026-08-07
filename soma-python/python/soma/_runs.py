@@ -32,7 +32,26 @@ class RunView:
 
     def __init__(self, path: str, _info: dict | None = None):
         self._dir = str(path)
-        self._info = _info or json.loads(_soma.run_info_json(self._dir))
+        self._info = _info or self._section("info")
+
+    def _section(self, name: str, **kwargs):
+        """One section of the run, read through the one reader.
+
+        Every accessor below used to have an FFI function of its own, and
+        each of those opened its own reader and re-parsed
+        ``events.jsonl``. They are sections of one object now, so reading
+        three of them is one call and one parse."""
+        return json.loads(_soma.run_sections_json(self._dir, [name], **kwargs))[name]
+
+    def sections(self, *names: str, metric: str | None = None) -> dict:
+        """Several sections at once, in one call.
+
+        ``view.sections("node_timings", "cache_activity", "health_flags")``
+        is what a report or a dashboard wants: the same parse serves all
+        of them. The individual accessors are the one-section case."""
+        return json.loads(
+            _soma.run_sections_json(self._dir, list(names), metric=metric)
+        )
 
     # ── identity ──
 
@@ -65,44 +84,44 @@ class RunView:
 
     def refresh(self) -> "RunView":
         """Re-read status (state/heartbeat) for a live run."""
-        self._info = json.loads(_soma.run_info_json(self._dir))
+        self._info = self._section("info")
         return self
 
     # ── raw logs ──
 
     def manifest(self) -> dict:
         """The run's ``manifest.json`` (environment, git, graph summary)."""
-        return json.loads(_soma.run_manifest_json(self._dir))
+        return self._section("manifest")
 
     def events(self) -> list[dict]:
         """All parseable event envelopes (``{seq, ts, event_type, ...}``),
         in log order. Torn or unknown lines are skipped; gaps in ``seq``
         reveal the skips."""
-        return json.loads(_soma.run_events_json(self._dir))
+        return self._section("events")
 
     # ── aggregations (chart-ready) ──
 
     def metric_series(self, name: str | None = None) -> list[dict]:
         """Metric points ``{ts, name, value, step, trial_id, node_id}``,
         optionally filtered by metric name."""
-        return json.loads(_soma.run_metric_series_json(self._dir, name=name))
+        return self._section("metric_series", metric=name)
 
     def node_timings(self) -> list[dict]:
         """Per-node execution spans ``{node_id, started_ts, finished_ts,
         duration_ms, outcome, cache_tier, error}`` in event order."""
-        return json.loads(_soma.run_node_timings_json(self._dir))
+        return self._section("node_timings")
 
     def cache_activity(self) -> dict:
         """Cache hit/miss counts: ``{hits, misses, by_node}``."""
-        return json.loads(_soma.run_cache_activity_json(self._dir))
+        return self._section("cache_activity")
 
     def health_flags(self) -> list[dict]:
         """HealthFlag events ``{ts, node_id, step, flag, detail}``."""
-        return json.loads(_soma.run_health_flags_json(self._dir))
+        return self._section("health_flags")
 
     def trial_timeline(self) -> list[dict]:
         """Trial lifetimes from ``study.json`` (empty for non-study runs)."""
-        return json.loads(_soma.run_trial_timeline_json(self._dir))
+        return self._section("trial_timeline")
 
     def agentic_activity(self) -> dict:
         """Agent-step activity: run totals (``turns``, ``input_tokens``,
@@ -110,14 +129,14 @@ class RunView:
         ``steps_completed``, ``steps_failed``, ``suspensions``) plus
         ``by_node`` with the same breakdown per step node. Empty
         ``by_node`` means the run had no agent steps."""
-        return json.loads(_soma.run_agentic_activity_json(self._dir))
+        return self._section("agentic_activity")
 
     def agentic_timeline(self) -> list[dict]:
         """Per-effect execution spans ``{node_id, turn, effect,
         started_ts, finished_ts, duration_ms, replayed, is_error,
         outcome}`` in event order — the gantt substrate for agent runs.
         An unclosed span means the run died mid-effect."""
-        return json.loads(_soma.run_agentic_timeline_json(self._dir))
+        return self._section("agentic_timeline")
 
     # ── architecture rendering ──
 
@@ -146,7 +165,7 @@ class RunView:
         events: status, total duration, cache tier, health flags. Feed
         it to ``graph.to_mermaid(overlay=...)`` or use ``to_mermaid()``
         directly."""
-        return json.loads(_soma.run_overlay_json(self._dir))
+        return self._section("overlay")
 
     def to_mermaid(self, overlay: bool = True, node: str | None = None) -> str:
         """Mermaid diagram of the graph this run executed, annotated
@@ -229,11 +248,6 @@ class RunView:
             if entry:
                 nodes[mermaid_by_path[path]] = entry
         return {"nodes": nodes}
-
-    def to_graphviz(self, overlay: bool = True) -> str:
-        """Graphviz DOT of the graph this run executed, annotated with
-        per-node timing/cache/health."""
-        return _soma.run_to_graphviz(self._dir, overlay=overlay)
 
     def to_svg(self, overlay: bool = True, node: str | None = None) -> str:
         """Self-contained SVG diagram (no JavaScript — displays inline

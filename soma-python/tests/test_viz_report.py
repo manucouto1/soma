@@ -41,7 +41,7 @@ def _tracked_fit(tmp_path):
     g = Graph()
     g.node("a", _Plain())
     g.node("b", _Plain())
-    g.connect("a", "b")
+    g.edge("a", "b")
     with g.track_run("report-run", root=str(tmp_path), kind="fit") as run:
         g.fit([1.0, 2.0])
         run.log("val_f1", 0.9, step=1)

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use somatize_core::SomaFilter;
-use somatize_core::search::Searchable;
+use somatize_core::optimizer::search::Searchable;
 use std::collections::HashMap;
 
 #[derive(SomaFilter, Serialize, Deserialize, Default)]
@@ -114,12 +114,15 @@ fn soma_meta_values() {
     let scaler = TestScaler::default();
     let meta = scaler.soma_meta();
     assert_eq!(meta.name, "TestScaler");
-    assert_eq!(meta.kind, somatize_core::filter::FilterKind::Trainable);
+    assert_eq!(
+        meta.kind,
+        somatize_core::graph::filter::FilterKind::Trainable
+    );
     assert!(meta.cacheable);
     assert!(meta.differentiable);
     assert_eq!(
         meta.stream_mode,
-        somatize_core::filter::StreamMode::FixedState
+        somatize_core::graph::filter::StreamMode::FixedState
     );
 }
 
@@ -139,7 +142,7 @@ fn auto_bool_search() {
     let dim = &space.active_dimensions()[0];
     assert_eq!(dim.name(), "enabled");
     // Should be Categorical with true/false
-    if let somatize_core::search::SearchDimension::Categorical { choices, .. } = dim {
+    if let somatize_core::optimizer::search::SearchDimension::Categorical { choices, .. } = dim {
         assert_eq!(choices.len(), 2);
     } else {
         panic!("expected Categorical for bool, got {dim:?}");
@@ -150,7 +153,7 @@ fn auto_bool_search() {
 fn opaque_meta() {
     let f = TestOpaque::default();
     let meta = f.soma_meta();
-    assert_eq!(meta.kind, somatize_core::filter::FilterKind::Opaque);
+    assert_eq!(meta.kind, somatize_core::graph::filter::FilterKind::Opaque);
     assert!(!meta.differentiable);
 }
 
@@ -201,7 +204,7 @@ fn cache_version_changes_hash() {
     let f = VersionedFilter { alpha: 1.0 };
     let unversioned = CacheKey::from_parts(&[
         b"VersionedFilter",
-        &somatize_core::canon::canonical_bytes(&1.0f64).unwrap(),
+        &somatize_core::cache::canon::canonical_bytes(&1.0f64).unwrap(),
     ]);
     assert_ne!(f.config_hash(), unversioned, "cache_version must be hashed");
 }

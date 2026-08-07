@@ -153,7 +153,7 @@ Executes plans. This is where computation happens.
 | `sampler/mod.rs` | `Sampler` trait, grid and random samplers |
 | `sampler/bayesian.rs` | TPE (Tree-Parzen Estimator) sampler |
 | `pruner.rs` | `MedianPruner` and `PercentilePruner` |
-| `runner/` | `LocalRunner` and `RemoteRunner` behind the `Runner` trait |
+| `runner/` | `LocalRunner` behind the `Runner` trait, and the `Transport` seam |
 | `tracking/local_tracker.rs` | Writes a run directory: manifest, status, artifacts, event sink |
 | `tracking/jsonl_sink.rs` | The lossless `events.jsonl` sink |
 | `tracking/reader.rs` | `RunReader` — every aggregate a chart or report needs |

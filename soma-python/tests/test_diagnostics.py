@@ -405,7 +405,7 @@ def test_channel_diagnostics_across_two_nodes(tmp_path):
     b = ChannelBlock(out_dim=6, dead=(1,))
     g.node("first", a)
     g.node("second", b)
-    g.connect("first", "second")
+    g.edge("first", "second")
     x = torch.randn(16, 8)
     g.materialize(x)
     g.train()

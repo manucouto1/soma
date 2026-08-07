@@ -181,9 +181,6 @@ def main(argv: list[str] | None = None) -> int:
         "graph", help="render a run's graph annotated with timing/cache/health"
     )
     p_graph.add_argument("run", help="run id (resolved under --root) or run directory path")
-    p_graph.add_argument(
-        "--format", choices=("mermaid", "dot"), default="mermaid", help="output format"
-    )
     p_graph.add_argument("--no-overlay", action="store_true", help="plain topology, no annotations")
     p_graph.add_argument("--root", default=".soma", help="tracking root (default .soma)")
 
@@ -284,8 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = _resolve_run_dir(args.run, args.root)
         if run_dir is None:
             return 1
-        render = _soma.run_to_mermaid if args.format == "mermaid" else _soma.run_to_graphviz
-        print(render(run_dir, overlay=not args.no_overlay), end="")
+        print(_soma.run_to_mermaid(run_dir, overlay=not args.no_overlay), end="")
         return 0
 
     if args.command == "runs":

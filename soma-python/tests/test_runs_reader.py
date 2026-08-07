@@ -49,7 +49,7 @@ def _graph():
     g = Graph(cache="memory")
     g.node("a", _Plain("a"))
     g.node("b", _Plain("b"))
-    g.connect("a", "b")
+    g.edge("a", "b")
     return g
 
 
@@ -292,9 +292,6 @@ def test_graph_to_mermaid_accepts_overlay_kwarg(tmp_path):
     assert "class a soma_completed" in annotated
     assert "class b soma_cached" in annotated
 
-    dot = g.to_graphviz(overlay={"nodes": {"a": {"status": "failed"}}})
-    assert "fillcolor" in dot
-
     with pytest.raises(RuntimeError, match="invalid overlay"):
         g.to_mermaid(overlay={"nodes": {"a": {"status": "not-a-status"}}})
 
@@ -316,9 +313,6 @@ def test_runview_overlay_and_annotated_rendering(tmp_path):
     assert "classDef" not in plain
     assert plain == _graph().to_mermaid()
 
-    dot = view.to_graphviz()
-    assert "fillcolor" in dot
-
     # The overlay dict round-trips through the Graph kwarg path too.
     assert "class a soma_completed" in _graph().to_mermaid(overlay=overlay)
 
@@ -332,8 +326,8 @@ def test_cli_soma_graph(tmp_path, capsys):
     assert out.startswith("graph LR")
     assert "class a soma_completed" in out
 
-    assert cli_main(["graph", run.dir, "--format", "dot"]) == 0
-    assert capsys.readouterr().out.startswith("digraph G {")
+    assert cli_main(["graph", run.dir]) == 0
+    assert capsys.readouterr().out.startswith("graph LR")
 
     assert cli_main(["graph", run_id, "--root", str(tmp_path), "--no-overlay"]) == 0
     assert "classDef" not in capsys.readouterr().out
@@ -490,3 +484,45 @@ def test_runview_agentic_activity_and_timeline(tmp_path):
     plain = soma.RunView(_tracked_fit(tmp_path, name="no-agents").dir)
     assert plain.agentic_activity()["by_node"] == {}
     assert plain.agentic_timeline() == []
+
+
+# ── one reader, one parse ───────────────────────────────────
+
+
+def test_sections_reads_several_aggregates_in_one_call(tmp_path):
+    """Twelve FFI functions with one caller each became one.
+
+    Each of them opened its own reader, and each reader re-parsed
+    `events.jsonl`, so a `RunView` reading three aggregates read the file
+    three times (D-63). They are sections of one object now.
+    """
+    run = _tracked_fit(tmp_path)
+    view = soma.RunView(run.dir)
+
+    got = view.sections("node_timings", "cache_activity", "health_flags")
+    assert set(got) == {"node_timings", "cache_activity", "health_flags"}
+
+    # Identical to asking one at a time — the accessors are the
+    # one-section case of the same call.
+    assert got["node_timings"] == view.node_timings()
+    assert got["cache_activity"] == view.cache_activity()
+    assert got["health_flags"] == view.health_flags()
+
+
+def test_metric_filters_only_the_series_section(tmp_path):
+    run = _tracked_fit(tmp_path)
+    view = soma.RunView(run.dir)
+
+    both = view.sections("metric_series", "node_timings")
+    filtered = view.sections("metric_series", "node_timings", metric="val_f1")
+    assert len(filtered["metric_series"]) == len(both["metric_series"])
+    assert filtered["node_timings"] == both["node_timings"], "metric is ignored here"
+
+    assert view.sections("metric_series", metric="nope")["metric_series"] == []
+
+
+def test_an_unknown_section_is_an_error_not_an_omission(tmp_path):
+    """A typo returning `{}` looks exactly like a run with nothing in it."""
+    run = _tracked_fit(tmp_path)
+    with pytest.raises(ValueError, match="unknown run section"):
+        soma.RunView(run.dir).sections("node_timings", "node_timmings")

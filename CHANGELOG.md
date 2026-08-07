@@ -7,7 +7,116 @@ and each one says what to do about it.
 Versions follow [semantic versioning](https://semver.org/). Pre-1.0, a
 minor bump may break API — and this one does, extensively.
 
-## [0.4.0] — unreleased
+## [0.6.0] — unreleased
+
+The release where the Python surface became nine domains instead of one
+2 371-line module, and naming the types that made it possible found three
+bugs nobody was looking for.
+
+### Breaking
+
+**`Runner::fit` and `GraphSession::fit` return `Fitted`.** They returned
+`(Value, HashMap<NodeId, Value>)` — an output and a bag of states, with
+nothing saying which was which. Rust callers must destructure the struct
+instead of the tuple; the Python surface is unchanged.
+
+Naming that type is what exposed the first fix below: with the two halves
+distinguishable, the differentiable path was visibly storing one node's
+*output* where another node's *state* belonged.
+
+**`Worker::set_filter_state` returns `Result<()>`.** It returned `()` and
+logged its failure, which is how three of the four sites in the fix below
+stayed invisible.
+
+**`ForwardEnv` is removed.** `ForwardStrategy::forward` takes the run's
+`RunContext` instead — the two structs described the same four things.
+`Batched` gained a `store` field: it was the only strategy that read one,
+and asking a shared environment for it made "requires a data store" a
+runtime error where it is now a compile error. `GraphSession::data_store()`
+is new, so a caller who handed their only `Arc` to `with_data_store` can
+still build one.
+
+**`Transport::execute_node` is removed.** It took a node id and nothing
+else, so it invented a plan, a mode and a seed; its own doc comment told
+callers with a `RunContext` not to use it. Call `Transport::execute`.
+
+### Fixed
+
+**`fit` stored one node's output as another node's state.** Trained state
+on the differentiable path was wrong, and nothing downstream could tell —
+a graph fitted before this loads state that never came from `fit`. Re-fit
+any graph whose states were persisted by 0.5.x.
+
+**The zarr chunk cache was written and never read.** Every chunk read went
+to the store; the cache filled up and no lookup ever consulted it. Purely
+a cost and latency fix — no result changes.
+
+**A `Remote` node inside a `Loop` ran locally, in silence.** The compiler
+did not descend into loop bodies, so distribution was dropped for any node
+nested in one, with no error and no warning. If you relied on remote
+execution inside a loop, it never happened.
+
+**`Value::to_plain_json` emitted the tagged encoding it documents never
+to emit.** `Bytes` and `Object` came out as `{"type":"Bytes","data":[…]}`
+instead of a plain number array, and any conversion failure became
+`null` — indistinguishable from `Empty`. Both are fixed, and the match
+is exhaustive now, so a new `Value` variant cannot slip through
+unconsidered.
+
+**`forward` dispatched on a method name and had three shapes.** Which of
+the three you got depended on how the node was defined.
+
+**A remote node ran the wrong plan, in the wrong mode, with no seed.**
+`execute_remote` rebuilt an `Execute` from the node's id instead of
+sending the plan the compiler wrapped — so a `Composite` whose nodes were
+all marked remote ran only its **first** node, and a remote `Step` lost
+its handoffs. It also hardcoded `Forward`, so a remote node in a fit run
+learned nothing and returned no states from a fit that reported success;
+and passed no seed, so a five-seed sweep shared one cache line on the
+worker. `Transport::execute_node`, which did the inventing, is removed.
+
+**A worker that could not restore a trained state ran anyway, from random
+weights.** A resumed epoch silently became a cold one, and nothing in the
+returned metrics distinguished that from a genuinely bad run — the loss
+curve was simply worse, which looks like a bad hyperparameter. Four sites:
+the Python process and the catalog, each reachable from a plan and from a
+stream. All four fail now.
+
+### Changed
+
+- `soma-core`, `soma-runtime` and `soma-python` are organised as nine
+  domain folders rather than flat modules.
+- `soma-python/src/graph/mod.rs`: 2 371 → 798 LOC, one module per thing a
+  `Graph` owns.
+- `Worker::execute_plan`: 324 → 44 LOC. The nine stages it performed are
+  nine named functions, and the streaming threshold is no longer a
+  literal in a comment that had to agree with a `const` in another
+  function. The `Worker` struct went from nine flat fields to five,
+  grouped as `execution` / `stores` / `python`; its public accessors are
+  unchanged.
+- Topology is declared with operators, actions with methods; one name for
+  an edge; one lever for the cache; one objective vocabulary.
+- A run parses its events once instead of per query.
+- A batched forward is **one** run, not one per batch. The run id was
+  minted inside a per-batch helper, so a single pass emitted N of them
+  and anything reading the event stream saw N runs.
+- `internals/capabilities.md` documents the 15 capabilities, with guards
+  in `npm run check` so the table cannot rot.
+
+## [0.5.1] — 2026-08-06
+
+### Fixed
+
+- A missing `safetensors` silently erased every channel snapshot.
+- Zero replicas reached a panic instead of an error.
+
+### Documentation
+
+- Every crate has a README, because none of them did.
+- A crate-by-crate type reference under `internals/`, generated where it
+  can be.
+
+## [0.5.0] — 2026-08-06
 
 The release where the agentic layer arrived, the runtime grew one
 execution site instead of four, and the Python bindings stopped lying

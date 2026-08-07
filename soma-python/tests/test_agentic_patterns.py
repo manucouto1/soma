@@ -286,7 +286,7 @@ def test_an_agentic_graph_serializes_whole():
     g = soma.Graph(cache="memory")
     g.node("draft", Echo())
     g.node("critic", Stops(1))
-    g.connect("draft", "critic")
+    g.edge("draft", "critic")
     g.loop("refine", body="draft", until="critic", max_iterations=3)
     g.branch("router", Says("a"), {"a": Echo(), "default": Echo()})
 

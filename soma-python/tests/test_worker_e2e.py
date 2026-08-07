@@ -356,10 +356,10 @@ class TestStreaming:
         g = Graph(cache="memory")
         for node_id in ["a", "b", "c", "d"]:
             g.node(node_id, DoubleFilter())
-        g.connect("a", "b")
-        g.connect("a", "c")
-        g.connect("b", "d")
-        g.connect("c", "d")
+        g.edge("a", "b")
+        g.edge("a", "c")
+        g.edge("b", "d")
+        g.edge("c", "d")
         with pytest.raises(Exception, match="linear chain"):
             g.forward([1.0, 2.0], stream=True, chunk_size=1)
 
@@ -882,7 +882,7 @@ class TestFederatedStrategy:
             g.add_worker(f"ws://127.0.0.1:{port}", tags=[tag])
         g.node("double", Double(), target="stage0")
         g.node("addten", AddTen(), target="stage1")
-        g.connect("double", "addten")
+        g.edge("double", "addten")
         g.set_strategy(
             "model_parallel",
             partitions=[
@@ -922,7 +922,7 @@ class TestFederatedStrategy:
             g.add_worker(f"ws://127.0.0.1:{port}", tags=[tag])
         g.node("a", Id(), target="s0")
         g.node("b", Id(), target="s1")
-        g.connect("a", "b")
+        g.edge("a", "b")
         g.set_strategy("model_parallel", partitions=[{"nodes": ["a"], "tag": "s0"}])
 
         with pytest.raises(RuntimeError, match="no partition claims b"):

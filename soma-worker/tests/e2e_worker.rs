@@ -2,9 +2,9 @@
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result as SomaResult;
-use somatize_core::filter::{Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
+use somatize_core::graph::filter::{Filter, FilterKind, FilterMeta, StreamMode};
 use somatize_worker::protocol::*;
 use somatize_worker::worker::Worker;
 use somatize_worker::{worker_router, worker_router_authenticated};
@@ -37,7 +37,7 @@ impl Filter for TestDoubler {
             differentiable: true,
             deterministic: true,
             stream_mode: StreamMode::FixedState,
-            distribution: somatize_core::filter::Distribution::Local,
+            distribution: somatize_core::graph::filter::Distribution::Local,
             input_schema: None,
             output_schema: None,
         }
@@ -390,4 +390,93 @@ async fn a_worker_error_reaches_the_caller_instead_of_hanging_it() {
         err.to_string().contains("not implemented"),
         "the worker's own words should come through: {err}"
     );
+}
+
+/// D-25: a resume that cannot resume fails, instead of retraining from
+/// random weights and saying so only in a log line.
+///
+/// The state sent is a `Value::Tensor`, which `set_state` refuses to encode
+/// before it sends anything — so the refusal under test is the worker's, not
+/// something the Python side decided, and the test cannot go green because a
+/// filter happened to accept a bad state.
+///
+/// What made this worth a High: the old path logged `warn!` and carried on,
+/// so the epoch restarted from random initialization and the returned
+/// metrics were indistinguishable from a genuinely bad run.
+#[test]
+fn a_state_that_cannot_be_restored_fails_the_plan() {
+    let python = std::env::var("SOMA_PYTHON").unwrap_or_else(|_| "python3".into());
+
+    // Both are needed to get as far as the state load: the daemon imports
+    // cloudpickle at startup, and LOAD unpickles the filter.
+    let usable = std::process::Command::new(&python)
+        .args(["-c", "import cloudpickle"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !usable {
+        eprintln!("Skipping: {python} has no cloudpickle");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let pickle_path = dir.path().join("filter.pkl");
+    let script = format!(
+        "import cloudpickle\n\
+         class Trivial:\n\
+         \x20   def fit(self, x, y=None): return {{}}\n\
+         \x20   def forward(self, x, state): return x\n\
+         open({:?}, 'wb').write(cloudpickle.dumps(Trivial()))\n",
+        pickle_path.to_string_lossy()
+    );
+    let dumped = std::process::Command::new(&python)
+        .args(["-c", &script])
+        .output()
+        .expect("failed to run python");
+    assert!(
+        dumped.status.success(),
+        "could not pickle the test filter: {}",
+        String::from_utf8_lossy(&dumped.stderr)
+    );
+    let pickled = std::fs::read(&pickle_path).unwrap();
+
+    let mut worker = make_worker().with_python(&python);
+    let plan = SerializedPlan {
+        protocol_version: PROTOCOL_VERSION,
+        plan_id: "resume_001".into(),
+        plan: ExecutionPlan::Execute {
+            node_id: "trained".into(),
+        },
+        input: Some(InputSource::Inline {
+            value: Value::tensor(vec![1.0, 2.0, 3.0], vec![3]),
+        }),
+        filters: vec![SerializedFilter {
+            node_id: "trained".into(),
+            pickled_filter: pickled,
+            // A tensor is a state the wire format has no encoding for.
+            state: Some(Value::tensor(vec![0.5], vec![1])),
+            requirements: vec![],
+            trainable: true,
+            config_hash: None,
+        }],
+        mode: somatize_worker::protocol::ExecutionMode::default(),
+        seed: None,
+        metadata: serde_json::json!({}),
+    };
+
+    match worker.execute_plan(&plan) {
+        PlanResult::Failed { error, .. } => {
+            assert!(
+                error.contains("trained"),
+                "the failure must name the node whose state was lost: {error}"
+            );
+            assert!(
+                error.contains("random weights"),
+                "and say what continuing would have cost: {error}"
+            );
+        }
+        PlanResult::Success { .. } => {
+            panic!("a plan that could not restore its trained state reported success")
+        }
+    }
 }

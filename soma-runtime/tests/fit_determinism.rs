@@ -2,10 +2,10 @@
 
 use somatize_compiler::ExecutionPlan;
 use somatize_core::cache::CacheKey;
+use somatize_core::data::value::Value;
 use somatize_core::error::Result;
-use somatize_core::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
-use somatize_core::value::Value;
-use somatize_runtime::runner::{LocalRunner, RunContext, Runner};
+use somatize_core::graph::filter::{Distribution, Filter, FilterKind, FilterMeta, StreamMode};
+use somatize_runtime::execution::runner::{LocalRunner, RunContext, Runner};
 use somatize_runtime::{EventBus, MemoryCache, NodeCatalog};
 use std::sync::Arc;
 
@@ -73,13 +73,13 @@ fn fit_answers_with_the_last_node_not_an_arbitrary_one() {
             &cache,
             &bus,
             "r",
-            somatize_runtime::executor::GraphInfo::new(),
+            somatize_runtime::execution::executor::GraphInfo::new(),
         );
-        let (out, _) = LocalRunner
+        let fitted = LocalRunner
             .fit(&plan, &ctx, &Value::tensor(vec![1.0], vec![1]), None)
             .unwrap();
         assert_eq!(
-            first(&out),
+            first(&fitted.last),
             11.0,
             "fit returned something other than `a`'s output"
         );
