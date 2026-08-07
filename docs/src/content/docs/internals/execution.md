@@ -721,6 +721,107 @@ PbtRunner::run(config, executor)                                executors/pbt.rs
          then explore (perturbation | resample)
 ```
 
+### (f) A tracked run: track_run → the run directory → experiments.jsonl
+
+```
+track_run(name, …)  « a contextmanager »                          _tracking.py:36
+├─ run = self.begin_run(name, root=, kind=, tags=, params=, parent=, hypothesis=)  _tracking.py:47
+│  └─ begin_run  « THE single writer of the run dir »             graph/tracking.rs:10
+│     ├─ LocalTracker::create(root, kind, name)                   local_tracker.rs:36
+│     │  ├─ run_id = new_run_id(kind)                             local_tracker.rs:37
+│     │  ├─ create_dir_all(root/runs/<run_id>)                    local_tracker.rs:39
+│     │  ├─ write_json_atomic(manifest.json)                      local_tracker.rs:53
+│     │  │     soma version, hostname, git info, argv, cwd
+│     │  ├─ write_json_atomic(status.json = running)              local_tracker.rs:54
+│     │  └─ JsonlEventSink::create(events.jsonl, metrics.jsonl, FLUSH_EVERY)  local_tracker.rs:56
+│     ├─ snapshot_topology(g, &tracker)                           graph/tracking.rs:70
+│     │     graph.json  — the machine contract
+│     │     graph.mmd   — the human one
+│     │     fingerprint.json + each node's config_hash
+│     ├─ load_manifest(run_dir) → enrich with Python-side context graph/tracking.rs:32
+│     │     tags, python_version, params, hypothesis, graph summary
+│     ├─ manifest.parent_run_id = resolve_parent(root, parent)    graph/tracking.rs:42
+│     │  └─ explicit → $SOMA_PARENT_RUN → .soma/HEAD → None       head.rs:99
+│     │        never inferred from timestamps
+│     ├─ tracker.save_manifest(&manifest)                         graph/tracking.rs:50
+│     └─ g.event_bus.add_sink(sink)   « from here, events are recorded »  graph/tracking.rs:53
+│        └─ add_sink                                              event_bus.rs:38
+├─ py_state["active_run"] = run ; train_step = 0                  _tracking.py:56
+├─ yield run   « the user's body runs here »                      _tracking.py:59
+│  └─ every EventBus::emit reaches the sink                       event_bus.rs:59
+│     └─ JsonlEventSink::record(event)                            jsonl_sink.rs:125
+│        ├─ seq += 1 ; envelope {seq, ts, event} → events.jsonl   jsonl_sink.rs:126
+│        ├─ metric_line(event)? → metrics.jsonl                   jsonl_sink.rs:78
+│        │     a flat time series, so a reader need not parse every event
+│        └─ flush every FLUSH_EVERY lines                         jsonl_sink.rs:132
+├─ except → run.finish("failed")  |  else → run.finish("completed")  _tracking.py:61
+│  └─ PyRun::finish(status)                                       tracking/run.rs:120
+│     ├─ swap(finished) → already finished? return                tracking/run.rs:121
+│     │     finish is idempotent: the contextmanager and an explicit call both land here
+│     ├─ bus.remove_sink(&sink)   « flushes, then detaches »      tracking/run.rs:127
+│     ├─ tracker.finalize(state) → status.json = completed|failed local_tracker.rs:128
+│     └─ if Completed:                                            tracking/run.rs:133
+│        ├─ append_run_record(run_dir, {}, summary_metrics)       tracking/run.rs:162
+│        │     best-effort throughout: recording must never fail a run that produced results
+│        │  ├─ RunReader::open(run_dir)                           tracking/run.rs:172
+│        │  │  └─ summarize(&reader)                              tracking/run.rs:182
+│        │  ├─ ExperimentRecord::from_run(&summary)               tracking/run.rs:190
+│        │  ├─ kb.get(parent_id) → record.descended_from(&parent) tracking/run.rs:202
+│        │  │     the DerivationMove: what changed from the parent
+│        │  └─ kb.record(record) → <root>/experiments.jsonl       tracking/run.rs:206
+│        └─ advance_head(root, run_id)                            tracking/run.rs:139
+│              HEAD advances ONLY on success — a run that died must never
+│              become the parent of everything that follows it
+└─ finally → py_state.pop("active_run"), pop("train_step")        _tracking.py:66
+```
+
+### (g) A checkpoint: save the topology and the weights, load them back
+
+```
+Graph.save(path, include_optimizer=False)                       _checkpoint.py:166
+├─ refuse without safetensors                                   _checkpoint.py:172
+│     a missing safetensors used to erase every channel snapshot silently; here it is an error
+├─ manifest = _build_manifest(self)                             _checkpoint.py:178
+│  ├─ per node: id, class_path, class_version, kwargs()         _checkpoint.py:149
+│  └─ edges = graph.edges()   « the real topology, not the node order »  _checkpoint.py:158
+│     └─ edges → (source, target) per Edge                      graph/topology.rs:225
+├─ states = self.state()                                        _checkpoint.py:179
+│  ├─ for nid in filter_ids()  « topological, not hash order »  _checkpoint.py:68
+│  │  └─ filter_ids → topological_sort, else insertion order    graph/registry.rs:300
+│  └─ get_node_state(nid) → library.get_state → value_to_py     graph/registry.rs:346
+└─ zipfile.ZipFile(path, "w", ZIP_DEFLATED)                     _checkpoint.py:185
+   ├─ manifest.json                                             _checkpoint.py:186
+   ├─ _split_state(st) → (tensors, non-tensor)                  _checkpoint.py:107
+   │     tensors and JSON are stored apart, so neither format has to carry the other
+   ├─ states/<nid>.safetensors                                  _checkpoint.py:190
+   ├─ states/<nid>.json                                         _checkpoint.py:193
+   │     a non-JSON-serialisable state is an error naming the filter, not a silent drop
+   └─ optimizer.pt  (include_optimizer=True)                    _checkpoint.py:209
+         warns, does not fail, when no optimiser is registered or torch is absent
+
+Graph.load(path, strict=True)                                     _checkpoint.py:224
+└─ zipfile.ZipFile(path, "r")                                     _checkpoint.py:242
+   ├─ refuse a format version from the future                     _checkpoint.py:245
+   ├─ per node: _import_class(class_path)                         _checkpoint.py:253
+   │  ├─ class_version mismatch → raise (strict) | warn           _checkpoint.py:258
+   │  └─ inst = klass(**kwargs) ; graph.node(id, inst)            _checkpoint.py:266
+   ├─ edges from the manifest                                     _checkpoint.py:270
+   │     a diamond comes back a diamond
+   ├─ else: wire nodes in manifest order  « the fallback »  (pre-edges checkpoints only)  _checkpoint.py:274
+   │     load's docstring used to present this as the ONLY behaviour
+   ├─ per node: st_load_bytes + json → _merge_state               _checkpoint.py:286
+   │  └─ _merge_state(tensors, non_tensor)                        _checkpoint.py:129
+   ├─ graph.load_state(sd, strict)                                _checkpoint.py:296
+   │  ├─ unknown keys → KeyError (strict) | warn                  _checkpoint.py:87
+   │  ├─ nodes without state → warn (non-strict only)             _checkpoint.py:92
+   │  ├─ set_node_state(nid, st) → py_to_value → library.try_set_state  graph/registry.rs:333
+   │  └─ mark_fitted()                                            _checkpoint.py:101
+   │        so a forward does not insist the graph be fitted again
+   └─ optimizer.pt → py_state["optimizer_state_dict_pending"]     _checkpoint.py:301
+         lazy on purpose: an optimiser must be registered before it can be restored
+restore_optimizer() consumes the pending blob                     _checkpoint.py:308
+```
+
 <!-- traces:end -->
 
 ### Ownership spine

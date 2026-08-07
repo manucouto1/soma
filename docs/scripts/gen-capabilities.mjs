@@ -197,6 +197,29 @@ for (const cap of spec.capabilities) {
 }
 
 const page = readFileSync(PAGE, 'utf8');
+
+// The preamble states how many rows are untraced. It is prose, above the
+// marker, so this script cannot own it — but it can refuse to let it lie.
+// It said "eight of the fifteen" for exactly as long as it took to write one
+// more trace, which is the rot this page exists to argue against.
+const CLAIM = /\*\*(\d+) of the (\d+)\*\*\s+rows below are untraced/;
+const claim = CLAIM.exec(page);
+const untraced = spec.capabilities.filter((c) => c.trace === null).length;
+if (!claim) {
+	console.error(
+		`gen-capabilities: the preamble of ${PAGE} no longer states "**N of the M** rows below are untraced".\n` +
+			'Keep the sentence in that form, or drop this check with it.',
+	);
+	process.exit(1);
+}
+if (Number(claim[1]) !== untraced || Number(claim[2]) !== spec.capabilities.length) {
+	console.error(
+		`gen-capabilities: the preamble of ${PAGE} says ${claim[1]} of ${claim[2]} rows are untraced; ` +
+			`the table says ${untraced} of ${spec.capabilities.length}.`,
+	);
+	process.exit(1);
+}
+
 const at = page.indexOf(MARKER);
 if (at === -1) {
 	console.error(`gen-capabilities: "${MARKER}" not found in ${PAGE}; refusing to overwrite.`);

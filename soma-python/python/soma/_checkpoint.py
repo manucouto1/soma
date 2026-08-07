@@ -224,11 +224,17 @@ def _import_class(class_path: str) -> type:
 def load(cls: type, path: str, strict: bool = True) -> Graph:
     """Rebuild a graph from a checkpoint produced by :meth:`save`.
 
-    Reconstructs every filter via ``filter_class(**kwargs)`` then loads
-    state. Topology edges are recovered from the saved order (linear
-    chain); richer topologies require the ``edges`` field of the
-    manifest, which is currently empty until Rust-side edge
-    introspection lands (see TODO in :func:`_build_manifest`).
+    Reconstructs every filter via ``filter_class(**kwargs)``, rewires the
+    topology, then loads state. Edges come from the manifest, so a
+    diamond comes back a diamond.
+
+    Wiring nodes in manifest order is the *fallback*, for a checkpoint
+    written before the manifest carried edges. This docstring used to
+    present that fallback as the only behaviour and point at a TODO in
+    :func:`_build_manifest` that is not there — the manifest has carried
+    ``graph.edges()`` for a while, and the round-trip test was a two-node
+    chain, for which the fallback and the real edges are
+    indistinguishable.
     """
     if not _HAS_SAFETENSORS:
         raise RuntimeError("graph.load requires safetensors")

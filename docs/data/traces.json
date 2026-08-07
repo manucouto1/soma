@@ -24,7 +24,17 @@
     "effects/mod.rs": "soma-runtime/src/agentic/mod.rs",
     "stream.rs": "soma-runtime/src/execution/stream.rs",
     "executors/study.rs": "soma-runtime/src/optimizer/study.rs",
-    "executors/pbt.rs": "soma-runtime/src/optimizer/pbt.rs"
+    "executors/pbt.rs": "soma-runtime/src/optimizer/pbt.rs",
+    "_tracking.py": "soma-python/python/soma/_tracking.py",
+    "graph/tracking.rs": "soma-python/src/graph/tracking.rs",
+    "tracking/run.rs": "soma-python/src/tracking/run.rs",
+    "local_tracker.rs": "soma-runtime/src/tracking/local_tracker.rs",
+    "jsonl_sink.rs": "soma-runtime/src/tracking/jsonl_sink.rs",
+    "event_bus.rs": "soma-runtime/src/tracking/event_bus.rs",
+    "head.rs": "soma-runtime/src/tracking/head.rs",
+    "_checkpoint.py": "soma-python/python/soma/_checkpoint.py",
+    "graph/registry.rs": "soma-python/src/graph/registry.rs",
+    "graph/topology.rs": "soma-python/src/graph/topology.rs"
   },
   "traces": [
     {
@@ -673,6 +683,1062 @@
               }
             ]
           }
+        }
+      ]
+    },
+    {
+      "id": "f",
+      "title": "A tracked run: track_run → the run directory → experiments.jsonl",
+      "entry": "Graph.track_run",
+      "blocks": [
+        {
+          "root": {
+            "id": "t36",
+            "label": "track_run(name, …)  « a contextmanager »",
+            "trail": null,
+            "at": "_tracking.py:36",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "t15",
+                "label": "run = self.begin_run(name, root=, kind=, tags=, params=, parent=, hypothesis=)",
+                "trail": null,
+                "at": "_tracking.py:47",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "t14",
+                    "label": "begin_run  « THE single writer of the run dir »",
+                    "trail": null,
+                    "at": "graph/tracking.rs:10",
+                    "loc": null,
+                    "sym": "begin_run",
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "t6",
+                        "label": "LocalTracker::create(root, kind, name)",
+                        "trail": null,
+                        "at": "local_tracker.rs:36",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "t1",
+                            "label": "run_id = new_run_id(kind)",
+                            "trail": null,
+                            "at": "local_tracker.rs:37",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "t2",
+                            "label": "create_dir_all(root/runs/<run_id>)",
+                            "trail": null,
+                            "at": "local_tracker.rs:39",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "t3",
+                            "label": "write_json_atomic(manifest.json)",
+                            "trail": null,
+                            "at": "local_tracker.rs:53",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "soma version, hostname, git info, argv, cwd"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "t4",
+                            "label": "write_json_atomic(status.json = running)",
+                            "trail": null,
+                            "at": "local_tracker.rs:54",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "t5",
+                            "label": "JsonlEventSink::create(events.jsonl, metrics.jsonl, FLUSH_EVERY)",
+                            "trail": null,
+                            "at": "local_tracker.rs:56",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "id": "t7",
+                        "label": "snapshot_topology(g, &tracker)",
+                        "trail": null,
+                        "at": "graph/tracking.rs:70",
+                        "loc": null,
+                        "sym": null,
+                        "note": [
+                          "graph.json  — the machine contract",
+                          "graph.mmd   — the human one",
+                          "fingerprint.json + each node's config_hash"
+                        ],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "t8",
+                        "label": "load_manifest(run_dir) → enrich with Python-side context",
+                        "trail": null,
+                        "at": "graph/tracking.rs:32",
+                        "loc": null,
+                        "sym": null,
+                        "note": [
+                          "tags, python_version, params, hypothesis, graph summary"
+                        ],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "t10",
+                        "label": "manifest.parent_run_id = resolve_parent(root, parent)",
+                        "trail": null,
+                        "at": "graph/tracking.rs:42",
+                        "loc": null,
+                        "sym": "resolve_parent",
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "t9",
+                            "label": "explicit → $SOMA_PARENT_RUN → .soma/HEAD → None",
+                            "trail": null,
+                            "at": "head.rs:99",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "never inferred from timestamps"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "id": "t11",
+                        "label": "tracker.save_manifest(&manifest)",
+                        "trail": null,
+                        "at": "graph/tracking.rs:50",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "t13",
+                        "label": "g.event_bus.add_sink(sink)   « from here, events are recorded »",
+                        "trail": null,
+                        "at": "graph/tracking.rs:53",
+                        "loc": null,
+                        "sym": "EventBus::add_sink",
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "t12",
+                            "label": "add_sink",
+                            "trail": null,
+                            "at": "event_bus.rs:38",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "t16",
+                "label": "py_state[\"active_run\"] = run ; train_step = 0",
+                "trail": null,
+                "at": "_tracking.py:56",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "t22",
+                "label": "yield run   « the user's body runs here »",
+                "trail": null,
+                "at": "_tracking.py:59",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "t21",
+                    "label": "every EventBus::emit reaches the sink",
+                    "trail": null,
+                    "at": "event_bus.rs:59",
+                    "loc": null,
+                    "sym": "EventBus::emit",
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "t20",
+                        "label": "JsonlEventSink::record(event)",
+                        "trail": null,
+                        "at": "jsonl_sink.rs:125",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "t17",
+                            "label": "seq += 1 ; envelope {seq, ts, event} → events.jsonl",
+                            "trail": null,
+                            "at": "jsonl_sink.rs:126",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "t18",
+                            "label": "metric_line(event)? → metrics.jsonl",
+                            "trail": null,
+                            "at": "jsonl_sink.rs:78",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "a flat time series, so a reader need not parse every event"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "t19",
+                            "label": "flush every FLUSH_EVERY lines",
+                            "trail": null,
+                            "at": "jsonl_sink.rs:132",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "t34",
+                "label": "except → run.finish(\"failed\")  |  else → run.finish(\"completed\")",
+                "trail": null,
+                "at": "_tracking.py:61",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "t33",
+                    "label": "PyRun::finish(status)",
+                    "trail": null,
+                    "at": "tracking/run.rs:120",
+                    "loc": null,
+                    "sym": "PyRun::finish",
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "t23",
+                        "label": "swap(finished) → already finished? return",
+                        "trail": null,
+                        "at": "tracking/run.rs:121",
+                        "loc": null,
+                        "sym": null,
+                        "note": [
+                          "finish is idempotent: the contextmanager and an explicit call both land here"
+                        ],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "t24",
+                        "label": "bus.remove_sink(&sink)   « flushes, then detaches »",
+                        "trail": null,
+                        "at": "tracking/run.rs:127",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "t25",
+                        "label": "tracker.finalize(state) → status.json = completed|failed",
+                        "trail": null,
+                        "at": "local_tracker.rs:128",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "t32",
+                        "label": "if Completed:",
+                        "trail": null,
+                        "at": "tracking/run.rs:133",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "t30",
+                            "label": "append_run_record(run_dir, {}, summary_metrics)",
+                            "trail": null,
+                            "at": "tracking/run.rs:162",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "best-effort throughout: recording must never fail a run that produced results"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": [
+                              {
+                                "id": "t26",
+                                "label": "RunReader::open(run_dir)",
+                                "trail": null,
+                                "at": "tracking/run.rs:172",
+                                "loc": null,
+                                "sym": null,
+                                "note": [],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": [
+                                  {
+                                    "id": "t_sum",
+                                    "label": "summarize(&reader)",
+                                    "trail": null,
+                                    "at": "tracking/run.rs:182",
+                                    "loc": null,
+                                    "sym": null,
+                                    "note": [],
+                                    "mark": null,
+                                    "ref": null,
+                                    "debt": null,
+                                    "dyn": null,
+                                    "children": []
+                                  }
+                                ]
+                              },
+                              {
+                                "id": "t27",
+                                "label": "ExperimentRecord::from_run(&summary)",
+                                "trail": null,
+                                "at": "tracking/run.rs:190",
+                                "loc": null,
+                                "sym": null,
+                                "note": [],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              },
+                              {
+                                "id": "t28",
+                                "label": "kb.get(parent_id) → record.descended_from(&parent)",
+                                "trail": null,
+                                "at": "tracking/run.rs:202",
+                                "loc": null,
+                                "sym": null,
+                                "note": [
+                                  "the DerivationMove: what changed from the parent"
+                                ],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              },
+                              {
+                                "id": "t29",
+                                "label": "kb.record(record) → <root>/experiments.jsonl",
+                                "trail": null,
+                                "at": "tracking/run.rs:206",
+                                "loc": null,
+                                "sym": null,
+                                "note": [],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              }
+                            ]
+                          },
+                          {
+                            "id": "t31",
+                            "label": "advance_head(root, run_id)",
+                            "trail": null,
+                            "at": "tracking/run.rs:139",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "HEAD advances ONLY on success — a run that died must never",
+                              "become the parent of everything that follows it"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "t35",
+                "label": "finally → py_state.pop(\"active_run\"), pop(\"train_step\")",
+                "trail": null,
+                "at": "_tracking.py:66",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        }
+      ]
+    },
+    {
+      "id": "g",
+      "title": "A checkpoint: save the topology and the weights, load them back",
+      "entry": "Graph.save",
+      "blocks": [
+        {
+          "root": {
+            "id": "k16",
+            "label": "Graph.save(path, include_optimizer=False)",
+            "trail": null,
+            "at": "_checkpoint.py:166",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "k1",
+                "label": "refuse without safetensors",
+                "trail": null,
+                "at": "_checkpoint.py:172",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "a missing safetensors used to erase every channel snapshot silently; here it is an error"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "k5",
+                "label": "manifest = _build_manifest(self)",
+                "trail": null,
+                "at": "_checkpoint.py:178",
+                "loc": null,
+                "sym": "_build_manifest",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "k2",
+                    "label": "per node: id, class_path, class_version, kwargs()",
+                    "trail": null,
+                    "at": "_checkpoint.py:149",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k4",
+                    "label": "edges = graph.edges()   « the real topology, not the node order »",
+                    "trail": null,
+                    "at": "_checkpoint.py:158",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "k_edges",
+                        "label": "edges → (source, target) per Edge",
+                        "trail": null,
+                        "at": "graph/topology.rs:225",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "k9",
+                "label": "states = self.state()",
+                "trail": null,
+                "at": "_checkpoint.py:179",
+                "loc": null,
+                "sym": "Graph.state",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "k7",
+                    "label": "for nid in filter_ids()  « topological, not hash order »",
+                    "trail": null,
+                    "at": "_checkpoint.py:68",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "k6",
+                        "label": "filter_ids → topological_sort, else insertion order",
+                        "trail": null,
+                        "at": "graph/registry.rs:300",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "k8",
+                    "label": "get_node_state(nid) → library.get_state → value_to_py",
+                    "trail": null,
+                    "at": "graph/registry.rs:346",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "k15",
+                "label": "zipfile.ZipFile(path, \"w\", ZIP_DEFLATED)",
+                "trail": null,
+                "at": "_checkpoint.py:185",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "k10",
+                    "label": "manifest.json",
+                    "trail": null,
+                    "at": "_checkpoint.py:186",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k11",
+                    "label": "_split_state(st) → (tensors, non-tensor)",
+                    "trail": null,
+                    "at": "_checkpoint.py:107",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "tensors and JSON are stored apart, so neither format has to carry the other"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k12",
+                    "label": "states/<nid>.safetensors",
+                    "trail": null,
+                    "at": "_checkpoint.py:190",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k13",
+                    "label": "states/<nid>.json",
+                    "trail": null,
+                    "at": "_checkpoint.py:193",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "a non-JSON-serialisable state is an error naming the filter, not a silent drop"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k14",
+                    "label": "optimizer.pt  (include_optimizer=True)",
+                    "trail": null,
+                    "at": "_checkpoint.py:209",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "warns, does not fail, when no optimiser is registered or torch is absent"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "k32",
+            "label": "Graph.load(path, strict=True)",
+            "trail": null,
+            "at": "_checkpoint.py:224",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "k31",
+                "label": "zipfile.ZipFile(path, \"r\")",
+                "trail": null,
+                "at": "_checkpoint.py:242",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "k17",
+                    "label": "refuse a format version from the future",
+                    "trail": null,
+                    "at": "_checkpoint.py:245",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k20",
+                    "label": "per node: _import_class(class_path)",
+                    "trail": null,
+                    "at": "_checkpoint.py:253",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "k18",
+                        "label": "class_version mismatch → raise (strict) | warn",
+                        "trail": null,
+                        "at": "_checkpoint.py:258",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "k19",
+                        "label": "inst = klass(**kwargs) ; graph.node(id, inst)",
+                        "trail": null,
+                        "at": "_checkpoint.py:266",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "k21",
+                    "label": "edges from the manifest",
+                    "trail": null,
+                    "at": "_checkpoint.py:270",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "a diamond comes back a diamond"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k22",
+                    "label": "else: wire nodes in manifest order  « the fallback »",
+                    "trail": "(pre-edges checkpoints only)",
+                    "at": "_checkpoint.py:274",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "load's docstring used to present this as the ONLY behaviour"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "k24",
+                    "label": "per node: st_load_bytes + json → _merge_state",
+                    "trail": null,
+                    "at": "_checkpoint.py:286",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "k23",
+                        "label": "_merge_state(tensors, non_tensor)",
+                        "trail": null,
+                        "at": "_checkpoint.py:129",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "k29",
+                    "label": "graph.load_state(sd, strict)",
+                    "trail": null,
+                    "at": "_checkpoint.py:296",
+                    "loc": null,
+                    "sym": "Graph.load_state",
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "k25",
+                        "label": "unknown keys → KeyError (strict) | warn",
+                        "trail": null,
+                        "at": "_checkpoint.py:87",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "k26",
+                        "label": "nodes without state → warn (non-strict only)",
+                        "trail": null,
+                        "at": "_checkpoint.py:92",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "k27",
+                        "label": "set_node_state(nid, st) → py_to_value → library.try_set_state",
+                        "trail": null,
+                        "at": "graph/registry.rs:333",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "k28",
+                        "label": "mark_fitted()",
+                        "trail": null,
+                        "at": "_checkpoint.py:101",
+                        "loc": null,
+                        "sym": null,
+                        "note": [
+                          "so a forward does not insist the graph be fitted again"
+                        ],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "k30",
+                    "label": "optimizer.pt → py_state[\"optimizer_state_dict_pending\"]",
+                    "trail": null,
+                    "at": "_checkpoint.py:301",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "lazy on purpose: an optimiser must be registered before it can be restored"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": [
+            {
+              "label": "restore_optimizer() consumes the pending blob",
+              "at": "_checkpoint.py:308"
+            }
+          ]
         }
       ]
     }

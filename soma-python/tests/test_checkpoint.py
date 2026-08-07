@@ -181,6 +181,42 @@ def test_full_save_load_matches_reference_output(filter_mod):
         assert g2.edges() == [("a", "b")]
 
 
+def test_non_linear_topology_survives_the_round_trip(filter_mod):
+    """A diamond must come back a diamond, not a chain.
+
+    `load` falls back to wiring nodes in manifest order when the manifest
+    carries no edges — and the only round-trip test was a two-node chain,
+    for which the fallback and the real edges are indistinguishable. So
+    `load`'s own docstring claimed edges were "currently empty until
+    Rust-side edge introspection lands", pointing at a TODO that is not
+    there: `_build_manifest` writes `graph.edges()` and has for a while.
+    This is the test that tells the two apart.
+    """
+    Dense = filter_mod.Dense
+    torch.manual_seed(0)
+    g = Graph()
+    g.node("a", Dense(out_dim=8))
+    g.node("b", Dense(out_dim=8))
+    g.node("c", Dense(out_dim=8))
+    g.node("d", Dense(out_dim=2))
+    g.edge("a", "b")
+    g.edge("a", "c")
+    g.edge("b", "d")
+    g.edge("c", "d")
+    g.materialize(torch.randn(8, 4))
+    g.freeze()
+
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "diamond.somack")
+        g.save(path)
+        g2 = Graph.load(path)
+
+    assert sorted(g2.edges()) == [("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")], (
+        "the saved edges were dropped and the linear fallback wired a chain: "
+        f"{g2.edges()}"
+    )
+
+
 def test_save_to_nonexistent_directory_errors_clean(filter_mod):
     Dense = filter_mod.Dense
     g, _ = _build_and_train(Dense, n_iter=1)

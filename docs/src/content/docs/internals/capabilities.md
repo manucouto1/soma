@@ -41,12 +41,17 @@ instead.
 
 ## What "trace" means, and when it is a dash
 
-Five execution traces are written down, by hand, in
+Execution traces are written down, by hand, in
 [Execution](/soma/internals/execution/#execution-traces). A row links one when
 it has one. **A dash means no trace has been written for that capability yet** —
-not that it has no path. The gap is left visible on purpose: eight of the
-fifteen rows below are untraced, and a plausible-looking trace nobody walked
-would be worse than an honest hole.
+not that it has no path. The gap is left visible on purpose: **6 of the 15**
+rows below are untraced, and a plausible-looking trace nobody walked would be
+worse than an honest hole.
+
+That count is checked, not typed. It said "eight of the fifteen" for exactly
+as long as it took to write one more trace, on a page whose whole argument is
+that hand-typed cross-references rot — so `gen-capabilities.mjs` now fails if
+this sentence and the table disagree.
 
 ## The capabilities
 
@@ -180,7 +185,7 @@ Every event goes to a lossless sink before it goes anywhere else. `begin_run` is
 | | |
 |---|---|
 | **Entry** | `Graph.track_run` · `Graph.begin_run` · `Run` · `runs` · `RunView` |
-| **Trace** | — |
+| **Trace** | [(f)](/soma/internals/execution/#f-a-tracked-run-track_run--the-run-directory--experimentsjsonl) |
 | **Hops** | `soma-python/src/graph/tracking.rs:10` → `soma-runtime/src/tracking/local_tracker.rs:36` → `soma-runtime/src/tracking/event_bus.rs:59` → `soma-runtime/src/tracking/jsonl_sink.rs:125` → `soma-runtime/src/tracking/reader.rs:266` |
 | **Types** | `Event` · `EventSink` · `EventBus` · `Tracker` · `LocalTracker` · `JsonlEventSink` · `RunReader` · `RunManifest` |
 | **Debt** | [D-05](/soma/internals/debt/#d-05--event-is-30-variants-across-six-unrelated-concerns) · [D-07](/soma/internals/debt/#d-07--runreader-is-17-methods-over-one-pathbuf) · [D-63](/soma/internals/debt/#d-63--runreader-re-parses-eventsjsonl-once-per-accessor) |
@@ -193,7 +198,7 @@ A checkpoint is the learned state of every node plus the manifest needed to rebu
 | | |
 |---|---|
 | **Entry** | `Graph.save` · `Graph.load` · `Graph.state` · `Graph.load_state` · `Graph.restore_optimizer` |
-| **Trace** | — |
+| **Trace** | [(g)](/soma/internals/execution/#g-a-checkpoint-save-the-topology-and-the-weights-load-them-back) |
 | **Hops** | `soma-python/python/soma/_checkpoint.py:60` → `soma-python/python/soma/_checkpoint.py:166` → `soma-python/python/soma/_checkpoint.py:224` → `soma-python/python/soma/_checkpoint.py:75` → `soma-python/src/graph/registry.rs:333` |
 | **Types** | `StateStore` · `NodeCatalog` · `ArchitectureFingerprint` |
 | **Debt** | none recorded |

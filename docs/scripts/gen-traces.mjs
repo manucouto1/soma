@@ -77,7 +77,20 @@ function flatten(hop, prefix, isLast, isRoot, out) {
 function renderBlock(block) {
 	const rows = [];
 	flatten(block.root, '', true, true, rows);
-	for (const t of block.tail ?? []) rows.push({ text: t.label, at: t.at ?? null });
+	for (const t of block.tail ?? []) {
+		// A tail entry is `{label, at}`. Writing it as a bare string is the
+		// natural mistake, and it used to surface as `Cannot read properties
+		// of undefined (reading 'length')` from the column sizer below —
+		// because `String.prototype.at` is a *method*, so the string passed
+		// the `r.at` filter and then had no `text`.
+		if (typeof t !== 'object' || t === null || typeof t.label !== 'string') {
+			console.error(
+				`gen-traces: a tail entry must be an object with a "label", got ${JSON.stringify(t)}.`,
+			);
+			process.exit(1);
+		}
+		rows.push({ text: t.label, at: t.at ?? null });
+	}
 	// One location column per block. Sized to the 90th percentile rather than
 	// the longest line: a single wide hop would otherwise open a gutter across
 	// the whole block. Anything past the column simply takes two spaces.
