@@ -47,7 +47,7 @@ is what keeps those anchors honest.
 | [D-21](#d-21--mean_by_key-panics-on-an-empty-slice) | `mean_by_key` panics on an empty slice, reachable from Python | High |
 | [D-32](#d-32--the-compiler-never-descends-into-loop-or-branch) | ~~Compiler never descends into `Loop`/`Branch` for distribution or fusion~~ — **Resolved** | High |
 | [D-41](#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) | `Transport::execute_node` runs every remote node with an empty catalog and an unsalted key | High |
-| [D-02](#d-02--worker-and-worker-execute_plan) | `Worker::execute_plan`: 324 lines across nine responsibilities | High |
+| [D-02](#d-02--worker-and-worker-execute_plan) | ~~`Worker::execute_plan`: 324 lines across nine responsibilities~~ — **Resolved** (44 lines; the `Worker` struct's 11 fields stand) | High |
 | [D-33](#d-33--value-to_plain_json-contradicts-its-own-contract) | `Value::to_plain_json` emits the tagged encoding it promises never to emit | Medium |
 | [D-12](#d-12--four-write_atomic-implementations-two-of-them-unsafe) | ~~Four `write_atomic` implementations, two without fsync or unique temp names~~ — **Resolved** | Medium |
 | [D-61](#d-61--contextsnapshot-deep-clones-the-value-store-per-branch) | `Context::snapshot` deep-clones the whole value store per parallel branch | Medium |
@@ -133,6 +133,36 @@ was made to point at them.
 **Fix shape** The stages are already sequential and independent. Extract each to
 a named private function taking and returning explicit state; the function body
 becomes the pipeline it already is.
+
+**Resolved (the function; the struct's 11 fields stand)** `execute_plan` is
+**44 lines**, and half of those are the version check and the span it opens.
+The body is now the pipeline it was describing:
+
+```
+interpreter_for → install_python_filters → resolve_plan_input
+               → try_streamed_from_store → run_in_mode → finish
+```
+
+The stages that can end the plan return `Result<_, Box<PlanResult>>`: the error
+type *is* the reply, so `?` replaces four hand-written `match` arms, and there
+is one place left that builds a `PlanResult::Failed` per reason. `run_in_mode`
+is a three-arm `match` over `ExecutionMode` — batched fit, fit, forward — where
+before, "is `batch_size` set" was an `if` nested three levels inside a `match`
+arm.
+
+Two things fell out that were not the point:
+
+- `STREAM_CHUNK_ROWS` was a `const` **inside** `execute_streamed_from_store`,
+  while the threshold that decides to call it was the literal `1024` written
+  in a comment as `total_rows > 1024`. They are one number now, at module
+  scope. Changing the chunk size used to silently stop matching the threshold.
+- Both fit paths stored what they had just learned and logged the failure —
+  the same shape as [D-25](#d-25--state-load-failure-silently-restarts-from-random-init)
+  pointing the other way. They go through one `keep_what_was_learned`, which
+  propagates. (Defensive today, for the reason given in D-25.)
+
+The `Worker` struct itself still has 11 fields. That is a separate finding and
+this entry stays open to it having been only half addressed.
 
 ### D-03 · `Context` carries five unrelated concerns
 
@@ -522,12 +552,18 @@ has two halves (the Python process that holds the weights, the catalog the
 executor reads) and two entry points (a plan, a stream), and three of the four
 combinations logged and carried on:
 
-| Site | Was |
-|---|---|
-| `worker.rs` · `proc.set_state` | `warn!`, continue |
-| `worker.rs` · `catalog.try_set_state` | `error!`, continue |
-| `worker.rs` · `set_filter_state` | `error!`, continue — returned `()` |
-| `server.rs` · stream begin | called the above, so the result did not exist |
+| Site | Was | Reachable today |
+|---|---|---|
+| `worker.rs` · `proc.set_state` | `warn!`, continue | **yes** — a state the wire format cannot encode, or a Python-side refusal |
+| `worker.rs` · `catalog.try_set_state` | `error!`, continue | no |
+| `worker.rs` · `set_filter_state` | `error!`, continue — returned `()` | no |
+| `server.rs` · stream begin | called the above, so the result did not exist | no |
+
+The last three are honest about being defensive: `MemoryStateStore::set`
+(`soma-core/src/data/state.rs:73`) always returns `Ok`, and it is the only
+`StateStore` anything constructs outside a test. They are fixed because the
+trait says the operation can fail and a persistent store would — not because
+they were losing weights this week. Only the first was.
 
 `Worker::set_filter_state` returns `Result<()>` now, which is what made the
 other three reachable by the compiler rather than by reading. The two

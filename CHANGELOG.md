@@ -60,6 +60,10 @@ stream. All four fail now.
   domain folders rather than flat modules.
 - `soma-python/src/graph/mod.rs`: 2 371 → 798 LOC, one module per thing a
   `Graph` owns.
+- `Worker::execute_plan`: 324 → 44 LOC. The nine stages it performed are
+  nine named functions, and the streaming threshold is no longer a
+  literal in a comment that had to agree with a `const` in another
+  function.
 - Topology is declared with operators, actions with methods; one name for
   an edge; one lever for the cache; one objective vocabulary.
 - A run parses its events once instead of per query.

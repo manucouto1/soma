@@ -40,6 +40,14 @@ pub struct Worker {
     python: String,
 }
 
+/// Rows per chunk when auto-streaming from a DataStore — and the threshold
+/// that triggers that path at all.
+///
+/// One constant, deliberately: the decision to stream and the size of the
+/// chunks it streams are the same number, and a plan just over the line
+/// producing a single chunk is the intended behaviour, not a coincidence.
+const STREAM_CHUNK_ROWS: usize = 1024;
+
 /// `$SOMA_PYTHON`, else `python3` off `PATH`.
 ///
 /// The env var exists because a worker started from a shell has no other
@@ -302,6 +310,33 @@ impl Worker {
             plan.mode
         );
 
+        let python_path = self.interpreter_for(plan);
+        if let Err(failed) = self.install_python_filters(plan, &python_path, start) {
+            return *failed;
+        }
+
+        let input = match self.resolve_plan_input(plan, start) {
+            Ok(value) => value,
+            Err(failed) => return *failed,
+        };
+
+        if let Some(streamed) = self.try_streamed_from_store(plan, start) {
+            return streamed;
+        }
+
+        let outcome = self.run_in_mode(plan, &input.unwrap_or(Value::Empty));
+        self.finish(outcome, start)
+    }
+
+    /// Which interpreter this plan's filters will be unpickled in.
+    ///
+    /// A plan with pip requirements gets a venv; one without gets whatever
+    /// [`Worker::with_python`] was told. A venv that cannot be built falls
+    /// back to the system interpreter with a `warn!` — that fallback is
+    /// [D-24](/soma/internals/debt#d-24--venv-provisioning-fails-into-the-system-interpreter)
+    /// and is deliberately left as it was here; changing it is its own
+    /// finding, not a side effect of splitting this function.
+    fn interpreter_for(&mut self, plan: &SerializedPlan) -> String {
         // Collect all requirements from serialized filters
         let all_reqs: Vec<String> = plan
             .filters
@@ -336,9 +371,25 @@ impl Worker {
         };
 
         // No site-packages resolution needed — subprocess uses the venv python directly
+        python_path
+    }
 
-        // Spawn ONE Python subprocess for all filters in this plan.
-        // All filters share the same process (needed for Composite autograd).
+    /// Spawn the plan's Python process, restore any trained states into it,
+    /// and register every filter in the catalog.
+    ///
+    /// One process for all of a plan's filters, deliberately: `Composite`
+    /// autograd needs them to share an interpreter.
+    ///
+    /// `Err` carries the reply to send, already timed — the three ways this
+    /// stage fails (no interpreter, a state that will not load into the
+    /// process, a state that will not store in the catalog) are all fatal,
+    /// and none of them has anything to add after the fact.
+    fn install_python_filters(
+        &mut self,
+        plan: &SerializedPlan,
+        python_path: &str,
+        start: Instant,
+    ) -> std::result::Result<(), Box<PlanResult>> {
         let filter_specs: Vec<(String, Vec<u8>, bool)> = plan
             .filters
             .iter()
@@ -355,24 +406,18 @@ impl Worker {
                 filter_specs.len()
             );
 
-            let proc = crate::python_process::PythonProcess::spawn(&python_path, &filter_specs)
+            let mut proc = crate::python_process::PythonProcess::spawn(python_path, &filter_specs)
                 .map_err(|e| {
                     // Not `.expect`: this runs on a tokio worker thread, so
                     // a panic here took the whole worker down — every other
                     // pipeline it was holding with it — because one plan
                     // named an interpreter that would not start.
                     tracing::error!(python = %python_path, "failed to spawn Python: {e}");
-                    e
-                });
-            let mut proc = match proc {
-                Ok(p) => p,
-                Err(e) => {
-                    return PlanResult::Failed {
+                    Box::new(PlanResult::Failed {
                         error: format!("could not start `{python_path}`: {e}"),
                         duration_ms: start.elapsed().as_millis() as u64,
-                    };
-                }
-            };
+                    })
+                })?;
 
             // Load trained states from previous epochs (SET_STATE)
             for sf in &plan.filters {
@@ -387,12 +432,12 @@ impl Worker {
                         "Loading trained state from previous epoch"
                     );
                     if let Err(e) = proc.set_state(&sf.node_id, state) {
-                        return state_restore_failed(
+                        return Err(Box::new(state_restore_failed(
                             &sf.node_id,
                             "the Python process that owns the weights",
                             &e,
                             start,
-                        );
+                        )));
                     }
                 }
             }
@@ -414,180 +459,233 @@ impl Worker {
                 ));
                 self.catalog.register(&sf.node_id, filter);
                 if let Some(state) = &sf.state
-                    && let Err(e) = self.catalog.try_set_state(&sf.node_id, state.clone())
+                    && let Err(e) = self.set_filter_state(&sf.node_id, state.clone())
                 {
-                    return state_restore_failed(
+                    return Err(Box::new(state_restore_failed(
                         &sf.node_id,
                         "the catalog the executor reads",
                         &e,
                         start,
-                    );
+                    )));
                 }
             }
 
             tracing::info!("Filters registered, Python process ready");
         }
+        Ok(())
+    }
 
-        // Resolve input via InputSource::resolve(). A reference that
-        // resolves nowhere fails HERE, naming what it looked in — it used
-        // to become an empty value and travel on into the filter, where it
-        // surfaced as a TypeError in the user's own code.
-        let input_value = match plan
-            .input
+    /// The plan's input, materialized.
+    ///
+    /// A reference that resolves nowhere fails HERE, naming what it looked
+    /// in — it used to become an empty value and travel on into the filter,
+    /// where it surfaced as a `TypeError` in the user's own code.
+    fn resolve_plan_input(
+        &self,
+        plan: &SerializedPlan,
+        start: Instant,
+    ) -> std::result::Result<Option<Value>, Box<PlanResult>> {
+        plan.input
             .as_ref()
             .map(|src| src.resolve(self.data_store.as_deref(), &self.temp_store))
             .transpose()
-        {
-            Ok(value) => value,
-            Err(e) => {
-                return PlanResult::Failed {
+            .map_err(|e| {
+                Box::new(PlanResult::Failed {
                     error: e.to_string(),
                     duration_ms: start.elapsed().as_millis() as u64,
-                };
-            }
-        };
+                })
+            })
+    }
 
-        // DataStore-backed streaming: if input is a large DataRef and we
-        // have a store, read chunks via get_rows() and stream them (no
-        // full materialization).
-        //
-        // FORWARD ONLY, and the mode check is the whole point. This branch
-        // used to be taken before `plan.mode` was ever looked at, so a Fit
-        // over a large reference was silently executed as a stream of
-        // forwards: nothing was fitted, no state was stored, and the fit
-        // reported success. The next forward then found no state and died
-        // inside the user's filter — while the same graph under the
-        // 1024-row threshold fitted normally and gave the right answer.
-        // A stream has no fit semantics (`compile_stream` refuses one
-        // locally, for the same reason), so a Fit falls through to the
-        // path that can honour it.
+    /// Take the DataStore-backed streaming path, if this plan qualifies:
+    /// read chunks via `get_rows()` and stream them, never materializing
+    /// the dataset.
+    ///
+    /// `None` means "not this path" — the caller runs the plan normally.
+    ///
+    /// **Forward only, and the mode check is the whole point.** This branch
+    /// used to be taken before `plan.mode` was ever looked at, so a Fit over
+    /// a large reference was silently executed as a stream of forwards:
+    /// nothing was fitted, no state was stored, and the fit reported
+    /// success. The next forward then found no state and died inside the
+    /// user's filter — while the same graph under the 1024-row threshold
+    /// fitted normally and gave the right answer. A stream has no fit
+    /// semantics (`compile_stream` refuses one locally, for the same
+    /// reason), so a Fit falls through to the path that can honour it.
+    fn try_streamed_from_store(
+        &mut self,
+        plan: &SerializedPlan,
+        start: Instant,
+    ) -> Option<PlanResult> {
         if matches!(plan.mode, ExecutionMode::Forward)
             && let Some(InputSource::Reference { data_ref }) = &plan.input
             && let Some(store) = self.data_store.clone()
             && let Ok(meta) = store.meta(data_ref)
-            && meta.total_rows > 1024
+            && meta.total_rows > STREAM_CHUNK_ROWS
         {
-            return self.execute_streamed_from_store(plan, &store, data_ref, &meta, start);
+            return Some(self.execute_streamed_from_store(plan, &store, data_ref, &meta, start));
         }
+        None
+    }
 
-        // Delegate to LocalRunner (same execution path as local)
-        let runner = somatize_runtime::LocalRunner;
-        let x = input_value.unwrap_or(Value::Empty);
+    /// Run the plan in whichever mode it asked for.
+    ///
+    /// The three arms are the three things a worker can be told to do, and
+    /// they differ in more than a flag: a batched fit talks to the
+    /// subprocess directly, a plain fit goes through the runner, and a
+    /// forward learns nothing. All three answer with the same pair — the
+    /// output, and whatever was learned.
+    fn run_in_mode(
+        &mut self,
+        plan: &SerializedPlan,
+        x: &Value,
+    ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
+        match &plan.mode {
+            ExecutionMode::Fit {
+                y,
+                batch_size: Some(bs),
+            } => self.run_batched_fit(plan, x, y.as_ref(), *bs),
+            ExecutionMode::Fit { y, .. } => self.run_fit(plan, x, y.as_ref()),
+            ExecutionMode::Forward => self.run_forward(plan, x),
+        }
+    }
 
-        let result = match &plan.mode {
-            ExecutionMode::Fit { y, batch_size } => {
-                // If batch_size is set, use BATCHED_FIT on the subprocess directly
-                if let Some(bs) = batch_size {
-                    tracing::info!(batch_size = bs, "Using batched fit");
-                    let node_ids = plan
-                        .plan
-                        .node_ids()
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect::<Vec<_>>();
-                    if let Some(filter) = self.catalog.get(&node_ids[0]) {
-                        if let Some(sf) = filter
-                            .as_any()
-                            .downcast_ref::<crate::python_process::SubprocessFilter>()
-                        {
-                            let result = sf
-                                .process
-                                .lock()
-                                .map_err(|e| {
-                                    WorkerError::Concurrency(format!("process mutex poisoned: {e}"))
-                                })
-                                .and_then(|mut proc| {
-                                    proc.batched_fit(&node_ids, &x, y.as_ref(), *bs)
-                                });
-                            match result {
-                                Ok((output, states)) => {
-                                    for (id, state) in &states {
-                                        if let Err(e) =
-                                            self.catalog.try_set_state(id, state.clone())
-                                        {
-                                            tracing::error!(
-                                                node_id = %id,
-                                                "storing filter state failed: {e}"
-                                            );
-                                        }
-                                    }
-                                    Ok((output, states))
-                                }
-                                Err(e) => Err(e.into()),
-                            }
-                        } else {
-                            Err(somatize_core::error::SomaError::Other(
-                                "batched_fit requires SubprocessFilter".into(),
-                            ))
-                        }
-                    } else {
-                        Err(somatize_core::error::SomaError::Other(
-                            "no filters found".into(),
-                        ))
-                    }
-                } else {
-                    let run_id = format!("worker_fit_{}", plan.plan_id);
-                    // `linear`, explicitly: a worker receives a serialized
-                    // plan and no graph, so it has no topology to consult.
-                    // Correct for the pipelines that get dispatched, and
-                    // stated here rather than assumed inside the runner.
-                    let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
-                        &self.catalog,
-                        self.cache.as_ref(),
-                        &self.event_bus,
-                        &run_id,
-                        &plan.plan,
-                    );
-                    ctx.seed = plan.seed;
-                    runner.fit(&plan.plan, &ctx, &x, y.as_ref()).map(|fitted| {
-                        // Keep what was learned, and send it back. The
-                        // runner already told states and outputs apart —
-                        // this used to re-derive the split from a key
-                        // prefix, as did three other callers.
-                        for (node_id, state) in &fitted.states {
-                            if let Err(e) = self.catalog.try_set_state(node_id, state.clone()) {
-                                tracing::error!(node_id, "storing filter state failed: {e}");
-                            }
-                        }
-                        (fitted.last, fitted.states)
-                    })
-                }
-            }
-            ExecutionMode::Forward => {
-                let run_id = format!("worker_forward_{}", plan.plan_id);
-                let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
-                    &self.catalog,
-                    self.cache.as_ref(),
-                    &self.event_bus,
-                    &run_id,
-                    &plan.plan,
-                );
-                ctx.seed = plan.seed;
-                runner
-                    .forward(&plan.plan, &ctx, &x)
-                    .map(|output| (output, std::collections::HashMap::new()))
-            }
+    /// Fit in batches, driving the subprocess directly rather than the
+    /// runner — the batching lives on the Python side.
+    fn run_batched_fit(
+        &mut self,
+        plan: &SerializedPlan,
+        x: &Value,
+        y: Option<&Value>,
+        batch_size: usize,
+    ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
+        tracing::info!(batch_size, "Using batched fit");
+        let node_ids = plan
+            .plan
+            .node_ids()
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+
+        let Some(filter) = node_ids.first().and_then(|id| self.catalog.get(id)) else {
+            return Err(somatize_core::error::SomaError::Other(
+                "no filters found".into(),
+            ));
+        };
+        let Some(sf) = filter
+            .as_any()
+            .downcast_ref::<crate::python_process::SubprocessFilter>()
+        else {
+            return Err(somatize_core::error::SomaError::Other(
+                "batched_fit requires SubprocessFilter".into(),
+            ));
         };
 
-        let elapsed = start.elapsed().as_millis() as u64;
-        match result {
+        let (output, states) = sf
+            .process
+            .lock()
+            .map_err(|e| WorkerError::Concurrency(format!("process mutex poisoned: {e}")))
+            .and_then(|mut proc| proc.batched_fit(&node_ids, x, y, batch_size))?;
+
+        self.keep_what_was_learned(&states)?;
+        Ok((output, states))
+    }
+
+    /// Fit through the runner — the same execution path a local fit takes.
+    fn run_fit(
+        &mut self,
+        plan: &SerializedPlan,
+        x: &Value,
+        y: Option<&Value>,
+    ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
+        let run_id = format!("worker_fit_{}", plan.plan_id);
+        let ctx = self.run_context(plan, &run_id);
+        let fitted = somatize_runtime::LocalRunner.fit(&plan.plan, &ctx, x, y)?;
+        // The runner already told states and outputs apart — this used to
+        // re-derive the split from a key prefix, as did three other callers.
+        self.keep_what_was_learned(&fitted.states)?;
+        Ok((fitted.last, fitted.states))
+    }
+
+    /// Forward through the runner. Learns nothing, so it answers with an
+    /// empty state map rather than pretending it might have one.
+    fn run_forward(
+        &mut self,
+        plan: &SerializedPlan,
+        x: &Value,
+    ) -> somatize_core::error::Result<(Value, HashMap<String, Value>)> {
+        let run_id = format!("worker_forward_{}", plan.plan_id);
+        let ctx = self.run_context(plan, &run_id);
+        let output = somatize_runtime::LocalRunner.forward(&plan.plan, &ctx, x)?;
+        Ok((output, HashMap::new()))
+    }
+
+    /// What a run of this plan needs, built the one way a worker can build
+    /// it.
+    ///
+    /// `linear`, explicitly: a worker receives a serialized plan and no
+    /// graph, so it has no topology to consult. Correct for the pipelines
+    /// that get dispatched, and stated here rather than assumed inside the
+    /// runner.
+    fn run_context<'a>(
+        &'a self,
+        plan: &'a SerializedPlan,
+        run_id: &'a str,
+    ) -> somatize_runtime::execution::runner::RunContext<'a> {
+        let mut ctx = somatize_runtime::execution::runner::RunContext::linear(
+            &self.catalog,
+            self.cache.as_ref(),
+            &self.event_bus,
+            run_id,
+            &plan.plan,
+        );
+        ctx.seed = plan.seed;
+        ctx
+    }
+
+    /// Store what a fit learned, so a later plan on this worker sees it.
+    ///
+    /// Both fit paths used to log a failure here and carry on, which is the
+    /// same shape as [D-25](/soma/internals/debt#d-25--state-load-failure-silently-restarts-from-random-init)
+    /// pointing the other way: the states still travel back to the client,
+    /// but this worker's catalog keeps the *old* ones, so the next Forward
+    /// sent here runs the previous epoch's weights and looks like a model
+    /// that stopped learning.
+    fn keep_what_was_learned(
+        &mut self,
+        states: &HashMap<String, Value>,
+    ) -> somatize_core::error::Result<()> {
+        for (node_id, state) in states {
+            self.set_filter_state(node_id, state.clone())?;
+        }
+        Ok(())
+    }
+
+    /// Turn what the run returned into the reply, and time it.
+    fn finish(
+        &self,
+        outcome: somatize_core::error::Result<(Value, HashMap<String, Value>)>,
+        start: Instant,
+    ) -> PlanResult {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        match outcome {
             Ok((output, states)) => {
                 tracing::info!(
-                    duration_ms = elapsed,
+                    duration_ms,
                     n_states = states.len(),
                     "Plan completed successfully"
                 );
                 PlanResult::Success {
                     output: self.wrap_output(output),
-                    duration_ms: elapsed,
+                    duration_ms,
                     states,
                 }
             }
             Err(e) => {
-                tracing::error!(duration_ms = elapsed, error = %e, "Plan failed");
+                tracing::error!(duration_ms, error = %e, "Plan failed");
                 PlanResult::Failed {
                     error: e.to_string(),
-                    duration_ms: elapsed,
+                    duration_ms,
                 }
             }
         }
@@ -606,10 +704,6 @@ impl Worker {
         start: Instant,
     ) -> PlanResult {
         use somatize_runtime::{Context, StreamOutput, StreamRun};
-
-        /// Rows per chunk when auto-streaming from a DataStore — also the
-        /// threshold that triggers this path (see `total_rows > 1024`).
-        const STREAM_CHUNK_ROWS: usize = 1024;
 
         let node_ids: Vec<String> = plan.plan.node_ids().into_iter().map(String::from).collect();
 
