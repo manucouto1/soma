@@ -44,14 +44,15 @@ instead.
 Execution traces are written down, by hand, in
 [Execution](/soma/internals/execution/#execution-traces). A row links one when
 it has one. **A dash means no trace has been written for that capability yet** —
-not that it has no path. The gap is left visible on purpose: **4 of the 15**
+not that it has no path. The gap is left visible on purpose: **2 of the 15**
 rows below are untraced, and a plausible-looking trace nobody walked would be
 worse than an honest hole.
 
 That count is checked, not typed. It said "eight of the fifteen" for exactly
 as long as it took to write one more trace, on a page whose whole argument is
 that hand-typed cross-references rot — so `gen-capabilities.mjs` now fails if
-this sentence and the table disagree.
+this sentence and the table disagree. It has been right through six edits
+since.
 
 ## The capabilities
 
@@ -237,7 +238,7 @@ A plan crosses the wire with the cloudpickle bytes of its filters, because a cat
 | | |
 |---|---|
 | **Entry** | `Graph.add_worker` · `Graph.set_strategy` · `Graph.set_data_store` · `Worker` |
-| **Trace** | — |
+| **Trace** | [(k)](/soma/internals/execution/#k-distribution-a-strategy-the-workers-it-indexes-and-the-wire) |
 | **Hops** | `soma-python/src/graph/distributed.rs:171` → `soma-worker/src/worker.rs:275` → `soma-python/src/graph/distributed.rs:114` → `soma-runtime/src/distributed.rs:146` |
 | **Types** | `TrainingStrategy` · `Partition` · `RemoteTarget` · `Transport` · `DataStore` · `DataRef` · `StrategyExecutor` |
 | **Debt** | [D-02](/soma/internals/debt/#d-02--worker-and-workerexecute_plan) · [D-41](/soma/internals/debt/#d-41--transportexecute_node-runs-remotes-with-an-empty-catalog) · [D-42](/soma/internals/debt/#d-42--executionplanremote-discards-its-routing-target) · [D-55](/soma/internals/debt/#d-55--set_strategy--strategy-is-a-lossy-round-trip) |
@@ -250,7 +251,7 @@ Every tracked run appends a record with its conclusion, its architecture fingerp
 | | |
 |---|---|
 | **Entry** | `experiments` · `find_similar` · `lineage` · `diff` · `checkout` · `record_conclusion` |
-| **Trace** | — |
+| **Trace** | [(j)](/soma/internals/execution/#j-the-experiment-pool-what-a-run-leaves-behind-and-how-it-is-found-again) |
 | **Hops** | `soma-memory/src/record.rs:169` → `soma-memory/src/file_kb.rs:128` → `soma-memory/src/retrieval.rs:200` |
 | **Types** | `ExperimentRecord` · `DerivationMove` · `RetrievalQuery` · `ScoreComponents` · `KnowledgeBase` · `ArchitectureFingerprint` |
 | **Debt** | [D-16](/soma/internals/debt/#d-16--two-knowledge-base-front-ends-already-divergent) |

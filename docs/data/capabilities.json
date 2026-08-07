@@ -504,7 +504,7 @@
         "Graph.set_data_store",
         "Worker"
       ],
-      "trace": null,
+      "trace": "k",
       "hops": [
         "graph/distributed.rs:171",
         "worker.rs:275",
@@ -543,7 +543,7 @@
         "checkout",
         "record_conclusion"
       ],
-      "trace": null,
+      "trace": "j",
       "hops": [
         "record.rs:169",
         "file_kb.rs:128",

@@ -921,6 +921,126 @@ on exit — including an exception                                  _audit.py:13
 the flags reach the overlay via RunReader::health_flags → trace (h)  reader.rs:518
 ```
 
+### (j) The experiment pool: what a run leaves behind, and how it is found again
+
+```
+a run finishes → append_run_record  → (f)                        tracking/run.rs:162
+   the ONLY path from "a run happened" to "the pool knows about it"
+├─ ExperimentRecord::from_run(&summary)                          record.rs:169
+│     identity, cost, metrics, and a templated deterministic conclusion
+├─ record.descended_from(&parent)                                record.rs:216
+│     the DerivationMove: what changed between parent and child.
+│     VisTrails-style — nodes are runs, edges are the changes applied
+└─ kb.record(record) → experiments.jsonl                         file_kb.rs:128
+   ├─ one line, one write_all, under an exclusive advisory lock  file_kb.rs:147
+   │     writeln! was two writes and nothing serialised concurrent writers,
+   │     so two processes could interleave INSIDE a record — the one
+   │     corruption load_from_offset cannot treat as a racing tail
+   ├─ sync_data(), not just a flush                              file_kb.rs:152
+   │     the pool must survive the crash of the run appending to it
+   └─ load_from_offset(false) — fold the log back in             file_kb.rs:162
+         the log stays the single source of what this handle holds,
+         so the offset cannot drift
+
+soma.find_similar(query, like_run=…, limit=…)                  _lineage.py:62
+└─ kb_find_similar_json                                        readers.rs:85
+   ├─ neither a query nor a like_run → error                   readers.rs:96
+   ├─ like_run → the record's ArchitectureFingerprint          readers.rs:110
+   │     absent → an error saying it may predate fingerprinting,
+   │     rather than silently scoring structure at zero
+   ├─ kb.retrieve(&query)                                      knowledge_base.rs:96
+   │  └─ rank(&all(), query)                                   retrieval.rs:200
+   │     ├─ filter by research_line, then by tags              retrieval.rs:205
+   │     ├─ Bm25Index::build over the candidates               retrieval.rs:215
+   │     ├─ normalise BM25 against the best hit in this set    retrieval.rs:224
+   │     │     BM25 is unbounded; normalising makes it comparable with the other three
+   │     ├─ weights renormalised over the terms this query can speak to  retrieval.rs:232
+   │     │     0.40 lexical · 0.25 structural · 0.15 recency · 0.20 importance
+   │     │     a query with no architecture redistributes the 0.25 instead of scoring 0
+   │     ├─ score = Σ wᵢ·termᵢ   « added, not multiplied »     retrieval.rs:270
+   │     │     a product would let recency alone veto a year-old dead end —
+   │     │     which is exactly what is worth surfacing
+   │     └─ importance(record)                                 retrieval.rs:340
+   │        └─ a dead end WITH a conclusion is floored at 0.6  retrieval.rs:355
+   │              failures must stay retrievable, or the next person repeats them
+   └─ each hit → {score, why(), components, record}            readers.rs:126
+         why() is the score broken down, so a ranking can be argued with
+
+soma.record_conclusion(run_id, notes)                             _lineage.py:102
+└─ kb_record_conclusion                                           readers.rs:145
+   ├─ kb.get(run_id) → unknown id is an error naming the file     readers.rs:155
+   ├─ ExperimentRecord::amendment(id, target, notes)              readers.rs:161
+   │     a SEPARATE journal line: the original is never rewritten, so a note
+   │     added today cannot corrupt what was recorded when the run happened
+   └─ kb.record(amendment) → the same append path above           readers.rs:169
+soma.lineage(run_id) → build_lineage(&all(), id)                  knowledge_base.rs:257
+soma.diff(a, b) → the same move between two records that never met  readers.rs:197
+```
+
+### (k) Distribution: a strategy, the workers it indexes, and the wire
+
+```
+g.add_worker(address, …) ; g.set_strategy(kind, …)                graph/distributed.rs:288
+├─ add_worker → g.workers.push(RemoteWorker)                      graph/distributed.rs:294
+└─ set_strategy(kind, …)                                          graph/distributed.rs:369
+   ├─ any count of 0 is refused, for five fields                  graph/distributed.rs:397
+   │     num_replicas / num_clients / population_size / rounds / generations
+   │     a 0 used to run every loop zero times and hand an empty slice to an
+   │     aggregator that indexed [0] — see D-21
+   └─ "data_parallel" | "federated" | "model_parallel" → TrainingStrategy  graph/distributed.rs:407
+
+g.fit(x, y) → GraphSession::fit                                   graph_session.rs:200
+├─ strategy = graph.effective_strategy()   « inherited by subgraphs »  graph_session.rs:215
+├─ not Local AND transports present → train through the strategy  graph_session.rs:216
+│     this branch is what the type was missing: set_strategy recorded
+│     an attribute nothing read
+├─ TransportContext::new(transports, &plan, &catalog, seed)       distributed.rs:562
+├─ .with_targets(worker_identities)                               distributed.rs:581
+│     only ModelParallel needs it — a partition is pinned to a worker by id
+│     or tag, where every other strategy treats workers as interchangeable
+├─ strategy.fit(&ctx, x, y, &node_ids)                            distributed.rs:146
+└─ a strategy fit has NO local outputs — only parameters come back  graph_session.rs:226
+
+StrategyExecutor::fit — one arm per strategy                      distributed.rs:145
+├─ Local → execute_on_worker(0, full dataset)                     distributed.rs:155
+├─ DataParallel — a real synchronous SGD round                    distributed.rs:159
+│  ├─ n = num_replicas.min(num_workers)                           distributed.rs:163
+│  ├─ shard_pair(input, y, n)  « x AND y, together »              distributed.rs:164
+│  │     sharding only x sent every replica the whole y: shapes that
+│  │     broadcast rather than fail
+│  ├─ per worker: execute_on_worker(i, shard, y_shard)            distributed.rs:169
+│  ├─ get_gradients(i) → aggregation.aggregate(&all_grads)        distributed.rs:177
+│  │     gradients cross the wire as JSON — a torch pickle cannot be
+│  │     averaged in Rust
+│  ├─ apply_gradients(i, &averaged)  « the step happens HERE »    distributed.rs:182
+│  │     the replicas move together, on the mean of what they each saw
+│  └─ read_back_state(0)  — over the wire, not get_state          distributed.rs:189
+│        get_state would return the weights from BEFORE the averaged
+│        gradient was applied: the round would train and hand back the
+│        untrained model
+├─ Federated — rounds of train → aggregate states → redistribute  distributed.rs:192
+│  └─ per round: get_state ×n → aggregate → set_state ×n          distributed.rs:213
+├─ ModelParallel — the model is split, the data is not            distributed.rs:228
+│  ├─ order_partitions(partitions, node_ids)                      distributed.rs:229
+│  │     partitions must TILE the plan: claimed twice, claimed by nobody,
+│  │     or interleaved are all errors
+│  └─ per stage: worker_for(target) → execute_partition → next activation  distributed.rs:238
+└─ PopulationBased → refuses, by design                           distributed.rs:246
+      each member needs its OWN hyperparameters applied to the graph, and a
+      worker is sent a plan, not a way to rebuild the filters. It runs as an
+      executor with callbacks instead: soma.Pbt(...).run(train, evaluate)
+
+every arm reaches a worker through one call                       distributed.rs:601
+├─ transport(i).execute(plan, catalog, input, RunMode::Fit{y}, seed)  distributed.rs:611
+├─ WsTransport::execute → wire_plan                               ws_transport.rs:406
+│  └─ SerializedPlan { plan, input, mode, seed, filters: vec![] } ws_transport.rs:386
+│        filters is empty and must be: a NodeCatalog holds live filters,
+│        not the pickle bytes a worker unpickles
+└─ Worker::execute_plan(&plan)  → (g)                             worker.rs:351
+      the worker side is its own pipeline — interpreter_for →
+      install_python_filters → resolve_plan_input → run_in_mode → finish
+```
+
 <!-- traces:end -->
 
 ### Ownership spine

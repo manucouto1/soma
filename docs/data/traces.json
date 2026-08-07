@@ -43,7 +43,16 @@
     "viz/mod.rs": "soma-core/src/viz/mod.rs",
     "reader.rs": "soma-runtime/src/tracking/reader.rs",
     "_audit.py": "soma-python/python/soma/_audit.py",
-    "_orchestrator.py": "soma-python/python/soma/_orchestrator.py"
+    "_orchestrator.py": "soma-python/python/soma/_orchestrator.py",
+    "_lineage.py": "soma-python/python/soma/_lineage.py",
+    "record.rs": "soma-memory/src/record.rs",
+    "file_kb.rs": "soma-memory/src/file_kb.rs",
+    "retrieval.rs": "soma-memory/src/retrieval.rs",
+    "knowledge_base.rs": "soma-memory/src/knowledge_base.rs",
+    "graph/distributed.rs": "soma-python/src/graph/distributed.rs",
+    "distributed.rs": "soma-runtime/src/distributed.rs",
+    "worker.rs": "soma-worker/src/worker.rs",
+    "ws_transport.rs": "soma-worker/src/ws_transport.rs"
   },
   "traces": [
     {
@@ -2686,6 +2695,949 @@
               "at": "reader.rs:518"
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "j",
+      "title": "The experiment pool: what a run leaves behind, and how it is found again",
+      "entry": "soma.find_similar",
+      "blocks": [
+        {
+          "root": {
+            "id": "p7",
+            "label": "a run finishes → append_run_record",
+            "trail": null,
+            "at": "tracking/run.rs:162",
+            "loc": null,
+            "sym": null,
+            "note": [
+              "the ONLY path from \"a run happened\" to \"the pool knows about it\""
+            ],
+            "mark": null,
+            "ref": "f",
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "p1",
+                "label": "ExperimentRecord::from_run(&summary)",
+                "trail": null,
+                "at": "record.rs:169",
+                "loc": null,
+                "sym": "ExperimentRecord::from_run",
+                "note": [
+                  "identity, cost, metrics, and a templated deterministic conclusion"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "p2",
+                "label": "record.descended_from(&parent)",
+                "trail": null,
+                "at": "record.rs:216",
+                "loc": null,
+                "sym": "ExperimentRecord::descended_from",
+                "note": [
+                  "the DerivationMove: what changed between parent and child.",
+                  "VisTrails-style — nodes are runs, edges are the changes applied"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "p6",
+                "label": "kb.record(record) → experiments.jsonl",
+                "trail": null,
+                "at": "file_kb.rs:128",
+                "loc": null,
+                "sym": "FileKnowledgeBase::record",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "p3",
+                    "label": "one line, one write_all, under an exclusive advisory lock",
+                    "trail": null,
+                    "at": "file_kb.rs:147",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "writeln! was two writes and nothing serialised concurrent writers,",
+                      "so two processes could interleave INSIDE a record — the one",
+                      "corruption load_from_offset cannot treat as a racing tail"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "p4",
+                    "label": "sync_data(), not just a flush",
+                    "trail": null,
+                    "at": "file_kb.rs:152",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "the pool must survive the crash of the run appending to it"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "p5",
+                    "label": "load_from_offset(false) — fold the log back in",
+                    "trail": null,
+                    "at": "file_kb.rs:162",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "the log stays the single source of what this handle holds,",
+                      "so the offset cannot drift"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "p21",
+            "label": "soma.find_similar(query, like_run=…, limit=…)",
+            "trail": null,
+            "at": "_lineage.py:62",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "p20",
+                "label": "kb_find_similar_json",
+                "trail": null,
+                "at": "readers.rs:85",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "p8",
+                    "label": "neither a query nor a like_run → error",
+                    "trail": null,
+                    "at": "readers.rs:96",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "p9",
+                    "label": "like_run → the record's ArchitectureFingerprint",
+                    "trail": null,
+                    "at": "readers.rs:110",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "absent → an error saying it may predate fingerprinting,",
+                      "rather than silently scoring structure at zero"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "p18",
+                    "label": "kb.retrieve(&query)",
+                    "trail": null,
+                    "at": "knowledge_base.rs:96",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "p17",
+                        "label": "rank(&all(), query)",
+                        "trail": null,
+                        "at": "retrieval.rs:200",
+                        "loc": null,
+                        "sym": "rank",
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "p10",
+                            "label": "filter by research_line, then by tags",
+                            "trail": null,
+                            "at": "retrieval.rs:205",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "p11",
+                            "label": "Bm25Index::build over the candidates",
+                            "trail": null,
+                            "at": "retrieval.rs:215",
+                            "loc": null,
+                            "sym": null,
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "p12",
+                            "label": "normalise BM25 against the best hit in this set",
+                            "trail": null,
+                            "at": "retrieval.rs:224",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "BM25 is unbounded; normalising makes it comparable with the other three"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "p13",
+                            "label": "weights renormalised over the terms this query can speak to",
+                            "trail": null,
+                            "at": "retrieval.rs:232",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "0.40 lexical · 0.25 structural · 0.15 recency · 0.20 importance",
+                              "a query with no architecture redistributes the 0.25 instead of scoring 0"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "p14",
+                            "label": "score = Σ wᵢ·termᵢ   « added, not multiplied »",
+                            "trail": null,
+                            "at": "retrieval.rs:270",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "a product would let recency alone veto a year-old dead end —",
+                              "which is exactly what is worth surfacing"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "p16",
+                            "label": "importance(record)",
+                            "trail": null,
+                            "at": "retrieval.rs:340",
+                            "loc": null,
+                            "sym": "importance",
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": [
+                              {
+                                "id": "p15",
+                                "label": "a dead end WITH a conclusion is floored at 0.6",
+                                "trail": null,
+                                "at": "retrieval.rs:355",
+                                "loc": null,
+                                "sym": null,
+                                "note": [
+                                  "failures must stay retrievable, or the next person repeats them"
+                                ],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "id": "p19",
+                    "label": "each hit → {score, why(), components, record}",
+                    "trail": null,
+                    "at": "readers.rs:126",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "why() is the score broken down, so a ranking can be argued with"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "p26",
+            "label": "soma.record_conclusion(run_id, notes)",
+            "trail": null,
+            "at": "_lineage.py:102",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "p25",
+                "label": "kb_record_conclusion",
+                "trail": null,
+                "at": "readers.rs:145",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "p22",
+                    "label": "kb.get(run_id) → unknown id is an error naming the file",
+                    "trail": null,
+                    "at": "readers.rs:155",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "p23",
+                    "label": "ExperimentRecord::amendment(id, target, notes)",
+                    "trail": null,
+                    "at": "readers.rs:161",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "a SEPARATE journal line: the original is never rewritten, so a note",
+                      "added today cannot corrupt what was recorded when the run happened"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "p24",
+                    "label": "kb.record(amendment) → the same append path above",
+                    "trail": null,
+                    "at": "readers.rs:169",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": [
+            {
+              "label": "soma.lineage(run_id) → build_lineage(&all(), id)",
+              "at": "knowledge_base.rs:257"
+            },
+            {
+              "label": "soma.diff(a, b) → the same move between two records that never met",
+              "at": "readers.rs:197"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "k",
+      "title": "Distribution: a strategy, the workers it indexes, and the wire",
+      "entry": "Graph.set_strategy",
+      "blocks": [
+        {
+          "root": {
+            "id": "d5",
+            "label": "g.add_worker(address, …) ; g.set_strategy(kind, …)",
+            "trail": null,
+            "at": "graph/distributed.rs:288",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "d1",
+                "label": "add_worker → g.workers.push(RemoteWorker)",
+                "trail": null,
+                "at": "graph/distributed.rs:294",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d4",
+                "label": "set_strategy(kind, …)",
+                "trail": null,
+                "at": "graph/distributed.rs:369",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "d2",
+                    "label": "any count of 0 is refused, for five fields",
+                    "trail": null,
+                    "at": "graph/distributed.rs:397",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "num_replicas / num_clients / population_size / rounds / generations",
+                      "a 0 used to run every loop zero times and hand an empty slice to an",
+                      "aggregator that indexed [0] — see D-21"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d3",
+                    "label": "\"data_parallel\" | \"federated\" | \"model_parallel\" → TrainingStrategy",
+                    "trail": null,
+                    "at": "graph/distributed.rs:407",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "d12",
+            "label": "g.fit(x, y) → GraphSession::fit",
+            "trail": null,
+            "at": "graph_session.rs:200",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "d6",
+                "label": "strategy = graph.effective_strategy()   « inherited by subgraphs »",
+                "trail": null,
+                "at": "graph_session.rs:215",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d7",
+                "label": "not Local AND transports present → train through the strategy",
+                "trail": null,
+                "at": "graph_session.rs:216",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "this branch is what the type was missing: set_strategy recorded",
+                  "an attribute nothing read"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d8",
+                "label": "TransportContext::new(transports, &plan, &catalog, seed)",
+                "trail": null,
+                "at": "distributed.rs:562",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d9",
+                "label": ".with_targets(worker_identities)",
+                "trail": null,
+                "at": "distributed.rs:581",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "only ModelParallel needs it — a partition is pinned to a worker by id",
+                  "or tag, where every other strategy treats workers as interchangeable"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d10",
+                "label": "strategy.fit(&ctx, x, y, &node_ids)",
+                "trail": null,
+                "at": "distributed.rs:146",
+                "loc": null,
+                "sym": "StrategyExecutor::fit",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d11",
+                "label": "a strategy fit has NO local outputs — only parameters come back",
+                "trail": null,
+                "at": "graph_session.rs:226",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "d27",
+            "label": "StrategyExecutor::fit — one arm per strategy",
+            "trail": null,
+            "at": "distributed.rs:145",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "d13",
+                "label": "Local → execute_on_worker(0, full dataset)",
+                "trail": null,
+                "at": "distributed.rs:155",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d20",
+                "label": "DataParallel — a real synchronous SGD round",
+                "trail": null,
+                "at": "distributed.rs:159",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "d14",
+                    "label": "n = num_replicas.min(num_workers)",
+                    "trail": null,
+                    "at": "distributed.rs:163",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d15",
+                    "label": "shard_pair(input, y, n)  « x AND y, together »",
+                    "trail": null,
+                    "at": "distributed.rs:164",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "sharding only x sent every replica the whole y: shapes that",
+                      "broadcast rather than fail"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d16",
+                    "label": "per worker: execute_on_worker(i, shard, y_shard)",
+                    "trail": null,
+                    "at": "distributed.rs:169",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d17",
+                    "label": "get_gradients(i) → aggregation.aggregate(&all_grads)",
+                    "trail": null,
+                    "at": "distributed.rs:177",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "gradients cross the wire as JSON — a torch pickle cannot be",
+                      "averaged in Rust"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d18",
+                    "label": "apply_gradients(i, &averaged)  « the step happens HERE »",
+                    "trail": null,
+                    "at": "distributed.rs:182",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "the replicas move together, on the mean of what they each saw"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d19",
+                    "label": "read_back_state(0)  — over the wire, not get_state",
+                    "trail": null,
+                    "at": "distributed.rs:189",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "get_state would return the weights from BEFORE the averaged",
+                      "gradient was applied: the round would train and hand back the",
+                      "untrained model"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "d22",
+                "label": "Federated — rounds of train → aggregate states → redistribute",
+                "trail": null,
+                "at": "distributed.rs:192",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "d21",
+                    "label": "per round: get_state ×n → aggregate → set_state ×n",
+                    "trail": null,
+                    "at": "distributed.rs:213",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "d25",
+                "label": "ModelParallel — the model is split, the data is not",
+                "trail": null,
+                "at": "distributed.rs:228",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "d23",
+                    "label": "order_partitions(partitions, node_ids)",
+                    "trail": null,
+                    "at": "distributed.rs:229",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "partitions must TILE the plan: claimed twice, claimed by nobody,",
+                      "or interleaved are all errors"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "d24",
+                    "label": "per stage: worker_for(target) → execute_partition → next activation",
+                    "trail": null,
+                    "at": "distributed.rs:238",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "d26",
+                "label": "PopulationBased → refuses, by design",
+                "trail": null,
+                "at": "distributed.rs:246",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "each member needs its OWN hyperparameters applied to the graph, and a",
+                  "worker is sent a plan, not a way to rebuild the filters. It runs as an",
+                  "executor with callbacks instead: soma.Pbt(...).run(train, evaluate)"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "d32",
+            "label": "every arm reaches a worker through one call",
+            "trail": null,
+            "at": "distributed.rs:601",
+            "loc": null,
+            "sym": "TransportContext::execute_on_worker",
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "d28",
+                "label": "transport(i).execute(plan, catalog, input, RunMode::Fit{y}, seed)",
+                "trail": null,
+                "at": "distributed.rs:611",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "d30",
+                "label": "WsTransport::execute → wire_plan",
+                "trail": null,
+                "at": "ws_transport.rs:406",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "d29",
+                    "label": "SerializedPlan { plan, input, mode, seed, filters: vec![] }",
+                    "trail": null,
+                    "at": "ws_transport.rs:386",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "filters is empty and must be: a NodeCatalog holds live filters,",
+                      "not the pickle bytes a worker unpickles"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "d31",
+                "label": "Worker::execute_plan(&plan)",
+                "trail": null,
+                "at": "worker.rs:351",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "the worker side is its own pipeline — interpreter_for →",
+                  "install_python_filters → resolve_plan_input → run_in_mode → finish"
+                ],
+                "mark": null,
+                "ref": "g",
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
         }
       ]
     }
