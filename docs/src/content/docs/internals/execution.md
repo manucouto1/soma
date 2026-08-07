@@ -822,6 +822,105 @@ Graph.load(path, strict=True)                                     _checkpoint.py
 restore_optimizer() consumes the pending blob                     _checkpoint.py:308
 ```
 
+### (h) Drawing it: the graph, and the run drawn over it
+
+```
+Graph.to_mermaid() / .to_svg() / .to_text()       graph/viz.rs:12
+├─ no overlay → Graph::to_mermaid()               graph/mod.rs:537
+│     which is to_mermaid_with(&GraphOverlay::default())
+│     an empty overlay produces byte-identical plain output
+├─ with overlay → py_overlay(py, dict)            readers.rs:15
+│     the dict goes through json.dumps and serde, so the shape is
+│     checked once, at the boundary, instead of field by field
+├─ Graph::to_mermaid_with(&overlay)               graph/mod.rs:547
+│  ├─ per node, a shape per NodeKind              graph/mod.rs:557
+│  │     Filter [ ] · SubGraph [[ ]] · Loop (( )) · Branch {{ }}
+│  │     Step [/ /] — the I/O parallelogram, because it reaches outside
+│  ├─ sublabel_text() → a second label line       viz/mod.rs:73
+│  │     duration, cache tier, health flags
+│  ├─ edges: Data --> , Control -.->              graph/mod.rs:582
+│  └─ classDef per status                         graph/mod.rs:615
+├─ Graph::to_svg_with(&overlay)                   viz/svg.rs:65
+│  ├─ topological_sort(), else node order         viz/svg.rs:69
+│  ├─ longest-path layering, left→right           viz/svg.rs:75
+│  └─ boxes sized from label + sublabel, layers centred  viz/svg.rs:93
+└─ Graph._repr_html_ → to_svg()                   graph/viz.rs:44
+      SVG, not Mermaid: a notebook sanitizes <script>
+      past 80 nodes the diagram is unreadable, so to_text() is the honest answer
+   └─ nodes > 80 → the ASCII tree instead         graph/viz.rs:48
+
+RunView.to_mermaid(overlay=True, node=None)                       _runs.py:170
+├─ node is None → _soma.run_to_mermaid(dir, overlay)              _runs.py:180
+│  └─ run_to_mermaid                                              readers.rs:335
+│     └─ RunReader::to_mermaid()                                  reader.rs:799
+│        ├─ graph() → the run's graph.json snapshot               reader.rs:749
+│        │     written by begin_run — see trace (f)
+│        ├─ overlay() → per-node status, duration, tier, flags    reader.rs:763
+│        │  ├─ node_timings(): last span wins for status; durations accumulate  reader.rs:766
+│        │  ├─ a node that ran more than once gets a ×N sublabel  reader.rs:785
+│        │  └─ health_flags() fold in, deduplicated               reader.rs:788
+│        └─ graph.to_mermaid_with(&overlay)                       reader.rs:803
+│              the same call the plain path makes — one renderer, two callers
+└─ node="encoder" → the node's INNER architecture                 _runs.py:179
+      the submodule chain snapshotted by gradient_audit(inside=...)
+   ├─ _module_trees() → diagnostics/modules/<node>.json           _runs.py:182
+   ├─ no snapshot → an error naming the scoped nodes              _runs.py:185
+   ├─ _inner_overlay(tree) → param counts, mean |out-grad|, flags _runs.py:197
+   └─ _soma.graph_json_to_mermaid(graph_json, overlay)            readers.rs:355
+         a soma-core Graph again, so the same renderer draws it
+to_svg is the same path through run_to_svg / graph_json_to_svg    _runs.py:252
+```
+
+### (i) gradient_audit: hooks inside a node, and the flags that come back out
+
+```
+with g.gradient_audit(inside=…, channels=…) as audit:            _audit.py:1239
+├─ scopes = _resolve_inside(filters, inside)                     _audit.py:1128
+│     precedence: inside[node] > the class's _audit_scope > auto
+│     a value may be True, an int depth, a list of fnmatch patterns, or an AuditScope
+├─ resolved_channels = _resolve_channels(channels)               _audit.py:1034
+├─ per filter with a live _module:                               _audit.py:1284
+│  ├─ pairs += (node_id, module)   « the root, under the plain id »  _audit.py:1288
+│  ├─ warn if snapshot_every does not divide sample_every        _audit.py:1299
+│  │     snapshots landing on unsampled steps would be dropped in silence
+│  └─ _iter_scoped_modules(mod, scope) → "<node>/<module.path>"  _audit.py:1060
+│        the id is opaque end to end: hierarchy travels in Audit._children,
+│        never by parsing the string
+├─ id collision → ValueError naming the ids                      _audit.py:1315
+│     a node id containing '/' would clash with a scoped submodule
+├─ Audit(pairs, thresholds, channels, sample_every, children)    _audit.py:1322
+├─ audit._install()                                              _audit.py:421
+│  ├─ register_forward_hook per module                           _audit.py:424
+│  └─ register_full_backward_hook per module                     _audit.py:427
+└─ py_state["active_audit"] = audit                              _audit.py:1331
+      so Graph.backward can call back — see the next block
+
+per training step: g.backward(ctx, loss)                          _orchestrator.py:475
+├─ loss.backward()  → the module hooks fire                       _orchestrator.py:488
+│  ├─ forward hook → activations                                  _audit.py:445
+│  └─ full backward hook → output-gradient norms                  _audit.py:539
+├─ audit._snapshot_after_backward()                               _orchestrator.py:491
+│     HERE, not in the backward hook: parameter grads finish accumulating
+│     after the per-module hook fires, so reading p.grad there is a race
+│  ├─ _snapshot_after_backward                                    _audit.py:572
+│  ├─ _persist_step(fid, rec) → diagnostics/audit_steps.jsonl     _audit.py:680
+│  └─ _persist_snapshot(...) → diagnostics/channels/*.safetensors _audit.py:782
+└─ run.step_completed(step) → a liveness marker on the bus        _orchestrator.py:497
+
+on exit — including an exception                                  _audit.py:1334
+├─ audit._remove() ; _close_files()                               _audit.py:430
+├─ del py_state["active_audit"]                                   _audit.py:1337
+└─ inside an active track_run:                                    _audit.py:1339
+   ├─ report = audit.report()                                     _audit.py:949
+   ├─ diagnostics/report.json                                     _audit.py:1347
+   └─ _emit_health_flags(graph, run, report, audit._children)     _audit.py:1190
+      ├─ one HealthFlag event per flagged filter                  _audit.py:1223
+      └─ children roll up: ONE event per (parent, flag family)    _audit.py:1234
+            detail names the flagged submodules, so the outer DAG overlay
+            marks the parent without any id parsing downstream
+the flags reach the overlay via RunReader::health_flags → trace (h)  reader.rs:518
+```
+
 <!-- traces:end -->
 
 ### Ownership spine

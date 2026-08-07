@@ -34,7 +34,16 @@
     "head.rs": "soma-runtime/src/tracking/head.rs",
     "_checkpoint.py": "soma-python/python/soma/_checkpoint.py",
     "graph/registry.rs": "soma-python/src/graph/registry.rs",
-    "graph/topology.rs": "soma-python/src/graph/topology.rs"
+    "graph/topology.rs": "soma-python/src/graph/topology.rs",
+    "graph/viz.rs": "soma-python/src/graph/viz.rs",
+    "readers.rs": "soma-python/src/tracking/readers.rs",
+    "_runs.py": "soma-python/python/soma/_runs.py",
+    "graph/mod.rs": "soma-core/src/graph/mod.rs",
+    "viz/svg.rs": "soma-core/src/viz/svg.rs",
+    "viz/mod.rs": "soma-core/src/viz/mod.rs",
+    "reader.rs": "soma-runtime/src/tracking/reader.rs",
+    "_audit.py": "soma-python/python/soma/_audit.py",
+    "_orchestrator.py": "soma-python/python/soma/_orchestrator.py"
   },
   "traces": [
     {
@@ -1737,6 +1746,944 @@
             {
               "label": "restore_optimizer() consumes the pending blob",
               "at": "_checkpoint.py:308"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "h",
+      "title": "Drawing it: the graph, and the run drawn over it",
+      "entry": "Graph.to_mermaid",
+      "blocks": [
+        {
+          "root": {
+            "id": "v14",
+            "label": "Graph.to_mermaid() / .to_svg() / .to_text()",
+            "trail": null,
+            "at": "graph/viz.rs:12",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "v1",
+                "label": "no overlay → Graph::to_mermaid()",
+                "trail": null,
+                "at": "graph/mod.rs:537",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "which is to_mermaid_with(&GraphOverlay::default())",
+                  "an empty overlay produces byte-identical plain output"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "v2",
+                "label": "with overlay → py_overlay(py, dict)",
+                "trail": null,
+                "at": "readers.rs:15",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "the dict goes through json.dumps and serde, so the shape is",
+                  "checked once, at the boundary, instead of field by field"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "v7",
+                "label": "Graph::to_mermaid_with(&overlay)",
+                "trail": null,
+                "at": "graph/mod.rs:547",
+                "loc": null,
+                "sym": "Graph::to_mermaid_with",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "v3",
+                    "label": "per node, a shape per NodeKind",
+                    "trail": null,
+                    "at": "graph/mod.rs:557",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "Filter [ ] · SubGraph [[ ]] · Loop (( )) · Branch {{ }}",
+                      "Step [/ /] — the I/O parallelogram, because it reaches outside"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v4",
+                    "label": "sublabel_text() → a second label line",
+                    "trail": null,
+                    "at": "viz/mod.rs:73",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "duration, cache tier, health flags"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v5",
+                    "label": "edges: Data --> , Control -.->",
+                    "trail": null,
+                    "at": "graph/mod.rs:582",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v6",
+                    "label": "classDef per status",
+                    "trail": null,
+                    "at": "graph/mod.rs:615",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "v11",
+                "label": "Graph::to_svg_with(&overlay)",
+                "trail": null,
+                "at": "viz/svg.rs:65",
+                "loc": null,
+                "sym": "Graph::to_svg_with",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "v8",
+                    "label": "topological_sort(), else node order",
+                    "trail": null,
+                    "at": "viz/svg.rs:69",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v9",
+                    "label": "longest-path layering, left→right",
+                    "trail": null,
+                    "at": "viz/svg.rs:75",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v10",
+                    "label": "boxes sized from label + sublabel, layers centred",
+                    "trail": null,
+                    "at": "viz/svg.rs:93",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "v13",
+                "label": "Graph._repr_html_ → to_svg()",
+                "trail": null,
+                "at": "graph/viz.rs:44",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "SVG, not Mermaid: a notebook sanitizes <script>",
+                  "past 80 nodes the diagram is unreadable, so to_text() is the honest answer"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "v12",
+                    "label": "nodes > 80 → the ASCII tree instead",
+                    "trail": null,
+                    "at": "graph/viz.rs:48",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "v29",
+            "label": "RunView.to_mermaid(overlay=True, node=None)",
+            "trail": null,
+            "at": "_runs.py:170",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "v23",
+                "label": "node is None → _soma.run_to_mermaid(dir, overlay)",
+                "trail": null,
+                "at": "_runs.py:180",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "v22",
+                    "label": "run_to_mermaid",
+                    "trail": null,
+                    "at": "readers.rs:335",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "v21",
+                        "label": "RunReader::to_mermaid()",
+                        "trail": null,
+                        "at": "reader.rs:799",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": [
+                          {
+                            "id": "v15",
+                            "label": "graph() → the run's graph.json snapshot",
+                            "trail": null,
+                            "at": "reader.rs:749",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "written by begin_run — see trace (f)"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          },
+                          {
+                            "id": "v19",
+                            "label": "overlay() → per-node status, duration, tier, flags",
+                            "trail": null,
+                            "at": "reader.rs:763",
+                            "loc": null,
+                            "sym": "RunReader::overlay",
+                            "note": [],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": [
+                              {
+                                "id": "v16",
+                                "label": "node_timings(): last span wins for status; durations accumulate",
+                                "trail": null,
+                                "at": "reader.rs:766",
+                                "loc": null,
+                                "sym": null,
+                                "note": [],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              },
+                              {
+                                "id": "v17",
+                                "label": "a node that ran more than once gets a ×N sublabel",
+                                "trail": null,
+                                "at": "reader.rs:785",
+                                "loc": null,
+                                "sym": null,
+                                "note": [],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              },
+                              {
+                                "id": "v18",
+                                "label": "health_flags() fold in, deduplicated",
+                                "trail": null,
+                                "at": "reader.rs:788",
+                                "loc": null,
+                                "sym": null,
+                                "note": [],
+                                "mark": null,
+                                "ref": null,
+                                "debt": null,
+                                "dyn": null,
+                                "children": []
+                              }
+                            ]
+                          },
+                          {
+                            "id": "v20",
+                            "label": "graph.to_mermaid_with(&overlay)",
+                            "trail": null,
+                            "at": "reader.rs:803",
+                            "loc": null,
+                            "sym": null,
+                            "note": [
+                              "the same call the plain path makes — one renderer, two callers"
+                            ],
+                            "mark": null,
+                            "ref": null,
+                            "debt": null,
+                            "dyn": null,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "v28",
+                "label": "node=\"encoder\" → the node's INNER architecture",
+                "trail": null,
+                "at": "_runs.py:179",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "the submodule chain snapshotted by gradient_audit(inside=...)"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "v24",
+                    "label": "_module_trees() → diagnostics/modules/<node>.json",
+                    "trail": null,
+                    "at": "_runs.py:182",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v25",
+                    "label": "no snapshot → an error naming the scoped nodes",
+                    "trail": null,
+                    "at": "_runs.py:185",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v26",
+                    "label": "_inner_overlay(tree) → param counts, mean |out-grad|, flags",
+                    "trail": null,
+                    "at": "_runs.py:197",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "v27",
+                    "label": "_soma.graph_json_to_mermaid(graph_json, overlay)",
+                    "trail": null,
+                    "at": "readers.rs:355",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "a soma-core Graph again, so the same renderer draws it"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": [
+            {
+              "label": "to_svg is the same path through run_to_svg / graph_json_to_svg",
+              "at": "_runs.py:252"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "i",
+      "title": "gradient_audit: hooks inside a node, and the flags that come back out",
+      "entry": "Graph.gradient_audit",
+      "blocks": [
+        {
+          "root": {
+            "id": "a13",
+            "label": "with g.gradient_audit(inside=…, channels=…) as audit:",
+            "trail": null,
+            "at": "_audit.py:1239",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "a1",
+                "label": "scopes = _resolve_inside(filters, inside)",
+                "trail": null,
+                "at": "_audit.py:1128",
+                "loc": null,
+                "sym": "_resolve_inside",
+                "note": [
+                  "precedence: inside[node] > the class's _audit_scope > auto",
+                  "a value may be True, an int depth, a list of fnmatch patterns, or an AuditScope"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "a2",
+                "label": "resolved_channels = _resolve_channels(channels)",
+                "trail": null,
+                "at": "_audit.py:1034",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "a6",
+                "label": "per filter with a live _module:",
+                "trail": null,
+                "at": "_audit.py:1284",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "a3",
+                    "label": "pairs += (node_id, module)   « the root, under the plain id »",
+                    "trail": null,
+                    "at": "_audit.py:1288",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a4",
+                    "label": "warn if snapshot_every does not divide sample_every",
+                    "trail": null,
+                    "at": "_audit.py:1299",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "snapshots landing on unsampled steps would be dropped in silence"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a5",
+                    "label": "_iter_scoped_modules(mod, scope) → \"<node>/<module.path>\"",
+                    "trail": null,
+                    "at": "_audit.py:1060",
+                    "loc": null,
+                    "sym": "_iter_scoped_modules",
+                    "note": [
+                      "the id is opaque end to end: hierarchy travels in Audit._children,",
+                      "never by parsing the string"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "a7",
+                "label": "id collision → ValueError naming the ids",
+                "trail": null,
+                "at": "_audit.py:1315",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "a node id containing '/' would clash with a scoped submodule"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "a8",
+                "label": "Audit(pairs, thresholds, channels, sample_every, children)",
+                "trail": null,
+                "at": "_audit.py:1322",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "a11",
+                "label": "audit._install()",
+                "trail": null,
+                "at": "_audit.py:421",
+                "loc": null,
+                "sym": "Audit::_install",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "a9",
+                    "label": "register_forward_hook per module",
+                    "trail": null,
+                    "at": "_audit.py:424",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a10",
+                    "label": "register_full_backward_hook per module",
+                    "trail": null,
+                    "at": "_audit.py:427",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "a12",
+                "label": "py_state[\"active_audit\"] = audit",
+                "trail": null,
+                "at": "_audit.py:1331",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "so Graph.backward can call back — see the next block"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "a22",
+            "label": "per training step: g.backward(ctx, loss)",
+            "trail": null,
+            "at": "_orchestrator.py:475",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "a16",
+                "label": "loss.backward()  → the module hooks fire",
+                "trail": null,
+                "at": "_orchestrator.py:488",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "a14",
+                    "label": "forward hook → activations",
+                    "trail": null,
+                    "at": "_audit.py:445",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a15",
+                    "label": "full backward hook → output-gradient norms",
+                    "trail": null,
+                    "at": "_audit.py:539",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "a20",
+                "label": "audit._snapshot_after_backward()",
+                "trail": null,
+                "at": "_orchestrator.py:491",
+                "loc": null,
+                "sym": "Audit::_snapshot_after_backward",
+                "note": [
+                  "HERE, not in the backward hook: parameter grads finish accumulating",
+                  "after the per-module hook fires, so reading p.grad there is a race"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "a17",
+                    "label": "_snapshot_after_backward",
+                    "trail": null,
+                    "at": "_audit.py:572",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a18",
+                    "label": "_persist_step(fid, rec) → diagnostics/audit_steps.jsonl",
+                    "trail": null,
+                    "at": "_audit.py:680",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a19",
+                    "label": "_persist_snapshot(...) → diagnostics/channels/*.safetensors",
+                    "trail": null,
+                    "at": "_audit.py:782",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "a21",
+                "label": "run.step_completed(step) → a liveness marker on the bus",
+                "trail": null,
+                "at": "_orchestrator.py:497",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "a31",
+            "label": "on exit — including an exception",
+            "trail": null,
+            "at": "_audit.py:1334",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "a23",
+                "label": "audit._remove() ; _close_files()",
+                "trail": null,
+                "at": "_audit.py:430",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "a24",
+                "label": "del py_state[\"active_audit\"]",
+                "trail": null,
+                "at": "_audit.py:1337",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "a30",
+                "label": "inside an active track_run:",
+                "trail": null,
+                "at": "_audit.py:1339",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "a25",
+                    "label": "report = audit.report()",
+                    "trail": null,
+                    "at": "_audit.py:949",
+                    "loc": null,
+                    "sym": "Audit::report",
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a26",
+                    "label": "diagnostics/report.json",
+                    "trail": null,
+                    "at": "_audit.py:1347",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "a29",
+                    "label": "_emit_health_flags(graph, run, report, audit._children)",
+                    "trail": null,
+                    "at": "_audit.py:1190",
+                    "loc": null,
+                    "sym": "_emit_health_flags",
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "a27",
+                        "label": "one HealthFlag event per flagged filter",
+                        "trail": null,
+                        "at": "_audit.py:1223",
+                        "loc": null,
+                        "sym": null,
+                        "note": [],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      },
+                      {
+                        "id": "a28",
+                        "label": "children roll up: ONE event per (parent, flag family)",
+                        "trail": null,
+                        "at": "_audit.py:1234",
+                        "loc": null,
+                        "sym": null,
+                        "note": [
+                          "detail names the flagged submodules, so the outer DAG overlay",
+                          "marks the parent without any id parsing downstream"
+                        ],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": [
+            {
+              "label": "the flags reach the overlay via RunReader::health_flags → trace (h)",
+              "at": "reader.rs:518"
             }
           ]
         }

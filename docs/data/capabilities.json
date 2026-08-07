@@ -439,7 +439,7 @@
         "Graph.architecture",
         "RunView"
       ],
-      "trace": null,
+      "trace": "h",
       "hops": [
         "graph/viz.rs:12",
         "graph.rs:547",
@@ -473,7 +473,7 @@
         "AuditScope",
         "Thresholds"
       ],
-      "trace": null,
+      "trace": "i",
       "hops": [
         "_audit.py:1239",
         "_audit.py:1016",

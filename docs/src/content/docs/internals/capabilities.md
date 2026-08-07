@@ -44,7 +44,7 @@ instead.
 Execution traces are written down, by hand, in
 [Execution](/soma/internals/execution/#execution-traces). A row links one when
 it has one. **A dash means no trace has been written for that capability yet** —
-not that it has no path. The gap is left visible on purpose: **6 of the 15**
+not that it has no path. The gap is left visible on purpose: **4 of the 15**
 rows below are untraced, and a plausible-looking trace nobody walked would be
 worse than an honest hole.
 
@@ -211,7 +211,7 @@ Pure data → string: no runtime, no I/O. SVG exists because a notebook sanitize
 | | |
 |---|---|
 | **Entry** | `Graph.to_mermaid` · `Graph.to_svg` · `Graph.to_text` · `Graph.architecture` · `RunView` |
-| **Trace** | — |
+| **Trace** | [(h)](/soma/internals/execution/#h-drawing-it-the-graph-and-the-run-drawn-over-it) |
 | **Hops** | `soma-python/src/graph/viz.rs:12` → `soma-core/src/graph/mod.rs:547` → `soma-core/src/viz/svg.rs:65` → `soma-runtime/src/tracking/reader.rs:763` → `soma-python/python/soma/viz/_report.py:178` |
 | **Types** | `GraphOverlay` · `NodeStatus` · `RunReader` |
 | **Debt** | [D-17](/soma/internals/debt/#d-17--four-renderers-four-independent-match-nodekind) · [D-15](/soma/internals/debt/#d-15--five-formatters-for-a-duration-two-for-a-truncation) |
@@ -224,7 +224,7 @@ Hooks under hierarchical ids (`node/module.path`), rolled up into one health fla
 | | |
 |---|---|
 | **Entry** | `Graph.gradient_audit` · `audit_modules` · `Audit` · `AuditScope` · `Thresholds` |
-| **Trace** | — |
+| **Trace** | [(i)](/soma/internals/execution/#i-gradient_audit-hooks-inside-a-node-and-the-flags-that-come-back-out) |
 | **Hops** | `soma-python/python/soma/_audit.py:1239` → `soma-python/python/soma/_audit.py:1016` → `soma-python/src/graph/tracking.rs:122` → `soma-runtime/src/tracking/reader.rs:518` |
 | **Types** | `HealthFlagRecord` · `RunReader` · `Event` |
 | **Debt** | [D-09](/soma/internals/debt/#d-09--audit-is-a-30-method-class-in-a-1-338-line-module) |
