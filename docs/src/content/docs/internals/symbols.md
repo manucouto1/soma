@@ -73,7 +73,7 @@ fails the build rather than quietly misleading a reader.
 
 | Symbol | Kind | Crate | Defined at |
 |---|---|---|---|
-| [`Batched`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:99` |
+| [`Batched`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:54` |
 | [`BayesianSampler`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/sampler/bayesian.rs:16` |
 | [`BlobStore`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/cache/action.rs:143` |
 
@@ -162,8 +162,7 @@ fails the build rather than quietly misleading a reader.
 | [`FnPbtExecutor`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/pbt.rs:63` |
 | [`FnTool`](/soma/internals/agentic/#soma-llm-somatize-llm) | struct | `soma-llm` | `soma-llm/src/tools.rs:62` |
 | [`FnTrialExecutor`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/study.rs:144` |
-| [`ForwardEnv`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:25` |
-| [`ForwardStrategy`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/execution/forward.rs:40` |
+| [`ForwardStrategy`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/execution/forward.rs:22` |
 | [`FsActionStore`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/cache/fs_store.rs:41` |
 
 ### G
@@ -369,7 +368,7 @@ fails the build rather than quietly misleading a reader.
 | [`SleepHandler`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/agentic/sleep_handler.rs:18` |
 | [`SomaContext`](/soma/internals/agentic/#soma-mcp-somatize-mcp) | struct | `soma-mcp` | `soma-mcp/src/context.rs:9` |
 | [`SomaError`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/error.rs:14` |
-| [`Standard`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:46` |
+| [`Standard`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:28` |
 | [`StateAggregator`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/distributed.rs:139` |
 | [`StateStore`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/data/state.rs:24` |
 | [`Step`](/soma/internals/foundation/#soma-core-somatize-core) | «trait» | `soma-core` | `soma-core/src/graph/step.rs:250` |
@@ -380,7 +379,7 @@ fails the build rather than quietly misleading a reader.
 | [`StoreMeta`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/data/store.rs:21` |
 | [`StrategyContext`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/distributed.rs:33` |
 | [`StrategyExecutor`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/distributed.rs:120` |
-| [`Stream`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:58` |
+| [`Stream`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/forward.rs:40` |
 | [`StreamMessage`](/soma/internals/distribution/#soma-worker-somatize-worker) | enum | `soma-worker` | `soma-worker/src/protocol.rs:620` |
 | [`StreamMode`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/graph/filter.rs:37` |
 | [`StreamOutput`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/execution/stream.rs:303` |

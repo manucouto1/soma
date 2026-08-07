@@ -39,70 +39,91 @@
             "children": [
               {
                 "label": "forward_with(x, &Standard)",
-                "at": "graph_session.rs:334",
+                "at": "graph_session.rs:286",
                 "children": [
                   {
-                    "label": "run_driver()  → driver.clone().with_catalog(…)",
-                    "at": "graph_session.rs:145"
+                    "id": "n5a",
+                    "label": "timestamp_id(\"forward\")",
+                    "trail": null,
+                    "at": "graph_session.rs:270",
+                    "loc": "soma-runtime/src/execution/graph_session.rs:270",
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
                   },
                   {
-                    "label": "Standard::forward(graph, &ForwardEnv{…}, x)",
-                    "at": "forward.rs:49",
+                    "id": "n5b",
+                    "label": "RunContext::new(…, GraphInfo::from_graph(graph))",
+                    "trail": "one per pass, not per batch",
+                    "at": "graph_session.rs:271",
+                    "loc": "soma-runtime/src/execution/graph_session.rs:271",
+                    "sym": null,
+                    "note": [
+                      "Batched used to mint a run id per batch"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "label": "run_driver()  → driver.clone().with_catalog(…)",
+                    "at": "graph_session.rs:278",
+                    "loc": "soma-runtime/src/execution/graph_session.rs:278"
+                  },
+                  {
+                    "label": "Standard::forward(graph, &ctx, x)",
+                    "at": "forward.rs:31",
                     "children": [
                       {
                         "label": "compile(graph, catalog, Inference, Some(cache))",
-                        "at": "forward.rs:51"
+                        "at": "forward.rs:32",
+                        "loc": "soma-runtime/src/execution/forward.rs:32"
                       },
                       {
-                        "label": "run_forward(graph, &plan, env, x)",
-                        "at": "forward.rs:77",
+                        "label": "LocalRunner.forward(plan, &ctx, x)",
+                        "at": "forward.rs:34",
                         "children": [
                           {
-                            "label": "timestamp_id(\"forward\")",
-                            "at": "forward.rs:83"
-                          },
-                          {
-                            "label": "RunContext::new(…, GraphInfo::from_graph(graph))",
-                            "at": "forward.rs:84"
-                          },
-                          {
-                            "label": "LocalRunner.forward(plan, &ctx, x)",
-                            "at": "forward.rs:94",
+                            "label": "walk(plan, ctx, input, RunMode::Forward)",
+                            "at": "runner/local.rs:26",
                             "children": [
                               {
-                                "label": "walk(plan, ctx, input, RunMode::Forward)",
-                                "at": "runner/local.rs:26",
-                                "children": [
-                                  {
-                                    "label": "Context::new(…).with_graph_info(…).with_seed(…)",
-                                    "at": "runner/local.rs:33"
-                                  },
-                                  {
-                                    "label": "exec.set(input_key(first), input)",
-                                    "at": "runner/local.rs:40"
-                                  },
-                                  {
-                                    "label": "executor::execute(…)",
-                                    "at": "runner/local.rs:44",
-                                    "ref": "b",
-                                    "sym": "execute"
-                                  },
-                                  {
-                                    "label": "last_output(&exec)",
-                                    "at": "runner/local.rs:51",
-                                    "note": [
-                                      "execution_order().rev().find(!reserved)"
-                                    ]
-                                  }
+                                "label": "Context::new(…).with_graph_info(…).with_seed(…)",
+                                "at": "runner/local.rs:33"
+                              },
+                              {
+                                "label": "exec.set(input_key(first), input)",
+                                "at": "runner/local.rs:40"
+                              },
+                              {
+                                "label": "executor::execute(…)",
+                                "at": "runner/local.rs:44",
+                                "ref": "b",
+                                "sym": "execute"
+                              },
+                              {
+                                "label": "last_output(&exec)",
+                                "at": "runner/local.rs:51",
+                                "note": [
+                                  "execution_order().rev().find(!reserved)"
                                 ]
                               }
                             ]
                           }
-                        ]
+                        ],
+                        "loc": "soma-runtime/src/execution/forward.rs:34"
                       }
-                    ]
+                    ],
+                    "loc": "soma-runtime/src/execution/forward.rs:31"
                   }
-                ]
+                ],
+                "loc": "soma-runtime/src/execution/graph_session.rs:286"
               }
             ]
           }

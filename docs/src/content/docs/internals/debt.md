@@ -189,8 +189,8 @@ consuming builders at `:195`–`:245`. It is a parameter of `execute`,
 
 Worse, it overlaps `RunContext` (`soma-runtime/src/execution/runner/mod.rs:32`) — five
 fields are copied across field-by-field at `soma-runtime/src/execution/runner/local.rs:33`
-— and `ForwardEnv` (`soma-runtime/src/execution/forward.rs:25`) is a third struct with the
-same "avoid six parameters" justification.
+— and `ForwardEnv` was a third struct with the same "avoid six parameters"
+justification.
 
 **Consequence** Three context types with overlapping contents; a reader has to
 learn which one carries what before reading any execution code.
@@ -199,6 +199,29 @@ learn which one carries what before reading any execution code.
 topology, transport, store, driver) and a mutable `ValueStore` (store,
 execution order, hash memo). `RunContext` and `ForwardEnv` then become views of
 `RunEnv` rather than parallel structs.
+
+**Partly resolved: three context types are two.** `ForwardEnv` is deleted.
+Its five fields were `RunContext`'s four (catalog, cache, events, driver) plus a
+`data_store` that exactly one strategy read — so `ForwardStrategy::forward`
+takes the run's `RunContext` directly, and `Batched` owns the store it reads
+as a field.
+
+Two things fell out:
+
+- **A runtime error became impossible.** `Batched` used to look for a store in
+  the shared environment and fail with "requires a data store" when the session
+  had none. Nothing in the workspace constructs a `Batched`, so that error had
+  never fired in a test. It cannot be written now.
+- **One run id per pass, not per batch.** The context was built inside a
+  private `run_forward` helper that `Batched` called *once per batch*, so a
+  single logical forward emitted N run ids and anything reading the event
+  stream saw N runs. It is built once, in `GraphSession::forward_with`, which
+  is where the graph — and therefore the topology — already is. `run_forward`
+  itself is gone.
+
+`Context` vs `RunContext` stands, and stays open. Splitting `Context` still
+changes the signature of twelve execution functions, and the remedy — two
+parameters where there is one — is what `Context` exists to avoid.
 
 ### D-04 · `GraphSession` has two unrelated transport fields
 

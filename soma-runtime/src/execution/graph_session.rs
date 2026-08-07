@@ -263,18 +263,22 @@ impl GraphSession {
         x: &Value,
         strategy: &dyn crate::execution::forward::ForwardStrategy,
     ) -> Result<Value> {
-        let driver = self.run_driver();
-        strategy.forward(
-            &self.graph,
-            &crate::execution::forward::ForwardEnv {
-                catalog: &self.catalog,
-                cache: self.cache.as_ref(),
-                event_bus: &self.event_bus,
-                data_store: self.data_store.as_ref(),
-                driver: driver.as_ref(),
-            },
-            x,
-        )
+        // One context, built here, for the whole pass — including a
+        // `Batched` one. Each batch used to mint its own run id, so a
+        // single logical forward reported N runs to anything reading the
+        // event stream.
+        let run_id = somatize_core::util::timestamp_id("forward");
+        let mut ctx = crate::execution::runner::RunContext::new(
+            &self.catalog,
+            self.cache.as_ref(),
+            &self.event_bus,
+            &run_id,
+            GraphInfo::from_graph(&self.graph),
+        );
+        if let Some(driver) = self.run_driver() {
+            ctx = ctx.with_driver(driver);
+        }
+        strategy.forward(&self.graph, &ctx, x)
     }
 
     /// Standard forward pass (shortcut for `forward_with(x, &Standard)`).
@@ -358,6 +362,15 @@ impl GraphSession {
     /// Access the graph.
     pub fn graph(&self) -> &Graph {
         &self.graph
+    }
+
+    /// The data store this session was given, if any.
+    ///
+    /// Exists because [`Batched`](crate::Batched) takes its store as a
+    /// field now: without this, a caller who handed their only `Arc` to
+    /// [`with_data_store`](Self::with_data_store) could not build one.
+    pub fn data_store(&self) -> Option<&Arc<dyn DataStore>> {
+        self.data_store.as_ref()
     }
 
     /// Access the node catalog.

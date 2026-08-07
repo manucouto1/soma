@@ -93,7 +93,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `SomaSchemaMismatch` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 3 | 0 | 3 |
 | `SomaNodeNotFound` | `soma-python/python/soma/__init__.py` |  | 0 | 0 | 1 | 0 | 3 |
 | `Judge` | `soma-python/python/soma/__init__.py` |  | 12 | 4 | 15 | 1 | 8 |
-| `agentic` | `soma-python/python/soma/__init__.py` |  | 41 | 19 | 290 | 4 | 24 |
+| `agentic` | `soma-python/python/soma/__init__.py` |  | 41 | 19 | 289 | 4 | 24 |
 | `library` | `soma-python/python/soma/__init__.py` |  | 5 | 2 | 34 | 0 | 10 |
 | `Tool` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 34 | 0 | 11 |
 | `tool` | `soma-python/python/soma/__init__.py` |  | 32 | 9 | 65 | 9 | 16 |
@@ -103,7 +103,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `Pbt` | `soma-python/python/soma/__init__.py` |  | 10 | 0 | 7 | 0 | 5 |
 | `Study` | `soma-python/python/soma/__init__.py` |  | 85 | 20 | 102 | 1 | 29 |
 | `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 41 | 0 | 12 |
-| `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 62 | 4 | 7 |
+| `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 50 | 4 | 7 |
 | `Filter` | `soma-python/python/soma/__init__.py` |  | 111 | 49 | 144 | 20 | 32 |
 | `DifferentiableFilter` | `soma-python/python/soma/__init__.py` |  | 39 | 8 | 23 | 7 | 19 |
 | `search` | `soma-python/python/soma/__init__.py` |  | 45 | 19 | 152 | 2 | 47 |
@@ -116,7 +116,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `record_conclusion` | `soma-python/python/soma/__init__.py` |  | 2 | 1 | 7 | 1 | 4 |
 | `lineage` | `soma-python/python/soma/__init__.py` |  | 4 | 7 | 24 | 9 | 4 |
 | `diff` | `soma-python/python/soma/__init__.py` |  | 9 | 1 | 17 | 5 | 9 |
-| `runs` | `soma-python/python/soma/__init__.py` |  | 74 | 37 | 149 | 13 | 53 |
+| `runs` | `soma-python/python/soma/__init__.py` |  | 74 | 37 | 150 | 13 | 53 |
 | `RunView` | `soma-python/python/soma/__init__.py` |  | 25 | 14 | 21 | 9 | 20 |
 | `experiments_dataframe` | `soma-python/python/soma/__init__.py` |  | 2 | 1 | 3 | 2 | 5 |
 | `__version__` | `soma-python/python/soma/__init__.py` |  | 1 | 3 | 0 | 0 | 5 |

@@ -28,6 +28,14 @@ distinguishable, the differentiable path was visibly storing one node's
 logged its failure, which is how three of the four sites in the fix below
 stayed invisible.
 
+**`ForwardEnv` is removed.** `ForwardStrategy::forward` takes the run's
+`RunContext` instead — the two structs described the same four things.
+`Batched` gained a `store` field: it was the only strategy that read one,
+and asking a shared environment for it made "requires a data store" a
+runtime error where it is now a compile error. `GraphSession::data_store()`
+is new, so a caller who handed their only `Arc` to `with_data_store` can
+still build one.
+
 **`Transport::execute_node` is removed.** It took a node id and nothing
 else, so it invented a plan, a mode and a seed; its own doc comment told
 callers with a `RunContext` not to use it. Call `Transport::execute`.
@@ -82,6 +90,9 @@ stream. All four fail now.
 - Topology is declared with operators, actions with methods; one name for
   an edge; one lever for the cache; one objective vocabulary.
 - A run parses its events once instead of per query.
+- A batched forward is **one** run, not one per batch. The run id was
+  minted inside a per-batch helper, so a single pass emitted N of them
+  and anything reading the event stream saw N runs.
 - `internals/capabilities.md` documents the 15 capabilities, with guards
   in `npm run check` so the table cannot rot.
 

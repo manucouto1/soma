@@ -189,7 +189,7 @@ which says what this crate adds to the search space `soma-core` defines.
 | `soma-runtime/src/execution/graph_session.rs` | 835 (485) | `GraphSession` — the top orchestrator; `run` / `fit` / `forward` |
 | `soma-runtime/src/execution/stream.rs` | 699 (355) | `StreamRun`, `StreamOutput`, `materialize_buffer` |
 | `soma-runtime/src/execution/node_catalog.rs` | 446 (228) | `NodeImpl`, `NodeCatalog` — the one registry |
-| `soma-runtime/src/execution/forward.rs` | 260 (153) | `ForwardEnv`, `ForwardStrategy` + `Standard` / `Stream` / `Batched` |
+| `soma-runtime/src/execution/forward.rs` | 221 | `ForwardStrategy` + `Standard` / `Stream` / `Batched` |
 | `soma-runtime/src/execution/runner/mod.rs` | 140 | `RunContext<'a>`, `Runner` trait |
 | `soma-runtime/src/execution/runner/local.rs` | 181 (86) | `LocalRunner` — the only real runner |
 | `soma-runtime/src/execution/runner/remote.rs` | 70 | `Transport` trait |
@@ -294,7 +294,7 @@ The wire seam. No implementor lives in this crate — `WsTransport` is in
 
 #### `ForwardStrategy` — `soma-runtime/src/execution/forward.rs:40`
 
-`fn forward(&self, graph: &Graph, env: &ForwardEnv<'_>, x: &Value) -> Result<Value>`
+`fn forward(&self, graph: &Graph, ctx: &RunContext<'_>, x: &Value) -> Result<Value>`
 
 | Implementor | file:line | Difference |
 |---|---|---|
@@ -375,7 +375,6 @@ filesystem persistence without `soma-core` gaining a filesystem.
 | `NodeCatalog` | THE registry — filters *and* steps | `nodes: HashMap<String, NodeImpl>`, `states: Arc<dyn StateStore>` | `Arc<dyn Filter\|Step>` ──◇; **clones share the state store** (`:75`) | `soma-runtime/src/execution/node_catalog.rs:79` |
 | `Context` | The executor's mutable run state | 12 fields `(!)` | value store, execution order, hash memo (all private) | `soma-runtime/src/execution/executor.rs:124` |
 | `RunContext<'a>` | A runner's borrowed view | catalog, cache, events, run id, `GraphInfo`, seed, driver | all borrowed except `GraphInfo` | `soma-runtime/src/execution/runner/mod.rs:32` |
-| `ForwardEnv<'a>` | A forward strategy's borrowed view | catalog, cache, bus, store, driver | all borrowed | `soma-runtime/src/execution/forward.rs:25` |
 | `GraphInfo` | Topology, not order | `predecessors: HashMap<String, Vec<String>>` | — | `soma-runtime/src/execution/executor.rs:28` |
 | `EffectDriver` | The turn loop | handlers, journal, bus, catalog | `Vec<Arc<dyn EffectHandler>>` ──◇ | `soma-runtime/src/agentic/mod.rs:57` |
 | `EffectJournal` | Record once, replay forever | `actions`, `blobs`, `enabled` | `Arc<dyn ActionCache>` ──◇, `Arc<dyn BlobStore>` ──◇ | `soma-runtime/src/agentic/journal.rs:51` |
@@ -543,21 +542,21 @@ documents. `npm run check` verifies all 99 of their source anchors.
 ### (a) `GraphSession::forward`
 
 ```
-GraphSession::forward(x)                                      graph_session.rs:333
-└─ forward_with(x, &Standard)                                 graph_session.rs:334
-   ├─ run_driver()  → driver.clone().with_catalog(…)          graph_session.rs:145
-   └─ Standard::forward(graph, &ForwardEnv{…}, x)             forward.rs:49
-      ├─ compile(graph, catalog, Inference, Some(cache))      forward.rs:51
-      └─ run_forward(graph, &plan, env, x)                    forward.rs:77
-         ├─ timestamp_id("forward")                           forward.rs:83
-         ├─ RunContext::new(…, GraphInfo::from_graph(graph))  forward.rs:84
-         └─ LocalRunner.forward(plan, &ctx, x)                forward.rs:94
-            └─ walk(plan, ctx, input, RunMode::Forward)       runner/local.rs:26
-               ├─ Context::new(…).with_graph_info(…).with_seed(…)  runner/local.rs:33
-               ├─ exec.set(input_key(first), input)           runner/local.rs:40
-               ├─ executor::execute(…)  → (b)                 runner/local.rs:44
-               └─ last_output(&exec)                          runner/local.rs:51
-                     execution_order().rev().find(!reserved)
+GraphSession::forward(x)                                        graph_session.rs:333
+└─ forward_with(x, &Standard)                                   graph_session.rs:286
+   ├─ timestamp_id("forward")                                   graph_session.rs:270
+   ├─ RunContext::new(…, GraphInfo::from_graph(graph))  one per pass, not per batch  graph_session.rs:271
+   │     Batched used to mint a run id per batch
+   ├─ run_driver()  → driver.clone().with_catalog(…)            graph_session.rs:278
+   └─ Standard::forward(graph, &ctx, x)                         forward.rs:31
+      ├─ compile(graph, catalog, Inference, Some(cache))        forward.rs:32
+      └─ LocalRunner.forward(plan, &ctx, x)                     forward.rs:34
+         └─ walk(plan, ctx, input, RunMode::Forward)            runner/local.rs:26
+            ├─ Context::new(…).with_graph_info(…).with_seed(…)  runner/local.rs:33
+            ├─ exec.set(input_key(first), input)                runner/local.rs:40
+            ├─ executor::execute(…)  → (b)                      runner/local.rs:44
+            └─ last_output(&exec)                               runner/local.rs:51
+                  execution_order().rev().find(!reserved)
 ```
 
 `Stream` diverges only at `soma-runtime/src/execution/forward.rs:65` (`compile_stream`); `Batched` at
