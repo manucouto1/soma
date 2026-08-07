@@ -71,7 +71,7 @@
         "Graph.loop",
         "Graph.handoff"
       ],
-      "trace": null,
+      "trace": "l",
       "hops": [
         "graph/topology.rs:68",
         "graph/registry.rs:116",
@@ -233,7 +233,7 @@
         "Graph.handoff",
         "Goto"
       ],
-      "trace": null,
+      "trace": "l",
       "hops": [
         "compiler.rs:727",
         "plan.rs:204",

@@ -52,7 +52,10 @@
     "graph/distributed.rs": "soma-python/src/graph/distributed.rs",
     "distributed.rs": "soma-runtime/src/distributed.rs",
     "worker.rs": "soma-worker/src/worker.rs",
-    "ws_transport.rs": "soma-worker/src/ws_transport.rs"
+    "ws_transport.rs": "soma-worker/src/ws_transport.rs",
+    "compiler.rs": "soma-compiler/src/compiler.rs",
+    "plan.rs": "soma-compiler/src/plan.rs",
+    "bridge.rs": "soma-python/src/graph/bridge.rs"
   },
   "traces": [
     {
@@ -3638,6 +3641,457 @@
             ]
           },
           "tail": []
+        }
+      ]
+    },
+    {
+      "id": "l",
+      "title": "Building a graph, and the control flow the compiler resolves",
+      "entry": "Graph.node",
+      "blocks": [
+        {
+          "root": {
+            "id": "b9",
+            "label": "g.node(obj) | g.node(id, obj)",
+            "trail": null,
+            "at": "graph/topology.rs:68",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "b1",
+                "label": "1 arg → id from the class name, snake_cased",
+                "trail": null,
+                "at": "graph/topology.rs:81",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b2",
+                "label": "free_id(g, wanted) — never silently overwrite",
+                "trail": null,
+                "at": "graph/topology.rs:16",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b7",
+                "label": "register_behaviour(g, py, id, obj)",
+                "trail": null,
+                "at": "graph/registry.rs:116",
+                "loc": null,
+                "sym": "register_behaviour",
+                "note": [
+                  "ONE way to add a node. An Agent or a Judge is a node too — it just",
+                  "runs a turn loop instead of a function"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "b3",
+                    "label": "duck-types a step first: poll(ctx) → Behaviour::Step",
+                    "trail": null,
+                    "at": "graph/registry.rs:122",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "b4",
+                    "label": "its tools go on the GRAPH, not the node",
+                    "trail": null,
+                    "at": "graph/registry.rs:126",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "one agent may declare a tool and another list the same one;",
+                      "both must reach the same implementation"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  },
+                  {
+                    "id": "b6",
+                    "label": "otherwise PyFilterBridge::new → Behaviour::Filter",
+                    "trail": null,
+                    "at": "graph/registry.rs:135",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": [
+                      {
+                        "id": "b5",
+                        "label": "_input_schema / _output_schema parsed once, here",
+                        "trail": null,
+                        "at": "bridge.rs:218",
+                        "loc": null,
+                        "sym": null,
+                        "note": [
+                          "a typo fails at registration; an impossible edge at compile"
+                        ],
+                        "mark": null,
+                        "ref": null,
+                        "debt": null,
+                        "dyn": null,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "b8",
+                "label": "graph.add_node(behaviour.node(id))",
+                "trail": null,
+                "at": "graph/topology.rs:103",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "b18",
+            "label": "g.loop(id, body, until=…) / g.branch(id, cond, arms)",
+            "trail": null,
+            "at": "graph/topology.rs:155",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "b10",
+                "label": "loop: body may be one entry or several",
+                "trail": null,
+                "at": "graph/topology.rs:167",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b11",
+                "label": "until=None → BodyTerminal (resolved by the compiler)",
+                "trail": null,
+                "at": "graph/topology.rs:179",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b12",
+                "label": "until=True is refused",
+                "trail": null,
+                "at": "graph/topology.rs:183",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "it would mean \"stop before it runs\", which nobody writes on purpose.",
+                  "False means Exhaust: run the full count"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b13",
+                "label": "until=\"node\" that does not exist → an error naming it",
+                "trail": null,
+                "at": "graph/topology.rs:195",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b14",
+                "label": "each body entry gets a CONTROL edge from the loop node",
+                "trail": null,
+                "at": "graph/topology.rs:210",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "control, not data: it is how the compiler learns what the loop owns"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b15",
+                "label": "branch: no arms → refused",
+                "trail": null,
+                "at": "graph/topology.rs:121",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "a router with nowhere to route is just a node"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b16",
+                "label": "the branch node IS the condition",
+                "trail": null,
+                "at": "graph/topology.rs:131",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "the executor runs it and reads the arm label from its output"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b17",
+                "label": "one labelled control edge per arm",
+                "trail": null,
+                "at": "graph/topology.rs:148",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "b23",
+            "label": "compile → who owns which node",
+            "trail": null,
+            "at": "compiler.rs:485",
+            "loc": null,
+            "sym": "owned_by",
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "b19",
+                "label": "compute_dominators over the topological order",
+                "trail": null,
+                "at": "compiler.rs:245",
+                "loc": null,
+                "sym": null,
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b20",
+                "label": "a target claims every node it DOMINATES",
+                "trail": null,
+                "at": "compiler.rs:482",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "so a node reachable from two arms is dominated by neither and stays",
+                  "outside — it runs once, after the branch, instead of twice inside it"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b21",
+                "label": "BodyTerminal → WhenSignaled(the body's single terminal)",
+                "trail": null,
+                "at": "compiler.rs:414",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "more than one terminal is an error asking you to name the node"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              },
+              {
+                "id": "b22",
+                "label": "ExecutionPlan::Loop { body, max_iterations, until, carry_from }",
+                "trail": null,
+                "at": "plan.rs:49",
+                "loc": null,
+                "sym": null,
+                "note": [
+                  "carry_from is SEPARATE from until: what a loop carries is not what stops it"
+                ],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": []
+              }
+            ]
+          },
+          "tail": []
+        },
+        {
+          "root": {
+            "id": "b28",
+            "label": "execute → the control-flow arms",
+            "trail": null,
+            "at": "executor.rs:348",
+            "loc": null,
+            "sym": null,
+            "note": [],
+            "mark": null,
+            "ref": null,
+            "debt": null,
+            "dyn": null,
+            "children": [
+              {
+                "id": "b25",
+                "label": "execute_loop(node_id, body, max_iterations, until, carry_from)",
+                "trail": null,
+                "at": "executor.rs:416",
+                "loc": null,
+                "sym": "execute_loop",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "b24",
+                    "label": "carry_from → each pass hands that node's output to the next",
+                    "trail": null,
+                    "at": "executor.rs:446",
+                    "loc": null,
+                    "sym": null,
+                    "note": [],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": "b27",
+                "label": "execute_branch(...)",
+                "trail": null,
+                "at": "executor.rs:487",
+                "loc": null,
+                "sym": "execute_branch",
+                "note": [],
+                "mark": null,
+                "ref": null,
+                "debt": null,
+                "dyn": null,
+                "children": [
+                  {
+                    "id": "b26",
+                    "label": "the arm receives the branch's INPUT, not the label",
+                    "trail": null,
+                    "at": "executor.rs:552",
+                    "loc": null,
+                    "sym": null,
+                    "note": [
+                      "the selector is control, not data. Leaving the label there would hand",
+                      "the chosen agent the string \"billing\" instead of the question"
+                    ],
+                    "mark": null,
+                    "ref": null,
+                    "debt": null,
+                    "dyn": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "tail": [
+            {
+              "label": "a Remote node nested in either is claimed too — resolve_distribution descends",
+              "at": "compiler.rs:727"
+            }
+          ]
         }
       ]
     }

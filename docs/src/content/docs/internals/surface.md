@@ -86,17 +86,17 @@ on the public module and carry its maintenance cost while serving one caller:
 
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
-| `Graph` | `soma-python/python/soma/__init__.py` |  | 340 | 71 | 324 | 32 | 121 |
-| `Agent` | `soma-python/python/soma/__init__.py` |  | 47 | 17 | 49 | 5 | 11 |
+| `Graph` | `soma-python/python/soma/__init__.py` |  | 340 | 71 | 325 | 32 | 121 |
+| `Agent` | `soma-python/python/soma/__init__.py` |  | 47 | 17 | 51 | 5 | 11 |
 | `SomaSuspended` | `soma-python/python/soma/__init__.py` |  | 5 | 3 | 7 | 0 | 4 |
 | `SomaPruned` | `soma-python/python/soma/__init__.py` |  | 0 | 0 | 1 | 0 | 3 |
 | `SomaSchemaMismatch` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 3 | 0 | 3 |
 | `SomaNodeNotFound` | `soma-python/python/soma/__init__.py` |  | 0 | 0 | 1 | 0 | 3 |
-| `Judge` | `soma-python/python/soma/__init__.py` |  | 12 | 4 | 15 | 1 | 8 |
+| `Judge` | `soma-python/python/soma/__init__.py` |  | 12 | 4 | 17 | 1 | 8 |
 | `agentic` | `soma-python/python/soma/__init__.py` |  | 41 | 19 | 289 | 4 | 24 |
 | `library` | `soma-python/python/soma/__init__.py` |  | 5 | 2 | 38 | 0 | 10 |
 | `Tool` | `soma-python/python/soma/__init__.py` |  | 1 | 0 | 34 | 0 | 11 |
-| `tool` | `soma-python/python/soma/__init__.py` |  | 32 | 9 | 65 | 9 | 16 |
+| `tool` | `soma-python/python/soma/__init__.py` |  | 32 | 9 | 67 | 9 | 16 |
 | `providers` | `soma-python/python/soma/__init__.py` |  | 17 | 7 | 15 | 0 | 9 |
 | `models` | `soma-python/python/soma/__init__.py` |  | 1 | 4 | 20 | 2 | 6 |
 | `Run` | `soma-python/python/soma/__init__.py` |  | 6 | 0 | 43 | 7 | 14 |
@@ -104,7 +104,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `Study` | `soma-python/python/soma/__init__.py` |  | 85 | 20 | 102 | 1 | 29 |
 | `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 41 | 0 | 12 |
 | `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 52 | 4 | 7 |
-| `Filter` | `soma-python/python/soma/__init__.py` |  | 111 | 49 | 146 | 20 | 32 |
+| `Filter` | `soma-python/python/soma/__init__.py` |  | 111 | 49 | 148 | 20 | 32 |
 | `DifferentiableFilter` | `soma-python/python/soma/__init__.py` |  | 39 | 8 | 23 | 7 | 19 |
 | `search` | `soma-python/python/soma/__init__.py` |  | 45 | 19 | 152 | 2 | 47 |
 | `experiments` | `soma-python/python/soma/__init__.py` |  | 25 | 7 | 43 | 4 | 20 |
@@ -116,7 +116,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `record_conclusion` | `soma-python/python/soma/__init__.py` |  | 2 | 1 | 9 | 1 | 4 |
 | `lineage` | `soma-python/python/soma/__init__.py` |  | 4 | 7 | 26 | 9 | 4 |
 | `diff` | `soma-python/python/soma/__init__.py` |  | 9 | 1 | 19 | 5 | 9 |
-| `runs` | `soma-python/python/soma/__init__.py` |  | 74 | 37 | 158 | 13 | 53 |
+| `runs` | `soma-python/python/soma/__init__.py` |  | 74 | 37 | 166 | 13 | 53 |
 | `RunView` | `soma-python/python/soma/__init__.py` |  | 25 | 14 | 23 | 9 | 20 |
 | `experiments_dataframe` | `soma-python/python/soma/__init__.py` |  | 2 | 1 | 3 | 2 | 5 |
 | `__version__` | `soma-python/python/soma/__init__.py` |  | 1 | 3 | 0 | 0 | 5 |
@@ -151,7 +151,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `Llm` | `soma-python/python/soma/agentic.py` |  | 2 | 0 | 13 | 0 | 2 |
 | `ToolCall` | `soma-python/python/soma/agentic.py` |  | 0 | 0 | 4 | 0 | 2 |
 | `react` | `soma-python/python/soma/agentic.py` |  | 7 | 0 | 5 | 0 | 4 |
-| `route` | `soma-python/python/soma/agentic.py` |  | 10 | 1 | 8 | 0 | 4 |
+| `route` | `soma-python/python/soma/agentic.py` |  | 10 | 1 | 10 | 0 | 4 |
 | `refine` | `soma-python/python/soma/agentic.py` |  | 19 | 16 | 20 | 0 | 9 |
 | `debate` | `soma-python/python/soma/agentic.py` |  | 7 | 23 | 17 | 1 | 14 |
 | `board` | `soma-python/python/soma/agentic.py` |  | 13 | 13 | 9 | 2 | 14 |
@@ -202,12 +202,12 @@ on the public module and carry its maintenance cost while serving one caller:
 | Symbol | Defined at | Notes | tests | nb | docs | ex | pkg |
 |---|---|---|---|---|---|---|---|
 | `new` | `soma-python/src/graph/mod.rs:101` | new | 0 | 0 | 1 | 0 | 0 |
-| `node` | `soma-python/src/graph/mod.rs:154` |  | 308 | 50 | 36 | 28 | 19 |
+| `node` | `soma-python/src/graph/mod.rs:154` |  | 308 | 50 | 43 | 28 | 19 |
 | `edge` | `soma-python/src/graph/mod.rs:164` |  | 89 | 17 | 7 | 0 | 17 |
 | `edges` | `soma-python/src/graph/mod.rs:173` |  | 4 | 0 | 2 | 5 | 4 |
 | `handoff` | `soma-python/src/graph/mod.rs:191` |  | 1 | 0 | 6 | 0 | 0 |
-| `branch` | `soma-python/src/graph/mod.rs:212` |  | 4 | 0 | 2 | 0 | 3 |
-| `loop` | `soma-python/src/graph/mod.rs:249` |  | 5 | 2 | 3 | 0 | 5 |
+| `branch` | `soma-python/src/graph/mod.rs:212` |  | 4 | 0 | 4 | 0 | 3 |
+| `loop` | `soma-python/src/graph/mod.rs:249` |  | 5 | 2 | 5 | 0 | 5 |
 | `optional` | `soma-python/src/graph/mod.rs:272` |  | 8 | 1 | 3 | 0 | 0 |
 | `optional_edges` | `soma-python/src/graph/mod.rs:277` |  | 1 | 0 | 0 | 0 | 1 |
 | `set_edge` | `soma-python/src/graph/mod.rs:286` |  | 1 | 0 | 0 | 0 | 1 |
@@ -409,4 +409,4 @@ on the public module and carry its maintenance cost while serving one caller:
 | `run_summary_json` | `soma-python/src/lib.rs` |  | 1 | 0 | 1 | 0 | 1 |
 | `run_to_mermaid` | `soma-python/src/lib.rs` |  | 0 | 0 | 6 | 0 | 3 |
 | `run_to_svg` | `soma-python/src/lib.rs` |  | 0 | 0 | 3 | 0 | 2 |
-| `tool` | `soma-python/src/lib.rs` |  | 32 | 9 | 65 | 9 | 16 |
+| `tool` | `soma-python/src/lib.rs` |  | 32 | 9 | 67 | 9 | 16 |

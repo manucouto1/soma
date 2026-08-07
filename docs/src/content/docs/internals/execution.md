@@ -1041,6 +1041,59 @@ every arm reaches a worker through one call                       distributed.rs
       install_python_filters → resolve_plan_input → run_in_mode → finish
 ```
 
+### (l) Building a graph, and the control flow the compiler resolves
+
+```
+g.node(obj) | g.node(id, obj)                               graph/topology.rs:68
+├─ 1 arg → id from the class name, snake_cased              graph/topology.rs:81
+├─ free_id(g, wanted) — never silently overwrite            graph/topology.rs:16
+├─ register_behaviour(g, py, id, obj)                       graph/registry.rs:116
+│     ONE way to add a node. An Agent or a Judge is a node too — it just
+│     runs a turn loop instead of a function
+│  ├─ duck-types a step first: poll(ctx) → Behaviour::Step  graph/registry.rs:122
+│  ├─ its tools go on the GRAPH, not the node               graph/registry.rs:126
+│  │     one agent may declare a tool and another list the same one;
+│  │     both must reach the same implementation
+│  └─ otherwise PyFilterBridge::new → Behaviour::Filter     graph/registry.rs:135
+│     └─ _input_schema / _output_schema parsed once, here   bridge.rs:218
+│           a typo fails at registration; an impossible edge at compile
+└─ graph.add_node(behaviour.node(id))                       graph/topology.rs:103
+
+g.loop(id, body, until=…) / g.branch(id, cond, arms)       graph/topology.rs:155
+├─ loop: body may be one entry or several                  graph/topology.rs:167
+├─ until=None → BodyTerminal (resolved by the compiler)    graph/topology.rs:179
+├─ until=True is refused                                   graph/topology.rs:183
+│     it would mean "stop before it runs", which nobody writes on purpose.
+│     False means Exhaust: run the full count
+├─ until="node" that does not exist → an error naming it   graph/topology.rs:195
+├─ each body entry gets a CONTROL edge from the loop node  graph/topology.rs:210
+│     control, not data: it is how the compiler learns what the loop owns
+├─ branch: no arms → refused                               graph/topology.rs:121
+│     a router with nowhere to route is just a node
+├─ the branch node IS the condition                        graph/topology.rs:131
+│     the executor runs it and reads the arm label from its output
+└─ one labelled control edge per arm                       graph/topology.rs:148
+
+compile → who owns which node                                     compiler.rs:485
+├─ compute_dominators over the topological order                  compiler.rs:245
+├─ a target claims every node it DOMINATES                        compiler.rs:482
+│     so a node reachable from two arms is dominated by neither and stays
+│     outside — it runs once, after the branch, instead of twice inside it
+├─ BodyTerminal → WhenSignaled(the body's single terminal)        compiler.rs:414
+│     more than one terminal is an error asking you to name the node
+└─ ExecutionPlan::Loop { body, max_iterations, until, carry_from }  plan.rs:49
+      carry_from is SEPARATE from until: what a loop carries is not what stops it
+
+execute → the control-flow arms                                   executor.rs:348
+├─ execute_loop(node_id, body, max_iterations, until, carry_from) executor.rs:416
+│  └─ carry_from → each pass hands that node's output to the next executor.rs:446
+└─ execute_branch(...)                                            executor.rs:487
+   └─ the arm receives the branch's INPUT, not the label          executor.rs:552
+         the selector is control, not data. Leaving the label there would hand
+         the chosen agent the string "billing" instead of the question
+a Remote node nested in either is claimed too — resolve_distribution descends  compiler.rs:727
+```
+
 <!-- traces:end -->
 
 ### Ownership spine

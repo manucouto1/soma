@@ -43,16 +43,20 @@ instead.
 
 Execution traces are written down, by hand, in
 [Execution](/soma/internals/execution/#execution-traces). A row links one when
-it has one. **A dash means no trace has been written for that capability yet** —
-not that it has no path. The gap is left visible on purpose: **2 of the 15**
-rows below are untraced, and a plausible-looking trace nobody walked would be
-worse than an honest hole.
+it has one, and **0 of the 15** rows below are untraced.
 
-That count is checked, not typed. It said "eight of the fifteen" for exactly
-as long as it took to write one more trace, on a page whose whole argument is
-that hand-typed cross-references rot — so `gen-capabilities.mjs` now fails if
-this sentence and the table disagree. It has been right through six edits
-since.
+**A dash would mean no trace has been written yet** — not that a capability has
+no path. That distinction mattered while the count came down from eight, because
+a plausible-looking trace nobody walked would be worse than an honest hole.
+Every hop in every trace was read back out of the source beside its label before
+it landed; that check caught twenty-eight hops citing the wrong line, four of
+them pointing at a closing brace or a blank line.
+
+The count is checked, not typed. It said "eight of the fifteen" for exactly as
+long as it took to write one more trace, on a page whose whole argument is that
+hand-typed cross-references rot — so `gen-capabilities.mjs` fails if this
+sentence and the table disagree. It stayed honest through seven edits, which is
+seven more than the sentence it replaced managed.
 
 ## The capabilities
 
@@ -69,7 +73,7 @@ Nodes, edges, and the two shapes that are not edges — a loop and a branch. Add
 | | |
 |---|---|
 | **Entry** | `Graph.node` · `Graph.edge` · `Graph.branch` · `Graph.loop` · `Graph.handoff` |
-| **Trace** | — |
+| **Trace** | [(l)](/soma/internals/execution/#l-building-a-graph-and-the-control-flow-the-compiler-resolves) |
 | **Hops** | `soma-python/src/graph/topology.rs:68` → `soma-python/src/graph/registry.rs:116` → `soma-python/src/graph/topology.rs:56` |
 | **Types** | `Graph` · `Node` · `Edge` · `NodeKind` · `LoopCondition` |
 | **Debt** | [D-56](/soma/internals/debt/#d-56--nodeid-is-a-string-and-so-is-everything-else) |
@@ -134,7 +138,7 @@ The compiler claims a loop body and a branch arm by dominance, so each is compil
 | | |
 |---|---|
 | **Entry** | `Graph.loop` · `Graph.branch` · `Graph.handoff` · `Goto` |
-| **Trace** | — |
+| **Trace** | [(l)](/soma/internals/execution/#l-building-a-graph-and-the-control-flow-the-compiler-resolves) |
 | **Hops** | `soma-compiler/src/compiler.rs:727` → `soma-compiler/src/plan.rs:204` → `soma-runtime/src/execution/executor.rs:416` → `soma-runtime/src/execution/executor.rs:487` |
 | **Types** | `LoopCondition` · `ExecutionPlan` · `Transition` · `NodeOutcome` |
 | **Debt** | [D-42](/soma/internals/debt/#d-42--executionplanremote-discards-its-routing-target) |
