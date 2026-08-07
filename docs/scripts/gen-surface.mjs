@@ -51,6 +51,29 @@ const CORPUS = [
 	['pkg', 'soma-python/python/soma', /\.pyi?$/],
 ];
 const USER_CORPORA = 4; // the first four; `pkg` is context, not use
+
+// A missing corpus root is an ENVIRONMENT difference, not an empty corpus.
+// `examples/` is a git submodule: a checkout without `submodules: true` sees
+// an empty directory, every `ex` count silently becomes 0, and the only
+// symptom is this file reporting itself stale in CI while it is current on
+// the machine that wrote it. Counting zero there is the wrong answer; saying
+// so is the right one.
+function requireCorpusRoots() {
+	const missing = CORPUS.filter(([, root]) => {
+		const dir = join(REPO, root);
+		return !existsSync(dir) || readdirSync(dir).length === 0;
+	});
+	if (missing.length === 0) return;
+	console.error(
+		'gen-surface: these corpus roots are missing or empty, so the counts ' +
+			'would be wrong:\n' +
+			missing.map(([col, root]) => `  ${root}  (the "${col}" column)`).join('\n') +
+			'\n\n`examples/` is a git submodule — run:\n\n' +
+			'    git submodule update --init\n\n' +
+			'or, in CI, check out with `submodules: true`.',
+	);
+	process.exit(1);
+}
 const CORPUS_SKIP = /(?:^|\/)(?:tutorials|node_modules|__pycache__|\.ipynb_checkpoints)(?:\/|$)/;
 
 const read = (p) => readFileSync(join(REPO, p), 'utf8');
@@ -64,6 +87,8 @@ function walk(dir) {
 }
 
 // ── The corpus, read once ────────────────────────────────────────────────────
+requireCorpusRoots();
+
 const corpus = CORPUS.map(([label, dir, ext]) => ({
 	label,
 	texts: walk(join(REPO, dir))

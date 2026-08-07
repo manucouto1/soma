@@ -305,7 +305,7 @@ fails the build rather than quietly misleading a reader.
 | [`PyStepCtx`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:506` |
 | [`PyStudy`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/optimizer/study.rs:173` |
 | [`PythonPipelineJob`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/protocol.rs:451` |
-| [`PythonProcess`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/python_process.rs:538` |
+| [`PythonProcess`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/python_process.rs:560` |
 | [`PyTool`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/agentic.rs:47` |
 | [`PyTrial`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/optimizer/study.rs:112` |
 | [`PyWorker`](/soma/internals/python/) | struct · pyclass | `soma-python` | `soma-python/src/distributed.rs:54` |
@@ -387,7 +387,7 @@ fails the build rather than quietly misleading a reader.
 | [`Study`](/soma/internals/foundation/#soma-core-somatize-core) | struct | `soma-core` | `soma-core/src/optimizer/study.rs:291` |
 | [`StudyIo`](/soma/internals/execution/#soma-runtime-somatize-runtime) | «trait» | `soma-runtime` | `soma-runtime/src/optimizer/study_io.rs:19` |
 | [`StudyRunner`](/soma/internals/execution/#soma-runtime-somatize-runtime) | struct | `soma-runtime` | `soma-runtime/src/optimizer/study.rs:160` |
-| [`SubprocessFilter`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/python_process.rs:982` |
+| [`SubprocessFilter`](/soma/internals/distribution/#soma-worker-somatize-worker) | struct | `soma-worker` | `soma-worker/src/python_process.rs:1004` |
 | [`SuspendReason`](/soma/internals/foundation/#soma-core-somatize-core) | enum | `soma-core` | `soma-core/src/agentic/effect.rs:507` |
 
 ### T
