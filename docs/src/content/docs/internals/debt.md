@@ -124,9 +124,11 @@ wrapping.
 
 **Consequence** Nine reasons to change one function. The two silent-degradation
 bugs below ([D-24](#d-24--venv-provisioning-fails-into-the-system-interpreter),
-[D-25](#d-25--state-load-failure-silently-restarts-from-random-init)) both live
-inside it, which is not a coincidence — a 324-line function is where a `warn!`
-and a fallback look reasonable.
+[D-25](#d-25--state-load-failure-silently-restarts-from-random-init), the
+latter since resolved) both live inside it, which is not a coincidence — a
+324-line function is where a `warn!` and a fallback look reasonable. Closing
+D-25 is the evidence: three of its four sites were invisible until the compiler
+was made to point at them.
 
 **Fix shape** The stages are already sequential and independent. Extract each to
 a named private function taking and returning explicit state; the function body
@@ -514,6 +516,30 @@ initialization. Nothing in the returned metrics distinguishes this from a
 genuinely bad run.
 
 **Fix shape** Fail. A resume that cannot resume is not a resume.
+
+**Resolved** The `warn!` was one of **four** sites, not one — restoring a state
+has two halves (the Python process that holds the weights, the catalog the
+executor reads) and two entry points (a plan, a stream), and three of the four
+combinations logged and carried on:
+
+| Site | Was |
+|---|---|
+| `worker.rs` · `proc.set_state` | `warn!`, continue |
+| `worker.rs` · `catalog.try_set_state` | `error!`, continue |
+| `worker.rs` · `set_filter_state` | `error!`, continue — returned `()` |
+| `server.rs` · stream begin | called the above, so the result did not exist |
+
+`Worker::set_filter_state` returns `Result<()>` now, which is what made the
+other three reachable by the compiler rather than by reading. The two
+`execute_plan` sites return `PlanResult::Failed` through one
+`state_restore_failed` helper that says which half refused and what continuing
+would have cost; `write_states` (the DataParallel path that loads averaged
+weights back) propagates; the stream fails with `StreamComplete`.
+
+Covered by `a_state_that_cannot_be_restored_fails_the_plan`
+(`soma-worker/tests/e2e_worker.rs`), which sends a `Value::Tensor` state —
+refused by `set_state` before anything reaches Python, so the test cannot pass
+because a filter tolerated a bad state.
 
 ### D-26 · `JudgeStep` scores an unparseable reply as 0.0
 

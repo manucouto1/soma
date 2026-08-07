@@ -103,7 +103,7 @@ on the public module and carry its maintenance cost while serving one caller:
 | `Pbt` | `soma-python/python/soma/__init__.py` |  | 10 | 0 | 7 | 0 | 5 |
 | `Study` | `soma-python/python/soma/__init__.py` |  | 85 | 20 | 102 | 1 | 29 |
 | `Trial` | `soma-python/python/soma/__init__.py` |  | 5 | 1 | 41 | 0 | 12 |
-| `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 60 | 4 | 7 |
+| `Worker` | `soma-python/python/soma/__init__.py` |  | 17 | 0 | 61 | 4 | 7 |
 | `Filter` | `soma-python/python/soma/__init__.py` |  | 111 | 49 | 144 | 20 | 32 |
 | `DifferentiableFilter` | `soma-python/python/soma/__init__.py` |  | 39 | 8 | 23 | 7 | 19 |
 | `search` | `soma-python/python/soma/__init__.py` |  | 45 | 19 | 152 | 2 | 47 |

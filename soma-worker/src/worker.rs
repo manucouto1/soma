@@ -191,7 +191,7 @@ impl Worker {
                 })?;
                 guard.set_state(node_id, state)?;
             }
-            self.set_filter_state(node_id, state.clone());
+            self.set_filter_state(node_id, state.clone())?;
         }
         Ok(())
     }
@@ -230,10 +230,13 @@ impl Worker {
     }
 
     /// Set trained state for a filter.
-    pub fn set_filter_state(&mut self, node_id: &str, state: Value) {
-        if let Err(e) = self.catalog.try_set_state(node_id, state) {
-            tracing::error!(node_id, "storing filter state failed: {e}");
-        }
+    pub fn set_filter_state(&mut self, node_id: &str, state: Value) -> Result<()> {
+        self.catalog.try_set_state(node_id, state).map_err(|e| {
+            WorkerError::Env(format!(
+                "could not store the trained state for `{node_id}`: {e}. \
+                 Refusing to continue: the node would run from random weights."
+            ))
+        })
     }
 
     /// Wrap output in the right delivery: inline for small, DataRef for large.
@@ -384,10 +387,11 @@ impl Worker {
                         "Loading trained state from previous epoch"
                     );
                     if let Err(e) = proc.set_state(&sf.node_id, state) {
-                        tracing::warn!(
-                            node_id = %sf.node_id,
-                            error = %e,
-                            "Failed to load state (will use fresh weights)"
+                        return state_restore_failed(
+                            &sf.node_id,
+                            "the Python process that owns the weights",
+                            &e,
+                            start,
                         );
                     }
                 }
@@ -412,7 +416,12 @@ impl Worker {
                 if let Some(state) = &sf.state
                     && let Err(e) = self.catalog.try_set_state(&sf.node_id, state.clone())
                 {
-                    tracing::error!(node_id = %sf.node_id, "storing filter state failed: {e}");
+                    return state_restore_failed(
+                        &sf.node_id,
+                        "the catalog the executor reads",
+                        &e,
+                        start,
+                    );
                 }
             }
 
@@ -704,6 +713,37 @@ impl Worker {
                 self.capabilities.tags.contains(tag)
             }
         }
+    }
+}
+
+/// A resume that cannot resume is not a resume.
+///
+/// Restoring a trained state has two halves — the Python process that holds
+/// the weights, and the catalog the executor reads — and both used to log
+/// the failure and carry on. Carrying on restarts the epoch from random
+/// initialization, and *nothing in the returned metrics distinguishes that
+/// from a genuinely bad run*: the loss curve is simply worse, which is
+/// indistinguishable from a bad hyperparameter. The state only exists
+/// because a previous epoch produced it, so failing to apply it means the
+/// plan cannot do the thing it was sent to do.
+///
+/// The `target` names which half refused, because the two fail for
+/// different reasons: the process rejects a state it cannot decode, the
+/// catalog rejects one it cannot store.
+fn state_restore_failed(
+    node_id: &str,
+    target: &str,
+    error: &dyn std::fmt::Display,
+    start: Instant,
+) -> PlanResult {
+    let error = format!(
+        "could not restore the trained state for `{node_id}` into {target}: {error}. \
+         Refusing to run: continuing would silently retrain from random weights."
+    );
+    tracing::error!(node_id = %node_id, "{error}");
+    PlanResult::Failed {
+        error,
+        duration_ms: start.elapsed().as_millis() as u64,
     }
 }
 
@@ -1100,7 +1140,9 @@ mod tests {
 
         let mut worker = make_worker().with_data_store(store);
         worker.register_filter("centre", Box::new(Centre));
-        worker.set_filter_state("centre", Value::tensor(vec![mean], vec![1]));
+        worker
+            .set_filter_state("centre", Value::tensor(vec![mean], vec![1]))
+            .unwrap();
 
         let mut plan = SerializedPlan::new(
             "p_stateful_stream",

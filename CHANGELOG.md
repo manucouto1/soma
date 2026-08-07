@@ -24,6 +24,10 @@ Naming that type is what exposed the first fix below: with the two halves
 distinguishable, the differentiable path was visibly storing one node's
 *output* where another node's *state* belonged.
 
+**`Worker::set_filter_state` returns `Result<()>`.** It returned `()` and
+logged its failure, which is how three of the four sites in the fix below
+stayed invisible.
+
 ### Fixed
 
 **`fit` stored one node's output as another node's state.** Trained state
@@ -42,6 +46,13 @@ execution inside a loop, it never happened.
 
 **`forward` dispatched on a method name and had three shapes.** Which of
 the three you got depended on how the node was defined.
+
+**A worker that could not restore a trained state ran anyway, from random
+weights.** A resumed epoch silently became a cold one, and nothing in the
+returned metrics distinguished that from a genuinely bad run — the loss
+curve was simply worse, which looks like a bad hyperparameter. Four sites:
+the Python process and the catalog, each reachable from a plan and from a
+stream. All four fail now.
 
 ### Changed
 

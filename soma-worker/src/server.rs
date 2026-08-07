@@ -603,8 +603,20 @@ fn handle_stream_message(msg: StreamMessage, state: &Arc<ServerState>) -> Option
                             config_hash,
                         ));
                     worker.register_filter(&sf.node_id, filter);
-                    if let Some(s) = &sf.state {
-                        worker.set_filter_state(&sf.node_id, s.clone());
+                    // A stream that cannot restore the state it was sent is
+                    // the same failure as a plan that cannot (D-25): it would
+                    // run from random weights and report chunks that look
+                    // exactly like a correct run's.
+                    if let Some(s) = &sf.state
+                        && let Err(e) = worker.set_filter_state(&sf.node_id, s.clone())
+                    {
+                        return Some(StreamMessage::StreamComplete {
+                            stream_id,
+                            result: PlanResult::Failed {
+                                error: e.to_string(),
+                                duration_ms: 0,
+                            },
+                        });
                     }
                 }
             }
