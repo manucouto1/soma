@@ -1,0 +1,11 @@
+[package]
+name = "soma-next-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[[test]]
+name = "unit"
+path = "tests/unit/main.rs"

@@ -1,0 +1,13 @@
+[package]
+name = "soma-next-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "_soma_next"
+crate-type = ["cdylib"]
+
+[dependencies]
+soma-next-core.workspace = true
+pyo3 = { version = "0.24", features = ["extension-module"] }
