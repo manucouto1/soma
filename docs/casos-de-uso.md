@@ -14,7 +14,7 @@ g.node("limpiar", Limpiar())
 g.edge("limpiar", "vectorizar")
 ```
 
-Estado: **esqueleto**. `Graph()` existe y cruza la costura; nada más.
+Estado: **cerrado**. 16 tests en Rust, 13 en Python.
 
 ### La decisión de diseño previa
 
@@ -32,30 +32,57 @@ de errores reales: `soma-core/src/graph/node.rs` (172 líneas) y sus tests
 ### Cuestionario (de `soma-core/tests/unit/graph*.rs`)
 
 **Construcción**
-- [ ] un grafo vacío es válido
-- [ ] un grafo de un solo nodo es válido
-- [ ] se puede añadir un nodo con id explícito
-- [ ] se puede añadir un nodo sin id y el sistema le pone uno
-- [ ] añadir dos veces lo mismo no duplica *(¿bajo qué criterio de identidad?)*
-- [ ] una tubería lineal tiene la estructura que dice tener
+- [x] un grafo vacío es válido
+- [x] un grafo de un solo nodo es válido
+- [x] se puede añadir un nodo con id explícito
+- [x] se puede añadir un nodo sin id y el sistema le pone uno (snake_case de la clase)
+- [x] añadir dos veces lo mismo no duplica — **decidido**: identidad = id, y el id
+      derivado sufija `_2`, `_3`. Dos filtros idénticos son dos nodos; deduplicar por
+      contenido es una decisión de caché, no de topología, y ese caso de uso no existe
+- [x] una tubería lineal tiene la estructura que dice tener
 
 **Consultas de topología**
-- [ ] raíces y hojas
-- [ ] predecesores y sucesores de un nodo
-- [ ] orden topológico de una cadena lineal
-- [ ] orden topológico con ramas paralelas
-- [ ] un ciclo se detecta y es un error, no un cuelgue
+- [x] raíces y hojas
+- [x] predecesores y sucesores de un nodo
+- [x] orden topológico de una cadena lineal
+- [x] orden topológico con ramas paralelas
+- [x] un ciclo es un error — **decidido**: al poner la arista, no al recorrer
 
-**Validación** — la pregunta de diseño real es *cuándo*: ¿`validate()` explícito
-como en el original, o typestate que impida construir el grafo inválido?
-- [ ] ids duplicados se rechazan
-- [ ] una arista a un nodo inexistente se rechaza
+**Validación** — **decidido**: no hay `validate()`. Los constructores devuelven
+`Result` y el invariante se sostiene en todo momento, así que un `Graph` inválido no
+es un valor que exista. Lo que compra: `topological_sort()` no devuelve `Result`,
+porque no puede fallar.
+- [x] ids duplicados se rechazan, en `add_node`
+- [x] una arista a un nodo inexistente se rechaza, en `add_edge`
 
 **Diferido a casos de uso posteriores** — está en los mismos ficheros de test,
 no lo arrastres a CU1: serialización (`graph_serde_roundtrip`), render
 (`to_mermaid*`, `to_text`, overlays), nodos de control (`loop_and_branch_nodes`,
 `subgraph_node`, todo `graph_control.rs`), y el contrato de `Filter`/`Step`
 (`graph_filter.rs`, `graph_step.rs`).
+
+### Decisiones tomadas en CU1
+
+1. **El `Graph` del núcleo es solo topología.** Ids y aristas. Qué hace un nodo no
+   es asunto suyo, porque crear un grafo no necesita saberlo. El mapa
+   id → objeto Python vive en `python/`. Por eso `core` no depende de nada.
+2. **Errores en la inserción, no en un `validate()`.** No hay instante en el que el
+   grafo esté mal formado.
+3. **DAG por construcción.** El ciclo se rechaza en `add_edge`. *Riesgo asumido*: si
+   un caso de uso futuro necesitara aristas de vuelta, habría que revisarlo — en el
+   original los bucles son nodos, no aristas hacia atrás, así que la apuesta es que
+   no hace falta.
+4. **`NodeId` es un tipo, no un `String`.** Hay más ids por venir.
+5. **O(n) donde podría ser O(1).** La adyacencia se calcula al vuelo. El código se lee
+   de un vistazo y ningún caso de uso ha pedido otra cosa.
+
+### Lo que NO entró, y por qué
+
+`target=` en `node()`. Lo escribí como azúcar para crear la arista en el mismo paso,
+y al comprobarlo contra el original resultó que allí `target` **no es una arista**:
+es el objetivo de supervisión que lee el `step()` del optimizador. Reutilizar el
+nombre con otro significado es justo el tipo de cosa que hace un sistema
+incomprensible, así que fuera: no es CU1 y no tiene consumidor hoy.
 
 ---
 
