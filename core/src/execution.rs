@@ -7,20 +7,24 @@
 //! su entrada, y aquí solo se busca en lo ya producido. Un plan es una
 //! estructura decidida, no un grafo que haya que interpretar.
 //!
+//! Todos los nodos se avanzan igual: se les pregunta, y si piden algo se les
+//! atiende y se les vuelve a preguntar. Un nodo que termina a la primera —lo
+//! que en otros sitios se llama un filtro— pasa por el bucle una sola vez, así
+//! que no hace falta un camino aparte para él.
+//!
 //! Cuando a un nodo le llega **una** cosa, recibe esa cosa. Cuando le llegan
 //! varias, recibe un [`Value::Map`] con la clave del nodo que produjo cada
 //! una: fan-in no es una variante del plan ni un tipo de nodo, es la forma que
 //! toma una entrada con varios orígenes. Agregarlas —promediar, votar,
 //! concatenar— es trabajo del nodo que las recibe, o sea biblioteca.
 
-use crate::{Catalog, Driver, DriverError, FilterError, NodeImpl, Plan, StepCtx, StepError};
-use crate::{NodeId, Transition, Value};
+use crate::{Catalog, Ctx, Driver, DriverError, NodeError, NodeId, Plan, Transition, Value};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Cuántas veces se le pregunta a un step antes de darlo por colgado.
+/// Cuántas veces se le pregunta a un nodo antes de darlo por colgado.
 ///
-/// Un step que no termina es un bug del step, no una espera legítima: quien
+/// Un nodo que no termina es un bug del nodo, no una espera legítima: quien
 /// espera de verdad pide algo y el driver tarda. El tope existe para que ese
 /// bug se note como un error con nombre en vez de como un proceso parado.
 const MAX_TURNS: usize = 64;
@@ -95,13 +99,7 @@ impl<'a> Executor<'a> {
             Plan::Empty => Ok(graph_input.clone()),
             Plan::Execute { node, from } => {
                 let input = gather(from, graph_input, produced);
-                let output = self.run_filter(node, input)?;
-                produced.insert(node.clone(), output.clone());
-                Ok(output)
-            }
-            Plan::Step { node, from } => {
-                let input = gather(from, graph_input, produced);
-                let output = self.drive_step(node, input)?;
+                let output = self.advance(node, input)?;
                 produced.insert(node.clone(), output.clone());
                 Ok(output)
             }
@@ -115,40 +113,27 @@ impl<'a> Executor<'a> {
         }
     }
 
-    /// Una llamada, y ya está.
-    fn run_filter(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
-        let NodeImpl::Filter(filter) = self.implementation(node)? else {
-            return Err(RunError::WrongKind {
-                node: node.clone(),
-                expected: "filtro",
-            });
-        };
-        filter.forward(&input).map_err(|source| RunError::Filter {
-            node: node.clone(),
-            source,
-        })
-    }
-
     /// Preguntar, atender lo que pida, volver a preguntar. Hasta que termine.
-    fn drive_step(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
-        let NodeImpl::Step(step) = self.implementation(node)? else {
-            return Err(RunError::WrongKind {
-                node: node.clone(),
-                expected: "step",
-            });
-        };
-
+    ///
+    /// Un nodo que contesta `Done` a la primera —lo que antes era un filtro—
+    /// recorre este bucle exactamente una vez. No hay dos caminos.
+    fn advance(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
+        let implementation = self.implementation(node)?;
         let mut results: Vec<Value> = Vec::new();
+
         for turn in 0..MAX_TURNS {
-            let ctx = StepCtx {
-                input: &input,
+            let ctx = Ctx {
                 turn,
                 results: &results,
             };
-            match step.poll(&ctx).map_err(|source| RunError::Step {
-                node: node.clone(),
-                source,
-            })? {
+            let transition =
+                implementation
+                    .forward(&input, &ctx)
+                    .map_err(|source| RunError::Node {
+                        node: node.clone(),
+                        source,
+                    })?;
+            match transition {
                 Transition::Done(output) => return Ok(output),
                 Transition::Await(requests) => {
                     let driver = self
@@ -169,8 +154,8 @@ impl<'a> Executor<'a> {
         })
     }
 
-    /// Lo que el catálogo dice que es este nodo.
-    fn implementation(&self, node: &NodeId) -> Result<&NodeImpl, RunError> {
+    /// Lo que el catálogo tiene registrado para este nodo.
+    fn implementation(&self, node: &NodeId) -> Result<&std::sync::Arc<dyn crate::Node>, RunError> {
         self.catalog
             .get(node)
             .ok_or_else(|| RunError::NoImplementation(node.clone()))
@@ -189,38 +174,23 @@ impl<'a> Executor<'a> {
 pub enum RunError {
     /// El plan nombra un nodo que este catálogo no conoce.
     NoImplementation(NodeId),
-    /// El plan dice una cosa y el catálogo tiene otra: se compiló con un
-    /// catálogo y se ejecutó con otro.
-    WrongKind {
-        /// El nodo en discordia.
-        node: NodeId,
-        /// Lo que el plan esperaba encontrar.
-        expected: &'static str,
-    },
-    /// El filtro del nodo falló.
-    Filter {
+    /// El nodo falló.
+    Node {
         /// Dónde pasó.
         node: NodeId,
-        /// Lo que dijo el filtro.
-        source: FilterError,
+        /// Lo que dijo.
+        source: NodeError,
     },
-    /// El step del nodo falló.
-    Step {
-        /// Dónde pasó.
-        node: NodeId,
-        /// Lo que dijo el step.
-        source: StepError,
-    },
-    /// El step pidió algo y no hay quien lo atienda.
+    /// El nodo pidió algo y no hay quien lo atienda.
     NoDriver(NodeId),
-    /// El driver no pudo atender lo que el step pidió.
+    /// El driver no pudo atender lo que el nodo pidió.
     Driver {
-        /// De qué step venía la petición.
+        /// De qué nodo venía la petición.
         node: NodeId,
         /// Lo que dijo el driver.
         source: DriverError,
     },
-    /// El step siguió pidiendo turnos sin terminar nunca.
+    /// El nodo siguió pidiendo turnos sin terminar nunca.
     TurnLimit {
         /// Quién.
         node: NodeId,
@@ -235,12 +205,7 @@ impl fmt::Display for RunError {
             Self::NoImplementation(id) => {
                 write!(f, "el nodo `{id}` no tiene implementación registrada")
             }
-            Self::WrongKind { node, expected } => write!(
-                f,
-                "el plan esperaba que `{node}` fuera un {expected}, y el catálogo dice otra cosa"
-            ),
-            Self::Filter { node, source } => write!(f, "el nodo `{node}` falló: {source}"),
-            Self::Step { node, source } => write!(f, "el step `{node}` falló: {source}"),
+            Self::Node { node, source } => write!(f, "el nodo `{node}` falló: {source}"),
             Self::NoDriver(node) => write!(
                 f,
                 "`{node}` pidió algo y este ejecutor no tiene driver que lo atienda"
@@ -296,7 +261,7 @@ fn terminals(plan: &Plan) -> Vec<NodeId> {
 fn collect(plan: &Plan, produced: &mut Vec<NodeId>, consumed: &mut Vec<NodeId>) {
     match plan {
         Plan::Empty => {}
-        Plan::Execute { node, from } | Plan::Step { node, from } => {
+        Plan::Execute { node, from } => {
             produced.push(node.clone());
             consumed.extend(from.iter().cloned());
         }

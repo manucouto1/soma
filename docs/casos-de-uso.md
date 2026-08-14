@@ -317,10 +317,77 @@ expresión de arriba *es* el diamante.
 6. **El DSL no es otra cosa que `node` y `edge`.** Hay un test que construye el
    mismo grafo de las dos formas y compara nodos, aristas y plan.
 
+## CU6 — Un solo contrato
+
+```rust
+pub trait Node: Send + Sync {
+    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError>;
+}
+```
+
+Estado: **cerrado**. 48 tests en Rust, 61 en Python.
+
+### La pregunta: ¿por qué dos tipos?
+
+La diferencia entre un filtro y un step era una sola cosa: si puede terminar
+solo. Pero **eso ya estaba dicho en `Transition`** — un filtro es un nodo que
+siempre contesta `Done`. Tener dos traits duplicaba en el sistema de tipos una
+distinción que vivía en el retorno, y con ella propagaba hacia arriba la
+obligación de saber cuál era cada nodo: catálogo, plan, motor, errores,
+adaptadores, DSL. **35 sitios.**
+
+Antes de decidir se probaron dos alternativas más, y las dos se descartaron con
+razones concretas:
+
+- **Un trait de azúcar con blanket impl** (`impl<T: Filter> Node for T`).
+  Compilado: `error[E0034]` — con dos traits a la vista el nombre `forward`
+  queda ambiguo *aunque las aridades sean distintas*, porque Rust resuelve el
+  nombre antes que los argumentos. Y `error[E0119]` — un tipo que implementa
+  `Filter` ya no puede implementar `Node` a mano, así que un nodo no podía
+  evolucionar de terminar siempre a pedir un turno sin reescribirse entero.
+- **El estado como continuación** (`Pending { requests, resume }`). Más simple
+  en superficie —se lleva `Ctx` entero— pero rompe el replay determinista: el
+  diario se apoya en que `forward` sea determinista dado `(turn, results)`, y
+  reanudar una continuación exigiría serializar un `Box<dyn Node>`.
+  La variante typestate muere antes: el `Catalog` es un mapa heterogéneo que
+  borra el parámetro de tipo, y no cruza a Python en absoluto.
+
+### Decisiones tomadas
+
+1. **Un trait, un método, `forward` en los dos lenguajes.** Sin el segundo
+   trait no hay ambigüedad de nombres, así que no hace falta llamarlo
+   `advance` en Rust.
+2. **`Pure` es una struct, no un trait.** Azúcar para envolver una función.
+   Cumple nuestra propia regla: si no puedes nombrar dos implementadores, es
+   una struct. Y no reintroduce ninguno de los dos errores de arriba.
+3. **`input` va aparte del contexto.** Un nodo que termina a la primera no mira
+   `ctx` nunca; no tiene por qué atravesar una struct para llegar a lo único
+   que le importa.
+4. **En Python se quedan `Filter` y `Step`, como fachada.** Son las dos
+   convenciones de llamada cómodas —`forward(x)` devuelve un valor,
+   `forward(x, ctx)` devuelve una transición— y la herencia sigue decidiendo
+   cuál se usa. Debajo hay un solo contrato. La separación pasó de ser del
+   sistema a ser de la puerta.
+
+### Lo que desapareció
+
+`trait Step`, `FilterError`, `StepError`, `StepCtx`, `NodeImpl`, `Plan::Step`,
+`RunError::{Filter, Step, WrongKind}`, `insert_filter`/`insert_step`,
+`run_filter`/`drive_step`, y `PyStep` como adaptador aparte.
+
+`RunError` pasa de 7 variantes a 5. `Plan` de 4 a 3. `compile` ya no necesita el
+catálogo para saber de qué tipo es cada nodo — solo para comprobar que lo hay.
+
+### Lo que se ganó, y no estaba en el plan
+
+**Un nodo puede evolucionar.** Empieza devolviendo `Done` siempre, y el día que
+necesite consultar algo se le añade una rama `Await` en el mismo cuerpo, sin
+cambiar de tipo ni de registro. Con dos traits eso era `error[E0119]`. Hay test.
+
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
 
-- CU6 — cachear la salida de un nodo por contenido
-- CU7 — validar tipos entre nodos conectados (schemas)
-- CU8 — control de flujo: rama y bucle
+- CU7 — cachear la salida de un nodo por contenido
+- CU8 — validar tipos entre nodos conectados (schemas)
+- CU9 — control de flujo: rama y bucle

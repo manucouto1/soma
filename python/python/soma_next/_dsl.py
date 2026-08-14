@@ -85,13 +85,18 @@ class Filter(Topology, ABC):
 class Step(Topology, ABC):
     """Algo que avanza por turnos y puede pedir cosas antes de terminar.
 
-    Heredar de aquí es lo que hace que un nodo sea un step, y obliga a escribir
-    `poll`. Devuelve `{"done": valor}` o `{"await": [peticiones]}`.
+    Heredar de aquí es lo que hace que un nodo sea un step. El método se llama
+    igual que en un filtro —`forward`— porque debajo el contrato es el mismo;
+    lo que cambia es que recibe el contexto y devuelve una transición.
     """
 
     @abstractmethod
-    def poll(self, ctx):
-        """Avanza un turno. `ctx` trae `input`, `turn` y `results`."""
+    def forward(self, input, ctx):
+        """Avanza un turno.
+
+        `ctx` trae `turn` y `results`. Devuelve `{"done": valor}` o
+        `{"await": [peticiones]}`.
+        """
 
     def named(self, node_id):
         """El mismo nodo, con el id que digas."""

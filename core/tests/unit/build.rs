@@ -1,7 +1,7 @@
 //! El DSL: declarar el grafo como una expresión.
 
 use crate::dobles::{Inmediato, Media, Sumar};
-use soma_next_core::{Executor, GraphError, Value, compile, filter, step};
+use soma_next_core::{Executor, GraphError, Value, compile, node};
 
 fn numero(v: &Value) -> f64 {
     let Value::Number(x) = v else {
@@ -12,7 +12,7 @@ fn numero(v: &Value) -> f64 {
 
 #[test]
 fn una_cadena() {
-    let (g, c) = (filter("a", Sumar(1.0)) >> filter("b", Sumar(10.0)))
+    let (g, c) = (node("a", Sumar(1.0)) >> node("b", Sumar(10.0)))
         .somatize()
         .unwrap();
 
@@ -27,9 +27,9 @@ fn una_cadena() {
 
 #[test]
 fn un_diamante_se_lee_de_un_vistazo() {
-    let (g, c) = (filter("fuente", Sumar(1.0))
-        >> (filter("izq", Sumar(10.0)) | filter("der", Sumar(100.0)))
-        >> filter("juntar", Media))
+    let (g, c) = (node("fuente", Sumar(1.0))
+        >> (node("izq", Sumar(10.0)) | node("der", Sumar(100.0)))
+        >> node("juntar", Media))
     .somatize()
     .unwrap();
 
@@ -44,8 +44,8 @@ fn un_diamante_se_lee_de_un_vistazo() {
 
 #[test]
 fn las_ramas_pueden_tener_su_propia_longitud() {
-    let (g, _) = (filter("fuente", Sumar(1.0))
-        >> ((filter("izq", Sumar(1.0)) >> filter("izq2", Sumar(1.0))) | filter("der", Sumar(1.0))))
+    let (g, _) = (node("fuente", Sumar(1.0))
+        >> ((node("izq", Sumar(1.0)) >> node("izq2", Sumar(1.0))) | node("der", Sumar(1.0))))
     .somatize()
     .unwrap();
 
@@ -55,8 +55,8 @@ fn las_ramas_pueden_tener_su_propia_longitud() {
 }
 
 #[test]
-fn un_filtro_y_un_step_se_mezclan_en_la_misma_expresion() {
-    let (g, c) = (filter("sumar", Sumar(1.0)) >> step("eco", Inmediato))
+fn un_nodo_que_pide_turnos_y_otro_que_no_se_mezclan_igual() {
+    let (g, c) = (node("sumar", Sumar(1.0)) >> node("eco", Inmediato))
         .somatize()
         .unwrap();
 
@@ -69,7 +69,7 @@ fn un_filtro_y_un_step_se_mezclan_en_la_misma_expresion() {
 
 #[test]
 fn un_id_repetido_se_cuenta_al_materializar() {
-    let err = (filter("a", Sumar(1.0)) >> filter("a", Sumar(1.0)))
+    let err = (node("a", Sumar(1.0)) >> node("a", Sumar(1.0)))
         .somatize()
         .unwrap_err();
     assert_eq!(err, GraphError::DuplicateNode("a".into()));
@@ -77,7 +77,7 @@ fn un_id_repetido_se_cuenta_al_materializar() {
 
 #[test]
 fn el_fallo_sobrevive_a_lo_que_le_pegues_despues() {
-    let roto = filter("a", Sumar(1.0)) >> filter("a", Sumar(1.0));
-    let err = (roto >> filter("b", Sumar(1.0))).somatize().unwrap_err();
+    let roto = node("a", Sumar(1.0)) >> node("a", Sumar(1.0));
+    let err = (roto >> node("b", Sumar(1.0))).somatize().unwrap_err();
     assert_eq!(err, GraphError::DuplicateNode("a".into()));
 }

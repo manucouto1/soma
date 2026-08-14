@@ -1,15 +1,14 @@
 //! La costura con Python. Traduce, no decide.
 //!
-//! La topología vive en `soma_next_core`, que no sabe qué es un filtro. Lo que
-//! este crate añade es lo único que el núcleo no puede tener: el mapa de
-//! id → objeto Python. Si una regla del dominio acaba escrita aquí, está en el
-//! sitio equivocado.
+//! La topología y el contrato viven en `soma_next_core`, que no sabe que hay
+//! Python detrás. Lo que este crate añade es lo único que el núcleo no puede
+//! tener: el mapa de id → objeto Python, y las dos convenciones de llamada. Si
+//! una regla del dominio acaba escrita aquí, está en el sitio equivocado.
 
-mod filter;
-mod step;
+mod node;
 mod value;
 
-use filter::PyFilter;
+use node::{PyDriver, PyFilterNode, PyStepNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
@@ -18,7 +17,6 @@ use soma_next_core::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use step::{PyDriver, PyStep};
 
 /// Traduce el error del núcleo a la excepción que un usuario de Python espera.
 fn to_py_err(e: GraphError) -> PyErr {
@@ -57,18 +55,20 @@ impl PyGraph {
         }
     }
 
-    /// Añade un nodo: `node(filtro)` le pone nombre, `node("id", filtro)` lo
-    /// nombras tú. Devuelve el id, que es lo que necesitas para `edge`.
+    /// Añade un nodo que se llama como `forward(x)` y devuelve un valor.
+    ///
+    /// `node(obj)` le pone nombre, `node("id", obj)` lo nombras tú. Devuelve el
+    /// id, que es lo que necesitas para `edge`.
     #[pyo3(signature = (*args))]
     fn node(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<String> {
         let (id, implementation) = self.name_and_object(args)?;
 
         // Antes de tocar el grafo: un objeto que no puede ser nodo falla aquí,
         // no a mitad de un run.
-        let wrapped = PyFilter::new(&implementation)?;
+        let wrapped = PyFilterNode::new(&implementation)?;
 
         self.graph.add_node(id.clone()).map_err(to_py_err)?;
-        self.catalog.insert_filter(id.clone(), Arc::new(wrapped));
+        self.catalog.insert(id.clone(), Arc::new(wrapped));
         self.implementations
             .insert(id.to_string(), implementation.unbind());
         Ok(id.to_string())
@@ -148,15 +148,15 @@ impl PyGraph {
         self.implementations.get(node_id)
     }
 
-    /// Añade un step: un objeto con `poll(ctx)`, que puede pedir cosas antes
-    /// de terminar. `step(obj)` le pone nombre, `step("id", obj)` lo nombras tú.
+    /// Añade un nodo que se llama como `forward(x, ctx)` y devuelve una
+    /// transición — el que puede pedir cosas antes de terminar.
     #[pyo3(signature = (*args))]
     fn step(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<String> {
         let (id, implementation) = self.name_and_object(args)?;
-        let wrapped = PyStep::new(&implementation)?;
+        let wrapped = PyStepNode::new(&implementation)?;
 
         self.graph.add_node(id.clone()).map_err(to_py_err)?;
-        self.catalog.insert_step(id.clone(), Arc::new(wrapped));
+        self.catalog.insert(id.clone(), Arc::new(wrapped));
         self.implementations
             .insert(id.to_string(), implementation.unbind());
         Ok(id.to_string())

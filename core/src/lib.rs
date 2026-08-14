@@ -10,7 +10,7 @@
 //! |---|---|
 //! | [`Graph`] | la **estructura**: qué nodos hay y cómo se conectan. Dato puro |
 //! | [`Catalog`] | el **almacén**: qué implementación corresponde a cada nodo |
-//! | [`Filter`] / [`Step`] | los dos **contratos** de unidad ejecutable |
+//! | [`Node`] | el **contrato** de lo que ejecuta un nodo |
 //! | [`Driver`] | quien **atiende** lo que un step pide |
 //! | [`Plan`] | la **forma decidida** de una ejecución |
 //! | [`compile`] | de la estructura a la forma |
@@ -27,18 +27,16 @@ mod build;
 mod catalog;
 mod driver;
 mod execution;
-mod filter;
 mod graph;
+mod node;
 mod plan;
-mod step;
 mod value;
 
-pub use build::{Wire, filter, step};
-pub use catalog::{Catalog, NodeImpl};
+pub use build::{Wire, node};
+pub use catalog::Catalog;
 pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};
-pub use filter::{Filter, FilterError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
+pub use node::{Ctx, Node, NodeError, Pure, Transition};
 pub use plan::{CompileError, Plan, compile};
-pub use step::{Step, StepCtx, StepError, Transition};
 pub use value::Value;

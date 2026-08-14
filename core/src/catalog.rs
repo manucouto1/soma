@@ -4,34 +4,14 @@
 //! serializa, se compara, se manda a otro sitio—; una implementación no lo es.
 //! Lo que los une es el id del nodo, y nada más.
 
-use crate::{Filter, NodeId, Step};
+use crate::{Node, NodeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Qué es un nodo, de las dos cosas que puede ser.
-///
-/// Sin `#[non_exhaustive]`: quien ejecuta tiene que decidir por cada variante.
-#[derive(Clone)]
-pub enum NodeImpl {
-    /// Una función: termina siempre en una llamada.
-    Filter(Arc<dyn Filter>),
-    /// Una máquina de estados: puede pedir cosas antes de terminar.
-    Step(Arc<dyn Step>),
-}
-
-impl std::fmt::Debug for NodeImpl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Filter(_) => "Filter",
-            Self::Step(_) => "Step",
-        })
-    }
-}
-
 /// Las implementaciones de un grafo, por id de nodo.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone)]
 pub struct Catalog {
-    nodes: HashMap<NodeId, NodeImpl>,
+    nodes: HashMap<NodeId, Arc<dyn Node>>,
 }
 
 impl Catalog {
@@ -40,22 +20,13 @@ impl Catalog {
         Self::default()
     }
 
-    /// Registra un filtro, devolviendo lo que hubiera antes bajo ese id.
-    pub fn insert_filter(
-        &mut self,
-        id: impl Into<NodeId>,
-        filter: Arc<dyn Filter>,
-    ) -> Option<NodeImpl> {
-        self.nodes.insert(id.into(), NodeImpl::Filter(filter))
+    /// Registra la implementación de un nodo, devolviendo la que hubiera antes.
+    pub fn insert(&mut self, id: impl Into<NodeId>, node: Arc<dyn Node>) -> Option<Arc<dyn Node>> {
+        self.nodes.insert(id.into(), node)
     }
 
-    /// Registra un step, devolviendo lo que hubiera antes bajo ese id.
-    pub fn insert_step(&mut self, id: impl Into<NodeId>, step: Arc<dyn Step>) -> Option<NodeImpl> {
-        self.nodes.insert(id.into(), NodeImpl::Step(step))
-    }
-
-    /// Qué es el nodo, si está registrado.
-    pub fn get(&self, id: &NodeId) -> Option<&NodeImpl> {
+    /// La implementación registrada para un nodo.
+    pub fn get(&self, id: &NodeId) -> Option<&Arc<dyn Node>> {
         self.nodes.get(id)
     }
 
@@ -67,5 +38,13 @@ impl Catalog {
     /// Si no hay ninguna.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+}
+
+impl std::fmt::Debug for Catalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Catalog")
+            .field("nodes", &self.nodes.keys().collect::<Vec<_>>())
+            .finish()
     }
 }

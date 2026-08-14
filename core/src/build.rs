@@ -1,9 +1,9 @@
 //! Declarar un grafo como una expresión, en vez de a base de llamadas.
 //!
 //! ```ignore
-//! let (graph, catalog) = (filter("fuente", Sumar(1.0))
-//!     >> (filter("izq", Sumar(10.0)) | filter("der", Sumar(100.0)))
-//!     >> filter("juntar", Media))
+//! let (graph, catalog) = (node("fuente", Sumar(1.0))
+//!     >> (node("izq", Sumar(10.0)) | node("der", Sumar(100.0)))
+//!     >> node("juntar", Media))
 //! .somatize()?;
 //! ```
 //!
@@ -17,7 +17,7 @@
 //! materializan hasta [`Wire::somatize`], así que juntar dos trozos es
 //! concatenar dos listas y no fusionar dos grafos.
 
-use crate::{Catalog, Filter, Graph, GraphError, NodeId, NodeImpl, Step};
+use crate::{Catalog, Graph, GraphError, Node, NodeId};
 use std::ops::{BitOr, Shr};
 use std::sync::Arc;
 
@@ -27,23 +27,18 @@ pub struct Wire {
 }
 
 struct Parts {
-    nodes: Vec<(NodeId, NodeImpl)>,
+    nodes: Vec<(NodeId, Arc<dyn Node>)>,
     edges: Vec<(NodeId, NodeId)>,
     heads: Vec<NodeId>,
     terminals: Vec<NodeId>,
 }
 
-/// Un nodo suelto que ejecuta un filtro.
-pub fn filter(id: impl Into<NodeId>, implementation: impl Filter + 'static) -> Wire {
-    single(id.into(), NodeImpl::Filter(Arc::new(implementation)))
+/// Un nodo suelto.
+pub fn node(id: impl Into<NodeId>, implementation: impl Node + 'static) -> Wire {
+    single(id.into(), Arc::new(implementation))
 }
 
-/// Un nodo suelto que conduce un step.
-pub fn step(id: impl Into<NodeId>, implementation: impl Step + 'static) -> Wire {
-    single(id.into(), NodeImpl::Step(Arc::new(implementation)))
-}
-
-fn single(id: NodeId, implementation: NodeImpl) -> Wire {
+fn single(id: NodeId, implementation: Arc<dyn Node>) -> Wire {
     Wire {
         parts: Ok(Parts {
             nodes: vec![(id.clone(), implementation)],
@@ -115,10 +110,7 @@ impl Wire {
 
         for (id, implementation) in parts.nodes {
             graph.add_node(id.clone())?;
-            match implementation {
-                NodeImpl::Filter(f) => catalog.insert_filter(id, f),
-                NodeImpl::Step(s) => catalog.insert_step(id, s),
-            };
+            catalog.insert(id, implementation);
         }
         for (from, to) in parts.edges {
             graph.add_edge(from, to)?;

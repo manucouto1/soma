@@ -27,15 +27,8 @@ use std::fmt;
 pub enum Plan {
     /// No hay nada que hacer.
     Empty,
-    /// Llamar al filtro de un nodo.
+    /// Avanzar un nodo hasta que termine.
     Execute {
-        /// Cuál.
-        node: NodeId,
-        /// De dónde sale su entrada. Vacío = la entrada del grafo.
-        from: Vec<NodeId>,
-    },
-    /// Conducir un step por turnos hasta que termine.
-    Step {
         /// Cuál.
         node: NodeId,
         /// De dónde sale su entrada. Vacío = la entrada del grafo.
@@ -48,8 +41,9 @@ pub enum Plan {
 
 /// Decide cómo se recorre este grafo.
 ///
-/// Necesita el catálogo porque la forma depende de **qué es** cada nodo: un
-/// filtro se llama una vez, un step se conduce por turnos.
+/// El catálogo solo se mira para comprobar que cada nodo tiene implementación.
+/// La forma ya no depende de **qué** sea cada uno: todos se avanzan igual, y si
+/// uno pide algo por el camino eso lo dice su `Transition`, no su tipo.
 ///
 /// # Errores
 /// Ver [`CompileError`].
@@ -61,16 +55,12 @@ pub fn compile(graph: &Graph, catalog: &Catalog) -> Result<Plan, CompileError> {
     let mut steps = Vec::with_capacity(graph.len());
     for node in graph.topological_sort() {
         let from: Vec<NodeId> = graph.predecessors(node).into_iter().cloned().collect();
-        steps.push(match catalog.get(node) {
-            Some(crate::NodeImpl::Filter(_)) => Plan::Execute {
-                node: node.clone(),
-                from,
-            },
-            Some(crate::NodeImpl::Step(_)) => Plan::Step {
-                node: node.clone(),
-                from,
-            },
-            None => return Err(CompileError::NoImplementation(node.clone())),
+        if catalog.get(node).is_none() {
+            return Err(CompileError::NoImplementation(node.clone()));
+        }
+        steps.push(Plan::Execute {
+            node: node.clone(),
+            from,
         });
     }
 

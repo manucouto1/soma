@@ -1,6 +1,6 @@
 //! Compilar: de la estructura a la forma decidida.
 
-use crate::dobles::{Inmediato, Sumar};
+use crate::dobles::{Preguntar, Sumar};
 use soma_next_core::{Catalog, CompileError, Graph, NodeId, Plan, compile};
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ fn con_filtros(ids: &[&str]) -> (Graph, Catalog) {
     let mut c = Catalog::new();
     for id in ids {
         g.add_node(*id).unwrap();
-        c.insert_filter(*id, Arc::new(Sumar(1.0)));
+        c.insert(*id, Arc::new(Sumar(1.0)));
     }
     (g, c)
 }
@@ -52,24 +52,20 @@ fn cada_paso_lleva_escrito_de_donde_sale_su_entrada() {
 }
 
 #[test]
-fn el_plan_distingue_un_step_de_un_filtro() {
+fn el_plan_no_distingue_quien_pide_turnos_de_quien_no() {
+    // `Preguntar` pide algo antes de terminar y `Sumar` no, y aun así los dos
+    // compilan al mismo paso: eso lo dice su `Transition` al ejecutar, no el plan.
     let mut g = Graph::new();
     let mut c = Catalog::new();
-    g.add_node("filtro").unwrap();
-    g.add_node("step").unwrap();
-    g.add_edge("filtro", "step").unwrap();
-    c.insert_filter("filtro", Arc::new(Sumar(1.0)));
-    c.insert_step("step", Arc::new(Inmediato));
+    g.add_node("a").unwrap();
+    g.add_node("b").unwrap();
+    g.add_edge("a", "b").unwrap();
+    c.insert("a", Arc::new(Sumar(1.0)));
+    c.insert("b", Arc::new(Preguntar(vec![])));
 
     assert_eq!(
         compile(&g, &c).unwrap(),
-        Plan::Sequence(vec![
-            ejecuta("filtro", &[]),
-            Plan::Step {
-                node: "step".into(),
-                from: vec!["filtro".into()]
-            },
-        ])
+        Plan::Sequence(vec![ejecuta("a", &[]), ejecuta("b", &["a"])])
     );
 }
 

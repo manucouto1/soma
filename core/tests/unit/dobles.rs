@@ -1,17 +1,18 @@
-//! Filtros, steps y drivers de mentira, compartidos por los demás módulos.
+//! Nodos y drivers de mentira, compartidos por los demás módulos.
+//!
+//! Fíjate en que ninguno declara de qué "tipo" es: lo que los distingue es la
+//! variante de `Transition` que devuelven.
 
-use soma_next_core::{
-    Driver, DriverError, Filter, FilterError, Step, StepCtx, StepError, Transition, Value,
-};
+use soma_next_core::{Ctx, Driver, DriverError, Node, NodeError, Transition, Value};
 
-/// Añade una constante a un escalar.
+/// Añade una constante a un número. Termina siempre.
 pub struct Sumar(pub f64);
 
-impl Filter for Sumar {
-    fn forward(&self, input: &Value) -> Result<Value, FilterError> {
+impl Node for Sumar {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
         match input {
-            Value::Number(x) => Ok(Value::number(x + self.0)),
-            other => Err(FilterError::new(format!(
+            Value::Number(x) => Ok(Transition::Done(Value::number(x + self.0))),
+            other => Err(NodeError::new(format!(
                 "Sumar necesita un número, le dieron {}",
                 other.type_name()
             ))),
@@ -22,17 +23,54 @@ impl Filter for Sumar {
 /// Falla siempre.
 pub struct Romper;
 
-impl Filter for Romper {
-    fn forward(&self, _input: &Value) -> Result<Value, FilterError> {
-        Err(FilterError::new("me rompí"))
+impl Node for Romper {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Err(NodeError::new("me rompí"))
     }
 }
 
-/// Pide `peticiones` cosas en el turno 0 y devuelve lo que le contesten.
+/// La media de lo que le llegue por sus aristas. Un agregador es esto: un nodo
+/// que lee un mapa. No hay ningún tipo nuevo detrás.
+pub struct Media;
+
+impl Node for Media {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        let Some(values) = input.values() else {
+            return Err(NodeError::new(format!(
+                "Media necesita varias entradas, le llegó {}",
+                input.type_name()
+            )));
+        };
+        let numeros: Vec<f64> = values
+            .iter()
+            .map(|v| match v {
+                Value::Number(x) => Ok(*x),
+                other => Err(NodeError::new(format!(
+                    "Media solo promedia números, uno era {}",
+                    other.type_name()
+                ))),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Transition::Done(Value::number(
+            numeros.iter().sum::<f64>() / numeros.len() as f64,
+        )))
+    }
+}
+
+/// Devuelve su entrada sin pedir nada.
+pub struct Inmediato;
+
+impl Node for Inmediato {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(input.clone()))
+    }
+}
+
+/// Pide cosas en el turno 0 y devuelve lo que le contesten.
 pub struct Preguntar(pub Vec<Value>);
 
-impl Step for Preguntar {
-    fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition, StepError> {
+impl Node for Preguntar {
+    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
         if ctx.turn == 0 {
             return Ok(Transition::Await(self.0.clone()));
         }
@@ -42,20 +80,11 @@ impl Step for Preguntar {
     }
 }
 
-/// Termina en el primer turno sin pedir nada: un filtro disfrazado de step.
-pub struct Inmediato;
-
-impl Step for Inmediato {
-    fn poll(&self, ctx: &StepCtx<'_>) -> Result<Transition, StepError> {
-        Ok(Transition::Done(ctx.input.clone()))
-    }
-}
-
 /// No sabe parar.
 pub struct Insaciable;
 
-impl Step for Insaciable {
-    fn poll(&self, _ctx: &StepCtx<'_>) -> Result<Transition, StepError> {
+impl Node for Insaciable {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
         Ok(Transition::Await(vec![Value::Null]))
     }
 }
@@ -78,30 +107,11 @@ impl Driver for Gritar {
     }
 }
 
-/// La media de lo que le llegue por sus aristas. Un agregador es esto: un
-/// filtro que lee un mapa. No hay ningún tipo nuevo detrás.
-pub struct Media;
+/// Contesta cualquier cosa, para probar el tope de turnos.
+pub struct SiempreNull;
 
-impl Filter for Media {
-    fn forward(&self, input: &Value) -> Result<Value, FilterError> {
-        let Some(values) = input.values() else {
-            return Err(FilterError::new(format!(
-                "Media necesita varias entradas, le llegó {}",
-                input.type_name()
-            )));
-        };
-        let numeros: Vec<f64> = values
-            .iter()
-            .map(|v| match v {
-                Value::Number(x) => Ok(*x),
-                other => Err(FilterError::new(format!(
-                    "Media solo promedia números, uno era {}",
-                    other.type_name()
-                ))),
-            })
-            .collect::<Result<_, _>>()?;
-        Ok(Value::number(
-            numeros.iter().sum::<f64>() / numeros.len() as f64,
-        ))
+impl Driver for SiempreNull {
+    fn perform(&self, requests: &[Value]) -> Result<Vec<Value>, DriverError> {
+        Ok(vec![Value::Null; requests.len()])
     }
 }

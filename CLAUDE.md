@@ -19,7 +19,9 @@ original acabó con 14 traits de un solo implementor y 2 de ninguno.
 - **enum** cuando el conjunto es cerrado y lo conoces tú. Es el lenguaje del
   dominio, y el compilador lleva la cuenta al añadir variantes.
 - **trait** solo cuando la implementación la pone *otro* (el usuario). Si no
-  puedes nombrar dos implementors reales hoy, es una struct.
+  puedes nombrar dos implementors reales hoy, es una struct. Y dos traits con
+  un método del mismo nombre a la vista dejan ese nombre inutilizable
+  (`error[E0034]`), aunque las firmas difieran.
 - **struct con typestate** para los invariantes: que un estado imposible no se
   pueda escribir, en vez de validarlo.
 

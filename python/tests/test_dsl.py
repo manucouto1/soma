@@ -22,8 +22,8 @@ class Media(Filter):
 
 
 class Eco(Step):
-    def poll(self, ctx):
-        return {"done": ctx["input"]}
+    def forward(self, x, ctx):
+        return {"done": x}
 
 
 # ── Encadenar ──
@@ -98,33 +98,30 @@ def test_la_clase_obliga_a_implementar_su_metodo():
     class SinForward(Filter):
         pass
 
-    class SinPoll(Step):
+    class SinForwardStep(Step):
         pass
 
     with pytest.raises(TypeError, match="abstract method 'forward'"):
         SinForward()
-    with pytest.raises(TypeError, match="abstract method 'poll'"):
-        SinPoll()
+    with pytest.raises(TypeError, match="abstract method 'forward'"):
+        SinForwardStep()
 
 
 def test_manda_la_herencia_no_los_metodos_que_tenga():
     class Confusa(Step):
-        def poll(self, ctx):
-            return {"done": ctx["input"]}
+        def forward(self, x, ctx):
+            return {"done": x}
 
-        def forward(self, x):  # existe, y da igual
-            return x
-
-    assert "Step {" in Graph.somatize(Confusa()).plan()
+    # No se distinguen en el plan: los dos son un paso. Lo que decide la
+    # herencia es la CONVENCIÓN DE LLAMADA, no un tipo de nodo.
+    g = Graph.somatize(Confusa())
+    assert g.forward("eco", driver=None) == "eco"
 
 
 def test_heredar_de_las_dos_no_vale():
     class Ambas(Filter, Step):
-        def forward(self, x):
+        def forward(self, x, ctx=None):
             return x
-
-        def poll(self, ctx):
-            return {"done": ctx["input"]}
 
     with pytest.raises(TypeError, match="hereda de Filter y de Step a la vez"):
         Graph.somatize(Ambas())
@@ -149,8 +146,8 @@ def test_lo_que_no_puede_ser_nodo_lo_dice():
 
 def test_node_con_algo_que_hereda_de_step_es_una_contradiccion():
     class UnStep(Step):
-        def poll(self, ctx):
-            return {"done": ctx["input"]}
+        def forward(self, x, ctx):
+            return {"done": x}
 
     g = Graph()
     with pytest.raises(TypeError, match="hereda de Step, así que se añade con step"):
