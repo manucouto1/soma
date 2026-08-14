@@ -15,7 +15,7 @@
 //! | [`Plan`] | la **forma decidida** de una ejecución |
 //! | [`compile`] | de la estructura a la forma |
 //! | [`Executor`] | el **motor** |
-//! | [`build`] | declarar un grafo como expresión: `a >> (b \| c) >> d` |
+//! | [`Wire`] | declarar un grafo como expresión: `a >> (b \| c) >> d` |
 //!
 //! Un fichero por tipo, con sus `impl` inherentes y los errores que producen
 //! sus operaciones. Ver la regla completa en `CLAUDE.md`.
@@ -33,7 +33,7 @@ mod plan;
 mod step;
 mod value;
 
-pub use build::{Wire, build, filter, step};
+pub use build::{Wire, filter, step};
 pub use catalog::{Catalog, NodeImpl};
 pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};

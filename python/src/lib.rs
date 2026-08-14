@@ -36,7 +36,7 @@ fn run_err(e: RunError) -> PyErr {
 }
 
 /// `soma_next.Graph` — la topología del núcleo más las implementaciones.
-#[pyclass(name = "Graph", module = "soma_next._soma_next")]
+#[pyclass(name = "Graph", module = "soma_next._soma_next", subclass)]
 struct PyGraph {
     graph: Graph,
     /// Lo que el motor ejecuta.

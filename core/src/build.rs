@@ -1,11 +1,10 @@
 //! Declarar un grafo como una expresión, en vez de a base de llamadas.
 //!
 //! ```ignore
-//! let (graph, catalog) = build(
-//!     filter("fuente", Sumar(1.0))
-//!         >> (filter("izq", Sumar(10.0)) | filter("der", Sumar(100.0)))
-//!         >> filter("juntar", Media),
-//! )?;
+//! let (graph, catalog) = (filter("fuente", Sumar(1.0))
+//!     >> (filter("izq", Sumar(10.0)) | filter("der", Sumar(100.0)))
+//!     >> filter("juntar", Media))
+//! .somatize()?;
 //! ```
 //!
 //! `>>` encadena y `|` abre en ramas, que es la misma sintaxis que el DSL de
@@ -15,8 +14,8 @@
 //! Un [`Wire`] es un grafo a medio declarar. Guarda por dónde se entra
 //! (`heads`) y por dónde se sale (`terminals`), que es lo único que hace falta
 //! para pegarle otro delante o detrás. Los nodos y las aristas no se
-//! materializan hasta [`build`], así que juntar dos trozos es concatenar dos
-//! listas y no fusionar dos grafos.
+//! materializan hasta [`Wire::somatize`], así que juntar dos trozos es
+//! concatenar dos listas y no fusionar dos grafos.
 
 use crate::{Catalog, Filter, Graph, GraphError, NodeId, NodeImpl, Step};
 use std::ops::{BitOr, Shr};
@@ -100,24 +99,30 @@ fn combine(left: Wire, right: Wire, join: impl FnOnce(Parts, Parts) -> Parts) ->
     }
 }
 
-/// Materializa lo declarado.
-///
-/// # Errores
-/// El primer [`GraphError`] que dé montarlo: un id repetido, sobre todo.
-pub fn build(wire: Wire) -> Result<(Graph, Catalog), GraphError> {
-    let parts = wire.parts?;
-    let mut graph = Graph::new();
-    let mut catalog = Catalog::new();
+impl Wire {
+    /// Materializa lo declarado: la estructura y el almacén.
+    ///
+    /// Son dos cosas y ninguna contiene a la otra, así que salen las dos —
+    /// es la misma separación de siempre: el grafo es dato, una
+    /// implementación no.
+    ///
+    /// # Errores
+    /// El primer [`GraphError`] que dé montarlo: un id repetido, sobre todo.
+    pub fn somatize(self) -> Result<(Graph, Catalog), GraphError> {
+        let parts = self.parts?;
+        let mut graph = Graph::new();
+        let mut catalog = Catalog::new();
 
-    for (id, implementation) in parts.nodes {
-        graph.add_node(id.clone())?;
-        match implementation {
-            NodeImpl::Filter(f) => catalog.insert_filter(id, f),
-            NodeImpl::Step(s) => catalog.insert_step(id, s),
-        };
+        for (id, implementation) in parts.nodes {
+            graph.add_node(id.clone())?;
+            match implementation {
+                NodeImpl::Filter(f) => catalog.insert_filter(id, f),
+                NodeImpl::Step(s) => catalog.insert_step(id, s),
+            };
+        }
+        for (from, to) in parts.edges {
+            graph.add_edge(from, to)?;
+        }
+        Ok((graph, catalog))
     }
-    for (from, to) in parts.edges {
-        graph.add_edge(from, to)?;
-    }
-    Ok((graph, catalog))
 }

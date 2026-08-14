@@ -1,6 +1,6 @@
 """Declarar un grafo como una expresión, en vez de a base de llamadas.
 
-    build(Fuente() >> (Izq() | Der()) >> Media())
+    Graph.somatize(Fuente() >> (Izq() | Der()) >> Media())
 
 `>>` encadena y `|` abre en ramas. Un `>>` entre dos ramas abiertas las une:
 lo que salga de todas entra en lo que venga detrás, que es exactamente el
@@ -98,11 +98,13 @@ def _branches(topology):
     return topology.branches if isinstance(topology, Fork) else [topology]
 
 
-def build(topology):
-    """Materializa la expresión en un `Graph` ejecutable."""
-    from soma_next._soma_next import Graph
+def somatize(graph_cls, topology):
+    """Materializa la expresión en un grafo de la clase que te den.
 
-    g = Graph()
+    La clase entra por parámetro y no se importa aquí: `soma_next._graph`
+    importa este módulo, así que importarlo de vuelta sería un ciclo.
+    """
+    g = graph_cls()
     _walk(g, _wrap(topology), [])
     return g
 
