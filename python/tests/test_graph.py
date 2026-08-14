@@ -6,11 +6,13 @@ import soma_next
 
 
 class LimpiarTexto:
-    pass
+    def forward(self, x):
+        return x
 
 
 class Vectorizar:
-    pass
+    def forward(self, x):
+        return x
 
 
 @pytest.fixture

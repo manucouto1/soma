@@ -5,14 +5,24 @@
 //! id → objeto Python. Si una regla del dominio acaba escrita aquí, está en el
 //! sitio equivocado.
 
+mod filter;
+mod value;
+
+use filter::PyFilter;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
-use soma_next_core::{Graph, GraphError, NodeId};
+use soma_next_core::{Catalog, Graph, GraphError, NodeId, RunError};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Traduce el error del núcleo a la excepción que un usuario de Python espera.
 fn to_py_err(e: GraphError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// Lo mismo para un fallo de ejecución.
+fn run_err(e: RunError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
@@ -20,6 +30,10 @@ fn to_py_err(e: GraphError) -> PyErr {
 #[pyclass(name = "Graph", module = "soma_next._soma_next")]
 struct PyGraph {
     graph: Graph,
+    /// Lo que el motor ejecuta.
+    catalog: Catalog,
+    /// El objeto tal cual lo pasó el usuario, para poder devolvérselo.
+    /// No es una copia del catálogo: guarda otra cosa, el original sin envolver.
     implementations: HashMap<String, PyObject>,
 }
 
@@ -29,6 +43,7 @@ impl PyGraph {
     fn new() -> Self {
         Self {
             graph: Graph::new(),
+            catalog: Catalog::new(),
             implementations: HashMap::new(),
         }
     }
@@ -54,7 +69,12 @@ impl PyGraph {
             }
         };
 
+        // Antes de tocar el grafo: un objeto que no puede ser nodo falla aquí,
+        // no a mitad de un run.
+        let wrapped = PyFilter::new(&implementation)?;
+
         self.graph.add_node(id.clone()).map_err(to_py_err)?;
+        self.catalog.insert(id.clone(), Arc::new(wrapped));
         self.implementations
             .insert(id.to_string(), implementation.unbind());
         Ok(id.to_string())
@@ -132,6 +152,17 @@ impl PyGraph {
     /// El objeto que registraste bajo `node_id`, o `None`.
     fn implementation(&self, node_id: &str) -> Option<&PyObject> {
         self.implementations.get(node_id)
+    }
+
+    /// Ejecuta el grafo entero y devuelve lo que produjo su hoja.
+    #[pyo3(signature = (input = None))]
+    fn forward(&self, py: Python<'_>, input: Option<&Bound<'_, PyAny>>) -> PyResult<PyObject> {
+        let start = match input {
+            Some(obj) => value::from_py(obj)?,
+            None => soma_next_core::Value::Null,
+        };
+        let out = self.graph.run(&self.catalog, start).map_err(run_err)?;
+        value::to_py(py, &out)
     }
 
     fn __len__(&self) -> usize {

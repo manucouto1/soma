@@ -86,11 +86,66 @@ incomprensible, así que fuera: no es CU1 y no tiene consumidor hoy.
 
 ---
 
+## CU2 — Ejecutar un grafo de filtros
+
+```python
+g.node("sumar", Sumar(1))
+g.node("doblar", Doblar())
+g.edge("sumar", "doblar")
+g.forward(41)          # → 84.0
+```
+
+Estado: **cerrado**. 29 tests en Rust, 25 en Python.
+
+### La decisión de partida
+
+**El motor va en Rust, Python es envoltorio.** Es decisión tuya y tiene una
+consecuencia que conviene tener presente: obliga a que exista `Value` ya. Si el
+núcleo ejecuta, los datos tienen que tener una forma que Rust entienda.
+
+Los cuatro papeles, que es fácil confundir:
+
+| pieza | papel | dónde |
+|---|---|---|
+| `Graph` | la **estructura** | `core/src/graph.rs` |
+| `Catalog` | el **almacén** de implementaciones | `core/src/filter.rs` |
+| `Filter` | el **contrato** de una unidad ejecutable | `core/src/filter.rs` |
+| `Graph::run` | el **motor** | `core/src/execution.rs` |
+
+### Decisiones tomadas
+
+1. **`Value` con cuatro variantes**: `Null`, `Text`, `Bytes`, `Tensor`. No hay
+   `Json` porque pediría `serde_json` y el núcleo no depende de nada; no hay
+   `Object` opaco porque solo sirve para mandar algo por un cable y no hay cable.
+   El error de conversión dice qué falta en vez de inventarse una representación.
+2. **`Filter` tiene un método**: `forward(&Value) -> Result<Value, FilterError>`.
+   Sin `fit` (entrenar es otro caso de uso), sin `config_hash` (caché), sin
+   `meta` (compilador), sin `composite_fit` (autograd).
+3. **Sin parámetro `state`.** El original pasa `state` en cada `forward` incluso
+   a los filtros sin estado. El estado llega con `fit`.
+4. **`Send + Sync` en el trait** — y no es decoración: PyO3 exige que un
+   `#[pyclass]` sea `Send`, el grafo lleva el catálogo dentro, y la cota sube
+   hasta el trait. El compilador lo descubrió solo.
+5. **Un objeto sin `forward` falla al registrarlo**, no a mitad de un run.
+6. **Un bool no cruza la frontera.** `True` como el tensor `1.0` es la clase de
+   conversión silenciosa que después nadie entiende.
+
+### Las dos decisiones que el motor NO toma
+
+Fallan con un error que nombra la decisión pendiente en vez de inventarse una:
+
+- **Fan-in**: a un nodo le llegan dos aristas. ¿Cómo se combinan los dos valores?
+  No hay respuesta obvia y `Value` no tiene dónde ponerlos.
+- **Varias hojas**: el grafo termina en dos sitios. ¿Cuál es la salida?
+
+Las dos están cubiertas por tests, en Rust y en Python.
+
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
 
-- CU2 — ejecutar un grafo lineal de filtros
-- CU3 — cachear la salida de un nodo por contenido
-- CU4 — validar tipos entre nodos conectados (schemas)
-- CU5 — control de flujo: rama y bucle
+- CU3 — `Step`: la unidad que puede **no terminar** (`Await`, `Suspend`) y el
+  driver que realiza sus efectos. Es la otra mitad de la pregunta de CU2
+- CU4 — cachear la salida de un nodo por contenido
+- CU5 — validar tipos entre nodos conectados (schemas)
+- CU6 — control de flujo: rama y bucle
