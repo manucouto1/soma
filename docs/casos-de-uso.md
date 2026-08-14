@@ -506,6 +506,26 @@ devolverlo (y una vez en la entrada del grafo).
 - **El GIL** serializa el despacho por nodo; torch lo libera durante los
   kernels.
 
+### El patrón, probado de extremo a extremo
+
+`python/tests/test_pipeline_torch.py` monta un pipeline de cuatro nodos —
+lematizador (sin gradientes) → encoder → cuello de botella → clasificador LSTM —
+y lo **entrena**: 12.571 parámetros, la pérdida baja de 1.09 a 0.005 en 40 pasos.
+Está entero en los tests porque además de comprobar, documenta el patrón.
+
+Tres cosas que enseña, y que no son evidentes:
+
+- **Los dos regímenes conviven.** El lematizador devuelve texto, que cruza
+  convertido; los tres nodos con parámetros devuelven `Opaque`. La frontera cae
+  sola donde empieza la gráfica de gradientes, sin declararla.
+- **El nodo tiene los módulos, no hereda de `nn.Module`.** Heredar registra los
+  parámetros solo, pero rompe llamar al nodo como módulo: nuestro `forward`
+  lleva `ctx` y torch lo llama sin él (`TypeError`). Comprobado.
+- **El bucle de entrenamiento va fuera**, y la línea que recoge los parámetros
+  recorriendo `g.nodes()` es exactamente el dolor que un
+  `soma_next.torch.parameters(g)` borraría. Está a la vista para que se decida
+  con el ejemplo delante.
+
 ### Lo que NO entró
 
 `soma_next.torch` —`module()`, `parameters()`, el bucle de entrenamiento— queda
