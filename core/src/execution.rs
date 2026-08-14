@@ -14,6 +14,73 @@ use crate::{Catalog, FilterError, Graph, NodeId, Value};
 use std::collections::HashMap;
 use std::fmt;
 
+/// Ejecuta el grafo entero y devuelve lo que produjo su hoja.
+///
+/// Es una función y no un método de [`Graph`] a propósito: ejecutar no es algo
+/// que un grafo sepa hacer solo. Necesita además el almacén y una entrada, y
+/// mañana necesitará una caché y un bus de eventos — cuando eso llegue, esto
+/// pasa a ser el tipo que los guarda (en el original se llama `GraphSession`).
+///
+/// Cada nodo recibe la salida de su predecesor; los que no tienen ninguno
+/// reciben `input`. Un grafo vacío devuelve `input` sin tocarlo.
+///
+/// # Errores
+/// Ver [`RunError`]. El primer nodo que falle para el run: no hay recuperación
+/// parcial, porque nadie ha dicho todavía qué debería significar.
+pub fn run(graph: &Graph, catalog: &Catalog, input: Value) -> Result<Value, RunError> {
+    let leaves = graph.leaves();
+    let output_node = match leaves.as_slice() {
+        [] => return Ok(input),
+        [single] => (*single).clone(),
+        many => {
+            return Err(RunError::ManyLeaves(
+                many.iter().map(|id| (*id).clone()).collect(),
+            ));
+        }
+    };
+
+    let mut outputs: HashMap<NodeId, Value> = HashMap::with_capacity(graph.len());
+    for node in graph.topological_sort() {
+        let node_input = resolve_input(graph, node, &outputs, &input)?;
+        let filter = catalog
+            .get(node)
+            .ok_or_else(|| RunError::NoImplementation(node.clone()))?;
+        let output = filter
+            .forward(&node_input)
+            .map_err(|source| RunError::Filter {
+                node: node.clone(),
+                source,
+            })?;
+        outputs.insert(node.clone(), output);
+    }
+
+    Ok(outputs
+        .remove(&output_node)
+        .expect("la hoja está en el grafo, así que el recorrido la ejecutó"))
+}
+
+/// Qué recibe un nodo: la salida de su predecesor, o la entrada del grafo.
+fn resolve_input(
+    graph: &Graph,
+    node: &NodeId,
+    outputs: &HashMap<NodeId, Value>,
+    graph_input: &Value,
+) -> Result<Value, RunError> {
+    match graph.predecessors(node).as_slice() {
+        [] => Ok(graph_input.clone()),
+        [single] => Ok(outputs
+            .get(*single)
+            .expect("el orden topológico ya ejecutó a los predecesores")
+            .clone()),
+        many => Err(RunError::Fanin {
+            node: node.clone(),
+            sources: many.iter().map(|id| (*id).clone()).collect(),
+        }),
+    }
+}
+
+// ── Lo que puede salir mal al ejecutar ──
+
 /// Por qué no se pudo ejecutar el grafo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
@@ -67,67 +134,4 @@ fn join(ids: &[NodeId]) -> String {
         .map(|id| format!("`{id}`"))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-impl Graph {
-    /// Ejecuta el grafo entero y devuelve lo que produjo su hoja.
-    ///
-    /// Cada nodo recibe la salida de su predecesor; los que no tienen ninguno
-    /// reciben `input`. Un grafo vacío devuelve `input` sin tocarlo.
-    ///
-    /// # Errores
-    /// Ver [`RunError`]. El primer nodo que falle para el run: no hay
-    /// recuperación parcial, porque nadie ha dicho todavía qué debería
-    /// significar.
-    pub fn run(&self, catalog: &Catalog, input: Value) -> Result<Value, RunError> {
-        let leaves = self.leaves();
-        let output_node = match leaves.as_slice() {
-            [] => return Ok(input),
-            [single] => (*single).clone(),
-            many => {
-                return Err(RunError::ManyLeaves(
-                    many.iter().map(|id| (*id).clone()).collect(),
-                ));
-            }
-        };
-
-        let mut outputs: HashMap<NodeId, Value> = HashMap::with_capacity(self.len());
-        for node in self.topological_sort() {
-            let node_input = self.resolve_input(node, &outputs, &input)?;
-            let filter = catalog
-                .get(node)
-                .ok_or_else(|| RunError::NoImplementation(node.clone()))?;
-            let output = filter
-                .forward(&node_input)
-                .map_err(|source| RunError::Filter {
-                    node: node.clone(),
-                    source,
-                })?;
-            outputs.insert(node.clone(), output);
-        }
-
-        Ok(outputs
-            .remove(&output_node)
-            .expect("la hoja está en el grafo, así que el recorrido la ejecutó"))
-    }
-
-    /// Qué recibe un nodo: la salida de su predecesor, o la entrada del grafo.
-    fn resolve_input(
-        &self,
-        node: &NodeId,
-        outputs: &HashMap<NodeId, Value>,
-        graph_input: &Value,
-    ) -> Result<Value, RunError> {
-        match self.predecessors(node).as_slice() {
-            [] => Ok(graph_input.clone()),
-            [single] => Ok(outputs
-                .get(*single)
-                .expect("el orden topológico ya ejecutó a los predecesores")
-                .clone()),
-            many => Err(RunError::Fanin {
-                node: node.clone(),
-                sources: many.iter().map(|id| (*id).clone()).collect(),
-            }),
-        }
-    }
 }

@@ -12,7 +12,7 @@ use filter::PyFilter;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
-use soma_next_core::{Catalog, Graph, GraphError, NodeId, RunError};
+use soma_next_core::{Catalog, Graph, GraphError, NodeId, RunError, run};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -161,7 +161,7 @@ impl PyGraph {
             Some(obj) => value::from_py(obj)?,
             None => soma_next_core::Value::Null,
         };
-        let out = self.graph.run(&self.catalog, start).map_err(run_err)?;
+        let out = run(&self.graph, &self.catalog, start).map_err(run_err)?;
         value::to_py(py, &out)
     }
 

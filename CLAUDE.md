@@ -23,6 +23,17 @@ original acabó con 14 traits de un solo implementor y 2 de ninguno.
 - **struct con typestate** para los invariantes: que un estado imposible no se
   pueda escribir, en vez de validarlo.
 
+**Un fichero por tipo.** El tipo, sus `impl` inherentes y los errores que
+producen sus operaciones, juntos. Un `impl` inherente **nunca** se parte entre
+ficheros: si te apetece partirlo, la operación probablemente no era un método
+de ese tipo (fue el caso de `run`, que necesitaba grafo *y* catálogo *y*
+entrada, y acabó siendo una función de `execution.rs`).
+
+Lo que en Rust no se puede sostener, y conviene saberlo si vienes de Java: el
+comportamiento no pertenece a un tipo, pertenece al par **(tipo, trait)**.
+`impl Filter for PyFilter` vive en otro crate. Los `impl` de trait se dispersan
+por necesidad y se buscan por el trait, no por el tipo.
+
 **Los tests viven fuera de `src/`.** Son otro crate: solo ven la API pública,
 así que no pueden pasar apoyándose en lo privado. Un binario de test por tipo
 (`tests/unit/main.rs` con un `mod` por módulo), no uno por fichero.

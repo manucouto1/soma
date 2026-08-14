@@ -9,19 +9,20 @@
 //! - [`Graph`] es la **estructura**: qué nodos hay y cómo se conectan. Dato puro.
 //! - [`Catalog`] es el **almacén**: qué implementación corresponde a cada nodo.
 //! - [`Filter`] es el **contrato** de una unidad ejecutable.
-//! - [`Graph::run`] es el **motor**.
+//! - [`run`] es el **motor**.
+//!
+//! Un fichero por tipo, con sus `impl` inherentes y los errores que producen
+//! sus operaciones. Ver la regla completa en `CLAUDE.md`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod error;
 mod execution;
 mod filter;
 mod graph;
 mod value;
 
-pub use error::GraphError;
-pub use execution::RunError;
+pub use execution::{RunError, run};
 pub use filter::{Catalog, Filter, FilterError};
-pub use graph::{Edge, Graph, NodeId};
+pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use value::Value;

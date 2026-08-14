@@ -1,6 +1,6 @@
 //! El motor, contra filtros de Rust: sin Python de por medio.
 
-use soma_next_core::{Catalog, Filter, FilterError, Graph, RunError, Value};
+use soma_next_core::{Catalog, Filter, FilterError, Graph, RunError, Value, run};
 use std::sync::Arc;
 
 /// Añade una constante a un escalar.
@@ -41,7 +41,7 @@ fn escalar(v: &Value) -> f64 {
 #[test]
 fn un_grafo_vacio_devuelve_su_entrada() {
     let g = Graph::new();
-    let out = g.run(&Catalog::new(), Value::text("intacto")).unwrap();
+    let out = run(&g, &Catalog::new(), Value::text("intacto")).unwrap();
     assert_eq!(out, Value::text("intacto"));
 }
 
@@ -52,7 +52,7 @@ fn un_solo_nodo_transforma_la_entrada() {
     let mut c = Catalog::new();
     c.insert("sumar", Arc::new(Sumar(1.0)));
 
-    assert_eq!(escalar(&g.run(&c, Value::scalar(41.0)).unwrap()), 42.0);
+    assert_eq!(escalar(&run(&g, &c, Value::scalar(41.0)).unwrap()), 42.0);
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn una_cadena_encadena_las_salidas() {
     c.insert("b", Arc::new(Sumar(10.0)));
     c.insert("c", Arc::new(Sumar(100.0)));
 
-    assert_eq!(escalar(&g.run(&c, Value::scalar(0.0)).unwrap()), 111.0);
+    assert_eq!(escalar(&run(&g, &c, Value::scalar(0.0)).unwrap()), 111.0);
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn un_nodo_suelto_recibe_la_entrada_del_grafo() {
     let mut c = Catalog::new();
     c.insert("a", Arc::new(Sumar(1.0)));
 
-    assert_eq!(escalar(&g.run(&c, Value::scalar(1.0)).unwrap()), 2.0);
+    assert_eq!(escalar(&run(&g, &c, Value::scalar(1.0)).unwrap()), 2.0);
 }
 
 // ── Lo que falla, y cómo lo cuenta ──
@@ -90,7 +90,7 @@ fn un_nodo_suelto_recibe_la_entrada_del_grafo() {
 fn un_nodo_sin_implementacion_es_un_error_con_nombre() {
     let mut g = Graph::new();
     g.add_node("huerfano").unwrap();
-    let err = g.run(&Catalog::new(), Value::Null).unwrap_err();
+    let err = run(&g, &Catalog::new(), Value::Null).unwrap_err();
 
     assert_eq!(err, RunError::NoImplementation("huerfano".into()));
     assert!(err.to_string().contains("`huerfano`"));
@@ -103,7 +103,7 @@ fn el_fallo_de_un_filtro_dice_en_que_nodo_fue() {
     let mut c = Catalog::new();
     c.insert("bomba", Arc::new(Romper));
 
-    let err = g.run(&c, Value::Null).unwrap_err();
+    let err = run(&g, &c, Value::Null).unwrap_err();
     assert_eq!(
         err,
         RunError::Filter {
@@ -127,7 +127,7 @@ fn el_run_para_en_el_primer_fallo() {
     // `despues` no tiene implementación: si el run llegara hasta él, el error
     // sería otro.
     assert!(matches!(
-        g.run(&c, Value::Null).unwrap_err(),
+        run(&g, &c, Value::Null).unwrap_err(),
         RunError::Filter { .. }
     ));
 }
@@ -148,7 +148,7 @@ fn juntar_dos_ramas_todavia_no_esta_decidido() {
         c.insert(id, Arc::new(Sumar(1.0)));
     }
 
-    let err = g.run(&c, Value::scalar(0.0)).unwrap_err();
+    let err = run(&g, &c, Value::scalar(0.0)).unwrap_err();
     assert_eq!(
         err,
         RunError::Fanin {
@@ -170,7 +170,7 @@ fn dos_hojas_todavia_no_esta_decidido() {
         c.insert(id, Arc::new(Sumar(1.0)));
     }
 
-    let err = g.run(&c, Value::scalar(0.0)).unwrap_err();
+    let err = run(&g, &c, Value::scalar(0.0)).unwrap_err();
     assert_eq!(err, RunError::ManyLeaves(vec!["a".into(), "b".into()]));
     assert!(err.to_string().contains("cuál es la salida"));
 }
