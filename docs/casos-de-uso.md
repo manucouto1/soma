@@ -294,10 +294,22 @@ expresión de arriba *es* el diamante.
    importar. Se declara en el cuerpo de una subclase, que además es lo único
    que ven `help()`, un IDE y mypy. Es la misma estructura que el Soma original
    (`soma/_graph.py`), y por las mismas razones.
-4. **Heredar de `Filter`/`Step` es opcional.** Son mixins vacíos que solo dan el
-   azúcar. Un objeto suelto sigue valiendo para `g.node(obj)`, y también dentro
-   de una expresión mientras algo a su lado herede — Python prueba
-   `__rrshift__` cuando el operando izquierdo no sabe.
+4. **`Filter` y `Step` son abstractas, y la herencia es lo que decide.** Cada
+   una exige su método con `@abstractmethod`, así que un `class X(Filter)` sin
+   `forward` no se puede ni instanciar, y `isinstance` es la única pregunta que
+   se hace el DSL.
+
+   Fue una corrección: nacieron como mixins vacíos que preguntaban por duck
+   typing si el objeto *tenía* `poll`. Eso dejaba pasar dos cosas feas —un
+   `class X(Step)` con solo `forward` acababa registrado como filtro sin un
+   aviso, y un objeto con los dos métodos daba tres respuestas distintas según
+   entrara por `node()`, por `step()` o por el DSL—. Los nombres prometían un
+   contrato que nadie exigía.
+
+   `node()` y `step()` siguen siendo la puerta de abajo y aceptan un objeto de
+   fuera que no herede de nada, porque ahí el tipo lo elige quien llama. Lo que
+   no aceptan es la contradicción: `node()` con algo que hereda de `Step` es un
+   error que dice cuál es la llamada correcta.
 5. **`Wire` no materializa hasta `somatize`.** Guarda por dónde se entra y por
    dónde se sale, más las listas de nodos y aristas. Así juntar dos trozos es
    concatenar listas y no fusionar dos grafos, y un id repetido se cuenta al

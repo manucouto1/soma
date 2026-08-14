@@ -91,21 +91,86 @@ def test_un_step_encaja_donde_encajaria_un_filtro():
     assert g.forward(41) == 42.0
 
 
-# ── Heredar es opcional ──
+# ── La herencia es lo que decide ──
 
 
-def test_un_objeto_sin_heredar_vale_si_algo_a_su_lado_hereda():
+def test_la_clase_obliga_a_implementar_su_metodo():
+    class SinForward(Filter):
+        pass
+
+    class SinPoll(Step):
+        pass
+
+    with pytest.raises(TypeError, match="abstract method 'forward'"):
+        SinForward()
+    with pytest.raises(TypeError, match="abstract method 'poll'"):
+        SinPoll()
+
+
+def test_manda_la_herencia_no_los_metodos_que_tenga():
+    class Confusa(Step):
+        def poll(self, ctx):
+            return {"done": ctx["input"]}
+
+        def forward(self, x):  # existe, y da igual
+            return x
+
+    assert "Step {" in Graph.somatize(Confusa()).plan()
+
+
+def test_heredar_de_las_dos_no_vale():
+    class Ambas(Filter, Step):
+        def forward(self, x):
+            return x
+
+        def poll(self, ctx):
+            return {"done": ctx["input"]}
+
+    with pytest.raises(TypeError, match="hereda de Filter y de Step a la vez"):
+        Graph.somatize(Ambas())
+
+
+def test_en_el_dsl_hay_que_heredar():
     class Suelto:
         def forward(self, x):
             return x * 2
 
-    g = Graph.somatize(Suelto() >> Sumar(1))
-    assert g.forward(20) == 41.0
+    with pytest.raises(TypeError, match="tiene que heredar de soma_next.Filter"):
+        Graph.somatize(Suelto() >> Sumar(1))
 
 
 def test_lo_que_no_puede_ser_nodo_lo_dice():
-    with pytest.raises(TypeError, match="le falta forward\\(\\) o poll\\(\\)"):
+    with pytest.raises(TypeError, match="tiene que heredar de"):
         Graph.somatize(Sumar(1) >> "esto no es un filtro")
+
+
+# ── La puerta de abajo: node() y step() ──
+
+
+def test_node_con_algo_que_hereda_de_step_es_una_contradiccion():
+    class UnStep(Step):
+        def poll(self, ctx):
+            return {"done": ctx["input"]}
+
+    g = Graph()
+    with pytest.raises(TypeError, match="hereda de Step, así que se añade con step"):
+        g.node("x", UnStep())
+
+
+def test_step_con_algo_que_hereda_de_filter_es_una_contradiccion():
+    g = Graph()
+    with pytest.raises(TypeError, match="hereda de Filter, así que se añade con node"):
+        g.step("x", Sumar(1))
+
+
+def test_un_objeto_de_fuera_sigue_entrando_por_la_puerta_de_abajo():
+    class Ajeno:  # no hereda de nada nuestro
+        def forward(self, x):
+            return x * 2
+
+    g = Graph()
+    g.node("ajeno", Ajeno())
+    assert g.forward(21) == 42.0
 
 
 # ── El DSL y las llamadas construyen lo mismo ──
@@ -122,3 +187,9 @@ def test_el_dsl_no_es_otra_cosa_que_node_y_edge():
     assert dsl.nodes() == a_mano.nodes()
     assert dsl.edges() == a_mano.edges()
     assert dsl.plan() == a_mano.plan()
+
+
+def test_el_numero_de_argumentos_lo_sigue_contando_rust():
+    g = Graph()
+    with pytest.raises(ValueError, match="toma \\(objeto\\)"):
+        g.node()
