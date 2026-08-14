@@ -199,6 +199,6 @@ decidir.
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
-- CU5 — cachear la salida de un nodo por contenido
-- CU6 — validar tipos entre nodos conectados (schemas)
-- CU7 — control de flujo: rama y bucle
+- CU6 — cachear la salida de un nodo por contenido
+- CU7 — validar tipos entre nodos conectados (schemas)
+- CU8 — control de flujo: rama y bucle
