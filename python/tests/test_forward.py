@@ -1,35 +1,19 @@
-"""Ejecutar un grafo: el motor está en Rust, esto solo aporta los filtros."""
+"""Ejecutar: el motor está en Rust, esto solo aporta las implementaciones."""
 
 import pytest
 
-import soma_next
+from conftest import Identidad, Media, Sumar
+from soma_next import Done, Node
 
 
-class Sumar:
-    def __init__(self, cuanto):
-        self.cuanto = cuanto
-
-    def forward(self, x):
-        return x + self.cuanto
+class Mayusculas(Node):
+    def forward(self, x, ctx):
+        return Done(x.upper())
 
 
-class Mayusculas:
-    def forward(self, x):
-        return x.upper()
-
-
-class Romper:
-    def forward(self, x):
+class Romper(Node):
+    def forward(self, x, ctx):
         raise RuntimeError("me rompí")
-
-
-class SinForward:
-    pass
-
-
-@pytest.fixture
-def g():
-    return soma_next.Graph()
 
 
 # ── El camino feliz ──
@@ -39,7 +23,7 @@ def test_un_grafo_vacio_devuelve_su_entrada(g):
     assert g.forward("intacto") == "intacto"
 
 
-def test_un_solo_filtro(g):
+def test_un_solo_nodo(g):
     g.node("sumar", Sumar(1))
     assert g.forward(41) == 42.0
 
@@ -59,28 +43,25 @@ def test_texto_cruza_la_frontera(g):
 
 
 def test_una_lista_va_y_vuelve_igual(g):
-    class Doblar:
-        def forward(self, xs):
-            return [x * 2 for x in xs]
-
-    g.node("doblar", Doblar())
-    assert g.forward([1, 2, 3]) == [2.0, 4.0, 6.0]
+    g.node("id", Identidad())
+    assert g.forward([1, 2, 3]) == [1.0, 2.0, 3.0]
 
 
 def test_una_lista_anidada_tambien(g):
-    class Identidad:
-        def forward(self, x):
-            return x
-
     g.node("id", Identidad())
     assert g.forward([1, ["dos", None], 3]) == [1.0, ["dos", None], 3.0]
 
 
+def test_un_dict_va_y_vuelve_igual(g):
+    g.node("id", Identidad())
+    assert g.forward({"b": 1, "a": ["dos", None]}) == {"b": 1.0, "a": ["dos", None]}
+
+
 def test_sin_entrada_el_nodo_recibe_none(g):
-    class Recibe:
-        def forward(self, x):
+    class Recibe(Node):
+        def forward(self, x, ctx):
             assert x is None
-            return "vale"
+            return Done("vale")
 
     g.node("recibe", Recibe())
     assert g.forward() == "vale"
@@ -90,21 +71,24 @@ def test_sin_entrada_el_nodo_recibe_none(g):
 
 
 def test_un_objeto_sin_forward_falla_al_registrarlo(g):
+    class NoLoEs:
+        pass
+
     with pytest.raises(TypeError, match="le falta forward"):
-        g.node("malo", SinForward())
+        g.node("malo", NoLoEs())
     assert len(g) == 0
 
 
-def test_la_excepcion_de_un_filtro_dice_el_nodo(g):
+def test_la_excepcion_de_un_nodo_dice_cual_fue(g):
     g.node("bomba", Romper())
     with pytest.raises(ValueError, match="el nodo `bomba` falló"):
         g.forward(1)
 
 
 def test_un_tipo_que_no_cruza_lo_dice(g):
-    class Devuelve:
-        def forward(self, x):
-            return {"no", "cruzo"}  # un set, no un dict
+    class Devuelve(Node):
+        def forward(self, x, ctx):
+            return Done({"no", "cruzo"})  # un set
 
     g.node("devuelve", Devuelve())
     with pytest.raises(ValueError, match="un `set` no cruza"):
@@ -117,17 +101,23 @@ def test_un_bool_no_se_convierte_en_silencio(g):
         g.forward(True)
 
 
-# ── Las decisiones pendientes, visibles desde Python ──
+def test_una_clave_que_no_es_texto_lo_dice(g):
+    g.node("id", Identidad())
+    with pytest.raises(TypeError, match="claves de un dict"):
+        g.forward({1: "uno"})
+
+
+def test_devolver_algo_que_no_es_una_transicion_lo_dice(g):
+    class Confuso(Node):
+        def forward(self, x, ctx):
+            return "olvidé el Done"
+
+    g.node("confuso", Confuso())
+    with pytest.raises(ValueError, match="debe devolver Done"):
+        g.forward(1)
 
 
 # ── Abanicos, en las dos direcciones ──
-
-
-class Media:
-    """Un agregador es un filtro que lee un mapa. No hay ningún tipo detrás."""
-
-    def forward(self, entradas):
-        return sum(entradas.values()) / len(entradas)
 
 
 def test_varias_hojas_salen_como_un_mapa_con_su_nombre(g):
@@ -162,9 +152,9 @@ def test_un_diamante_da_la_vuelta(g):
 
 
 def test_el_mapa_conserva_el_orden_en_que_se_declararon_las_aristas(g):
-    class Claves:
-        def forward(self, entradas):
-            return list(entradas.keys())
+    class Claves(Node):
+        def forward(self, entradas, ctx):
+            return Done(list(entradas.keys()))
 
     g.node("segundo", Sumar(1))
     g.node("primero", Sumar(1))
@@ -173,21 +163,6 @@ def test_el_mapa_conserva_el_orden_en_que_se_declararon_las_aristas(g):
     g.edge("primero", "juntar")
 
     assert g.forward(0) == ["segundo", "primero"]
-
-
-def test_un_dict_va_y_vuelve_igual(g):
-    class Identidad:
-        def forward(self, x):
-            return x
-
-    g.node("id", Identidad())
-    assert g.forward({"b": 1, "a": ["dos", None]}) == {"b": 1.0, "a": ["dos", None]}
-
-
-def test_una_clave_que_no_es_texto_lo_dice(g):
-    g.node("sumar", Sumar(1))
-    with pytest.raises(TypeError, match="claves de un dict"):
-        g.forward({1: "uno"})
 
 
 def test_el_plan_se_puede_mirar(g):

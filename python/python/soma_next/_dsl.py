@@ -6,14 +6,10 @@
 lo que salga de todas entra en lo que venga detrás, que es exactamente el
 fan-in — el nodo de la derecha recibe un mapa con la clave de cada rama.
 
-`Filter` y `Step` son clases abstractas, y **la herencia es lo que decide** de
-qué tipo es un nodo. Cada una exige su método —un `Filter` sin `forward` no se
-puede ni instanciar— y `isinstance` es la única pregunta que se hace el DSL.
-
-No es duck typing: mirar si el objeto *tiene* `poll` dejaba pasar que un
-`class X(Step)` con solo `forward` acabara registrado como filtro, sin un
-aviso. Y con un objeto que tuviera los dos métodos, `node()`, `step()` y el DSL
-daban tres respuestas distintas.
+Hay **una sola clase de nodo**, igual que en el núcleo hay un solo trait. Un
+nodo devuelve `Done(valor)` si ya está o `Await([peticiones])` si necesita algo
+del mundo antes de seguir; lo que en otros sitios se llama un filtro es
+simplemente un nodo que siempre contesta `Done`.
 
 Ojo con la precedencia, que es la de Python (y la misma en Rust): `>>` aprieta
 más que `|`, así que las ramas van entre paréntesis.
@@ -54,108 +50,47 @@ class Fork(Topology):
         self.branches = branches
 
 
-class Node(Topology):
+class Declared(Topology):
     """Un objeto declarado como nodo, con su id si se lo pusiste."""
 
     def __init__(self, obj, node_id=None):
         self.obj = obj
         self.node_id = node_id
 
-    def named(self, node_id):
-        """El mismo nodo, con el id que digas."""
-        return Node(self.obj, node_id)
 
+class Node(Topology, ABC):
+    """Lo que ejecuta un nodo del grafo.
 
-class Filter(Topology, ABC):
-    """Algo que transforma un valor en otro y termina siempre.
-
-    Heredar de aquí es lo que hace que un nodo sea un filtro, y obliga a
-    escribir `forward`: sin él, la clase no se puede instanciar.
-    """
-
-    @abstractmethod
-    def forward(self, input):
-        """Transforma la entrada."""
-
-    def named(self, node_id):
-        """El mismo nodo, con el id que digas."""
-        return Node(self, node_id)
-
-
-class Step(Topology, ABC):
-    """Algo que avanza por turnos y puede pedir cosas antes de terminar.
-
-    Heredar de aquí es lo que hace que un nodo sea un step. El método se llama
-    igual que en un filtro —`forward`— porque debajo el contrato es el mismo;
-    lo que cambia es que recibe el contexto y devuelve una transición.
+    Obliga a escribir `forward`: sin él, la clase no se puede instanciar.
     """
 
     @abstractmethod
     def forward(self, input, ctx):
         """Avanza un turno.
 
-        `ctx` trae `turn` y `results`. Devuelve `{"done": valor}` o
-        `{"await": [peticiones]}`.
+        `ctx` trae `turn` y `results`. Devuelve `Done(valor)` o
+        `Await([peticiones])`.
         """
 
     def named(self, node_id):
         """El mismo nodo, con el id que digas."""
-        return Node(self, node_id)
-
-
-def kind_of(obj):
-    """`"filter"` o `"step"`, según de qué herede. La única pregunta que vale.
-
-    Raises:
-        TypeError: si no hereda de ninguna, o si hereda de las dos.
-    """
-    es_filtro = isinstance(obj, Filter)
-    es_step = isinstance(obj, Step)
-    if es_filtro and es_step:
-        raise TypeError(
-            f"`{type(obj).__name__}` hereda de Filter y de Step a la vez, así que "
-            "no hay forma de saber qué es. Un nodo termina siempre o puede no "
-            "terminar; las dos cosas no"
-        )
-    if es_filtro:
-        return "filter"
-    if es_step:
-        return "step"
-    raise TypeError(
-        f"`{type(obj).__name__}` no puede ser un nodo: tiene que heredar de "
-        "soma_next.Filter (termina siempre, escribe forward) o de soma_next.Step "
-        "(puede pedir cosas antes de terminar, escribe poll)"
-    )
-
-
-def ensure_kind(obj, expected):
-    """Comprueba que el objeto es del tipo que la llamada dice.
-
-    Un objeto que no hereda de ninguna de las dos pasa: `node()` y `step()` son
-    la puerta de abajo, y ahí el tipo lo elige quien llama. Lo que no pasa es la
-    contradicción — `node()` con algo que hereda de `Step`.
-    """
-    if not isinstance(obj, (Filter, Step)):
-        return
-    actual = kind_of(obj)
-    if actual != expected:
-        raise TypeError(
-            f"`{type(obj).__name__}` hereda de {actual.capitalize()}, así que se "
-            f"añade con {'step' if actual == 'step' else 'node'}(), no con "
-            f"{'node' if actual == 'step' else 'step'}()"
-        )
+        return Declared(self, node_id)
 
 
 def _wrap(obj):
     """Cualquier cosa, vista como topología.
 
-    Un `Filter` del usuario es un `Topology` —de ahí le vienen los
-    operadores— pero no es un nodo declarado todavía: hay que envolverlo.
+    Un `Node` del usuario es un `Topology` —de ahí le vienen los operadores—
+    pero no es un nodo declarado todavía: hay que envolverlo.
     """
-    if isinstance(obj, (Chain, Fork, Node)):
+    if isinstance(obj, (Chain, Fork, Declared)):
         return obj
-    kind_of(obj)  # decide, o explica por qué no puede
-    return Node(obj)
+    if isinstance(obj, Node):
+        return Declared(obj)
+    raise TypeError(
+        f"`{type(obj).__name__}` no puede ir en una expresión de grafo: tiene "
+        "que heredar de soma_next.Node"
+    )
 
 
 def _steps(topology):
@@ -192,8 +127,9 @@ def _walk(g, topology, sources):
             for terminal in _walk(g, _wrap(branch), sources)
         ]
 
-    add = g.step if kind_of(topology.obj) == "step" else g.node
-    node_id = add(topology.node_id, topology.obj) if topology.node_id else add(topology.obj)
+    node_id = (
+        g.node(topology.node_id, topology.obj) if topology.node_id else g.node(topology.obj)
+    )
     for source in sources:
         g.edge(source, node_id)
     return [node_id]

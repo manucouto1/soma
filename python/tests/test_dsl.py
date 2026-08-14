@@ -2,34 +2,14 @@
 
 import pytest
 
-import soma_next
-from soma_next import Filter, Graph, Step
-
-
-class Sumar(Filter):
-    def __init__(self, cuanto):
-        self.cuanto = cuanto
-
-    def forward(self, x):
-        return x + self.cuanto
-
-
-class Media(Filter):
-    """Un agregador es un filtro que lee un mapa."""
-
-    def forward(self, entradas):
-        return sum(entradas.values()) / len(entradas)
-
-
-class Eco(Step):
-    def forward(self, x, ctx):
-        return {"done": x}
+from conftest import Media, Preguntar, Sumar
+from soma_next import Done, Graph, Node
 
 
 # ── Encadenar ──
 
 
-def test_un_solo_filtro_ya_es_un_grafo():
+def test_un_solo_nodo_ya_es_un_grafo():
     g = Graph.somatize(Sumar(1))
     assert g.nodes() == ["sumar"]
     assert g.forward(41) == 42.0
@@ -83,89 +63,43 @@ def test_tres_ramas():
     assert g.forward(0) == {"a": 1.0, "b": 2.0, "c": 3.0}
 
 
-# ── Filtros y steps en la misma expresión ──
+def test_un_nodo_que_pide_turnos_encaja_donde_encajaria_cualquiera():
+    from conftest import Gritar
+
+    g = Graph.somatize(Sumar(1) >> Preguntar("x"))
+    assert g.forward(41, driver=Gritar()) == "X"
 
 
-def test_un_step_encaja_donde_encajaria_un_filtro():
-    g = Graph.somatize(Sumar(1) >> Eco())
-    assert g.forward(41) == 42.0
+# ── La clase obliga, y es la única puerta del DSL ──
 
 
-# ── La herencia es lo que decide ──
-
-
-def test_la_clase_obliga_a_implementar_su_metodo():
-    class SinForward(Filter):
-        pass
-
-    class SinForwardStep(Step):
+def test_la_clase_obliga_a_implementar_forward():
+    class SinForward(Node):
         pass
 
     with pytest.raises(TypeError, match="abstract method 'forward'"):
         SinForward()
-    with pytest.raises(TypeError, match="abstract method 'forward'"):
-        SinForwardStep()
 
 
-def test_manda_la_herencia_no_los_metodos_que_tenga():
-    class Confusa(Step):
-        def forward(self, x, ctx):
-            return {"done": x}
-
-    # No se distinguen en el plan: los dos son un paso. Lo que decide la
-    # herencia es la CONVENCIÓN DE LLAMADA, no un tipo de nodo.
-    g = Graph.somatize(Confusa())
-    assert g.forward("eco", driver=None) == "eco"
-
-
-def test_heredar_de_las_dos_no_vale():
-    class Ambas(Filter, Step):
-        def forward(self, x, ctx=None):
-            return x
-
-    with pytest.raises(TypeError, match="hereda de Filter y de Step a la vez"):
-        Graph.somatize(Ambas())
-
-
-def test_en_el_dsl_hay_que_heredar():
+def test_en_el_dsl_hay_que_heredar_de_node():
     class Suelto:
-        def forward(self, x):
-            return x * 2
+        def forward(self, x, ctx):
+            return Done(x)
 
-    with pytest.raises(TypeError, match="tiene que heredar de soma_next.Filter"):
+    with pytest.raises(TypeError, match="tiene que heredar de soma_next.Node"):
         Graph.somatize(Suelto() >> Sumar(1))
 
 
 def test_lo_que_no_puede_ser_nodo_lo_dice():
-    with pytest.raises(TypeError, match="tiene que heredar de"):
-        Graph.somatize(Sumar(1) >> "esto no es un filtro")
+    with pytest.raises(TypeError, match="tiene que heredar de soma_next.Node"):
+        Graph.somatize(Sumar(1) >> "esto no es un nodo")
 
 
-# ── La puerta de abajo: node() y step() ──
-
-
-def test_node_con_algo_que_hereda_de_step_es_una_contradiccion():
-    class UnStep(Step):
-        def forward(self, x, ctx):
-            return {"done": x}
-
-    g = Graph()
-    with pytest.raises(TypeError, match="hereda de Step, así que se añade con step"):
-        g.node("x", UnStep())
-
-
-def test_step_con_algo_que_hereda_de_filter_es_una_contradiccion():
-    g = Graph()
-    with pytest.raises(TypeError, match="hereda de Filter, así que se añade con node"):
-        g.step("x", Sumar(1))
-
-
-def test_un_objeto_de_fuera_sigue_entrando_por_la_puerta_de_abajo():
+def test_un_objeto_de_fuera_sigue_entrando_por_la_puerta_de_abajo(g):
     class Ajeno:  # no hereda de nada nuestro
-        def forward(self, x):
-            return x * 2
+        def forward(self, x, ctx):
+            return Done(x * 2)
 
-    g = Graph()
     g.node("ajeno", Ajeno())
     assert g.forward(21) == 42.0
 
@@ -186,7 +120,6 @@ def test_el_dsl_no_es_otra_cosa_que_node_y_edge():
     assert dsl.plan() == a_mano.plan()
 
 
-def test_el_numero_de_argumentos_lo_sigue_contando_rust():
-    g = Graph()
+def test_el_numero_de_argumentos_lo_sigue_contando_rust(g):
     with pytest.raises(ValueError, match="toma \\(objeto\\)"):
         g.node()

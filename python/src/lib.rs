@@ -8,7 +8,7 @@
 mod node;
 mod value;
 
-use node::{PyDriver, PyFilterNode, PyStepNode};
+use node::{PyAwait, PyCtx, PyDone, PyDriver, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
@@ -55,7 +55,7 @@ impl PyGraph {
         }
     }
 
-    /// Añade un nodo que se llama como `forward(x)` y devuelve un valor.
+    /// Añade un nodo: cualquier objeto con `forward(input, ctx)`.
     ///
     /// `node(obj)` le pone nombre, `node("id", obj)` lo nombras tú. Devuelve el
     /// id, que es lo que necesitas para `edge`.
@@ -65,7 +65,7 @@ impl PyGraph {
 
         // Antes de tocar el grafo: un objeto que no puede ser nodo falla aquí,
         // no a mitad de un run.
-        let wrapped = PyFilterNode::new(&implementation)?;
+        let wrapped = PyNode::new(&implementation)?;
 
         self.graph.add_node(id.clone()).map_err(to_py_err)?;
         self.catalog.insert(id.clone(), Arc::new(wrapped));
@@ -146,20 +146,6 @@ impl PyGraph {
     /// El objeto que registraste bajo `node_id`, o `None`.
     fn implementation(&self, node_id: &str) -> Option<&PyObject> {
         self.implementations.get(node_id)
-    }
-
-    /// Añade un nodo que se llama como `forward(x, ctx)` y devuelve una
-    /// transición — el que puede pedir cosas antes de terminar.
-    #[pyo3(signature = (*args))]
-    fn step(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<String> {
-        let (id, implementation) = self.name_and_object(args)?;
-        let wrapped = PyStepNode::new(&implementation)?;
-
-        self.graph.add_node(id.clone()).map_err(to_py_err)?;
-        self.catalog.insert(id.clone(), Arc::new(wrapped));
-        self.implementations
-            .insert(id.to_string(), implementation.unbind());
-        Ok(id.to_string())
     }
 
     /// Cómo se va a recorrer este grafo, tal cual lo decide el compilador.
@@ -275,6 +261,9 @@ fn snake_case(name: &str) -> String {
 #[pymodule]
 fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
+    m.add_class::<PyCtx>()?;
+    m.add_class::<PyDone>()?;
+    m.add_class::<PyAwait>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

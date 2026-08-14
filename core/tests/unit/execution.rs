@@ -273,26 +273,3 @@ fn un_nodo_puede_evolucionar_de_terminar_siempre_a_pedir_un_turno() {
         .unwrap();
     assert_eq!(out, Value::text("NEGATIVO"));
 }
-
-#[test]
-fn pure_envuelve_una_funcion_sin_necesitar_un_segundo_trait() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("doblar").unwrap();
-    c.insert(
-        "doblar",
-        Arc::new(soma_next_core::Pure(|v: &Value| match v {
-            Value::Number(x) => Ok(Value::number(x * 2.0)),
-            otro => Err(NodeError::new(format!(
-                "esperaba un número, había {}",
-                otro.type_name()
-            ))),
-        })),
-    );
-
-    let plan = compile(&g, &c).unwrap();
-    assert_eq!(
-        numero(&Executor::new(&c).run(&plan, Value::number(21.0)).unwrap()),
-        42.0
-    );
-}

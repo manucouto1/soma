@@ -384,10 +384,57 @@ catálogo para saber de qué tipo es cada nodo — solo para comprobar que lo ha
 necesite consultar algo se le añade una rama `Await` en el mismo cuerpo, sin
 cambiar de tipo ni de registro. Con dos traits eso era `error[E0119]`. Hay test.
 
+## CU7 — El mismo mecanismo en los dos lenguajes
+
+```python
+from soma_next import Await, Done, Graph, Node
+
+class Limpiar(Node):
+    def forward(self, x, ctx):
+        return Done(x.strip())
+
+class Preguntar(Node):
+    def forward(self, x, ctx):
+        if ctx.turn == 0:
+            return Await([f"¿y {x}?"])
+        return Done(ctx.results[0])
+
+Graph.somatize(Limpiar() >> Preguntar()).forward("  hola  ", driver=MiDriver())
+```
+
+Estado: **cerrado**. 47 tests en Rust, 56 en Python.
+
+### Lo que faltaba de CU6
+
+CU6 unificó el núcleo pero dejó Python con dos clases (`Filter` y `Step`) y dos
+convenciones de llamada. Era una asimetría sin razón: si debajo hay un contrato,
+arriba no hay por qué elegir puerta.
+
+### Decisiones tomadas
+
+1. **Una sola clase `Node` en Python**, con `forward(input, ctx)` que devuelve
+   una transición. `Filter` y `Step` desaparecen, y con ellas `g.step()`,
+   `kind_of`, `ensure_kind` y los dos `override` de `Graph`.
+2. **`Ctx`, `Done` y `Await` son `#[pyclass]`**, no diccionarios. Son los mismos
+   conceptos del núcleo cruzando la costura, así que el adaptador los reconoce
+   por su tipo en vez de adivinar por las claves de un dict, y `ctx.turn` se lee
+   como en Rust en lugar de `ctx["turn"]`.
+3. **Un adaptador, no dos.** `PyFilterNode` y `PyStepNode` se funden en `PyNode`.
+4. **Fuera `Pure`.** Era azúcar en el núcleo para envolver una función, y cada
+   implementación decide cómo transiciona sin necesitar un atajo.
+
+### El precio, dicho claro
+
+Un nodo que solo transforma escribe ahora `return Done(x.strip())` y acepta un
+`ctx` que no mira. Es más ceremonia que `return x.strip()`, y es deliberado:
+compra que **no haya dos formas de escribir un nodo**, que el DSL tenga una sola
+puerta, y que un nodo pueda ganar un turno añadiendo una rama en vez de
+cambiando de clase.
+
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
 
-- CU7 — cachear la salida de un nodo por contenido
-- CU8 — validar tipos entre nodos conectados (schemas)
-- CU9 — control de flujo: rama y bucle
+- CU8 — cachear la salida de un nodo por contenido
+- CU9 — validar tipos entre nodos conectados (schemas)
+- CU10 — control de flujo: rama y bucle

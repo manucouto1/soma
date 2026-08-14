@@ -61,6 +61,11 @@ cada una con la forma de llamada que decidamos.
 en Rust. `node()`/`edge()` quedan para cuando la topología se construye en un
 bucle o viene de fuera.
 
+**Un nodo es uno solo**, en los dos lenguajes: `forward(input, ctx)` devuelve
+`Done(valor)` o `Await([peticiones])`. No hay un tipo "filtro" y otro "step" —
+un filtro es un nodo que siempre contesta `Done`, y eso lo dice su transición,
+no su tipo.
+
 ## Comandos
 
 ```bash

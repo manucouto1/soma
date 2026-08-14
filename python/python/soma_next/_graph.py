@@ -18,25 +18,9 @@ from soma_next._soma_next import Graph as _RustGraph
 class Graph(_RustGraph):
     """Un grafo de cómputo: nodos, aristas y lo que ejecuta cada uno.
 
-    Todo lo demás —`edge`, `forward`, `plan` y las consultas de topología— se
-    hereda de la clase de Rust.
+    Todo lo demás —`node`, `edge`, `forward`, `plan` y las consultas de
+    topología— se hereda de la clase de Rust.
     """
-
-    def node(self, *args):
-        """Añade un filtro: `node(obj)` o `node("id", obj)`.
-
-        Si el objeto hereda de `Step`, esto es una contradicción y se dice —
-        la herencia manda sobre la llamada.
-        """
-        if args:
-            _dsl.ensure_kind(args[-1], "filter")
-        return super().node(*args)
-
-    def step(self, *args):
-        """Añade un step: `step(obj)` o `step("id", obj)`."""
-        if args:
-            _dsl.ensure_kind(args[-1], "step")
-        return super().step(*args)
 
     @classmethod
     def somatize(cls, topology):

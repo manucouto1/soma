@@ -89,20 +89,3 @@ impl std::fmt::Display for NodeError {
 }
 
 impl std::error::Error for NodeError {}
-
-/// Un nodo que siempre termina a la primera, hecho de una función.
-///
-/// Es azúcar para el caso común, y es una **struct** y no un trait a propósito:
-/// un segundo trait con un `forward` propio dejaba el nombre ambiguo
-/// (`error[E0034]`) y encerraba al tipo, que ya no podía implementar `Node` a
-/// mano el día que necesitara un turno (`error[E0119]`).
-pub struct Pure<F>(pub F);
-
-impl<F> Node for Pure<F>
-where
-    F: Fn(&Value) -> Result<Value, NodeError> + Send + Sync,
-{
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done((self.0)(input)?))
-    }
-}

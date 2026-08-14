@@ -1,21 +1,28 @@
 """soma-next: el gemelo re-derivado de Soma, un caso de uso cada vez.
 
-La forma normal de escribir un grafo es la expresión::
+Un nodo es cualquier cosa que sabe avanzar un turno::
 
-    from soma_next import Filter, Graph
+    from soma_next import Await, Done, Graph, Node
 
-    class Limpiar(Filter):
-        def forward(self, x): ...
+    class Limpiar(Node):
+        def forward(self, x, ctx):
+            return Done(x.strip())
 
-    g = Graph.somatize(Limpiar() >> (Izq() | Der()) >> Media())
-    g.forward(datos)
+    class Preguntar(Node):
+        def forward(self, x, ctx):
+            if ctx.turn == 0:
+                return Await([f"¿y {x}?"])
+            return Done(ctx.results[0])
+
+    g = Graph.somatize(Limpiar() >> Preguntar())
+    g.forward("  hola  ", driver=MiDriver())
 
 `Graph()` con `node()` y `edge()` sigue estando para cuando la topología se
 construye en un bucle o viene de fuera.
 """
 
-from soma_next._dsl import Filter, Step
+from soma_next._dsl import Node
 from soma_next._graph import Graph
-from soma_next._soma_next import __version__
+from soma_next._soma_next import Await, Ctx, Done, __version__
 
-__all__ = ["Filter", "Graph", "Step", "__version__"]
+__all__ = ["Await", "Ctx", "Done", "Graph", "Node", "__version__"]

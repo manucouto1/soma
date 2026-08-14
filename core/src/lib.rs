@@ -37,6 +37,6 @@ pub use catalog::Catalog;
 pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
-pub use node::{Ctx, Node, NodeError, Pure, Transition};
+pub use node::{Ctx, Node, NodeError, Transition};
 pub use plan::{CompileError, Plan, compile};
 pub use value::Value;
