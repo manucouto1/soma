@@ -104,10 +104,10 @@ def test_la_excepcion_de_un_filtro_dice_el_nodo(g):
 def test_un_tipo_que_no_cruza_lo_dice(g):
     class Devuelve:
         def forward(self, x):
-            return {"no": "cruzo"}
+            return {"no", "cruzo"}  # un set, no un dict
 
     g.node("devuelve", Devuelve())
-    with pytest.raises(ValueError, match="un `dict` no cruza"):
+    with pytest.raises(ValueError, match="un `set` no cruza"):
         g.forward(1)
 
 
@@ -120,41 +120,81 @@ def test_un_bool_no_se_convierte_en_silencio(g):
 # ── Las decisiones pendientes, visibles desde Python ──
 
 
-def test_juntar_dos_ramas_todavia_no_esta_decidido(g):
-    for name in ("izq", "der", "juntar"):
-        g.node(name, Sumar(1))
-    g.edge("izq", "juntar")
-    g.edge("der", "juntar")
-    with pytest.raises(ValueError, match="cómo se combinan"):
-        g.forward(0)
+# ── Abanicos, en las dos direcciones ──
 
 
-# ── Abanicos ──
+class Media:
+    """Un agregador es un filtro que lee un mapa. No hay ningún tipo detrás."""
+
+    def forward(self, entradas):
+        return sum(entradas.values()) / len(entradas)
 
 
-def test_un_nodo_puede_alimentar_a_dos_ramas(g):
+def test_varias_hojas_salen_como_un_mapa_con_su_nombre(g):
     g.node("fuente", Sumar(1))
     g.node("izq", Sumar(10))
     g.node("der", Sumar(100))
     g.edge("fuente", "izq")
     g.edge("fuente", "der")
 
-    assert g.forward(0) == [11.0, 101.0]
+    assert g.forward(0) == {"izq": 11.0, "der": 101.0}
 
 
-def test_dos_raices_sueltas_tambien_son_ramas(g):
-    g.node("a", Sumar(1))
-    g.node("b", Sumar(2))
-    assert g.forward(0) == [1.0, 2.0]
+def test_a_un_nodo_con_dos_entradas_le_llega_un_mapa(g):
+    g.node("izq", Sumar(10))
+    g.node("der", Sumar(100))
+    g.node("juntar", Media())
+    g.edge("izq", "juntar")
+    g.edge("der", "juntar")
+
+    assert g.forward(0) == 55.0
+
+
+def test_un_diamante_da_la_vuelta(g):
+    g.node("fuente", Sumar(1))
+    g.node("izq", Sumar(10))
+    g.node("der", Sumar(100))
+    g.node("juntar", Media())
+    for a, b in (("fuente", "izq"), ("fuente", "der"), ("izq", "juntar"), ("der", "juntar")):
+        g.edge(a, b)
+
+    assert g.forward(0) == 56.0
+
+
+def test_el_mapa_conserva_el_orden_en_que_se_declararon_las_aristas(g):
+    class Claves:
+        def forward(self, entradas):
+            return list(entradas.keys())
+
+    g.node("segundo", Sumar(1))
+    g.node("primero", Sumar(1))
+    g.node("juntar", Claves())
+    g.edge("segundo", "juntar")
+    g.edge("primero", "juntar")
+
+    assert g.forward(0) == ["segundo", "primero"]
+
+
+def test_un_dict_va_y_vuelve_igual(g):
+    class Identidad:
+        def forward(self, x):
+            return x
+
+    g.node("id", Identidad())
+    assert g.forward({"b": 1, "a": ["dos", None]}) == {"b": 1.0, "a": ["dos", None]}
+
+
+def test_una_clave_que_no_es_texto_lo_dice(g):
+    g.node("sumar", Sumar(1))
+    with pytest.raises(TypeError, match="claves de un dict"):
+        g.forward({1: "uno"})
 
 
 def test_el_plan_se_puede_mirar(g):
     g.node("fuente", Sumar(1))
     g.node("izq", Sumar(10))
-    g.node("der", Sumar(100))
     g.edge("fuente", "izq")
-    g.edge("fuente", "der")
 
     plan = g.plan()
     assert "Sequence" in plan
-    assert "Parallel" in plan
+    assert "from" in plan

@@ -1,6 +1,6 @@
 //! El motor, contra filtros y steps de Rust: sin Python de por medio.
 
-use crate::dobles::{Gritar, Inmediato, Insaciable, Preguntar, Romper, Sumar};
+use crate::dobles::{Gritar, Inmediato, Insaciable, Media, Preguntar, Romper, Sumar};
 use soma_next_core::{Catalog, Executor, Graph, Plan, RunError, StepError, Value, compile};
 use std::sync::Arc;
 
@@ -38,7 +38,7 @@ fn una_cadena_encadena_las_salidas() {
 }
 
 #[test]
-fn un_abanico_produce_una_lista_con_lo_de_cada_rama() {
+fn varias_hojas_salen_como_un_mapa_con_su_nombre() {
     let mut g = Graph::new();
     let mut c = Catalog::new();
     for (id, cuanto) in [("fuente", 1.0), ("izq", 10.0), ("der", 100.0)] {
@@ -54,8 +54,55 @@ fn un_abanico_produce_una_lista_con_lo_de_cada_rama() {
     // fuente deja 1.0, y cada rama parte de ahí.
     assert_eq!(
         out,
-        Value::list(vec![Value::number(11.0), Value::number(101.0)])
+        Value::map(vec![
+            ("izq".to_string(), Value::number(11.0)),
+            ("der".to_string(), Value::number(101.0)),
+        ])
     );
+    assert_eq!(out.get("der"), Some(&Value::number(101.0)));
+}
+
+#[test]
+fn a_un_nodo_con_dos_entradas_le_llega_un_mapa() {
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    for (id, cuanto) in [("izq", 10.0), ("der", 100.0)] {
+        g.add_node(id).unwrap();
+        c.insert_filter(id, Arc::new(Sumar(cuanto)));
+    }
+    g.add_node("juntar").unwrap();
+    c.insert_filter("juntar", Arc::new(Media));
+    g.add_edge("izq", "juntar").unwrap();
+    g.add_edge("der", "juntar").unwrap();
+
+    let plan = compile(&g, &c).unwrap();
+    let out = Executor::new(&c).run(&plan, Value::number(0.0)).unwrap();
+    assert_eq!(numero(&out), 55.0);
+}
+
+#[test]
+fn un_diamante_da_la_vuelta() {
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    for (id, cuanto) in [("fuente", 1.0), ("izq", 10.0), ("der", 100.0)] {
+        g.add_node(id).unwrap();
+        c.insert_filter(id, Arc::new(Sumar(cuanto)));
+    }
+    g.add_node("juntar").unwrap();
+    c.insert_filter("juntar", Arc::new(Media));
+    for (a, b) in [
+        ("fuente", "izq"),
+        ("fuente", "der"),
+        ("izq", "juntar"),
+        ("der", "juntar"),
+    ] {
+        g.add_edge(a, b).unwrap();
+    }
+
+    let plan = compile(&g, &c).unwrap();
+    let out = Executor::new(&c).run(&plan, Value::number(0.0)).unwrap();
+    // fuente deja 1.0; ramas 11.0 y 101.0; media 56.0.
+    assert_eq!(numero(&out), 56.0);
 }
 
 #[test]

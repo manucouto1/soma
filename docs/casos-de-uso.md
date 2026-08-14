@@ -130,16 +130,9 @@ Los cuatro papeles, que es fácil confundir:
 6. **Un bool no cruza la frontera.** `True` como el tensor `1.0` es la clase de
    conversión silenciosa que después nadie entiende.
 
-### La decisión que el motor NO toma
+### Las dos decisiones que el motor NO tomaba
 
-**Fan-in**: a un nodo le llegan dos aristas. ¿Cómo se combinan los dos valores?
-No hay respuesta obvia, así que falla al compilar con un error que nombra la
-decisión pendiente. Cubierto por tests en Rust y en Python.
-
-*(Hubo un segundo error, `ManyLeaves`, que prohibía el fan-out. Era un fallo de
-diseño: confundía "de este nodo salen dos ramas" —que no tiene ninguna
-ambigüedad, las dos reciben lo mismo— con "qué devuelve el grafo". Se quitó en
-CU3: un abanico produce una `Value::List`.)*
+Las dos se cerraron en CU4. `Fanin` y `ManyLeaves` ya no existen como errores.
 
 ## CU3 — La forma de la ejecución, y los steps
 
@@ -206,7 +199,6 @@ decidir.
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
-- CU4 — fan-in: cómo se combinan dos valores que llegan al mismo nodo
 - CU5 — cachear la salida de un nodo por contenido
 - CU6 — validar tipos entre nodos conectados (schemas)
 - CU7 — control de flujo: rama y bucle

@@ -25,8 +25,17 @@ pub enum Value {
     Text(Arc<str>),
     /// Bytes sin interpretar.
     Bytes(Arc<Vec<u8>>),
-    /// Varios valores en orden. Es lo que produce un abanico.
+    /// Varios valores en orden.
     List(Arc<Vec<Value>>),
+    /// Varios valores con nombre. Es lo que recibe un nodo al que llegan
+    /// varias aristas, con la clave del nodo que produjo cada uno.
+    ///
+    /// **Ordenado**, y no por capricho: un `HashMap` itera distinto en cada
+    /// proceso, así que pasarlo a lista daría un orden distinto cada vez y el
+    /// hash por contenido —cuando llegue la caché— sería inservible. Los pares
+    /// van en el orden en que se declararon las aristas, que es además lo
+    /// simétrico con un `dict` de Python.
+    Map(Arc<Vec<(String, Value)>>),
 }
 
 impl Value {
@@ -45,6 +54,27 @@ impl Value {
         Self::List(Arc::new(values.into()))
     }
 
+    /// Un mapa, en el orden en que le pases los pares.
+    pub fn map(pairs: impl Into<Vec<(String, Value)>>) -> Self {
+        Self::Map(Arc::new(pairs.into()))
+    }
+
+    /// El valor guardado bajo esa clave, si es un mapa y la tiene.
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        let Self::Map(pairs) = self else {
+            return None;
+        };
+        pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    /// Los valores de un mapa, en orden — pasar un mapa a lista es esto.
+    pub fn values(&self) -> Option<Vec<&Value>> {
+        let Self::Map(pairs) = self else {
+            return None;
+        };
+        Some(pairs.iter().map(|(_, v)| v).collect())
+    }
+
     /// Cómo llamar a esta variante en un mensaje de error.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -53,6 +83,7 @@ impl Value {
             Self::Text(_) => "text",
             Self::Bytes(_) => "bytes",
             Self::List(_) => "list",
+            Self::Map(_) => "map",
         }
     }
 }

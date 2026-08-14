@@ -77,3 +77,31 @@ impl Driver for Gritar {
             .collect()
     }
 }
+
+/// La media de lo que le llegue por sus aristas. Un agregador es esto: un
+/// filtro que lee un mapa. No hay ningún tipo nuevo detrás.
+pub struct Media;
+
+impl Filter for Media {
+    fn forward(&self, input: &Value) -> Result<Value, FilterError> {
+        let Some(values) = input.values() else {
+            return Err(FilterError::new(format!(
+                "Media necesita varias entradas, le llegó {}",
+                input.type_name()
+            )));
+        };
+        let numeros: Vec<f64> = values
+            .iter()
+            .map(|v| match v {
+                Value::Number(x) => Ok(*x),
+                other => Err(FilterError::new(format!(
+                    "Media solo promedia números, uno era {}",
+                    other.type_name()
+                ))),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Value::number(
+            numeros.iter().sum::<f64>() / numeros.len() as f64,
+        ))
+    }
+}

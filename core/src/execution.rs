@@ -3,13 +3,19 @@
 //! Vive en el núcleo, no en los bindings, porque recorrer *es* lógica de
 //! dominio. Python solo aporta las implementaciones.
 //!
-//! Fíjate en lo que **no** hay aquí: resolver de dónde sale la entrada de cada
-//! nodo. Eso lo decidió [`compile`](crate::compile), y lo que quedó fue una
-//! [`Plan::Sequence`] donde cada uno recibe la salida del anterior. Un plan es
-//! una estructura ya decidida, no un grafo que haya que interpretar.
+//! El motor no mira el grafo: cada paso del plan lleva escrito de dónde sale
+//! su entrada, y aquí solo se busca en lo ya producido. Un plan es una
+//! estructura decidida, no un grafo que haya que interpretar.
+//!
+//! Cuando a un nodo le llega **una** cosa, recibe esa cosa. Cuando le llegan
+//! varias, recibe un [`Value::Map`] con la clave del nodo que produjo cada
+//! una: fan-in no es una variante del plan ni un tipo de nodo, es la forma que
+//! toma una entrada con varios orígenes. Agregarlas —promediar, votar,
+//! concatenar— es trabajo del nodo que las recibe, o sea biblioteca.
 
 use crate::{Catalog, Driver, DriverError, FilterError, NodeImpl, Plan, StepCtx, StepError};
 use crate::{NodeId, Transition, Value};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Cuántas veces se le pregunta a un step antes de darlo por colgado.
@@ -53,21 +59,58 @@ impl<'a> Executor<'a> {
     /// Ver [`RunError`]. El primer fallo para la ejecución: no hay recuperación
     /// parcial, porque nadie ha dicho todavía qué debería significar.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
+        let mut produced: HashMap<NodeId, Value> = HashMap::new();
+        let last = self.walk(plan, &input, &mut produced)?;
+
+        // La salida del grafo es la de sus hojas: los nodos cuya salida no lee
+        // nadie. Una hoja → ese valor. Varias → un mapa con la clave de cada
+        // una, igual que una entrada con varios orígenes. Las dos direcciones
+        // del abanico tienen la misma forma, así que un diamante da la vuelta.
+        let leaves = terminals(plan);
+        Ok(match leaves.as_slice() {
+            [] | [_] => last,
+            many => Value::map(
+                many.iter()
+                    .map(|id| {
+                        let value = produced
+                            .get(id)
+                            .cloned()
+                            .expect("el recorrido ejecutó todos los pasos del plan");
+                        (id.to_string(), value)
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        })
+    }
+
+    /// Ejecuta un plan, apuntando lo que produce cada nodo, y devuelve la
+    /// salida de su último paso.
+    fn walk(
+        &self,
+        plan: &Plan,
+        graph_input: &Value,
+        produced: &mut HashMap<NodeId, Value>,
+    ) -> Result<Value, RunError> {
         match plan {
-            Plan::Empty => Ok(input),
-            Plan::Execute(node) => self.run_filter(node, input),
-            Plan::Step(node) => self.drive_step(node, input),
-            Plan::Sequence(plans) => plans
-                .iter()
-                .try_fold(input, |carried, plan| self.run(plan, carried)),
-            Plan::Parallel(branches) => {
-                // Todas reciben la misma entrada; lo que sale es una lista con
-                // sus salidas, en el orden en que se declararon las aristas.
-                let outputs = branches
-                    .iter()
-                    .map(|branch| self.run(branch, input.clone()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Value::list(outputs))
+            Plan::Empty => Ok(graph_input.clone()),
+            Plan::Execute { node, from } => {
+                let input = gather(from, graph_input, produced);
+                let output = self.run_filter(node, input)?;
+                produced.insert(node.clone(), output.clone());
+                Ok(output)
+            }
+            Plan::Step { node, from } => {
+                let input = gather(from, graph_input, produced);
+                let output = self.drive_step(node, input)?;
+                produced.insert(node.clone(), output.clone());
+                Ok(output)
+            }
+            Plan::Sequence(plans) => {
+                let mut last = graph_input.clone();
+                for plan in plans {
+                    last = self.walk(plan, graph_input, produced)?;
+                }
+                Ok(last)
             }
         }
     }
@@ -214,3 +257,53 @@ impl fmt::Display for RunError {
 }
 
 impl std::error::Error for RunError {}
+
+/// Qué recibe un nodo, según de dónde le llegue.
+///
+/// Nada → la entrada del grafo. Una cosa → esa cosa. Varias → un mapa con la
+/// clave de quien produjo cada una, en el orden en que se declararon las
+/// aristas.
+fn gather(from: &[NodeId], graph_input: &Value, produced: &HashMap<NodeId, Value>) -> Value {
+    let recall = |id: &NodeId| {
+        produced
+            .get(id)
+            .cloned()
+            .expect("el orden topológico ya ejecutó a los predecesores")
+    };
+    match from {
+        [] => graph_input.clone(),
+        [single] => recall(single),
+        many => Value::map(
+            many.iter()
+                .map(|id| (id.to_string(), recall(id)))
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
+/// Los nodos del plan cuya salida no lee ningún otro: las hojas.
+fn terminals(plan: &Plan) -> Vec<NodeId> {
+    let mut produced = Vec::new();
+    let mut consumed = Vec::new();
+    collect(plan, &mut produced, &mut consumed);
+    produced
+        .into_iter()
+        .filter(|id| !consumed.contains(id))
+        .collect()
+}
+
+/// Qué produce y qué lee cada paso, aplanando las secuencias.
+fn collect(plan: &Plan, produced: &mut Vec<NodeId>, consumed: &mut Vec<NodeId>) {
+    match plan {
+        Plan::Empty => {}
+        Plan::Execute { node, from } | Plan::Step { node, from } => {
+            produced.push(node.clone());
+            consumed.extend(from.iter().cloned());
+        }
+        Plan::Sequence(plans) => {
+            for plan in plans {
+                collect(plan, produced, consumed);
+            }
+        }
+    }
+}
