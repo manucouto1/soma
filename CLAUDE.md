@@ -55,8 +55,9 @@ no queremos. De cada fichero se extrae la lista de garantías y se contesta a
 cada una con la forma de llamada que decidamos.
 
 **El DSL es la forma normal de escribir un grafo**, en los dos lenguajes:
-`a >> (b | c) >> d`. `node()`/`edge()` quedan para cuando la topología se
-construye en un bucle o viene de fuera.
+`Graph.somatize(a >> (b | c) >> d)` en Python, `(a >> (b | c) >> d).somatize()`
+en Rust. `node()`/`edge()` quedan para cuando la topología se construye en un
+bucle o viene de fuera.
 
 ## Comandos
 

@@ -196,9 +196,119 @@ puede ejecutar. Lo que compra el enum es justo que añadirla el día que haya
 worker sea una variante más, y que el compilador señale cada sitio que tenga que
 decidir.
 
+> **Nota de CU4**: `Plan::Parallel` y los errores `Fanin`/`ManyLeaves` que se
+> describen arriba ya no existen. Ver abajo por qué.
+
+## CU4 — Abanicos en las dos direcciones
+
+```python
+Graph.somatize(Izq().named("izq") | Der().named("der")) >> Media()
+# a `Media` le llega {"izq": …, "der": …}
+```
+
+Estado: **cerrado**. 46 tests en Rust, 52 en Python.
+
+### La pregunta: ¿dónde vive la agregación?
+
+El original la contesta **dos veces**, y las dos enseñan:
+
+- **En la arista** (forward): junta lo que llega en un `serde_json::Map` con la
+  clave del nodo origen, y el agregador es un nodo corriente — `MajorityVote`
+  es un `Filter`.
+- **En el entrenamiento** (federated): `FederatedAggregation::{FedAvg, FedProx,
+  FedYogi}` y `GradientAggregation::{AllReduce, ParameterServer, …}` — enums de
+  algoritmos, envueltos en traits `StateAggregator`/`GradientAggregator` con
+  **un solo implementador cada uno: el propio enum**. Los dos están en la lista
+  de traits huérfanos. Cuando enumeraron los algoritmos reales de FL les salió
+  un enum; el trait de encima no compró nada.
+
+Y la trampa que hay que ver: **la agregación federada no es fan-in.** En FedAvg
+lo que se promedia son estados de N workers al cerrar una ronda — ahí no hay
+arista ni predecesores. Es una operación dentro de `fit`, y llegará con él.
+
+### Decisiones tomadas
+
+1. **No hay trait `Aggregator`.** Un agregador es un filtro que lee un mapa.
+   `Media`, `MajorityVote`, `Concat`, `WeightedMean` son biblioteca.
+2. **`Value::Map`, ordenado.** Un `HashMap` itera distinto en cada proceso, así
+   que pasarlo a lista daría un orden distinto cada vez y el hash por contenido
+   —cuando llegue la caché— sería inservible. Los pares van en orden de
+   declaración de las aristas, que es además lo simétrico con un `dict` de
+   Python: la ida y la vuelta dan el mismo dict.
+3. **Las dos direcciones tienen la misma forma.** Varias entradas → un mapa con
+   la clave de cada origen. Varias hojas → un mapa con la clave de cada hoja.
+   Un diamante da la vuelta.
+4. **El peso viaja con el valor.** FedAvg pondera por muestras de cada cliente;
+   ni una lista ni un mapa de salidas crudas dan ese peso. Cada rama produce
+   algo como `{"update": …, "n": 128}` — otra razón independiente para tener
+   `Value::Map`.
+
+### Lo que se quitó
+
+**`Plan::Parallel`**, añadido en CU3. Se rompía con el fan-in: en un diamante
+las dos ramas reclamaban el nodo de unión y se ejecutaba dos veces. La forma
+correcta es que **cada paso lleve escrito de dónde sale su entrada**
+(`Execute { node, from }`). Con eso el plan sigue siendo autónomo —el motor no
+vuelve a mirar el grafo— y los abanicos salen sin ninguna variante especial.
+`Parallel` volverá cuando signifique algo que hoy no significa: repartir entre
+hilos.
+
+Con él se fueron los errores `CompileError::Fanin` y `ManyLeaves`. `CompileError`
+se queda con una sola variante.
+
+## CU5 — El DSL
+
+```python
+from soma_next import Filter, Graph
+
+g = Graph.somatize(Fuente() >> (Izq().named("izq") | Der().named("der")) >> Media())
+g.forward(0)
+```
+
+```rust
+let (graph, catalog) = (filter("fuente", Sumar(1.0))
+    >> (filter("izq", Sumar(10.0)) | filter("der", Sumar(100.0)))
+    >> filter("juntar", Media))
+.somatize()?;
+```
+
+Estado: **cerrado**. Mismos tests, más `build.rs` y `test_dsl.py`.
+
+`>>` encadena, `|` abre en ramas, y un `>>` detrás de unas ramas abiertas las
+cierra — que es el fan-in de CU4: el nodo de la derecha recibe el mapa. La
+expresión de arriba *es* el diamante.
+
+### Decisiones tomadas
+
+1. **La misma sintaxis en los dos lenguajes.** En Rust sale de implementar
+   `std::ops::Shr` y `BitOr` sobre un tipo propio; no hace falta un macro
+   (`macro_rules!` daría sintaxis que los operadores no dan, pero para esto no
+   hace falta). La precedencia también coincide: `>>` aprieta más que `|`, así
+   que las ramas van entre paréntesis en los dos.
+2. **Se llama `somatize`, que es el verbo del proyecto.** En Python es un
+   classmethod de `Graph`; en Rust, un método de `Wire`, porque devuelve **dos**
+   cosas —la estructura y el almacén— y ninguna contiene a la otra.
+3. **Hay una clase Python encima de la de Rust.** `somatize` recorre una
+   expresión de objetos Python, así que no puede estar en Rust; y un
+   `#[pyclass]` es un tipo inmutable, así que tampoco se le puede colgar al
+   importar. Se declara en el cuerpo de una subclase, que además es lo único
+   que ven `help()`, un IDE y mypy. Es la misma estructura que el Soma original
+   (`soma/_graph.py`), y por las mismas razones.
+4. **Heredar de `Filter`/`Step` es opcional.** Son mixins vacíos que solo dan el
+   azúcar. Un objeto suelto sigue valiendo para `g.node(obj)`, y también dentro
+   de una expresión mientras algo a su lado herede — Python prueba
+   `__rrshift__` cuando el operando izquierdo no sabe.
+5. **`Wire` no materializa hasta `somatize`.** Guarda por dónde se entra y por
+   dónde se sale, más las listas de nodos y aristas. Así juntar dos trozos es
+   concatenar listas y no fusionar dos grafos, y un id repetido se cuenta al
+   final, una sola vez.
+6. **El DSL no es otra cosa que `node` y `edge`.** Hay un test que construye el
+   mismo grafo de las dos formas y compara nodos, aristas y plan.
+
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
+
 - CU6 — cachear la salida de un nodo por contenido
 - CU7 — validar tipos entre nodos conectados (schemas)
 - CU8 — control de flujo: rama y bucle
