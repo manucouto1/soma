@@ -58,13 +58,22 @@ def test_texto_cruza_la_frontera(g):
     assert g.forward("hola") == "HOLA"
 
 
-def test_una_lista_de_numeros_es_un_tensor(g):
+def test_una_lista_va_y_vuelve_igual(g):
     class Doblar:
         def forward(self, xs):
             return [x * 2 for x in xs]
 
     g.node("doblar", Doblar())
     assert g.forward([1, 2, 3]) == [2.0, 4.0, 6.0]
+
+
+def test_una_lista_anidada_tambien(g):
+    class Identidad:
+        def forward(self, x):
+            return x
+
+    g.node("id", Identidad())
+    assert g.forward([1, ["dos", None], 3]) == [1.0, ["dos", None], 3.0]
 
 
 def test_sin_entrada_el_nodo_recibe_none(g):
@@ -120,8 +129,32 @@ def test_juntar_dos_ramas_todavia_no_esta_decidido(g):
         g.forward(0)
 
 
-def test_dos_hojas_todavia_no_esta_decidido(g):
+# ── Abanicos ──
+
+
+def test_un_nodo_puede_alimentar_a_dos_ramas(g):
+    g.node("fuente", Sumar(1))
+    g.node("izq", Sumar(10))
+    g.node("der", Sumar(100))
+    g.edge("fuente", "izq")
+    g.edge("fuente", "der")
+
+    assert g.forward(0) == [11.0, 101.0]
+
+
+def test_dos_raices_sueltas_tambien_son_ramas(g):
     g.node("a", Sumar(1))
-    g.node("b", Sumar(1))
-    with pytest.raises(ValueError, match="cuál es la salida"):
-        g.forward(0)
+    g.node("b", Sumar(2))
+    assert g.forward(0) == [1.0, 2.0]
+
+
+def test_el_plan_se_puede_mirar(g):
+    g.node("fuente", Sumar(1))
+    g.node("izq", Sumar(10))
+    g.node("der", Sumar(100))
+    g.edge("fuente", "izq")
+    g.edge("fuente", "der")
+
+    plan = g.plan()
+    assert "Sequence" in plan
+    assert "Parallel" in plan

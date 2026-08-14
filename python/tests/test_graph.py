@@ -105,7 +105,7 @@ def test_consultar_un_nodo_que_no_existe(g):
 
 
 def test_node_con_argumentos_absurdos(g):
-    with pytest.raises(ValueError, match="node\\(\\) toma"):
+    with pytest.raises(ValueError, match="toma \\(objeto\\)"):
         g.node()
 
 

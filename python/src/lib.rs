@@ -6,18 +6,27 @@
 //! sitio equivocado.
 
 mod filter;
+mod step;
 mod value;
 
 use filter::PyFilter;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
-use soma_next_core::{Catalog, Graph, GraphError, NodeId, RunError, run};
+use soma_next_core::{
+    Catalog, CompileError, Executor, Graph, GraphError, NodeId, RunError, compile,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
+use step::{PyDriver, PyStep};
 
 /// Traduce el error del núcleo a la excepción que un usuario de Python espera.
 fn to_py_err(e: GraphError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// Lo mismo para un fallo al decidir la forma de la ejecución.
+fn compile_err(e: CompileError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
@@ -52,29 +61,14 @@ impl PyGraph {
     /// nombras tú. Devuelve el id, que es lo que necesitas para `edge`.
     #[pyo3(signature = (*args))]
     fn node(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<String> {
-        let (id, implementation) = match args.len() {
-            1 => {
-                let obj = args.get_item(0)?;
-                let wanted = snake_case(&type_name(&obj)?);
-                (self.graph.free_id(&wanted), obj)
-            }
-            2 => (
-                NodeId::from(args.get_item(0)?.extract::<String>()?),
-                args.get_item(1)?,
-            ),
-            n => {
-                return Err(PyValueError::new_err(format!(
-                    "node() toma (filtro) o (id, filtro), no {n} argumentos"
-                )));
-            }
-        };
+        let (id, implementation) = self.name_and_object(args)?;
 
         // Antes de tocar el grafo: un objeto que no puede ser nodo falla aquí,
         // no a mitad de un run.
         let wrapped = PyFilter::new(&implementation)?;
 
         self.graph.add_node(id.clone()).map_err(to_py_err)?;
-        self.catalog.insert(id.clone(), Arc::new(wrapped));
+        self.catalog.insert_filter(id.clone(), Arc::new(wrapped));
         self.implementations
             .insert(id.to_string(), implementation.unbind());
         Ok(id.to_string())
@@ -154,14 +148,53 @@ impl PyGraph {
         self.implementations.get(node_id)
     }
 
-    /// Ejecuta el grafo entero y devuelve lo que produjo su hoja.
-    #[pyo3(signature = (input = None))]
-    fn forward(&self, py: Python<'_>, input: Option<&Bound<'_, PyAny>>) -> PyResult<PyObject> {
+    /// Añade un step: un objeto con `poll(ctx)`, que puede pedir cosas antes
+    /// de terminar. `step(obj)` le pone nombre, `step("id", obj)` lo nombras tú.
+    #[pyo3(signature = (*args))]
+    fn step(&mut self, args: &Bound<'_, PyTuple>) -> PyResult<String> {
+        let (id, implementation) = self.name_and_object(args)?;
+        let wrapped = PyStep::new(&implementation)?;
+
+        self.graph.add_node(id.clone()).map_err(to_py_err)?;
+        self.catalog.insert_step(id.clone(), Arc::new(wrapped));
+        self.implementations
+            .insert(id.to_string(), implementation.unbind());
+        Ok(id.to_string())
+    }
+
+    /// Cómo se va a recorrer este grafo, tal cual lo decide el compilador.
+    fn plan(&self) -> PyResult<String> {
+        Ok(format!(
+            "{:?}",
+            compile(&self.graph, &self.catalog).map_err(compile_err)?
+        ))
+    }
+
+    /// Ejecuta el grafo entero y devuelve lo que produjo.
+    ///
+    /// Con `driver=` se le da a los steps quien atienda lo que pidan: un objeto
+    /// con `perform(peticiones)` que devuelva un resultado por cada una.
+    #[pyo3(signature = (input = None, *, driver = None))]
+    fn forward(
+        &self,
+        py: Python<'_>,
+        input: Option<&Bound<'_, PyAny>>,
+        driver: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyObject> {
         let start = match input {
             Some(obj) => value::from_py(obj)?,
             None => soma_next_core::Value::Null,
         };
-        let out = run(&self.graph, &self.catalog, start).map_err(run_err)?;
+        let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
+
+        let driver = driver.map(PyDriver::new).transpose()?;
+        let executor = Executor::new(&self.catalog);
+        let executor = match &driver {
+            Some(d) => executor.with_driver(d),
+            None => executor,
+        };
+
+        let out = executor.run(&plan, start).map_err(run_err)?;
         value::to_py(py, &out)
     }
 
@@ -183,6 +216,30 @@ impl PyGraph {
 }
 
 impl PyGraph {
+    /// Lee `(obj)` o `(id, obj)`, que es como se añade cualquier nodo.
+    ///
+    /// Sin id, el nombre sale de la clase del objeto: `LimpiarTexto` →
+    /// `limpiar_texto`, sufijando si ya estaba cogido.
+    fn name_and_object<'py>(
+        &self,
+        args: &Bound<'py, PyTuple>,
+    ) -> PyResult<(NodeId, Bound<'py, PyAny>)> {
+        match args.len() {
+            1 => {
+                let obj = args.get_item(0)?;
+                let wanted = snake_case(&type_name(&obj)?);
+                Ok((self.graph.free_id(&wanted), obj))
+            }
+            2 => Ok((
+                NodeId::from(args.get_item(0)?.extract::<String>()?),
+                args.get_item(1)?,
+            )),
+            n => Err(PyValueError::new_err(format!(
+                "toma (objeto) o (id, objeto), no {n} argumentos"
+            ))),
+        }
+    }
+
     /// Un id que sabemos que está en el grafo, o el mismo error que daría el núcleo.
     fn known(&self, node_id: &str) -> PyResult<NodeId> {
         let id = NodeId::from(node_id);

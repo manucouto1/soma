@@ -1,53 +1,38 @@
 //! Lo que viaja por una arista.
 //!
 //! Es el precio de que el núcleo ejecute: si el motor está en Rust, los datos
-//! tienen que tener una forma que Rust entienda, y eso obliga a decidir *ahora*
-//! qué puede cruzar una arista.
+//! tienen que tener una forma que Rust entienda.
 //!
-//! Cuatro variantes, no seis. `Json` pediría `serde_json` y el núcleo no
-//! depende de nada; un `Object` opaco (un pickle) solo sirve para mandarlo por
-//! un cable, y no hay cable. Las dos entrarán cuando un caso de uso las pida,
-//! y el error de conversión dice exactamente qué faltó.
+//! Cinco variantes, y ninguna de adorno. No hay `Json` porque pediría
+//! `serde_json` y el núcleo no depende de nada; no hay `Object` opaco porque
+//! solo sirve para mandar algo por un cable y no hay cable; y no hay `Tensor`
+//! con forma porque nadie produce uno todavía — cuando haya un puente a numpy
+//! o a torch traerá consigo su propia decisión sobre copiar o no copiar.
 
 use std::sync::Arc;
 
 /// Un dato que cruza de un nodo al siguiente.
 ///
-/// `Arc` en todas partes porque un valor se clona en cada arista y clonar no
-/// debe copiar los datos.
+/// `Arc` donde los datos pesan, porque un valor se clona en cada arista y
+/// clonar no debe copiar.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// Nada. Lo que recibe un nodo raíz cuando no le pasas entrada.
     Null,
+    /// Un número.
+    Number(f64),
     /// Texto UTF-8.
     Text(Arc<str>),
     /// Bytes sin interpretar.
     Bytes(Arc<Vec<u8>>),
-    /// Datos numéricos: los valores en orden row-major, más su forma.
-    Tensor {
-        /// Los números, aplanados.
-        values: Arc<Vec<f64>>,
-        /// El tamaño de cada dimensión; su producto es `values.len()`.
-        shape: Vec<usize>,
-    },
+    /// Varios valores en orden. Es lo que produce un abanico.
+    List(Arc<Vec<Value>>),
 }
 
 impl Value {
-    /// Un tensor de una dimensión.
-    pub fn vector(values: impl Into<Vec<f64>>) -> Self {
-        let values = values.into();
-        Self::Tensor {
-            shape: vec![values.len()],
-            values: Arc::new(values),
-        }
-    }
-
-    /// Un solo número.
-    pub fn scalar(x: f64) -> Self {
-        Self::Tensor {
-            values: Arc::new(vec![x]),
-            shape: vec![],
-        }
+    /// Un número.
+    pub fn number(x: f64) -> Self {
+        Self::Number(x)
     }
 
     /// Texto.
@@ -55,13 +40,19 @@ impl Value {
         Self::Text(Arc::from(s.as_ref()))
     }
 
+    /// Una lista.
+    pub fn list(values: impl Into<Vec<Value>>) -> Self {
+        Self::List(Arc::new(values.into()))
+    }
+
     /// Cómo llamar a esta variante en un mensaje de error.
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "null",
+            Self::Number(_) => "number",
             Self::Text(_) => "text",
             Self::Bytes(_) => "bytes",
-            Self::Tensor { .. } => "tensor",
+            Self::List(_) => "list",
         }
     }
 }
@@ -74,6 +65,6 @@ impl From<&str> for Value {
 
 impl From<f64> for Value {
     fn from(x: f64) -> Self {
-        Self::scalar(x)
+        Self::Number(x)
     }
 }

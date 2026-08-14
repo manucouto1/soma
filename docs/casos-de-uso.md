@@ -130,22 +130,83 @@ Los cuatro papeles, que es fácil confundir:
 6. **Un bool no cruza la frontera.** `True` como el tensor `1.0` es la clase de
    conversión silenciosa que después nadie entiende.
 
-### Las dos decisiones que el motor NO toma
+### La decisión que el motor NO toma
 
-Fallan con un error que nombra la decisión pendiente en vez de inventarse una:
+**Fan-in**: a un nodo le llegan dos aristas. ¿Cómo se combinan los dos valores?
+No hay respuesta obvia, así que falla al compilar con un error que nombra la
+decisión pendiente. Cubierto por tests en Rust y en Python.
 
-- **Fan-in**: a un nodo le llegan dos aristas. ¿Cómo se combinan los dos valores?
-  No hay respuesta obvia y `Value` no tiene dónde ponerlos.
-- **Varias hojas**: el grafo termina en dos sitios. ¿Cuál es la salida?
+*(Hubo un segundo error, `ManyLeaves`, que prohibía el fan-out. Era un fallo de
+diseño: confundía "de este nodo salen dos ramas" —que no tiene ninguna
+ambigüedad, las dos reciben lo mismo— con "qué devuelve el grafo". Se quitó en
+CU3: un abanico produce una `Value::List`.)*
 
-Las dos están cubiertas por tests, en Rust y en Python.
+## CU3 — La forma de la ejecución, y los steps
+
+```python
+g.step("agente", Agente())          # un objeto con poll(ctx)
+g.forward(x, driver=MiDriver())     # quien atiende lo que pida
+g.plan()                            # cómo se va a recorrer
+```
+
+Estado: **cerrado**. 39 tests en Rust, 38 en Python.
+
+### La pregunta: ¿hay varias formas de ejecutar un grafo?
+
+Sí — local, remota, por turnos, en paralelo. Pero la respuesta del original **no
+es un trait de ejecutores**: es un enum de diez variantes (`Sequence | Parallel |
+Execute | Step | Loop | Branch | Remote | Composite | Stream | Empty`) y un solo
+`match`. `Remote` no es otro ejecutor: es una variante que *envuelve* un
+sub-plan.
+
+Es el mismo principio que ya habíamos encontrado —la variación como dato, no
+como subtipo— y tiene una ventaja concreta sobre una función suelta o un trait:
+al añadir `Parallel` a mitad de este caso de uso, el compilador señaló el único
+sitio que tenía que decidir qué hacer con ella. Un brazo comodín no habría dicho
+nada.
+
+### La pieza que faltaba: compilar
+
+Entre la estructura y el motor hay ahora un paso: `compile(&Graph, &Catalog) ->
+Plan`. Decide la forma, y de paso **todo lo estructural se detecta antes de
+ejecutar nada**. El motor ya no resuelve de dónde sale la entrada de cada nodo:
+eso lo dice el plan.
+
+Necesita el catálogo porque la forma depende de qué es cada nodo — un filtro se
+llama una vez, un step se conduce por turnos.
+
+### Decisiones tomadas
+
+1. **`Plan` es un enum**, no un trait. Cerrado, exhaustivo, sin comodines.
+2. **`Parallel` significa "las ramas no dependen entre sí"**, no "corre en
+   hilos". Repartirlas es una decisión que no cambia el resultado y no la ha
+   pedido nadie.
+3. **Un abanico produce una `Value::List`** con lo de cada rama, en orden.
+4. **`Executor` es un tipo**, no una función suelta: ejecutar necesita contexto
+   (hoy el almacén y el driver; mañana caché y eventos). Ese "mañana" es lo que
+   en el original se llama `GraphSession`.
+5. **Lo que un step pide es opaco para el núcleo**: un `Value` que el `Driver`
+   interpreta. Por eso no hay ni LLMs, ni herramientas, ni diario de efectos —
+   eso es biblioteca y persistencia, no el contrato.
+6. **`Transition` tiene dos variantes**: `Done` y `Await`. `Spawn`, `Goto` y
+   `Suspend` entrarán con su caso de uso. Sin `#[non_exhaustive]`, a propósito.
+7. **Tope de 64 turnos.** Un step que no termina es un bug del step; el tope
+   hace que se note como un error con nombre y no como un proceso parado.
+8. **`Value` pierde `Tensor` y gana `Number` y `List`.** Nadie producía un
+   tensor con forma, y la ida y vuelta a Python tiene que ser simétrica: lo que
+   entra como lista sale como lista.
+
+### Lo que NO entró
+
+**`Plan::Remote`.** No hay transporte, así que sería una variante que nadie
+puede ejecutar. Lo que compra el enum es justo que añadirla el día que haya
+worker sea una variante más, y que el compilador señale cada sitio que tenga que
+decidir.
 
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
-
-- CU3 — `Step`: la unidad que puede **no terminar** (`Await`, `Suspend`) y el
-  driver que realiza sus efectos. Es la otra mitad de la pregunta de CU2
-- CU4 — cachear la salida de un nodo por contenido
-- CU5 — validar tipos entre nodos conectados (schemas)
-- CU6 — control de flujo: rama y bucle
+- CU4 — fan-in: cómo se combinan dos valores que llegan al mismo nodo
+- CU5 — cachear la salida de un nodo por contenido
+- CU6 — validar tipos entre nodos conectados (schemas)
+- CU7 — control de flujo: rama y bucle

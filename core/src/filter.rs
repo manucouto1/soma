@@ -1,17 +1,14 @@
-//! El contrato de una unidad ejecutable, y dónde se guardan.
+//! El contrato de una unidad que **termina siempre**.
 //!
-//! Un filtro es una **función**: entra un valor, sale otro, termina siempre.
-//! Es la mitad fácil; la otra —una unidad que puede *no* terminar y pedir algo
-//! al mundo antes de seguir— es un `Step`, y todavía no existe aquí.
+//! Un filtro es una función: entra un valor, sale otro, se acabó. La otra
+//! mitad —lo que puede no terminar— es un [`Step`](crate::Step).
 //!
 //! El contrato tiene un método. El del original tiene cinco, y los otros
 //! cuatro no sirven para ejecutar: `config_hash` es para la clave de caché,
 //! `meta` para el compilador, `fit` para entrenar y `composite_fit` para que
 //! el autograd cruce entre filtros. Entrarán con su caso de uso.
 
-use crate::{NodeId, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::Value;
 
 /// Algo que transforma un valor en otro.
 ///
@@ -51,52 +48,3 @@ impl std::fmt::Display for FilterError {
 }
 
 impl std::error::Error for FilterError {}
-
-/// El almacén: qué implementación corresponde a cada nodo.
-///
-/// Va aparte del [`Graph`](crate::Graph) a propósito. El grafo es dato —se
-/// serializa, se compara, se manda a otro sitio—; una implementación no lo es.
-/// Lo que los une es el id del nodo, y nada más.
-#[derive(Default, Clone)]
-pub struct Catalog {
-    filters: HashMap<NodeId, Arc<dyn Filter>>,
-}
-
-impl Catalog {
-    /// Un almacén vacío.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registra la implementación de un nodo, devolviendo la que hubiera antes.
-    pub fn insert(
-        &mut self,
-        id: impl Into<NodeId>,
-        filter: Arc<dyn Filter>,
-    ) -> Option<Arc<dyn Filter>> {
-        self.filters.insert(id.into(), filter)
-    }
-
-    /// La implementación registrada para un nodo.
-    pub fn get(&self, id: &NodeId) -> Option<&Arc<dyn Filter>> {
-        self.filters.get(id)
-    }
-
-    /// Cuántas implementaciones hay.
-    pub fn len(&self) -> usize {
-        self.filters.len()
-    }
-
-    /// Si no hay ninguna.
-    pub fn is_empty(&self) -> bool {
-        self.filters.is_empty()
-    }
-}
-
-impl std::fmt::Debug for Catalog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Catalog")
-            .field("nodes", &self.filters.keys().collect::<Vec<_>>())
-            .finish()
-    }
-}
