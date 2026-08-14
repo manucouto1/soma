@@ -23,6 +23,6 @@ construye en un bucle o viene de fuera.
 
 from soma_next._dsl import Node
 from soma_next._graph import Graph
-from soma_next._soma_next import Await, Ctx, Done, __version__
+from soma_next._soma_next import Await, Ctx, Done, Opaque, __version__
 
-__all__ = ["Await", "Ctx", "Done", "Graph", "Node", "__version__"]
+__all__ = ["Await", "Ctx", "Done", "Graph", "Node", "Opaque", "__version__"]

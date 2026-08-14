@@ -264,6 +264,7 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCtx>()?;
     m.add_class::<PyDone>()?;
     m.add_class::<PyAwait>()?;
+    m.add_class::<value::PyOpaque>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

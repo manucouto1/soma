@@ -431,10 +431,94 @@ compra que **no haya dos formas de escribir un nodo**, que el DSL tenga una sola
 puerta, y que un nodo pueda ganar un turno añadiendo una rama en vez de
 cambiando de clase.
 
+## CU8 — Un valor que cruza sin convertirse
+
+```python
+class Capa(Node, nn.Module):
+    def __init__(self, m):
+        nn.Module.__init__(self); self.m = m
+    def forward(self, x, ctx):
+        return Done(Opaque(self.m(x)))
+
+g = Graph.somatize(Capa(l1) >> Capa(nn.ReLU()) >> Capa(l2))
+y = g.forward(Opaque(x))
+y.pow(2).sum().backward()      # atraviesa los tres nodos
+```
+
+Estado: **cerrado**. 53 tests en Rust, 64 en Python.
+
+### El problema
+
+`Value` es una frontera de **conversión**, y hay valores que no sobreviven a
+convertirse. El caso que lo motivó: un tensor de torch a mitad de una gráfica de
+autograd. Medido — pasarlo a listas y de vuelta da `requires_grad = False,
+grad_fn = None`. El grafo de gradientes se rompe.
+
+### La decisión
+
+Una variante, y solo una:
+
+```rust
+Opaque(Arc<dyn Any + Send + Sync>)
+```
+
+No es un `PyObject` porque el núcleo no depende de PyO3 y no va a empezar.
+`Arc<dyn Any + Send + Sync>` deja que el crate de Python guarde dentro un
+`Py<PyAny>` y lo recupere con `downcast_ref`, sin que el núcleo sepa que hay
+Python detrás.
+
+**Lo que significa la variante, y de donde sale todo lo demás**: este valor solo
+existe en este proceso y en este run.
+
+| propiedad | consecuencia | ¿correcto? |
+|---|---|---|
+| no se hashea por contenido | el nodo no se memoiza | sí — memoizar un tensor a mitad de autograd sería un error |
+| no se serializa | ese subgrafo no viaja a otra máquina | sí — por eso el original manda gradientes por el cable, no la gráfica |
+| solo se compara por identidad (`Arc::ptr_eq`) | dos envoltorios del mismo objeto son distintos | es lo único que el núcleo puede afirmar |
+
+Las fronteras de la futura caché y de la ejecución remota quedan **visibles en el
+tipo** en vez de ser una regla que alguien tenga que recordar.
+
+### Se pide a mano, a propósito
+
+`Opaque(x)` se escribe. Se descartó que un objeto desconocido se volviera opaco
+solo: se perdería la honestidad de "un `set` no cruza", y un hueco por el que
+cabe todo se convierte en el camino por defecto — dejando el grafo sin caché,
+sin schemas y sin distribución a la vez, sin que nadie se entere.
+
+También se descartó un **registro de tipos opacos** que `soma_next.torch`
+rellenaría al importarse: añade estado global mutable y dependencia del orden de
+importación, para ahorrar una palabra.
+
+El nodo que lo recibe lo ve **desenvuelto**, así que solo se escribe al
+devolverlo (y una vez en la entrada del grafo).
+
+### Limitaciones, medidas
+
+- **`torch.compile` no funde entre nodos.** Tres nodos → 3 grafos y 2 roturas;
+  lo mismo sin Rust → 1 grafo, 0 roturas. Es correcto (el backward llega) pero
+  **el nodo es la unidad de compilación**. Mitigación del usuario, una línea:
+  `torch.compile(mi_modulo)` dentro del nodo.
+- **Sin caché por contenido en esas aristas.** Para entrenar es lo correcto;
+  para inferencia es una pérdida real. Se recupera convirtiendo a propósito en
+  el borde: `Done(y.detach().tolist())`.
+- **Fuera del alcance de los schemas** cuando lleguen: no hay dtype ni shape.
+- **El GIL** serializa el despacho por nodo; torch lo libera durante los
+  kernels.
+
+### Lo que NO entró
+
+`soma_next.torch` —`module()`, `parameters()`, el bucle de entrenamiento— queda
+para cuando esté claro cómo debe funcionar. **El núcleo aporta el hueco; quien
+sabe qué hay dentro es biblioteca**, y esa separación es la que permite que esto
+se cerrara sin decidir aquello.
+
 ## Casos de uso siguientes (sin abrir)
 
 Orden tentativo; se decide al cerrar cada uno, no ahora.
 
-- CU8 — cachear la salida de un nodo por contenido
-- CU9 — validar tipos entre nodos conectados (schemas)
-- CU10 — control de flujo: rama y bucle
+- CU9 — cachear la salida de un nodo por contenido
+- CU10 — validar tipos entre nodos conectados (schemas)
+- CU11 — control de flujo: rama y bucle
+- *(sin abrir, pendiente de diseño)* `soma_next.torch`: envoltorio de `nn.Module`
+  y bucle de entrenamiento

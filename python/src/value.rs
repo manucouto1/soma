@@ -3,6 +3,12 @@
 //! La correspondencia es simétrica a propósito: lo que entra como lista sale
 //! como lista. Una conversión que no da la vuelta —una lista de números que se
 //! convierte en otra cosa— es la clase de sorpresa que después nadie entiende.
+//!
+//! [`PyOpaque`] es la excepción, y es explícita: lo que envuelvas con
+//! `Opaque(x)` cruza **sin convertirse**, y sale por el otro lado siendo el
+//! mismo objeto. Es la única forma de que un valor atraviese el grafo intacto,
+//! y se pide a mano justamente para que no ocurra por accidente: un objeto
+//! desconocido sigue dando error en vez de colarse opaco.
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -10,8 +16,45 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 use soma_next_core::Value;
 use std::sync::Arc;
 
+/// Marca un valor para que cruce el grafo sin que nadie lo toque.
+///
+/// Lo que envuelve puede ser cualquier cosa: un tensor de torch a mitad de una
+/// gráfica de autograd, un DataFrame, una conexión. El nodo que lo recibe lo ve
+/// **desenvuelto** —el objeto original, no este envoltorio—, así que solo se
+/// escribe al devolverlo.
+#[pyclass(name = "Opaque", module = "soma_next._soma_next", frozen)]
+pub struct PyOpaque {
+    /// El objeto tal cual.
+    #[pyo3(get)]
+    value: PyObject,
+}
+
+#[pymethods]
+impl PyOpaque {
+    #[new]
+    fn new(value: PyObject) -> Self {
+        Self { value }
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let nombre = self
+            .value
+            .bind(py)
+            .get_type()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|_| "?".into());
+        format!("Opaque({nombre})")
+    }
+}
+
 /// De un objeto Python al valor que cruza una arista.
 pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if let Ok(envuelto) = obj.downcast::<PyOpaque>() {
+        // Se guarda el PyObject dentro del opaco del núcleo. El núcleo no sabe
+        // qué es ni tiene forma de averiguarlo.
+        return Ok(Value::opaque(envuelto.get().value.clone_ref(obj.py())));
+    }
     if obj.is_none() {
         return Ok(Value::Null);
     }
@@ -58,7 +101,8 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
     Err(PyTypeError::new_err(format!(
         "un `{}` no cruza una arista: hoy pasan None, str, bytes, números, \
-         listas y dicts con claves de texto",
+         listas y dicts con claves de texto. Para que algo cruce sin \
+         convertirse, envuélvelo: Opaque(x)",
         obj.get_type().name()?
     )))
 }
@@ -77,6 +121,15 @@ pub fn to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
             }
             dict.into_any().unbind()
         }
+        Value::Opaque(_) => match value.downcast::<PyObject>() {
+            Some(obj) => obj.clone_ref(py),
+            None => {
+                return Err(PyTypeError::new_err(
+                    "este valor opaco no lo puso Python, así que no hay nada que \
+                     devolver aquí",
+                ));
+            }
+        },
         Value::List(items) => {
             let converted = items
                 .iter()
