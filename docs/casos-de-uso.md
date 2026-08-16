@@ -535,21 +535,41 @@ se cerrara sin decidir aquello.
 
 ## Casos de uso siguientes (sin abrir)
 
-El orden no es por ambición sino por dependencia, y sale de la investigación
-bibliográfica de agosto de 2026. Se decide al cerrar cada uno, no ahora.
+El orden sale de la investigación bibliográfica de agosto de 2026, y el
+contenido de los dos últimos cambió al cerrar CU11: la separación en tres
+niveles —grafo, entrenamiento, estudio— reordena qué mecanismo resuelve qué.
 
-- CU11 — `fit`: el bucle de entrenamiento entra en el grafo. La pregunta que
-  hay que contestar ahí —**¿el estado de un nodo es un `Value`?**— es la más
-  consecuente de todo el plan: si lo es, es serializable y federado sale casi
-  solo; si no, federado no puede existir
-- CU12 — micro-lotes: solapar dentro de una rama (GPipe, 1F1B)
+- CU12 — micro-lotes: solapar dentro de una rama (GPipe, 1F1B). **Nivel del
+  grafo**: es un forward por dentro
 - CU13 — `Plan::Remote`: transporte (el único trait nuevo, `Transport`), y
-  `Opaque` cruzando el cable pasa a ser un `CompileError`. Es a la vez model
-  parallel entre hosts y **split learning**: son el mismo mecanismo
-- CU14 — federado: una ronda federada **es un grafo**, y FedAvg y compañía son
-  nodos de biblioteca
-- *(sin abrir, pendiente de diseño)* `soma_next.torch`: envoltorio de `nn.Module`
-  y bucle de entrenamiento
+  `Opaque` cruzando el cable pasa a ser un `CompileError`. Solo para repartir
+  **un grafo** entre hosts —una red que no cabe en una máquina—, que es model
+  parallel y **split learning** a la vez. Repartir *entrenamientos enteros* es
+  otra cosa y no lo necesita
+- CU14 — federado: `map` sobre los clientes y `reduce` con FedAvg, en el nivel
+  del estudio. FedAvg, FedProx y compañía son biblioteca — **funciones**, no
+  nodos. Aquí es donde toca contestar qué exporta un entrenamiento como estado
+- *(candidata)* liberar lo que ya no lee nadie, y poder pedir que dos ramas
+  estructuralmente paralelas no se solapen. Las dos nacen de «no me cabe en la
+  GPU» y las dos son del nivel del grafo
+- *(candidata, con condición de entrada)* **entrenar desde Rust**. No se abre
+  hasta que haya consumidor, y el consumidor tiene nombre: un cliente federado
+  que entrene **sin un CPython cargado**. Investigado el 16 de agosto de 2026,
+  y estos cuatro resultados ahorran tener que averiguarlo otra vez:
+  - `tch::Tensor` es `Send` pero **no `Sync`** (`unsafe impl Send for Tensor`
+    en `wrappers/tensor.rs`, y ningún `Sync` en todo el crate), así que **no
+    cabe en `Value::Opaque`**, cuya cota es `Arc<dyn Any + Send + Sync>`. `tch`
+    queda descartado salvo envolviendo cada tensor en un `Mutex`
+  - `candle_core::Tensor` **sí** es `Send + Sync` —lleva `Arc<RwLock<Storage>>`
+    dentro, y su propio código explica que eligieron el `RwLock` justo para
+    eso—, así que cabría hoy **sin tocar el núcleo**. Comprobado compilando
+  - el límite que no se mueve: **un grafo es todo-Python o todo-Rust para los
+    tensores**. Un `Opaque` puesto por Python lleva un `PyObject` dentro, y un
+    nodo de Rust que hiciera `downcast_ref::<candle::Tensor>()` obtendría
+    `None`. No hay puente barato: convertir de verdad sería copiar los datos
+    crudos y perder la gráfica de autograd, que es lo que `Opaque` evita
+  - el orden, si llega el día: **primero un nodo de Rust con parámetros**,
+    después la recogida, y el Trainer al final. Nunca empezando por el Trainer
 
 ## CU9 — Las ramas corren a la vez
 
@@ -951,3 +971,167 @@ lo dicen en su nombre en vez de dejarlo implícito.
 Y sigue en pie el aviso de CU9: nada de justificar esto con un benchmark de dos
 ramas en dos GPUs. CUDA lanza asíncrono y las dos ya se solapan ejecutándose en
 secuencia; lo que las waves compran es tiempo de **host**.
+
+## CU11 — El entrenamiento, fuera del grafo
+
+```python
+from soma_next.torch import Trainer, parameters
+
+g = Graph.somatize(Encoder().on("cuda:0") >> Cabeza().on("cuda:0"))
+t = Trainer(g, objetivo=cross_entropy,
+            optimizador=torch.optim.Adam(parameters(g), lr=1e-3))
+
+t.fit(datos, epocas=10)   # el azúcar
+t.step(lote)              # la primitiva
+```
+
+Estado: **cerrado**. 110 tests en Rust, 136 en Python, y **cero líneas nuevas
+en `core/`** — el primer caso de uso que no toca el núcleo.
+
+### La pregunta: ¿el bucle de entrenamiento va dentro del grafo?
+
+No, y hay dos razones independientes.
+
+**La primera está en el contrato del nodo.** `forward(input, ctx) → Done |
+Await` describe **un paso**: se ejecuta una vez por run, tiene un presupuesto
+de 64 turnos, y `run()` no tiene recuperación parcial. Un entrenamiento dura
+una tarde, muta su propio estado, emite métricas continuamente y falla de
+maneras de las que uno quiere recuperarse. **El grafo opera a la escala de un
+`forward`; un entrenamiento opera a la escala de una tarde.**
+
+El original lo intentó: su trait de nodo lleva `fn fit(&self, x, y)`. La
+factura se ve en sus propios tests — `soma-worker`, `soma-compiler`,
+`soma-runtime` y `soma-agent` implementan todos un `fit` vacío solo para poder
+existir. Es el mismo impuesto que CU6 quitó en el eje filtro/step.
+
+**La segunda es que un grafo describe una red, y explorar es una familia de
+redes.** Ese grafo es justo el artefacto que en CU13 se serializa y viaja; uno
+que llevara cinco configuraciones dentro estaría mintiendo sobre la
+arquitectura.
+
+### Los tres niveles
+
+| nivel | qué es | escala | qué reparte |
+|---|---|---|---|
+| el grafo | una red | un `forward` | trozos de un forward: waves, `Placement`, y `Remote` en su día |
+| `Trainer` | un entrenamiento | una tarde | nada; repite forwards |
+| un estudio | N entrenamientos | un experimento | runs enteros |
+
+Y la regla que lo sostiene: **ningún nivel sabe que existe el de arriba.** El
+grafo no sabe que lo entrenan; el trainer no sabe que hay otros trainers. La
+composición entre niveles es composición de **funciones**, no de grafos.
+
+### El nivel 3 no tiene tipo, y es a propósito
+
+```python
+estudio = {lr: Trainer(red(), ..., lr).fit(datos) for lr in (1e-4, 1e-2)}
+mejor = min(estudio, key=lambda lr: estudio[lr].loss)
+```
+
+> Un grafo se gana el sueldo cuando hay **dependencias** que declarar. N
+> entrenamientos independientes no tienen ninguna: son una lista. Modelar una
+> lista como un grafo es pagar el precio de un DAG para no usarlo.
+
+Se llegó a diseñar la alternativa —las N configuraciones como ramas de un `|`,
+con un nodo que elige la mejor— y se descartó. Y también su variante astuta,
+«un grafo, un plan, **N catálogos**», que se cae por algo concreto: `Catalog`
+es `Clone`, pero clona `Arc`. Las N réplicas compartirían los objetos nodo, o
+sea **los pesos**, y las cinco configuraciones entrenarían el mismo modelo
+dando resultados que parecen buenos. Cada réplica hay que construirla — y en
+cuanto la construyes, ya no tienes un grafo con N planes, tienes N grafos. Hay
+test.
+
+### Decisiones tomadas
+
+**1. El Trainer recibe el grafo; nunca `g.fit(...)`.** Así el mismo grafo se
+entrena de tres maneras sin tocarlo, y sigue siendo el artefacto que viaja.
+
+**2. Vive en `soma_next.torch`.** Pérdida, `backward()` y optimizador son
+torch; escribirlo neutral pediría un `Backend` con un solo implementor. El
+núcleo no aprende qué es entrenar, y eso es la señal de que la separación
+aguanta.
+
+**3. `step(lote)` es la primitiva; `fit(datos, epocas)` es azúcar.** Es lo que
+evita el camino del trainer-dios: parada temprana, *schedules* raros, rondas
+federadas y PBT son un `while` que escribe el usuario sobre `step`, no una
+lista creciente de opciones y *callbacks*. Una ronda federada es
+`for _ in range(k): t.step(lote)`.
+
+**4. Los parámetros se recogen por *duck typing*, y un grafo sin ellos falla al
+construir el Trainer.** Se pregunta por `.parameters()` y se salta a quien no
+lo tenga —un lematizador no entrena y no por eso deja de ser nodo—. Meterlo en
+el contrato sería el `fit` del original otra vez. Y como el *duck typing* falla
+callado —un grafo sin parámetros entrena la nada y muestra una pérdida plana—,
+la lista vacía revienta al construir, igual que la postcondición de CU10.
+
+**5. Van sin repetir, por identidad.** Dos nodos pueden compartir un módulo
+—pesos atados entre embedding y salida— y entonces el mismo `Parameter` sale
+dos veces.
+
+**6. El optimizador lo construye quien llama.** Nada de `optimizador="adam"`,
+que acabaría siendo un registro de nombres. Lo único que se comprueba es que
+el optimizador y el grafo **compartan algún parámetro**: no compartir ninguno
+no tiene lectura inocente. Cubrir solo una parte sí es legítimo y pasa —
+congelar el encoder y entrenar la cabeza es exactamente eso.
+
+**7. Los datos son un iterable de `(entrada, objetivo)`.** Un `DataLoader` lo
+es. Descartado a propósito: **los datos como nodo fuente**, porque un nodo
+produce *un* valor por ejecución; para ser un flujo tendría que recordar por
+dónde va, y entonces dos ejecuciones del mismo grafo dejan de dar lo mismo.
+
+**8. La pérdida es un invocable, no un nodo.** No es parte de la red: se cambia
+sin tocar el modelo y en inferencia no existe. Como nodo, la salida del grafo
+sería un escalar y el grafo solo serviría para entrenar.
+
+### Lo que encontró el test con GPU
+
+El objetivo no cruza el grafo. La **entrada** sí, y cada nodo la mueve a su
+dispositivo porque eso es lo que hace un nodo colocado; el **objetivo** va
+directo a la pérdida, así que no lo movía nadie. Con la última capa en
+`cuda:0`, la salida sale de allí, el objetivo sigue en la cpu y torch para el
+entrenamiento con *«expected all tensors to be on the same device»*.
+
+Lo arregla el único que ve los dos lados. Y se mueve el objetivo, no la salida:
+traer la salida a la cpu arrastraría el backward de vuelta por el cable en cada
+paso.
+
+### Cuestionario
+
+**Python** (`python/tests/test_trainer.py`)
+- [x] `parameters(g)` recoge lo de todos los nodos que tengan y salta a los que
+      no; en orden de declaración; sin repetir un módulo compartido
+- [x] un grafo sin parámetros falla **al construir el Trainer**
+- [x] un optimizador de otro grafo falla; congelar una parte pasa
+- [x] entrenar baja la pérdida, y `fit` da lo mismo que el bucle a mano
+- [x] los pesos que actualiza el optimizador son los que usa el grafo
+- [x] entrenar no cambia el grafo: `nodes()`, `edges()`, `plan()` y `devices()`
+      idénticos antes y después
+- [x] una entrada que no es un tensor cruza como siempre
+- [x] **dos redes de la misma fábrica no comparten pesos**
+- [x] la exploración de hiperparámetros, como comprensión de lista
+- [x] con GPU: el optimizador sigue apuntando a los pesos después de que el
+      nodo se mueva; el objetivo va a buscar a la salida; y las dos capas en
+      dispositivos distintos entrenan
+
+### Lo que NO entró
+
+Checkpoints y reanudación · *callbacks* y parada temprana, que son un `while`
+sobre `step` · métricas más allá de la pérdida · *schedulers* · acumulación de
+gradiente · el estudio como tipo · y **exportar o cargar el estado de un
+modelo**, que es la pregunta de CU14 y aquí no hacía falta: entrenar en local
+no extrae ningún estado.
+
+### Lo que esto le hizo al plan
+
+- **La pregunta del estado deja de bloquear.** Ya no es «¿el estado de un nodo
+  es un `Value`?» en el núcleo, sino «¿qué exporta un entrenamiento?» en el
+  nivel 2, y se contesta en CU14 con el caso delante.
+- **CU13 se parte en dos.** Repartir *un grafo* entre hosts es `Plan::Remote`,
+  con dependencias a mitad del forward. Repartir *entrenamientos* —HPO,
+  federado, data parallel— es «ejecuta esto entero allí», nivel 3, y no lo
+  necesita. El original los tenía en el mismo enum: `ModelParallel` junto a
+  `DataParallel`, `Federated` y `PopulationBased`.
+- **CU14 cambia de forma.** «Una ronda federada es un grafo» se retira: es
+  `map` y `reduce`. Un grafo solo se justificaría con topologías no planas
+  —federación jerárquica, gossip—, y ese día no ha llegado.
+- **`soma_next.torch` deja de estar pendiente** y se abre aquí.

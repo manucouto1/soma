@@ -77,15 +77,20 @@ cd python && maturin develop && python -m pytest tests/ -q
 
 ## Estado
 
-Diez casos de uso cerrados: el grafo, el motor, el plan, los abanicos, el DSL,
-un solo contrato de nodo, `Opaque`, las waves y el dispositivo. Un grafo se
-declara con `>>`, `|` y `.on("cuda:0")`, se ejecuta en Rust, y las ramas de un
-`|` corren a la vez, cada una entera en su hilo. Ver `docs/casos-de-uso.md`.
+Once casos de uso cerrados: el grafo, el motor, el plan, los abanicos, el DSL,
+un solo contrato de nodo, `Opaque`, las waves, el dispositivo y el
+entrenamiento. Un grafo se declara con `>>`, `|` y `.on("cuda:0")`, se ejecuta
+en Rust, y se entrena desde fuera con `soma_next.torch.Trainer`. Ver
+`docs/casos-de-uso.md`.
 
-Cuatro hechos ortogonales, y confundirlos es el error fácil: `Graph` dice
+**Cuatro hechos ortogonales**, y confundirlos es el error fácil: `Graph` dice
 **qué** hay, `Catalog` **quién** lo ejecuta, `Placement` **dónde**, y `Plan`
 **cuándo**. El dispositivo no vive en el plan a propósito.
 
-Lo siguiente: `fit`, el bucle de entrenamiento dentro del grafo. Ahí hay que
-contestar si el estado de un nodo es un `Value`, que decide si el federado
-puede existir. Ver el informe de distribución para el orden completo.
+**Tres niveles, y ninguno sabe que existe el de arriba**: el grafo es una red
+—escala de un `forward`—, el `Trainer` es un entrenamiento —escala de una
+tarde—, y N entrenamientos son una lista de Python, no un tipo y desde luego no
+un grafo. Un grafo se gana el sueldo cuando hay dependencias que declarar.
+
+Lo siguiente: micro-lotes, y después repartir un grafo entre hosts. Ver el
+informe de distribución para el orden completo.
