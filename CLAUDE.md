@@ -77,6 +77,10 @@ cd python && maturin develop && python -m pytest tests/ -q
 
 ## Estado
 
-Esqueleto andante: `Graph()` cruza Rust→PyO3→Python y no hace nada más. Qué es
-un nodo, y por tanto `node()` y `edge()`, es el caso de uso 1 — sin diseñar a
-propósito. Ver `docs/casos-de-uso.md`.
+Nueve casos de uso cerrados: el grafo, el motor, el plan, los abanicos, el DSL,
+un solo contrato de nodo, `Opaque` y las waves. Un grafo se declara con
+`>>` y `|`, se ejecuta en Rust, y las ramas de un `|` corren a la vez, cada
+una entera en su hilo. Ver `docs/casos-de-uso.md`.
+
+Lo siguiente: el dispositivo de un nodo (`.on("cuda:1")`), que es lo que las
+waves habilitan. Ver el informe de distribución para el orden completo.

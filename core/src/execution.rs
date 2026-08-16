@@ -110,7 +110,64 @@ impl<'a> Executor<'a> {
                 }
                 Ok(last)
             }
+            Plan::Wave(branches) => self.at_once(branches, graph_input, produced),
         }
+    }
+
+    /// Lanza las ramas de una wave a la vez y funde lo que produjeron.
+    ///
+    /// Cada rama arranca con una **copia** de lo producido hasta aquí y
+    /// devuelve solo lo suyo. Las ramas de una wave son componentes conexas
+    /// del subgrafo, así que lo que añade cada una es disjunto y fundirlas no
+    /// puede pisar nada — hay test. Copiar el mapa sale barato porque un
+    /// `Value` se clona por `Arc`, y a cambio no hay ni un cerrojo.
+    ///
+    /// `std::thread::scope` presta `&Catalog` y `&Driver` sin envolverlos en
+    /// nada, así que el núcleo sigue sin depender de nadie. Las cotas que lo
+    /// permiten —`Node: Send + Sync`, `Driver: Send + Sync`— llevan puestas
+    /// desde CU2 por otra razón: PyO3 exige `Send` en un pyclass.
+    fn at_once(
+        &self,
+        branches: &[Plan],
+        graph_input: &Value,
+        produced: &mut HashMap<NodeId, Value>,
+    ) -> Result<Value, RunError> {
+        let earlier: &HashMap<NodeId, Value> = produced;
+        let outcomes = std::thread::scope(|scope| {
+            let running: Vec<_> = branches
+                .iter()
+                .map(|branch| {
+                    scope.spawn(move || {
+                        let mut mine = earlier.clone();
+                        let last = self.walk(branch, graph_input, &mut mine)?;
+                        mine.retain(|id, _| !earlier.contains_key(id));
+                        Ok::<_, RunError>((last, mine))
+                    })
+                })
+                .collect();
+            running
+                .into_iter()
+                .map(|handle| match handle.join() {
+                    Ok(outcome) => outcome,
+                    // Un nodo que revienta revienta el run entero, no se traga
+                    // aquí: `scope` ya ha esperado a las demás ramas.
+                    Err(panic) => std::panic::resume_unwind(panic),
+                })
+                .collect::<Vec<_>>()
+        });
+
+        for outcome in outcomes {
+            // El primero que falle **en orden de declaración**, no el primero
+            // en fallar: si dos ramas se rompen, el error no puede depender de
+            // cuál corría más rápido.
+            let (_, mine) = outcome?;
+            produced.extend(mine);
+        }
+
+        // Una wave no tiene *una* salida: sus ramas terminan en varios sitios.
+        // Si el plan acaba en una, la salida del run sale del mapa de hojas,
+        // que es el otro camino de `run`.
+        Ok(Value::Null)
     }
 
     /// Preguntar, atender lo que pida, volver a preguntar. Hasta que termine.
@@ -265,7 +322,9 @@ fn collect(plan: &Plan, produced: &mut Vec<NodeId>, consumed: &mut Vec<NodeId>) 
             produced.push(node.clone());
             consumed.extend(from.iter().cloned());
         }
-        Plan::Sequence(plans) => {
+        // Una wave y una secuencia se recorren igual para esto: lo que
+        // importa es qué produce y qué lee cada paso, no cuándo corre.
+        Plan::Sequence(plans) | Plan::Wave(plans) => {
             for plan in plans {
                 collect(plan, produced, consumed);
             }

@@ -542,3 +542,190 @@ Orden tentativo; se decide al cerrar cada uno, no ahora.
 - CU11 — control de flujo: rama y bucle
 - *(sin abrir, pendiente de diseño)* `soma_next.torch`: envoltorio de `nn.Module`
   y bucle de entrenamiento
+
+## CU9 — Las ramas corren a la vez
+
+```python
+g = Graph.somatize(
+    Fuente()
+    >> ((Encoder() >> Cuello()) | (Otro() >> Otro2()))
+    >> Juntar()
+)
+g.plan()      # Sequence([Execute, Wave([Sequence, Sequence]), Execute])
+g.forward(x)  # las dos ramas, en dos hilos, de principio a fin
+```
+
+Estado: **cerrado**. 88 tests en Rust, 86 en Python.
+
+### La pregunta: ¿qué agrupa una wave?
+
+`Plan::Parallel` se añadió en CU3 y se quitó en CU4 porque se rompía en el
+diamante: sus ramas se solapaban —las dos reclamaban el nodo de unión— y se
+ejecutaba dos veces. Se dijo entonces que volvería «cuando signifique algo que
+hoy no significa: repartir entre hilos». Este es ese día, y la pregunta que
+faltaba por contestar es **qué va dentro de cada rama**.
+
+Se probaron dos respuestas y la primera se descartó con un contraejemplo:
+
+- **Por nivel topológico** (Kahn por niveles). Cada wave es una anticadena, y
+  sus miembros son pasos sueltos. Es correcto y ningún nodo puede duplicarse.
+  Pero con `a >> (b >> b2 >> b3 | c >> c2) >> d` sale
+  `Seq([a, Wave([b,c]), Wave([b2,c2]), b3, d])`: **lockstep**. `b2` no arranca
+  hasta que `c` termina aunque no dependa de ella, y `c2` acaba y se queda
+  mirando mientras `b3` corre sola. Peor para lo que viene: el dispositivo de
+  torch es *thread-local*, así que una rama que salta de hilo en cada wave no
+  puede fijarlo una sola vez.
+
+- **Por rama**, que es lo que quedó. `Seq([a, Wave([Seq([b,b2,b3]), Seq([c,c2])]), d])`.
+  Un hilo por rama, de principio a fin, y una sola junta.
+
+### La pieza que faltaba: descomponer, no aplanar
+
+`compile` deja de recorrer el orden topológico y **recupera el árbol**. Y tiene
+que recuperarlo del grafo, no de la expresión: la decisión 6 de CU5 dice que el
+mismo grafo construido con `node()`/`edge()` en un bucle da el mismo plan, y un
+bucle no tiene árbol. **La expresión del DSL es el oráculo, no el origen.**
+
+Cuatro casos, y el orden importa:
+
+| caso | sale |
+|---|---|
+| ningún nodo | `Empty` |
+| un nodo | `Execute` |
+| el subgrafo se parte en componentes conexas | `Wave`, una rama por componente |
+| hay un **corte serie** | `Sequence` de los dos lados |
+| no hay corte | secuencia plana: no es serie-paralelo |
+
+Un **corte serie** `(A, B)` es lo que hace un `>>`: las aristas que cruzan van
+de **todos** los sinks de `A` a **todos** los sources de `B`, y de ningún otro
+sitio. Las dos mitades de la comprobación hacen falta — sin la primera, una
+arista que sale de un nodo interior pasa por buena.
+
+Bastó con probar los **prefijos de un orden topológico**, y es demostrable: en
+una composición serie todo nodo de `A` alcanza un sink de `A`, todo sink de `A`
+tiene arista a todo source de `B`, y todo nodo de `B` es alcanzable desde un
+source de `B`. Luego todo nodo de `A` precede a todo nodo de `B` en *cualquier*
+orden topológico. No hay que enumerar subconjuntos.
+
+### La regla que se descartó por el camino
+
+Antes del corte serie se intentó cortar por un **nodo barrera** —uno tal que
+`ancestros(x) ∪ {x} ∪ descendientes(x)` fuera todo—. Solo acierta cuando la
+junta es un nodo único. El contraejemplo, que está como test:
+
+```
+(a >> a2 | b) >> (c | d)
+
+con barrera →  Seq([ Wave([a, b]), a2, Wave([c, d]) ])   ← parte la rama
+correcto    →  Seq([ Wave([Seq([a,a2]), b]), Wave([c,d]) ])
+```
+
+### Decisiones tomadas
+
+1. **`Wave(Vec<Plan>)`, no `Vec<Execute>`.** Una rama es un plan entero. Lo
+   restrictivo era más simple de ejecutar, pero no sabe expresar una rama de
+   varios nodos, que es justo el caso.
+2. **Una wave significa «se lanzan a la vez»**, no «son independientes». Esa
+   fue la lección de CU4: una variante que solo describe estructura no compra
+   nada.
+3. **Las ramas son componentes conexas**, así que son disjuntas por
+   construcción y ningún nodo puede aparecer en dos. El bug que mató a
+   `Parallel` no puede volver: hay un test que lo comprueba sobre una batería
+   de topologías.
+4. **`std::thread::scope`, sin dependencias.** Presta `&Catalog` y `&Driver`
+   sin envolverlos. Las cotas que lo permiten —`Node: Send + Sync`,
+   `Driver: Send + Sync`— llevan puestas desde CU2 por otra razón: PyO3 exige
+   `Send` en un pyclass. Rayon habría sido la respuesta obvia y la peor.
+5. **Cada rama copia lo producido y devuelve lo suyo**; el padre funde al
+   juntar. Copiar sale barato porque un `Value` se clona por `Arc`, y a cambio
+   no hay ni un cerrojo.
+6. **El error es el de la primera rama declarada**, no el de la que falló antes
+   en el reloj. Si dos ramas se rompen a la vez, cuál llega primero es una
+   carrera y el mensaje no puede depender de ella.
+7. **Un panic dentro de una rama no se traga**: se propaga con
+   `resume_unwind` después de que `scope` haya esperado a las demás.
+8. **Una cadena lineal compila al plan de antes, idéntico.** Es la regresión
+   que más importa: todo lo cerrado de CU2 a CU8 son cadenas.
+9. **Lo que no es serie-paralelo se recorre en secuencia**, como antes. No es
+   un fallo ni un aviso: es lo que había.
+
+### La frontera afortunada
+
+**La imagen del DSL son exactamente los grafos serie-paralelos.** `>>` compone
+en serie conectando todos los terminales con todas las cabezas, `|` compone en
+paralelo con unión disjunta, y no hay una tercera operación.
+
+El patrón mínimo que no es serie-paralelo es la «N» —`a→c`, `a→d`, `b→d`—, y
+**no se puede escribir con `>>` y `|`**. Para llegar a ella hay que usar
+`node()`/`edge()`. Así que la línea se explica en una frase: *si lo escribiste
+con el DSL, se paraleliza; si no, se paraleliza cuando se puede*. Que haya DAGs
+sin árbol es un teorema, no un hueco del algoritmo — ver Valdes, Tarjan y
+Lawler, «The recognition of series parallel digraphs», SIAM J. Comput. 11(2),
+1982.
+
+### El GIL, que es donde esto se cuelga
+
+`Graph.forward` tenía el GIL cogido mientras corría el motor. En cuanto una
+wave lanza hilos que llaman al `forward` de un objeto Python, esos hilos se
+bloquean pidiéndolo y **el proceso entero se congela** — ni un
+`join(timeout=…)` del hilo principal vuelve, porque también necesita el GIL.
+La solución es una línea, `py.allow_threads`, y su test tiene que vivir **en
+otro proceso**: un cuelgue así no lo puede cazar nada de dentro.
+
+Lo que `allow_threads` no arregla, y conviene decirlo: dos nodos de Python
+puros en la misma wave **se serializan entre ellos**. Se solapa lo que suelte
+el GIL — torch en su dispatch, la espera de un driver de red, la E/S. Por eso
+el test que mide concurrencia de verdad usa un driver, y no dos nodos.
+
+### Cuestionario
+
+**Descomposición** (`core/tests/unit/plan.rs`)
+- [x] vacío, un nodo, y una cadena lineal idéntica a la de antes
+- [x] abanico de salida, de entrada y diamante, cada uno con su wave
+- [x] `a >> (b >> b2 >> b3 | c >> c2) >> d` da una wave de dos secuencias
+- [x] `(a >> a2 | b) >> (c | d)` no parte la rama — el contraejemplo de la barrera
+- [x] `(a | b) >> (c | d)` son dos waves, no una de cuatro
+- [x] una wave dentro de la rama de otra wave
+- [x] dos grafos sin relación, cada uno largo, son dos ramas
+- [x] la N se recorre en secuencia, y no estropea el paralelismo de lo que tenga al lado
+
+**Invariantes, sobre una batería de diez topologías**
+- [x] ningún nodo se ejecuta dos veces ni se queda fuera
+- [x] el orden que dicta el plan respeta todas las aristas
+- [x] cada paso declara exactamente sus predecesores del grafo
+- [x] las ramas de una wave no comparten ningún nodo
+- [x] el mismo grafo compila siempre igual
+
+**El oráculo** (`core/tests/unit/build.rs`)
+- [x] siete expresiones del DSL, y su plan es el árbol que se escribió
+
+**Ejecución** (`core/tests/unit/execution.rs`)
+- [x] el orden **real** de ejecución respeta las aristas, con hilos de por medio
+- [x] una rama entera corre en el mismo hilo, y dos ramas en hilos distintos
+- [x] dos y tres ramas corren de verdad a la vez — sin dormir: quedan en verse,
+      y si fueran secuenciales la primera agotaría el plazo
+- [x] el resultado del diamante es el mismo repartido que en fila
+- [x] lo que produce una rama por dentro llega a quien la lee
+- [x] dos ramas que fallan dan siempre el error de la primera declarada
+- [x] un panic dentro de una rama no se traga
+- [x] dos ramas pueden tener al driver ocupado a la vez
+- [x] una wave que es todo el plan devuelve el mapa de sus hojas
+
+**Python** (`python/tests/test_waves.py`)
+- [x] el motor suelta el GIL — en otro proceso, con plazo
+- [x] dos nodos Python en la misma wave dan el resultado correcto aunque el
+      GIL los serialice
+- [x] el DSL con ramas da el mismo plan que `node()`/`edge()`
+- [x] hilos, orden real, fallos y la N, como en Rust
+
+### Lo que NO entró
+
+**El dispositivo.** `Plan::Execute` sigue sin decir *dónde*. Esta rebanada es
+la que lo habilita —una rama por hilo es lo que hace que fijar un dispositivo
+por rama signifique algo—, pero `.on("cuda:1")` es el caso de uso siguiente.
+
+**Micro-lotes.** Solapar dentro de una rama, no entre ramas, es otro problema y
+otra variante.
+
+**Repartir una wave entre procesos.** Necesita transporte, y `Opaque` no cruza
+un cable. Ese es el otro caso de uso siguiente.

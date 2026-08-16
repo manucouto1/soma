@@ -180,7 +180,14 @@ impl PyGraph {
             None => executor,
         };
 
-        let out = executor.run(&plan, start).map_err(run_err)?;
+        // Soltar el GIL mientras corre el motor no es una optimización: es
+        // obligatorio. Una wave lanza hilos que llaman a `forward` de objetos
+        // Python, y si este hilo se quedara con el GIL cogido se colgarían
+        // todos esperándolo. Que dos nodos Python se serialicen luego entre
+        // ellos al pedirlo es otra cosa, y esa sí es una consecuencia del GIL.
+        let out = py
+            .allow_threads(|| executor.run(&plan, start))
+            .map_err(run_err)?;
         value::to_py(py, &out)
     }
 
