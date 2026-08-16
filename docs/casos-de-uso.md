@@ -533,6 +533,48 @@ para cuando esté claro cómo debe funcionar. **El núcleo aporta el hueco; quie
 sabe qué hay dentro es biblioteca**, y esa separación es la que permite que esto
 se cerrara sin decidir aquello.
 
+## Lo siguiente, sin decidir (16 de agosto de 2026)
+
+La discusión quedó abierta aquí, con **CU12 en duda**. «Micro-lotes» tapa tres
+problemas distintos que no tienen ni el mismo dueño ni el mismo valor:
+
+| problema | qué lo resuelve | de quién es | ¿consumidor hoy? |
+|---|---|---|---|
+| el lote no cabe en memoria | partirlo y acumular gradientes | del **Trainer**, cinco líneas | sí, y es el 80% de los casos |
+| la burbuja: `cuda:1` parado mientras computa `cuda:0` | encadenar micro-lotes | del **grafo** | dudoso |
+| acotar las activaciones vivas | el planificador 1F1B de verdad | **de nadie**, y ése es el problema | no |
+
+Las dos razones de la duda:
+
+**La burbuja puede que ya no exista.** CUDA lanza asíncrono: un bucle de
+micro-lotes en el host ya solapa los dispositivos sin planificador, porque nada
+sincroniza por el camino —`Opaque` envuelve el tensor y no hay ningún `.item()`
+en la costura—. Lo que un planificador añadiría **hay que medirlo antes de
+escribirlo**, y con una sola GPU aquí no se puede medir.
+
+**El 1F1B de verdad no es nuestro.** Su valor no es la burbuja sino acotar
+cuántos micro-lotes tienen las activaciones vivas, y para eso hay que
+intercalar los backward entre los forward. El backward lo dispara el Trainer,
+no el motor. Un planificador 1F1B obligaría a que el plan supiera del backward
+— o sea, a meter el entrenamiento dentro del grafo, que es justo lo que CU11
+decidió que no. La versión que sí encaja en los niveles —micro-lotes solo hacia
+delante— es la que menos valor tiene.
+
+### Los tres candidatos
+
+- **A. Acumulación de gradiente en el Trainer.** El problema real del 80%,
+  nivel 2, cero Rust. Honesto y pequeño; no enseña nada nuevo del diseño.
+- **B. Un worker local: `Plan::Remote` con destino un proceso de esta misma
+  máquina.** ← *recomendado.* Es el único con beneficio **medible aquí y
+  ahora**: dos nodos Python en una wave se serializan contra el GIL, y
+  `test_waves.py` ya lo deja documentado como limitación conocida; en dos
+  procesos, no. Todo Rust —el trait `Transport`, la serialización, `Opaque`
+  como `CompileError`—, primer trait nuevo desde CU2, y prepara CU13 sin
+  necesitar una segunda máquina.
+- **C. Lo que no cabe en la GPU**: poder pedir que dos ramas estructuralmente
+  paralelas no se solapen, y liberar lo que ya no lee nadie. Todo Rust, y toca
+  lo más delicado: el compilador y el motor.
+
 ## Casos de uso siguientes (sin abrir)
 
 El orden sale de la investigación bibliográfica de agosto de 2026, y el
