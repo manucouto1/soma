@@ -18,7 +18,10 @@
 //! toma una entrada con varios orígenes. Agregarlas —promediar, votar,
 //! concatenar— es trabajo del nodo que las recibe, o sea biblioteca.
 
-use crate::{Catalog, Ctx, Driver, DriverError, NodeError, NodeId, Plan, Transition, Value};
+use crate::{
+    Catalog, Ctx, Device, Driver, DriverError, NodeError, NodeId, Placement, Plan, Transition,
+    Value,
+};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -32,11 +35,14 @@ const MAX_TURNS: usize = 64;
 /// Ejecuta planes.
 ///
 /// Es un tipo y no una función suelta porque ejecutar necesita contexto —hoy
-/// el almacén y el driver— y mañana necesitará más: una caché, un bus de
-/// eventos. Ese "mañana" es lo que en el original se llama `GraphSession`.
+/// el almacén, el driver y la colocación— y mañana necesitará más: una caché,
+/// un bus de eventos. Ese "mañana" es lo que en el original se llama
+/// `GraphSession`. La colocación llegó por aquí y no por el plan a propósito:
+/// el plan dice cuándo se ejecuta cada nodo, no dónde.
 pub struct Executor<'a> {
     catalog: &'a Catalog,
     driver: Option<&'a dyn Driver>,
+    placement: Option<&'a Placement>,
 }
 
 impl<'a> Executor<'a> {
@@ -48,12 +54,22 @@ impl<'a> Executor<'a> {
         Self {
             catalog,
             driver: None,
+            placement: None,
         }
     }
 
     /// El mismo ejecutor, con quien atenderá lo que pidan los steps.
     pub fn with_driver(mut self, driver: &'a dyn Driver) -> Self {
         self.driver = Some(driver);
+        self
+    }
+
+    /// El mismo ejecutor, sabiendo dónde corre cada nodo.
+    ///
+    /// Sin esto ningún nodo tiene dispositivo y `ctx.device` es `None`, que es
+    /// «donde caiga» — no «cpu».
+    pub fn placed(mut self, placement: &'a Placement) -> Self {
+        self.placement = Some(placement);
         self
     }
 
@@ -176,12 +192,14 @@ impl<'a> Executor<'a> {
     /// recorre este bucle exactamente una vez. No hay dos caminos.
     fn advance(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
         let implementation = self.implementation(node)?;
+        let device = self.device(node);
         let mut results: Vec<Value> = Vec::new();
 
         for turn in 0..MAX_TURNS {
             let ctx = Ctx {
                 turn,
                 results: &results,
+                device,
             };
             let transition =
                 implementation
@@ -209,6 +227,11 @@ impl<'a> Executor<'a> {
             node: node.clone(),
             turns: MAX_TURNS,
         })
+    }
+
+    /// Dónde se dijo que corriera este nodo. Sin colocación, en ninguna parte.
+    fn device(&self, node: &NodeId) -> Option<&'a Device> {
+        self.placement.and_then(|placement| placement.of(node))
     }
 
     /// Lo que el catálogo tiene registrado para este nodo.

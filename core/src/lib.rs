@@ -10,6 +10,8 @@
 //! |---|---|
 //! | [`Graph`] | la **estructura**: qué nodos hay y cómo se conectan. Dato puro |
 //! | [`Catalog`] | el **almacén**: qué implementación corresponde a cada nodo |
+//! | [`Placement`] | **dónde** corre cada nodo. Dato puro, y aparte del plan |
+//! | [`Device`] | el sitio: `cpu`, `cuda:0`, `meta` |
 //! | [`Node`] | el **contrato** de lo que ejecuta un nodo |
 //! | [`Driver`] | quien **atiende** lo que un step pide |
 //! | [`Plan`] | la **forma decidida** de una ejecución |
@@ -25,18 +27,22 @@
 
 mod build;
 mod catalog;
+mod device;
 mod driver;
 mod execution;
 mod graph;
 mod node;
+mod placement;
 mod plan;
 mod value;
 
 pub use build::{Wire, node};
 pub use catalog::Catalog;
+pub use device::{Device, DeviceError};
 pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use node::{Ctx, Node, NodeError, Transition};
+pub use placement::Placement;
 pub use plan::{CompileError, Plan, compile};
 pub use value::Value;

@@ -3,7 +3,7 @@
 //! Fíjate en que ninguno declara de qué "tipo" es: lo que los distingue es la
 //! variante de `Transition` que devuelven.
 
-use soma_next_core::{Ctx, Driver, DriverError, Node, NodeError, Transition, Value};
+use soma_next_core::{Ctx, Device, Driver, DriverError, Node, NodeError, Transition, Value};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
 use std::time::Duration;
@@ -265,5 +265,46 @@ impl Driver for PreguntarEnCita {
         }
         drop(llegados);
         Ok(vec![Value::text("atendido"); requests.len()])
+    }
+}
+
+// ── Los que hacen falta para mirar una colocación por dentro ──
+
+/// Dónde le dijeron a cada nodo que corriera.
+#[derive(Default)]
+pub struct Registro(Mutex<Vec<(String, Option<Device>)>>);
+
+impl Registro {
+    pub fn nuevo() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// El dispositivo que le llegó en el `Ctx`, o `None` si no le llegó
+    /// ninguno. Revienta si el nodo no llegó a ejecutarse, que es otra cosa.
+    pub fn de(&self, quien: &str) -> Option<Device> {
+        self.0
+            .lock()
+            .expect("nadie envenena este mutex")
+            .iter()
+            .find(|(nombre, _)| nombre == quien)
+            .map(|(_, donde)| donde.clone())
+            .unwrap_or_else(|| panic!("`{quien}` no llegó a ejecutarse"))
+    }
+}
+
+/// Apunta dónde le dijeron que corriera y devuelve su entrada sin tocarla.
+///
+/// Es todo lo que un nodo del núcleo puede hacer con un dispositivo: verlo.
+/// Mover algo a una GPU no es asunto de aquí.
+pub struct Ubicuo(pub &'static str, pub Arc<Registro>);
+
+impl Node for Ubicuo {
+    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        self.1
+            .0
+            .lock()
+            .expect("nadie envenena este mutex")
+            .push((self.0.to_string(), ctx.device.cloned()));
+        Ok(Transition::Done(input.clone()))
     }
 }

@@ -2,7 +2,8 @@
 
     Graph.somatize(Fuente() >> (Izq() | Der()) >> Media())
 
-`>>` encadena y `|` abre en ramas. Un `>>` entre dos ramas abiertas las une:
+`>>` encadena, `|` abre en ramas y `.on()` coloca. Un `>>` entre dos ramas
+abiertas las une:
 lo que salga de todas entra en lo que venga detrás, que es exactamente el
 fan-in — el nodo de la derecha recibe un mapa con la clave de cada rama.
 
@@ -22,6 +23,19 @@ from abc import ABC, abstractmethod
 
 class Topology:
     """Un trozo de grafo a medio declarar."""
+
+    def on(self, device):
+        """El mismo trozo, colocado. **Gana el de dentro.**
+
+        ``(A().on("cuda:0") >> B()).on("cuda:1")`` deja `A` en la 0 y `B` en la
+        1: el de fuera rellena a los que no tienen sitio, no pisa a los que sí.
+        Así se coloca una rama entera y luego se afina un nodo suelto, que es
+        como se lee de dentro afuera.
+
+        El nombre del dispositivo se valida al materializar el grafo, en Rust:
+        `on("cude:0")` falla ahí, no dentro de torch a mitad de un run.
+        """
+        return _placed(self, device)
 
     def __rshift__(self, other):
         return Chain(_steps(self) + _steps(_wrap(other)))
@@ -51,11 +65,16 @@ class Fork(Topology):
 
 
 class Declared(Topology):
-    """Un objeto declarado como nodo, con su id si se lo pusiste."""
+    """Un objeto declarado como nodo, con su id y su sitio si se los pusiste."""
 
-    def __init__(self, obj, node_id=None):
+    def __init__(self, obj, node_id=None, device=None):
         self.obj = obj
         self.node_id = node_id
+        self.device = device
+
+    def named(self, node_id):
+        """El mismo nodo, con el id que digas. `.named` y `.on` conmutan."""
+        return Declared(self.obj, node_id, self.device)
 
 
 class Node(Topology, ABC):
@@ -75,6 +94,24 @@ class Node(Topology, ABC):
     def named(self, node_id):
         """El mismo nodo, con el id que digas."""
         return Declared(self, node_id)
+
+
+def _placed(topology, device):
+    """Reparte un dispositivo a las hojas que no lo tengan ya puesto.
+
+    Se reparte al declarar, y no se guarda como «el dispositivo de este trozo»,
+    porque un trozo deja de existir al materializarse: lo que queda son nodos.
+    Colocar es un hecho por nodo.
+    """
+    topology = _wrap(topology)
+    if isinstance(topology, Chain):
+        return Chain([_placed(step, device) for step in topology.steps])
+    if isinstance(topology, Fork):
+        return Fork([_placed(branch, device) for branch in topology.branches])
+    # `is not None` y no un `or`: `.on("")` tiene que llegar a `place()` y
+    # fallar allí, no desaparecer por ser una cadena vacía.
+    puesto = topology.device if topology.device is not None else device
+    return Declared(topology.obj, topology.node_id, puesto)
 
 
 def _wrap(obj):
@@ -130,6 +167,10 @@ def _walk(g, topology, sources):
     node_id = (
         g.node(topology.node_id, topology.obj) if topology.node_id else g.node(topology.obj)
     )
+    if topology.device is not None:
+        # `.on()` no es otro camino: termina en el mismo `place` que usa quien
+        # construye el grafo a mano, y hereda su validación.
+        g.place(node_id, topology.device)
     for source in sources:
         g.edge(source, node_id)
     return [node_id]

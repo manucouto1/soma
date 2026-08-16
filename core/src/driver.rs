@@ -7,7 +7,14 @@
 
 use crate::Value;
 
-/// Realiza lo que un [`Step`](crate::Step) pidió.
+/// Atiende lo que un nodo pidió con [`Transition::Await`](crate::Transition).
+///
+/// Es lo declarado frente a lo inyectado: un [`Node`](crate::Node) lo pone
+/// quien declara el grafo y vive en él —tiene id, se coloca, sale en el plan—;
+/// un driver lo pone quien **ejecuta**, no está en el grafo, y lo que devuelve
+/// no cruza ninguna arista: vuelve al `ctx.results` del nodo que lo pidió y no
+/// lo ve nadie más. Por eso el mismo grafo corre con un servicio de verdad o
+/// con un doble sin tocar una línea de su declaración.
 pub trait Driver: Send + Sync {
     /// Atiende las peticiones y devuelve un resultado por cada una, en orden.
     ///

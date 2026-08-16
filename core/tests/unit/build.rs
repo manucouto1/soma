@@ -12,7 +12,7 @@ fn numero(v: &Value) -> f64 {
 
 #[test]
 fn una_cadena() {
-    let (g, c) = (node("a", Sumar(1.0)) >> node("b", Sumar(10.0)))
+    let (g, c, _) = (node("a", Sumar(1.0)) >> node("b", Sumar(10.0)))
         .somatize()
         .unwrap();
 
@@ -27,7 +27,7 @@ fn una_cadena() {
 
 #[test]
 fn un_diamante_se_lee_de_un_vistazo() {
-    let (g, c) = (node("fuente", Sumar(1.0))
+    let (g, c, _) = (node("fuente", Sumar(1.0))
         >> (node("izq", Sumar(10.0)) | node("der", Sumar(100.0)))
         >> node("juntar", Media))
     .somatize()
@@ -44,7 +44,7 @@ fn un_diamante_se_lee_de_un_vistazo() {
 
 #[test]
 fn las_ramas_pueden_tener_su_propia_longitud() {
-    let (g, _) = (node("fuente", Sumar(1.0))
+    let (g, _, _) = (node("fuente", Sumar(1.0))
         >> ((node("izq", Sumar(1.0)) >> node("izq2", Sumar(1.0))) | node("der", Sumar(1.0))))
     .somatize()
     .unwrap();
@@ -56,7 +56,7 @@ fn las_ramas_pueden_tener_su_propia_longitud() {
 
 #[test]
 fn un_nodo_que_pide_turnos_y_otro_que_no_se_mezclan_igual() {
-    let (g, c) = (node("sumar", Sumar(1.0)) >> node("eco", Inmediato))
+    let (g, c, _) = (node("sumar", Sumar(1.0)) >> node("eco", Inmediato))
         .somatize()
         .unwrap();
 
@@ -101,7 +101,7 @@ fn ejecuta(id: &str, from: &[&str]) -> Plan {
 /// El plan de una expresión, para compararlo con su árbol.
 macro_rules! plan_de {
     ($wire:expr) => {{
-        let (g, c) = ($wire).somatize().unwrap();
+        let (g, c, _) = ($wire).somatize().unwrap();
         compile(&g, &c).unwrap()
     }};
 }

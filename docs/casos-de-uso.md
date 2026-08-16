@@ -535,11 +535,19 @@ se cerrara sin decidir aquello.
 
 ## Casos de uso siguientes (sin abrir)
 
-Orden tentativo; se decide al cerrar cada uno, no ahora.
+El orden no es por ambición sino por dependencia, y sale de la investigación
+bibliográfica de agosto de 2026. Se decide al cerrar cada uno, no ahora.
 
-- CU9 — cachear la salida de un nodo por contenido
-- CU10 — validar tipos entre nodos conectados (schemas)
-- CU11 — control de flujo: rama y bucle
+- CU11 — `fit`: el bucle de entrenamiento entra en el grafo. La pregunta que
+  hay que contestar ahí —**¿el estado de un nodo es un `Value`?**— es la más
+  consecuente de todo el plan: si lo es, es serializable y federado sale casi
+  solo; si no, federado no puede existir
+- CU12 — micro-lotes: solapar dentro de una rama (GPipe, 1F1B)
+- CU13 — `Plan::Remote`: transporte (el único trait nuevo, `Transport`), y
+  `Opaque` cruzando el cable pasa a ser un `CompileError`. Es a la vez model
+  parallel entre hosts y **split learning**: son el mismo mecanismo
+- CU14 — federado: una ronda federada **es un grafo**, y FedAvg y compañía son
+  nodos de biblioteca
 - *(sin abrir, pendiente de diseño)* `soma_next.torch`: envoltorio de `nn.Module`
   y bucle de entrenamiento
 
@@ -729,3 +737,217 @@ otra variante.
 
 **Repartir una wave entre procesos.** Necesita transporte, y `Opaque` no cruza
 un cable. Ese es el otro caso de uso siguiente.
+
+## CU10 — Dónde corre un nodo
+
+```python
+g = Graph.somatize(
+    Tokenizar()
+    >> (Encoder().on("cuda:0") | Otro().on("cuda:1"))
+    >> Juntar()
+)
+g.devices()   # {"encoder": "cuda:0", "otro": "cuda:1"}
+g.plan()      # el mismo de siempre: el plan dice cuándo, no dónde
+```
+
+Estado: **cerrado**. 110 tests en Rust, 119 en Python.
+
+### La pregunta: ¿dónde vive el dispositivo?
+
+El primer diseño lo metía en el plan, como `Plan::On { device, inner }`
+envolviendo un subplan —la misma forma que va a tener `Plan::Remote`—. Se
+descartó por una razón que lo tumba entero: **el plan determina el orden de
+ejecución y la concurrencia, y colocar no cambia ni uno ni otra**. Son dos ejes
+distintos y meterlos en el mismo tipo los ata sin necesidad.
+
+Sacarlo del plan pagó de inmediato:
+
+- `plan.rs` no se toca en todo el caso de uso.
+- Desaparece la regla de colapsar tiradas contiguas del mismo dispositivo, que
+  era lo más frágil del diseño: la única parte que tenía que ser canónica y
+  podía dejar de serlo.
+- «Colocar no cambia el plan» deja de ser algo que comprobar y pasa a ser
+  cierto por construcción, porque `compile` no ve la colocación. El test sigue
+  escrito, pero como aviso para el día que alguien intente meterla ahí.
+
+Descartado también, y por qué:
+
+| dónde | por qué no |
+|---|---|
+| en el `Node` (`fn device(&self)`) | mete una decisión de **orquestación** dentro del contrato de la implementación. El nodo no elige dónde corre; y además queda invisible: no se puede imprimir ni razonar sobre ella |
+| en el `Graph` | un `Graph` es solo topología. Y el motor no lo mira —cada paso del plan es autónomo desde CU3—, así que habría obligado a pasarle el grafo al `Executor` |
+| en el `Catalog` | era el finalista: el motor ya lo tiene en la mano. Pierde porque el catálogo es la mitad que **no** es dato, y una colocación sí lo es. Cuando un subgrafo viaje a otra máquina, la colocación viaja con él y las implementaciones no |
+| una `Metadata` genérica | es el nombre genérico de `Placement`, y el genérico se paga caro: un saco `id → dict` no puede guardar un `Device` **tipado** |
+
+### Decisiones tomadas
+
+**1. `Placement` es un tipo propio, y se le da al motor como se le da el
+driver.** Queda un cuarto hecho ortogonal, que es lo que la pregunta hizo
+visible:
+
+| pieza | contesta |
+|---|---|
+| `Graph` | **qué** hay y cómo se conecta |
+| `Catalog` | **quién** lo ejecuta |
+| `Placement` | **dónde** |
+| `Plan` | **cuándo**, y con qué concurrencia |
+
+Encaja con lo que el propio `Executor` tenía escrito de sí mismo: «ejecutar
+necesita contexto —hoy el almacén y el driver— y mañana necesitará más».
+
+**2. `Device` es un enum, no un `String` validado por forma.** El argumento que
+lo decidió no es el de la exhaustividad sino éste: **con un enum, un typo es un
+error al declarar**. `.on("cude:0")` falla donde se escribió; un
+`Device(String)` que solo comprobara la forma lo daría por bueno y el fallo
+saldría dentro de torch a mitad de un run.
+
+El coste de que el vocabulario pase a ser nuestro se puede pagar porque **el
+núcleo no hace `match` sobre un `Device` en ninguna otra parte**: no decide nada
+según cuál sea, solo lo transporta. Añadir una variante son tres líneas —el
+enum, un brazo de `FromStr` y otro de `Display`— y ningún otro sitio deja de
+compilar.
+
+**3. El índice de `cuda` es obligatorio.** En torch, `"cuda"` a secas significa
+«la GPU actual», que es estado del hilo. Para quien coloca, «la actual» no es
+una colocación: `.on("cuda")` se rechaza pidiendo `cuda:0`. Una declaración
+ambigua no se puede escribir.
+
+**4. `meta` entra como variante.** Es el único dispositivo que permite probar de
+extremo a extremo que una colocación llega y se obedece **en cualquier
+máquina**. La de desarrollo tiene una sola GPU, así que sin `meta` la mitad del
+cuestionario dependería del hardware.
+
+**5. Sin colocar ≠ colocado en `cpu`.** El primero es «donde ya esté», el
+segundo es una orden de mover. Por eso `Placement::of` devuelve `Option` en vez
+de un `Cpu` por defecto.
+
+**6. El dispositivo llega por el `Ctx`, y el que obedece es el nodo.** Es la
+consecuencia de que el núcleo no sepa qué es una GPU: su papel es transportar
+la declaración hasta el punto de ejecución. `ctx.device` llega escrito como lo
+escribe torch —`"cuda:0"`— para que se le pueda pasar a `.to()` sin traducir.
+
+**7. `.on()` en el DSL, `place()` con el id, y una sola puerta.** `.on()` se
+reparte a las hojas que no tengan sitio y **gana el de dentro**:
+`(a.on("cuda:0") >> b).on("cuda:1")` deja `a` en la 0 y `b` en la 1. Pero
+`.on()` necesita el objeto dentro de una expresión, y hay dos casos en que solo
+queda el id: el grafo construido en un bucle, y —el que importa de verdad— la
+colocación decidida **después**, con lo que haya en la máquina:
+
+```python
+for i, nid in enumerate(g.nodes()):
+    g.place(nid, f"cuda:{i % torch.cuda.device_count()}")
+```
+
+No son dos caminos: `.on()` termina llamando a `place()`, así que la validación
+se escribe una vez y el DSL la hereda. Ningún id huérfano es posible — `.on()`
+solo nombra nodos de su propio `Wire`, y `place()` valida contra el grafo.
+
+### Lo que `.on()` **no** es
+
+`.on("cuda:1")` no es `torch.cuda.set_device(1)`. Para que un nodo compute en
+una GPU tienen que pasar tres cosas, y el contexto ambiente solo afecta a la
+tercera:
+
+| qué | cómo | cuándo |
+|---|---|---|
+| los **parámetros** están allí | `modulo.to(dev)` | una vez |
+| la **entrada** está allí | `x.to(dev)` | cada forward |
+| lo **creado dentro** nace allí | `device=` explícito | cada forward |
+
+El contraejemplo estaba ya en el repo: `test_pipeline_torch.py` crea el tensor
+de índices con `torch.tensor(filas)` dentro del `forward`. Con el `Embedding`
+movido a cuda, eso revienta con *«Expected all tensors to be on the same
+device»*, y ningún `set_device` lo arregla.
+
+De ahí que obedecer sea trabajo del nodo, y que el patrón se escriba a mano —
+son cinco líneas, y hasta que se repitan tres veces no hay nada que sacar a una
+clase base:
+
+```python
+def forward(self, x, ctx):
+    if ctx.device:
+        if self.colocada != ctx.device:
+            self.lin.to(ctx.device)   # los parámetros, una vez
+            self.colocada = ctx.device
+        x = x.to(ctx.device)          # la entrada, cada vez
+    return Done(Opaque(self.lin(x)))
+```
+
+### La postcondición, que es lo que evita el silencio
+
+Un nodo que ignora su `ctx.device` correría en el sitio equivocado sin que se
+notara, y eso es justo lo que este proyecto no tolera. Desde fuera solo se puede
+mirar una cosa: **dónde acabó lo que devolvió**. Si no coincide, es un error con
+nombre:
+
+```
+el nodo `encoder` falló: declaró `cuda:0` pero devolvió un valor en `cpu`
+```
+
+Se mira lo que tenga un `.device` que mirar —un tensor, suelto o dentro de un
+`Opaque`—. Un nodo colocado que devuelve una lista de textos no se comprueba, y
+tampoco tenía mucho sentido colocarlo.
+
+**El caso que marca sin ser un error**: un nodo que corre en la GPU y termina a
+propósito con un `.cpu()`. Se acepta a sabiendas —es el caso raro, el mensaje
+dice exactamente lo que pasó, y la alternativa era el silencio—.
+
+### Por qué esto venía después de las waves
+
+Una rama de una wave corre entera en un hilo (decisión de CU9), así que un
+dispositivo por rama significa algo. Al revés no funcionaba: agrupar por nivel
+topológico habría hecho saltar de hilo a una rama, y el dispositivo de torch es
+thread-local.
+
+Y lo que hace barato todo el caso de uso: `.to()` entre dispositivos es
+**diferenciable**, así que autograd atraviesa el salto y `Opaque` no ha tenido
+que cambiar ni una línea. Hay test: dos capas, una en `cuda:0` y otra en `cpu`,
+entrenando de extremo a extremo.
+
+### Cuestionario
+
+**Rust** (`core/tests/unit/device.rs`, `placement.rs`, `execution.rs`)
+- [x] `cpu`, `cuda:N` y `meta` se leen, y la ida y la vuelta dan lo mismo
+- [x] `cude:0` es un tipo desconocido; `cuda` pide índice; `cuda:`, `cuda:x`,
+      `cuda:1:2`, `cpu:0` y `""` no tienen forma de dispositivo
+- [x] `.on()` reparte por todo el trozo y gana el de dentro
+- [x] cada rama de un `|` en su sitio, y lo no colocado sigue sin colocar
+- [x] el nodo ve el suyo y solo el suyo — a nadie se le pega el del vecino
+- [x] las ramas de una wave ven dispositivos distintos, cada una en su hilo
+- [x] colocar no cambia el plan, ni el grafo, ni lo que produce
+
+**Python** (`python/tests/test_dispositivo.py`)
+- [x] `.on()` y `place()` dan el mismo grafo, y `.named` y `.on` conmutan
+- [x] colocar después en un bucle, y recolocar pisa lo anterior
+- [x] colocar un nodo que no existe falla, y cada nombre malo con su aviso
+- [x] `ctx.device` llega, y sale en el `repr` del `Ctx`
+- [x] la postcondición salta, y dice de qué nodo — sin torch, con un objeto
+      cualquiera que sepa decir dónde está
+- [x] con torch: `meta` de extremo a extremo sin hardware; un nodo que ignora
+      su dispositivo se cuenta
+- [x] con GPU: `cuda:0` → `cpu` en el mismo grafo, y el backward atraviesa el
+      salto entrenando
+
+### Lo que NO entró
+
+**Elegir el dispositivo automáticamente.** Balanceo, «auto», mirar cuánta
+memoria queda: eso es una política, y todavía no hay quien la pida.
+
+**Partir un nodo entre dispositivos**, y `g.to("cuda")` para el grafo entero.
+
+**`soma_next.torch`.** El patrón para obedecer una colocación se escribe a mano
+en el test, que es donde se documenta hasta que se repita.
+
+**Generalizar `Placement` a «un sitio, local o remoto»** para adelantar CU13.
+Cuando llegue `Remote`, `Placement` estará ahí para crecer — o no; eso se decide
+entonces.
+
+### Medido, no afirmado
+
+Con una sola GPU en la máquina de desarrollo, `cuda:1` no existe: el reparto
+entre dos GPUs se puede **declarar** y no se puede **ejecutar** aquí. Los tests
+lo dicen en su nombre en vez de dejarlo implícito.
+
+Y sigue en pie el aviso de CU9: nada de justificar esto con un benchmark de dos
+ramas en dos GPUs. CUDA lanza asíncrono y las dos ya se solapan ejecutándose en
+secuencia; lo que las waves compran es tiempo de **host**.

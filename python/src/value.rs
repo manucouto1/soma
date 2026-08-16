@@ -26,7 +26,7 @@ use std::sync::Arc;
 pub struct PyOpaque {
     /// El objeto tal cual.
     #[pyo3(get)]
-    value: PyObject,
+    pub(crate) value: PyObject,
 }
 
 #[pymethods]

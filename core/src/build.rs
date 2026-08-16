@@ -1,8 +1,8 @@
 //! Declarar un grafo como una expresión, en vez de a base de llamadas.
 //!
 //! ```ignore
-//! let (graph, catalog) = (node("fuente", Sumar(1.0))
-//!     >> (node("izq", Sumar(10.0)) | node("der", Sumar(100.0)))
+//! let (graph, catalog, placement) = (node("fuente", Sumar(1.0))
+//!     >> (node("izq", Sumar(10.0)).on(Device::Cuda(0)) | node("der", Sumar(100.0)))
 //!     >> node("juntar", Media))
 //! .somatize()?;
 //! ```
@@ -17,7 +17,7 @@
 //! materializan hasta [`Wire::somatize`], así que juntar dos trozos es
 //! concatenar dos listas y no fusionar dos grafos.
 
-use crate::{Catalog, Graph, GraphError, Node, NodeId};
+use crate::{Catalog, Device, Graph, GraphError, Node, NodeId, Placement};
 use std::ops::{BitOr, Shr};
 use std::sync::Arc;
 
@@ -31,6 +31,9 @@ struct Parts {
     edges: Vec<(NodeId, NodeId)>,
     heads: Vec<NodeId>,
     terminals: Vec<NodeId>,
+    /// Los que ya tienen sitio. Un id aparece una vez como mucho: quien lo
+    /// pone es [`Wire::on`], y solo coloca a los que no lo tenían.
+    devices: Vec<(NodeId, Device)>,
 }
 
 /// Un nodo suelto.
@@ -45,6 +48,7 @@ fn single(id: NodeId, implementation: Arc<dyn Node>) -> Wire {
             edges: Vec::new(),
             heads: vec![id.clone()],
             terminals: vec![id],
+            devices: Vec::new(),
         }),
     }
 }
@@ -65,6 +69,7 @@ impl Shr for Wire {
             nodes: left.nodes.into_iter().chain(right.nodes).collect(),
             heads: left.heads,
             terminals: right.terminals,
+            devices: left.devices.into_iter().chain(right.devices).collect(),
         })
     }
 }
@@ -80,6 +85,7 @@ impl BitOr for Wire {
             edges: left.edges.into_iter().chain(right.edges).collect(),
             heads: left.heads.into_iter().chain(right.heads).collect(),
             terminals: left.terminals.into_iter().chain(right.terminals).collect(),
+            devices: left.devices.into_iter().chain(right.devices).collect(),
         })
     }
 }
@@ -95,18 +101,45 @@ fn combine(left: Wire, right: Wire, join: impl FnOnce(Parts, Parts) -> Parts) ->
 }
 
 impl Wire {
-    /// Materializa lo declarado: la estructura y el almacén.
+    /// Todo este trozo en un dispositivo. Gana el de dentro.
     ///
-    /// Son dos cosas y ninguna contiene a la otra, así que salen las dos —
+    /// `(a.on(Cuda(0)) >> b).on(Cuda(1))` deja `a` en la 0 y `b` en la 1: el
+    /// de fuera rellena a los que no tienen sitio, no pisa a los que sí. Así
+    /// se puede colocar una rama entera y luego afinar un nodo suelto, que es
+    /// como se lee de dentro afuera.
+    pub fn on(self, device: Device) -> Wire {
+        Wire {
+            parts: self.parts.map(|mut parts| {
+                let sin_sitio: Vec<NodeId> = parts
+                    .nodes
+                    .iter()
+                    .map(|(id, _)| id)
+                    .filter(|id| !parts.devices.iter().any(|(placed, _)| placed == *id))
+                    .cloned()
+                    .collect();
+                parts
+                    .devices
+                    .extend(sin_sitio.into_iter().map(|id| (id, device.clone())));
+                parts
+            }),
+        }
+    }
+
+    /// Materializa lo declarado: la estructura, el almacén y la colocación.
+    ///
+    /// Son tres cosas y ninguna contiene a las otras, así que salen las tres —
     /// es la misma separación de siempre: el grafo es dato, una
-    /// implementación no.
+    /// implementación no, y dónde corre cada nodo vuelve a ser dato.
     ///
     /// # Errores
     /// El primer [`GraphError`] que dé montarlo: un id repetido, sobre todo.
-    pub fn somatize(self) -> Result<(Graph, Catalog), GraphError> {
+    /// La colocación no puede fallar aquí: solo nombra nodos de este mismo
+    /// `Wire`, así que no hay ids huérfanos que comprobar.
+    pub fn somatize(self) -> Result<(Graph, Catalog, Placement), GraphError> {
         let parts = self.parts?;
         let mut graph = Graph::new();
         let mut catalog = Catalog::new();
+        let mut placement = Placement::new();
 
         for (id, implementation) in parts.nodes {
             graph.add_node(id.clone())?;
@@ -115,6 +148,9 @@ impl Wire {
         for (from, to) in parts.edges {
             graph.add_edge(from, to)?;
         }
-        Ok((graph, catalog))
+        for (id, device) in parts.devices {
+            placement.place(id, device);
+        }
+        Ok((graph, catalog, placement))
     }
 }

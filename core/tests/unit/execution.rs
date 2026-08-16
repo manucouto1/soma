@@ -2,10 +2,11 @@
 
 use crate::dobles::{
     Cita, Diario, Gritar, Inmediato, Insaciable, Media, Preguntar, PreguntarEnCita, Punto,
-    Reventar, Romper, SiempreNull, Sumar, Testigo,
+    Registro, Reventar, Romper, SiempreNull, Sumar, Testigo, Ubicuo,
 };
 use soma_next_core::{
-    Catalog, Ctx, Executor, Graph, Node, NodeError, Plan, RunError, Transition, Value, compile,
+    Catalog, Ctx, Device, Executor, Graph, Node, NodeError, Placement, Plan, RunError, Transition,
+    Value, compile,
 };
 use std::sync::Arc;
 
@@ -618,4 +619,132 @@ fn un_grafo_que_no_es_serie_paralelo_se_ejecuta_bien_aunque_no_se_reparta() {
             ("d".to_string(), Value::number(1.5)),
         ])
     );
+}
+
+// ── La colocación: llega al nodo, y no hace nada más ──
+
+/// Un grafo de testigos que apuntan dónde les dijeron que corrieran.
+fn testigos(ids: &[&'static str], registro: &Arc<Registro>) -> (Graph, Catalog) {
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    for id in ids {
+        g.add_node(*id).unwrap();
+        c.insert(*id, Arc::new(Ubicuo(id, registro.clone())));
+    }
+    (g, c)
+}
+
+#[test]
+fn sin_colocacion_el_nodo_no_ve_ningun_dispositivo() {
+    let registro = Registro::nuevo();
+    let (g, c) = testigos(&["a"], &registro);
+
+    let plan = compile(&g, &c).unwrap();
+    Executor::new(&c).run(&plan, Value::Null).unwrap();
+
+    assert_eq!(registro.de("a"), None);
+}
+
+#[test]
+fn el_nodo_ve_donde_le_dijeron_que_corriera() {
+    let registro = Registro::nuevo();
+    let (g, c) = testigos(&["a"], &registro);
+    let mut placement = Placement::new();
+    placement.place("a", Device::Cuda(1));
+
+    let plan = compile(&g, &c).unwrap();
+    Executor::new(&c)
+        .placed(&placement)
+        .run(&plan, Value::Null)
+        .unwrap();
+
+    assert_eq!(registro.de("a"), Some(Device::Cuda(1)));
+}
+
+#[test]
+fn cada_nodo_ve_el_suyo_y_solo_el_suyo() {
+    let registro = Registro::nuevo();
+    let (mut g, c) = testigos(&["a", "b", "c"], &registro);
+    g.add_edge("a", "b").unwrap();
+    g.add_edge("b", "c").unwrap();
+
+    let mut placement = Placement::new();
+    placement.place("a", Device::Cpu);
+    placement.place("c", Device::Meta);
+
+    let plan = compile(&g, &c).unwrap();
+    Executor::new(&c)
+        .placed(&placement)
+        .run(&plan, Value::Null)
+        .unwrap();
+
+    assert_eq!(registro.de("a"), Some(Device::Cpu));
+    assert_eq!(registro.de("b"), None, "a nadie se le pega el del vecino");
+    assert_eq!(registro.de("c"), Some(Device::Meta));
+}
+
+#[test]
+fn las_ramas_de_una_wave_ven_dispositivos_distintos_cada_una_en_su_hilo() {
+    // Es la razón de que CU9 fuera antes que esto: una rama entera corre en un
+    // hilo, así que puede fijar su dispositivo una vez y que aguante.
+    let registro = Registro::nuevo();
+    let (mut g, c) = testigos(&["fuente", "izq", "der"], &registro);
+    g.add_edge("fuente", "izq").unwrap();
+    g.add_edge("fuente", "der").unwrap();
+
+    let mut placement = Placement::new();
+    placement.place("izq", Device::Cuda(0));
+    placement.place("der", Device::Cuda(1));
+
+    let plan = compile(&g, &c).unwrap();
+    assert!(format!("{plan:?}").contains("Wave"));
+    Executor::new(&c)
+        .placed(&placement)
+        .run(&plan, Value::Null)
+        .unwrap();
+
+    assert_eq!(registro.de("izq"), Some(Device::Cuda(0)));
+    assert_eq!(registro.de("der"), Some(Device::Cuda(1)));
+}
+
+#[test]
+fn una_colocacion_que_nombra_a_otro_no_le_llega_a_nadie() {
+    // Un `Placement` suelto no puede comprobar ids: eso se hace donde hay un
+    // grafo delante. Aquí solo se ve que no se lo come otro nodo.
+    let registro = Registro::nuevo();
+    let (g, c) = testigos(&["a"], &registro);
+    let mut placement = Placement::new();
+    placement.place("otro", Device::Cuda(0));
+
+    let plan = compile(&g, &c).unwrap();
+    Executor::new(&c)
+        .placed(&placement)
+        .run(&plan, Value::Null)
+        .unwrap();
+
+    assert_eq!(registro.de("a"), None);
+}
+
+#[test]
+fn colocar_no_cambia_lo_que_produce_el_grafo() {
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    for (id, cuanto) in [("a", 1.0), ("b", 10.0)] {
+        g.add_node(id).unwrap();
+        c.insert(id, Arc::new(Sumar(cuanto)));
+    }
+    g.add_edge("a", "b").unwrap();
+    let mut placement = Placement::new();
+    placement.place("a", Device::Meta);
+    placement.place("b", Device::Cuda(3));
+
+    let plan = compile(&g, &c).unwrap();
+    let sin = Executor::new(&c).run(&plan, Value::number(0.0)).unwrap();
+    let con = Executor::new(&c)
+        .placed(&placement)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+
+    assert_eq!(numero(&sin), 11.0);
+    assert_eq!(sin, con);
 }

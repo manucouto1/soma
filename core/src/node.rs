@@ -19,7 +19,7 @@
 //! [`Driver`](crate::Driver) sabe interpretar. Por eso aquí no hay ni LLMs, ni
 //! herramientas, ni diario de efectos.
 
-use crate::Value;
+use crate::{Device, Value};
 
 /// Algo que un nodo sabe hacer.
 ///
@@ -50,6 +50,14 @@ pub struct Ctx<'a> {
     /// Lo que devolvió el driver de lo pedido en el turno anterior, en orden.
     /// Vacío en el turno 0.
     pub results: &'a [Value],
+    /// Dónde se dijo que corriera este nodo, si se dijo.
+    ///
+    /// Es el único canal por el que una colocación llega a una
+    /// implementación, y llega como **información**: el núcleo no sabe mover
+    /// nada a una GPU, así que quien obedece es el nodo. Lo que sí hay es una
+    /// postcondición al otro lado de la costura de Python, para que
+    /// desobedecer no salga gratis ni en silencio.
+    pub device: Option<&'a Device>,
 }
 
 /// Cómo sigue la cosa después de un turno.

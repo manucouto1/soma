@@ -11,15 +11,21 @@ mod value;
 use node::{PyAwait, PyCtx, PyDone, PyDriver, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::types::{PyDict, PyTuple};
 use soma_next_core::{
-    Catalog, CompileError, Executor, Graph, GraphError, NodeId, RunError, compile,
+    Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, NodeId, Placement,
+    RunError, compile,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Traduce el error del núcleo a la excepción que un usuario de Python espera.
 fn to_py_err(e: GraphError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// Lo mismo para un nombre que no nombra ningún sitio donde ejecutar.
+fn device_err(e: DeviceError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
@@ -39,6 +45,8 @@ struct PyGraph {
     graph: Graph,
     /// Lo que el motor ejecuta.
     catalog: Catalog,
+    /// Dónde corre cada nodo, para los que se dijo.
+    placement: Placement,
     /// El objeto tal cual lo pasó el usuario, para poder devolvérselo.
     /// No es una copia del catálogo: guarda otra cosa, el original sin envolver.
     implementations: HashMap<String, PyObject>,
@@ -51,6 +59,7 @@ impl PyGraph {
         Self {
             graph: Graph::new(),
             catalog: Catalog::new(),
+            placement: Placement::new(),
             implementations: HashMap::new(),
         }
     }
@@ -78,6 +87,31 @@ impl PyGraph {
     fn edge(&mut self, source: &str, target: &str) -> PyResult<()> {
         self.graph.add_edge(source, target).map_err(to_py_err)?;
         Ok(())
+    }
+
+    /// Coloca un nodo: dónde tiene que correr.
+    ///
+    /// Es la primitiva, y `.on()` del DSL termina llamando aquí. Existe
+    /// aparte porque `.on()` necesita el objeto dentro de una expresión y
+    /// esto solo necesita el id — que es el caso de quien construyó el grafo
+    /// con `node()`/`edge()`, y el de quien decide la colocación **después**,
+    /// en un bucle, con lo que haya en la máquina.
+    fn place(&mut self, node_id: &str, device: &str) -> PyResult<()> {
+        let id = self.known(node_id)?;
+        let device: Device = device.parse().map_err(device_err)?;
+        self.placement.place(id, device);
+        Ok(())
+    }
+
+    /// Dónde corre cada nodo colocado, en orden de declaración.
+    fn devices<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let out = PyDict::new(py);
+        for id in self.graph.nodes() {
+            if let Some(device) = self.placement.of(id) {
+                out.set_item(id.to_string(), device.to_string())?;
+            }
+        }
+        Ok(out)
     }
 
     /// Los ids, en orden de inserción.
@@ -174,7 +208,7 @@ impl PyGraph {
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
 
         let driver = driver.map(PyDriver::new).transpose()?;
-        let executor = Executor::new(&self.catalog);
+        let executor = Executor::new(&self.catalog).placed(&self.placement);
         let executor = match &driver {
             Some(d) => executor.with_driver(d),
             None => executor,
