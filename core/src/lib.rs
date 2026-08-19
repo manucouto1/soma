@@ -11,11 +11,13 @@
 //! | [`Graph`] | the **structure**: which nodes exist and how they connect. Pure data |
 //! | [`Catalog`] | the **store**: which implementation belongs to each node |
 //! | [`Placement`] | **where** each node runs. Pure data, and separate from the plan |
+//! | [`Memory`] | **what is remembered** of each node: what it is, whether it is frozen, whether its output is kept |
 //! | [`Device`] | the place inside a machine: `cpu`, `cuda:0`, `meta` |
 //! | [`Host`] | the place that **is** another machine or process, by name |
 //! | [`Node`] | the **contract** for what a node executes |
 //! | [`Driver`] | who **serves** what a step asks for |
 //! | [`Transport`] | who **carries** a slice of plan to another host |
+//! | [`Keeper`] | who **hashes** a recipe and **keeps** what it names |
 //! | [`Plan`] | the **decided shape** of an execution |
 //! | [`compile`] | from the structure to the shape |
 //! | [`distribute`] | and from the placement, which slices travel together |
@@ -35,6 +37,9 @@ mod driver;
 mod execution;
 mod graph;
 mod host;
+mod keeper;
+mod key;
+mod memory;
 mod node;
 mod placement;
 mod plan;
@@ -48,6 +53,9 @@ pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;
+pub use keeper::{Keeper, KeeperError};
+pub use key::Key;
+pub use memory::{Memory, MemoryError, cacheable};
 pub use node::{Ctx, Node, NodeError, Transition};
 pub use placement::Placement;
 pub use plan::{CompileError, Plan, compile, distribute};

@@ -9,6 +9,8 @@ mod doubles;
 mod execution;
 mod graph;
 mod host;
+mod key;
+mod memory;
 mod placement;
 mod plan;
 mod value;
