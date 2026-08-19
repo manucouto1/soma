@@ -1,91 +1,85 @@
-//! El motor: recorrer un [`Plan`] y ejecutar lo que dice.
+//! The engine: walking a [`Plan`] and executing what it says.
 //!
-//! Vive en el núcleo, no en los bindings, porque recorrer *es* lógica de
-//! dominio. Python solo aporta las implementaciones.
+//! It lives in the core, not in the bindings, because walking *is* domain
+//! logic. Python only supplies the implementations.
 //!
-//! El motor no mira el grafo: cada paso del plan lleva escrito de dónde sale
-//! su entrada, y aquí solo se busca en lo ya producido. Un plan es una
-//! estructura decidida, no un grafo que haya que interpretar.
+//! The engine never looks at the graph: every plan step carries where its input
+//! comes from, and here it is only looked up in what was already produced.
 //!
-//! Todos los nodos se avanzan igual: se les pregunta, y si piden algo se les
-//! atiende y se les vuelve a preguntar. Un nodo que termina a la primera —lo
-//! que en otros sitios se llama un filtro— pasa por el bucle una sola vez, así
-//! que no hace falta un camino aparte para él.
+//! Every node is advanced the same way — ask, serve whatever it asks for, ask
+//! again — so a node that finishes on the first turn needs no separate path.
 //!
-//! Cuando a un nodo le llega **una** cosa, recibe esa cosa. Cuando le llegan
-//! varias, recibe un [`Value::Map`] con la clave del nodo que produjo cada
-//! una: fan-in no es una variante del plan ni un tipo de nodo, es la forma que
-//! toma una entrada con varios orígenes. Agregarlas —promediar, votar,
-//! concatenar— es trabajo del nodo que las recibe, o sea biblioteca.
+//! When **one** thing reaches a node it receives that thing; when several do, a
+//! [`Value::Map`] keyed by whoever produced each. Fan-in is neither a plan
+//! variant nor a kind of node, it is the shape an input with several origins
+//! takes; aggregating them is the receiving node's job, i.e. library.
 
 use crate::{
-    Catalog, Ctx, Device, Driver, DriverError, NodeError, NodeId, Placement, Plan, Transition,
-    Value,
+    Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, NodeError, NodeId, Outcome, Placement,
+    Plan, Transition, Transport, TransportError, Value,
 };
 use std::collections::HashMap;
 use std::fmt;
 
-/// Cuántas veces se le pregunta a un nodo antes de darlo por colgado.
-///
-/// Un nodo que no termina es un bug del nodo, no una espera legítima: quien
-/// espera de verdad pide algo y el driver tarda. El tope existe para que ese
-/// bug se note como un error con nombre en vez de como un proceso parado.
+/// How many times a node is asked before it is given up for hung. A node that
+/// does not finish is a bug in the node, not a legitimate wait.
 const MAX_TURNS: usize = 64;
 
-/// Ejecuta planes.
+/// Executes plans.
 ///
-/// Es un tipo y no una función suelta porque ejecutar necesita contexto —hoy
-/// el almacén, el driver y la colocación— y mañana necesitará más: una caché,
-/// un bus de eventos. Ese "mañana" es lo que en el original se llama
-/// `GraphSession`. La colocación llegó por aquí y no por el plan a propósito:
-/// el plan dice cuándo se ejecuta cada nodo, no dónde.
+/// A type and not a bare function because executing needs context: today the
+/// store, the driver, the placement and the transports.
 pub struct Executor<'a> {
     catalog: &'a Catalog,
     driver: Option<&'a dyn Driver>,
     placement: Option<&'a Placement>,
+    /// Which host it knows how to reach, and by what route. A list because
+    /// there are two or three of them.
+    transports: Vec<(Host, &'a dyn Transport)>,
 }
 
 impl<'a> Executor<'a> {
-    /// Un ejecutor que solo sabe de filtros.
-    ///
-    /// Sin driver, un plan con steps falla con [`RunError::NoDriver`] en vez de
-    /// inventarse qué hacer con lo que pidan.
+    /// An executor with no driver: a plan whose steps ask for something fails
+    /// with [`RunError::NoDriver`].
     pub fn new(catalog: &'a Catalog) -> Self {
         Self {
             catalog,
             driver: None,
             placement: None,
+            transports: Vec::new(),
         }
     }
 
-    /// El mismo ejecutor, con quien atenderá lo que pidan los steps.
+    /// The same executor, with whoever will serve what the steps ask for.
     pub fn with_driver(mut self, driver: &'a dyn Driver) -> Self {
         self.driver = Some(driver);
         self
     }
 
-    /// El mismo ejecutor, sabiendo dónde corre cada nodo.
-    ///
-    /// Sin esto ningún nodo tiene dispositivo y `ctx.device` es `None`, que es
-    /// «donde caiga» — no «cpu».
+    /// The same executor, knowing where each node runs. Without this every
+    /// `ctx.device` is `None`, which means "wherever it lands".
     pub fn placed(mut self, placement: &'a Placement) -> Self {
         self.placement = Some(placement);
         self
     }
 
-    /// Ejecuta el plan y devuelve lo que produjo.
-    ///
-    /// # Errores
-    /// Ver [`RunError`]. El primer fallo para la ejecución: no hay recuperación
-    /// parcial, porque nadie ha dicho todavía qué debería significar.
+    /// The same executor, knowing how to reach a host. Called once per host; a
+    /// name nobody resolves is [`RunError::NoTransport`], not a slice executed
+    /// here just in case.
+    pub fn reaching(mut self, host: impl Into<Host>, transport: &'a dyn Transport) -> Self {
+        self.transports.push((host.into(), transport));
+        self
+    }
+
+    /// Executes the plan and returns what it produced. The first failure stops
+    /// the execution.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let mut produced: HashMap<NodeId, Value> = HashMap::new();
         let last = self.walk(plan, &input, &mut produced)?;
 
-        // La salida del grafo es la de sus hojas: los nodos cuya salida no lee
-        // nadie. Una hoja → ese valor. Varias → un mapa con la clave de cada
-        // una, igual que una entrada con varios orígenes. Las dos direcciones
-        // del abanico tienen la misma forma, así que un diamante da la vuelta.
+        // A graph's output is that of its leaves: one leaf gives that value,
+        // several a map keyed by each — the same shape as an input with several
+        // origins, so a diamond comes back round.
         let leaves = terminals(plan);
         Ok(match leaves.as_slice() {
             [] | [_] => last,
@@ -95,7 +89,7 @@ impl<'a> Executor<'a> {
                         let value = produced
                             .get(id)
                             .cloned()
-                            .expect("el recorrido ejecutó todos los pasos del plan");
+                            .expect("the walk executed every step of the plan");
                         (id.to_string(), value)
                     })
                     .collect::<Vec<_>>(),
@@ -103,8 +97,34 @@ impl<'a> Executor<'a> {
         })
     }
 
-    /// Ejecuta un plan, apuntando lo que produce cada nodo, y devuelve la
-    /// salida de su último paso.
+    /// Executes a slice that already knows what came before: what a worker does
+    /// on receiving one.
+    ///
+    /// `known` is fed in as if this very run had produced it, so the steps read
+    /// it through their `from`. What comes back does **not** include it, and is
+    /// ordered by id because this crosses a process boundary.
+    pub fn resume(
+        &self,
+        plan: &Plan,
+        input: Value,
+        known: Vec<(NodeId, Value)>,
+    ) -> Result<Outcome, RunError> {
+        let mut produced: HashMap<NodeId, Value> = known.into_iter().collect();
+        let brought: Vec<NodeId> = produced.keys().cloned().collect();
+
+        let last = self.walk(plan, &input, &mut produced)?;
+
+        produced.retain(|id, _| !brought.contains(id));
+        let mut mine: Vec<(NodeId, Value)> = produced.into_iter().collect();
+        mine.sort_by(|(a, _), (b, _)| a.cmp(b));
+        Ok(Outcome {
+            last,
+            produced: mine,
+        })
+    }
+
+    /// Executes a plan, noting what each node produces, and returns the output
+    /// of its last step.
     fn walk(
         &self,
         plan: &Plan,
@@ -127,21 +147,16 @@ impl<'a> Executor<'a> {
                 Ok(last)
             }
             Plan::Wave(branches) => self.at_once(branches, graph_input, produced),
+            Plan::Remote { host, inner } => self.elsewhere(host, inner, graph_input, produced),
         }
     }
 
-    /// Lanza las ramas de una wave a la vez y funde lo que produjeron.
+    /// Launches a wave's branches at once and merges what they produced.
     ///
-    /// Cada rama arranca con una **copia** de lo producido hasta aquí y
-    /// devuelve solo lo suyo. Las ramas de una wave son componentes conexas
-    /// del subgrafo, así que lo que añade cada una es disjunto y fundirlas no
-    /// puede pisar nada — hay test. Copiar el mapa sale barato porque un
-    /// `Value` se clona por `Arc`, y a cambio no hay ni un cerrojo.
-    ///
-    /// `std::thread::scope` presta `&Catalog` y `&Driver` sin envolverlos en
-    /// nada, así que el núcleo sigue sin depender de nadie. Las cotas que lo
-    /// permiten —`Node: Send + Sync`, `Driver: Send + Sync`— llevan puestas
-    /// desde CU2 por otra razón: PyO3 exige `Send` en un pyclass.
+    /// Each branch starts with a **copy** of what was produced so far and
+    /// returns only its own; being connected components, what each adds is
+    /// disjoint and merging cannot clobber anything. Copying is cheap — a
+    /// `Value` clones by `Arc` — and in exchange there is not a single lock.
     fn at_once(
         &self,
         branches: &[Plan],
@@ -165,31 +180,62 @@ impl<'a> Executor<'a> {
                 .into_iter()
                 .map(|handle| match handle.join() {
                     Ok(outcome) => outcome,
-                    // Un nodo que revienta revienta el run entero, no se traga
-                    // aquí: `scope` ya ha esperado a las demás ramas.
+                    // Not swallowed: `scope` has already waited on the others.
                     Err(panic) => std::panic::resume_unwind(panic),
                 })
                 .collect::<Vec<_>>()
         });
 
         for outcome in outcomes {
-            // El primero que falle **en orden de declaración**, no el primero
-            // en fallar: si dos ramas se rompen, el error no puede depender de
-            // cuál corría más rápido.
+            // The first to fail **in declaration order**, not in time.
             let (_, mine) = outcome?;
             produced.extend(mine);
         }
 
-        // Una wave no tiene *una* salida: sus ramas terminan en varios sitios.
-        // Si el plan acaba en una, la salida del run sale del mapa de hojas,
-        // que es el otro camino de `run`.
+        // A wave has no single output: its branches end in several places.
         Ok(Value::Null)
     }
 
-    /// Preguntar, atender lo que pida, volver a preguntar. Hasta que termine.
-    ///
-    /// Un nodo que contesta `Done` a la primera —lo que antes era un filtro—
-    /// recorre este bucle exactamente una vez. No hay dos caminos.
+    /// Sends a slice elsewhere and merges whatever comes back. It is given only
+    /// what it reads and does not produce, because the wire is the expensive
+    /// part.
+    fn elsewhere(
+        &self,
+        host: &Host,
+        inner: &Plan,
+        graph_input: &Value,
+        produced: &mut HashMap<NodeId, Value>,
+    ) -> Result<Value, RunError> {
+        let transport = self
+            .transports
+            .iter()
+            .find(|(known, _)| known == host)
+            .map(|(_, transport)| *transport)
+            .ok_or_else(|| RunError::NoTransport(host.clone()))?;
+
+        let known: Vec<(NodeId, Value)> = needs(inner)
+            .into_iter()
+            .filter_map(|id| produced.get(&id).map(|value| (id, value.clone())))
+            .collect();
+
+        let nowhere = Placement::new();
+        let cargo = Cargo {
+            input: graph_input,
+            known: &known,
+            placement: self.placement.unwrap_or(&nowhere),
+        };
+        let outcome = transport
+            .dispatch(inner, &cargo)
+            .map_err(|source| RunError::Transport {
+                host: host.clone(),
+                source,
+            })?;
+
+        produced.extend(outcome.produced);
+        Ok(outcome.last)
+    }
+
+    /// Ask, serve whatever it asks for, ask again. Until it finishes.
     fn advance(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
         let implementation = self.implementation(node)?;
         let device = self.device(node);
@@ -229,12 +275,12 @@ impl<'a> Executor<'a> {
         })
     }
 
-    /// Dónde se dijo que corriera este nodo. Sin colocación, en ninguna parte.
+    /// Where this node was said to run. Without a placement, nowhere.
     fn device(&self, node: &NodeId) -> Option<&'a Device> {
         self.placement.and_then(|placement| placement.of(node))
     }
 
-    /// Lo que el catálogo tiene registrado para este nodo.
+    /// What the catalog has registered for this node.
     fn implementation(&self, node: &NodeId) -> Result<&std::sync::Arc<dyn crate::Node>, RunError> {
         self.catalog
             .get(node)
@@ -242,39 +288,45 @@ impl<'a> Executor<'a> {
     }
 }
 
-// ── Lo que puede salir mal al ejecutar ──
-
-/// Por qué no se pudo terminar la ejecución.
+/// Why the execution could not be finished.
 ///
-/// Lo estructural —fan-in, varias hojas, un nodo sin implementación en el
-/// grafo— ya se descartó en [`compile`](crate::compile). Lo de aquí son
-/// fallos de las implementaciones, o de un plan que no cuadra con el catálogo
-/// con el que se ejecuta.
+/// The structural things were already ruled out in [`compile`](crate::compile).
+/// What is here are failures of the implementations, or of a plan that does not
+/// match its catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
-    /// El plan nombra un nodo que este catálogo no conoce.
+    /// The plan names a node this catalog does not know.
     NoImplementation(NodeId),
-    /// El nodo falló.
+    /// The node failed.
     Node {
-        /// Dónde pasó.
+        /// Where it happened.
         node: NodeId,
-        /// Lo que dijo.
+        /// What it said.
         source: NodeError,
     },
-    /// El nodo pidió algo y no hay quien lo atienda.
+    /// The node asked for something and there is nobody to serve it.
     NoDriver(NodeId),
-    /// El driver no pudo atender lo que el nodo pidió.
+    /// The driver could not serve what the node asked for.
     Driver {
-        /// De qué nodo venía la petición.
+        /// Which node the request came from.
         node: NodeId,
-        /// Lo que dijo el driver.
+        /// What the driver said.
         source: DriverError,
     },
-    /// El nodo siguió pidiendo turnos sin terminar nunca.
+    /// The plan sends a slice to a host nobody knows how to reach.
+    NoTransport(Host),
+    /// The transport could not carry the slice, or what ran there failed.
+    Transport {
+        /// Which host it was bound for.
+        host: Host,
+        /// What the transport said.
+        source: TransportError,
+    },
+    /// The node kept asking for turns without ever finishing.
     TurnLimit {
-        /// Quién.
+        /// Which one.
         node: NodeId,
-        /// Cuántos turnos se le dieron.
+        /// How many turns it was given.
         turns: usize,
     },
 }
@@ -283,19 +335,24 @@ impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoImplementation(id) => {
-                write!(f, "el nodo `{id}` no tiene implementación registrada")
+                write!(f, "node `{id}` has no registered implementation")
             }
-            Self::Node { node, source } => write!(f, "el nodo `{node}` falló: {source}"),
+            Self::Node { node, source } => write!(f, "node `{node}` failed: {source}"),
             Self::NoDriver(node) => write!(
                 f,
-                "`{node}` pidió algo y este ejecutor no tiene driver que lo atienda"
+                "`{node}` asked for something and this executor has no driver to serve it"
             ),
             Self::Driver { node, source } => {
-                write!(f, "atendiendo lo que pidió `{node}`: {source}")
+                write!(f, "serving what `{node}` asked for: {source}")
             }
+            Self::NoTransport(host) => write!(
+                f,
+                "there is a slice placed on `{host}` and this executor cannot reach it"
+            ),
+            Self::Transport { host, source } => write!(f, "carrying a slice to `{host}`: {source}"),
             Self::TurnLimit { node, turns } => write!(
                 f,
-                "`{node}` gastó los {turns} turnos sin terminar; probablemente no sabe parar"
+                "`{node}` spent all {turns} turns without finishing; it probably cannot stop"
             ),
         }
     }
@@ -303,17 +360,14 @@ impl fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
-/// Qué recibe un nodo, según de dónde le llegue.
-///
-/// Nada → la entrada del grafo. Una cosa → esa cosa. Varias → un mapa con la
-/// clave de quien produjo cada una, en el orden en que se declararon las
-/// aristas.
+/// What a node receives: nothing → the graph's input, one thing → that thing,
+/// several → a map keyed by whoever produced each, in edge declaration order.
 fn gather(from: &[NodeId], graph_input: &Value, produced: &HashMap<NodeId, Value>) -> Value {
     let recall = |id: &NodeId| {
         produced
             .get(id)
             .cloned()
-            .expect("el orden topológico ya ejecutó a los predecesores")
+            .expect("topological order already executed the predecessors")
     };
     match from {
         [] => graph_input.clone(),
@@ -326,7 +380,22 @@ fn gather(from: &[NodeId], graph_input: &Value, produced: &HashMap<NodeId, Value
     }
 }
 
-/// Los nodos del plan cuya salida no lee ningún otro: las hojas.
+/// What this plan reads and does not produce: what has to travel with it.
+fn needs(plan: &Plan) -> Vec<NodeId> {
+    let mut produced = Vec::new();
+    let mut consumed = Vec::new();
+    collect(plan, &mut produced, &mut consumed);
+
+    let mut out: Vec<NodeId> = Vec::new();
+    for id in consumed {
+        if !produced.contains(&id) && !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// The plan's nodes whose output no other node reads: the leaves.
 fn terminals(plan: &Plan) -> Vec<NodeId> {
     let mut produced = Vec::new();
     let mut consumed = Vec::new();
@@ -337,7 +406,8 @@ fn terminals(plan: &Plan) -> Vec<NodeId> {
         .collect()
 }
 
-/// Qué produce y qué lee cada paso, aplanando las secuencias.
+/// What each step produces and what it reads. Neither when nor where matters
+/// here, so waves, sequences and remotes walk the same.
 fn collect(plan: &Plan, produced: &mut Vec<NodeId>, consumed: &mut Vec<NodeId>) {
     match plan {
         Plan::Empty => {}
@@ -345,12 +415,11 @@ fn collect(plan: &Plan, produced: &mut Vec<NodeId>, consumed: &mut Vec<NodeId>) 
             produced.push(node.clone());
             consumed.extend(from.iter().cloned());
         }
-        // Una wave y una secuencia se recorren igual para esto: lo que
-        // importa es qué produce y qué lee cada paso, no cuándo corre.
         Plan::Sequence(plans) | Plan::Wave(plans) => {
             for plan in plans {
                 collect(plan, produced, consumed);
             }
         }
+        Plan::Remote { inner, .. } => collect(inner, produced, consumed),
     }
 }

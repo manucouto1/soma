@@ -1,51 +1,53 @@
-//! Compilar: de la estructura a la forma decidida.
+//! Compiling: from the structure to the decided shape.
 //!
-//! La mitad de este fichero comprueba **formas concretas** —qué árbol sale de
-//! qué grafo— y la otra mitad **invariantes** que tienen que valer para
-//! cualquier grafo: que ningún nodo se ejecute dos veces, que ninguno se
-//! quede fuera, y que el orden que dicta el plan respete las aristas. Los
-//! invariantes son los que habrían cazado el bug que mató a `Plan::Parallel`
-//! en CU4, y por eso van sobre una batería de topologías y no sobre una.
+//! Half of this file checks **concrete shapes** — which tree comes out of which
+//! graph — and the other half **invariants** that have to hold for any graph:
+//! that no node executes twice, that none is left out, and that the order the
+//! plan dictates respects the edges. The invariants are the ones that would
+//! have caught the bug that killed `Plan::Parallel` in CU4, which is why they
+//! run over a battery of topologies and not over one.
 
-use crate::dobles::{Preguntar, Sumar};
-use soma_next_core::{Catalog, CompileError, Graph, NodeId, Plan, compile};
+use crate::doubles::{Add, Ask};
+use soma_next_core::{
+    Catalog, CompileError, Device, Graph, Host, NodeId, Placement, Plan, compile, distribute, node,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Un grafo con estos nodos y estas aristas, todos con implementación.
-fn grafo(nodos: &[&str], aristas: &[(&str, &str)]) -> (Graph, Catalog) {
+/// A graph with these nodes and these edges, all with an implementation.
+fn graph_with(nodes: &[&str], edges: &[(&str, &str)]) -> (Graph, Catalog) {
     let mut g = Graph::new();
     let mut c = Catalog::new();
-    for id in nodos {
+    for id in nodes {
         g.add_node(*id).unwrap();
-        c.insert(*id, Arc::new(Sumar(1.0)));
+        c.insert(*id, Arc::new(Add(1.0)));
     }
-    for (from, to) in aristas {
+    for (from, to) in edges {
         g.add_edge(*from, *to).unwrap();
     }
     (g, c)
 }
 
-fn con_filtros(ids: &[&str]) -> (Graph, Catalog) {
-    grafo(ids, &[])
+fn with_filters(ids: &[&str]) -> (Graph, Catalog) {
+    graph_with(ids, &[])
 }
 
-fn ejecuta(node: &str, from: &[&str]) -> Plan {
+fn execute(node: &str, from: &[&str]) -> Plan {
     Plan::Execute {
         node: node.into(),
         from: from.iter().map(|id| NodeId::from(*id)).collect(),
     }
 }
 
-fn plan_de(nodos: &[&str], aristas: &[(&str, &str)]) -> Plan {
-    let (g, c) = grafo(nodos, aristas);
+fn plan_of(nodes: &[&str], edges: &[(&str, &str)]) -> Plan {
+    let (g, c) = graph_with(nodes, edges);
     compile(&g, &c).unwrap()
 }
 
-// ── Lo de siempre, que no cambia ──
+// ── The usual, which does not change ──
 
 #[test]
-fn un_grafo_vacio_compila_a_nada() {
+fn an_empty_graph_compiles_to_nothing() {
     assert_eq!(
         compile(&Graph::new(), &Catalog::new()).unwrap(),
         Plan::Empty
@@ -53,142 +55,143 @@ fn un_grafo_vacio_compila_a_nada() {
 }
 
 #[test]
-fn un_solo_filtro_no_se_envuelve_en_secuencia() {
-    let (g, c) = con_filtros(&["a"]);
-    assert_eq!(compile(&g, &c).unwrap(), ejecuta("a", &[]));
+fn a_single_filter_is_not_wrapped_in_a_sequence() {
+    let (g, c) = with_filters(&["a"]);
+    assert_eq!(compile(&g, &c).unwrap(), execute("a", &[]));
 }
 
 #[test]
-fn cada_paso_lleva_escrito_de_donde_sale_su_entrada() {
+fn every_step_carries_where_its_input_comes_from() {
     assert_eq!(
-        plan_de(&["a", "b", "c"], &[("a", "b"), ("b", "c")]),
+        plan_of(&["a", "b", "c"], &[("a", "b"), ("b", "c")]),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
-            ejecuta("b", &["a"]),
-            ejecuta("c", &["b"]),
+            execute("a", &[]),
+            execute("b", &["a"]),
+            execute("c", &["b"]),
         ])
     );
 }
 
 #[test]
-fn una_cadena_lineal_compila_a_lo_mismo_que_antes_de_las_waves() {
-    // La regresión que más importa: todo lo cerrado de CU2 a CU8 son cadenas,
-    // y su plan tiene que salir idéntico, sin una sola wave.
-    let plan = plan_de(&["a", "b", "c", "d"], &[("a", "b"), ("b", "c"), ("c", "d")]);
+fn a_linear_chain_compiles_to_what_it_did_before_waves() {
+    // The regression that matters most: everything closed from CU2 to CU8 is a
+    // chain, and its plan has to come out identical, without a single wave.
+    let plan = plan_of(&["a", "b", "c", "d"], &[("a", "b"), ("b", "c"), ("c", "d")]);
     assert_eq!(
         plan,
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
-            ejecuta("b", &["a"]),
-            ejecuta("c", &["b"]),
-            ejecuta("d", &["c"]),
+            execute("a", &[]),
+            execute("b", &["a"]),
+            execute("c", &["b"]),
+            execute("d", &["c"]),
         ])
     );
 }
 
 #[test]
-fn el_plan_no_distingue_quien_pide_turnos_de_quien_no() {
-    // `Preguntar` pide algo antes de terminar y `Sumar` no, y aun así los dos
-    // compilan al mismo paso: eso lo dice su `Transition` al ejecutar, no el plan.
+fn the_plan_does_not_tell_apart_who_asks_for_turns_from_who_does_not() {
+    // `Ask` asks for something before finishing and `Add` does not, and yet
+    // both compile to the same step: that is said by their `Transition` at run
+    // time, not by the plan.
     let mut g = Graph::new();
     let mut c = Catalog::new();
     g.add_node("a").unwrap();
     g.add_node("b").unwrap();
     g.add_edge("a", "b").unwrap();
-    c.insert("a", Arc::new(Sumar(1.0)));
-    c.insert("b", Arc::new(Preguntar(vec![])));
+    c.insert("a", Arc::new(Add(1.0)));
+    c.insert("b", Arc::new(Ask(vec![])));
 
     assert_eq!(
         compile(&g, &c).unwrap(),
-        Plan::Sequence(vec![ejecuta("a", &[]), ejecuta("b", &["a"])])
+        Plan::Sequence(vec![execute("a", &[]), execute("b", &["a"])])
     );
 }
 
 #[test]
-fn un_nodo_sin_implementacion_no_llega_a_ejecutarse() {
+fn a_node_without_an_implementation_never_gets_to_execute() {
     let mut g = Graph::new();
-    g.add_node("huerfano").unwrap();
+    g.add_node("orphan").unwrap();
     assert_eq!(
         compile(&g, &Catalog::new()).unwrap_err(),
-        CompileError::NoImplementation("huerfano".into())
+        CompileError::NoImplementation("orphan".into())
     );
 }
 
-// ── Las formas: qué árbol sale de qué grafo ──
+// ── The shapes: which tree comes out of which graph ──
 
 #[test]
-fn dos_nodos_sueltos_son_una_wave_de_dos_ramas() {
-    // Sin ninguna arista, el grafo son dos componentes: `a | b`.
+fn two_loose_nodes_are_a_wave_of_two_branches() {
+    // With no edges at all, the graph is two components: `a | b`.
     assert_eq!(
-        plan_de(&["a", "b"], &[]),
-        Plan::Wave(vec![ejecuta("a", &[]), ejecuta("b", &[])])
+        plan_of(&["a", "b"], &[]),
+        Plan::Wave(vec![execute("a", &[]), execute("b", &[])])
     );
 }
 
 #[test]
-fn abrir_en_dos_ramas_las_pone_en_una_wave() {
+fn opening_into_two_branches_puts_them_in_a_wave() {
     assert_eq!(
-        plan_de(
-            &["fuente", "izq", "der"],
-            &[("fuente", "izq"), ("fuente", "der")]
+        plan_of(
+            &["source", "left", "right"],
+            &[("source", "left"), ("source", "right")]
         ),
         Plan::Sequence(vec![
-            ejecuta("fuente", &[]),
+            execute("source", &[]),
             Plan::Wave(vec![
-                ejecuta("izq", &["fuente"]),
-                ejecuta("der", &["fuente"]),
+                execute("left", &["source"]),
+                execute("right", &["source"]),
             ]),
         ])
     );
 }
 
 #[test]
-fn cerrar_dos_ramas_es_que_uno_lee_de_dos() {
+fn closing_two_branches_is_one_node_reading_from_two() {
     assert_eq!(
-        plan_de(
-            &["izq", "der", "juntar"],
-            &[("izq", "juntar"), ("der", "juntar")]
+        plan_of(
+            &["left", "right", "join"],
+            &[("left", "join"), ("right", "join")]
         ),
         Plan::Sequence(vec![
-            Plan::Wave(vec![ejecuta("izq", &[]), ejecuta("der", &[])]),
-            ejecuta("juntar", &["izq", "der"]),
+            Plan::Wave(vec![execute("left", &[]), execute("right", &[])]),
+            execute("join", &["left", "right"]),
         ])
     );
 }
 
 #[test]
-fn un_diamante_ejecuta_el_nodo_de_union_una_sola_vez() {
-    // El caso que rompió `Plan::Parallel` en CU4: sus ramas se solapaban y
-    // `juntar` acababa en las dos. Aquí las ramas son componentes conexas, así
-    // que `juntar` no puede estar en ninguna: se emite fuera de la wave.
+fn a_diamond_executes_the_join_node_exactly_once() {
+    // The case that broke `Plan::Parallel` in CU4: its branches overlapped and
+    // `join` ended up in both. Here the branches are connected components, so
+    // `join` cannot be in either: it is emitted outside the wave.
     assert_eq!(
-        plan_de(
-            &["fuente", "izq", "der", "juntar"],
+        plan_of(
+            &["source", "left", "right", "join"],
             &[
-                ("fuente", "izq"),
-                ("fuente", "der"),
-                ("izq", "juntar"),
-                ("der", "juntar"),
+                ("source", "left"),
+                ("source", "right"),
+                ("left", "join"),
+                ("right", "join"),
             ]
         ),
         Plan::Sequence(vec![
-            ejecuta("fuente", &[]),
+            execute("source", &[]),
             Plan::Wave(vec![
-                ejecuta("izq", &["fuente"]),
-                ejecuta("der", &["fuente"]),
+                execute("left", &["source"]),
+                execute("right", &["source"]),
             ]),
-            ejecuta("juntar", &["izq", "der"]),
+            execute("join", &["left", "right"]),
         ])
     );
 }
 
 #[test]
-fn una_rama_de_varios_nodos_es_una_sola_rama_de_la_wave() {
-    // `a >> (b >> b2 >> b3 | c >> c2) >> d`. Es el caso que descarta agrupar
-    // por nivel topológico: así, `b2` no espera a `c`, y la rama entera cabe
-    // en un hilo.
+fn a_branch_of_several_nodes_is_a_single_branch_of_the_wave() {
+    // `a >> (b >> b2 >> b3 | c >> c2) >> d`. It is the case that rules out
+    // grouping by topological level: this way `b2` does not wait on `c`, and
+    // the whole branch fits on one thread.
     assert_eq!(
-        plan_de(
+        plan_of(
             &["a", "b", "b2", "b3", "c", "c2", "d"],
             &[
                 ("a", "b"),
@@ -201,28 +204,29 @@ fn una_rama_de_varios_nodos_es_una_sola_rama_de_la_wave() {
             ]
         ),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
+            execute("a", &[]),
             Plan::Wave(vec![
                 Plan::Sequence(vec![
-                    ejecuta("b", &["a"]),
-                    ejecuta("b2", &["b"]),
-                    ejecuta("b3", &["b2"]),
+                    execute("b", &["a"]),
+                    execute("b2", &["b"]),
+                    execute("b3", &["b2"]),
                 ]),
-                Plan::Sequence(vec![ejecuta("c", &["a"]), ejecuta("c2", &["c"])]),
+                Plan::Sequence(vec![execute("c", &["a"]), execute("c2", &["c"])]),
             ]),
-            ejecuta("d", &["b3", "c2"]),
+            execute("d", &["b3", "c2"]),
         ])
     );
 }
 
 #[test]
-fn el_corte_serie_no_parte_una_rama_por_la_mitad() {
-    // `(a >> a2 | b) >> (c | d)`. Aquí no hay ningún nodo por el que pase
-    // todo, así que buscar un "nodo barrera" fallaría y acabaría metiendo `a`
-    // en una wave con `b` y dejando `a2` suelto. El corte serie mira los dos
-    // extremos enteros, y por eso recupera la rama `a >> a2` de una pieza.
+fn the_series_cut_does_not_split_a_branch_down_the_middle() {
+    // `(a >> a2 | b) >> (c | d)`. Here there is no node everything passes
+    // through, so looking for a "barrier node" would fail and end up putting
+    // `a` in a wave with `b` and leaving `a2` loose. The series cut looks at
+    // both whole ends, which is why it recovers the `a >> a2` branch in one
+    // piece.
     assert_eq!(
-        plan_de(
+        plan_of(
             &["a", "a2", "b", "c", "d"],
             &[
                 ("a", "a2"),
@@ -234,36 +238,36 @@ fn el_corte_serie_no_parte_una_rama_por_la_mitad() {
         ),
         Plan::Sequence(vec![
             Plan::Wave(vec![
-                Plan::Sequence(vec![ejecuta("a", &[]), ejecuta("a2", &["a"])]),
-                ejecuta("b", &[]),
+                Plan::Sequence(vec![execute("a", &[]), execute("a2", &["a"])]),
+                execute("b", &[]),
             ]),
-            Plan::Wave(vec![ejecuta("c", &["a2", "b"]), ejecuta("d", &["a2", "b"]),]),
+            Plan::Wave(vec![execute("c", &["a2", "b"]), execute("d", &["a2", "b"]),]),
         ])
     );
 }
 
 #[test]
-fn dos_waves_seguidas_no_se_funden_en_una() {
-    // `(a | b) >> (c | d)`: cuatro nodos independientes dos a dos, pero `c` y
-    // `d` dependen de los dos primeros. Son dos waves, no una de cuatro.
+fn two_consecutive_waves_do_not_merge_into_one() {
+    // `(a | b) >> (c | d)`: four nodes independent pairwise, but `c` and `d`
+    // depend on the first two. That is two waves, not one of four.
     assert_eq!(
-        plan_de(
+        plan_of(
             &["a", "b", "c", "d"],
             &[("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]
         ),
         Plan::Sequence(vec![
-            Plan::Wave(vec![ejecuta("a", &[]), ejecuta("b", &[])]),
-            Plan::Wave(vec![ejecuta("c", &["a", "b"]), ejecuta("d", &["a", "b"])]),
+            Plan::Wave(vec![execute("a", &[]), execute("b", &[])]),
+            Plan::Wave(vec![execute("c", &["a", "b"]), execute("d", &["a", "b"])]),
         ])
     );
 }
 
 #[test]
-fn una_wave_puede_llevar_otra_dentro() {
-    // `a >> ((b >> (c | d) >> e) | f) >> g`: la rama larga tiene su propio
-    // abanico. El árbol anida tan hondo como la expresión.
+fn a_wave_can_carry_another_inside() {
+    // `a >> ((b >> (c | d) >> e) | f) >> g`: the long branch has its own fan.
+    // The tree nests as deep as the expression.
     assert_eq!(
-        plan_de(
+        plan_of(
             &["a", "b", "c", "d", "e", "f", "g"],
             &[
                 ("a", "b"),
@@ -277,114 +281,114 @@ fn una_wave_puede_llevar_otra_dentro() {
             ]
         ),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
+            execute("a", &[]),
             Plan::Wave(vec![
                 Plan::Sequence(vec![
-                    ejecuta("b", &["a"]),
-                    Plan::Wave(vec![ejecuta("c", &["b"]), ejecuta("d", &["b"])]),
-                    ejecuta("e", &["c", "d"]),
+                    execute("b", &["a"]),
+                    Plan::Wave(vec![execute("c", &["b"]), execute("d", &["b"])]),
+                    execute("e", &["c", "d"]),
                 ]),
-                ejecuta("f", &["a"]),
+                execute("f", &["a"]),
             ]),
-            ejecuta("g", &["e", "f"]),
+            execute("g", &["e", "f"]),
         ])
     );
 }
 
 #[test]
-fn tres_ramas_dan_una_wave_de_tres() {
-    let Plan::Sequence(pasos) = plan_de(
-        &["fuente", "x", "y", "z"],
-        &[("fuente", "x"), ("fuente", "y"), ("fuente", "z")],
+fn three_branches_give_a_wave_of_three() {
+    let Plan::Sequence(steps) = plan_of(
+        &["source", "x", "y", "z"],
+        &[("source", "x"), ("source", "y"), ("source", "z")],
     ) else {
-        panic!("un abanico compila a una secuencia");
+        panic!("a fan compiles to a sequence");
     };
-    let Plan::Wave(ramas) = &pasos[1] else {
-        panic!("el segundo paso es la wave");
+    let Plan::Wave(branches) = &steps[1] else {
+        panic!("the second step is the wave");
     };
-    assert_eq!(ramas.len(), 3);
+    assert_eq!(branches.len(), 3);
 }
 
 #[test]
-fn dos_grafos_sin_relacion_son_dos_ramas_aunque_cada_uno_sea_largo() {
+fn two_unrelated_graphs_are_two_branches_even_if_each_is_long() {
     assert_eq!(
-        plan_de(&["a", "a2", "b", "b2"], &[("a", "a2"), ("b", "b2")]),
+        plan_of(&["a", "a2", "b", "b2"], &[("a", "a2"), ("b", "b2")]),
         Plan::Wave(vec![
-            Plan::Sequence(vec![ejecuta("a", &[]), ejecuta("a2", &["a"])]),
-            Plan::Sequence(vec![ejecuta("b", &[]), ejecuta("b2", &["b"])]),
+            Plan::Sequence(vec![execute("a", &[]), execute("a2", &["a"])]),
+            Plan::Sequence(vec![execute("b", &[]), execute("b2", &["b"])]),
         ])
     );
 }
 
-// ── Lo que no es serie-paralelo ──
+// ── What is not series-parallel ──
 
 #[test]
-fn la_n_no_tiene_arbol_y_se_recorre_en_secuencia() {
-    // `a→c, a→d, b→d` es el patrón mínimo que no es serie-paralelo (Valdes,
-    // Tarjan y Lawler, 1982). No hay corte ni componentes, así que se recorre
-    // como antes de que existieran las waves: en fila, sin paralelismo.
+fn the_n_has_no_tree_and_is_walked_in_sequence() {
+    // `a→c, a→d, b→d` is the minimal pattern that is not series-parallel
+    // (Valdes, Tarjan and Lawler, 1982). There is neither a cut nor components,
+    // so it is walked as before waves existed: in a row, without parallelism.
     //
-    // Y no se puede escribir con el DSL: `>>` y `|` solo generan grafos
-    // serie-paralelos. Para llegar aquí hay que usar `node()`/`edge()`.
+    // And it cannot be written with the DSL: `>>` and `|` only generate
+    // series-parallel graphs. Getting here requires `node()`/`edge()`.
     assert_eq!(
-        plan_de(&["a", "b", "c", "d"], &[("a", "c"), ("a", "d"), ("b", "d")]),
+        plan_of(&["a", "b", "c", "d"], &[("a", "c"), ("a", "d"), ("b", "d")]),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
-            ejecuta("b", &[]),
-            ejecuta("c", &["a"]),
-            ejecuta("d", &["a", "b"]),
+            execute("a", &[]),
+            execute("b", &[]),
+            execute("c", &["a"]),
+            execute("d", &["a", "b"]),
         ])
     );
 }
 
 #[test]
-fn una_n_no_estropea_el_paralelismo_de_lo_que_tiene_al_lado() {
-    // La N cuelga de `raiz` y no toca a `otra`, que es una componente aparte:
-    // la parte sana sigue siendo una rama de la wave.
-    let Plan::Wave(ramas) = plan_de(
-        &["a", "b", "c", "d", "otra"],
+fn an_n_does_not_spoil_the_parallelism_of_what_sits_beside_it() {
+    // The N hangs off its own roots and does not touch `other`, which is a
+    // separate component: the healthy part is still a branch of the wave.
+    let Plan::Wave(branches) = plan_of(
+        &["a", "b", "c", "d", "other"],
         &[("a", "c"), ("a", "d"), ("b", "d")],
     ) else {
-        panic!("la N y el nodo suelto son dos componentes");
+        panic!("the N and the loose node are two components");
     };
-    assert_eq!(ramas.len(), 2, "la N entera es una rama, `otra` es la otra");
-    assert_eq!(ramas[1], ejecuta("otra", &[]));
+    assert_eq!(
+        branches.len(),
+        2,
+        "the whole N is one branch, `other` is the other"
+    );
+    assert_eq!(branches[1], execute("other", &[]));
 }
 
-// ── Invariantes: valen para cualquier grafo ──
+// ── Invariants: they hold for any graph ──
 
-/// Una topología de la batería. Lleva nombre para que el fallo diga cuál fue.
-struct Topologia {
-    nombre: &'static str,
-    nodos: Vec<&'static str>,
-    aristas: Vec<(&'static str, &'static str)>,
+/// One topology from the battery. It is named so the failure says which it was.
+struct Topology {
+    name: &'static str,
+    nodes: Vec<&'static str>,
+    edges: Vec<(&'static str, &'static str)>,
 }
 
-fn topologia(
-    nombre: &'static str,
-    nodos: Vec<&'static str>,
-    aristas: Vec<(&'static str, &'static str)>,
-) -> Topologia {
-    Topologia {
-        nombre,
-        nodos,
-        aristas,
-    }
+fn topology(
+    name: &'static str,
+    nodes: Vec<&'static str>,
+    edges: Vec<(&'static str, &'static str)>,
+) -> Topology {
+    Topology { name, nodes, edges }
 }
 
-/// Todas las topologías interesantes, para pasarles los invariantes a todas.
-fn bateria() -> Vec<Topologia> {
+/// Every interesting topology, so the invariants can be run against them all.
+fn battery() -> Vec<Topology> {
     vec![
-        topologia("un nodo", vec!["a"], vec![]),
-        topologia("cadena", vec!["a", "b", "c"], vec![("a", "b"), ("b", "c")]),
-        topologia("sueltos", vec!["a", "b", "c"], vec![]),
-        topologia(
-            "diamante",
-            vec!["f", "i", "d", "j"],
-            vec![("f", "i"), ("f", "d"), ("i", "j"), ("d", "j")],
+        topology("one node", vec!["a"], vec![]),
+        topology("chain", vec!["a", "b", "c"], vec![("a", "b"), ("b", "c")]),
+        topology("loose", vec!["a", "b", "c"], vec![]),
+        topology(
+            "diamond",
+            vec!["s", "l", "r", "j"],
+            vec![("s", "l"), ("s", "r"), ("l", "j"), ("r", "j")],
         ),
-        topologia(
-            "ramas largas",
+        topology(
+            "long branches",
             vec!["a", "b", "b2", "b3", "c", "c2", "d"],
             vec![
                 ("a", "b"),
@@ -396,8 +400,8 @@ fn bateria() -> Vec<Topologia> {
                 ("c2", "d"),
             ],
         ),
-        topologia(
-            "ramas desiguales sin junta unica",
+        topology(
+            "uneven branches with no single join",
             vec!["a", "a2", "b", "c", "d"],
             vec![
                 ("a", "a2"),
@@ -407,8 +411,8 @@ fn bateria() -> Vec<Topologia> {
                 ("b", "d"),
             ],
         ),
-        topologia(
-            "wave anidada",
+        topology(
+            "nested wave",
             vec!["a", "b", "c", "d", "e", "f", "g"],
             vec![
                 ("a", "b"),
@@ -421,23 +425,23 @@ fn bateria() -> Vec<Topologia> {
                 ("f", "g"),
             ],
         ),
-        topologia(
-            "la N",
+        topology(
+            "the N",
             vec!["a", "b", "c", "d"],
             vec![("a", "c"), ("a", "d"), ("b", "d")],
         ),
-        topologia(
-            "N con vecino sano",
-            vec!["a", "b", "c", "d", "otra", "otra2"],
-            vec![("a", "c"), ("a", "d"), ("b", "d"), ("otra", "otra2")],
+        topology(
+            "N with a healthy neighbour",
+            vec!["a", "b", "c", "d", "other", "other2"],
+            vec![("a", "c"), ("a", "d"), ("b", "d"), ("other", "other2")],
         ),
-        topologia(
-            "abanico de tres que se vuelve a juntar",
-            vec!["f", "x", "y", "z", "j"],
+        topology(
+            "fan of three that rejoins",
+            vec!["s", "x", "y", "z", "j"],
             vec![
-                ("f", "x"),
-                ("f", "y"),
-                ("f", "z"),
+                ("s", "x"),
+                ("s", "y"),
+                ("s", "z"),
                 ("x", "j"),
                 ("y", "j"),
                 ("z", "j"),
@@ -446,73 +450,66 @@ fn bateria() -> Vec<Topologia> {
     ]
 }
 
-/// Los pasos del plan, en el orden en que se ejecutarían.
+/// The plan's steps, in the order they would execute.
 ///
-/// Las ramas de una wave se aplanan una detrás de otra: como son
-/// independientes, cualquier entrelazado vale, y ése es el más fácil de leer.
-fn pasos(plan: &Plan) -> Vec<(NodeId, Vec<NodeId>)> {
+/// A wave's branches are flattened one after another: since they are
+/// independent, any interleaving will do, and that is the easiest to read.
+fn steps(plan: &Plan) -> Vec<(NodeId, Vec<NodeId>)> {
     match plan {
         Plan::Empty => Vec::new(),
         Plan::Execute { node, from } => vec![(node.clone(), from.clone())],
-        Plan::Sequence(plans) | Plan::Wave(plans) => plans.iter().flat_map(pasos).collect(),
+        Plan::Sequence(plans) | Plan::Wave(plans) => plans.iter().flat_map(steps).collect(),
+        // What runs on another host is the same steps: distributing changes
+        // neither what executes nor where its input comes from.
+        Plan::Remote { inner, .. } => steps(inner),
     }
 }
 
 #[test]
-fn ningun_nodo_se_ejecuta_dos_veces_ni_se_queda_fuera() {
-    // El invariante que `Plan::Parallel` incumplía: en un diamante ejecutaba
-    // el nodo de unión dos veces porque sus ramas se solapaban.
-    for Topologia {
-        nombre,
-        nodos,
-        aristas,
-    } in bateria()
-    {
-        let (g, c) = grafo(&nodos, &aristas);
-        let ejecutados: Vec<NodeId> = pasos(&compile(&g, &c).unwrap())
+fn no_node_executes_twice_or_is_left_out() {
+    // The invariant `Plan::Parallel` broke: on a diamond it executed the join
+    // node twice because its branches overlapped.
+    for Topology { name, nodes, edges } in battery() {
+        let (g, c) = graph_with(&nodes, &edges);
+        let executed: Vec<NodeId> = steps(&compile(&g, &c).unwrap())
             .into_iter()
             .map(|(node, _)| node)
             .collect();
 
-        let unicos: HashSet<&NodeId> = ejecutados.iter().collect();
+        let unique: HashSet<&NodeId> = executed.iter().collect();
         assert_eq!(
-            unicos.len(),
-            ejecutados.len(),
-            "`{nombre}` ejecuta algún nodo dos veces: {ejecutados:?}"
+            unique.len(),
+            executed.len(),
+            "`{name}` executes some node twice: {executed:?}"
         );
         assert_eq!(
-            unicos.len(),
+            unique.len(),
             g.len(),
-            "`{nombre}` deja algún nodo del grafo sin ejecutar"
+            "`{name}` leaves some node of the graph unexecuted"
         );
     }
 }
 
 #[test]
-fn el_orden_que_dicta_el_plan_respeta_las_aristas() {
-    // Que un nodo no se ejecute antes que sus predecesores es lo que hace que
-    // su entrada exista cuando la va a buscar.
-    for Topologia {
-        nombre,
-        nodos,
-        aristas,
-    } in bateria()
-    {
-        let (g, c) = grafo(&nodos, &aristas);
-        let orden: Vec<NodeId> = pasos(&compile(&g, &c).unwrap())
+fn the_order_the_plan_dictates_respects_the_edges() {
+    // That a node does not execute before its predecessors is what makes its
+    // input exist by the time it goes looking for it.
+    for Topology { name, nodes, edges } in battery() {
+        let (g, c) = graph_with(&nodes, &edges);
+        let order: Vec<NodeId> = steps(&compile(&g, &c).unwrap())
             .into_iter()
             .map(|(node, _)| node)
             .collect();
 
-        for (i, node) in orden.iter().enumerate() {
+        for (i, node) in order.iter().enumerate() {
             for pred in g.predecessors(node) {
-                let antes = orden
+                let before = order
                     .iter()
                     .position(|n| n == pred)
-                    .expect("está en el plan");
+                    .expect("it is in the plan");
                 assert!(
-                    antes < i,
-                    "`{nombre}`: {node} se ejecuta antes que su predecesor {pred}"
+                    before < i,
+                    "`{name}`: {node} executes before its predecessor {pred}"
                 );
             }
         }
@@ -520,71 +517,299 @@ fn el_orden_que_dicta_el_plan_respeta_las_aristas() {
 }
 
 #[test]
-fn cada_paso_declara_exactamente_sus_predecesores_del_grafo() {
-    for Topologia {
-        nombre,
-        nodos,
-        aristas,
-    } in bateria()
-    {
-        let (g, c) = grafo(&nodos, &aristas);
-        for (node, from) in pasos(&compile(&g, &c).unwrap()) {
-            let esperado: Vec<NodeId> = g.predecessors(&node).into_iter().cloned().collect();
-            assert_eq!(from, esperado, "`{nombre}`: mal el `from` de {node}");
+fn every_step_declares_exactly_its_predecessors_in_the_graph() {
+    for Topology { name, nodes, edges } in battery() {
+        let (g, c) = graph_with(&nodes, &edges);
+        for (node, from) in steps(&compile(&g, &c).unwrap()) {
+            let expected: Vec<NodeId> = g.predecessors(&node).into_iter().cloned().collect();
+            assert_eq!(from, expected, "`{name}`: wrong `from` for {node}");
         }
     }
 }
 
 #[test]
-fn las_ramas_de_una_wave_no_comparten_ningun_nodo() {
-    // Es lo que hace que fundir lo que produjo cada rama no pueda pisar nada,
-    // y sale gratis de que las ramas sean componentes conexas.
-    fn revisa(plan: &Plan, nombre: &str) {
+fn the_branches_of_a_wave_share_no_node() {
+    // It is what makes merging what each branch produced unable to clobber
+    // anything, and it falls out for free from the branches being connected
+    // components.
+    fn check(plan: &Plan, name: &str) {
         match plan {
             Plan::Empty | Plan::Execute { .. } => {}
-            Plan::Sequence(plans) => plans.iter().for_each(|p| revisa(p, nombre)),
-            Plan::Wave(ramas) => {
-                let mut vistos: HashSet<NodeId> = HashSet::new();
-                for rama in ramas {
-                    for (node, _) in pasos(rama) {
+            Plan::Remote { inner, .. } => check(inner, name),
+            Plan::Sequence(plans) => plans.iter().for_each(|p| check(p, name)),
+            Plan::Wave(branches) => {
+                let mut seen: HashSet<NodeId> = HashSet::new();
+                for branch in branches {
+                    for (node, _) in steps(branch) {
                         assert!(
-                            vistos.insert(node.clone()),
-                            "`{nombre}`: {node} está en dos ramas de la misma wave"
+                            seen.insert(node.clone()),
+                            "`{name}`: {node} is in two branches of the same wave"
                         );
                     }
-                    revisa(rama, nombre);
+                    check(branch, name);
                 }
             }
         }
     }
-    for Topologia {
-        nombre,
-        nodos,
-        aristas,
-    } in bateria()
-    {
-        let (g, c) = grafo(&nodos, &aristas);
-        revisa(&compile(&g, &c).unwrap(), nombre);
+    for Topology { name, nodes, edges } in battery() {
+        let (g, c) = graph_with(&nodes, &edges);
+        check(&compile(&g, &c).unwrap(), name);
     }
 }
 
 #[test]
-fn el_mismo_grafo_compila_siempre_igual() {
-    // Sin esto, `plan()` no serviría para nada y la caché que venga tampoco.
-    for Topologia {
-        nombre,
-        nodos,
-        aristas,
-    } in bateria()
-    {
-        let (g, c) = grafo(&nodos, &aristas);
-        let primero = compile(&g, &c).unwrap();
+fn the_same_graph_always_compiles_the_same() {
+    // Without this, `plan()` would be useless and so would whatever cache comes.
+    for Topology { name, nodes, edges } in battery() {
+        let (g, c) = graph_with(&nodes, &edges);
+        let first = compile(&g, &c).unwrap();
         for _ in 0..5 {
-            assert_eq!(
-                compile(&g, &c).unwrap(),
-                primero,
-                "`{nombre}` no es estable"
-            );
+            assert_eq!(compile(&g, &c).unwrap(), first, "`{name}` is not stable");
         }
+    }
+}
+
+// ── Distribution: which slices travel together ──
+//
+// `compile` does not see the placement and `distribute` does. These tests are
+// the half the other step cannot have: the shape that comes out of a plan **and**
+// a map of hosts. None of them builds an executor, because distributing is not
+// executing.
+
+fn placed(hosts: &[(&str, &str)]) -> Placement {
+    let mut placement = Placement::new();
+    for (id, host) in hosts {
+        placement.place_at(*id, Host::new(*host));
+    }
+    placement
+}
+
+fn distributed(nodes: &[&str], edges: &[(&str, &str)], hosts: &[(&str, &str)]) -> Plan {
+    distribute(&plan_of(nodes, edges), &placed(hosts))
+}
+
+/// A trip to `host` with this inside.
+fn at(host: &str, inner: Plan) -> Plan {
+    Plan::Remote {
+        host: Host::new(host),
+        inner: Box::new(inner),
+    }
+}
+
+#[test]
+fn without_any_host_the_plan_comes_out_identical() {
+    // The guarantee bought by separating `compile` from `distribute`: as long as
+    // nobody places a host, the second step does not exist. Over the whole
+    // battery, not over one case.
+    for Topology { name, nodes, edges } in battery() {
+        let (g, c) = graph_with(&nodes, &edges);
+        let plan = compile(&g, &c).unwrap();
+        assert_eq!(
+            distribute(&plan, &Placement::new()),
+            plan,
+            "`{name}` changes shape without anyone having sent it anywhere"
+        );
+    }
+}
+
+#[test]
+fn placing_devices_only_distributes_nothing_either() {
+    // The CU10 invariant is still alive: a device is inert as far as the
+    // traversal goes. Only a host moves anything.
+    let (g, c, placement) = (node("a", Add(1.0)).on(Device::Cuda(0))
+        >> node("b", Add(1.0)).on(Device::Cpu))
+    .somatize()
+    .unwrap();
+    let plan = compile(&g, &c).unwrap();
+
+    assert_eq!(distribute(&plan, &placement), plan);
+}
+
+#[test]
+fn a_whole_chain_on_one_host_is_a_single_trip() {
+    // The most that can be grouped, which is where the benefit comes from.
+    assert_eq!(
+        distributed(
+            &["a", "b", "c"],
+            &[("a", "b"), ("b", "c")],
+            &[("a", "w1"), ("b", "w1"), ("c", "w1")],
+        ),
+        at(
+            "w1",
+            Plan::Sequence(vec![
+                execute("a", &[]),
+                execute("b", &["a"]),
+                execute("c", &["b"]),
+            ])
+        )
+    );
+}
+
+#[test]
+fn a_consecutive_run_is_not_split_into_one_trip_per_node() {
+    // The one that really catches the bug: `decompose` leaves sequences flat, so
+    // wrapping child by child would give three consecutive `Remote`s for what is
+    // a single trip.
+    assert_eq!(
+        distributed(
+            &["a", "b", "c", "d"],
+            &[("a", "b"), ("b", "c"), ("c", "d")],
+            &[("b", "w1"), ("c", "w1"), ("d", "w1")],
+        ),
+        Plan::Sequence(vec![
+            execute("a", &[]),
+            at(
+                "w1",
+                Plan::Sequence(vec![
+                    execute("b", &["a"]),
+                    execute("c", &["b"]),
+                    execute("d", &["c"]),
+                ])
+            ),
+        ])
+    );
+}
+
+#[test]
+fn you_come_back_from_a_host_and_carry_on_here() {
+    assert_eq!(
+        distributed(&["a", "b", "c"], &[("a", "b"), ("b", "c")], &[("b", "w1")],),
+        Plan::Sequence(vec![
+            execute("a", &[]),
+            at("w1", execute("b", &["a"])),
+            execute("c", &["b"]),
+        ])
+    );
+}
+
+#[test]
+fn two_different_hosts_are_not_merged() {
+    assert_eq!(
+        distributed(&["a", "b"], &[("a", "b")], &[("a", "w1"), ("b", "w2")],),
+        Plan::Sequence(vec![
+            at("w1", execute("a", &[])),
+            at("w2", execute("b", &["a"])),
+        ])
+    );
+}
+
+#[test]
+fn a_run_of_one_is_not_wrapped_in_a_sequence_of_one() {
+    // The shape cannot depend on how you arrived at it.
+    let one = distributed(&["a", "b"], &[("a", "b")], &[("b", "w1")]);
+    let Plan::Sequence(steps) = &one else {
+        panic!("a sequence was expected: {one:?}")
+    };
+    assert_eq!(steps[1], at("w1", execute("b", &["a"])));
+}
+
+#[test]
+fn each_branch_of_a_wave_travels_to_its_own_host() {
+    assert_eq!(
+        distributed(
+            &["s", "l", "r"],
+            &[("s", "l"), ("s", "r")],
+            &[("l", "w1"), ("r", "w2")],
+        ),
+        Plan::Sequence(vec![
+            execute("s", &[]),
+            Plan::Wave(vec![
+                at("w1", execute("l", &["s"])),
+                at("w2", execute("r", &["s"])),
+            ]),
+        ])
+    );
+}
+
+#[test]
+fn a_whole_wave_on_one_host_travels_once_with_the_wave_inside() {
+    // The `Remote` goes on the outside and the `Wave` on the inside, not the
+    // other way round: the concurrency happens **there**, where the nodes are.
+    assert_eq!(
+        distributed(
+            &["s", "l", "r"],
+            &[("s", "l"), ("s", "r")],
+            &[("l", "w1"), ("r", "w1")],
+        ),
+        Plan::Sequence(vec![
+            execute("s", &[]),
+            at(
+                "w1",
+                Plan::Wave(vec![execute("l", &["s"]), execute("r", &["s"])])
+            ),
+        ])
+    );
+}
+
+#[test]
+fn a_whole_long_branch_on_one_host_is_one_trip() {
+    // `a >> (b >> b2 | c) >> d`, with the long branch away.
+    let plan = distributed(
+        &["a", "b", "b2", "c", "d"],
+        &[("a", "b"), ("b", "b2"), ("a", "c"), ("b2", "d"), ("c", "d")],
+        &[("b", "w1"), ("b2", "w1")],
+    );
+
+    assert_eq!(
+        plan,
+        Plan::Sequence(vec![
+            execute("a", &[]),
+            Plan::Wave(vec![
+                at(
+                    "w1",
+                    Plan::Sequence(vec![execute("b", &["a"]), execute("b2", &["b"])])
+                ),
+                execute("c", &["a"]),
+            ]),
+            execute("d", &["b2", "c"]),
+        ])
+    );
+}
+
+#[test]
+fn distributing_twice_gives_the_same_thing() {
+    // Idempotent, and over the whole battery with half a placement applied:
+    // going through twice cannot wrap twice.
+    for Topology { name, nodes, edges } in battery() {
+        let hosts: Vec<(&str, &str)> = nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(_, id)| (*id, "w1"))
+            .collect();
+        let placement = placed(&hosts);
+        let plan = distribute(&plan_of(&nodes, &edges), &placement);
+
+        assert_eq!(
+            distribute(&plan, &placement),
+            plan,
+            "`{name}` gets wrapped twice"
+        );
+    }
+}
+
+#[test]
+fn placing_a_node_that_is_not_there_distributes_nothing() {
+    // A `Placement` is a bare map: it does not check that the ids exist, and
+    // naming a stranger cannot change the plan of those that are there.
+    let plan = plan_of(&["a", "b"], &[("a", "b")]);
+    assert_eq!(distribute(&plan, &placed(&[("ghost", "w1")])), plan);
+}
+
+#[test]
+fn an_empty_plan_travels_nowhere() {
+    assert_eq!(
+        distribute(&Plan::Empty, &placed(&[("a", "w1")])),
+        Plan::Empty
+    );
+}
+
+#[test]
+fn the_same_plan_and_the_same_placement_always_distribute_the_same() {
+    let placement = placed(&[("b", "w1"), ("c", "w1")]);
+    let plan = plan_of(&["a", "b", "c"], &[("a", "b"), ("b", "c")]);
+    let first = distribute(&plan, &placement);
+    for _ in 0..5 {
+        assert_eq!(distribute(&plan, &placement), first);
     }
 }

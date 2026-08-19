@@ -15,8 +15,10 @@
 //! | [`Host`] | the place that **is** another machine or process, by name |
 //! | [`Node`] | the **contract** for what a node executes |
 //! | [`Driver`] | who **serves** what a step asks for |
+//! | [`Transport`] | who **carries** a slice of plan to another host |
 //! | [`Plan`] | the **decided shape** of an execution |
 //! | [`compile`] | from the structure to the shape |
+//! | [`distribute`] | and from the placement, which slices travel together |
 //! | [`Executor`] | the **engine** |
 //! | [`Wire`] | declaring a graph as an expression: `a >> (b \| c) >> d` |
 //!
@@ -36,6 +38,7 @@ mod host;
 mod node;
 mod placement;
 mod plan;
+mod transport;
 mod value;
 
 pub use build::{Wire, node};
@@ -47,5 +50,6 @@ pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;
 pub use node::{Ctx, Node, NodeError, Transition};
 pub use placement::Placement;
-pub use plan::{CompileError, Plan, compile};
+pub use plan::{CompileError, Plan, compile, distribute};
+pub use transport::{Cargo, Outcome, Transport, TransportError};
 pub use value::Value;

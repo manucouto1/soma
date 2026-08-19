@@ -1,114 +1,98 @@
-//! La forma decidida de una ejecución.
+//! The decided shape of an execution.
 //!
-//! Un [`Graph`] dice qué nodos hay y cómo se conectan. Un `Plan` dice **cómo
-//! se recorren**, y es una decisión aparte: la misma estructura puede
-//! ejecutarse en secuencia, a la vez o repartida entre máquinas.
+//! A [`Graph`] says which nodes exist; a `Plan` says **how they are walked**,
+//! and that is a separate decision: the same structure can run in sequence, all
+//! at once, or spread across machines.
 //!
-//! Es un enum y no un trait de ejecutores a propósito. Las formas de ejecutar
-//! son un conjunto **cerrado** que decidimos nosotros, así que el compilador
-//! puede llevar la cuenta: el día que entre `Remote { target, inner }`, el
-//! `match` del motor deja de compilar y hay que decidir qué hacer, en vez de
-//! caer en un brazo comodín. Un trait con N implementadores no da eso, y el
-//! original —diez variantes y un solo `match`— llegó a la misma conclusión.
+//! It is an enum and not a trait of executors on purpose. The ways of executing
+//! are a **closed** set that we decide, so the compiler keeps track: the day a
+//! variant arrives, the engine's `match` stops compiling and someone has to
+//! decide what to do, instead of falling into a wildcard arm.
 //!
-//! Cada paso lleva escrito **de dónde sale su entrada**. Es lo que hace que un
-//! plan sea autónomo: al ejecutarlo no hace falta volver a mirar el grafo, y
-//! los abanicos —hacia fuera y hacia dentro— salen sin ninguna variante
-//! especial.
+//! Every step carries **where its input comes from** written on it. That is what
+//! makes a plan self-contained — executing it never looks at the graph again —
+//! and it is why fans, in both directions, need no special variant.
 //!
-//! # Cómo se recupera la forma
+//! # How the shape is recovered
 //!
-//! [`compile`] no aplana el grafo: lo **descompone**. `>>` y `|` del DSL son
-//! composición en serie y en paralelo, así que el árbol que escribiste está
-//! ahí y se puede recuperar del grafo — que es obligatorio, porque el mismo
-//! grafo construido con `node()`/`edge()` en un bucle tiene que dar el mismo
-//! plan (decisión 6 de CU5). El árbol de la expresión es el **oráculo**, no el
-//! origen.
+//! [`compile`] does not flatten the graph, it **decomposes** it. The DSL's `>>`
+//! and `|` are serial and parallel composition, so the tree you wrote is in
+//! there — and it has to be recovered from the graph, because the same graph
+//! built with `node()`/`edge()` in a loop must give the same plan (decision 6 of
+//! CU5). The expression tree is the **oracle**, not the source.
 //!
-//! La descomposición son cuatro casos, y el orden importa:
-//!
-//! | caso | sale |
+//! | case | yields |
 //! |---|---|
-//! | ningún nodo | [`Plan::Empty`] |
-//! | un nodo | [`Plan::Execute`] |
-//! | el subgrafo se parte en componentes | [`Plan::Wave`], una rama por componente |
-//! | hay un **corte serie** | [`Plan::Sequence`] de los dos lados |
-//! | no hay corte | secuencia plana: no es serie-paralelo |
+//! | no nodes | [`Plan::Empty`] |
+//! | one node | [`Plan::Execute`] |
+//! | the subgraph splits into components | [`Plan::Wave`], one branch per component |
+//! | there is a **series cut** | [`Plan::Sequence`] of the two sides |
+//! | no cut | flat sequence: it is not series-parallel |
 //!
-//! Un **corte serie** `(A, B)` es lo que haría un `>>`: las aristas que cruzan
-//! van de **todos** los sinks de `A` a **todos** los sources de `B`, y de
-//! ningún otro sitio. Es la definición de composición en serie, y comprobarla
-//! entera —no solo que exista un nodo de paso— es lo que evita que una rama de
-//! varios nodos se parta por la mitad.
+//! A **series cut** `(A, B)` is what a `>>` produces: the crossing edges run
+//! from **all** the sinks of `A` to **all** the sources of `B`, and from nowhere
+//! else. Checking that in full is what keeps a multi-node branch from being
+//! split down the middle. Only the **prefixes of a topological order** need
+//! testing, and that is provable: in a serial composition every node of `A`
+//! precedes every node of `B` in *any* topological order.
 //!
-//! Basta probar los **prefijos de un orden topológico**, y eso es demostrable:
-//! en una composición serie todo nodo de `A` alcanza un sink de `A`, todo sink
-//! de `A` tiene arista a todo source de `B`, y todo nodo de `B` es alcanzable
-//! desde un source de `B`. Luego todo nodo de `A` precede a todo nodo de `B` en
-//! *cualquier* orden topológico, o sea que `A` es prefijo de todos ellos. No
-//! hay que enumerar subconjuntos.
+//! There are DAGs without a tree — a theorem, not a gap here. The minimal
+//! forbidden pattern is the "N": `a→c`, `a→d`, `b→d`. See Valdes, Tarjan and
+//! Lawler, *The recognition of series parallel digraphs*, SIAM J. Comput. 11(2),
+//! 1982. And there is a fortunate boundary: **the image of the DSL is exactly
+//! the series-parallel graphs**, so the N can only be built with
+//! `node()`/`edge()`, and those fall to the last case.
 //!
-//! # Lo que no es serie-paralelo
+//! # Distribution, which is a second step
 //!
-//! Hay DAGs sin árbol —es un teorema, no un hueco de esto—. El patrón mínimo
-//! prohibido es la «N»: `a→c`, `a→d`, `b→d`. Ver Valdes, Tarjan y Lawler, *The
-//! recognition of series parallel digraphs*, SIAM J. Comput. 11(2), 1982.
-//!
-//! Y hay una frontera afortunada: **la imagen del DSL son exactamente los
-//! grafos serie-paralelos**, porque `>>` conecta todos los terminales con
-//! todas las cabezas y `|` es unión disjunta, y no hay una tercera operación.
-//! La N solo se puede construir con `node()`/`edge()`. Para ésos, el último
-//! caso los deja como estaban antes de que existieran las waves: una secuencia
-//! plana. Sin paralelismo, sin regresión, y visible en `plan()`.
+//! [`compile`] does not see the [`Placement`]; [`distribute`] does, and wraps
+//! the slices running elsewhere in [`Plan::Remote`]. Two steps and not one
+//! because the two halves of "where" do not weigh the same: a
+//! [`Device`](crate::Device) is **inert** for the traversal, so placing cannot
+//! alter what comes out of `compile`, and that stays an invariant. A [`Host`] is
+//! not: crossing a wire is a step of another nature, and how often it is crossed
+//! depends on how you group.
 
-use crate::{Catalog, Graph, NodeId};
+use crate::{Catalog, Graph, Host, NodeId, Placement};
 use std::fmt;
 
-/// Cómo se recorre un grafo.
+/// How a graph is walked.
 ///
-/// Sin `#[non_exhaustive]`: quien ejecuta tiene que decidir por cada variante,
-/// y un brazo comodín es una respuesta equivocada en silencio.
+/// No `#[non_exhaustive]`: whoever executes has to decide for each variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Plan {
-    /// No hay nada que hacer.
+    /// Nothing to do.
     Empty,
-    /// Avanzar un nodo hasta que termine.
+    /// Advance one node until it finishes.
     Execute {
-        /// Cuál.
+        /// Which one.
         node: NodeId,
-        /// De dónde sale su entrada. Vacío = la entrada del grafo.
+        /// Where its input comes from. Empty = the graph's input.
         from: Vec<NodeId>,
     },
-    /// Uno detrás de otro. Cada uno lee lo que necesita de lo ya producido,
-    /// así que el orden importa y es el topológico.
+    /// One after another, in topological order. Each reads what it needs from
+    /// what has already been produced.
     Sequence(Vec<Plan>),
-    /// Ramas que se lanzan **a la vez**.
-    ///
-    /// Significa «se ejecutan a la vez», no «son independientes». Esa es la
-    /// diferencia con el `Plan::Parallel` que se quitó en CU4: aquel solo
-    /// describía la estructura, y encima se rompía en el diamante porque sus
-    /// ramas se solapaban —las dos reclamaban el nodo de unión y se ejecutaba
-    /// dos veces—. Las ramas de una wave son **componentes conexas** del
-    /// subgrafo, así que son disjuntas por construcción y ningún nodo puede
-    /// aparecer en dos.
-    ///
-    /// Cada rama es un plan entero, no un paso suelto: en
-    /// `a >> (b >> b2 | c) >> d` la rama larga corre de principio a fin en el
-    /// mismo hilo. Agruparlas por nivel topológico también sería correcto,
-    /// pero dejaría a `b2` esperando a `c` sin necesitarla, y el dispositivo
-    /// de torch es *thread-local*, así que una rama que salta de hilo no puede
-    /// fijarlo una sola vez.
+    /// Branches launched **at the same time**, one per connected component —
+    /// so they are disjoint, which is what the dropped `Plan::Parallel` was
+    /// not. Each is a whole plan, so a branch runs start to finish on one
+    /// thread.
     Wave(Vec<Plan>),
+    /// This whole slice executes elsewhere. A complete plan and not a step, so
+    /// a chain of five nodes on the same host is sent once.
+    Remote {
+        /// Where.
+        host: Host,
+        /// What runs there.
+        inner: Box<Plan>,
+    },
 }
 
-/// Decide cómo se recorre este grafo.
+/// Decides how this graph is walked.
 ///
-/// El catálogo solo se mira para comprobar que cada nodo tiene implementación.
-/// La forma ya no depende de **qué** sea cada uno: todos se avanzan igual, y si
-/// uno pide algo por el camino eso lo dice su `Transition`, no su tipo.
-///
-/// # Errores
-/// Ver [`CompileError`].
+/// The catalog is only consulted to check that every node has an
+/// implementation: since CU6 the shape no longer depends on **what** each one is.
 pub fn compile(graph: &Graph, catalog: &Catalog) -> Result<Plan, CompileError> {
     if graph.is_empty() {
         return Ok(Plan::Empty);
@@ -124,15 +108,125 @@ pub fn compile(graph: &Graph, catalog: &Catalog) -> Result<Plan, CompileError> {
     Ok(decompose(graph, &order))
 }
 
-// ── La descomposición ──
-
-/// La forma de un subconjunto de nodos, en orden topológico.
+/// Wraps the slices that run on another host in [`Plan::Remote`].
 ///
-/// El subconjunto está siempre **cerrado bajo caminos**: si dos de sus nodos
-/// están unidos por un camino, todo el camino está dentro. Los tres que se
-/// construyen aquí lo cumplen —un prefijo del orden topológico, su
-/// complemento, y una componente conexa—, y por eso la alcanzabilidad dentro
-/// del subgrafo coincide con la del grafo entero y no hay que inducirlo.
+/// It groups **as much as it can**, descending only where a slice is spread
+/// across several places. Idempotent, and a plan with no hosts comes out of
+/// here unchanged.
+pub fn distribute(plan: &Plan, placement: &Placement) -> Plan {
+    if placement.is_local() {
+        return plan.clone();
+    }
+    wrap(plan, placement)
+}
+
+/// Where everything inside a plan runs.
+enum Where {
+    /// There are no nodes, so it runs nowhere.
+    Nothing,
+    /// All in the same place: a host, or — with `None` — here.
+    All(Option<Host>),
+    /// In more than one place, so it has to be descended into and split.
+    Mixed,
+}
+
+fn wrap(plan: &Plan, placement: &Placement) -> Plan {
+    if matches!(plan, Plan::Remote { .. }) {
+        return plan.clone();
+    }
+    match uniform(plan, placement) {
+        Where::All(Some(host)) => Plan::Remote {
+            host,
+            inner: Box::new(plan.clone()),
+        },
+        Where::All(None) | Where::Nothing => plan.clone(),
+        Where::Mixed => match plan {
+            Plan::Sequence(plans) => Plan::Sequence(runs(plans, placement)),
+            // Branches are wrapped one by one, without regrouping two of the
+            // same host: that would change their declaration order, which is
+            // observable. All on one host was already wrapped whole above.
+            Plan::Wave(branches) => {
+                Plan::Wave(branches.iter().map(|p| wrap(p, placement)).collect())
+            }
+            Plan::Empty | Plan::Execute { .. } | Plan::Remote { .. } => plan.clone(),
+        },
+    }
+}
+
+/// The steps of a sequence, merging **consecutive** runs bound for the same
+/// host — consecutive only, because the order is the topological one.
+fn runs(plans: &[Plan], placement: &Placement) -> Vec<Plan> {
+    let mut out: Vec<Plan> = Vec::new();
+    let mut run: Vec<Plan> = Vec::new();
+    let mut destination: Option<Host> = None;
+
+    for plan in plans {
+        let here = match plan {
+            Plan::Remote { .. } => None,
+            _ => match uniform(plan, placement) {
+                Where::All(Some(host)) => Some(host),
+                Where::All(None) | Where::Nothing | Where::Mixed => None,
+            },
+        };
+        if here != destination {
+            close(&mut out, &mut run, destination.take());
+            destination = here;
+        }
+        match destination {
+            Some(_) => run.push(plan.clone()),
+            None => out.push(wrap(plan, placement)),
+        }
+    }
+    close(&mut out, &mut run, destination);
+    out
+}
+
+/// Closes the open run, if any, as a single trip.
+fn close(out: &mut Vec<Plan>, run: &mut Vec<Plan>, destination: Option<Host>) {
+    let Some(host) = destination else { return };
+    // A run of one is not wrapped in a sequence of one: the shape cannot depend
+    // on how you arrived at it.
+    let inner = match run.len() {
+        1 => run.remove(0),
+        _ => Plan::Sequence(std::mem::take(run)),
+    };
+    out.push(Plan::Remote {
+        host,
+        inner: Box::new(inner),
+    });
+}
+
+/// Whether the whole plan lands in the same place.
+fn uniform(plan: &Plan, placement: &Placement) -> Where {
+    let mut places = Vec::new();
+    hosts_in(plan, placement, &mut places);
+    match places.split_first() {
+        None => Where::Nothing,
+        Some((first, rest)) if rest.iter().all(|host| host == first) => Where::All(first.clone()),
+        Some(_) => Where::Mixed,
+    }
+}
+
+/// The host of each node in the plan, with repeats. `None` means "here". A
+/// [`Plan::Remote`] counts as its host and is not descended into.
+fn hosts_in(plan: &Plan, placement: &Placement, out: &mut Vec<Option<Host>>) {
+    match plan {
+        Plan::Empty => {}
+        Plan::Execute { node, .. } => out.push(placement.host_of(node).cloned()),
+        Plan::Sequence(plans) | Plan::Wave(plans) => {
+            for plan in plans {
+                hosts_in(plan, placement, out);
+            }
+        }
+        Plan::Remote { host, .. } => out.push(Some(host.clone())),
+    }
+}
+
+/// The shape of a subset of nodes, in topological order.
+///
+/// The subset is always **closed under paths** — a topological prefix, its
+/// complement, or a connected component — which is why reachability inside the
+/// subgraph coincides with reachability in the whole graph.
 fn decompose<'g>(graph: &'g Graph, nodes: &[&'g NodeId]) -> Plan {
     match nodes {
         [] => Plan::Empty,
@@ -144,15 +238,12 @@ fn decompose<'g>(graph: &'g Graph, nodes: &[&'g NodeId]) -> Plan {
             }
 
             let Some(cut) = series_cut(graph, nodes) else {
-                // Sin corte no hay árbol que recuperar: no es serie-paralelo.
-                // Se recorre en secuencia, que es lo que se hacía antes de que
-                // existieran las waves.
+                // No cut, no tree: walked in sequence, as before waves existed.
                 return Plan::Sequence(nodes.iter().map(|node| step(graph, node)).collect());
             };
 
-            // El corte más pequeño, y el resto se sigue cortando. Aplanar la
-            // recursión por la derecha deja `Sequence` con sus pasos en fila
-            // en vez de anidada, que es como se lee.
+            // Flattening the recursion on the right leaves `Sequence` with its
+            // steps in a row rather than nested.
             let mut steps = vec![decompose(graph, &nodes[..cut])];
             match decompose(graph, &nodes[cut..]) {
                 Plan::Sequence(rest) => steps.extend(rest),
@@ -163,10 +254,8 @@ fn decompose<'g>(graph: &'g Graph, nodes: &[&'g NodeId]) -> Plan {
     }
 }
 
-/// Un paso suelto, con de dónde sale su entrada.
-///
-/// Los predecesores son los del grafo entero y no los del subconjunto: el
-/// motor los busca en lo ya producido, que incluye lo de antes de esta rama.
+/// A lone step, with where its input comes from — the whole graph's
+/// predecessors, not the subset's.
 fn step(graph: &Graph, node: &NodeId) -> Plan {
     Plan::Execute {
         node: node.clone(),
@@ -174,10 +263,8 @@ fn step(graph: &Graph, node: &NodeId) -> Plan {
     }
 }
 
-/// Las componentes conexas —sin mirar la dirección— del subgrafo.
-///
-/// Cada una conserva el orden topológico de la entrada, y salen ordenadas por
-/// su primer nodo, así que dos ejecuciones dan lo mismo.
+/// The connected components — ignoring direction — of the subgraph, each
+/// keeping the input's topological order and ordered by their first node.
 fn components<'g>(graph: &'g Graph, nodes: &[&'g NodeId]) -> Vec<Vec<&'g NodeId>> {
     let mut unassigned: Vec<bool> = vec![true; nodes.len()];
     let mut out = Vec::new();
@@ -206,23 +293,18 @@ fn components<'g>(graph: &'g Graph, nodes: &[&'g NodeId]) -> Vec<Vec<&'g NodeId>
     out
 }
 
-/// Si hay una arista entre los dos, en cualquier dirección.
+/// Whether there is an edge between the two, in either direction.
 fn adjacent(graph: &Graph, a: &NodeId, b: &NodeId) -> bool {
     graph.successors(a).contains(&b) || graph.successors(b).contains(&a)
 }
 
-/// Por dónde parte la secuencia: el corte serie más pequeño, si lo hay.
+/// Where the sequence splits: the smallest series cut, if there is one.
 fn series_cut(graph: &Graph, nodes: &[&NodeId]) -> Option<usize> {
     (1..nodes.len()).find(|cut| is_series_cut(graph, &nodes[..*cut], &nodes[*cut..]))
 }
 
-/// Si `before >> after` es exactamente lo que hay entre los dos.
-///
-/// O sea: las aristas que cruzan van de **todos** los sinks de `before` a
-/// **todos** los sources de `after`, y de ningún otro sitio. Las dos mitades
-/// de la comprobación hacen falta: sin la primera, una arista que sale de un
-/// nodo interior pasaría por buena; sin la segunda, dos ramas que no se juntan
-/// del todo también.
+/// Whether `before >> after` is exactly what lies between the two: nothing
+/// crosses outside the ends, and every sink reaches every source.
 fn is_series_cut(graph: &Graph, before: &[&NodeId], after: &[&NodeId]) -> bool {
     let sinks: Vec<&NodeId> = before
         .iter()
@@ -251,12 +333,10 @@ fn is_series_cut(graph: &Graph, before: &[&NodeId], after: &[&NodeId]) -> bool {
     })
 }
 
-// ── Lo que puede salir mal al compilar ──
-
-/// Por qué no se pudo decidir cómo recorrer el grafo.
+/// Why it was not possible to decide how to walk the graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
-    /// El nodo está en el grafo pero nadie registró qué hace.
+    /// The node is in the graph but nobody registered what it does.
     NoImplementation(NodeId),
 }
 
@@ -264,7 +344,7 @@ impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoImplementation(id) => {
-                write!(f, "el nodo `{id}` no tiene implementación registrada")
+                write!(f, "node `{id}` has no registered implementation")
             }
         }
     }
