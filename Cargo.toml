@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "python"]
+members = ["core", "python", "store"]
 resolver = "3"
 
 [workspace.package]
@@ -10,3 +10,5 @@ repository = "https://github.com/manucouto1/soma-next"
 
 [workspace.dependencies]
 soma-next-core = { path = "core" }
+soma-next-store = { path = "store" }
+serde = { version = "1", features = ["derive"] }
