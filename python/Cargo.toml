@@ -10,4 +10,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soma-next-core.workspace = true
+soma-next-transport = { path = "../transport" }
 pyo3 = { version = "0.24", features = ["extension-module"] }
