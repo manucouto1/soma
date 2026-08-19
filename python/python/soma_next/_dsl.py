@@ -1,19 +1,19 @@
-"""Declarar un grafo como una expresión, en vez de a base de llamadas.
+"""Declaring a graph as an expression, instead of by calls.
 
-    Graph.somatize(Fuente() >> (Izq() | Der()) >> Media())
+    Graph.somatize(Source() >> (Left() | Right()) >> Mean())
 
-`>>` encadena, `|` abre en ramas y `.on()` coloca. Un `>>` entre dos ramas
-abiertas las une:
-lo que salga de todas entra en lo que venga detrás, que es exactamente el
-fan-in — el nodo de la derecha recibe un mapa con la clave de cada rama.
+`>>` chains, `|` opens branches, `.on()` places on a device and `.at()` sends to
+another host. A `>>` between two open branches joins them: whatever leaves them
+all enters whatever comes next, which is exactly fan-in — the node on the right
+receives a map keyed by each branch.
 
-Hay **una sola clase de nodo**, igual que en el núcleo hay un solo trait. Un
-nodo devuelve `Done(valor)` si ya está o `Await([peticiones])` si necesita algo
-del mundo antes de seguir; lo que en otros sitios se llama un filtro es
-simplemente un nodo que siempre contesta `Done`.
+There is **a single kind of node**, just as the core has a single trait. A node
+returns `Done(value)` if it is finished or `Await([requests])` if it needs
+something from the world first; what elsewhere is called a filter is simply a
+node that always answers `Done`.
 
-Ojo con la precedencia, que es la de Python (y la misma en Rust): `>>` aprieta
-más que `|`, así que las ramas van entre paréntesis.
+Mind the precedence, which is Python's (and the same in Rust): `>>` binds
+tighter than `|`, so the branches go in parentheses.
 """
 
 from __future__ import annotations
@@ -22,20 +22,24 @@ from abc import ABC, abstractmethod
 
 
 class Topology:
-    """Un trozo de grafo a medio declarar."""
+    """A half-declared piece of graph."""
 
     def on(self, device):
-        """El mismo trozo, colocado. **Gana el de dentro.**
+        """The same piece, placed on a device. **The innermost one wins**, so
+        ``(A().on("cuda:0") >> B()).on("cuda:1")`` leaves `A` on 0 and `B` on 1.
 
-        ``(A().on("cuda:0") >> B()).on("cuda:1")`` deja `A` en la 0 y `B` en la
-        1: el de fuera rellena a los que no tienen sitio, no pisa a los que sí.
-        Así se coloca una rama entera y luego se afina un nodo suelto, que es
-        como se lee de dentro afuera.
-
-        El nombre del dispositivo se valida al materializar el grafo, en Rust:
-        `on("cude:0")` falla ahí, no dentro de torch a mitad de un run.
+        The name is validated when the graph is materialized, in Rust.
         """
-        return _placed(self, device)
+        return _placed(self, "device", device)
+
+    def at(self, host):
+        """The same piece, in another process. The innermost one wins alike, and
+        **independently** of `.on()`, so the two can be written in any order.
+
+        A host is a **name**: what it resolves to is said by whoever executes,
+        with `forward(..., workers={...})`.
+        """
+        return _placed(self, "host", host)
 
     def __rshift__(self, other):
         return Chain(_steps(self) + _steps(_wrap(other)))
@@ -51,82 +55,79 @@ class Topology:
 
 
 class Chain(Topology):
-    """Uno detrás de otro."""
+    """One after another."""
 
     def __init__(self, steps):
         self.steps = steps
 
 
 class Fork(Topology):
-    """Ramas que no se tocan."""
+    """Branches that do not touch."""
 
     def __init__(self, branches):
         self.branches = branches
 
 
 class Declared(Topology):
-    """Un objeto declarado como nodo, con su id y su sitio si se los pusiste."""
+    """An object declared as a node, with its id and its place if you gave it one."""
 
-    def __init__(self, obj, node_id=None, device=None):
+    def __init__(self, obj, node_id=None, device=None, host=None):
         self.obj = obj
         self.node_id = node_id
         self.device = device
+        self.host = host
 
     def named(self, node_id):
-        """El mismo nodo, con el id que digas. `.named` y `.on` conmutan."""
-        return Declared(self.obj, node_id, self.device)
+        """The same node, with the id you say. `.named`, `.on` and `.at` commute."""
+        return Declared(self.obj, node_id, self.device, self.host)
 
 
 class Node(Topology, ABC):
-    """Lo que ejecuta un nodo del grafo.
-
-    Obliga a escribir `forward`: sin él, la clase no se puede instanciar.
-    """
+    """What a graph node executes. `forward` has to be written or the class
+    cannot be instantiated."""
 
     @abstractmethod
     def forward(self, input, ctx):
-        """Avanza un turno.
+        """Advances one turn: returns `Done(value)` or `Await([requests])`.
 
-        `ctx` trae `turn` y `results`. Devuelve `Done(valor)` o
-        `Await([peticiones])`.
+        `ctx` carries `turn`, `results` and `device`.
         """
 
     def named(self, node_id):
-        """El mismo nodo, con el id que digas."""
+        """The same node, with the id you say."""
         return Declared(self, node_id)
 
 
-def _placed(topology, device):
-    """Reparte un dispositivo a las hojas que no lo tengan ya puesto.
+def _placed(topology, field, value):
+    """Hands a place out to the leaves that do not already have one.
 
-    Se reparte al declarar, y no se guarda como «el dispositivo de este trozo»,
-    porque un trozo deja de existir al materializarse: lo que queda son nodos.
-    Colocar es un hecho por nodo.
+    It is handed out at declaration time because a piece stops existing once
+    materialized: placing is a per-node fact. `field` is `"device"` or `"host"`,
+    and each looks at only its own, which is what makes them independent.
     """
     topology = _wrap(topology)
     if isinstance(topology, Chain):
-        return Chain([_placed(step, device) for step in topology.steps])
+        return Chain([_placed(step, field, value) for step in topology.steps])
     if isinstance(topology, Fork):
-        return Fork([_placed(branch, device) for branch in topology.branches])
-    # `is not None` y no un `or`: `.on("")` tiene que llegar a `place()` y
-    # fallar allí, no desaparecer por ser una cadena vacía.
-    puesto = topology.device if topology.device is not None else device
-    return Declared(topology.obj, topology.node_id, puesto)
+        return Fork([_placed(branch, field, value) for branch in topology.branches])
+    # `is not None` and not an `or`: `.on("")` has to reach `place()` and fail
+    # there, not vanish for being an empty string.
+    place = {"device": topology.device, "host": topology.host}
+    if place[field] is None:
+        place[field] = value
+    return Declared(topology.obj, topology.node_id, **place)
 
 
 def _wrap(obj):
-    """Cualquier cosa, vista como topología.
-
-    Un `Node` del usuario es un `Topology` —de ahí le vienen los operadores—
-    pero no es un nodo declarado todavía: hay que envolverlo.
-    """
+    """Anything, seen as a topology. A user's `Node` is one, but it is not a
+    declared node yet."""
     if isinstance(obj, (Chain, Fork, Declared)):
         return obj
     if isinstance(obj, Node):
         return Declared(obj)
     raise TypeError(
-        f"`{type(obj).__name__}` no puede ir en una expresión de grafo: tiene "
-        "que heredar de soma_next.Node"
+        f"`{type(obj).__name__}` cannot go in a graph expression: it has to "
+        "inherit from soma_next.Node"
     )
 
 
@@ -139,10 +140,10 @@ def _branches(topology):
 
 
 def somatize(graph_cls, topology):
-    """Materializa la expresión en un grafo de la clase que te den.
+    """Materializes the expression into a graph of the class you are given.
 
-    La clase entra por parámetro y no se importa aquí: `soma_next._graph`
-    importa este módulo, así que importarlo de vuelta sería un ciclo.
+    The class comes in as a parameter and is not imported here: `soma_next._graph`
+    imports this module, so importing it back would be a cycle.
     """
     g = graph_cls()
     _walk(g, _wrap(topology), [])
@@ -150,7 +151,7 @@ def somatize(graph_cls, topology):
 
 
 def _walk(g, topology, sources):
-    """Añade lo declarado y devuelve por dónde sale este trozo."""
+    """Adds what was declared and returns where this piece leaves from."""
     if isinstance(topology, Chain):
         cursor = sources
         for step in topology.steps:
@@ -168,9 +169,11 @@ def _walk(g, topology, sources):
         g.node(topology.node_id, topology.obj) if topology.node_id else g.node(topology.obj)
     )
     if topology.device is not None:
-        # `.on()` no es otro camino: termina en el mismo `place` que usa quien
-        # construye el grafo a mano, y hereda su validación.
+        # `.on()` is not another path: it ends at the same `place` used by
+        # whoever builds the graph by hand, and inherits its validation.
         g.place(node_id, topology.device)
+    if topology.host is not None:
+        g.place_at(node_id, topology.host)
     for source in sources:
         g.edge(source, node_id)
     return [node_id]

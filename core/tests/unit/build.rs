@@ -1,18 +1,18 @@
-//! El DSL: declarar el grafo como una expresión.
+//! The DSL: declaring the graph as an expression.
 
-use crate::dobles::{Inmediato, Media, Sumar};
+use crate::doubles::{Add, Immediate, Mean};
 use soma_next_core::{Executor, GraphError, NodeId, Plan, Value, compile, node};
 
-fn numero(v: &Value) -> f64 {
+fn number(v: &Value) -> f64 {
     let Value::Number(x) = v else {
-        panic!("esperaba un número, había {}", v.type_name());
+        panic!("expected a number, found {}", v.type_name());
     };
     *x
 }
 
 #[test]
-fn una_cadena() {
-    let (g, c, _) = (node("a", Sumar(1.0)) >> node("b", Sumar(10.0)))
+fn a_chain() {
+    let (g, c, _) = (node("a", Add(1.0)) >> node("b", Add(10.0)))
         .somatize()
         .unwrap();
 
@@ -20,16 +20,16 @@ fn una_cadena() {
     assert_eq!(g.edges().len(), 1);
     let plan = compile(&g, &c).unwrap();
     assert_eq!(
-        numero(&Executor::new(&c).run(&plan, Value::number(0.0)).unwrap()),
+        number(&Executor::new(&c).run(&plan, Value::number(0.0)).unwrap()),
         11.0
     );
 }
 
 #[test]
-fn un_diamante_se_lee_de_un_vistazo() {
-    let (g, c, _) = (node("fuente", Sumar(1.0))
-        >> (node("izq", Sumar(10.0)) | node("der", Sumar(100.0)))
-        >> node("juntar", Media))
+fn a_diamond_reads_at_a_glance() {
+    let (g, c, _) = (node("source", Add(1.0))
+        >> (node("left", Add(10.0)) | node("right", Add(100.0)))
+        >> node("join", Mean))
     .somatize()
     .unwrap();
 
@@ -37,69 +37,69 @@ fn un_diamante_se_lee_de_un_vistazo() {
     assert_eq!(g.edges().len(), 4);
     let plan = compile(&g, &c).unwrap();
     assert_eq!(
-        numero(&Executor::new(&c).run(&plan, Value::number(0.0)).unwrap()),
+        number(&Executor::new(&c).run(&plan, Value::number(0.0)).unwrap()),
         56.0
     );
 }
 
 #[test]
-fn las_ramas_pueden_tener_su_propia_longitud() {
-    let (g, _, _) = (node("fuente", Sumar(1.0))
-        >> ((node("izq", Sumar(1.0)) >> node("izq2", Sumar(1.0))) | node("der", Sumar(1.0))))
+fn branches_can_have_their_own_length() {
+    let (g, _, _) = (node("source", Add(1.0))
+        >> ((node("left", Add(1.0)) >> node("left2", Add(1.0))) | node("right", Add(1.0))))
     .somatize()
     .unwrap();
 
     assert_eq!(g.len(), 4);
-    // fuente→izq, izq→izq2, fuente→der
+    // source→left, left→left2, source→right
     assert_eq!(g.edges().len(), 3);
 }
 
 #[test]
-fn un_nodo_que_pide_turnos_y_otro_que_no_se_mezclan_igual() {
-    let (g, c, _) = (node("sumar", Sumar(1.0)) >> node("eco", Inmediato))
+fn a_node_that_asks_for_turns_and_one_that_does_not_mix_just_the_same() {
+    let (g, c, _) = (node("add", Add(1.0)) >> node("echo", Immediate))
         .somatize()
         .unwrap();
 
     let plan = compile(&g, &c).unwrap();
     assert_eq!(
-        numero(&Executor::new(&c).run(&plan, Value::number(41.0)).unwrap()),
+        number(&Executor::new(&c).run(&plan, Value::number(41.0)).unwrap()),
         42.0
     );
 }
 
 #[test]
-fn un_id_repetido_se_cuenta_al_materializar() {
-    let err = (node("a", Sumar(1.0)) >> node("a", Sumar(1.0)))
+fn a_repeated_id_is_caught_at_materialization() {
+    let err = (node("a", Add(1.0)) >> node("a", Add(1.0)))
         .somatize()
         .unwrap_err();
     assert_eq!(err, GraphError::DuplicateNode("a".into()));
 }
 
 #[test]
-fn el_fallo_sobrevive_a_lo_que_le_pegues_despues() {
-    let roto = node("a", Sumar(1.0)) >> node("a", Sumar(1.0));
-    let err = (roto >> node("b", Sumar(1.0))).somatize().unwrap_err();
+fn the_failure_survives_whatever_you_glue_on_afterwards() {
+    let broken = node("a", Add(1.0)) >> node("a", Add(1.0));
+    let err = (broken >> node("b", Add(1.0))).somatize().unwrap_err();
     assert_eq!(err, GraphError::DuplicateNode("a".into()));
 }
 
-// ── El oráculo: el plan reproduce el árbol de la expresión ──
+// ── The oracle: the plan reproduces the expression tree ──
 //
-// `>>` y `|` son composición en serie y en paralelo, así que la expresión que
-// escribes **es** un árbol. `compile` no lo recibe —el grafo solo tiene nodos
-// y aristas, y tiene que dar lo mismo construido en un bucle con
-// `node()`/`edge()`, que fue la decisión 6 de CU5— así que lo **recupera**.
-// Estos tests comprueban que lo recupera entero: son el oráculo del que sale
-// toda la descomposición.
+// `>>` and `|` are serial and parallel composition, so the expression you write
+// **is** a tree. `compile` does not receive it — the graph has only nodes and
+// edges, and has to give the same thing when built in a loop with
+// `node()`/`edge()`, which was decision 6 of CU5 — so it **recovers** it. These
+// tests check that it recovers it whole: they are the oracle the whole
+// decomposition comes from.
 
-fn ejecuta(id: &str, from: &[&str]) -> Plan {
+fn execute(id: &str, from: &[&str]) -> Plan {
     Plan::Execute {
         node: id.into(),
         from: from.iter().map(|f| NodeId::from(*f)).collect(),
     }
 }
 
-/// El plan de una expresión, para compararlo con su árbol.
-macro_rules! plan_de {
+/// The plan of an expression, to compare against its tree.
+macro_rules! plan_of {
     ($wire:expr) => {{
         let (g, c, _) = ($wire).somatize().unwrap();
         compile(&g, &c).unwrap()
@@ -107,157 +107,157 @@ macro_rules! plan_de {
 }
 
 #[test]
-fn una_cadena_es_una_secuencia_y_nada_mas() {
+fn a_chain_is_a_sequence_and_nothing_more() {
     assert_eq!(
-        plan_de!(node("a", Sumar(1.0)) >> node("b", Sumar(1.0)) >> node("c", Sumar(1.0))),
+        plan_of!(node("a", Add(1.0)) >> node("b", Add(1.0)) >> node("c", Add(1.0))),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
-            ejecuta("b", &["a"]),
-            ejecuta("c", &["b"]),
+            execute("a", &[]),
+            execute("b", &["a"]),
+            execute("c", &["b"]),
         ])
     );
 }
 
 #[test]
-fn un_or_suelto_es_una_wave() {
+fn a_lone_or_is_a_wave() {
     assert_eq!(
-        plan_de!(node("a", Sumar(1.0)) | node("b", Sumar(1.0))),
-        Plan::Wave(vec![ejecuta("a", &[]), ejecuta("b", &[])])
+        plan_of!(node("a", Add(1.0)) | node("b", Add(1.0))),
+        Plan::Wave(vec![execute("a", &[]), execute("b", &[])])
     );
 }
 
 #[test]
-fn el_diamante_del_dsl_sale_tal_cual_se_escribe() {
+fn the_dsl_diamond_comes_out_exactly_as_written() {
     assert_eq!(
-        plan_de!(
-            node("f", Sumar(1.0))
-                >> (node("i", Sumar(10.0)) | node("d", Sumar(100.0)))
-                >> node("j", Media)
+        plan_of!(
+            node("s", Add(1.0))
+                >> (node("l", Add(10.0)) | node("r", Add(100.0)))
+                >> node("j", Mean)
         ),
         Plan::Sequence(vec![
-            ejecuta("f", &[]),
-            Plan::Wave(vec![ejecuta("i", &["f"]), ejecuta("d", &["f"])]),
-            ejecuta("j", &["i", "d"]),
+            execute("s", &[]),
+            Plan::Wave(vec![execute("l", &["s"]), execute("r", &["s"])]),
+            execute("j", &["l", "r"]),
         ])
     );
 }
 
 #[test]
-fn los_parentesis_de_una_rama_larga_sobreviven_al_grafo() {
-    // `a >> (b >> b2 >> b3 | c >> c2) >> d`, que es el caso que obliga a que
-    // una rama de la wave sea un plan entero y no un paso suelto.
+fn the_parentheses_of_a_long_branch_survive_the_graph() {
+    // `a >> (b >> b2 >> b3 | c >> c2) >> d`, the case that forces a wave branch
+    // to be a whole plan and not a lone step.
     assert_eq!(
-        plan_de!(
-            node("a", Sumar(1.0))
-                >> ((node("b", Sumar(1.0)) >> node("b2", Sumar(1.0)) >> node("b3", Sumar(1.0)))
-                    | (node("c", Sumar(1.0)) >> node("c2", Sumar(1.0))))
-                >> node("d", Media)
+        plan_of!(
+            node("a", Add(1.0))
+                >> ((node("b", Add(1.0)) >> node("b2", Add(1.0)) >> node("b3", Add(1.0)))
+                    | (node("c", Add(1.0)) >> node("c2", Add(1.0))))
+                >> node("d", Mean)
         ),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
+            execute("a", &[]),
             Plan::Wave(vec![
                 Plan::Sequence(vec![
-                    ejecuta("b", &["a"]),
-                    ejecuta("b2", &["b"]),
-                    ejecuta("b3", &["b2"]),
+                    execute("b", &["a"]),
+                    execute("b2", &["b"]),
+                    execute("b3", &["b2"]),
                 ]),
-                Plan::Sequence(vec![ejecuta("c", &["a"]), ejecuta("c2", &["c"])]),
+                Plan::Sequence(vec![execute("c", &["a"]), execute("c2", &["c"])]),
             ]),
-            ejecuta("d", &["b3", "c2"]),
+            execute("d", &["b3", "c2"]),
         ])
     );
 }
 
 #[test]
-fn dos_ramas_abiertas_seguidas_de_otras_dos() {
-    // `(a >> a2 | b) >> (c | d)`: el contraejemplo que descarta cortar por un
-    // "nodo barrera". La rama `a >> a2` tiene que salir de una pieza.
+fn two_open_branches_followed_by_two_more() {
+    // `(a >> a2 | b) >> (c | d)`: the counterexample that rules out cutting at a
+    // "barrier node". The `a >> a2` branch has to come out in one piece.
     assert_eq!(
-        plan_de!(
-            ((node("a", Sumar(1.0)) >> node("a2", Sumar(1.0))) | node("b", Sumar(1.0)))
-                >> (node("c", Media) | node("d", Media))
+        plan_of!(
+            ((node("a", Add(1.0)) >> node("a2", Add(1.0))) | node("b", Add(1.0)))
+                >> (node("c", Mean) | node("d", Mean))
         ),
         Plan::Sequence(vec![
             Plan::Wave(vec![
-                Plan::Sequence(vec![ejecuta("a", &[]), ejecuta("a2", &["a"])]),
-                ejecuta("b", &[]),
+                Plan::Sequence(vec![execute("a", &[]), execute("a2", &["a"])]),
+                execute("b", &[]),
             ]),
-            Plan::Wave(vec![ejecuta("c", &["a2", "b"]), ejecuta("d", &["a2", "b"]),]),
+            Plan::Wave(vec![execute("c", &["a2", "b"]), execute("d", &["a2", "b"]),]),
         ])
     );
 }
 
 #[test]
-fn una_wave_dentro_de_una_rama_de_otra_wave() {
-    // `a >> ((b >> (c | d) >> e) | f) >> g`: el árbol anida tan hondo como los
-    // paréntesis.
+fn a_wave_inside_a_branch_of_another_wave() {
+    // `a >> ((b >> (c | d) >> e) | f) >> g`: the tree nests as deep as the
+    // parentheses do.
     assert_eq!(
-        plan_de!(
-            node("a", Sumar(1.0))
-                >> ((node("b", Sumar(1.0))
-                    >> (node("c", Sumar(1.0)) | node("d", Sumar(1.0)))
-                    >> node("e", Media))
-                    | node("f", Sumar(1.0)))
-                >> node("g", Media)
+        plan_of!(
+            node("a", Add(1.0))
+                >> ((node("b", Add(1.0))
+                    >> (node("c", Add(1.0)) | node("d", Add(1.0)))
+                    >> node("e", Mean))
+                    | node("f", Add(1.0)))
+                >> node("g", Mean)
         ),
         Plan::Sequence(vec![
-            ejecuta("a", &[]),
+            execute("a", &[]),
             Plan::Wave(vec![
                 Plan::Sequence(vec![
-                    ejecuta("b", &["a"]),
-                    Plan::Wave(vec![ejecuta("c", &["b"]), ejecuta("d", &["b"])]),
-                    ejecuta("e", &["c", "d"]),
+                    execute("b", &["a"]),
+                    Plan::Wave(vec![execute("c", &["b"]), execute("d", &["b"])]),
+                    execute("e", &["c", "d"]),
                 ]),
-                ejecuta("f", &["a"]),
+                execute("f", &["a"]),
             ]),
-            ejecuta("g", &["e", "f"]),
+            execute("g", &["e", "f"]),
         ])
     );
 }
 
 #[test]
-fn tres_ramas_de_longitudes_distintas() {
+fn three_branches_of_different_lengths() {
     assert_eq!(
-        plan_de!(
-            node("f", Sumar(1.0))
-                >> (node("x", Sumar(1.0))
-                    | (node("y", Sumar(1.0)) >> node("y2", Sumar(1.0)))
-                    | (node("z", Sumar(1.0)) >> node("z2", Sumar(1.0)) >> node("z3", Sumar(1.0))))
-                >> node("j", Media)
+        plan_of!(
+            node("s", Add(1.0))
+                >> (node("x", Add(1.0))
+                    | (node("y", Add(1.0)) >> node("y2", Add(1.0)))
+                    | (node("z", Add(1.0)) >> node("z2", Add(1.0)) >> node("z3", Add(1.0))))
+                >> node("j", Mean)
         ),
         Plan::Sequence(vec![
-            ejecuta("f", &[]),
+            execute("s", &[]),
             Plan::Wave(vec![
-                ejecuta("x", &["f"]),
-                Plan::Sequence(vec![ejecuta("y", &["f"]), ejecuta("y2", &["y"])]),
+                execute("x", &["s"]),
+                Plan::Sequence(vec![execute("y", &["s"]), execute("y2", &["y"])]),
                 Plan::Sequence(vec![
-                    ejecuta("z", &["f"]),
-                    ejecuta("z2", &["z"]),
-                    ejecuta("z3", &["z2"]),
+                    execute("z", &["s"]),
+                    execute("z2", &["z"]),
+                    execute("z3", &["z2"]),
                 ]),
             ]),
-            ejecuta("j", &["x", "y2", "z3"]),
+            execute("j", &["x", "y2", "z3"]),
         ])
     );
 }
 
 #[test]
-fn una_rama_que_se_abre_y_se_cierra_dentro_de_si_misma() {
-    // La rama izquierda es un diamante completo; la derecha, un nodo.
+fn a_branch_that_opens_and_closes_inside_itself() {
+    // The left branch is a whole diamond; the right one, a single node.
     assert_eq!(
-        plan_de!(
-            ((node("p", Sumar(1.0))
-                >> (node("q", Sumar(1.0)) | node("r", Sumar(1.0)))
-                >> node("s", Media))
-                | node("t", Sumar(1.0)))
+        plan_of!(
+            ((node("p", Add(1.0))
+                >> (node("q", Add(1.0)) | node("r", Add(1.0)))
+                >> node("s", Mean))
+                | node("t", Add(1.0)))
         ),
         Plan::Wave(vec![
             Plan::Sequence(vec![
-                ejecuta("p", &[]),
-                Plan::Wave(vec![ejecuta("q", &["p"]), ejecuta("r", &["p"])]),
-                ejecuta("s", &["q", "r"]),
+                execute("p", &[]),
+                Plan::Wave(vec![execute("q", &["p"]), execute("r", &["p"])]),
+                execute("s", &["q", "r"]),
             ]),
-            ejecuta("t", &[]),
+            execute("t", &[]),
         ])
     );
 }

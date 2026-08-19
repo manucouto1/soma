@@ -1,80 +1,107 @@
 use soma_next_core::Value;
 
 #[test]
-fn una_lista_guarda_lo_que_le_metes() {
-    let Value::List(items) = Value::list(vec![Value::number(1.0), Value::text("dos")]) else {
-        panic!("list() construye una lista");
+fn a_list_holds_what_you_put_in_it() {
+    let Value::List(items) = Value::list(vec![Value::number(1.0), Value::text("two")]) else {
+        panic!("list() builds a list");
     };
     assert_eq!(items.len(), 2);
-    assert_eq!(items[1], Value::text("dos"));
+    assert_eq!(items[1], Value::text("two"));
 }
 
 #[test]
-fn clonar_no_copia_los_datos() {
+fn cloning_does_not_copy_the_data() {
     let original = Value::list(vec![Value::Null; 1000]);
-    let copia = original.clone();
-    let (Value::List(a), Value::List(b)) = (&original, &copia) else {
-        panic!("las dos son listas");
+    let copy = original.clone();
+    let (Value::List(a), Value::List(b)) = (&original, &copy) else {
+        panic!("both are lists");
     };
-    assert!(std::sync::Arc::ptr_eq(a, b), "el Arc debería compartirse");
+    assert!(std::sync::Arc::ptr_eq(a, b), "the Arc should be shared");
 }
 
 #[test]
-fn cada_variante_sabe_como_se_llama() {
+fn every_variant_knows_its_name() {
     assert_eq!(Value::Null.type_name(), "null");
     assert_eq!(Value::number(1.0).type_name(), "number");
-    assert_eq!(Value::text("hola").type_name(), "text");
+    assert_eq!(Value::text("hello").type_name(), "text");
     assert_eq!(Value::list(vec![]).type_name(), "list");
 }
 
-// ── Lo que el núcleo transporta sin mirar ──
+// ── What the core carries without looking ──
 
-/// Algo que el núcleo no tiene forma de entender.
+/// Something the core has no way of understanding.
 #[derive(Debug, PartialEq)]
-struct Ajeno(String);
+struct Foreign(String);
 
 #[test]
-fn un_opaco_sale_tal_cual_entro() {
-    let v = Value::opaque(Ajeno("intacto".into()));
-    assert_eq!(v.downcast::<Ajeno>(), Some(&Ajeno("intacto".into())));
+fn an_opaque_comes_out_exactly_as_it_went_in() {
+    let v = Value::opaque(Foreign("intact".into()));
+    assert_eq!(v.downcast::<Foreign>(), Some(&Foreign("intact".into())));
     assert_eq!(v.type_name(), "opaque");
 }
 
 #[test]
-fn clonarlo_no_lo_duplica() {
-    let original = Value::opaque(Ajeno("uno".into()));
-    let copia = original.clone();
-    // Es el MISMO, que es lo que hace que un tensor cruce sin romperse.
-    assert_eq!(original, copia);
+fn cloning_it_does_not_duplicate_it() {
+    let original = Value::opaque(Foreign("one".into()));
+    let copy = original.clone();
+    // It is the SAME one, which is what lets a tensor cross unbroken.
+    assert_eq!(original, copy);
 }
 
 #[test]
-fn dos_opacos_distintos_no_son_iguales_aunque_lleven_lo_mismo() {
-    let a = Value::opaque(Ajeno("igual".into()));
-    let b = Value::opaque(Ajeno("igual".into()));
-    assert_ne!(a, b, "el núcleo no puede comparar lo que no mira");
+fn two_distinct_opaques_are_not_equal_even_carrying_the_same_thing() {
+    let a = Value::opaque(Foreign("same".into()));
+    let b = Value::opaque(Foreign("same".into()));
+    assert_ne!(a, b, "the core cannot compare what it does not look at");
 }
 
 #[test]
-fn preguntar_por_el_tipo_equivocado_devuelve_none() {
-    let v = Value::opaque(Ajeno("x".into()));
+fn asking_for_the_wrong_type_gives_none() {
+    let v = Value::opaque(Foreign("x".into()));
     assert!(v.downcast::<String>().is_none());
-    assert!(Value::number(1.0).downcast::<Ajeno>().is_none());
+    assert!(Value::number(1.0).downcast::<Foreign>().is_none());
 }
 
 #[test]
-fn no_se_imprime_lo_que_no_se_sabe_que_es() {
+fn what_is_not_known_is_not_printed() {
     assert_eq!(
-        format!("{:?}", Value::opaque(Ajeno("secreto".into()))),
+        format!("{:?}", Value::opaque(Foreign("secret".into()))),
         "Opaque(..)"
     );
 }
 
 #[test]
-fn cabe_dentro_de_una_lista_y_de_un_mapa() {
-    let v = Value::list(vec![Value::opaque(Ajeno("dentro".into()))]);
+fn it_fits_inside_a_list_and_inside_a_map() {
+    let v = Value::list(vec![Value::opaque(Foreign("inside".into()))]);
     let Value::List(items) = &v else {
-        panic!("es una lista")
+        panic!("it is a list")
     };
-    assert_eq!(items[0].downcast::<Ajeno>(), Some(&Ajeno("dentro".into())));
+    assert_eq!(
+        items[0].downcast::<Foreign>(),
+        Some(&Foreign("inside".into()))
+    );
+}
+
+#[test]
+fn what_travels_is_everything_but_an_opaque() {
+    // The question whoever is about to send it asks, and it is the core's to
+    // answer: it is the one that knows what an opaque is.
+    assert!(Value::Null.travels());
+    assert!(Value::text("hello").travels());
+    assert!(!Value::opaque(7u32).travels());
+}
+
+#[test]
+fn an_opaque_at_any_depth_stops_the_whole_value_travelling() {
+    // The one that would slip through if the question were about the outermost
+    // variant: a list of numbers with one opaque hidden in it.
+    assert!(Value::list(vec![Value::number(1.0), Value::text("two")]).travels());
+    assert!(!Value::list(vec![Value::number(1.0), Value::opaque(7u32)]).travels());
+    assert!(
+        !Value::map(vec![(
+            "inside".to_string(),
+            Value::list(vec![Value::opaque(7u32)])
+        )])
+        .travels()
+    );
 }

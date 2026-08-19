@@ -1,67 +1,97 @@
-//! Dónde corre cada nodo.
+//! Where each node runs.
 //!
-//! Es un tipo aparte, y no un campo del [`Graph`](crate::Graph) ni del
-//! [`Catalog`](crate::Catalog), porque colocar es un cuarto hecho —distinto de
-//! qué hay, de quién lo ejecuta y de en qué orden—:
+//! A type of its own, and not a field of [`Graph`](crate::Graph) or
+//! [`Catalog`](crate::Catalog), because placing is a fourth fact:
 //!
-//! | pieza | contesta |
+//! | piece | answers |
 //! |---|---|
-//! | [`Graph`](crate::Graph) | **qué** hay y cómo se conecta |
-//! | [`Catalog`](crate::Catalog) | **quién** lo ejecuta |
-//! | `Placement` | **dónde** |
-//! | [`Plan`](crate::Plan) | **cuándo**, y con qué concurrencia |
+//! | [`Graph`](crate::Graph) | **what** exists and how it connects |
+//! | [`Catalog`](crate::Catalog) | **who** executes it |
+//! | `Placement` | **where** |
+//! | [`Plan`](crate::Plan) | **when**, and with what concurrency |
 //!
-//! En el grafo no cabe: un `Graph` es solo topología, y además el motor no lo
-//! mira —cada paso del plan es autónomo desde CU3—, así que meterlo ahí
-//! obligaría a pasarle el grafo al [`Executor`](crate::Executor). En el
-//! catálogo tampoco: el catálogo es la mitad que **no** es dato, y una
-//! colocación sí lo es —el día que un subgrafo viaje a otra máquina, la
-//! colocación viaja con él y las implementaciones no—.
+//! It does not fit in the graph — a `Graph` is topology only, and the engine
+//! does not look at it — nor in the catalog, which is the half that is **not**
+//! data: the day a subgraph travels to another machine, the placement travels
+//! with it and the implementations do not.
 //!
-//! Y en el plan menos que en ninguno. El plan decide el orden y la
-//! concurrencia; colocar no cambia ni uno ni otra. Que `compile` no vea esto
-//! no es una omisión: es lo que hace que colocar no pueda alterar el recorrido.
+//! # The two halves, and who obeys each
 //!
-//! Un mapa suelto es lo que es, sin comprobar que los ids existan: eso se
-//! comprueba donde hay un grafo delante —al declarar con
-//! [`Wire::on`](crate::Wire::on), que solo puede nombrar nodos suyos, y en el
-//! `place()` de los bindings, que valida contra el grafo—.
+//! | half | who reads it | when |
+//! |---|---|---|
+//! | [`Host`] | [`distribute`](crate::distribute) | when deciding the shape |
+//! | [`Device`] | the node, via `ctx.device` | when executing it |
+//!
+//! The node obeys the [`Device`] because the core does not know how to move
+//! anything to a GPU; it cannot obey the [`Host`], because its code does not run
+//! here. Hence two maps and not a pair: a node can have a host without a device,
+//! a device without a host, both, or neither.
+//!
+//! And hence [`compile`](crate::compile) sees neither. A device is **inert** for
+//! the traversal, so placing cannot alter the plan. A host is not, but crossing
+//! a wire is decided in a separate, named step.
+//!
+//! A bare map is what it is, without checking that the ids exist: that is
+//! checked where there is a graph in front of you — [`Wire::on`](crate::Wire::on)
+//! and [`Wire::at`](crate::Wire::at) can only name their own nodes, and the
+//! bindings' `place()` validates against the graph.
 
-use crate::{Device, NodeId};
-use std::collections::HashMap;
+use crate::{Device, Host, NodeId};
+use std::collections::{HashMap, HashSet};
 
-/// Dónde corre cada nodo. Los que no estén, donde caigan.
-///
-/// «No colocado» y «colocado en `cpu`» son cosas distintas: el primero es
-/// «donde ya esté», el segundo es una orden de moverlo.
+/// Where each node runs. The ones not listed run wherever they land.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Placement {
-    nodes: HashMap<NodeId, Device>,
+    devices: HashMap<NodeId, Device>,
+    hosts: HashMap<NodeId, Host>,
 }
 
 impl Placement {
-    /// Sin colocar nada.
+    /// Nothing placed.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Coloca un nodo, devolviendo dónde estuviera antes.
+    /// Places a node on a device, returning where it was before.
     pub fn place(&mut self, id: impl Into<NodeId>, device: Device) -> Option<Device> {
-        self.nodes.insert(id.into(), device)
+        self.devices.insert(id.into(), device)
     }
 
-    /// Dónde corre este nodo, si se dijo.
+    /// Sends a node to a host, returning which one it was on before.
+    /// Independent of [`place`](Self::place).
+    pub fn place_at(&mut self, id: impl Into<NodeId>, host: Host) -> Option<Host> {
+        self.hosts.insert(id.into(), host)
+    }
+
+    /// Which device this node runs on, if it was said. `None` is "wherever it
+    /// already is", not `cpu`.
     pub fn of(&self, id: &NodeId) -> Option<&Device> {
-        self.nodes.get(id)
+        self.devices.get(id)
     }
 
-    /// Cuántos nodos están colocados.
+    /// Which host this node runs on, if it was said. `None` is here.
+    pub fn host_of(&self, id: &NodeId) -> Option<&Host> {
+        self.hosts.get(id)
+    }
+
+    /// How many nodes have something said about them: device, host or both.
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.devices
+            .keys()
+            .chain(self.hosts.keys())
+            .collect::<HashSet<_>>()
+            .len()
     }
 
-    /// Si no hay ninguno.
+    /// Whether nothing has been said about any node.
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.devices.is_empty() && self.hosts.is_empty()
+    }
+
+    /// Whether no node has been sent to any host, which is what allows skipping
+    /// [`distribute`](crate::distribute).
+    pub fn is_local(&self) -> bool {
+        self.hosts.is_empty()
     }
 }

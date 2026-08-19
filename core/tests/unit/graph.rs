@@ -1,9 +1,9 @@
-//! El cuestionario del CU1, contestado.
+//! The CU1 questionnaire, answered.
 
 use soma_next_core::{Graph, GraphError, NodeId};
 
-/// `a → b → c`, la tubería lineal de la que sale casi todo lo demás.
-fn lineal() -> Graph {
+/// `a → b → c`, the linear pipeline almost everything else grows from.
+fn linear() -> Graph {
     let mut g = Graph::new();
     for id in ["a", "b", "c"] {
         g.add_node(id).unwrap();
@@ -17,10 +17,10 @@ fn ids(nodes: Vec<&NodeId>) -> Vec<&str> {
     nodes.into_iter().map(NodeId::as_str).collect()
 }
 
-// ── Construcción ──
+// ── Construction ──
 
 #[test]
-fn un_grafo_vacio_es_valido() {
+fn an_empty_graph_is_valid() {
     let g = Graph::new();
     assert_eq!(g.len(), 0);
     assert!(g.is_empty());
@@ -28,17 +28,17 @@ fn un_grafo_vacio_es_valido() {
 }
 
 #[test]
-fn un_grafo_de_un_solo_nodo_es_valido() {
+fn a_single_node_graph_is_valid() {
     let mut g = Graph::new();
-    g.add_node("solo").unwrap();
-    assert_eq!(ids(g.roots()), ["solo"]);
-    assert_eq!(ids(g.leaves()), ["solo"]);
+    g.add_node("alone").unwrap();
+    assert_eq!(ids(g.roots()), ["alone"]);
+    assert_eq!(ids(g.leaves()), ["alone"]);
 }
 
 #[test]
-fn los_nodos_conservan_el_orden_de_insercion() {
+fn the_nodes_keep_their_insertion_order() {
     assert_eq!(
-        lineal()
+        linear()
             .nodes()
             .iter()
             .map(NodeId::as_str)
@@ -48,8 +48,8 @@ fn los_nodos_conservan_el_orden_de_insercion() {
 }
 
 #[test]
-fn una_tuberia_lineal_tiene_la_estructura_que_dice() {
-    let g = lineal();
+fn a_linear_pipeline_has_the_structure_it_says() {
+    let g = linear();
     assert_eq!(g.len(), 3);
     assert_eq!(g.edges().len(), 2);
     assert_eq!(ids(g.roots()), ["a"]);
@@ -57,19 +57,19 @@ fn una_tuberia_lineal_tiene_la_estructura_que_dice() {
 }
 
 #[test]
-fn free_id_sufija_hasta_encontrar_hueco() {
+fn free_id_suffixes_until_it_finds_a_gap() {
     let mut g = Graph::new();
-    assert_eq!(g.free_id("limpiar").as_str(), "limpiar");
-    g.add_node("limpiar").unwrap();
-    assert_eq!(g.free_id("limpiar").as_str(), "limpiar_2");
-    g.add_node("limpiar_2").unwrap();
-    assert_eq!(g.free_id("limpiar").as_str(), "limpiar_3");
+    assert_eq!(g.free_id("clean").as_str(), "clean");
+    g.add_node("clean").unwrap();
+    assert_eq!(g.free_id("clean").as_str(), "clean_2");
+    g.add_node("clean_2").unwrap();
+    assert_eq!(g.free_id("clean").as_str(), "clean_3");
 }
 
-// ── Lo que no se puede construir ──
+// ── What cannot be built ──
 
 #[test]
-fn dos_nodos_no_pueden_llamarse_igual() {
+fn two_nodes_cannot_share_a_name() {
     let mut g = Graph::new();
     g.add_node("a").unwrap();
     assert_eq!(
@@ -80,23 +80,23 @@ fn dos_nodos_no_pueden_llamarse_igual() {
 }
 
 #[test]
-fn una_arista_necesita_que_sus_dos_extremos_existan() {
+fn an_edge_needs_both_its_ends_to_exist() {
     let mut g = Graph::new();
     g.add_node("a").unwrap();
     assert_eq!(
-        g.add_edge("a", "fantasma").unwrap_err(),
-        GraphError::UnknownNode("fantasma".into())
+        g.add_edge("a", "ghost").unwrap_err(),
+        GraphError::UnknownNode("ghost".into())
     );
     assert_eq!(
-        g.add_edge("fantasma", "a").unwrap_err(),
-        GraphError::UnknownNode("fantasma".into())
+        g.add_edge("ghost", "a").unwrap_err(),
+        GraphError::UnknownNode("ghost".into())
     );
     assert!(g.edges().is_empty());
 }
 
 #[test]
-fn la_misma_arista_no_se_pone_dos_veces() {
-    let mut g = lineal();
+fn the_same_edge_is_not_added_twice() {
+    let mut g = linear();
     assert_eq!(
         g.add_edge("a", "b").unwrap_err(),
         GraphError::DuplicateEdge {
@@ -108,8 +108,8 @@ fn la_misma_arista_no_se_pone_dos_veces() {
 }
 
 #[test]
-fn un_ciclo_se_rechaza_al_ponerlo_no_al_recorrerlo() {
-    let mut g = lineal();
+fn a_cycle_is_rejected_when_added_not_when_walked() {
+    let mut g = linear();
     assert_eq!(
         g.add_edge("c", "a").unwrap_err(),
         GraphError::WouldCycle {
@@ -121,19 +121,19 @@ fn un_ciclo_se_rechaza_al_ponerlo_no_al_recorrerlo() {
 }
 
 #[test]
-fn un_nodo_no_se_conecta_consigo_mismo() {
-    let mut g = lineal();
+fn a_node_does_not_connect_to_itself() {
+    let mut g = linear();
     assert!(matches!(
         g.add_edge("a", "a").unwrap_err(),
         GraphError::WouldCycle { .. }
     ));
 }
 
-// ── Consultas de topología ──
+// ── Topology queries ──
 
 #[test]
-fn predecesores_y_sucesores() {
-    let g = lineal();
+fn predecessors_and_successors() {
+    let g = linear();
     assert_eq!(ids(g.predecessors(&"b".into())), ["a"]);
     assert_eq!(ids(g.successors(&"b".into())), ["c"]);
     assert!(g.predecessors(&"a".into()).is_empty());
@@ -141,54 +141,54 @@ fn predecesores_y_sucesores() {
 }
 
 #[test]
-fn raices_y_hojas_con_ramas() {
+fn roots_and_leaves_with_branches() {
     let mut g = Graph::new();
-    for id in ["fuente_1", "fuente_2", "juntar", "salida"] {
+    for id in ["source_1", "source_2", "join", "output"] {
         g.add_node(id).unwrap();
     }
-    g.add_edge("fuente_1", "juntar").unwrap();
-    g.add_edge("fuente_2", "juntar").unwrap();
-    g.add_edge("juntar", "salida").unwrap();
+    g.add_edge("source_1", "join").unwrap();
+    g.add_edge("source_2", "join").unwrap();
+    g.add_edge("join", "output").unwrap();
 
-    assert_eq!(ids(g.roots()), ["fuente_1", "fuente_2"]);
-    assert_eq!(ids(g.leaves()), ["salida"]);
+    assert_eq!(ids(g.roots()), ["source_1", "source_2"]);
+    assert_eq!(ids(g.leaves()), ["output"]);
     assert_eq!(
-        ids(g.predecessors(&"juntar".into())),
-        ["fuente_1", "fuente_2"]
+        ids(g.predecessors(&"join".into())),
+        ["source_1", "source_2"]
     );
 }
 
 #[test]
-fn orden_topologico_de_una_cadena() {
-    assert_eq!(ids(lineal().topological_sort()), ["a", "b", "c"]);
+fn topological_order_of_a_chain() {
+    assert_eq!(ids(linear().topological_sort()), ["a", "b", "c"]);
 }
 
 #[test]
-fn orden_topologico_con_ramas_paralelas() {
+fn topological_order_with_parallel_branches() {
     let mut g = Graph::new();
-    for id in ["entrada", "izquierda", "derecha", "juntar"] {
+    for id in ["input", "left", "right", "join"] {
         g.add_node(id).unwrap();
     }
-    g.add_edge("entrada", "izquierda").unwrap();
-    g.add_edge("entrada", "derecha").unwrap();
-    g.add_edge("izquierda", "juntar").unwrap();
-    g.add_edge("derecha", "juntar").unwrap();
+    g.add_edge("input", "left").unwrap();
+    g.add_edge("input", "right").unwrap();
+    g.add_edge("left", "join").unwrap();
+    g.add_edge("right", "join").unwrap();
 
-    let orden = ids(g.topological_sort());
-    assert_eq!(orden.len(), 4);
-    assert_eq!(orden[0], "entrada");
-    assert_eq!(orden[3], "juntar");
+    let order = ids(g.topological_sort());
+    assert_eq!(order.len(), 4);
+    assert_eq!(order[0], "input");
+    assert_eq!(order[3], "join");
 }
 
 #[test]
-fn el_orden_topologico_es_determinista() {
-    let g = lineal();
+fn the_topological_order_is_deterministic() {
+    let g = linear();
     assert_eq!(ids(g.topological_sort()), ids(g.topological_sort()));
 }
 
 #[test]
-fn nodos_sueltos_tambien_salen_en_el_orden() {
-    let mut g = lineal();
-    g.add_node("suelto").unwrap();
-    assert_eq!(ids(g.topological_sort()), ["a", "b", "c", "suelto"]);
+fn loose_nodes_also_show_up_in_the_order() {
+    let mut g = linear();
+    g.add_node("loose").unwrap();
+    assert_eq!(ids(g.topological_sort()), ["a", "b", "c", "loose"]);
 }

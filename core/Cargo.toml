@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Optional, and off by default: the core still compiles with nothing. Whoever
+# has to put these types on a wire — `transport` — turns it on.
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
 
 [[test]]
 name = "unit"

@@ -1,84 +1,72 @@
-//! Lo que viaja por una arista.
+//! What travels along an edge.
 //!
-//! Es el precio de que el núcleo ejecute: si el motor está en Rust, los datos
-//! tienen que tener una forma que Rust entienda.
+//! The price of the core doing the executing: if the engine is in Rust, the data
+//! has to have a shape Rust understands. Five variants are data the core
+//! understands and can compare — no `Json`, which would pull in `serde_json`,
+//! and no shaped `Tensor`, which nobody produces.
 //!
-//! Cinco de sus variantes son datos que el núcleo entiende y puede comparar.
-//! No hay `Json` porque pediría `serde_json` y el núcleo no depende de nada, ni
-//! `Tensor` con forma porque nadie produce uno.
-//!
-//! La sexta, [`Value::Opaque`], es de otra naturaleza: transporta algo que el
-//! núcleo **no mira**. Existe porque hay valores que no pueden convertirse sin
-//! destruirse — un tensor de torch a mitad de una gráfica de autograd es el
-//! caso que la motivó: pasarlo a números y de vuelta lo deja sin `grad_fn`.
+//! The sixth, [`Value::Opaque`], is of another nature: it carries something the
+//! core **does not look at**. It exists because some values cannot be converted
+//! without being destroyed — a torch tensor mid-autograd-graph round-tripped
+//! through numbers comes back without its `grad_fn`.
 
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-/// Un dato que cruza de un nodo al siguiente.
+/// A datum crossing from one node to the next.
 ///
-/// `Arc` donde los datos pesan, porque un valor se clona en cada arista y
-/// clonar no debe copiar.
+/// `Arc` wherever the data is heavy, because a value is cloned on every edge
+/// and cloning must not copy.
 #[derive(Clone)]
 pub enum Value {
-    /// Nada. Lo que recibe un nodo raíz cuando no le pasas entrada.
+    /// Nothing. What a root node receives when you pass it no input.
     Null,
-    /// Un número.
+    /// A number.
     Number(f64),
-    /// Texto UTF-8.
+    /// UTF-8 text.
     Text(Arc<str>),
-    /// Bytes sin interpretar.
+    /// Uninterpreted bytes.
     Bytes(Arc<Vec<u8>>),
-    /// Varios valores en orden.
+    /// Several values in order.
     List(Arc<Vec<Value>>),
-    /// Algo que el núcleo transporta sin mirarlo. Quien lo metió sabe qué es.
+    /// Something the core carries without looking at it, as `dyn Any` so the
+    /// core need not depend on PyO3.
     ///
-    /// Es la vía por la que un valor cruza el grafo **sin convertirse**, y el
-    /// tipo es `dyn Any` y no algo de Python porque el núcleo no depende de
-    /// PyO3 ni va a empezar: quien lo mete guarda dentro lo que quiera y lo
-    /// recupera con `downcast_ref`.
-    ///
-    /// Lo que significa la variante, y de donde sale todo lo demás: **este
-    /// valor solo existe en este proceso y en este run**. De ahí que no se
-    /// pueda hashear por contenido (luego el nodo no se memoiza), ni
-    /// serializar (luego no viaja a otra máquina), ni comparar salvo por
-    /// identidad. Las tres consecuencias son las correctas: memoizar un tensor
-    /// a mitad de autograd sería un error, no una optimización.
+    /// It **only exists in this process and in this run**, and everything else
+    /// follows: no content hash, no serialization, and no comparison but
+    /// identity.
     Opaque(Arc<dyn Any + Send + Sync>),
-    /// Varios valores con nombre. Es lo que recibe un nodo al que llegan
-    /// varias aristas, con la clave del nodo que produjo cada uno.
+    /// Several named values: what a node with several incoming edges receives,
+    /// keyed by the node that produced each one.
     ///
-    /// **Ordenado**, y no por capricho: un `HashMap` itera distinto en cada
-    /// proceso, así que pasarlo a lista daría un orden distinto cada vez y el
-    /// hash por contenido —cuando llegue la caché— sería inservible. Los pares
-    /// van en el orden en que se declararon las aristas, que es además lo
-    /// simétrico con un `dict` de Python.
+    /// **Ordered**, in the edges' declaration order: a `HashMap` iterates
+    /// differently in each process, so a content hash would be useless.
     Map(Arc<Vec<(String, Value)>>),
 }
 
 impl Value {
-    /// Un número.
+    /// A number.
     pub fn number(x: f64) -> Self {
         Self::Number(x)
     }
 
-    /// Texto.
+    /// Text.
     pub fn text(s: impl AsRef<str>) -> Self {
         Self::Text(Arc::from(s.as_ref()))
     }
 
-    /// Una lista.
+    /// A list.
     pub fn list(values: impl Into<Vec<Value>>) -> Self {
         Self::List(Arc::new(values.into()))
     }
 
-    /// Un mapa, en el orden en que le pases los pares.
+    /// A map, in the order you pass the pairs.
     pub fn map(pairs: impl Into<Vec<(String, Value)>>) -> Self {
         Self::Map(Arc::new(pairs.into()))
     }
 
-    /// El valor guardado bajo esa clave, si es un mapa y la tiene.
+    /// The value stored under that key, if this is a map and has it.
     pub fn get(&self, key: &str) -> Option<&Value> {
         let Self::Map(pairs) = self else {
             return None;
@@ -86,7 +74,7 @@ impl Value {
         pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    /// Los valores de un mapa, en orden — pasar un mapa a lista es esto.
+    /// A map's values, in order — flattening a map to a list is this.
     pub fn values(&self) -> Option<Vec<&Value>> {
         let Self::Map(pairs) = self else {
             return None;
@@ -94,12 +82,12 @@ impl Value {
         Some(pairs.iter().map(|(_, v)| v).collect())
     }
 
-    /// Envuelve algo para que cruce el grafo sin que nadie lo toque.
+    /// Wraps something so it crosses the graph untouched.
     pub fn opaque(x: impl Any + Send + Sync) -> Self {
         Self::Opaque(Arc::new(x))
     }
 
-    /// Lo que hay dentro de un opaco, si es de este tipo.
+    /// What is inside an opaque, if it is of this type.
     pub fn downcast<T: Any + Send + Sync>(&self) -> Option<&T> {
         let Self::Opaque(inner) = self else {
             return None;
@@ -107,7 +95,21 @@ impl Value {
         inner.downcast_ref::<T>()
     }
 
-    /// Cómo llamar a esta variante en un mensaje de error.
+    /// Whether this value, and everything inside it, can leave this process.
+    ///
+    /// `false` for an [`Opaque`](Self::Opaque) at any depth: what it carries
+    /// only exists here. Whoever is about to send it asks first, so the refusal
+    /// names the reason instead of coming out of a serializer.
+    pub fn travels(&self) -> bool {
+        match self {
+            Self::Opaque(_) => false,
+            Self::List(items) => items.iter().all(Self::travels),
+            Self::Map(pairs) => pairs.iter().all(|(_, value)| value.travels()),
+            Self::Null | Self::Number(_) | Self::Text(_) | Self::Bytes(_) => true,
+        }
+    }
+
+    /// What to call this variant in an error message.
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "null",
@@ -122,10 +124,8 @@ impl Value {
 }
 
 impl PartialEq for Value {
-    /// Dos opacos son iguales solo si son **el mismo**: el núcleo no sabe qué
-    /// llevan dentro, así que no puede comparar su contenido. Un valor clonado
-    /// al recorrer una arista conserva el mismo `Arc`, que es el caso que
-    /// importa; envolver dos veces el mismo objeto da dos valores distintos.
+    /// Two opaques are equal only if they are **the same one**: the core cannot
+    /// compare contents it does not look at.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Null, Self::Null) => true,
@@ -149,7 +149,6 @@ impl fmt::Debug for Value {
             Self::Bytes(b) => write!(f, "Bytes({} bytes)", b.len()),
             Self::List(items) => f.debug_tuple("List").field(items).finish(),
             Self::Map(pairs) => f.debug_tuple("Map").field(pairs).finish(),
-            // No se imprime lo que lleva dentro porque no se sabe qué es.
             Self::Opaque(_) => f.write_str("Opaque(..)"),
         }
     }
@@ -164,5 +163,100 @@ impl From<&str> for Value {
 impl From<f64> for Value {
     fn from(x: f64) -> Self {
         Self::Number(x)
+    }
+}
+
+/// What a value looks like once it leaves this process.
+///
+/// A shadow of [`Value`] and not `Value` itself for one reason worth the fifty
+/// lines: **it has no opaque variant**. That what only exists here cannot be
+/// sent stops being a check somebody has to remember and becomes a type that
+/// cannot be built. The borrowed halves are so that sending copies nothing.
+#[cfg(feature = "serde")]
+mod shadow {
+    use super::Value;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::borrow::Cow;
+    use std::sync::Arc;
+
+    #[derive(Serialize, Deserialize)]
+    pub(super) enum Shadow<'a> {
+        Null,
+        Number(f64),
+        Text(Cow<'a, str>),
+        Bytes(Cow<'a, [u8]>),
+        List(Vec<Shadow<'a>>),
+        Map(Vec<(Cow<'a, str>, Shadow<'a>)>),
+    }
+
+    /// The one thing that cannot become a [`Shadow`].
+    pub(super) struct Opaque;
+
+    impl<'a> TryFrom<&'a Value> for Shadow<'a> {
+        type Error = Opaque;
+
+        fn try_from(value: &'a Value) -> Result<Self, Opaque> {
+            Ok(match value {
+                Value::Null => Shadow::Null,
+                Value::Number(x) => Shadow::Number(*x),
+                Value::Text(s) => Shadow::Text(Cow::Borrowed(s)),
+                Value::Bytes(bytes) => Shadow::Bytes(Cow::Borrowed(bytes)),
+                Value::List(items) => Shadow::List(
+                    items
+                        .iter()
+                        .map(Shadow::try_from)
+                        .collect::<Result<_, _>>()?,
+                ),
+                Value::Map(pairs) => Shadow::Map(
+                    pairs
+                        .iter()
+                        .map(|(key, value)| Ok((Cow::Borrowed(key.as_str()), value.try_into()?)))
+                        .collect::<Result<_, Opaque>>()?,
+                ),
+                Value::Opaque(_) => return Err(Opaque),
+            })
+        }
+    }
+
+    impl From<Shadow<'_>> for Value {
+        fn from(shadow: Shadow<'_>) -> Self {
+            match shadow {
+                Shadow::Null => Value::Null,
+                Shadow::Number(x) => Value::Number(x),
+                Shadow::Text(s) => Value::text(s),
+                Shadow::Bytes(bytes) => Value::Bytes(Arc::new(bytes.into_owned())),
+                Shadow::List(items) => {
+                    Value::list(items.into_iter().map(Value::from).collect::<Vec<_>>())
+                }
+                Shadow::Map(pairs) => Value::map(
+                    pairs
+                        .into_iter()
+                        .map(|(key, value)| (key.into_owned(), value.into()))
+                        .collect::<Vec<_>>(),
+                ),
+            }
+        }
+    }
+
+    impl Serialize for Value {
+        /// # Errors
+        /// If anything inside only exists in this process. Ask
+        /// [`travels`](Value::travels) first and the refusal reads better.
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            Shadow::try_from(self)
+                .map_err(|Opaque| {
+                    serde::ser::Error::custom(
+                        "an opaque value does not leave this process: what it carries \
+                         only exists here",
+                    )
+                })?
+                .serialize(serializer)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Value {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            Shadow::deserialize(deserializer).map(Value::from)
+        }
     }
 }

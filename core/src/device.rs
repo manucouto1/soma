@@ -1,48 +1,44 @@
-//! Dónde corre un nodo.
+//! Where a node runs.
 //!
-//! Es un enum y no un `String` validado porque así un typo es un error **al
-//! declarar**: `.on("cude:0")` falla donde se escribió, con el nombre delante,
-//! en vez de convertirse en un `RuntimeError` de torch a mitad de un run. Un
-//! `Device(String)` que solo comprobara la forma daría `cude:0` por bueno.
+//! An enum and not a validated `String` so that a typo is an error **at
+//! declaration time**: `.on("cude:0")` fails where it was written, instead of
+//! turning into a torch `RuntimeError` halfway through a run.
 //!
-//! El precio es que el vocabulario pasa a ser nuestro y no de torch: un
-//! backend que no esté aquí no se puede declarar hasta que lo añadamos. Sale
-//! barato, y es la razón de que se pueda pagar: **el núcleo no hace `match`
-//! sobre un `Device` en ninguna otra parte**. No decide nada según cuál sea,
-//! solo lo transporta hasta el nodo. Añadir una variante son tres líneas —el
-//! enum, un brazo de [`FromStr`] y otro de [`Display`](fmt::Display)— y ningún
-//! sitio más deja de compilar.
-//!
-//! Solo están las que tienen consumidor hoy. `mps`, `xpu` y compañía entran el
-//! día que alguien las ejecute.
+//! The price is that the vocabulary becomes ours rather than torch's, and it can
+//! be paid because **the core does not `match` on a `Device` anywhere else** —
+//! it only carries it to the node. Adding a variant is three lines and nowhere
+//! else stops compiling. Only the ones with a consumer today are here.
 
 use std::fmt;
 use std::str::FromStr;
 
-/// El sitio donde se ejecuta un nodo.
+/// The place where a node executes.
+///
+/// It travels **as text**, through [`Display`](fmt::Display) and [`FromStr`]:
+/// a variant number would be shorter and would break silently the day the enum
+/// grows in the middle.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(into = "String", try_from = "String")
+)]
 pub enum Device {
-    /// El procesador.
+    /// The processor.
     Cpu,
-    /// Una GPU de CUDA, por índice.
-    ///
-    /// El índice es obligatorio a propósito. En torch, `"cuda"` a secas
-    /// significa «la GPU actual», que es estado del hilo; para quien coloca,
-    /// «la actual» no es una colocación. Una declaración ambigua no se puede
-    /// escribir.
+    /// A CUDA GPU, by index. Mandatory: bare `"cuda"` is thread state in torch,
+    /// and to whoever is placing that is not a placement.
     Cuda(usize),
-    /// El dispositivo `meta` de torch: forma y dtype, sin memoria ni cómputo.
-    ///
-    /// Está porque es el único que permite probar que una colocación llega y
-    /// se obedece **en cualquier máquina**, sin GPU.
+    /// Torch's `meta` device: shape and dtype, without memory or compute. The
+    /// only one that proves a placement is obeyed on any machine.
     Meta,
 }
 
 impl FromStr for Device {
     type Err = DeviceError;
 
-    /// `cpu`, `cuda:0`, `meta`. Tal cual los escribe torch, para que lo que
-    /// llega al nodo se le pueda pasar a `.to()` sin traducir nada.
+    /// `cpu`, `cuda:0`, `meta`. Exactly as torch writes them, so what reaches
+    /// the node can be handed to `.to()` without translating anything.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.is_empty() {
             return Err(DeviceError::Malformed(s.to_string()));
@@ -65,6 +61,20 @@ impl FromStr for Device {
     }
 }
 
+impl From<Device> for String {
+    fn from(device: Device) -> Self {
+        device.to_string()
+    }
+}
+
+impl TryFrom<String> for Device {
+    type Error = DeviceError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 impl fmt::Display for Device {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -75,16 +85,14 @@ impl fmt::Display for Device {
     }
 }
 
-// ── Lo que puede salir mal al nombrar un dispositivo ──
-
-/// Por qué eso no nombra un sitio donde ejecutar.
+/// Why that does not name a place to execute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceError {
-    /// No conocemos ese tipo de dispositivo.
+    /// We do not know that kind of device.
     Unknown(String),
-    /// El tipo es de los nuestros, pero lo que lo acompaña no.
+    /// The kind is one of ours, but what comes with it is not.
     Malformed(String),
-    /// Falta decir cuál de todos.
+    /// It does not say which one.
     NeedsIndex(String),
 }
 
@@ -93,16 +101,16 @@ impl fmt::Display for DeviceError {
         match self {
             Self::Unknown(kind) => write!(
                 f,
-                "no conozco el dispositivo `{kind}`; hoy hay `cpu`, `cuda:N` y `meta`"
+                "unknown device `{kind}`; today there are `cpu`, `cuda:N` and `meta`"
             ),
             Self::Malformed(s) => write!(
                 f,
-                "`{s}` no tiene forma de dispositivo; se escribe `cpu`, `cuda:N` o `meta`"
+                "`{s}` is not shaped like a device; write `cpu`, `cuda:N` or `meta`"
             ),
             Self::NeedsIndex(kind) => write!(
                 f,
-                "`{kind}` no dice cuál: escribe `{kind}:0`. «El actual» es estado \
-                 del hilo, no una colocación"
+                "`{kind}` does not say which one: write `{kind}:0`. \"The current one\" \
+                 is thread state, not a placement"
             ),
         }
     }

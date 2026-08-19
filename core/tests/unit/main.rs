@@ -8,6 +8,7 @@ mod device;
 mod doubles;
 mod execution;
 mod graph;
+mod host;
 mod placement;
 mod plan;
 mod value;
