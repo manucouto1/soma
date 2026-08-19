@@ -1,96 +1,96 @@
 # soma-next
 
-Re-derivación de [Soma](/mnt/cluster/projects/soma) escrita a mano, un caso de
-uso cada vez. El objetivo no es un diseño mejor: es **autoría**. Un sistema que
-diseñaste tú lo sostienes en la cabeza aunque tenga trescientos tipos; uno que
-no, no — y por eso el original, que funciona y está publicado, dejó de ser
-mantenible por su autor.
+A re-derivation of [Soma](/mnt/cluster/projects/soma) written by hand, one use
+case at a time. The goal is not a better design: it is **authorship**. A system
+you designed yourself you can hold in your head even with three hundred types in
+it; one you did not, you cannot — and that is why the original, which works and
+is published, stopped being maintainable by its author.
 
-Objetivo secundario, no negociable: aprender Rust escribiéndolo.
+Secondary goal, non-negotiable: learn Rust by writing it.
 
-## Reglas
+## Rules
 
-**Rebanadas verticales, no capas de crate.** Nada se escribe sin un consumidor
-real *hoy*. Construir un crate entero antes de que algo lo use es cómo el
-original acabó con 14 traits de un solo implementor y 2 de ninguno.
+**Vertical slices, not crate layers.** Nothing is written without a real
+consumer *today*. Building a whole crate before anything uses it is how the
+original ended up with 14 traits with a single implementor and 2 with none.
 
-**Taxonomía de tipos** — la regla que evita la sopa de `dyn Trait`:
+**Type taxonomy** — the rule that avoids the `dyn Trait` soup:
 
-- **enum** cuando el conjunto es cerrado y lo conoces tú. Es el lenguaje del
-  dominio, y el compilador lleva la cuenta al añadir variantes.
-- **trait** solo cuando la implementación la pone *otro* (el usuario). Si no
-  puedes nombrar dos implementors reales hoy, es una struct. Y dos traits con
-  un método del mismo nombre a la vista dejan ese nombre inutilizable
-  (`error[E0034]`), aunque las firmas difieran.
-- **struct con typestate** para los invariantes: que un estado imposible no se
-  pueda escribir, en vez de validarlo.
+- **enum** when the set is closed and you know it. It is the domain's language,
+  and the compiler keeps track when a variant is added.
+- **trait** only when the implementation is supplied by *someone else* (the
+  user). If you cannot name two real implementors today, it is a struct. And two
+  traits with a same-named method in scope make that name unusable
+  (`error[E0034]`), even when the signatures differ.
+- **struct with typestate** for the invariants: so an impossible state cannot be
+  written, rather than validated.
 
-**Un fichero por tipo.** El tipo, sus `impl` inherentes y los errores que
-producen sus operaciones, juntos. Un `impl` inherente **nunca** se parte entre
-ficheros: si te apetece partirlo, la operación probablemente no era un método
-de ese tipo (fue el caso de `run`, que necesitaba grafo *y* catálogo *y*
-entrada, y acabó siendo una función de `execution.rs`).
+**One file per type.** The type, its inherent `impl`s and the errors its
+operations produce, together. An inherent `impl` is **never** split across
+files: if you feel like splitting it, the operation probably was not a method of
+that type (that was the case of `run`, which needed graph *and* catalog *and*
+input, and ended up a function in `execution.rs`).
 
-Lo que en Rust no se puede sostener, y conviene saberlo si vienes de Java: el
-comportamiento no pertenece a un tipo, pertenece al par **(tipo, trait)**.
-`impl Filter for PyFilter` vive en otro crate. Los `impl` de trait se dispersan
-por necesidad y se buscan por el trait, no por el tipo.
+What cannot be sustained in Rust, and is worth knowing if you come from Java:
+behaviour does not belong to a type, it belongs to the **(type, trait)** pair.
+`impl Filter for PyFilter` lives in another crate. Trait `impl`s scatter out of
+necessity and are looked up by the trait, not by the type.
 
-**Los tests viven fuera de `src/`.** Son otro crate: solo ven la API pública,
-así que no pueden pasar apoyándose en lo privado. Un binario de test por tipo
-(`tests/unit/main.rs` con un `mod` por módulo), no uno por fichero.
+**The tests live outside `src/`.** They are another crate: they only see the
+public API, so they cannot pass by leaning on anything private. One test binary
+per type (`tests/unit/main.rs` with one `mod` per module), not one per file.
 
-**El núcleo no sabe de Python.** `#[pyclass]` no entra en `core/`. En cuanto un
-tipo del núcleo lo lleva, deja de poder usarse sin un intérprete cargado.
-`python/` traduce; si una regla del dominio acaba escrita ahí, está mal puesta.
+**The core knows nothing about Python.** `#[pyclass]` does not go into `core/`.
+The moment a core type carries one, it can no longer be used without an
+interpreter loaded. `python/` translates; if a domain rule ends up written
+there, it is in the wrong place.
 
-## El original como oráculo, no como plantilla
+## The original as an oracle, not a template
 
-`/mnt/cluster/projects/soma` está **congelado**: consulta y bugfixes, cero
-features. Sus 31.994 líneas de test son la especificación ejecutable de lo que
-tiene que ser verdad.
+`/mnt/cluster/projects/soma` is **frozen**: consultation and bugfixes, zero
+features. Its 31,994 lines of tests are the executable specification of what has
+to be true.
 
-Se leen como **cuestionario, no como código**. Un test viejo mezcla dos cosas:
-qué debe ser verdad (conocimiento, irremplazable) y cómo se invoca (diseño, que
-se decide aquí). Copiarlos tal cual recrearía la API vieja, que es justo lo que
-no queremos. De cada fichero se extrae la lista de garantías y se contesta a
-cada una con la forma de llamada que decidamos.
+They are read as a **questionnaire, not as code**. An old test mixes two things:
+what has to be true (knowledge, irreplaceable) and how it is invoked (design,
+which is decided here). Copying them as they are would recreate the old API,
+which is exactly what we do not want. From each file the list of guarantees is
+extracted and each one answered with whatever call shape we decide.
 
-**El DSL es la forma normal de escribir un grafo**, en los dos lenguajes:
-`Graph.somatize(a >> (b | c) >> d)` en Python, `(a >> (b | c) >> d).somatize()`
-en Rust. `node()`/`edge()` quedan para cuando la topología se construye en un
-bucle o viene de fuera.
+**The DSL is the normal way of writing a graph**, in both languages:
+`Graph.somatize(a >> (b | c) >> d)` in Python, `(a >> (b | c) >> d).somatize()`
+in Rust. `node()`/`edge()` remain for when the topology is built in a loop or
+comes from outside.
 
-**Un nodo es uno solo**, en los dos lenguajes: `forward(input, ctx)` devuelve
-`Done(valor)` o `Await([peticiones])`. No hay un tipo "filtro" y otro "step" —
-un filtro es un nodo que siempre contesta `Done`, y eso lo dice su transición,
-no su tipo.
+**A node is one single thing**, in both languages: `forward(input, ctx)` returns
+`Done(value)` or `Await([requests])`. There is no "filter" type and "step" type
+— a filter is a node that always answers `Done`, and that is said by its
+transition, not by its type.
 
-## Comandos
+## Commands
 
 ```bash
-conda activate mos                  # PyO3 no compila fuera de este env
+conda activate mos                  # PyO3 does not compile outside this env
 cargo test --workspace
 cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check
 cd python && maturin develop && python -m pytest tests/ -q
 ```
 
-## Estado
+## Status
 
-Once casos de uso cerrados: el grafo, el motor, el plan, los abanicos, el DSL,
-un solo contrato de nodo, `Opaque`, las waves, el dispositivo y el
-entrenamiento. Un grafo se declara con `>>`, `|` y `.on("cuda:0")`, se ejecuta
-en Rust, y se entrena desde fuera con `soma_next.torch.Trainer`. Ver
-`docs/casos-de-uso.md`.
+Eleven use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+single node contract, `Opaque`, the waves, the device and training. A graph is
+declared with `>>`, `|` and `.on("cuda:0")`, executed in Rust, and trained from
+outside with `soma_next.torch.Trainer`. See `docs/use-cases.md`.
 
-**Cuatro hechos ortogonales**, y confundirlos es el error fácil: `Graph` dice
-**qué** hay, `Catalog` **quién** lo ejecuta, `Placement` **dónde**, y `Plan`
-**cuándo**. El dispositivo no vive en el plan a propósito.
+**Four orthogonal facts**, and confusing them is the easy mistake: `Graph` says
+**what** exists, `Catalog` **who** executes it, `Placement` **where**, and
+`Plan` **when**. The device deliberately does not live in the plan.
 
-**Tres niveles, y ninguno sabe que existe el de arriba**: el grafo es una red
-—escala de un `forward`—, el `Trainer` es un entrenamiento —escala de una
-tarde—, y N entrenamientos son una lista de Python, no un tipo y desde luego no
-un grafo. Un grafo se gana el sueldo cuando hay dependencias que declarar.
+**Three levels, and none knows the one above exists**: the graph is a network —
+the scale of one `forward` —, the `Trainer` is a training run — the scale of an
+afternoon —, and N training runs are a Python list, not a type and certainly not
+a graph. A graph earns its keep when there are dependencies to declare.
 
-Lo siguiente: micro-lotes, y después repartir un grafo entre hosts. Ver el
-informe de distribución para el orden completo.
+Next up: micro-batches, and after that spreading a graph across hosts. See the
+distribution report for the full order.
