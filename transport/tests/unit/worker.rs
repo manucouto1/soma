@@ -892,7 +892,22 @@ use std::io::BufRead;
 /// It reports the address on `stdout` — where there is no wire — because it is
 /// asked for port `0`: picking a fixed number in a test is asking for two
 /// concurrent runs to collide.
-fn standing(empty: bool) -> (std::process::Child, String) {
+/// A worker standing on a port, and the guarantee that it stops.
+///
+/// A `Drop` and not a `kill()` on the last line of each test: a test that fails
+/// never reaches its last line, and the orphan keeps the test binary's inherited
+/// `stderr` open — so `cargo test` waits on that pipe instead of reporting the
+/// failure, until whatever timeout is watching gives up.
+struct Standing(std::process::Child);
+
+impl Drop for Standing {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn standing(empty: bool) -> (Standing, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_test-worker"));
     cmd.args(["--listen", "127.0.0.1:0"]);
     if empty {
@@ -913,12 +928,12 @@ fn standing(empty: bool) -> (std::process::Child, String) {
         .unwrap_or_else(|| panic!("it did not say where it listens: {line:?}"))
         .trim()
         .to_string();
-    (child, addr)
+    (Standing(child), addr)
 }
 
 #[test]
 fn a_standing_worker_serves_whoever_connects() {
-    let (mut process, addr) = standing(false);
+    let (_standing, addr) = standing(false);
     let w = Worker::connect(&addr).unwrap();
 
     let g = graph_with(&["where"], &[]);
@@ -927,7 +942,6 @@ fn a_standing_worker_serves_whoever_connects() {
     let output = run(&g, &c, &p, &w, Value::Null).unwrap();
 
     assert_ne!(number(&output) as u32, std::process::id());
-    let _ = process.kill();
 }
 
 #[test]
@@ -935,7 +949,7 @@ fn the_worker_outlives_the_client_leaving() {
     // What separates a worker from a subprocess: two different clients, one
     // after the other, against the same process. If dying with the first were
     // the behaviour, the second could not even connect.
-    let (mut process, addr) = standing(false);
+    let (_standing, addr) = standing(false);
     let g = graph_with(&["where"], &[]);
     let c = catalog();
     let p = on_hosts(&[("where", "worker1")]);
@@ -954,12 +968,11 @@ fn the_worker_outlives_the_client_leaving() {
         "it is not the same process from one client to the next"
     );
     assert_ne!(first as u32, std::process::id());
-    let _ = process.kill();
 }
 
 #[test]
 fn a_standing_empty_worker_is_provisioned_and_executes() {
-    let (mut process, addr) = standing(true);
+    let (_standing, addr) = standing(true);
     let w = Worker::connect(&addr)
         .unwrap()
         .carrying(adds("x=5"), "rust");
@@ -973,7 +986,6 @@ fn a_standing_empty_worker_is_provisioned_and_executes() {
         number(&run(&g, &c, &p, &w, Value::number(0.0)).unwrap()),
         5.0
     );
-    let _ = process.kill();
 }
 
 #[test]
@@ -981,7 +993,7 @@ fn the_provisioned_catalog_survives_from_one_client_to_the_next() {
     // The `have`/`want` cache, now between clients and not only between runs:
     // the second client announces the same artifact and the worker answers that
     // it already has it. `times` counts how many catalogs were built there.
-    let (mut process, addr) = standing(true);
+    let (_standing, addr) = standing(true);
     let mut c = Catalog::new();
     c.insert("times", Arc::new(Add(0.0)));
     let g = graph_with(&["times"], &[]);
@@ -996,7 +1008,6 @@ fn the_provisioned_catalog_survives_from_one_client_to_the_next() {
 
     assert_eq!(count(), 1.0);
     assert_eq!(count(), 1.0, "the second client resent the artifact");
-    let _ = process.kill();
 }
 
 #[test]
@@ -1005,7 +1016,7 @@ fn a_client_is_not_left_working_against_another_ones_catalog() {
     // different artifacts. The second replaces it, and the first has to be told
     // — executing whatever is now there would run somebody else's
     // implementations, and with these ids it would do it in silence.
-    let (mut process, addr) = standing(true);
+    let (_standing, addr) = standing(true);
     let first = Worker::connect(&addr)
         .unwrap()
         .carrying(adds("x=5"), "rust");
@@ -1034,7 +1045,6 @@ fn a_client_is_not_left_working_against_another_ones_catalog() {
 
     assert!(complained.contains("text:x=100"), "{complained}");
     assert!(complained.contains("text:x=5"), "{complained}");
-    let _ = process.kill();
 }
 
 #[test]
@@ -1049,7 +1059,7 @@ fn two_simultaneous_connections_against_the_same_standing_worker() {
     // connections, a single worker. If it served one at a time, the second
     // would sit in the `accept` queue waiting for the first to release its own
     // — and the first does not release it until the `forward` finishes.
-    let (mut process, addr) = standing(false);
+    let (_standing, addr) = standing(false);
     let (one, other) = (
         Worker::connect(&addr).unwrap(),
         Worker::connect(&addr).unwrap(),
@@ -1076,5 +1086,4 @@ fn two_simultaneous_connections_against_the_same_standing_worker() {
             ("right".to_string(), Value::number(1.0)),
         ])
     );
-    let _ = process.kill();
 }

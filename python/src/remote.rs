@@ -15,7 +15,7 @@
 //! what an `Opaque` carries, or what a serialized catalog is.
 
 use crate::node::{PyDriver, PyNode};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use soma_next_core::Catalog;
@@ -188,22 +188,12 @@ impl Provision for PyProvision {
                     ProvisionError::Broken("provide() must return (nodes, driver)".into())
                 })?;
 
-            let dict = nodes
-                .bind(py)
-                .downcast::<PyDict>()
-                .map_err(|_| {
-                    ProvisionError::Broken("the nodes have to be a dict of id → node".into())
-                })?
-                .clone();
-
-            let mut catalog = Catalog::new();
-            for (id, obj) in dict.iter() {
-                let id: String = id.extract().map_err(|_| {
-                    ProvisionError::Broken("the catalog's keys have to be text".into())
-                })?;
-                let node = PyNode::new(&obj).map_err(|e| ProvisionError::Broken(e.to_string()))?;
-                catalog.insert(id, Arc::new(node));
-            }
+            let dict = nodes.bind(py).downcast::<PyDict>().map_err(|_| {
+                ProvisionError::Broken("the nodes have to be a dict of id → node".into())
+            })?;
+            // The same walk as a worker that brings its own catalog: how the
+            // nodes got here is not what tells them apart.
+            let catalog = catalog_of(dict).map_err(|e| ProvisionError::Broken(e.to_string()))?;
 
             let provisioned = Provisioned::new(catalog);
             Ok(match driver {
@@ -218,11 +208,15 @@ impl Provision for PyProvision {
     }
 }
 
-/// The nodes as a catalog the engine can execute.
+/// The nodes as a catalog the engine can execute. The one walk, for a worker
+/// that brings its catalog and for one that is sent it alike.
 fn catalog_of(nodes: &Bound<'_, PyDict>) -> PyResult<Catalog> {
     let mut catalog = Catalog::new();
     for (id, obj) in nodes.iter() {
-        catalog.insert(id.extract::<String>()?, Arc::new(PyNode::new(&obj)?));
+        let named = id.extract::<String>().map_err(|_| {
+            PyTypeError::new_err("a catalog is a dict of id → node, and a key is not text")
+        })?;
+        catalog.insert(named, Arc::new(PyNode::new(&obj)?));
     }
     Ok(catalog)
 }

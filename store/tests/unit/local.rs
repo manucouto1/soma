@@ -310,3 +310,28 @@ fn a_blobs_file_still_says_which_algorithm_it_is() {
         "{found}"
     );
 }
+
+#[test]
+fn many_threads_writing_at_once_do_not_tread_on_each_other() {
+    // Every write lands somewhere else and is renamed into place, and two of
+    // them picking the same landing spot would give one the other's bytes. It
+    // exercises the property rather than forcing it: what makes it hold is that
+    // the spot comes from a counter, and a counter cannot be read twice.
+    let (store, _where) = store();
+    let payloads: Vec<Vec<u8>> = (0..32u8).map(|n| vec![n; 4096]).collect();
+
+    let digests: Vec<Digest> = std::thread::scope(|scope| {
+        let running: Vec<_> = payloads
+            .iter()
+            .map(|bytes| scope.spawn(|| store.put(bytes).unwrap()))
+            .collect();
+        running
+            .into_iter()
+            .map(|thread| thread.join().expect("no writer panicked"))
+            .collect()
+    });
+
+    for (digest, bytes) in digests.iter().zip(&payloads) {
+        assert_eq!(store.get(digest).unwrap().as_ref(), Some(bytes));
+    }
+}

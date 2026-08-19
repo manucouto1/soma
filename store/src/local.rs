@@ -25,7 +25,13 @@ use crate::{Bound, Digest, Meta, Store, StoreError};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// So no two writes of this process pick the same landing spot. A counter and
+/// not a clock: the pid separates processes, but two threads can read the same
+/// nanosecond, and then one of them lands on the other's bytes.
+static LANDINGS: AtomicU64 = AtomicU64::new(0);
 
 /// A store kept in a directory.
 pub struct Local {
@@ -62,10 +68,7 @@ impl Local {
         let landing = self.root.join("tmp").join(format!(
             "{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|since| since.as_nanos())
-                .unwrap_or(0)
+            LANDINGS.fetch_add(1, Ordering::Relaxed)
         ));
         fs::write(&landing, bytes).map_err(io_error)?;
         fs::rename(&landing, at).map_err(io_error)
