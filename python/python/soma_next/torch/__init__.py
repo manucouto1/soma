@@ -1,26 +1,26 @@
-"""Lo que solo tiene sentido con torch delante: entrenar.
+"""What only makes sense with torch in front of you: training.
 
-El núcleo no sabe qué es una pérdida, ni un gradiente, ni un optimizador, y no
-va a saberlo — escribir esto de forma neutral pediría un `Backend` con un solo
-implementor. Así que vive aquí, en Python, y `core/` no cambia ni una línea::
+The core does not know what a loss is, nor a gradient, nor an optimizer, and it
+is not going to — writing this neutrally would ask for a `Backend` with a single
+implementor. So it lives here, in Python, and `core/` does not change a line::
 
     from soma_next import Graph
     from soma_next.torch import Trainer, parameters
 
-    g = Graph.somatize(Encoder().on("cuda:0") >> Cabeza().on("cuda:0"))
-    t = Trainer(g, objetivo=cross_entropy,
-                optimizador=torch.optim.Adam(parameters(g), lr=1e-3))
-    t.fit(datos, epocas=10)
+    g = Graph.somatize(Encoder().on("cuda:0") >> Head().on("cuda:0"))
+    t = Trainer(g, objective=cross_entropy,
+                optimizer=torch.optim.Adam(parameters(g), lr=1e-3))
+    t.fit(data, epochs=10)
 
-Entrenar no toca el grafo: después de esto sus nodos, sus aristas, su plan y su
-colocación son los mismos. Lo que cambia son los pesos, que viven dentro de los
-nodos y siempre vivieron ahí.
+Training does not touch the graph: afterwards its nodes, its edges, its plan and
+its placement are the same. What changes are the weights, which live inside the
+nodes and always did.
 
-Que el paquete se llame `torch` no pisa al de verdad: en Python 3 los imports
-son absolutos, así que `import torch` aquí dentro trae el de siempre.
+That the package is called `torch` does not shadow the real one: in Python 3
+imports are absolute, so `import torch` in here brings the usual one.
 """
 
 from soma_next.torch._params import parameters
-from soma_next.torch._trainer import Resultado, Trainer
+from soma_next.torch._trainer import Result, Trainer
 
-__all__ = ["Resultado", "Trainer", "parameters"]
+__all__ = ["Result", "Trainer", "parameters"]

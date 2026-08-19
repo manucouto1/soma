@@ -1,31 +1,28 @@
-//! Un objeto Python visto como un `Node` de Rust, y los tipos que cruzan con él.
+//! A Python object seen as a Rust `Node`, and the types that cross with it.
 //!
-//! **Un adaptador, una convención de llamada**: `forward(input, ctx)` devuelve
-//! una transición. La misma que en Rust, con los mismos nombres.
+//! **One adapter, one calling convention**: `forward(input, ctx)` returns a
+//! transition, the same one as in Rust and with the same names.
 //!
-//! `Ctx`, `Done` y `Await` son `#[pyclass]` y no diccionarios sueltos porque
-//! son los mismos conceptos del núcleo cruzando la costura: así el adaptador
-//! los reconoce por su tipo en vez de adivinar por las claves de un dict, y un
-//! error de forma se cuenta con el nombre del tipo que llegó.
+//! `Ctx`, `Done` and `Await` are `#[pyclass]`es and not bare dictionaries: they
+//! are the core's own concepts crossing the seam, so the adapter recognizes them
+//! by type instead of guessing from a dict's keys.
 
 use crate::value::{PyOpaque, from_py, to_py};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use soma_next_core::{Ctx, Device, Driver, DriverError, Node, NodeError, Transition, Value};
 
-/// Lo que un nodo sabe además de su entrada.
+/// What a node knows beyond its input.
 #[pyclass(name = "Ctx", module = "soma_next._soma_next", frozen)]
 pub struct PyCtx {
-    /// Cuántas veces se le ha preguntado ya; empieza en 0.
+    /// How many times it has already been asked; starts at 0.
     #[pyo3(get)]
     turn: usize,
-    /// Lo que devolvió el driver de lo pedido en el turno anterior, en orden.
+    /// What the driver returned for the previous turn's requests, in order.
     #[pyo3(get)]
     results: Vec<PyObject>,
-    /// Dónde se dijo que corriera este nodo —`"cuda:0"`—, o `None`.
-    ///
-    /// Llega escrito como lo escribe torch para que se le pueda pasar a
-    /// `.to()` sin traducir nada por el camino.
+    /// Where this node was said to run — `"cuda:0"` — or `None`. Written the
+    /// way torch writes it, so it can be handed straight to `.to()`.
     #[pyo3(get)]
     device: Option<String>,
 }
@@ -44,10 +41,10 @@ impl PyCtx {
     }
 }
 
-/// Terminado, con esta salida.
+/// Finished, with this output.
 #[pyclass(name = "Done", module = "soma_next._soma_next", frozen)]
 pub struct PyDone {
-    /// Lo que produjo el nodo.
+    /// What the node produced.
     #[pyo3(get)]
     value: PyObject,
 }
@@ -71,10 +68,10 @@ impl PyDone {
     }
 }
 
-/// Necesita que alguien haga esto antes de seguir.
+/// Needs someone to do this before continuing.
 #[pyclass(name = "Await", module = "soma_next._soma_next", frozen)]
 pub struct PyAwait {
-    /// Las peticiones, en orden. El driver contesta una por cada una.
+    /// The requests, in order. The driver answers one per request.
     #[pyo3(get)]
     requests: Vec<PyObject>,
 }
@@ -87,21 +84,21 @@ impl PyAwait {
     }
 
     fn __repr__(&self) -> String {
-        format!("Await({} peticiones)", self.requests.len())
+        format!("Await({} requests)", self.requests.len())
     }
 }
 
-/// Un objeto Python con `forward(input, ctx)`, por el lado de Rust.
+/// A Python object with `forward(input, ctx)`, from the Rust side.
 pub struct PyNode {
     obj: PyObject,
 }
 
 impl PyNode {
-    /// Envuelve el objeto, comprobando que sabe lo que hay que saber.
+    /// Wraps the object, checking that it knows what it has to know.
     pub fn new(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         if !obj.hasattr("forward")? {
             return Err(PyTypeError::new_err(format!(
-                "un `{}` no puede ser un nodo: le falta forward()",
+                "a `{}` cannot be a node: it is missing forward()",
                 obj.get_type().name()?
             )));
         }
@@ -146,50 +143,40 @@ impl Node for PyNode {
     }
 }
 
-/// Comprueba que lo que devolvió un nodo colocado está donde se dijo.
+/// Checks that what a placed node returned is where it was said to be.
 ///
-/// Es la única defensa contra el fallo silencioso de CU10. El núcleo no sabe
-/// mover nada a una GPU, así que quien obedece un `ctx.device` es el nodo — y
-/// un nodo que lo ignora correría en el sitio equivocado sin que se notara.
-/// Desde fuera solo se puede mirar una cosa: dónde acabó lo que devolvió.
-///
-/// Se comprueba lo que tiene un `.device` que mirar: un tensor, suelto o
-/// dentro de un `Opaque`. Un nodo colocado que devuelve una lista de textos no
-/// se comprueba, y tampoco tenía mucho sentido colocarlo.
-///
-/// El caso que esto marca sin ser un error: un nodo que corre en la GPU y
-/// termina a propósito con un `.cpu()`. Se acepta a sabiendas — es el caso
-/// raro, y el mensaje dice exactamente lo que pasó.
+/// The only defence against a node ignoring its `ctx.device` in silence: from
+/// outside there is one thing to look at, where what it returned ended up. Only
+/// what has a `.device` is checked — a tensor, loose or inside an `Opaque`.
 fn obeyed(answer: &Bound<'_, PyAny>, device: &Device) -> Result<(), NodeError> {
     let Ok(done) = answer.downcast::<PyDone>() else {
-        // Lo que pide algo todavía no ha producido nada que mirar.
+        // Still asking for things: nothing produced to look at.
         return Ok(());
     };
     let py = answer.py();
     let value = done.get().value.bind(py);
-    // Un `Opaque` no es el valor: lo lleva dentro, y es justo donde va un
-    // tensor a mitad de una gráfica de autograd.
+    // An `Opaque` is not the value: it carries it inside.
     let value = match value.downcast::<PyOpaque>() {
         Ok(opaque) => opaque.get().value.bind(py).clone(),
         Err(_) => value.clone(),
     };
 
-    let Ok(donde) = value.getattr("device") else {
+    let Ok(landed) = value.getattr("device") else {
         return Ok(());
     };
-    let donde = donde.str().map_err(as_node_error)?.to_string();
-    let dijo = device.to_string();
-    if donde != dijo {
+    let landed = landed.str().map_err(as_node_error)?.to_string();
+    let declared = device.to_string();
+    if landed != declared {
         return Err(NodeError::new(format!(
-            "declaró `{dijo}` pero devolvió un valor en `{donde}`; un dispositivo \
-             se obedece en el nodo: mueve los parámetros y la entrada con \
+            "it declared `{declared}` but returned a value on `{landed}`; a device \
+             is obeyed in the node: move the parameters and the input with \
              `.to(ctx.device)`"
         )));
     }
     Ok(())
 }
 
-/// Lee lo que devolvió un `forward`.
+/// Reads what a `forward` returned.
 fn transition_from_py(answer: &Bound<'_, PyAny>) -> Result<Transition, NodeError> {
     if let Ok(done) = answer.downcast::<PyDone>() {
         let value = done.get().value.bind(answer.py());
@@ -207,7 +194,7 @@ fn transition_from_py(answer: &Bound<'_, PyAny>) -> Result<Transition, NodeError
         return Ok(Transition::Await(requests));
     }
     Err(NodeError::new(format!(
-        "forward() debe devolver Done(valor) o Await([peticiones]), devolvió un `{}`",
+        "forward() must return Done(value) or Await([requests]), it returned a `{}`",
         answer
             .get_type()
             .name()
@@ -216,17 +203,17 @@ fn transition_from_py(answer: &Bound<'_, PyAny>) -> Result<Transition, NodeError
     )))
 }
 
-/// Un objeto Python con `perform`, por el lado de Rust.
+/// A Python object with `perform`, from the Rust side.
 pub struct PyDriver {
     obj: PyObject,
 }
 
 impl PyDriver {
-    /// Envuelve el objeto, comprobando que puede hacer de driver.
+    /// Wraps the object, checking that it can act as a driver.
     pub fn new(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         if !obj.hasattr("perform")? {
             return Err(PyTypeError::new_err(format!(
-                "un `{}` no puede ser un driver: le falta perform()",
+                "a `{}` cannot be a driver: it is missing perform()",
                 obj.get_type().name()?
             )));
         }
@@ -251,14 +238,14 @@ impl Driver for PyDriver {
             let results = answer
                 .bind(py)
                 .try_iter()
-                .map_err(|_| DriverError::new("perform() tiene que devolver una lista"))?
+                .map_err(|_| DriverError::new("perform() has to return a list"))?
                 .map(|item| from_py(&item?))
                 .collect::<PyResult<Vec<Value>>>()
                 .map_err(as_driver_error)?;
 
             if results.len() != requests.len() {
                 return Err(DriverError::new(format!(
-                    "se pidieron {} cosas y perform() devolvió {}; el nodo las lee por posición",
+                    "{} things were asked for and perform() returned {}; the node reads them by position",
                     requests.len(),
                     results.len()
                 )));

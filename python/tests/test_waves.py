@@ -1,9 +1,10 @@
-"""Ramas que se lanzan a la vez.
+"""Branches launched at the same time.
 
-`|` abre ramas en el DSL, y desde CU9 eso no es solo topología: las ramas de
-una wave **corren a la vez**, cada una entera en su hilo. Aquí se comprueban
-las tres cosas que pueden salir mal cruzando la frontera: que el plan tenga la
-forma que dice, que los hilos existan de verdad, y que el GIL no lo estropee.
+`|` opens branches in the DSL, and since CU9 that is not just topology: a wave's
+branches **run at the same time**, each one whole on its own thread. What is
+checked here is the three things that can go wrong crossing the boundary: that
+the plan has the shape it says, that the threads really exist, and that the GIL
+does not spoil it.
 """
 
 import subprocess
@@ -14,304 +15,313 @@ import threading
 import pytest
 
 from soma_next import Done, Graph, Node
-from conftest import Media, Sumar
+from conftest import Add, Mean
 
-PLAZO = 10
-
-
-# ── Nodos que miran cómo se les ejecuta ──
+DEADLINE = 10
 
 
-class Apuntador(Node):
-    """Se apunta en una lista compartida: quién, cuándo y en qué hilo."""
+# ── Nodes that watch how they get executed ──
 
-    def __init__(self, nombre, diario, cerrojo):
-        self.nombre = nombre
-        self.diario = diario
-        self.cerrojo = cerrojo
+
+class Noter(Node):
+    """Notes itself in a shared list: who, when and on what thread."""
+
+    def __init__(self, name, journal, lock):
+        self.name = name
+        self.journal = journal
+        self.lock = lock
 
     def forward(self, x, ctx):
-        with self.cerrojo:
-            self.diario.append((self.nombre, threading.get_ident()))
+        with self.lock:
+            self.journal.append((self.name, threading.get_ident()))
         return Done(x)
 
 
-class Cita(Node):
-    """No termina hasta que ha llegado la otra rama.
+class Rendezvous(Node):
+    """Does not finish until the other branch has arrived.
 
-    Si las ramas se ejecutaran una detrás de otra, la primera esperaría a una
-    segunda que todavía no ha empezado y la barrera reventaría al agotar el
-    plazo. `Barrier.wait()` suelta el GIL mientras espera, que es lo que hace
-    que esto pueda funcionar con nodos de Python.
+    If the branches were executed one after the other, the first would wait for
+    a second that has not started yet and the barrier would blow up when the
+    deadline ran out. `Barrier.wait()` releases the GIL while it waits, which is
+    what makes this able to work with Python nodes.
     """
 
-    def __init__(self, barrera, falla=None):
-        self.barrera = barrera
-        self.falla = falla
+    def __init__(self, barrier, fails=None):
+        self.barrier = barrier
+        self.fails = fails
 
     def forward(self, x, ctx):
-        self.barrera.wait()
-        if self.falla:
-            raise ValueError(self.falla)
+        self.barrier.wait()
+        if self.fails:
+            raise ValueError(self.fails)
         return Done(x)
 
 
-def en_otro_proceso(fuente):
-    """Corre un programa que usa waves, con plazo, en un intérprete aparte.
+def in_another_process(source):
+    """Runs a program that uses waves, with a deadline, in a separate interpreter.
 
-    Tiene que ser otro **proceso** y no otro hilo: si el motor no soltara el
-    GIL, los hilos de la wave se quedarían esperándolo y con ellos el
-    intérprete entero —hasta un `join(timeout=…)` del hilo principal necesita
-    el GIL para volver—. Un cuelgue así no lo puede cazar nada de dentro.
+    It has to be another **process** and not another thread: if the engine did
+    not release the GIL, the wave's threads would be waiting for it and with them
+    the whole interpreter — even a `join(timeout=…)` on the main thread needs the
+    GIL to return. A hang like that cannot be caught by anything inside.
     """
     try:
         return subprocess.run(
-            [sys.executable, "-c", textwrap.dedent(fuente)],
+            [sys.executable, "-c", textwrap.dedent(source)],
             capture_output=True,
             text=True,
-            timeout=PLAZO,
+            timeout=DEADLINE,
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"el programa no volvió en {PLAZO}s. El motor no soltó el GIL: las ramas "
-            "de la wave lo están esperando y quien lo tiene está bloqueado dentro de "
-            "Rust. Falta `py.allow_threads` alrededor de `executor.run` en "
-            "`python/src/lib.rs`."
+            f"the program did not return in {DEADLINE}s. The engine did not release "
+            "the GIL: the wave's branches are waiting for it and whoever holds it is "
+            "blocked inside Rust. `py.allow_threads` is missing around `executor.run` "
+            "in `python/src/lib.rs`."
         )
 
 
-# ── La forma del plan ──
+# ── The shape of the plan ──
 
 
-def test_una_cadena_no_tiene_waves():
-    g = Graph.somatize(Sumar(1).named("a") >> Sumar(10).named("b"))
+def test_a_chain_has_no_waves():
+    g = Graph.somatize(Add(1).named("a") >> Add(10).named("b"))
     assert "Wave" not in g.plan()
 
 
-def test_dos_ramas_salen_como_una_wave_en_el_plan():
+def test_two_branches_come_out_as_a_wave_in_the_plan():
     g = Graph.somatize(
-        Sumar(1).named("f") >> (Sumar(10).named("i") | Sumar(100).named("d")) >> Media().named("j")
+        Add(1).named("s") >> (Add(10).named("l") | Add(100).named("r")) >> Mean().named("j")
     )
     plan = g.plan()
     assert "Wave" in plan
     assert plan.count("Execute") == 4
 
 
-def test_una_rama_larga_es_una_sola_rama_de_la_wave():
-    # `a >> (b >> b2 | c) >> d`: la wave lleva dentro una secuencia.
+def test_a_long_branch_is_a_single_branch_of_the_wave():
+    # `a >> (b >> b2 | c) >> d`: the wave carries a sequence inside.
     g = Graph.somatize(
-        Sumar(1).named("a")
-        >> ((Sumar(10).named("b") >> Sumar(20).named("b2")) | Sumar(100).named("c"))
-        >> Media().named("d")
+        Add(1).named("a")
+        >> ((Add(10).named("b") >> Add(20).named("b2")) | Add(100).named("c"))
+        >> Mean().named("d")
     )
     plan = g.plan()
     assert "Wave" in plan
-    # La secuencia de la rama larga está dentro de la wave, no fuera.
+    # The long branch's sequence is inside the wave, not outside.
     assert plan.index("Wave") < plan.index('NodeId("b2")')
 
 
-def test_el_dsl_con_ramas_da_el_mismo_plan_que_node_y_edge():
-    # La decisión 6 de CU5, ahora con waves de por medio: el plan sale del
-    # grafo, no de la expresión, así que las dos puertas dan lo mismo.
+def test_the_dsl_with_branches_gives_the_same_plan_as_node_and_edge():
+    # Decision 6 of CU5, now with waves in the way: the plan comes out of the
+    # graph, not the expression, so both doors give the same thing.
     dsl = Graph.somatize(
-        Sumar(1).named("f") >> (Sumar(10).named("i") | Sumar(100).named("d")) >> Media().named("j")
+        Add(1).named("s") >> (Add(10).named("l") | Add(100).named("r")) >> Mean().named("j")
     )
 
-    a_mano = Graph()
-    for nombre, nodo in [("f", Sumar(1)), ("i", Sumar(10)), ("d", Sumar(100)), ("j", Media())]:
-        a_mano.node(nombre, nodo)
-    for origen, destino in [("f", "i"), ("f", "d"), ("i", "j"), ("d", "j")]:
-        a_mano.edge(origen, destino)
+    by_hand = Graph()
+    for name, node in [("s", Add(1)), ("l", Add(10)), ("r", Add(100)), ("j", Mean())]:
+        by_hand.node(name, node)
+    for source, target in [("s", "l"), ("s", "r"), ("l", "j"), ("r", "j")]:
+        by_hand.edge(source, target)
 
-    assert dsl.plan() == a_mano.plan()
-
-
-# ── Que los hilos existan de verdad ──
+    assert dsl.plan() == by_hand.plan()
 
 
-def test_las_ramas_corren_a_la_vez():
-    barrera = threading.Barrier(2, timeout=PLAZO)
-    g = Graph.somatize(Cita(barrera).named("izq") | Cita(barrera).named("der"))
-
-    salida = g.forward("x")
-    assert salida == {"izq": "x", "der": "x"}
+# ── That the threads really exist ──
 
 
-def test_tres_ramas_tambien():
-    barrera = threading.Barrier(3, timeout=PLAZO)
+def test_the_branches_run_at_the_same_time():
+    barrier = threading.Barrier(2, timeout=DEADLINE)
+    g = Graph.somatize(Rendezvous(barrier).named("left") | Rendezvous(barrier).named("right"))
+
+    output = g.forward("x")
+    assert output == {"left": "x", "right": "x"}
+
+
+def test_three_branches_too():
+    barrier = threading.Barrier(3, timeout=DEADLINE)
     g = Graph.somatize(
-        Sumar(1).named("f")
-        >> (Cita(barrera).named("x") | Cita(barrera).named("y") | Cita(barrera).named("z"))
+        Add(1).named("s")
+        >> (
+            Rendezvous(barrier).named("x")
+            | Rendezvous(barrier).named("y")
+            | Rendezvous(barrier).named("z")
+        )
     )
     g.forward(0)
 
 
-def test_una_rama_entera_corre_en_el_mismo_hilo():
-    # Lo que compra descomponer por ramas: el día que un nodo tenga
-    # dispositivo, torch lo fija por hilo y la rama no salta de uno a otro.
-    diario, cerrojo = [], threading.Lock()
+def test_a_whole_branch_runs_on_the_same_thread():
+    # What decomposing by branch buys: the day a node has a device, torch pins it
+    # per thread and the branch does not hop from one to another.
+    journal, lock = [], threading.Lock()
 
-    def testigo(nombre):
-        return Apuntador(nombre, diario, cerrojo).named(nombre)
+    def witness(name):
+        return Noter(name, journal, lock).named(name)
 
     g = Graph.somatize(
-        testigo("a")
-        >> ((testigo("b") >> testigo("b2") >> testigo("b3")) | (testigo("c") >> testigo("c2")))
-        >> testigo("d")
+        witness("a")
+        >> ((witness("b") >> witness("b2") >> witness("b3")) | (witness("c") >> witness("c2")))
+        >> witness("d")
     )
     g.forward("x")
 
-    hilos = dict(diario)
-    assert hilos["b"] == hilos["b2"] == hilos["b3"]
-    assert hilos["c"] == hilos["c2"]
-    assert hilos["b"] != hilos["c"], "las dos ramas comparten hilo: no van a la vez"
-    assert hilos["a"] == hilos["d"], "lo de fuera de la wave corre en el hilo de quien ejecuta"
+    threads = dict(journal)
+    assert threads["b"] == threads["b2"] == threads["b3"]
+    assert threads["c"] == threads["c2"]
+    assert threads["b"] != threads["c"], "the two branches share a thread: they are not concurrent"
+    assert threads["a"] == threads["d"], "what is outside the wave runs on the executing thread"
 
 
-def test_el_orden_real_de_ejecucion_respeta_las_aristas():
-    # El plan dice un orden; esto mira el que de verdad ocurrió, con hilos.
-    diario, cerrojo = [], threading.Lock()
+def test_the_real_execution_order_respects_the_edges():
+    # The plan states an order; this looks at the one that actually happened,
+    # with threads.
+    journal, lock = [], threading.Lock()
 
-    def testigo(nombre):
-        return Apuntador(nombre, diario, cerrojo).named(nombre)
+    def witness(name):
+        return Noter(name, journal, lock).named(name)
 
-    aristas = [("a", "b"), ("b", "b2"), ("a", "c"), ("b2", "d"), ("c", "d")]
+    edges = [("a", "b"), ("b", "b2"), ("a", "c"), ("b2", "d"), ("c", "d")]
     g = Graph.somatize(
-        testigo("a") >> ((testigo("b") >> testigo("b2")) | testigo("c")) >> testigo("d")
+        witness("a") >> ((witness("b") >> witness("b2")) | witness("c")) >> witness("d")
     )
     g.forward("x")
 
-    orden = [nombre for nombre, _ in diario]
-    assert sorted(orden) == ["a", "b", "b2", "c", "d"], f"alguno sobra o falta: {orden}"
-    for origen, destino in aristas:
-        assert orden.index(origen) < orden.index(destino), (
-            f"{destino} se ejecutó antes que {origen}: {orden}"
+    order = [name for name, _ in journal]
+    assert sorted(order) == ["a", "b", "b2", "c", "d"], f"one is spare or missing: {order}"
+    for source, target in edges:
+        assert order.index(source) < order.index(target), (
+            f"{target} executed before {source}: {order}"
         )
 
 
-# ── Que el resultado no dependa de nada de lo anterior ──
+# ── That the result depends on none of the above ──
 
 
-def test_el_diamante_da_lo_mismo_repartido_que_en_fila():
+def test_the_diamond_gives_the_same_spread_out_as_in_a_row():
     g = Graph.somatize(
-        Sumar(1).named("f") >> (Sumar(10).named("i") | Sumar(100).named("d")) >> Media().named("j")
+        Add(1).named("s") >> (Add(10).named("l") | Add(100).named("r")) >> Mean().named("j")
     )
     assert g.forward(0) == 56.0
 
 
-def test_lo_que_produce_cada_rama_por_dentro_llega_al_final():
+def test_what_each_branch_produces_inside_reaches_the_end():
     g = Graph.somatize(
-        Sumar(1).named("a")
+        Add(1).named("a")
         >> (
-            (Sumar(10).named("b") >> Sumar(20).named("b2"))
-            | (Sumar(100).named("c") >> Sumar(200).named("c2"))
+            (Add(10).named("b") >> Add(20).named("b2"))
+            | (Add(100).named("c") >> Add(200).named("c2"))
         )
-        >> Media().named("d")
+        >> Mean().named("d")
     )
-    # 0 → 1 → rama b: 11, 31 · rama c: 101, 301 → media 166
+    # 0 → 1 → branch b: 11, 31 · branch c: 101, 301 → mean 166
     assert g.forward(0) == 166.0
 
 
-def test_ejecutar_dos_veces_da_lo_mismo():
+def test_executing_twice_gives_the_same_thing():
     g = Graph.somatize(
-        Sumar(1).named("f") >> (Sumar(10).named("i") | Sumar(100).named("d")) >> Media().named("j")
+        Add(1).named("s") >> (Add(10).named("l") | Add(100).named("r")) >> Mean().named("j")
     )
     assert [g.forward(0) for _ in range(5)] == [56.0] * 5
 
 
-# ── Fallos ──
+# ── Failures ──
 
 
-def test_si_fallan_dos_ramas_se_cuenta_siempre_la_primera():
-    # Las dos fallan a la vez de verdad —quedan en verse antes de romperse—,
-    # así que cuál llega antes es una carrera; el error que se cuenta no.
-    barrera = threading.Barrier(2, timeout=PLAZO)
+def test_if_two_branches_fail_the_first_is_always_the_one_reported():
+    # Both genuinely fail at the same time — they agree to meet before breaking
+    # — so which one arrives first is a race; the error reported is not.
+    barrier = threading.Barrier(2, timeout=DEADLINE)
     g = Graph.somatize(
-        Cita(barrera, falla="rompió la izquierda").named("izq")
-        | Cita(barrera, falla="rompió la derecha").named("der")
+        Rendezvous(barrier, fails="the left one broke").named("left")
+        | Rendezvous(barrier, fails="the right one broke").named("right")
     )
 
-    with pytest.raises(ValueError, match="rompió la izquierda"):
+    with pytest.raises(ValueError, match="the left one broke"):
         g.forward("x")
 
 
-def test_el_error_dice_en_que_rama_fue():
-    class Romper(Node):
+def test_the_error_says_which_branch_it_was():
+    class Fail(Node):
         def forward(self, x, ctx):
-            raise ValueError("me rompí")
+            raise ValueError("I broke")
 
-    g = Graph.somatize(Sumar(1).named("sano") | Romper().named("malo"))
-    with pytest.raises(ValueError, match="malo"):
+    g = Graph.somatize(Add(1).named("healthy") | Fail().named("bad"))
+    with pytest.raises(ValueError, match="bad"):
         g.forward(0)
 
 
-# ── Lo que el DSL no puede escribir ──
+# ── What the DSL cannot write ──
 
 
-def test_un_grafo_que_no_es_serie_paralelo_se_ejecuta_aunque_no_se_reparta():
-    # La «N»: `a→c, a→d, b→d`. No tiene árbol serie-paralelo —es un teorema—,
-    # así que no hay wave; y no se puede escribir con `>>` y `|`, hay que
-    # construirla con node()/edge(). Sigue ejecutándose como siempre.
+def test_a_graph_that_is_not_series_parallel_executes_even_without_being_spread():
+    # The "N": `a→c, a→d, b→d`. It has no series-parallel tree — that is a
+    # theorem — so there is no wave; and it cannot be written with `>>` and `|`,
+    # it has to be built with node()/edge(). It still executes as always.
     g = Graph()
-    for nombre, nodo in [("a", Sumar(1)), ("b", Sumar(2)), ("c", Sumar(100)), ("d", Media())]:
-        g.node(nombre, nodo)
-    for origen, destino in [("a", "c"), ("a", "d"), ("b", "d")]:
-        g.edge(origen, destino)
+    for name, node in [("a", Add(1)), ("b", Add(2)), ("c", Add(100)), ("d", Mean())]:
+        g.node(name, node)
+    for source, target in [("a", "c"), ("a", "d"), ("b", "d")]:
+        g.edge(source, target)
 
-    assert "Wave" not in g.plan(), "la N no tiene árbol que recuperar"
+    assert "Wave" not in g.plan(), "the N has no tree to recover"
     assert g.forward(0) == {"c": 101.0, "d": 1.5}
 
 
-# ── El GIL ──
+# ── The GIL ──
 
 
-def test_el_motor_suelta_el_gil_mientras_corre():
-    """La guarda de todo lo anterior, y la única que no puede vivir dentro.
+def test_the_engine_releases_the_gil_while_it_runs():
+    """The guard on everything above, and the only one that cannot live inside.
 
-    Una wave lanza hilos que llaman al `forward` de objetos Python. Si el hilo
-    que entró por `Graph.forward` se quedara con el GIL cogido, esos hilos se
-    bloquearían al pedirlo y el proceso entero se congelaría — no un error, un
-    cuelgue. Por eso este test vive en otro proceso: aquí el plazo sí funciona.
+    A wave spawns threads that call Python objects' `forward`. If the thread that
+    came in through `Graph.forward` kept the GIL, those threads would block on
+    asking for it and the whole process would freeze — not an error, a hang. That
+    is why this test lives in another process: there the deadline works.
     """
-    hecho = en_otro_proceso("""
+    done = in_another_process("""
         import threading
         from soma_next import Done, Graph, Node
 
-        barrera = threading.Barrier(2, timeout=5)
+        barrier = threading.Barrier(2, timeout=5)
 
-        class Cita(Node):
+        class Rendezvous(Node):
             def forward(self, x, ctx):
-                barrera.wait()
+                barrier.wait()
                 return Done(x)
 
-        g = Graph.somatize(Cita().named("izq") | Cita().named("der"))
-        assert g.forward("x") == {"izq": "x", "der": "x"}
-        print("volvió")
+        g = Graph.somatize(Rendezvous().named("left") | Rendezvous().named("right"))
+        assert g.forward("x") == {"left": "x", "right": "x"}
+        print("it returned")
     """)
 
-    assert hecho.returncode == 0, hecho.stderr
-    assert "volvió" in hecho.stdout
+    assert done.returncode == 0, done.stderr
+    assert "it returned" in done.stdout
 
 
-def test_dos_nodos_python_en_la_misma_wave_dan_el_resultado_correcto():
-    """El GIL los serializa entre ellos y eso no lo arregla nada.
+def test_two_python_nodes_in_the_same_wave_give_the_right_result():
+    """The GIL interleaves them and nothing fixes that.
 
-    Lo que sí tiene que valer es el resultado: que el intérprete reparta los
-    turnos como quiera no puede cambiar lo que sale. Es el precio dicho claro
-    —dos nodos Python puros no se solapan— y el límite de lo que una wave
-    compra en este lado de la frontera.
+    That both are in flight is proved by `test_the_branches_run_at_the_same_time`,
+    with a rendezvous and no driver. What the GIL prevents is the other thing:
+    that more than one runs at any instant, i.e. that spreading them out gains
+    time.
+
+    What does have to hold is the result: the interpreter handing out turns as it
+    likes cannot change what comes out. It is the price said plainly and the
+    limit of what a wave buys on this side of the boundary.
     """
-    contador, cerrojo = [], threading.Lock()
+    counter, lock = [], threading.Lock()
 
-    class Cuenta(Node):
+    class Counts(Node):
         def forward(self, x, ctx):
             for _ in range(2000):
-                with cerrojo:
-                    contador.append(1)
-            return Done(len(contador))
+                with lock:
+                    counter.append(1)
+            return Done(len(counter))
 
-    g = Graph.somatize(Cuenta().named("uno") | Cuenta().named("otro"))
-    salida = g.forward(0)
+    g = Graph.somatize(Counts().named("one") | Counts().named("other"))
+    output = g.forward(0)
 
-    assert len(contador) == 4000, "se perdieron incrementos"
-    assert set(salida) == {"uno", "otro"}
+    assert len(counter) == 4000, "increments were lost"
+    assert set(output) == {"one", "other"}

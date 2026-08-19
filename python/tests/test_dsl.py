@@ -1,125 +1,125 @@
-"""El DSL: el grafo como una expresión."""
+"""The DSL: the graph as an expression."""
 
 import pytest
 
-from conftest import Media, Preguntar, Sumar
+from conftest import Add, Ask, Mean
 from soma_next import Done, Graph, Node
 
 
-# ── Encadenar ──
+# ── Chaining ──
 
 
-def test_un_solo_nodo_ya_es_un_grafo():
-    g = Graph.somatize(Sumar(1))
-    assert g.nodes() == ["sumar"]
+def test_a_single_node_is_already_a_graph():
+    g = Graph.somatize(Add(1))
+    assert g.nodes() == ["add"]
     assert g.forward(41) == 42.0
 
 
-def test_una_cadena():
-    g = Graph.somatize(Sumar(1) >> Sumar(10) >> Sumar(100))
-    assert g.nodes() == ["sumar", "sumar_2", "sumar_3"]
+def test_a_chain():
+    g = Graph.somatize(Add(1) >> Add(10) >> Add(100))
+    assert g.nodes() == ["add", "add_2", "add_3"]
     assert g.forward(0) == 111.0
 
 
-def test_named_pone_el_id():
-    g = Graph.somatize(Sumar(1).named("primero") >> Sumar(10).named("segundo"))
-    assert g.nodes() == ["primero", "segundo"]
-    assert g.edges() == [("primero", "segundo")]
+def test_named_sets_the_id():
+    g = Graph.somatize(Add(1).named("first") >> Add(10).named("second"))
+    assert g.nodes() == ["first", "second"]
+    assert g.edges() == [("first", "second")]
 
 
-# ── Abrir y cerrar ramas ──
+# ── Opening and closing branches ──
 
 
-def test_un_diamante_se_lee_de_un_vistazo():
-    g = Graph.somatize(Sumar(1) >> (Sumar(10).named("izq") | Sumar(100).named("der")) >> Media())
+def test_a_diamond_reads_at_a_glance():
+    g = Graph.somatize(Add(1) >> (Add(10).named("left") | Add(100).named("right")) >> Mean())
     assert g.edges() == [
-        ("sumar", "izq"),
-        ("sumar", "der"),
-        ("izq", "media"),
-        ("der", "media"),
+        ("add", "left"),
+        ("add", "right"),
+        ("left", "mean"),
+        ("right", "mean"),
     ]
     assert g.forward(0) == 56.0
 
 
-def test_ramas_abiertas_salen_como_mapa():
-    g = Graph.somatize(Sumar(1) >> (Sumar(10).named("izq") | Sumar(100).named("der")))
-    assert g.forward(0) == {"izq": 11.0, "der": 101.0}
+def test_open_branches_come_out_as_a_map():
+    g = Graph.somatize(Add(1) >> (Add(10).named("left") | Add(100).named("right")))
+    assert g.forward(0) == {"left": 11.0, "right": 101.0}
 
 
-def test_una_rama_puede_ser_mas_larga_que_la_otra():
+def test_one_branch_can_be_longer_than_the_other():
     g = Graph.somatize(
-        Sumar(1).named("fuente")
-        >> ((Sumar(1).named("izq") >> Sumar(1).named("izq2")) | Sumar(1).named("der"))
+        Add(1).named("source")
+        >> ((Add(1).named("left") >> Add(1).named("left2")) | Add(1).named("right"))
     )
     assert g.edges() == [
-        ("fuente", "izq"),
-        ("izq", "izq2"),
-        ("fuente", "der"),
+        ("source", "left"),
+        ("left", "left2"),
+        ("source", "right"),
     ]
 
 
-def test_tres_ramas():
-    g = Graph.somatize(Sumar(0) >> (Sumar(1).named("a") | Sumar(2).named("b") | Sumar(3).named("c")))
+def test_three_branches():
+    g = Graph.somatize(Add(0) >> (Add(1).named("a") | Add(2).named("b") | Add(3).named("c")))
     assert g.forward(0) == {"a": 1.0, "b": 2.0, "c": 3.0}
 
 
-def test_un_nodo_que_pide_turnos_encaja_donde_encajaria_cualquiera():
-    from conftest import Gritar
+def test_a_node_that_asks_for_turns_fits_where_any_other_would():
+    from conftest import Shout
 
-    g = Graph.somatize(Sumar(1) >> Preguntar("x"))
-    assert g.forward(41, driver=Gritar()) == "X"
-
-
-# ── La clase obliga, y es la única puerta del DSL ──
+    g = Graph.somatize(Add(1) >> Ask("x"))
+    assert g.forward(41, driver=Shout()) == "X"
 
 
-def test_la_clase_obliga_a_implementar_forward():
-    class SinForward(Node):
+# ── The class forces it, and it is the DSL's only door ──
+
+
+def test_the_class_forces_forward_to_be_implemented():
+    class WithoutForward(Node):
         pass
 
     with pytest.raises(TypeError, match="abstract method 'forward'"):
-        SinForward()
+        WithoutForward()
 
 
-def test_en_el_dsl_hay_que_heredar_de_node():
-    class Suelto:
+def test_in_the_dsl_you_have_to_inherit_from_node():
+    class Loose:
         def forward(self, x, ctx):
             return Done(x)
 
-    with pytest.raises(TypeError, match="tiene que heredar de soma_next.Node"):
-        Graph.somatize(Suelto() >> Sumar(1))
+    with pytest.raises(TypeError, match="has to inherit from soma_next.Node"):
+        Graph.somatize(Loose() >> Add(1))
 
 
-def test_lo_que_no_puede_ser_nodo_lo_dice():
-    with pytest.raises(TypeError, match="tiene que heredar de soma_next.Node"):
-        Graph.somatize(Sumar(1) >> "esto no es un nodo")
+def test_what_cannot_be_a_node_says_so():
+    with pytest.raises(TypeError, match="has to inherit from soma_next.Node"):
+        Graph.somatize(Add(1) >> "this is not a node")
 
 
-def test_un_objeto_de_fuera_sigue_entrando_por_la_puerta_de_abajo(g):
-    class Ajeno:  # no hereda de nada nuestro
+def test_an_outside_object_still_comes_in_through_the_lower_door(g):
+    class Foreign:  # inherits from nothing of ours
         def forward(self, x, ctx):
             return Done(x * 2)
 
-    g.node("ajeno", Ajeno())
+    g.node("foreign", Foreign())
     assert g.forward(21) == 42.0
 
 
-# ── El DSL y las llamadas construyen lo mismo ──
+# ── The DSL and the calls build the same thing ──
 
 
-def test_el_dsl_no_es_otra_cosa_que_node_y_edge():
-    dsl = Graph.somatize(Sumar(1).named("a") >> Sumar(10).named("b"))
+def test_the_dsl_is_nothing_but_node_and_edge():
+    dsl = Graph.somatize(Add(1).named("a") >> Add(10).named("b"))
 
-    a_mano = Graph()
-    a_mano.node("a", Sumar(1))
-    a_mano.node("b", Sumar(10))
-    a_mano.edge("a", "b")
+    by_hand = Graph()
+    by_hand.node("a", Add(1))
+    by_hand.node("b", Add(10))
+    by_hand.edge("a", "b")
 
-    assert dsl.nodes() == a_mano.nodes()
-    assert dsl.edges() == a_mano.edges()
-    assert dsl.plan() == a_mano.plan()
+    assert dsl.nodes() == by_hand.nodes()
+    assert dsl.edges() == by_hand.edges()
+    assert dsl.plan() == by_hand.plan()
 
 
-def test_el_numero_de_argumentos_lo_sigue_contando_rust(g):
-    with pytest.raises(ValueError, match="toma \\(objeto\\)"):
+def test_the_argument_count_is_still_checked_by_rust(g):
+    with pytest.raises(ValueError, match="takes \\(object\\)"):
         g.node()

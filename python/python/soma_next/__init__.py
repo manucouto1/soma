@@ -1,28 +1,38 @@
-"""soma-next: el gemelo re-derivado de Soma, un caso de uso cada vez.
+"""soma-next: the re-derived twin of Soma, one use case at a time.
 
-Un nodo es cualquier cosa que sabe avanzar un turno::
+A node is anything that knows how to advance one turn::
 
     from soma_next import Await, Done, Graph, Node
 
-    class Limpiar(Node):
+    class Clean(Node):
         def forward(self, x, ctx):
             return Done(x.strip())
 
-    class Preguntar(Node):
+    class Ask(Node):
         def forward(self, x, ctx):
             if ctx.turn == 0:
-                return Await([f"¿y {x}?"])
+                return Await([f"and {x}?"])
             return Done(ctx.results[0])
 
-    g = Graph.somatize(Limpiar() >> Preguntar())
-    g.forward("  hola  ", driver=MiDriver())
+    g = Graph.somatize(Clean() >> Ask())
+    g.forward("  hello  ", driver=MyDriver())
 
-`Graph()` con `node()` y `edge()` sigue estando para cuando la topología se
-construye en un bucle o viene de fuera.
+`Graph()` with `node()` and `edge()` is still there for when the topology is
+built in a loop or comes from outside.
 """
 
 from soma_next._dsl import Node
 from soma_next._graph import Graph
+from soma_next._remote import Worker
 from soma_next._soma_next import Await, Ctx, Done, Opaque, __version__
 
-__all__ = ["Await", "Ctx", "Done", "Graph", "Node", "Opaque", "__version__"]
+__all__ = [
+    "Await",
+    "Ctx",
+    "Done",
+    "Graph",
+    "Node",
+    "Opaque",
+    "Worker",
+    "__version__",
+]

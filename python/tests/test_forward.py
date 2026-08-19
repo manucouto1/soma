@@ -1,174 +1,174 @@
-"""Ejecutar: el motor está en Rust, esto solo aporta las implementaciones."""
+"""Executing: the engine is in Rust, this only supplies the implementations."""
 
 import pytest
 
-from conftest import Identidad, Media, Sumar
+from conftest import Add, Identity, Mean
 from soma_next import Done, Node
 
 
-class Mayusculas(Node):
+class Upper(Node):
     def forward(self, x, ctx):
         return Done(x.upper())
 
 
-class Romper(Node):
+class Fail(Node):
     def forward(self, x, ctx):
-        raise RuntimeError("me rompí")
+        raise RuntimeError("I broke")
 
 
-# ── El camino feliz ──
+# ── The happy path ──
 
 
-def test_un_grafo_vacio_devuelve_su_entrada(g):
-    assert g.forward("intacto") == "intacto"
+def test_an_empty_graph_returns_its_input(g):
+    assert g.forward("intact") == "intact"
 
 
-def test_un_solo_nodo(g):
-    g.node("sumar", Sumar(1))
+def test_a_single_node(g):
+    g.node("add", Add(1))
     assert g.forward(41) == 42.0
 
 
-def test_una_cadena_encadena_las_salidas(g):
-    g.node("a", Sumar(1))
-    g.node("b", Sumar(10))
-    g.node("c", Sumar(100))
+def test_a_chain_chains_the_outputs(g):
+    g.node("a", Add(1))
+    g.node("b", Add(10))
+    g.node("c", Add(100))
     g.edge("a", "b")
     g.edge("b", "c")
     assert g.forward(0) == 111.0
 
 
-def test_texto_cruza_la_frontera(g):
-    g.node("gritar", Mayusculas())
-    assert g.forward("hola") == "HOLA"
+def test_text_crosses_the_boundary(g):
+    g.node("shout", Upper())
+    assert g.forward("hello") == "HELLO"
 
 
-def test_una_lista_va_y_vuelve_igual(g):
-    g.node("id", Identidad())
+def test_a_list_goes_and_comes_back_the_same(g):
+    g.node("id", Identity())
     assert g.forward([1, 2, 3]) == [1.0, 2.0, 3.0]
 
 
-def test_una_lista_anidada_tambien(g):
-    g.node("id", Identidad())
-    assert g.forward([1, ["dos", None], 3]) == [1.0, ["dos", None], 3.0]
+def test_a_nested_list_too(g):
+    g.node("id", Identity())
+    assert g.forward([1, ["two", None], 3]) == [1.0, ["two", None], 3.0]
 
 
-def test_un_dict_va_y_vuelve_igual(g):
-    g.node("id", Identidad())
-    assert g.forward({"b": 1, "a": ["dos", None]}) == {"b": 1.0, "a": ["dos", None]}
+def test_a_dict_goes_and_comes_back_the_same(g):
+    g.node("id", Identity())
+    assert g.forward({"b": 1, "a": ["two", None]}) == {"b": 1.0, "a": ["two", None]}
 
 
-def test_sin_entrada_el_nodo_recibe_none(g):
-    class Recibe(Node):
+def test_without_input_the_node_receives_none(g):
+    class Receives(Node):
         def forward(self, x, ctx):
             assert x is None
-            return Done("vale")
+            return Done("fine")
 
-    g.node("recibe", Recibe())
-    assert g.forward() == "vale"
-
-
-# ── Los fallos ──
+    g.node("receives", Receives())
+    assert g.forward() == "fine"
 
 
-def test_un_objeto_sin_forward_falla_al_registrarlo(g):
-    class NoLoEs:
+# ── The failures ──
+
+
+def test_an_object_without_forward_fails_when_registered(g):
+    class NotOne:
         pass
 
-    with pytest.raises(TypeError, match="le falta forward"):
-        g.node("malo", NoLoEs())
+    with pytest.raises(TypeError, match="missing forward"):
+        g.node("bad", NotOne())
     assert len(g) == 0
 
 
-def test_la_excepcion_de_un_nodo_dice_cual_fue(g):
-    g.node("bomba", Romper())
-    with pytest.raises(ValueError, match="el nodo `bomba` falló"):
+def test_a_nodes_exception_says_which_one_it_was(g):
+    g.node("bomb", Fail())
+    with pytest.raises(ValueError, match="node `bomb` failed"):
         g.forward(1)
 
 
-def test_un_tipo_que_no_cruza_lo_dice(g):
-    class Devuelve(Node):
+def test_a_type_that_does_not_cross_says_so(g):
+    class Returns(Node):
         def forward(self, x, ctx):
-            return Done({"no", "cruzo"})  # un set
+            return Done({"I", "do", "not", "cross"})  # a set
 
-    g.node("devuelve", Devuelve())
-    with pytest.raises(ValueError, match="un `set` no cruza"):
+    g.node("returns", Returns())
+    with pytest.raises(ValueError, match="a `set` does not cross"):
         g.forward(1)
 
 
-def test_un_bool_no_se_convierte_en_silencio(g):
-    g.node("sumar", Sumar(1))
-    with pytest.raises(TypeError, match="un bool no cruza"):
+def test_a_bool_is_not_converted_silently(g):
+    g.node("add", Add(1))
+    with pytest.raises(TypeError, match="a bool does not cross"):
         g.forward(True)
 
 
-def test_una_clave_que_no_es_texto_lo_dice(g):
-    g.node("id", Identidad())
-    with pytest.raises(TypeError, match="claves de un dict"):
-        g.forward({1: "uno"})
+def test_a_key_that_is_not_text_says_so(g):
+    g.node("id", Identity())
+    with pytest.raises(TypeError, match="keys of a dict"):
+        g.forward({1: "one"})
 
 
-def test_devolver_algo_que_no_es_una_transicion_lo_dice(g):
-    class Confuso(Node):
+def test_returning_something_that_is_not_a_transition_says_so(g):
+    class Confused(Node):
         def forward(self, x, ctx):
-            return "olvidé el Done"
+            return "I forgot the Done"
 
-    g.node("confuso", Confuso())
-    with pytest.raises(ValueError, match="debe devolver Done"):
+    g.node("confused", Confused())
+    with pytest.raises(ValueError, match="must return Done"):
         g.forward(1)
 
 
-# ── Abanicos, en las dos direcciones ──
+# ── Fans, in both directions ──
 
 
-def test_varias_hojas_salen_como_un_mapa_con_su_nombre(g):
-    g.node("fuente", Sumar(1))
-    g.node("izq", Sumar(10))
-    g.node("der", Sumar(100))
-    g.edge("fuente", "izq")
-    g.edge("fuente", "der")
+def test_several_leaves_come_out_as_a_map_keyed_by_name(g):
+    g.node("source", Add(1))
+    g.node("left", Add(10))
+    g.node("right", Add(100))
+    g.edge("source", "left")
+    g.edge("source", "right")
 
-    assert g.forward(0) == {"izq": 11.0, "der": 101.0}
+    assert g.forward(0) == {"left": 11.0, "right": 101.0}
 
 
-def test_a_un_nodo_con_dos_entradas_le_llega_un_mapa(g):
-    g.node("izq", Sumar(10))
-    g.node("der", Sumar(100))
-    g.node("juntar", Media())
-    g.edge("izq", "juntar")
-    g.edge("der", "juntar")
+def test_a_node_with_two_inputs_receives_a_map(g):
+    g.node("left", Add(10))
+    g.node("right", Add(100))
+    g.node("join", Mean())
+    g.edge("left", "join")
+    g.edge("right", "join")
 
     assert g.forward(0) == 55.0
 
 
-def test_un_diamante_da_la_vuelta(g):
-    g.node("fuente", Sumar(1))
-    g.node("izq", Sumar(10))
-    g.node("der", Sumar(100))
-    g.node("juntar", Media())
-    for a, b in (("fuente", "izq"), ("fuente", "der"), ("izq", "juntar"), ("der", "juntar")):
+def test_a_diamond_comes_back_round(g):
+    g.node("source", Add(1))
+    g.node("left", Add(10))
+    g.node("right", Add(100))
+    g.node("join", Mean())
+    for a, b in (("source", "left"), ("source", "right"), ("left", "join"), ("right", "join")):
         g.edge(a, b)
 
     assert g.forward(0) == 56.0
 
 
-def test_el_mapa_conserva_el_orden_en_que_se_declararon_las_aristas(g):
-    class Claves(Node):
-        def forward(self, entradas, ctx):
-            return Done(list(entradas.keys()))
+def test_the_map_keeps_the_order_the_edges_were_declared_in(g):
+    class Keys(Node):
+        def forward(self, inputs, ctx):
+            return Done(list(inputs.keys()))
 
-    g.node("segundo", Sumar(1))
-    g.node("primero", Sumar(1))
-    g.node("juntar", Claves())
-    g.edge("segundo", "juntar")
-    g.edge("primero", "juntar")
+    g.node("second", Add(1))
+    g.node("first", Add(1))
+    g.node("join", Keys())
+    g.edge("second", "join")
+    g.edge("first", "join")
 
-    assert g.forward(0) == ["segundo", "primero"]
+    assert g.forward(0) == ["second", "first"]
 
 
-def test_el_plan_se_puede_mirar(g):
-    g.node("fuente", Sumar(1))
-    g.node("izq", Sumar(10))
-    g.edge("fuente", "izq")
+def test_the_plan_can_be_looked_at(g):
+    g.node("source", Add(1))
+    g.node("left", Add(10))
+    g.edge("source", "left")
 
     plan = g.plan()
     assert "Sequence" in plan

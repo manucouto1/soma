@@ -1,25 +1,24 @@
-"""Entrenar **un** grafo. Ni el grafo sabe que existe esto, ni esto sabe que
-hay otros entrenamientos.
+"""Training **one** graph. Neither does the graph know this exists, nor does
+this know there are other training runs.
 
-Son tres niveles, y ninguno conoce al de arriba:
+Three levels, and none knows the one above:
 
-| nivel | qué es | escala |
+| level | what it is | scale |
 |---|---|---|
-| el grafo | una red | un `forward` |
-| `Trainer` | un entrenamiento | una tarde |
-| un estudio | N entrenamientos | un experimento |
+| the graph | a network | one `forward` |
+| `Trainer` | one training run | an afternoon |
+| a study | N training runs | an experiment |
 
-El tercero **no tiene tipo**, y es a propósito: N entrenamientos independientes
-son una lista de Python, y modelar una lista como un grafo es pagar el precio
-de un DAG para no usarlo. Un grafo se gana el sueldo cuando hay dependencias
-que declarar.
+The third **has no type**, and that is on purpose: N independent training runs
+are a Python list, and modelling a list as a graph is paying a DAG's price
+without using it. A graph earns its keep when there are dependencies to declare.
 
-Y el entrenamiento no es un nodo por la misma razón: el contrato de un nodo
-—`forward(input, ctx)`— describe **un paso**, con su presupuesto de turnos y
-sin recuperación parcial. Un entrenamiento dura una tarde, muta su estado y
-falla de maneras de las que uno quiere recuperarse. El Soma original metió
-`fit` en el contrato del nodo, y la factura se ve en sus propios tests: cuatro
-crates implementan un `fit` vacío solo para poder existir.
+And training is not a node for the same reason: a node's contract —
+`forward(input, ctx)` — describes **one step**, with its turn budget and no
+partial recovery. A training run lasts an afternoon, mutates its state and fails
+in ways one wants to recover from. The original Soma put `fit` in the node
+contract, and the bill shows in its own tests: four crates implement an empty
+`fit` just to be able to exist.
 """
 
 from __future__ import annotations
@@ -30,141 +29,117 @@ from soma_next import Opaque
 from soma_next.torch._params import parameters
 
 
-class Resultado:
-    """Lo que deja un entrenamiento: la pérdida, paso a paso.
+class Result:
+    """What a training run leaves behind: the loss, step by step."""
 
-    Es lo mínimo que hace comparables dos runs, que es lo único que alguien
-    necesita hoy. Métricas, tiempos y checkpoints cuando haya quien los pida.
-    """
-
-    def __init__(self, historia):
-        self.historia = historia
+    def __init__(self, history):
+        self.history = history
 
     @property
     def loss(self):
-        """La última pérdida, o `None` si no se dio ni un paso."""
-        return self.historia[-1] if self.historia else None
+        """The last loss, or `None` if not a single step was taken."""
+        return self.history[-1] if self.history else None
 
     def __repr__(self):
-        if not self.historia:
-            return "Resultado(sin pasos)"
+        if not self.history:
+            return "Result(no steps)"
         return (
-            f"Resultado({len(self.historia)} pasos, "
-            f"{self.historia[0]:.4f} → {self.historia[-1]:.4f})"
+            f"Result({len(self.history)} steps, "
+            f"{self.history[0]:.4f} → {self.history[-1]:.4f})"
         )
 
 
 class Trainer:
-    """Entrena un grafo, sin que el grafo se entere.
+    """Trains a graph, without the graph finding out — no `g.fit(...)`, so the
+    same graph can be trained three ways without touching it.
 
-    Recibe el grafo y no al revés —nada de `g.fit(...)`—: así el mismo grafo se
-    entrena de tres maneras sin tocarlo, y sigue siendo el artefacto que se
-    serializa y viaja.
+    The optimizer is built by the caller, which is what keeps a name registry
+    (`optimizer="adam"`) out::
 
-    El optimizador lo construye quien llama::
-
-        t = Trainer(g, objetivo=cross_entropy,
-                    optimizador=torch.optim.Adam(parameters(g), lr=1e-3))
-
-    Así se elige Adam o SGD sin que esto tenga que conocerlos, y sin un
-    `optimizador="adam"` que acabe siendo un registro de nombres.
+        t = Trainer(g, objective=cross_entropy,
+                    optimizer=torch.optim.Adam(parameters(g), lr=1e-3))
     """
 
-    def __init__(self, graph, *, objetivo, optimizador):
-        parametros = parameters(graph)
-        if not parametros:
+    def __init__(self, graph, *, objective, optimizer):
+        params = parameters(graph)
+        if not params:
             raise ValueError(
-                "este grafo no tiene parámetros: ningún nodo contesta a "
-                "`.parameters()`, así que entrenarlo no cambiaría nada y la "
-                "pérdida saldría plana"
+                "this graph has no parameters: no node answers `.parameters()`, "
+                "so training it would change nothing and the loss would come out "
+                "flat"
             )
-        _comprueba_que_se_hablan(parametros, optimizador)
+        _check_they_talk(params, optimizer)
 
         self.graph = graph
-        self.objetivo = objetivo
-        self.optimizador = optimizador
+        self.objective = objective
+        self.optimizer = optimizer
 
-    def step(self, lote):
-        """Un paso: adelante, pérdida, atrás, actualizar. Devuelve la pérdida.
+    def step(self, batch):
+        """One step: forward, loss, backward, update. Returns the loss.
 
-        Es **la primitiva**, y `fit` es azúcar encima. Todo lo que no entra en
-        un bucle de épocas —parada temprana, rondas federadas, PBT— se escribe
-        como un `while` sobre esto, en vez de como opciones y *callbacks* de
-        esta clase.
+        **The primitive**, and `fit` is sugar on top: whatever does not fit in an
+        epoch loop is written as a `while` over this.
         """
-        entrada, objetivo = lote
-        self.optimizador.zero_grad()
-        salida = self.graph.forward(_cruzable(entrada))
-        perdida = self.objetivo(salida, _donde_la_salida(objetivo, salida))
-        perdida.backward()
-        self.optimizador.step()
-        return perdida.item()
+        input_, target = batch
+        self.optimizer.zero_grad()
+        output = self.graph.forward(_crossable(input_))
+        loss = self.objective(output, _where_the_output_is(target, output))
+        loss.backward()
+        self.optimizer.step()
+        return loss.item()
 
-    def fit(self, datos, epocas=1):
-        """Da un paso por lote, tantas épocas como digas.
+    def fit(self, data, epochs=1):
+        """Takes one step per batch, for as many epochs as you say.
 
-        `datos` se recorre una vez por época, así que con más de una tiene que
-        ser algo re-iterable —una lista, un `DataLoader`—: un generador se
-        agota en la primera.
+        `data` is walked once per epoch, so with more than one it has to be
+        re-iterable: a generator is exhausted on the first.
         """
-        historia = []
-        for _ in range(epocas):
-            for lote in datos:
-                historia.append(self.step(lote))
-        return Resultado(historia)
+        history = []
+        for _ in range(epochs):
+            for batch in data:
+                history.append(self.step(batch))
+        return Result(history)
 
     def __repr__(self):
-        return f"Trainer({len(parameters(self.graph))} parámetros)"
+        return f"Trainer({len(parameters(self.graph))} parameters)"
 
 
-def _cruzable(entrada):
-    """Un tensor se envuelve para cruzar una arista; lo demás pasa tal cual.
+def _crossable(input_):
+    """A tensor is wrapped to cross an edge; everything else passes as it is.
 
-    `Opaque` se pide a mano en todas partes para que nada cruce opaco por
-    accidente. Aquí se pone solo, y es una excepción con motivo: esto es
-    `soma_next.torch`, donde un tensor no es una sorpresa sino el caso. Lo que
-    no es un tensor —una lista de textos, por ejemplo— sigue su camino y se
-    convierte como siempre.
+    The one place `Opaque` is not asked for by hand, because here a tensor is
+    the case and not a surprise.
     """
-    return Opaque(entrada) if isinstance(entrada, torch.Tensor) else entrada
+    return Opaque(input_) if isinstance(input_, torch.Tensor) else input_
 
 
-def _donde_la_salida(objetivo, salida):
-    """El objetivo va a buscar a la salida allá donde haya acabado.
+def _where_the_output_is(target, output):
+    """The target goes to meet the output wherever it ended up.
 
-    Hay una asimetría que solo se ve entrenando en GPU: la **entrada** cruza el
-    grafo y cada nodo la mueve a su dispositivo, porque eso es lo que hace un
-    nodo colocado. El **objetivo** no entra en el grafo — va directo a la
-    pérdida—, así que nadie lo mueve nunca. Si el último nodo está en `cuda:0`,
-    la salida sale de allí y el objetivo sigue en la cpu.
-
-    Quien puede arreglarlo es el único que ve los dos: esto. Y mover el
-    objetivo y no la salida no es indiferente — traer la salida a la cpu
-    arrastraría el backward de vuelta por el cable en cada paso.
+    The input crosses the graph and each node moves it to its device; the target
+    goes straight to the loss, so nobody ever moves it. The loss is the only one
+    that sees both. Moving the target and not the output: bringing the output
+    back to the cpu would drag the backward pass with it at every step.
     """
-    if torch.is_tensor(objetivo) and torch.is_tensor(salida):
-        return objetivo.to(salida.device)
-    return objetivo
+    if torch.is_tensor(target) and torch.is_tensor(output):
+        return target.to(output.device)
+    return target
 
 
-def _comprueba_que_se_hablan(parametros, optimizador):
-    """Que el optimizador y el grafo hablen de los mismos pesos.
+def _check_they_talk(params, optimizer):
+    """That the optimizer and the graph are talking about the same weights.
 
-    Solo se rechaza que **no compartan ninguno**, que no tiene lectura
-    inocente: el optimizador se construyó sobre otro grafo, o sobre éste antes
-    de que tuviera nodos.
-
-    Cubrir solo una parte sí es legítimo y se deja pasar: entrenar únicamente
-    la cabeza y congelar el encoder es exactamente eso.
+    Only sharing **none at all** is rejected; covering a part is legitimate —
+    freezing the encoder and training the head is exactly that.
     """
-    del_grafo = {id(p) for p in parametros}
-    del_optimizador = {
-        id(p) for grupo in optimizador.param_groups for p in grupo["params"]
+    from_graph = {id(p) for p in params}
+    from_optimizer = {
+        id(p) for group in optimizer.param_groups for p in group["params"]
     }
-    if not (del_grafo & del_optimizador):
+    if not (from_graph & from_optimizer):
         raise ValueError(
-            f"el optimizador no actualiza ningún parámetro de este grafo: "
-            f"tiene {len(del_optimizador)} y el grafo {len(del_grafo)}, y no "
-            f"coincide ninguno. ¿Se construyó sobre otro grafo? "
-            f"Se hace con `Adam(parameters(g), ...)`"
+            f"the optimizer updates no parameter of this graph: it has "
+            f"{len(from_optimizer)} and the graph {len(from_graph)}, and not one "
+            f"matches. Was it built over another graph? "
+            f"You do it with `Adam(parameters(g), ...)`"
         )

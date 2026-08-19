@@ -1,106 +1,106 @@
-"""El DSL de topología: node, edge y las consultas."""
+"""The topology DSL: node, edge and the queries."""
 
 import pytest
 
-from conftest import Identidad, Sumar
+from conftest import Add, Identity
 
 
-def test_un_grafo_recien_creado_esta_vacio(g):
+def test_a_freshly_created_graph_is_empty(g):
     assert len(g) == 0
     assert g.nodes() == []
-    assert repr(g) == "Graph(0 nodos, 0 aristas)"
+    assert repr(g) == "Graph(0 nodes, 0 edges)"
 
 
-def test_node_con_id_explicito_devuelve_el_id(g):
-    assert g.node("limpiar", Identidad()) == "limpiar"
-    assert "limpiar" in g
+def test_node_with_an_explicit_id_returns_the_id(g):
+    assert g.node("clean", Identity()) == "clean"
+    assert "clean" in g
     assert len(g) == 1
 
 
-def test_node_sin_id_lo_deriva_de_la_clase(g):
-    assert g.node(Identidad()) == "identidad"
+def test_node_without_an_id_derives_it_from_the_class(g):
+    assert g.node(Identity()) == "identity"
 
 
-def test_node_sin_id_desempata_sufijando(g):
-    assert g.node(Identidad()) == "identidad"
-    assert g.node(Identidad()) == "identidad_2"
-    assert g.node(Identidad()) == "identidad_3"
+def test_node_without_an_id_breaks_ties_by_suffixing(g):
+    assert g.node(Identity()) == "identity"
+    assert g.node(Identity()) == "identity_2"
+    assert g.node(Identity()) == "identity_3"
 
 
-def test_una_tuberia_de_dos_nodos(g):
-    g.node("limpiar", Identidad())
-    g.node("vectorizar", Identidad())
-    g.edge("limpiar", "vectorizar")
+def test_a_two_node_pipeline(g):
+    g.node("clean", Identity())
+    g.node("vectorize", Identity())
+    g.edge("clean", "vectorize")
 
-    assert g.edges() == [("limpiar", "vectorizar")]
-    assert g.roots() == ["limpiar"]
-    assert g.leaves() == ["vectorizar"]
-    assert g.topological_sort() == ["limpiar", "vectorizar"]
-    assert repr(g) == "Graph(2 nodos, 1 aristas)"
-
-
-def test_el_objeto_registrado_se_recupera(g):
-    nodo = Identidad()
-    g.node("limpiar", nodo)
-    assert g.implementation("limpiar") is nodo
-    assert g.implementation("no_existe") is None
+    assert g.edges() == [("clean", "vectorize")]
+    assert g.roots() == ["clean"]
+    assert g.leaves() == ["vectorize"]
+    assert g.topological_sort() == ["clean", "vectorize"]
+    assert repr(g) == "Graph(2 nodes, 1 edges)"
 
 
-def test_dos_nodos_no_pueden_llamarse_igual(g):
-    g.node("limpiar", Identidad())
-    with pytest.raises(ValueError, match="ya hay un nodo llamado `limpiar`"):
-        g.node("limpiar", Sumar(1))
+def test_the_registered_object_comes_back(g):
+    node = Identity()
+    g.node("clean", node)
+    assert g.implementation("clean") is node
+    assert g.implementation("does_not_exist") is None
+
+
+def test_two_nodes_cannot_share_a_name(g):
+    g.node("clean", Identity())
+    with pytest.raises(ValueError, match="there is already a node called `clean`"):
+        g.node("clean", Add(1))
     assert len(g) == 1
 
 
-def test_una_arista_a_un_nodo_que_no_existe(g):
-    g.node("limpiar", Identidad())
-    with pytest.raises(ValueError, match="no nombra ningún nodo"):
-        g.edge("limpiar", "fantasma")
+def test_an_edge_to_a_node_that_does_not_exist(g):
+    g.node("clean", Identity())
+    with pytest.raises(ValueError, match="names no node"):
+        g.edge("clean", "ghost")
     assert g.edges() == []
 
 
-def test_un_ciclo_se_rechaza_al_ponerlo(g):
+def test_a_cycle_is_rejected_when_added(g):
     for name in ("a", "b", "c"):
-        g.node(name, Identidad())
+        g.node(name, Identity())
     g.edge("a", "b")
     g.edge("b", "c")
-    with pytest.raises(ValueError, match="cerraría un ciclo"):
+    with pytest.raises(ValueError, match="would close a cycle"):
         g.edge("c", "a")
     assert len(g.edges()) == 2
 
 
-def test_la_misma_arista_no_se_pone_dos_veces(g):
-    g.node("a", Identidad())
-    g.node("b", Identidad())
+def test_the_same_edge_is_not_added_twice(g):
+    g.node("a", Identity())
+    g.node("b", Identity())
     g.edge("a", "b")
-    with pytest.raises(ValueError, match="ya existe"):
+    with pytest.raises(ValueError, match="already exists"):
         g.edge("a", "b")
 
 
-def test_consultar_un_nodo_que_no_existe(g):
-    with pytest.raises(ValueError, match="no nombra ningún nodo"):
-        g.predecessors("fantasma")
+def test_querying_a_node_that_does_not_exist(g):
+    with pytest.raises(ValueError, match="names no node"):
+        g.predecessors("ghost")
 
 
-def test_node_con_argumentos_absurdos(g):
-    with pytest.raises(ValueError, match="toma \\(objeto\\)"):
+def test_node_with_absurd_arguments(g):
+    with pytest.raises(ValueError, match="takes \\(object\\)"):
         g.node()
 
 
-def test_ramas_paralelas_que_se_juntan(g):
-    for name in ("entrada", "izquierda", "derecha", "juntar"):
-        g.node(name, Identidad())
-    g.edge("entrada", "izquierda")
-    g.edge("entrada", "derecha")
-    g.edge("izquierda", "juntar")
-    g.edge("derecha", "juntar")
+def test_parallel_branches_that_rejoin(g):
+    for name in ("input", "left", "right", "join"):
+        g.node(name, Identity())
+    g.edge("input", "left")
+    g.edge("input", "right")
+    g.edge("left", "join")
+    g.edge("right", "join")
 
-    assert g.roots() == ["entrada"]
-    assert g.leaves() == ["juntar"]
-    assert g.predecessors("juntar") == ["izquierda", "derecha"]
-    assert g.successors("entrada") == ["izquierda", "derecha"]
+    assert g.roots() == ["input"]
+    assert g.leaves() == ["join"]
+    assert g.predecessors("join") == ["left", "right"]
+    assert g.successors("input") == ["left", "right"]
 
-    orden = g.topological_sort()
-    assert orden[0] == "entrada"
-    assert orden[-1] == "juntar"
+    order = g.topological_sort()
+    assert order[0] == "input"
+    assert order[-1] == "join"

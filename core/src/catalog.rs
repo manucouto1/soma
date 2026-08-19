@@ -1,41 +1,41 @@
-//! El almacén: qué implementación corresponde a cada nodo.
+//! The store: which implementation belongs to each node.
 //!
-//! Va aparte del [`Graph`](crate::Graph) a propósito. El grafo es dato —se
-//! serializa, se compara, se manda a otro sitio—; una implementación no lo es.
-//! Lo que los une es el id del nodo, y nada más.
+//! Apart from the [`Graph`](crate::Graph) on purpose: a graph is data — it
+//! serializes, compares, gets sent elsewhere — and an implementation is not.
+//! What joins them is the node id, and nothing else.
 
 use crate::{Node, NodeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Las implementaciones de un grafo, por id de nodo.
+/// A graph's implementations, by node id.
 #[derive(Default, Clone)]
 pub struct Catalog {
     nodes: HashMap<NodeId, Arc<dyn Node>>,
 }
 
 impl Catalog {
-    /// Un almacén vacío.
+    /// An empty store.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Registra la implementación de un nodo, devolviendo la que hubiera antes.
+    /// Registers a node's implementation, returning whatever was there before.
     pub fn insert(&mut self, id: impl Into<NodeId>, node: Arc<dyn Node>) -> Option<Arc<dyn Node>> {
         self.nodes.insert(id.into(), node)
     }
 
-    /// La implementación registrada para un nodo.
+    /// The implementation registered for a node.
     pub fn get(&self, id: &NodeId) -> Option<&Arc<dyn Node>> {
         self.nodes.get(id)
     }
 
-    /// Cuántas implementaciones hay.
+    /// How many implementations there are.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    /// Si no hay ninguna.
+    /// Whether there are none.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }

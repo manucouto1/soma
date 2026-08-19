@@ -1,39 +1,32 @@
-//! Quien hace lo que un step pide.
+//! Who does what a step asks for.
 //!
-//! El núcleo no sabe qué es una petición: para él es un `Value`. Quien la
-//! interpreta es el driver — llamar a un modelo, ejecutar una herramienta,
-//! consultar un índice. Esa ignorancia es lo que mantiene la capa agéntica
-//! fuera del núcleo.
+//! The core does not know what a request is: to it, it is a `Value`. The one
+//! who interprets it is the driver — calling a model, running a tool, querying
+//! an index. That ignorance is what keeps the agentic layer out of the core.
 
 use crate::Value;
 
-/// Atiende lo que un nodo pidió con [`Transition::Await`](crate::Transition).
+/// Serves what a node asked for with [`Transition::Await`](crate::Transition).
 ///
-/// Es lo declarado frente a lo inyectado: un [`Node`](crate::Node) lo pone
-/// quien declara el grafo y vive en él —tiene id, se coloca, sale en el plan—;
-/// un driver lo pone quien **ejecuta**, no está en el grafo, y lo que devuelve
-/// no cruza ninguna arista: vuelve al `ctx.results` del nodo que lo pidió y no
-/// lo ve nadie más. Por eso el mismo grafo corre con un servicio de verdad o
-/// con un doble sin tocar una línea de su declaración.
+/// Declared versus injected: a [`Node`](crate::Node) is put there by whoever
+/// declares the graph; a driver by whoever **executes**, and what it returns
+/// crosses no edge.
 pub trait Driver: Send + Sync {
-    /// Atiende las peticiones y devuelve un resultado por cada una, en orden.
-    ///
-    /// # Errores
-    /// Lo que el driver quiera decir; el motor lo envuelve con el nodo.
+    /// Serves the requests and returns one result per request, in order.
     fn perform(&self, requests: &[Value]) -> Result<Vec<Value>, DriverError>;
 }
 
-/// Lo que un driver puede contestar cuando no puede atender una petición.
+/// What a driver can answer when it cannot serve a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverError(String);
 
 impl DriverError {
-    /// Un fallo descrito con un mensaje.
+    /// A failure described by a message.
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 
-    /// El mensaje.
+    /// The message.
     pub fn message(&self) -> &str {
         &self.0
     }

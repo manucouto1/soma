@@ -1,11 +1,11 @@
-//! El binario de tests unitarios. Un `mod` por módulo de `src/`.
+//! The unit test binary. One `mod` per module of `src/`.
 //!
-//! Los tests viven fuera de `src/` a propósito: son otro crate, así que solo
-//! ven la API pública y no pueden apoyarse en lo privado para pasar.
+//! The tests live outside `src/` on purpose: they are another crate, so they
+//! only see the public API and cannot lean on anything private to pass.
 
 mod build;
 mod device;
-mod dobles;
+mod doubles;
 mod execution;
 mod graph;
 mod placement;

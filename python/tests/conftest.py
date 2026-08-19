@@ -1,7 +1,7 @@
-"""Nodos de mentira, compartidos por todos los tests.
+"""Fake nodes, shared by every test.
 
-Ninguno declara de qué "tipo" es: lo que los distingue es la transición que
-devuelven.
+None of them declares what "kind" it is: what tells them apart is the transition
+they return.
 """
 
 import pytest
@@ -9,43 +9,43 @@ import pytest
 from soma_next import Await, Done, Graph, Node
 
 
-class Sumar(Node):
-    def __init__(self, cuanto):
-        self.cuanto = cuanto
+class Add(Node):
+    def __init__(self, how_much):
+        self.how_much = how_much
 
     def forward(self, x, ctx):
-        return Done(x + self.cuanto)
+        return Done(x + self.how_much)
 
 
-class Identidad(Node):
+class Identity(Node):
     def forward(self, x, ctx):
         return Done(x)
 
 
-class Media(Node):
-    """Un agregador es un nodo que lee un mapa. No hay ningún tipo detrás."""
+class Mean(Node):
+    """An aggregator is a node that reads a map. There is no type behind it."""
 
-    def forward(self, entradas, ctx):
-        return Done(sum(entradas.values()) / len(entradas))
+    def forward(self, inputs, ctx):
+        return Done(sum(inputs.values()) / len(inputs))
 
 
-class Preguntar(Node):
-    """Pide cosas en el turno 0 y devuelve lo que le contesten."""
+class Ask(Node):
+    """Asks for things on turn 0 and returns whatever it is told."""
 
-    def __init__(self, *peticiones):
-        self.peticiones = list(peticiones)
+    def __init__(self, *requests):
+        self.requests = list(requests)
 
     def forward(self, x, ctx):
         if ctx.turn == 0:
-            return Await(self.peticiones)
+            return Await(self.requests)
         return Done(ctx.results[0])
 
 
-class Gritar:
-    """Un driver."""
+class Shout:
+    """A driver."""
 
-    def perform(self, peticiones):
-        return [p.upper() for p in peticiones]
+    def perform(self, requests):
+        return [r.upper() for r in requests]
 
 
 @pytest.fixture

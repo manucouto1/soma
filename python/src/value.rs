@@ -1,14 +1,13 @@
-//! Traducir entre `Value` y los objetos de Python. Solo eso.
+//! Translating between `Value` and Python objects. Only that.
 //!
-//! La correspondencia es simétrica a propósito: lo que entra como lista sale
-//! como lista. Una conversión que no da la vuelta —una lista de números que se
-//! convierte en otra cosa— es la clase de sorpresa que después nadie entiende.
+//! The correspondence is deliberately symmetric: what goes in as a list comes
+//! out as a list. A conversion that does not round-trip is the kind of surprise
+//! nobody understands later.
 //!
-//! [`PyOpaque`] es la excepción, y es explícita: lo que envuelvas con
-//! `Opaque(x)` cruza **sin convertirse**, y sale por el otro lado siendo el
-//! mismo objeto. Es la única forma de que un valor atraviese el grafo intacto,
-//! y se pide a mano justamente para que no ocurra por accidente: un objeto
-//! desconocido sigue dando error en vez de colarse opaco.
+//! [`PyOpaque`] is the explicit exception: what you wrap with `Opaque(x)`
+//! crosses **without being converted** and comes out as the same object. It is
+//! asked for by hand precisely so it does not happen by accident — an unknown
+//! object still raises rather than slipping through opaque.
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -16,15 +15,11 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 use soma_next_core::Value;
 use std::sync::Arc;
 
-/// Marca un valor para que cruce el grafo sin que nadie lo toque.
-///
-/// Lo que envuelve puede ser cualquier cosa: un tensor de torch a mitad de una
-/// gráfica de autograd, un DataFrame, una conexión. El nodo que lo recibe lo ve
-/// **desenvuelto** —el objeto original, no este envoltorio—, así que solo se
-/// escribe al devolverlo.
+/// Marks a value so it crosses the graph untouched. The node that receives it
+/// sees it **unwrapped**, so it is only written on returning.
 #[pyclass(name = "Opaque", module = "soma_next._soma_next", frozen)]
 pub struct PyOpaque {
-    /// El objeto tal cual.
+    /// The object as it is.
     #[pyo3(get)]
     pub(crate) value: PyObject,
 }
@@ -37,23 +32,21 @@ impl PyOpaque {
     }
 
     fn __repr__(&self, py: Python<'_>) -> String {
-        let nombre = self
+        let name = self
             .value
             .bind(py)
             .get_type()
             .name()
             .map(|n| n.to_string())
             .unwrap_or_else(|_| "?".into());
-        format!("Opaque({nombre})")
+        format!("Opaque({name})")
     }
 }
 
-/// De un objeto Python al valor que cruza una arista.
+/// From a Python object to the value that crosses an edge.
 pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
-    if let Ok(envuelto) = obj.downcast::<PyOpaque>() {
-        // Se guarda el PyObject dentro del opaco del núcleo. El núcleo no sabe
-        // qué es ni tiene forma de averiguarlo.
-        return Ok(Value::opaque(envuelto.get().value.clone_ref(obj.py())));
+    if let Ok(wrapped) = obj.downcast::<PyOpaque>() {
+        return Ok(Value::opaque(wrapped.get().value.clone_ref(obj.py())));
     }
     if obj.is_none() {
         return Ok(Value::Null);
@@ -64,28 +57,23 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(b) = obj.downcast::<PyBytes>() {
         return Ok(Value::Bytes(Arc::new(b.as_bytes().to_vec())));
     }
-    // bool es subclase de int en Python; se deja fuera a propósito, porque
-    // `True` como el número 1.0 es la clase de conversión silenciosa que
-    // después nadie entiende.
+    // A bool is a subclass of int in Python, and left out on purpose.
     if obj.is_instance_of::<PyBool>() {
         return Err(PyTypeError::new_err(
-            "un bool no cruza una arista todavía: no hay variante para él y \
-             convertirlo a 1.0 sería mentir",
+            "a bool does not cross an edge yet: there is no variant for it and \
+             converting it to 1.0 would be lying",
         ));
     }
     if obj.is_instance_of::<PyFloat>() || obj.is_instance_of::<PyInt>() {
         return Ok(Value::number(obj.extract::<f64>()?));
     }
     if let Ok(dict) = obj.downcast::<PyDict>() {
-        // Un dict de Python conserva el orden de inserción, y `Value::Map`
-        // también: la ida y la vuelta dan el mismo dict.
+        // A dict keeps insertion order, and so does `Value::Map`.
         let pairs = dict
             .iter()
             .map(|(k, v)| {
                 let key: String = k.extract().map_err(|_| {
-                    PyTypeError::new_err(
-                        "las claves de un dict que cruza una arista tienen que ser texto",
-                    )
+                    PyTypeError::new_err("the keys of a dict that crosses an edge have to be text")
                 })?;
                 Ok((key, from_py(&v)?))
             })
@@ -100,14 +88,14 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::list(items));
     }
     Err(PyTypeError::new_err(format!(
-        "un `{}` no cruza una arista: hoy pasan None, str, bytes, números, \
-         listas y dicts con claves de texto. Para que algo cruce sin \
-         convertirse, envuélvelo: Opaque(x)",
+        "a `{}` does not cross an edge: today None, str, bytes, numbers, lists \
+         and dicts with text keys do. For something to cross without being \
+         converted, wrap it: Opaque(x)",
         obj.get_type().name()?
     )))
 }
 
-/// Del valor que cruza una arista al objeto que ve el usuario.
+/// From the value that crosses an edge to the object the user sees.
 pub fn to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
     Ok(match value {
         Value::Null => py.None(),
@@ -125,8 +113,8 @@ pub fn to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
             Some(obj) => obj.clone_ref(py),
             None => {
                 return Err(PyTypeError::new_err(
-                    "este valor opaco no lo puso Python, así que no hay nada que \
-                     devolver aquí",
+                    "this opaque value was not put there by Python, so there is \
+                     nothing to return here",
                 ));
             }
         },
