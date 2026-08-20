@@ -54,7 +54,7 @@
 
 use crate::frame;
 use crate::{Answer, Label, Provision, Provisioned, Request};
-use soma_next_core::{Catalog, Driver, Executor};
+use soma_next_core::{Catalog, Driver, Executor, Keeper};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
@@ -65,6 +65,7 @@ pub struct Serving<'a> {
     source: Source<'a>,
     driver: Option<&'a dyn Driver>,
     store: Option<&'a dyn Store>,
+    keeper: Option<&'a dyn Keeper>,
 }
 
 impl<'a> Serving<'a> {
@@ -74,6 +75,7 @@ impl<'a> Serving<'a> {
             source: Source::Own(catalog),
             driver: None,
             store: None,
+            keeper: None,
         }
     }
 
@@ -84,6 +86,7 @@ impl<'a> Serving<'a> {
             source: Source::Sent(provision),
             driver: None,
             store: None,
+            keeper: None,
         }
     }
 
@@ -104,6 +107,22 @@ impl<'a> Serving<'a> {
     /// up is provisioned without the client noticing.
     pub fn store(mut self, store: &'a dyn Store) -> Self {
         self.store = Some(store);
+        self
+    }
+
+    /// The same worker, able to keep what the slices it runs produce.
+    ///
+    /// Separate from [`Serving::store`] and not derived from it: that one keeps
+    /// **artifacts**, so that a worker is not sent a catalog it already has;
+    /// this one keeps **values**, so that a node whose answer is already known
+    /// is not run at all. Both can be the same directory underneath, and the two
+    /// questions still have nothing to do with each other.
+    ///
+    /// What is remembered about each node does not come from here: it arrives
+    /// with the work, because it belongs to the graph and the graph is over
+    /// there.
+    pub fn keeping(mut self, keeper: &'a dyn Keeper) -> Self {
+        self.keeper = Some(keeper);
         self
     }
 
@@ -170,6 +189,7 @@ struct Shared<'a> {
     source: Source<'a>,
     driver: Option<&'a dyn Driver>,
     store: Option<&'a dyn Store>,
+    keeper: Option<&'a dyn Keeper>,
     loaded: Mutex<Loaded<'a>>,
 }
 
@@ -183,6 +203,7 @@ impl<'a> Shared<'a> {
             source: serving.source,
             driver: serving.driver,
             store: serving.store,
+            keeper: serving.keeper,
             loaded: Mutex::new(loaded),
         }
     }
@@ -336,7 +357,9 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
             plan,
             input,
             known,
+            keys,
             placement,
+            memory,
         } => {
             // The lock is released before executing — a `Catalog` clones by
             // `Arc` — or every client would serialize against the run.
@@ -365,12 +388,15 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
                 );
             };
             let mut executor = Executor::new(&catalog).placed(&placement);
+            if let Some(keeper) = shared.keeper {
+                executor = executor.keeping(keeper, &memory);
+            }
             // The one that arrived wins: it belongs to the job.
             if let Some(driver) = sent.as_deref().or(shared.driver) {
                 executor = executor.with_driver(driver);
             }
             // What arrived is fed in as if this run had produced it.
-            match executor.resume(&plan, input, known) {
+            match executor.resume(&plan, input, known, keys) {
                 Ok(outcome) => Answer::Done(outcome),
                 Err(e) => Answer::Failed(e.to_string()),
             }

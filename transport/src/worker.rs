@@ -254,7 +254,9 @@ impl Transport for Worker {
             plan: plan.clone(),
             input: cargo.input.clone(),
             known: cargo.known.to_vec(),
+            keys: cargo.keys.to_vec(),
             placement: cargo.placement.clone(),
+            memory: cargo.memory.clone(),
         };
         match open.say(&work)? {
             Answer::Done(outcome) => Ok(outcome),

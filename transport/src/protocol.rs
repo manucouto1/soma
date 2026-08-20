@@ -15,8 +15,8 @@
 //! → Provision { bytes }                only if it answered Send
 //! ← Ready | Refused(why)
 //!
-//! → Work { plan, input, known, placement }     n times
-//! ← Done { last, produced } | Failed(why)
+//! → Work { plan, input, known, keys, placement, memory }     n times
+//! ← Done { last, produced, keys } | Failed(why)
 //! ```
 //!
 //! # Why it is announced before being sent
@@ -64,10 +64,18 @@
 
 use crate::{Label, Outcome};
 use serde::{Deserialize, Serialize};
-use soma_next_core::{Device, NodeId, Placement, Plan, Value};
+use soma_next_core::{Device, Key, Memory, NodeId, Placement, Plan, Value};
 use std::fmt;
 
 /// What the client says.
+///
+/// The first `allow` in the project, and it is worth saying why rather than
+/// leaving it to be discovered: `Work` is far bigger than `Hello`, and clippy is
+/// right about the arithmetic and wrong about what to do. Boxing it would buy an
+/// allocation on every message to save a few hundred bytes of stack on one that
+/// is about to be serialized anyway — and `Hello` is sent **once per session**
+/// while `Work` is the whole conversation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Opens the session: who I am and what I would provision you with.
@@ -94,8 +102,14 @@ pub enum Request {
         /// What was produced on the client that this plan reads and does not
         /// produce.
         known: Vec<(NodeId, Value)>,
+        /// What each of those is called, so what runs here can name what it
+        /// produces and the chain of keys does not stop at the wire.
+        keys: Vec<(NodeId, Key)>,
         /// Where each node of this slice runs.
         placement: Placement,
+        /// What is remembered about the nodes of this slice: what implements
+        /// each, which are settled, which are worth keeping.
+        memory: Memory,
     },
 }
 
@@ -178,15 +192,21 @@ fn read<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, MessageError>
 
 /// What a request looks like on the wire.
 ///
-/// A mirror of [`Request`], and not the type itself, because of the one field
-/// `serde` cannot decide on its own: the **placement**. Only the devices of
-/// *this plan's* nodes travel — sending the whole thing would put on the wire
-/// where nodes that do not even exist there run — and the **host** half does not
-/// travel at all, having already done its job when it decided this slice would
-/// leave. `serde` sees one field at a time, so that transformation lives here.
+/// A mirror of [`Request`], and not the type itself, because of the fields
+/// `serde` cannot decide on its own: the **placement** and the **memory**. Only
+/// what belongs to *this plan's* nodes travels — sending the whole thing would
+/// put on the wire where nodes that do not even exist there run, and what is
+/// remembered of them — and of the placement the **host** half does not travel
+/// at all, having already done its job when it decided this slice would leave.
+/// `serde` sees one field at a time, so those transformations live here.
+///
+/// The memory is the one thing here that is **built** rather than borrowed: a
+/// projection has to be made somewhere, and it is a handful of short strings
+/// against a plan and its values.
 ///
 /// Two mirrors and not one so that sending copies nothing. **Their variants have
 /// to stay in the same order**: what goes on the wire is the index.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize)]
 enum Sending<'a> {
     Hello {
@@ -200,10 +220,13 @@ enum Sending<'a> {
         plan: &'a Plan,
         input: &'a Value,
         known: &'a [(NodeId, Value)],
+        keys: &'a [(NodeId, Key)],
         devices: Vec<(&'a NodeId, &'a Device)>,
+        memory: Memory,
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Deserialize)]
 enum Received {
     Hello {
@@ -217,7 +240,9 @@ enum Received {
         plan: Plan,
         input: Value,
         known: Vec<(NodeId, Value)>,
+        keys: Vec<(NodeId, Key)>,
         devices: Vec<(NodeId, Device)>,
+        memory: Memory,
     },
 }
 
@@ -233,12 +258,16 @@ impl<'a> From<&'a Request> for Sending<'a> {
                 plan,
                 input,
                 known,
+                keys,
                 placement,
+                memory,
             } => Sending::Work {
                 plan,
                 input,
                 known,
+                keys,
                 devices: devices_in(plan, placement),
+                memory: memory_in(plan, memory),
             },
         }
     }
@@ -253,7 +282,9 @@ impl From<Received> for Request {
                 plan,
                 input,
                 known,
+                keys,
                 devices,
+                memory,
             } => {
                 let mut placement = Placement::new();
                 for (id, device) in devices {
@@ -263,7 +294,9 @@ impl From<Received> for Request {
                     plan,
                     input,
                     known,
+                    keys,
                     placement,
+                    memory,
                 }
             }
         }
@@ -277,6 +310,28 @@ fn devices_in<'a>(plan: &'a Plan, placement: &'a Placement) -> Vec<(&'a NodeId, 
     ids.into_iter()
         .filter_map(|id| placement.of(id).map(|device| (id, device)))
         .collect()
+}
+
+/// What is remembered about each node of this plan, and about no other.
+fn memory_in(plan: &Plan, memory: &Memory) -> Memory {
+    let mut ids = Vec::new();
+    nodes_in(plan, &mut ids);
+    let mut mine = Memory::new();
+    for id in ids {
+        if let Some(what) = memory.identity_of(id) {
+            mine.identify(id.clone(), what);
+        }
+        if memory.is_frozen(id) {
+            mine.freeze(id.clone(), memory.state_of(id).map(str::to_string));
+        }
+        if memory.is_cached(id) {
+            mine.cache(id.clone(), memory.salt_of(id).map(str::to_string));
+        }
+        if let Some(written) = memory.fingerprint_of(id) {
+            mine.written_as(id.clone(), written);
+        }
+    }
+    mine
 }
 
 fn nodes_in<'p>(plan: &'p Plan, out: &mut Vec<&'p NodeId>) {

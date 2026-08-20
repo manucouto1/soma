@@ -13,10 +13,25 @@
 //! [`Value::Map`] keyed by whoever produced each. Fan-in is neither a plan
 //! variant nor a kind of node, it is the shape an input with several origins
 //! takes; aggregating them is the receiving node's job, i.e. library.
+//!
+//! # The keys travel beside what was produced, not inside it
+//!
+//! A cached node has to be named before it runs, and its name is built out of
+//! the names of what it reads — so a [`Key`] has to reach it along the same
+//! edge its input does. labchain hangs that hash **inside** the value, because
+//! it has no engine: the pipeline is the user's code and the only place left to
+//! put one is the data. Here the walk already carries `produced` everywhere, so
+//! the keys go in a **table beside it** — same lifetime, same copy into a
+//! wave's branches, same retention in [`Executor::resume`] — and neither
+//! [`Value`] grows a wrapper every `forward` would have to unwrap, nor does the
+//! [`Node`](crate::Node) contract change.
+//!
+//! Nothing of this happens without [`Executor::keeping`]: with no keeper the
+//! table stays empty and the engine is what it was.
 
 use crate::{
-    Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, NodeError, NodeId, Outcome, Placement,
-    Plan, Transition, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, Keeper, Kept, Key, Memory, NodeError,
+    NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError, Value,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -24,6 +39,12 @@ use std::fmt;
 /// How many times a node is asked before it is given up for hung. A node that
 /// does not finish is a bug in the node, not a legitimate wait.
 const MAX_TURNS: usize = 64;
+
+/// What the engine writes beside a value it keeps. Private because the engine
+/// is the only one that writes it and the only one that reads it back: to a
+/// [`Keeper`] the metadata is text it hands over untouched.
+const NODE: &str = "node";
+const FINGERPRINT: &str = "fingerprint";
 
 /// Executes plans.
 ///
@@ -33,6 +54,10 @@ pub struct Executor<'a> {
     catalog: &'a Catalog,
     driver: Option<&'a dyn Driver>,
     placement: Option<&'a Placement>,
+    /// Who hashes and keeps, and what is remembered about each node. The two
+    /// together or neither: a keeper with nothing declared keeps nothing, and a
+    /// declaration with nobody to hash it names nothing.
+    keeping: Option<(&'a dyn Keeper, &'a Memory)>,
     /// Which host it knows how to reach, and by what route. A list because
     /// there are two or three of them.
     transports: Vec<(Host, &'a dyn Transport)>,
@@ -46,6 +71,7 @@ impl<'a> Executor<'a> {
             catalog,
             driver: None,
             placement: None,
+            keeping: None,
             transports: Vec::new(),
         }
     }
@@ -63,6 +89,21 @@ impl<'a> Executor<'a> {
         self
     }
 
+    /// The same executor, naming what it produces and keeping what was said to
+    /// be worth keeping.
+    ///
+    /// Both at once because neither is any use alone. Without this the keys are
+    /// not even computed, which is why a graph that declares nothing pays
+    /// nothing.
+    ///
+    /// Whether what the [`Memory`] declares can honestly be kept is
+    /// [`cacheable`](crate::cacheable)'s question, and it is asked by whoever
+    /// has the graph: the engine never looks at one.
+    pub fn keeping(mut self, keeper: &'a dyn Keeper, memory: &'a Memory) -> Self {
+        self.keeping = Some((keeper, memory));
+        self
+    }
+
     /// The same executor, knowing how to reach a host. Called once per host; a
     /// name nobody resolves is [`RunError::NoTransport`], not a slice executed
     /// here just in case.
@@ -75,7 +116,8 @@ impl<'a> Executor<'a> {
     /// the execution.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let mut produced: HashMap<NodeId, Value> = HashMap::new();
-        let last = self.walk(plan, &input, &mut produced)?;
+        let mut keys: HashMap<NodeId, Key> = HashMap::new();
+        let last = self.walk(plan, &input, &mut produced, &mut keys)?;
 
         // A graph's output is that of its leaves: one leaf gives that value,
         // several a map keyed by each — the same shape as an input with several
@@ -101,25 +143,32 @@ impl<'a> Executor<'a> {
     /// on receiving one.
     ///
     /// `known` is fed in as if this very run had produced it, so the steps read
-    /// it through their `from`. What comes back does **not** include it, and is
-    /// ordered by id because this crosses a process boundary.
+    /// it through their `from`, and `named` likewise: a slice that arrives
+    /// without the keys of what it reads can name nothing it produces, which is
+    /// a cache that stops at the process boundary rather than an error.
+    ///
+    /// What comes back does **not** include either of them, and both are ordered
+    /// by id because this crosses a process boundary.
     pub fn resume(
         &self,
         plan: &Plan,
         input: Value,
         known: Vec<(NodeId, Value)>,
+        named: Vec<(NodeId, Key)>,
     ) -> Result<Outcome, RunError> {
         let mut produced: HashMap<NodeId, Value> = known.into_iter().collect();
+        let mut keys: HashMap<NodeId, Key> = named.into_iter().collect();
         let brought: Vec<NodeId> = produced.keys().cloned().collect();
+        let named: Vec<NodeId> = keys.keys().cloned().collect();
 
-        let last = self.walk(plan, &input, &mut produced)?;
+        let last = self.walk(plan, &input, &mut produced, &mut keys)?;
 
         produced.retain(|id, _| !brought.contains(id));
-        let mut mine: Vec<(NodeId, Value)> = produced.into_iter().collect();
-        mine.sort_by(|(a, _), (b, _)| a.cmp(b));
+        keys.retain(|id, _| !named.contains(id));
         Ok(Outcome {
             last,
-            produced: mine,
+            produced: sorted(produced),
+            keys: sorted(keys),
         })
     }
 
@@ -130,24 +179,40 @@ impl<'a> Executor<'a> {
         plan: &Plan,
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
+        keys: &mut HashMap<NodeId, Key>,
     ) -> Result<Value, RunError> {
         match plan {
             Plan::Empty => Ok(graph_input.clone()),
             Plan::Execute { node, from } => {
-                let input = gather(from, graph_input, produced);
-                let output = self.advance(node, input)?;
+                let key = self.key_for(node, from, graph_input, keys);
+                if let Some(key) = &key {
+                    keys.insert(node.clone(), key.clone());
+                }
+                // A hit is the whole point: the node is not advanced, and its
+                // input is not even assembled.
+                let output = match self.recalled(node, key.as_ref()) {
+                    Some(kept) => kept,
+                    None => {
+                        let input = gather(from, graph_input, produced);
+                        let output = self.advance(node, input)?;
+                        self.keep(node, key.as_ref(), &output);
+                        output
+                    }
+                };
                 produced.insert(node.clone(), output.clone());
                 Ok(output)
             }
             Plan::Sequence(plans) => {
                 let mut last = graph_input.clone();
                 for plan in plans {
-                    last = self.walk(plan, graph_input, produced)?;
+                    last = self.walk(plan, graph_input, produced, keys)?;
                 }
                 Ok(last)
             }
-            Plan::Wave(branches) => self.at_once(branches, graph_input, produced),
-            Plan::Remote { host, inner } => self.elsewhere(host, inner, graph_input, produced),
+            Plan::Wave(branches) => self.at_once(branches, graph_input, produced, keys),
+            Plan::Remote { host, inner } => {
+                self.elsewhere(host, inner, graph_input, produced, keys)
+            }
         }
     }
 
@@ -162,17 +227,21 @@ impl<'a> Executor<'a> {
         branches: &[Plan],
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
+        keys: &mut HashMap<NodeId, Key>,
     ) -> Result<Value, RunError> {
         let earlier: &HashMap<NodeId, Value> = produced;
+        let named: &HashMap<NodeId, Key> = keys;
         let outcomes = std::thread::scope(|scope| {
             let running: Vec<_> = branches
                 .iter()
                 .map(|branch| {
                     scope.spawn(move || {
                         let mut mine = earlier.clone();
-                        let last = self.walk(branch, graph_input, &mut mine)?;
+                        let mut mine_keys = named.clone();
+                        let last = self.walk(branch, graph_input, &mut mine, &mut mine_keys)?;
                         mine.retain(|id, _| !earlier.contains_key(id));
-                        Ok::<_, RunError>((last, mine))
+                        mine_keys.retain(|id, _| !named.contains_key(id));
+                        Ok::<_, RunError>((last, mine, mine_keys))
                     })
                 })
                 .collect();
@@ -188,8 +257,9 @@ impl<'a> Executor<'a> {
 
         for outcome in outcomes {
             // The first to fail **in declaration order**, not in time.
-            let (_, mine) = outcome?;
+            let (_, mine, mine_keys) = outcome?;
             produced.extend(mine);
+            keys.extend(mine_keys);
         }
 
         // A wave has no single output: its branches end in several places.
@@ -205,6 +275,7 @@ impl<'a> Executor<'a> {
         inner: &Plan,
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
+        keys: &mut HashMap<NodeId, Key>,
     ) -> Result<Value, RunError> {
         let transport = self
             .transports
@@ -213,16 +284,26 @@ impl<'a> Executor<'a> {
             .map(|(_, transport)| *transport)
             .ok_or_else(|| RunError::NoTransport(host.clone()))?;
 
-        let known: Vec<(NodeId, Value)> = needs(inner)
-            .into_iter()
-            .filter_map(|id| produced.get(&id).map(|value| (id, value.clone())))
+        let reads = needs(inner);
+        let known: Vec<(NodeId, Value)> = reads
+            .iter()
+            .filter_map(|id| produced.get(id).map(|value| (id.clone(), value.clone())))
+            .collect();
+        // The keys of the same set: what it reads is what it has to be able to
+        // name, and what it produces it names from those.
+        let named: Vec<(NodeId, Key)> = reads
+            .iter()
+            .filter_map(|id| keys.get(id).map(|key| (id.clone(), key.clone())))
             .collect();
 
         let nowhere = Placement::new();
+        let nothing = Memory::new();
         let cargo = Cargo {
             input: graph_input,
             known: &known,
+            keys: &named,
             placement: self.placement.unwrap_or(&nowhere),
+            memory: self.keeping.map_or(&nothing, |(_, memory)| memory),
         };
         let outcome = transport
             .dispatch(inner, &cargo)
@@ -232,6 +313,7 @@ impl<'a> Executor<'a> {
             })?;
 
         produced.extend(outcome.produced);
+        keys.extend(outcome.keys);
         Ok(outcome.last)
     }
 
@@ -273,6 +355,105 @@ impl<'a> Executor<'a> {
             node: node.clone(),
             turns: MAX_TURNS,
         })
+    }
+
+    /// The name this node's output will have, **before** it has one.
+    ///
+    /// One of the two seams of the cache, and it has a name of its own because
+    /// it is where the observer of gradients will hang: it is the one place
+    /// that sees every edge with what crosses it already decided.
+    ///
+    /// `None` — no name — whenever anything the recipe is made of is missing:
+    /// no keeper, nothing said about what implements this node, or a
+    /// predecessor that has no key either. It is not a failure. It means this
+    /// output cannot be kept and neither can anything below it, and the run
+    /// goes on exactly as it did before any of this existed.
+    fn key_for(
+        &self,
+        node: &NodeId,
+        from: &[NodeId],
+        graph_input: &Value,
+        keys: &HashMap<NodeId, Key>,
+    ) -> Option<Key> {
+        let (keeper, memory) = self.keeping?;
+        let identity = memory.identity_of(node)?;
+        // A root reads the graph's input, and the input is the one thing in the
+        // whole chain hashed **by its content** — from here down it is hashes
+        // of hashes, which is what makes a key knowable before anything runs.
+        let above: Vec<Key> = match from {
+            [] => vec![keeper.key_of(graph_input)?],
+            many => many
+                .iter()
+                .map(|id| keys.get(id).cloned())
+                .collect::<Option<Vec<_>>>()?,
+        };
+
+        // The state of a node that is not frozen is empty, and it does not
+        // matter: nothing unfrozen is kept, nor is anything under it.
+        let mut parts = vec![
+            identity,
+            memory.state_of(node).unwrap_or(""),
+            memory.salt_of(node).unwrap_or(""),
+        ];
+        parts.extend(above.iter().map(Key::as_str));
+        Some(keeper.combine(&parts))
+    }
+
+    /// What is kept under this node's name, if it is kept at all.
+    ///
+    /// A keeper that cannot answer is **not** the end of the run: the value is
+    /// recomputed and the trouble is said out loud, the same as a worker whose
+    /// store cannot be reached asks the client instead of refusing. A cache is
+    /// an optimization, and an optimization that can kill a run at hour three
+    /// is not one.
+    fn recalled(&self, node: &NodeId, key: Option<&Key>) -> Option<Value> {
+        let (keeper, memory) = self.keeping?;
+        let key = key?;
+        if !memory.is_cached(node) {
+            return None;
+        }
+        let kept = match keeper.recall(&[key]) {
+            Ok(answers) => answers.into_iter().next().flatten()?,
+            Err(why) => {
+                eprintln!("what `{node}` produced could not be looked up: {why}");
+                return None;
+            }
+        };
+
+        // The fingerprint is not in the key on purpose — a cosmetic refactor
+        // would invalidate half the store in silence — so this is where the two
+        // are put side by side. It is said, and what was kept is used: whoever
+        // wants the other behaviour asks for it.
+        if let (Some(declared), Some(written)) = (memory.fingerprint_of(node), fingerprint(&kept))
+            && declared != written
+        {
+            eprintln!(
+                "`{node}` was kept by code fingerprinted `{written}` and this graph declares \
+                 `{declared}`: using what is kept, since the fingerprint is not part of the key"
+            );
+        }
+        Some(kept.value)
+    }
+
+    /// Keeps what this node produced, if it was said to be worth keeping.
+    ///
+    /// The other seam. A node with no `.cached()` still got a key above and
+    /// still passed it on — it just does not land anywhere, which is what makes
+    /// declaring the cache node by node cost nothing to the chain.
+    fn keep(&self, node: &NodeId, key: Option<&Key>, output: &Value) {
+        let (Some((keeper, memory)), Some(key)) = (self.keeping, key) else {
+            return;
+        };
+        if !memory.is_cached(node) {
+            return;
+        }
+        let mut meta = vec![(NODE, node.as_str())];
+        if let Some(written) = memory.fingerprint_of(node) {
+            meta.push((FINGERPRINT, written));
+        }
+        if let Err(why) = keeper.keep(key, output, &meta) {
+            eprintln!("what `{node}` produced could not be kept: {why}");
+        }
     }
 
     /// Where this node was said to run. Without a placement, nowhere.
@@ -378,6 +559,22 @@ fn gather(from: &[NodeId], graph_input: &Value, produced: &HashMap<NodeId, Value
                 .collect::<Vec<_>>(),
         ),
     }
+}
+
+/// A table in the order a wire wants it: by id, so two runs of the same thing
+/// answer with the same bytes.
+fn sorted<T>(table: HashMap<NodeId, T>) -> Vec<(NodeId, T)> {
+    let mut out: Vec<(NodeId, T)> = table.into_iter().collect();
+    out.sort_by(|(a, _), (b, _)| a.cmp(b));
+    out
+}
+
+/// What was written beside a kept value about the code that produced it.
+fn fingerprint(kept: &Kept) -> Option<&str> {
+    kept.meta
+        .iter()
+        .find(|(what, _)| what == FINGERPRINT)
+        .map(|(_, written)| written.as_str())
 }
 
 /// What this plan reads and does not produce: what has to travel with it.

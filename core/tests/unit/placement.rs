@@ -35,7 +35,7 @@ fn unplaced_is_not_the_same_as_on_cpu() {
 
 #[test]
 fn on_places_the_whole_piece() {
-    let (_, _, placement) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).on(Device::Cuda(0)))
+    let (_, _, placement, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).on(Device::Cuda(0)))
         .somatize()
         .unwrap();
 
@@ -45,7 +45,7 @@ fn on_places_the_whole_piece() {
 
 #[test]
 fn the_innermost_one_wins() {
-    let (_, _, placement) = ((node("a", Add(1.0)).on(Device::Cuda(0)) >> node("b", Add(1.0)))
+    let (_, _, placement, _) = ((node("a", Add(1.0)).on(Device::Cuda(0)) >> node("b", Add(1.0)))
         .on(Device::Meta))
     .somatize()
     .unwrap();
@@ -56,7 +56,7 @@ fn the_innermost_one_wins() {
 
 #[test]
 fn each_branch_in_its_own_place() {
-    let (_, _, placement) = (node("source", Add(1.0))
+    let (_, _, placement, _) = (node("source", Add(1.0))
         >> (node("left", Add(1.0)).on(Device::Cuda(0)) | node("right", Add(1.0)).on(Device::Cpu)))
     .somatize()
     .unwrap();
@@ -68,7 +68,7 @@ fn each_branch_in_its_own_place() {
 
 #[test]
 fn what_is_not_placed_stays_unplaced() {
-    let (_, _, placement) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
+    let (_, _, placement, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
         .somatize()
         .unwrap();
     assert!(placement.is_empty());
@@ -86,8 +86,8 @@ fn placing_does_not_change_the_plan() {
             >> node("join", Add(1.0))
     };
 
-    let (g, c, _) = expression().somatize().unwrap();
-    let (g_placed, c_placed, placement) = expression().on(Device::Cuda(0)).somatize().unwrap();
+    let (g, c, _, _) = expression().somatize().unwrap();
+    let (g_placed, c_placed, placement, _) = expression().on(Device::Cuda(0)).somatize().unwrap();
 
     assert_eq!(placement.len(), 4, "all four have a place");
     assert_eq!(
@@ -100,10 +100,10 @@ fn placing_does_not_change_the_plan() {
 fn placing_does_not_change_the_graph() {
     // `Graph` is still topology only, so two equal graphs placed differently are
     // equal **as graphs**.
-    let (g, _, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
+    let (g, _, _, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
         .somatize()
         .unwrap();
-    let (g_placed, _, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).on(Device::Cuda(0)))
+    let (g_placed, _, _, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).on(Device::Cuda(0)))
         .somatize()
         .unwrap();
 
@@ -174,7 +174,7 @@ fn without_hosts_the_placement_is_local() {
 
 #[test]
 fn at_sends_the_whole_piece() {
-    let (_, _, placement) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).at("w1"))
+    let (_, _, placement, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).at("w1"))
         .somatize()
         .unwrap();
 
@@ -184,7 +184,7 @@ fn at_sends_the_whole_piece() {
 
 #[test]
 fn with_hosts_the_innermost_one_wins_too() {
-    let (_, _, placement) = ((node("a", Add(1.0)).at("w1") >> node("b", Add(1.0))).at("w2"))
+    let (_, _, placement, _) = ((node("a", Add(1.0)).at("w1") >> node("b", Add(1.0))).at("w2"))
         .somatize()
         .unwrap();
 
@@ -198,7 +198,7 @@ fn an_inner_device_does_not_stop_the_outer_host_from_arriving() {
     // list, `.at` would have skipped `a` for "already having a place" and it
     // would have ended up without a host for having asked for a GPU — which
     // there is no way of writing on purpose.
-    let (_, _, placement) = ((node("a", Add(1.0)).on(Device::Cuda(0)) >> node("b", Add(1.0)))
+    let (_, _, placement, _) = ((node("a", Add(1.0)).on(Device::Cuda(0)) >> node("b", Add(1.0)))
         .at("w1"))
     .somatize()
     .unwrap();
@@ -229,7 +229,7 @@ fn the_order_of_on_and_at_does_not_matter() {
 
 #[test]
 fn each_branch_to_its_own_host() {
-    let (_, _, placement) = (node("source", Add(1.0))
+    let (_, _, placement, _) = (node("source", Add(1.0))
         >> (node("left", Add(1.0)).at("w1") | node("right", Add(1.0)).at("w2")))
     .somatize()
     .unwrap();
@@ -248,10 +248,10 @@ fn sending_away_changes_neither_the_graph_nor_what_compile_produces() {
     // The same that already held for devices: `compile` sees none of this. What
     // does change is what comes out of `distribute`, and that is tested in
     // `plan.rs`.
-    let (g, c, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
+    let (g, c, _, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
         .somatize()
         .unwrap();
-    let (g_away, c_away, placement) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).at("w1"))
+    let (g_away, c_away, placement, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).at("w1"))
         .somatize()
         .unwrap();
 

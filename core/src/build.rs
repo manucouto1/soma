@@ -1,7 +1,7 @@
 //! Declaring a graph as an expression, instead of by calls.
 //!
 //! ```ignore
-//! let (graph, catalog, placement) = (node("source", Add(1.0))
+//! let (graph, catalog, placement, memory) = (node("source", Add(1.0))
 //!     >> (node("left", Add(10.0)).on(Device::Cuda(0)) | node("right", Add(100.0)))
 //!     >> node("join", Mean))
 //! .somatize()?;
@@ -16,7 +16,7 @@
 //! materialized until [`Wire::somatize`], so joining two pieces concatenates
 //! lists rather than merging graphs.
 
-use crate::{Catalog, Device, Graph, GraphError, Host, Node, NodeId, Placement};
+use crate::{Catalog, Device, Graph, GraphError, Host, Memory, Node, NodeId, Placement};
 use std::ops::{BitOr, Shr};
 use std::sync::Arc;
 
@@ -35,22 +35,46 @@ struct Parts {
     /// The ones that already have a host. Separate from the devices so that
     /// `.on(...)` does not shadow an inner `.at(...)`, or the other way round.
     hosts: Vec<(NodeId, Host)>,
+    /// What implements each one. Filled where the concrete type is still known,
+    /// which is [`node`] and nowhere else: from there on it is an `Arc<dyn
+    /// Node>` and the name is gone.
+    identities: Vec<(NodeId, String)>,
+    /// The ones settled, each with the digest of the state they are settled at —
+    /// never one here, because hashing weights is torch's job and this is the
+    /// core.
+    frozen: Vec<(NodeId, Option<String>)>,
+    /// The ones worth keeping, each with its salt — likewise never one here:
+    /// telling apart two runs the key cannot is a knob for whoever runs them,
+    /// and it is [`Memory::cache`] for anyone who wants it.
+    cached: Vec<(NodeId, Option<String>)>,
 }
 
 /// A lone node.
-pub fn node(id: impl Into<NodeId>, implementation: impl Node + 'static) -> Wire {
-    single(id.into(), Arc::new(implementation))
+///
+/// Named after its type, because this is the last place that knows it: what a
+/// node is called is half of the key its output is kept under, and one line
+/// later there is only an `Arc<dyn Node>`. Python does the same thing with the
+/// class name.
+pub fn node<N: Node + 'static>(id: impl Into<NodeId>, implementation: N) -> Wire {
+    single(
+        id.into(),
+        std::any::type_name::<N>(),
+        Arc::new(implementation),
+    )
 }
 
-fn single(id: NodeId, implementation: Arc<dyn Node>) -> Wire {
+fn single(id: NodeId, identity: &str, implementation: Arc<dyn Node>) -> Wire {
     Wire {
         parts: Ok(Parts {
             nodes: vec![(id.clone(), implementation)],
             edges: Vec::new(),
             heads: vec![id.clone()],
-            terminals: vec![id],
+            terminals: vec![id.clone()],
             devices: Vec::new(),
             hosts: Vec::new(),
+            identities: vec![(id, identity.to_string())],
+            frozen: Vec::new(),
+            cached: Vec::new(),
         }),
     }
 }
@@ -73,6 +97,13 @@ impl Shr for Wire {
             terminals: right.terminals,
             devices: left.devices.into_iter().chain(right.devices).collect(),
             hosts: left.hosts.into_iter().chain(right.hosts).collect(),
+            identities: left
+                .identities
+                .into_iter()
+                .chain(right.identities)
+                .collect(),
+            frozen: left.frozen.into_iter().chain(right.frozen).collect(),
+            cached: left.cached.into_iter().chain(right.cached).collect(),
         })
     }
 }
@@ -90,6 +121,13 @@ impl BitOr for Wire {
             terminals: left.terminals.into_iter().chain(right.terminals).collect(),
             devices: left.devices.into_iter().chain(right.devices).collect(),
             hosts: left.hosts.into_iter().chain(right.hosts).collect(),
+            identities: left
+                .identities
+                .into_iter()
+                .chain(right.identities)
+                .collect(),
+            frozen: left.frozen.into_iter().chain(right.frozen).collect(),
+            cached: left.cached.into_iter().chain(right.cached).collect(),
         })
     }
 }
@@ -140,13 +178,45 @@ impl Wire {
         }
     }
 
-    /// Materializes what was declared: the structure, the store and the
-    /// placement, none containing the others. Fails on a repeated id, above all.
-    pub fn somatize(self) -> Result<(Graph, Catalog, Placement), GraphError> {
+    /// This whole piece settled: its state does not change while the graph
+    /// runs. The innermost one wins, like the rest.
+    ///
+    /// Only half of it, and the half the core can hold: whoever knows what a
+    /// gradient is has to make it true, and says it again with the digest of the
+    /// state it settled at. See [`Memory::freeze`].
+    pub fn frozen(self) -> Wire {
+        Wire {
+            parts: self.parts.map(|mut parts| {
+                fill(&parts.nodes, &mut parts.frozen, None);
+                parts
+            }),
+        }
+    }
+
+    /// This whole piece worth keeping: what each of its nodes produces is looked
+    /// up before being computed, and kept after.
+    ///
+    /// Declaring it does not make it honest — that is
+    /// [`cacheable`](crate::cacheable)'s question, and it is asked before
+    /// running, not here.
+    pub fn cached(self) -> Wire {
+        Wire {
+            parts: self.parts.map(|mut parts| {
+                fill(&parts.nodes, &mut parts.cached, None);
+                parts
+            }),
+        }
+    }
+
+    /// Materializes what was declared: the structure, the store, the placement
+    /// and what is remembered, none containing the others. Fails on a repeated
+    /// id, above all.
+    pub fn somatize(self) -> Result<(Graph, Catalog, Placement, Memory), GraphError> {
         let parts = self.parts?;
         let mut graph = Graph::new();
         let mut catalog = Catalog::new();
         let mut placement = Placement::new();
+        let mut memory = Memory::new();
 
         for (id, implementation) in parts.nodes {
             graph.add_node(id.clone())?;
@@ -161,6 +231,15 @@ impl Wire {
         for (id, host) in parts.hosts {
             placement.place_at(id, host);
         }
-        Ok((graph, catalog, placement))
+        for (id, what) in parts.identities {
+            memory.identify(id, what);
+        }
+        for (id, state) in parts.frozen {
+            memory.freeze(id, state);
+        }
+        for (id, salt) in parts.cached {
+            memory.cache(id, salt);
+        }
+        Ok((graph, catalog, placement, memory))
     }
 }

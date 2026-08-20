@@ -5,7 +5,7 @@ use soma_next_core::{Graph, Memory, MemoryError, cacheable, node};
 
 /// `a >> b >> c`, which is the shape the prefix rule is about.
 fn chain() -> Graph {
-    let (graph, _, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)) >> node("c", Add(1.0)))
+    let (graph, _, _, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)) >> node("c", Add(1.0)))
         .somatize()
         .unwrap();
     graph

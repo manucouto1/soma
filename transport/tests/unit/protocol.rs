@@ -4,7 +4,7 @@
 //! you do not need a worker to find out. What does need testing here and nowhere
 //! else is what **does not** cross.
 
-use soma_next_core::{Device, Host, NodeId, Outcome, Placement, Plan, Value};
+use soma_next_core::{Device, Host, Key, Memory, NodeId, Outcome, Placement, Plan, Value};
 use soma_next_transport::{Answer, Label, MessageError, Request};
 
 fn work(input: Value) -> Request {
@@ -12,7 +12,9 @@ fn work(input: Value) -> Request {
         plan: Plan::Empty,
         input,
         known: Vec::new(),
+        keys: Vec::new(),
         placement: Placement::new(),
+        memory: Memory::new(),
     }
 }
 
@@ -110,7 +112,9 @@ fn the_plans_go_and_come_back_equal() {
         ]),
         input: Value::Null,
         known: Vec::new(),
+        keys: Vec::new(),
         placement: Placement::new(),
+        memory: Memory::new(),
     });
 }
 
@@ -123,7 +127,9 @@ fn what_was_already_produced_travels_with_its_id() {
             (NodeId::from("a"), Value::number(1.0)),
             (NodeId::from("b"), Value::text("two")),
         ],
+        keys: Vec::new(),
         placement: Placement::new(),
+        memory: Memory::new(),
     });
 }
 
@@ -139,7 +145,9 @@ fn the_placement_crosses_the_wire() {
         },
         input: Value::Null,
         known: Vec::new(),
+        keys: Vec::new(),
         placement,
+        memory: Memory::new(),
     })
     .unwrap();
 
@@ -164,7 +172,9 @@ fn only_the_placement_of_the_nodes_that_travel_is_sent() {
         },
         input: Value::Null,
         known: Vec::new(),
+        keys: Vec::new(),
         placement,
+        memory: Memory::new(),
     })
     .unwrap();
 
@@ -174,6 +184,63 @@ fn only_the_placement_of_the_nodes_that_travel_is_sent() {
     assert_eq!(placement.of(&"a".into()), Some(&Device::Cpu));
     assert_eq!(placement.of(&"stays".into()), None);
     assert_eq!(placement.len(), 1);
+}
+
+#[test]
+fn the_names_of_what_it_reads_cross_the_wire() {
+    // Without them the slice over there can name nothing it produces, and the
+    // cache stops at the process boundary.
+    let bytes = bytes_of(&Request::Work {
+        plan: Plan::Empty,
+        input: Value::Null,
+        known: vec![(NodeId::from("a"), Value::number(1.0))],
+        keys: vec![(NodeId::from("a"), Key::new("sha256:abc"))],
+        placement: Placement::new(),
+        memory: Memory::new(),
+    })
+    .unwrap();
+
+    let Request::Work { keys, .. } = Request::from_bytes(&bytes).unwrap() else {
+        panic!("not a work message")
+    };
+    assert_eq!(keys, [(NodeId::from("a"), Key::new("sha256:abc"))]);
+}
+
+#[test]
+fn only_what_is_remembered_of_the_nodes_that_travel_is_sent() {
+    // The same rule as the placement, and for the same reason: what is
+    // remembered of a node that does not exist over there is nobody's business
+    // over there.
+    let mut memory = Memory::new();
+    memory.identify("a", "Encoder");
+    memory.freeze("a", Some("sha256:weights".into()));
+    memory.cache("a", Some("a100-fp16".into()));
+    memory.written_as("a", "v1");
+    memory.identify("stays", "Head");
+    memory.cache("stays", None);
+
+    let bytes = bytes_of(&Request::Work {
+        plan: Plan::Execute {
+            node: "a".into(),
+            from: Vec::new(),
+        },
+        input: Value::Null,
+        known: Vec::new(),
+        keys: Vec::new(),
+        placement: Placement::new(),
+        memory,
+    })
+    .unwrap();
+
+    let Request::Work { memory, .. } = Request::from_bytes(&bytes).unwrap() else {
+        panic!("not a work message")
+    };
+    assert_eq!(memory.identity_of(&"a".into()), Some("Encoder"));
+    assert_eq!(memory.state_of(&"a".into()), Some("sha256:weights"));
+    assert_eq!(memory.salt_of(&"a".into()), Some("a100-fp16"));
+    assert_eq!(memory.fingerprint_of(&"a".into()), Some("v1"));
+    assert!(!memory.is_cached(&"stays".into()));
+    assert_eq!(memory.len(), 1);
 }
 
 #[test]
@@ -190,7 +257,9 @@ fn the_host_does_not_travel_as_a_placement() {
         },
         input: Value::Null,
         known: Vec::new(),
+        keys: Vec::new(),
         placement,
+        memory: Memory::new(),
     })
     .unwrap();
 
@@ -262,6 +331,7 @@ fn the_answers_go_and_come_back_equal() {
                 (NodeId::from("a"), Value::number(1.0)),
                 (NodeId::from("b"), Value::number(42.0)),
             ],
+            keys: vec![(NodeId::from("a"), Key::new("sha256:abc"))],
         }),
     ] {
         let bytes = bytes_of_answer(&answer).unwrap();
@@ -303,7 +373,9 @@ fn an_opaque_inside_what_was_already_produced_does_not_either() {
             plan: Plan::Empty,
             input: Value::Null,
             known: vec![(NodeId::from("a"), Value::opaque(7u32))],
+            keys: Vec::new(),
             placement: Placement::new(),
+            memory: Memory::new(),
         })
         .unwrap_err(),
         MessageError::Opaque
@@ -317,6 +389,7 @@ fn an_opaque_does_not_come_back_either() {
         bytes_of_answer(&Answer::Done(Outcome {
             last: Value::opaque(7u32),
             produced: Vec::new(),
+            keys: Vec::new(),
         }))
         .unwrap_err(),
         MessageError::Opaque

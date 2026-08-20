@@ -2,11 +2,11 @@
 
 use crate::doubles::{
     Add, AlwaysNull, Ask, Cable, Fail, Immediate, Insatiable, Journal, Ledger, Mean, MeetingPoint,
-    Mirror, Panics, Rendezvous, RendezvousDriver, Shout, Ubiquitous, Witness,
+    Mirror, Notebook, Panics, Rendezvous, RendezvousDriver, Shout, Ubiquitous, Witness,
 };
 use soma_next_core::{
-    Catalog, Ctx, Device, Executor, Graph, Host, Node, NodeError, NodeId, Outcome, Placement, Plan,
-    RunError, Transition, Value, compile, distribute, node,
+    Catalog, Ctx, Device, Executor, Graph, Host, Key, Memory, Node, NodeError, NodeId, Outcome,
+    Placement, Plan, RunError, Transition, Value, compile, distribute, node,
 };
 use std::sync::Arc;
 
@@ -761,7 +761,7 @@ fn placing_does_not_change_what_the_graph_produces() {
 
 #[test]
 fn a_slice_on_another_host_without_a_transport_stops_saying_which() {
-    let (g, c, placement) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
+    let (g, c, placement, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
         .somatize()
         .unwrap();
     let plan = distribute(&compile(&g, &c).unwrap(), &placement);
@@ -784,7 +784,7 @@ fn without_distributing_the_same_graph_runs_as_always() {
     // distribution, not the placement. The same graph, the same catalog, the
     // same `Placement`, and a plan that has not been through `distribute` runs
     // in full.
-    let (g, c, placement) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
+    let (g, c, placement, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
         .somatize()
         .unwrap();
     let plan = compile(&g, &c).unwrap();
@@ -806,7 +806,7 @@ fn what_runs_away_still_counts_as_a_leaf() {
     // graph produces, only where. If it did not go through, the output of a
     // distributed plan would stop being a map and nobody would find out until
     // there was a transport.
-    let (g, c, placement) = (node("a", Add(1.0)).at("w1") | node("b", Add(2.0)))
+    let (g, c, placement, _) = (node("a", Add(1.0)).at("w1") | node("b", Add(2.0)))
         .somatize()
         .unwrap();
     let plan = distribute(&compile(&g, &c).unwrap(), &placement);
@@ -1028,6 +1028,7 @@ fn resume_feeds_in_what_it_was_given_as_if_it_had_produced_it() {
             &plan,
             Value::Null,
             vec![(NodeId::from("a"), Value::number(1.0))],
+            Vec::new(),
         )
         .unwrap();
 
@@ -1049,6 +1050,7 @@ fn resume_does_not_return_what_arrived() {
             &plan,
             Value::Null,
             vec![(NodeId::from("a"), Value::number(1.0))],
+            Vec::new(),
         )
         .unwrap();
 
@@ -1071,7 +1073,7 @@ fn resume_returns_what_was_produced_ordered_by_id() {
     let plan = compile(&g, &c).unwrap();
 
     let outcome = Executor::new(&c)
-        .resume(&plan, Value::number(0.0), Vec::new())
+        .resume(&plan, Value::number(0.0), Vec::new(), Vec::new())
         .unwrap();
 
     assert_eq!(
@@ -1089,11 +1091,292 @@ fn resume_of_an_empty_plan_returns_its_input_and_nothing_produced() {
     let c = Catalog::new();
     assert_eq!(
         Executor::new(&c)
-            .resume(&Plan::Empty, Value::number(7.0), Vec::new())
+            .resume(&Plan::Empty, Value::number(7.0), Vec::new(), Vec::new())
             .unwrap(),
         Outcome {
             last: Value::number(7.0),
             produced: Vec::new(),
+            keys: Vec::new(),
         }
     );
+}
+
+// ── What is remembered, and what does not get run twice ──
+//
+// The engine's half of the cache: a key travelling beside what was produced,
+// a lookup before the node and a write after it. What a key is *made of* is a
+// keeper's business and lives with the double.
+
+/// A graph of one node that writes itself down when it runs.
+fn watched(who: &'static str) -> (Graph, Catalog, Memory, Arc<Journal>) {
+    let journal = Journal::new();
+    let (graph, catalog, _, memory) = node(who, Witness(who, journal.clone()))
+        .frozen()
+        .cached()
+        .somatize()
+        .unwrap();
+    (graph, catalog, memory, journal)
+}
+
+#[test]
+fn what_is_kept_is_not_computed_again() {
+    let (g, c, memory, journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    let first = Executor::new(&c)
+        .keeping(&notebook, &memory)
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+    let second = Executor::new(&c)
+        .keeping(&notebook, &memory)
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+
+    assert_eq!(number(&first), 7.0);
+    assert_eq!(number(&second), 7.0);
+    assert_eq!(
+        notebook.under(&notebook.names()[0]),
+        Some(Value::number(7.0)),
+        "and what is kept under that name is what it produced"
+    );
+    assert_eq!(
+        journal.order(),
+        ["encoder"],
+        "the second run had the answer already: the node must not have been asked"
+    );
+}
+
+#[test]
+fn a_different_input_is_a_different_name_and_the_node_runs() {
+    // The other half of the one above, and the reason the root is the one place
+    // content is hashed: a cache that answers the same for two inputs is not a
+    // cache, it is a bug.
+    let (g, c, memory, journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    for input in [1.0, 2.0] {
+        Executor::new(&c)
+            .keeping(&notebook, &memory)
+            .run(&plan, Value::number(input))
+            .unwrap();
+    }
+
+    assert_eq!(journal.order(), ["encoder", "encoder"]);
+    assert_eq!(notebook.names().len(), 2);
+}
+
+#[test]
+fn what_is_above_names_what_is_below() {
+    // The Merkle rule, seen from outside: the same node, the same code, and a
+    // predecessor settled at another state — another name, and no hit.
+    let name_of_head = |state: &str| {
+        let (g, c, _, mut memory) = (node("encoder", Add(1.0)).frozen().cached()
+            >> node("head", Add(1.0)).frozen().cached())
+        .somatize()
+        .unwrap();
+        memory.freeze("encoder", Some(state.to_string()));
+        let plan = compile(&g, &c).unwrap();
+        let notebook = Notebook::new();
+        Executor::new(&c)
+            .keeping(&notebook, &memory)
+            .run(&plan, Value::number(0.0))
+            .unwrap();
+        notebook.names().last().cloned().expect("head was kept")
+    };
+
+    assert_ne!(
+        name_of_head("weights-of-monday"),
+        name_of_head("weights-of-tuesday")
+    );
+}
+
+#[test]
+fn the_fingerprint_of_the_code_is_not_part_of_the_name() {
+    // Deliberate, and the whole reason the fingerprint is written *beside* the
+    // value: a cosmetic refactor must not invalidate half the store in silence.
+    // What it does is get compared on a hit and said out loud.
+    let (g, c, memory, journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    let mut written_yesterday = memory.clone();
+    written_yesterday.written_as("encoder", "v1");
+    let mut written_today = memory.clone();
+    written_today.written_as("encoder", "v2");
+
+    Executor::new(&c)
+        .keeping(&notebook, &written_yesterday)
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+    Executor::new(&c)
+        .keeping(&notebook, &written_today)
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+
+    assert_eq!(notebook.names().len(), 1, "one name, not two");
+    assert_eq!(
+        journal.order(),
+        ["encoder"],
+        "and the second run used what was kept by the first"
+    );
+    assert_eq!(
+        notebook.said_of(&notebook.names()[0]),
+        [
+            ("node".to_string(), "encoder".to_string()),
+            ("fingerprint".to_string(), "v1".to_string())
+        ],
+        "what is written beside it is what produced it, not what asked for it"
+    );
+}
+
+#[test]
+fn a_node_that_keeps_nothing_still_passes_its_name_on() {
+    // `.cached()` is opt-in because keeping costs; not declaring it must not
+    // break the chain, or declaring it node by node would be declaring it for
+    // the whole graph.
+    let journal = Journal::new();
+    let (g, c, _, memory) = (node("encoder", Witness("encoder", journal.clone())).frozen()
+        >> node("head", Witness("head", journal.clone()))
+            .frozen()
+            .cached())
+    .somatize()
+    .unwrap();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    for _ in 0..2 {
+        Executor::new(&c)
+            .keeping(&notebook, &memory)
+            .run(&plan, Value::number(7.0))
+            .unwrap();
+    }
+
+    assert_eq!(
+        notebook.names().len(),
+        1,
+        "only what asked to be kept is kept"
+    );
+    assert_eq!(
+        notebook.said_of(&notebook.names()[0])[0].1,
+        "head",
+        "and it is the one that asked"
+    );
+    assert_eq!(
+        journal.order(),
+        ["encoder", "head", "encoder"],
+        "the encoder ran twice, keeping nothing; the head ran once and then hit, \
+         so it was named out of a name nobody kept"
+    );
+}
+
+#[test]
+fn what_cannot_be_named_is_not_kept_and_is_not_an_error() {
+    // An `Opaque` root: there is nothing to hash, so nothing below it has a
+    // name. The run goes on exactly as it did before any of this existed.
+    let journal = Journal::new();
+    let (g, c, _, memory) = node("encoder", Witness("encoder", journal.clone()))
+        .frozen()
+        .cached()
+        .somatize()
+        .unwrap();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    for _ in 0..2 {
+        Executor::new(&c)
+            .keeping(&notebook, &memory)
+            .run(&plan, Value::opaque(7u32))
+            .unwrap();
+    }
+
+    assert!(notebook.names().is_empty());
+    assert_eq!(journal.order(), ["encoder", "encoder"]);
+}
+
+#[test]
+fn nothing_is_named_without_somebody_to_hash_it() {
+    // The whole thing is behind `keeping`: a graph that declares a cache and an
+    // executor that was given no keeper runs as it always did.
+    let (g, c, _, journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+
+    for _ in 0..2 {
+        Executor::new(&c).run(&plan, Value::number(7.0)).unwrap();
+    }
+    assert_eq!(journal.order(), ["encoder", "encoder"]);
+}
+
+#[test]
+fn the_names_a_slice_brings_are_not_the_names_it_gives() {
+    // What a worker answers with. The same retention as `produced`: what came in
+    // does not come back, or every hop would grow the answer.
+    let (_, c, _, memory) = (node("encoder", Add(1.0)).frozen().cached()
+        >> node("head", Add(1.0)).frozen().cached())
+    .somatize()
+    .unwrap();
+    let notebook = Notebook::new();
+
+    // As if `encoder` had run at home and only `head` were sent away.
+    let brought = Key::new("what-the-encoder-was-called");
+    let outcome = Executor::new(&c)
+        .keeping(&notebook, &memory)
+        .resume(
+            &Plan::Execute {
+                node: "head".into(),
+                from: vec!["encoder".into()],
+            },
+            Value::Null,
+            vec![(NodeId::from("encoder"), Value::number(1.0))],
+            vec![(NodeId::from("encoder"), brought.clone())],
+        )
+        .unwrap();
+
+    assert_eq!(
+        outcome
+            .keys
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["head"],
+        "what it was given back is what it named itself"
+    );
+    assert_eq!(outcome.keys[0].1, notebook.names()[0]);
+    assert_ne!(outcome.keys[0].1, brought);
+}
+
+#[test]
+fn the_names_and_what_is_remembered_cross_to_the_other_side() {
+    // A slice that leaves has to be able to name what it produces, and for that
+    // it needs the names of what it reads and the table that says what any of it
+    // is. Both travel in the `Cargo`, like the placement and for the same
+    // reason: they are data.
+    let (g, c, placement, memory) = (node("encoder", Add(1.0)).frozen().cached()
+        >> node("head", Add(1.0)).frozen().cached().at("worker1"))
+    .somatize()
+    .unwrap();
+    let plan = distribute(&compile(&g, &c).unwrap(), &placement);
+    let notebook = Notebook::new();
+    let mirror = Mirror::new(c.clone());
+
+    Executor::new(&c)
+        .keeping(&notebook, &memory)
+        .placed(&placement)
+        .reaching("worker1", &mirror)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+
+    let trips = mirror.trips();
+    assert_eq!(
+        trips[0]
+            .keys
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["encoder"],
+        "the names of what it reads, and only those"
+    );
+    assert_eq!(trips[0].keys[0].1, notebook.names()[0]);
+    assert!(trips[0].memory.is_cached(&"head".into()));
 }

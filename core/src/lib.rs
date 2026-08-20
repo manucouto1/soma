@@ -53,7 +53,7 @@ pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;
-pub use keeper::{Keeper, KeeperError};
+pub use keeper::{Keeper, KeeperError, Kept};
 pub use key::Key;
 pub use memory::{Memory, MemoryError, cacheable};
 pub use node::{Ctx, Node, NodeError, Transition};

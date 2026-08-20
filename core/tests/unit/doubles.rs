@@ -4,8 +4,8 @@
 //! the `Transition` variant they return.
 
 use soma_next_core::{
-    Cargo, Catalog, Ctx, Device, Driver, DriverError, Node, NodeError, NodeId, Outcome, Placement,
-    Plan, Transition, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Driver, DriverError, Keeper, KeeperError, Kept, Key, Memory, Node,
+    NodeError, NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError, Value,
 };
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
@@ -332,7 +332,9 @@ pub struct Trip {
     pub plan: Plan,
     pub input: Value,
     pub known: Vec<(NodeId, Value)>,
+    pub keys: Vec<(NodeId, Key)>,
     pub placement: Placement,
+    pub memory: Memory,
 }
 
 impl Mirror {
@@ -355,12 +357,19 @@ impl Transport for Mirror {
             plan: plan.clone(),
             input: cargo.input.clone(),
             known: cargo.known.to_vec(),
+            keys: cargo.keys.to_vec(),
             placement: cargo.placement.clone(),
+            memory: cargo.memory.clone(),
         });
 
         soma_next_core::Executor::new(&self.catalog)
             .placed(cargo.placement)
-            .resume(plan, cargo.input.clone(), cargo.known.to_vec())
+            .resume(
+                plan,
+                cargo.input.clone(),
+                cargo.known.to_vec(),
+                cargo.keys.to_vec(),
+            )
             .map_err(|e| TransportError::new(e.to_string()))
     }
 }
@@ -371,5 +380,92 @@ pub struct Cable(pub &'static str);
 impl Transport for Cable {
     fn dispatch(&self, _plan: &Plan, _cargo: &Cargo<'_>) -> Result<Outcome, TransportError> {
         Err(TransportError::new(self.0))
+    }
+}
+
+/// Hashes by writing the recipe down, and keeps what it is given in a map.
+///
+/// No `sha256` here on purpose: what the engine needs from a keeper is that two
+/// different recipes give two different keys, and a key that spells its recipe
+/// out gives that **and** a failed assertion you can read.
+#[derive(Default)]
+pub struct Notebook {
+    kept: Mutex<Vec<(Key, Kept)>>,
+}
+
+impl Notebook {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// What each thing was kept under, in the order it was kept.
+    pub fn names(&self) -> Vec<Key> {
+        self.entries().into_iter().map(|(key, _)| key).collect()
+    }
+
+    /// What is kept under that name, if anything.
+    pub fn under(&self, key: &Key) -> Option<Value> {
+        self.entries()
+            .into_iter()
+            .find(|(under, _)| under == key)
+            .map(|(_, kept)| kept.value)
+    }
+
+    /// What was said beside the one kept under that name.
+    pub fn said_of(&self, key: &Key) -> Vec<(String, String)> {
+        self.entries()
+            .into_iter()
+            .find(|(under, _)| under == key)
+            .map(|(_, kept)| kept.meta)
+            .unwrap_or_default()
+    }
+
+    fn entries(&self) -> Vec<(Key, Kept)> {
+        self.kept.lock().expect("nobody poisons this mutex").clone()
+    }
+}
+
+impl Keeper for Notebook {
+    fn key_of(&self, value: &Value) -> Option<Key> {
+        value.travels().then(|| Key::new(format!("{value:?}")))
+    }
+
+    fn combine(&self, parts: &[&str]) -> Key {
+        // Length-prefixed, because the one failure a cache must not have is two
+        // recipes under one name: run together, `["ab", "c"]` and `["a", "bc"]`
+        // would be the same string.
+        Key::new(
+            parts
+                .iter()
+                .map(|part| format!("{}:{part}", part.len()))
+                .collect::<Vec<_>>()
+                .join("+"),
+        )
+    }
+
+    fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Kept>>, KeeperError> {
+        let kept = self.entries();
+        Ok(keys
+            .iter()
+            .map(|wanted| {
+                kept.iter()
+                    .find(|(under, _)| &under == wanted)
+                    .map(|(_, kept)| kept.clone())
+            })
+            .collect())
+    }
+
+    fn keep(&self, key: &Key, value: &Value, meta: &[(&str, &str)]) -> Result<(), KeeperError> {
+        let kept = Kept {
+            value: value.clone(),
+            meta: meta
+                .iter()
+                .map(|(what, said)| (what.to_string(), said.to_string()))
+                .collect(),
+        };
+        let mut inside = self.kept.lock().expect("nobody poisons this mutex");
+        inside.retain(|(under, _)| under != key);
+        inside.push((key.clone(), kept));
+        Ok(())
     }
 }

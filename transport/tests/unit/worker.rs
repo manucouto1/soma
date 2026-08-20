@@ -350,7 +350,7 @@ fn an_id_the_worker_does_not_know_is_reported_instead_of_hanging() {
 #[test]
 fn the_dsl_sends_a_slice_away_without_assembling_anything_by_hand() {
     // How it is really written, end to end.
-    let (g, c, p) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
+    let (g, c, p, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
         .somatize()
         .unwrap();
     let w = worker();

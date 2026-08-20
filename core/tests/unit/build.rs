@@ -1,7 +1,7 @@
 //! The DSL: declaring the graph as an expression.
 
 use crate::doubles::{Add, Immediate, Mean};
-use soma_next_core::{Executor, GraphError, NodeId, Plan, Value, compile, node};
+use soma_next_core::{Executor, GraphError, NodeId, Plan, Value, cacheable, compile, node};
 
 fn number(v: &Value) -> f64 {
     let Value::Number(x) = v else {
@@ -12,7 +12,7 @@ fn number(v: &Value) -> f64 {
 
 #[test]
 fn a_chain() {
-    let (g, c, _) = (node("a", Add(1.0)) >> node("b", Add(10.0)))
+    let (g, c, _, _) = (node("a", Add(1.0)) >> node("b", Add(10.0)))
         .somatize()
         .unwrap();
 
@@ -27,7 +27,7 @@ fn a_chain() {
 
 #[test]
 fn a_diamond_reads_at_a_glance() {
-    let (g, c, _) = (node("source", Add(1.0))
+    let (g, c, _, _) = (node("source", Add(1.0))
         >> (node("left", Add(10.0)) | node("right", Add(100.0)))
         >> node("join", Mean))
     .somatize()
@@ -44,7 +44,7 @@ fn a_diamond_reads_at_a_glance() {
 
 #[test]
 fn branches_can_have_their_own_length() {
-    let (g, _, _) = (node("source", Add(1.0))
+    let (g, _, _, _) = (node("source", Add(1.0))
         >> ((node("left", Add(1.0)) >> node("left2", Add(1.0))) | node("right", Add(1.0))))
     .somatize()
     .unwrap();
@@ -56,7 +56,7 @@ fn branches_can_have_their_own_length() {
 
 #[test]
 fn a_node_that_asks_for_turns_and_one_that_does_not_mix_just_the_same() {
-    let (g, c, _) = (node("add", Add(1.0)) >> node("echo", Immediate))
+    let (g, c, _, _) = (node("add", Add(1.0)) >> node("echo", Immediate))
         .somatize()
         .unwrap();
 
@@ -101,7 +101,7 @@ fn execute(id: &str, from: &[&str]) -> Plan {
 /// The plan of an expression, to compare against its tree.
 macro_rules! plan_of {
     ($wire:expr) => {{
-        let (g, c, _) = ($wire).somatize().unwrap();
+        let (g, c, _, _) = ($wire).somatize().unwrap();
         compile(&g, &c).unwrap()
     }};
 }
@@ -260,4 +260,61 @@ fn a_branch_that_opens_and_closes_inside_itself() {
             execute("t", &[]),
         ])
     );
+}
+
+// ── What is remembered, declared as part of the expression ──
+
+#[test]
+fn every_node_is_named_after_what_implements_it() {
+    // The last place that knows: one line later there is only an `Arc<dyn
+    // Node>`. Python does the same with the class name, and the name is half of
+    // what a key is made of.
+    let (_, _, _, memory) = (node("a", Add(1.0)) >> node("b", Mean)).somatize().unwrap();
+
+    let name_of = |id: &str| memory.identity_of(&id.into()).unwrap().to_string();
+    assert!(name_of("a").ends_with("Add"), "{}", name_of("a"));
+    assert!(name_of("b").ends_with("Mean"), "{}", name_of("b"));
+    assert_ne!(name_of("a"), name_of("b"));
+}
+
+#[test]
+fn a_whole_piece_settles_at_once_and_that_does_not_keep_anything() {
+    // The two are independent, like the device and the host: a node can be
+    // settled without being worth keeping, and the other way round is what
+    // `cacheable` refuses.
+    let (_, _, _, memory) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).frozen()
+        >> node("c", Add(1.0)))
+    .somatize()
+    .unwrap();
+
+    assert!(memory.is_frozen(&"a".into()));
+    assert!(memory.is_frozen(&"b".into()));
+    assert!(!memory.is_frozen(&"c".into()));
+    assert!(!memory.is_cached(&"a".into()));
+}
+
+#[test]
+fn a_whole_piece_is_kept_at_once_and_that_settles_nothing() {
+    let (_, _, _, memory) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).cached()
+        >> node("c", Add(1.0)))
+    .somatize()
+    .unwrap();
+
+    assert!(memory.is_cached(&"a".into()));
+    assert!(memory.is_cached(&"b".into()));
+    assert!(!memory.is_cached(&"c".into()));
+    assert!(!memory.is_frozen(&"a".into()));
+}
+
+#[test]
+fn what_is_declared_and_what_it_is_worth_are_two_questions() {
+    // Declaring a cache does not make it honest: `cacheable` is what answers
+    // that, it needs the graph as well as the table, and it is asked by whoever
+    // is about to run — never by the engine, which does not look at a graph.
+    let (graph, _, _, memory) = (node("a", Add(1.0)) >> node("b", Add(1.0)).cached())
+        .somatize()
+        .unwrap();
+
+    assert!(memory.is_cached(&"b".into()));
+    assert!(cacheable(&graph, &memory).is_err());
 }

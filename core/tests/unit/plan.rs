@@ -616,7 +616,7 @@ fn without_any_host_the_plan_comes_out_identical() {
 fn placing_devices_only_distributes_nothing_either() {
     // The CU10 invariant is still alive: a device is inert as far as the
     // traversal goes. Only a host moves anything.
-    let (g, c, placement) = (node("a", Add(1.0)).on(Device::Cuda(0))
+    let (g, c, placement, _) = (node("a", Add(1.0)).on(Device::Cuda(0))
         >> node("b", Add(1.0)).on(Device::Cpu))
     .somatize()
     .unwrap();

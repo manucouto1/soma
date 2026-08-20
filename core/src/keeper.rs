@@ -43,12 +43,27 @@ pub trait Keeper: Send + Sync {
     /// In the trait in **batch form** from the first day, and not for symmetry:
     /// against a store on the far end of a network, one question per item is
     /// one round trip per item.
-    fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Value>>, KeeperError>;
+    fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Kept>>, KeeperError>;
 
     /// Keeps this, with what should be remembered beside it — the fingerprint
     /// of the code that produced it, above all, which is **not** in the key and
     /// is what a hit gets compared against.
     fn keep(&self, key: &Key, value: &Value, meta: &[(&str, &str)]) -> Result<(), KeeperError>;
+}
+
+/// Something that was kept, on the way back: the value, and what was said
+/// beside it when it was written.
+///
+/// The metadata comes back because of one line of the design — the fingerprint
+/// of the code is **not** in the key, it is written next to the value and
+/// compared on a hit. Without it here, a cache that quietly went cold could not
+/// be told from one that is working.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Kept {
+    /// What was kept.
+    pub value: Value,
+    /// What was said beside it, in the order it was said.
+    pub meta: Vec<(String, String)>,
 }
 
 /// Why something could not be kept, or found.
