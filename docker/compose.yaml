@@ -1,0 +1,58 @@
+# A cluster that is not a metaphor: three hosts, each its own process, its own
+# filesystem and its own name, on a network of their own.
+#
+#   SOMA_CLUSTER=1 python -m pytest tests/cluster -q
+#
+# The client is pytest, **outside**: that is the real shape — whoever declares
+# the graph is not one of the workers.
+
+name: soma-cluster
+
+services:
+  # Two ordinary workers, sharing a store. Neither has a line of your code.
+  worker-a:
+    build: &worker
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+      target: worker
+    command: &keeping ["python", "-m", "soma_next.worker", "--listen", "0.0.0.0:7000", "--store", "/store"]
+    ports: ["127.0.0.1:7001:7000"]
+    volumes: ["store:/store", "../python/tests/cluster/clone:/clone:ro"]
+
+  worker-b:
+    build: *worker
+    command: *keeping
+    ports: ["127.0.0.1:7002:7000"]
+    volumes: ["store:/store", "../python/tests/cluster/clone:/clone:ro"]
+
+  # The same worker with the code at **another version**. It stops rather than
+  # run something that is not what the graph was written against.
+  worker-old:
+    build: *worker
+    ports: ["127.0.0.1:7003:7000"]
+    volumes: ["../python/tests/cluster/clone_old:/clone:ro"]
+
+  # And the same one told to take its chances, which is the other half of the
+  # knob: it runs its own version and says so.
+  worker-lucky:
+    build: *worker
+    command: ["python", "-m", "soma_next.worker", "--listen", "0.0.0.0:7000", "--lucky"]
+    ports: ["127.0.0.1:7005:7000"]
+    volumes: ["../python/tests/cluster/clone_old:/clone:ro"]
+
+  # And one with the GPU, which is what makes the cluster heterogeneous.
+  # Eleven gigabytes of torch and CUDA, so it is **not** part of a plain `up`:
+  #     docker compose --profile gpu up -d worker-gpu
+  worker-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+      target: worker-gpu
+    command: *keeping
+    ports: ["127.0.0.1:7004:7000"]
+    devices: ["nvidia.com/gpu=all"]
+    volumes: ["store:/store"]
+
+volumes:
+  store:

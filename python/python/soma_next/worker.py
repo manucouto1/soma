@@ -1,6 +1,6 @@
 """The generic worker: `pip install soma-next` and nothing else.
 
-    python -m soma_next.worker --listen 127.0.0.1:7000
+    python -m soma_next.worker --listen 127.0.0.1:7000 [--store /scratch/soma]
 
 An independent process, in the background, on whatever machine. It starts
 **empty** — it does not know what `tokenize` is — and waits for someone to
@@ -187,11 +187,13 @@ def default(strict=True):
     return Strategies(**{_manifest.KIND: Project(strict), "pickle": Pickles()})
 
 
-def serve_provisioned(provision=None):
+def serve_provisioned(provision=None, store=None):
     """Serves slices with the catalog the client sends, until the client closes.
     Without an argument it opens both kinds."""
     _hush()
-    return _serve_provisioned(default() if provision is None else provision)
+    return _serve_provisioned(
+        default() if provision is None else provision, store=store
+    )
 
 
 def _hush():
@@ -199,37 +201,52 @@ def _hush():
     sys.stdout = sys.stderr
 
 
-def listen(addr, provision=None, opened=None):
+def listen(addr, provision=None, opened=None, store=None):
     """Stands on `addr` and serves whoever connects. It does not return.
 
     `provision` says what the implementations are resolved with; by default,
     `project` and `pickle`. `stdout` is not touched — here the wire is the
     socket — and `opened` is called once with the real address, so port `0` can
     be asked for.
+
+    `store` is a directory, and it answers two questions that stay two: an
+    artifact it already has is **not sent again**, and a node whose answer is
+    already there is **not run again**. Shared between workers — a mount, a
+    network folder — the second one to be stood up starts warm.
     """
-    return _listen_provisioned(addr, default() if provision is None else provision, opened)
+    return _listen_provisioned(
+        addr, default() if provision is None else provision, opened, store=store
+    )
 
 
 def main(argv=None):
-    """`python -m soma_next.worker [--listen HOST:PORT] [--lucky]`.
+    """`python -m soma_next.worker [--listen HOST:PORT] [--store DIR] [--lucky]`.
 
     Without `--listen` it talks over standard input, which is for testing.
     `--lucky` executes even if its code is not the version the graph was written
-    against; by default it stops.
+    against; by default it stops. `--store` is a directory to keep things in.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     which = default(strict="--lucky" not in argv)
+    store = _after("--store", argv)
     if "--listen" in argv:
-        after = argv.index("--listen") + 1
-        if after >= len(argv):
-            raise SystemExit("`--listen` needs an address: --listen 127.0.0.1:7000")
-        addr = argv[after]
         return listen(
-            addr,
+            _after("--listen", argv, needed=True),
             provision=which,
             opened=lambda where: print(f"listening on {where}", flush=True),
+            store=store,
         )
-    return serve_provisioned(which)
+    return serve_provisioned(which, store=store)
+
+
+def _after(flag, argv, needed=False):
+    """What comes after a flag, or `None` if the flag is not there."""
+    if flag not in argv:
+        return None
+    after = argv.index(flag) + 1
+    if after >= len(argv):
+        raise SystemExit(f"`{flag}` needs a value: {flag} 127.0.0.1:7000")
+    return argv[after]
 
 
 if __name__ == "__main__":

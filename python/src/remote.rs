@@ -19,6 +19,7 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use soma_next_core::Catalog;
+use soma_next_store::{Cache, Local};
 use soma_next_transport::{Artifact, Provision, ProvisionError, Provisioned, Serving, Worker};
 use std::process::Command;
 use std::sync::Arc;
@@ -258,39 +259,85 @@ fn serving_provisioned<'a>(
     }
 }
 
+/// The store this worker was pointed at, if it was pointed at one.
+fn opened(store: Option<&str>) -> PyResult<Option<Local>> {
+    store
+        .map(Local::at)
+        .transpose()
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// The same worker, keeping what it is sent **and** what its nodes produce.
+///
+/// One directory answers the two questions and they stay two: a catalog that is
+/// not sent twice, and a node that is not run twice. Neither is on unless a
+/// `store` was given.
+fn keeping<'a>(
+    serving: Serving<'a>,
+    kept: Option<&'a Local>,
+    cache: Option<&'a Cache<'a>>,
+) -> Serving<'a> {
+    let serving = match kept {
+        Some(kept) => serving.store(kept),
+        None => serving,
+    };
+    match cache {
+        Some(cache) => serving.keeping(cache),
+        None => serving,
+    }
+}
+
 /// Serves slices with what the client sends it: the generic worker. It starts
 /// empty and `provision` turns whatever arrives into nodes and a driver.
 ///
 /// `driver` here is only the fallback for clients that pack none: the one that
 /// arrives in the artifact wins.
 #[pyfunction]
-#[pyo3(signature = (provision, driver = None))]
+#[pyo3(signature = (provision, driver = None, store = None))]
 pub fn serve_provisioned(
     py: Python<'_>,
     provision: &Bound<'_, PyAny>,
     driver: Option<&Bound<'_, PyAny>>,
+    store: Option<&str>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
     let driver = driver.map(PyDriver::new).transpose()?;
-    py.allow_threads(|| serving_provisioned(&provision, driver.as_ref()).over_stdin())
-        .map_err(|e| PyRuntimeError::new_err(format!("the worker was cut off: {e}")))
+    let kept = opened(store)?;
+    let cache = kept.as_ref().map(|kept| Cache::over(kept));
+    py.allow_threads(|| {
+        keeping(
+            serving_provisioned(&provision, driver.as_ref()),
+            kept.as_ref(),
+            cache.as_ref(),
+        )
+        .over_stdin()
+    })
+    .map_err(|e| PyRuntimeError::new_err(format!("the worker was cut off: {e}")))
 }
 
 /// Stands on `addr` and serves whoever connects; it does not return. `opened`
 /// is called once with the real address, so port `0` can be asked for.
 #[pyfunction]
-#[pyo3(signature = (addr, provision, opened = None, driver = None))]
+#[pyo3(signature = (addr, provision, opened = None, driver = None, store = None))]
 pub fn listen_provisioned(
     py: Python<'_>,
     addr: &str,
     provision: &Bound<'_, PyAny>,
     opened: Option<PyObject>,
     driver: Option<&Bound<'_, PyAny>>,
+    store: Option<&str>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
     let driver = driver.map(PyDriver::new).transpose()?;
+    let kept = self::opened(store)?;
+    let cache = kept.as_ref().map(|kept| Cache::over(kept));
     py.allow_threads(|| {
-        serving_provisioned(&provision, driver.as_ref()).listen_at(addr, |where_| {
+        keeping(
+            serving_provisioned(&provision, driver.as_ref()),
+            kept.as_ref(),
+            cache.as_ref(),
+        )
+        .listen_at(addr, |where_| {
             if let Some(notify) = opened {
                 Python::with_gil(|py| {
                     let _ = notify.call1(py, (where_.to_string(),));

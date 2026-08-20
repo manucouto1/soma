@@ -74,7 +74,17 @@ conda activate mos                  # PyO3 does not compile outside this env
 cargo test --workspace
 cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check
 cd python && maturin develop && python -m pytest tests/ -q
+
+# A real cluster: containers, one per host. Opt-in; the images build themselves
+# the first time. `SOMA_CLUSTER=build` forces a rebuild, which is what you want
+# after touching `python/src` or the Dockerfile.
+SOMA_CLUSTER=1 python -m pytest tests/cluster -q
+docker compose -f docker/compose.yaml --profile gpu build worker-gpu   # once, 11 GB
 ```
+
+`maturin develop` is not optional before `pytest`: the Python tests run against
+the **installed** extension, so a change in `python/src/` that is not rebuilt
+means the suite is green about code that is not the code.
 
 ## Status
 

@@ -1412,6 +1412,34 @@ leaves its seat)
 - [x] the fingerprint changes with a helper, a base class or a module constant,
       and not with a comment or a docstring
 
+### The cluster, which came later and is where this is really tested
+
+Every test above runs its workers as **subprocesses of the test**. That proves
+the protocol and cannot prove the rest: those workers share this filesystem, this
+interpreter and these installed packages, so "the worker cannot import your
+module" is a trick with `sys.path` and "another version of the code" is the file
+rewritten underneath.
+
+`docker/compose.yaml` and `python/tests/cluster/` are the same thing without the
+tricks: four containers, each with **the wheel and nothing else**, and the client
+outside. What only becomes provable there:
+
+| | as subprocesses | as containers |
+|---|---|---|
+| the worker has none of your code | a trick with `sys.path` | it really has none |
+| another version of it | the file rewritten | another mount, another image |
+| two hosts | two processes on the loopback | two network namespaces |
+| a store shared between workers | a common `/tmp` | a volume between machines |
+| a worker with a GPU | — | a device, and torch, in one of them |
+
+It is opt-in — `SOMA_CLUSTER=1 python -m pytest tests/cluster -q` — because the
+first build takes minutes, and the suite has to keep taking seconds.
+
+Writing it turned up something missing: `Serving::store` and `Serving::keeping`
+existed in Rust and **were not reachable from the shipped worker**. The generic
+worker now takes `--store DIR`, which is what lets two containers share a shelf:
+one keeps what a node produced, and the other reads it.
+
 ### What did NOT go in
 
 **Authentication and encryption**, on purpose and for good (decision 8) ·

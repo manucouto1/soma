@@ -164,10 +164,11 @@ def test_the_whole_prefix_settled_is_what_passes(store):
     assert g.forward(1.0, store=store) == 2.0
 
 
-def test_nothing_is_checked_where_nothing_is_kept():
-    # Deliberate: the question is asked by whoever is about to keep something.
-    # Without a store there is nothing to keep and nothing to be wrong about.
-    g = Graph.somatize(Add(1).named("encoder") >> Counts().named("head").cached())
+def test_a_graph_that_declares_nothing_is_never_asked_anything():
+    # The other side of it: what the check costs is a walk of the graph, and it
+    # is only walked by whoever declared a cache. Everything that came before
+    # this slice pays nothing.
+    g = Graph.somatize(Add(1).named("encoder") >> Counts().named("head"))
     assert g.forward(1.0) == 2.0
 
 
