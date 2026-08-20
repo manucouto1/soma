@@ -6,6 +6,7 @@
 //! test-worker --driver               a driver of its own, with either catalog
 //! test-worker --noisy                writes on `stdout` before serving
 //! test-worker --store DIR            keeps what it is sent, and looks there first
+//! test-worker --store DIR --keeper   and also keeps what the nodes produce
 //! test-worker --listen 127.0.0.1:0   standing,    own catalog
 //! test-worker --listen … --empty     standing,    catalog sent
 //! ```
@@ -28,7 +29,7 @@
 //! look at, and whoever interprets them can be anyone.
 
 use soma_next_core::{Catalog, Ctx, Driver, DriverError, Node, NodeError, Transition, Value};
-use soma_next_store::Local;
+use soma_next_store::{Cache, Local};
 use soma_next_transport::{Provision, ProvisionError, Provisioned, Serving};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -174,6 +175,19 @@ impl Node for Rendezvous {
     }
 }
 
+/// How many times it has been asked, in this process. What makes a cache hit
+/// **over there** observable from here: a second run that answers `1` did not
+/// run it.
+struct Counts(AtomicUsize);
+
+impl Node for Counts {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::number(
+            self.0.fetch_add(1, Ordering::SeqCst) as f64 + 1.0,
+        )))
+    }
+}
+
 /// How many times a catalog has been built here: what makes the `have`/`want`
 /// observable from outside.
 struct Times(Arc<AtomicUsize>);
@@ -197,6 +211,7 @@ fn catalog() -> Catalog {
     catalog.insert("broken", Arc::new(Fail));
     catalog.insert("device", Arc::new(WhichDevice));
     catalog.insert("ask", Arc::new(Ask));
+    catalog.insert("counts", Arc::new(Counts(AtomicUsize::new(0))));
     for id in ["meet_one", "meet_two"] {
         catalog.insert(id, Arc::new(Rendezvous));
     }
@@ -303,6 +318,13 @@ fn main() -> std::io::Result<()> {
     }
     if let Some(store) = &store {
         serving = serving.store(store);
+    }
+    // Keeping **values** is another question from keeping artifacts, and the
+    // same directory answers both: one so a catalog is not sent twice, the other
+    // so a node is not run twice.
+    let cache = store.as_ref().map(|store| Cache::over(store));
+    if let (true, Some(cache)) = (args.iter().any(|a| a == "--keeper"), &cache) {
+        serving = serving.keeping(cache);
     }
     match where_ {
         Some(addr) => serving.listen_at(addr.as_str(), opened),

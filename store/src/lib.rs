@@ -26,6 +26,18 @@
 //! `JournalFileStorage` uses to claim trials, and the same one that will work
 //! unchanged against S3.
 //!
+//! # Who asks it for things
+//!
+//! | who | what it keeps | under what name |
+//! |---|---|---|
+//! | a worker's `Serving::store` | artifacts, so a catalog is not sent twice | `artifact:<kind>:<id>` |
+//! | [`Cache`] | what a node produced, so it is not computed twice | `value:<key>` |
+//!
+//! Two questions, one directory, and the namespace of the name is what keeps
+//! them apart. [`Cache`] is the [`Keeper`](soma_next_core::Keeper) the core
+//! left a hole for: the core cannot hash and has nowhere to put bytes, and both
+//! of those live here.
+//!
 //! An index that can be queried — what do I have, from which run, from when — is
 //! **derived** from these records and can be thrown away and rebuilt. Making it
 //! the truth would mean a single writer, and a single writer over NFS is exactly
@@ -34,10 +46,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod cache;
 mod digest;
 mod local;
 mod store;
 
+pub use cache::Cache;
 pub use digest::Digest;
 pub use local::Local;
 pub use store::{Bound, Meta, Store, StoreError};

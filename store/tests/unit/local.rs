@@ -4,6 +4,7 @@
 //! that two processes could share it, and that cannot be tested against a map
 //! in memory.
 
+use crate::tempdir;
 use soma_next_store::{Digest, Local, Store, StoreError};
 
 /// A store of its own, in a directory nobody else is using.
@@ -11,38 +12,6 @@ fn store() -> (Local, tempdir::Dir) {
     let where_ = tempdir::Dir::new();
     let store = Local::at(where_.path()).unwrap();
     (store, where_)
-}
-
-/// A temporary directory, without a dependency for it.
-mod tempdir {
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNT: AtomicUsize = AtomicUsize::new(0);
-
-    pub struct Dir(PathBuf);
-
-    impl Dir {
-        pub fn new() -> Self {
-            let at = std::env::temp_dir().join(format!(
-                "soma-store-{}-{}",
-                std::process::id(),
-                COUNT.fetch_add(1, Ordering::SeqCst)
-            ));
-            std::fs::create_dir_all(&at).unwrap();
-            Self(at)
-        }
-
-        pub fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Dir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 }
 
 #[test]

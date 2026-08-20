@@ -6,9 +6,10 @@
 
 use crate::doubles::{Add, Dir, catalog};
 use soma_next_core::{
-    Catalog, Device, Executor, Graph, Host, Placement, Plan, RunError, Value, compile, distribute,
-    node,
+    Catalog, Device, Executor, Graph, Host, Memory, Placement, Plan, RunError, Value, compile,
+    distribute, node,
 };
+use soma_next_store::{Cache, Local};
 use soma_next_transport::Worker;
 use std::process::Command;
 use std::sync::Arc;
@@ -1086,4 +1087,105 @@ fn two_simultaneous_connections_against_the_same_standing_worker() {
             ("right".to_string(), Value::number(1.0)),
         ])
     );
+}
+
+// ── That a worker can already know the answer ──
+
+#[test]
+fn what_a_worker_already_kept_is_not_run_again() {
+    // The `Keeper` reaching the far side. `counts` answers how many times it has
+    // been asked **in that process**: a second run that answers `1` did not run
+    // it, and the only way it could answer without running is out of the store.
+    let shared = Dir::new();
+    let w = Worker::spawn(keeping(shared.path())).unwrap();
+    let (c, memory) = counting();
+
+    assert_eq!(number(&run_counting(&c, &memory, &w)), 1.0);
+    assert_eq!(
+        number(&run_counting(&c, &memory, &w)),
+        1.0,
+        "it ran again over there: what was kept never got looked up"
+    );
+}
+
+#[test]
+fn without_a_keeper_the_same_worker_runs_it_every_time() {
+    // The other half, and it is the one that proves the test above is not a
+    // fiction: the same worker, the same graph, no keeper.
+    let shared = Dir::new();
+    let mut without = Command::new(env!("CARGO_BIN_EXE_test-worker"));
+    without.args(["--store", &shared.path().to_string_lossy()]);
+    let w = Worker::spawn(without).unwrap();
+    let (c, memory) = counting();
+
+    assert_eq!(number(&run_counting(&c, &memory, &w)), 1.0);
+    assert_eq!(number(&run_counting(&c, &memory, &w)), 2.0);
+}
+
+#[test]
+fn the_name_of_what_ran_over_there_comes_back() {
+    // What makes the chain carry on **below** a slice that went away: whatever
+    // reads `counts` next is named out of the name it was given over there.
+    let shared = Dir::new();
+    let w = Worker::spawn(keeping(shared.path())).unwrap();
+    let (c, memory) = counting();
+    let here = Dir::new();
+    let store = Local::at(here.path()).unwrap();
+    let cache = Cache::over(&store);
+
+    let plan = distribute(
+        &compile(&graph_with(&["counts"], &[]), &c).unwrap(),
+        &on_hosts(&[("counts", "worker1")]),
+    );
+    let outcome = Executor::new(&c)
+        .keeping(&cache, &memory)
+        .placed(&on_hosts(&[("counts", "worker1")]))
+        .reaching("worker1", &w)
+        .resume(&plan, Value::Null, Vec::new(), Vec::new())
+        .unwrap();
+
+    assert_eq!(
+        outcome
+            .keys
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["counts"]
+    );
+}
+
+/// A worker that keeps both what it is sent and what its nodes produce.
+fn keeping(store: &std::path::Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_test-worker"));
+    cmd.args(["--store", &store.to_string_lossy(), "--keeper"]);
+    cmd
+}
+
+/// The catalog both sides know, and what is remembered of `counts`: settled, so
+/// keeping its output is honest, and named, or there is nothing to build a key
+/// out of.
+fn counting() -> (Catalog, Memory) {
+    let mut catalog = Catalog::new();
+    catalog.insert("counts", Arc::new(Add(1.0)));
+    let mut memory = Memory::new();
+    memory.identify("counts", "Counts");
+    memory.freeze("counts", None);
+    memory.cache("counts", None);
+    (catalog, memory)
+}
+
+/// `counts`, executed over there, with a keeper here so the table travels.
+fn run_counting(c: &Catalog, memory: &Memory, w: &Worker) -> Value {
+    let here = Dir::new();
+    let store = Local::at(here.path()).unwrap();
+    let cache = Cache::over(&store);
+    let p = on_hosts(&[("counts", "worker1")]);
+    let plan = distribute(&compile(&graph_with(&["counts"], &[]), c).unwrap(), &p);
+
+    Executor::new(c)
+        .keeping(&cache, memory)
+        .placed(&p)
+        .reaching("worker1", w)
+        .run(&plan, Value::Null)
+        .unwrap()
 }

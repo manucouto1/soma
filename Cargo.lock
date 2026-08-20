@@ -305,9 +305,11 @@ dependencies = [
 name = "soma-next-store"
 version = "0.1.0"
 dependencies = [
+ "rmp-serde",
  "serde",
  "serde_json",
  "sha2",
+ "soma-next-core",
 ]
 
 [[package]]
