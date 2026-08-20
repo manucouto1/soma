@@ -588,13 +588,20 @@ The order comes from the August 2026 literature review, and the content of the
 last two changed when CU11 closed: the separation into three levels — graph,
 training run, study — reorders which mechanism solves what.
 
-- CU12 — micro-batches: overlapping inside a branch (GPipe, 1F1B). **Graph
-  level**: it is one forward from the inside
-- CU13 — `Plan::Remote`: transport (the only new trait, `Transport`), and
-  `Opaque` crossing the wire becomes a `CompileError`. Only for spreading **one
-  graph** across hosts — a network that does not fit on one machine — which is
-  model parallel and **split learning** at once. Spreading *whole training runs*
-  is another thing and does not need it
+What actually happened with the two next ones, since this list was written:
+**CU12 was candidate B** — the worker and `Plan::Remote` — and **CU13 was the
+cache**, which was not on the list at all: it came out of the store the worker's
+`have`/`want` had been waiting for. Micro-batches did not open, and they are
+still where the grain per item joins them.
+
+- ~~CU12 — micro-batches~~: overlapping inside a branch (GPipe, 1F1B). **Graph
+  level**: it is one forward from the inside. Still open, now with `.mapped()`
+  waiting on it
+- ~~CU13 — `Plan::Remote`~~: **done as CU12**. Transport (the only new trait,
+  `Transport`), and `Opaque` crossing the wire. Only for spreading **one graph**
+  across hosts — a network that does not fit on one machine — which is model
+  parallel and **split learning** at once. Spreading *whole training runs* is
+  another thing and does not need it
 - CU14 — federated: `map` over the clients and `reduce` with FedAvg, at the study
   level. FedAvg, FedProx and company are library — **functions**, not nodes. This
   is where the question of what a training run exports as state has to be
@@ -1194,3 +1201,214 @@ question and was not needed here: training locally extracts no state.
   and `reduce`. A graph would only be justified by non-flat topologies —
   hierarchical federation, gossip — and that day has not come.
 - **`soma_next.torch` stops being pending** and opens here.
+
+---
+
+## CU13 — What is remembered, and what is not computed twice
+
+```python
+from soma_next.torch import freeze
+
+g = Graph.somatize(Encoder().frozen().cached() >> Head())
+freeze(g)                                     # no gradient, and the weights hashed
+g.forward(Opaque(x), store="/scratch/soma")   # the second time, the encoder does not run
+```
+
+Status: **closed**. 185 tests in the core, 33 in the store, 73 in the transport
+and 249 in Python.
+
+The case it exists for is labchain's
+([SoftwareX, S2352711026000373](https://www.sciencedirect.com/science/article/pii/S2352711026000373)):
+an expensive, settled node — an encoder, an embedding — under a head that
+changes twenty times in an afternoon. What has to be true is that changing the
+head **does not touch the name of what is underneath it**.
+
+### The question: where does the hash go?
+
+labchain hangs it **inside the data**: an `XYData` object carrying the value and
+its hashes. It has no choice — it has no engine, the pipeline is the user's code,
+and the only place left to put a hash is the datum itself.
+
+Here there is an engine, and `walk` already carries `produced` everywhere. So the
+key goes **beside it**, in a parallel table with the same life cycle: the same
+copy into a wave's branches, the same retention in `resume`, the same merge from
+what came back over a wire. In exchange, `Value` grows no wrapper that every
+`forward` would have to unwrap, and the `Node` contract does not change by one
+character.
+
+> The engine is the only one that sees every edge. Anything that wants to travel
+> along an edge without being a value belongs to the engine, not to the value.
+
+### The key: a Merkle hash over the recipe, not over the data
+
+```text
+key(root) = H(the input, by its content)     ← the only place data is hashed
+key(node) = H(identity, state, salt, the keys of its predecessors)
+identity  = the name of the class            ← not the fingerprint of the code
+```
+
+From the root down they are hashes of hashes, and that is the whole point: **the
+key is known before anything runs**. Naming what a node will produce does not
+cost a byte of the data it will produce it from, and changing the classifier does
+not touch the name of the embeddings under it.
+
+Three things deliberately left out of the key:
+
+- **The fingerprint of the code.** In it, a cosmetic refactor would invalidate
+  half a store in silence. It is written *beside* the value and compared on a
+  hit, which turns the same event into a line on `stderr` you can act on. The
+  window it leaves open is narrow and known: two classes of the same name with
+  different bodies share a key, and the fingerprint is what says so out loud.
+- **The device.** Where something ran is not what it is. What the key cannot see,
+  the user says with `.cached(salt="a100-fp16")`.
+- **The graph.** A key names a node's output, not the run it happened in: that is
+  what makes two graphs share what they have in common.
+
+### The prefix rule, which is one line and has two reasons
+
+> A node's output can be kept if **nothing upstream of it can change** — itself
+> included.
+
+Freezing the node alone is not enough: freezing layer 3 of 5 does not stop the
+gradient crossing it towards layers 1 and 2. Two independent arguments land on
+the same line, and that is why it is a check and not a warning:
+
+- what is restored from a store is a **leaf**. The backward pass stops there and
+  everything above it quietly stops training;
+- the digest of the state is in the key, so a node that still trains gets a new
+  key every step. It never hits; it only fills the store.
+
+At inference the whole prefix is settled by definition, so all of it is
+cacheable. The question is asked by `cacheable(graph, memory)` **before the first
+node runs** — the engine never sees a graph, so it cannot be the one to ask.
+
+### Declaring and obeying, for the fourth time
+
+`Memory` is the **fifth fact**, and like the other four it is inert data:
+
+| piece | answers |
+|---|---|
+| `Graph` | **what** exists |
+| `Catalog` | **who** executes it |
+| `Placement` | **where** |
+| `Plan` | **when** |
+| `Memory` | **what is remembered** |
+
+The core defines *frozen* as "this node's state does not change while the graph
+runs" — a statement about **cache validity**, not about gradients, which it still
+knows nothing about. `soma_next.torch.freeze` is what makes it true, with
+`requires_grad_(False)`, exactly as a node and not the core is what moves a
+tensor to a GPU. And the digest of the weights is paid for **there**, once,
+because settling is the moment that makes both halves true at the same time.
+
+### The fourth hole, and the first that is a decorator
+
+`Keeper` joins `Node`, `Driver` and `Transport`: the core provides the hole,
+whoever knows what goes in it is a library. Here it is doubly true — hashing is
+`sha256` and keeping is a directory, and the core has no dependencies at all.
+
+**Driver serves, Transport carries, Keeper keeps.**
+
+What fills it is `soma_next_store::Cache`, and in Python there is a second one in
+front: `Packing` turns every `Opaque` into bytes on the way in and back on the
+way out, so the store sees maps and bytes and never learns Python exists.
+
+### Decisions taken
+
+**1. The key travels beside `produced`, not inside `Value`.** See above. It also
+means a node that declares nothing pays nothing, and that without a keeper the
+table is not even computed.
+
+**2. `.cached()` is opt-in, and not declaring it does not break the chain.** A
+node with no cache still gets a key and still passes it on. Otherwise declaring
+the cache node by node would be declaring it for the whole graph.
+
+**3. A keeper that fails never kills the run.** It is said on `stderr` and the
+value is recomputed. A cache is an optimization, and one that can kill a run at
+hour three is not one. Same criterion the worker already applies to a store it
+cannot reach.
+
+**4. The frontier of `Opaque` moves rather than disappearing.** From "an opaque
+does not travel" to "an opaque nobody registered a codec for does not travel",
+which is the more precise of the two. `codec(kind, type, dump=, load=)` is the
+register; `soma_next.torch` fills in the tensor's on being imported. What comes
+back is a **leaf**, and there is a test that says so, because it will look like a
+bug the first time somebody sees it.
+
+**5. A tensor comes back on the cpu, and `weights_only=True`.** A store shared
+between machines that only reads back where it was written is not shared at all;
+and one that unpickles arbitrary objects is a way in. Whoever receives it moves
+it, which is what a placed node already does with its input.
+
+**6. Values and artifacts live in the same store, under two namespaces.**
+`value:<key>` and `artifact:<kind>:<id>`. Two questions — a catalog that is not
+sent twice, a node that is not run twice — one directory, and what keeps them
+apart is the name.
+
+### Questionnaire
+
+**The core** (`core/tests/unit/{execution,build,memory}.rs`)
+- [x] what is kept is not computed again, and what is kept under that name is
+      what was produced
+- [x] a different input is a different name, and the node runs
+- [x] what is above names what is below: another state upstream, another name
+- [x] the fingerprint of the code is **not** part of the name, and what is
+      written beside the value is what produced it
+- [x] a node that keeps nothing still passes its name on
+- [x] an `Opaque` root leaves everything below nameless, and it is not an error
+- [x] nothing is named without a keeper
+- [x] `cacheable` names the cached node **and** the ancestor that can still change
+- [x] the names a slice brings are not the names it gives, and both cross a
+      `Cargo` and come back in an `Outcome`
+
+**The store** (`store/tests/unit/cache.rs`)
+- [x] the pieces of a recipe cannot run into each other: `["ab","c"]` and
+      `["a","bc"]` are two names
+- [x] the same recipe is the same name every time; only a root is named by its
+      content
+- [x] a batch answers in the order it was asked, holes included
+- [x] a name nobody kept is a miss and not a failure
+- [x] a kept value is findable by looking at what is in the store
+- [x] the same bytes under two names are stored once
+
+**The worker** (`transport/tests/unit/worker.rs`)
+- [x] what a worker already kept is not run again **over there** — and the same
+      worker without a keeper runs it every time
+- [x] the name of what ran over there comes back
+
+**Python** (`python/tests/{test_cache,test_freeze}.py`)
+- [x] changing the head does not recompute the embedding, with real tensors
+- [x] a cache over something that can still change is refused, naming both
+- [x] the salt is another name, and the innermost one wins
+- [x] declaring is not obeying: until `freeze`, the weights still ask for a
+      gradient
+- [x] the same weights are the same state; other weights are another state
+- [x] `Trainer` obeys whatever was declared, and the optimizer still points at
+      the same objects
+- [x] a different fingerprint says so on `stderr` and **uses** what is kept
+- [x] an opaque nobody can write down is said and is not fatal
+- [x] what comes back is a leaf
+
+### What did NOT go in
+
+**The grain per item** (`.mapped()`): a node that maps over items, with a key per
+item instead of per node. It is designed and unwritten — `Key` is public and
+there is no `Keys` yet, on purpose: a variant nobody can construct is worse than
+a variant that arrives late, and the day it arrives every `match` stops compiling
+and somebody decides. It opens together with micro-batches, because it is the
+same question.
+
+Also out: **`.overwrite(times=1)`**, which is a policy of the *run* and lives in
+the executor, not in what is kept · **the queryable index** — what do I have,
+from which run, from when — which is a SQLite derived from the records and
+throwaway, and making it the truth would mean a single writer over NFS · a
+**strict mode** for the fingerprint (`.cached(strict=True)`) · and **S3**, which
+arrives the day there is a MinIO to point at, through OpenDAL and as another
+configuration rather than another implementation.
+
+### What is left owing
+
+The **worker's own cache is wired and proven, but the client sends the table only
+if it has a keeper of its own**: `Cargo` gets its `memory` from
+`Executor::keeping`. A coordinator that keeps nothing locally but sends work to
+workers that do would want the table to travel anyway. It has not come up yet.

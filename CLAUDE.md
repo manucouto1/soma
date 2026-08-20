@@ -78,19 +78,28 @@ cd python && maturin develop && python -m pytest tests/ -q
 
 ## Status
 
-Eleven use cases closed: the graph, the engine, the plan, the fans, the DSL, a
-single node contract, `Opaque`, the waves, the device and training. A graph is
-declared with `>>`, `|` and `.on("cuda:0")`, executed in Rust, and trained from
-outside with `soma_next.torch.Trainer`. See `docs/use-cases.md`.
+Thirteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+single node contract, `Opaque`, the waves, the device, training, the distributed
+worker and the cache. A graph is declared with `>>`, `|`, `.on("cuda:0")` and
+`.cached()`, executed in Rust, spread across processes with `.at("worker1")`,
+and trained from outside with `soma_next.torch.Trainer`. See `docs/use-cases.md`
+— CU12's section is the one still owing.
 
-**Four orthogonal facts**, and confusing them is the easy mistake: `Graph` says
-**what** exists, `Catalog` **who** executes it, `Placement` **where**, and
-`Plan` **when**. The device deliberately does not live in the plan.
+**Five orthogonal facts**, and confusing them is the easy mistake: `Graph` says
+**what** exists, `Catalog` **who** executes it, `Placement` **where**, `Plan`
+**when**, and `Memory` **what is remembered** of each node. The device
+deliberately does not live in the plan.
+
+**Four holes, and the core provides them without filling any**: `Node` is the
+user's, `Driver` serves what a step asks for, `Transport` carries a slice
+elsewhere, `Keeper` hashes a recipe and keeps what it names. The core still has
+no dependencies.
 
 **Three levels, and none knows the one above exists**: the graph is a network —
 the scale of one `forward` —, the `Trainer` is a training run — the scale of an
 afternoon —, and N training runs are a Python list, not a type and certainly not
 a graph. A graph earns its keep when there are dependencies to declare.
 
-Next up: micro-batches, and after that spreading a graph across hosts. See the
-distribution report for the full order.
+Next up: micro-batches, which is where the grain per item (`.mapped()`) joins
+them; and federated, which is what a training run exports. See the distribution
+report for the full order.
