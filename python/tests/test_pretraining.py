@@ -121,8 +121,9 @@ def body():
     weights."""
     torch.manual_seed(0)
     tokenize, embed, block = Tokenize(), Embed(), Block(DIM, HID)
-    expression = tokenize.named("tokenize") >> embed.named("embed") >> block.named("block")
-    return expression, (tokenize, embed, block)
+    # Nobody is named by hand: an id nobody gives comes from the class,
+    # `CleanText` -> `clean_text`, and it is suffixed if it is already taken.
+    return tokenize >> embed >> block, (tokenize, embed, block)
 
 
 @pytest.fixture
@@ -132,7 +133,7 @@ def batches():
 
 def pretrained(expression, batches):
     """Phase one: train the body against a decoder, and throw the decoder away."""
-    graph = Graph.somatize(expression >> Decoder(HID, DIM).named("decoder"))
+    graph = Graph.somatize(expression >> Decoder(HID, DIM))
     return Trainer(
         graph,
         objective=torch.nn.functional.mse_loss,
@@ -142,7 +143,7 @@ def pretrained(expression, batches):
 
 def settled(expression, head, store, lr=1e-2):
     """Phase two: the same pieces, settled and kept, under a head that trains."""
-    graph = Graph.somatize(expression.frozen().cached() >> head.named("head"))
+    graph = Graph.somatize(expression.frozen().cached() >> head)
     return graph, Trainer(
         graph,
         objective=torch.nn.functional.cross_entropy,
@@ -248,7 +249,7 @@ def test_a_tokenizer_is_kept_without_anybody_registering_a_codec(body, batches, 
     # What it returns is a list of ints, not a tensor: it crosses as data and is
     # kept as data. `Opaque` is for what cannot.
     expression, (tokenize, _, _) = body
-    graph = Graph.somatize(tokenize.named("tokenize").frozen().cached())
+    graph = Graph.somatize(tokenize.frozen().cached())
 
     first = graph.forward(TEXTS[:2], store=str(tmp_path))
     second = graph.forward(TEXTS[:2], store=str(tmp_path))
@@ -262,7 +263,7 @@ def test_it_needs_no_freeze_call_because_it_has_no_state(body, tmp_path):
     # Something with neither is settled by saying so and nothing else — and the
     # check before a run knows the difference.
     expression, (tokenize, _, _) = body
-    graph = Graph.somatize(tokenize.named("tokenize").frozen().cached())
+    graph = Graph.somatize(tokenize.frozen().cached())
 
     assert graph.forward(TEXTS[:2], store=str(tmp_path)) is not None
 
@@ -273,10 +274,7 @@ def test_it_still_has_to_be_declared_settled(body, batches, tmp_path):
     # unable to change, and a tokenizer with an adaptive vocabulary would be
     # exactly the thing that breaks it.
     expression, (tokenize, embed, block) = body
-    graph = Graph.somatize(
-        tokenize.named("tokenize")
-        >> (embed.named("embed") >> block.named("block")).frozen().cached()
-    )
+    graph = Graph.somatize(tokenize >> (embed >> block).frozen().cached())
     # Obedience is checked first, and it is a different complaint: settle the
     # body so that what is left is the one being tested.
     freeze(graph)
@@ -288,7 +286,7 @@ def test_it_still_has_to_be_declared_settled(body, batches, tmp_path):
 def test_a_head_that_still_trains_cannot_be_kept(body, batches, tmp_path):
     expression, (tokenize, embed, block) = body
     graph = Graph.somatize(
-        expression.frozen() >> Head(HID, CLASSES).named("head").frozen().cached()
+        expression.frozen() >> Head(HID, CLASSES).frozen().cached()
     )
     freeze(graph, "tokenize", "embed", "block")
 
@@ -300,7 +298,7 @@ def test_a_body_declared_settled_and_never_settled_refuses_to_run(body, tmp_path
     # Without the digest of the weights the key does not depend on them, and two
     # checkpoints of the same class would be kept under one name.
     expression, _ = body
-    graph = Graph.somatize(expression.frozen().cached() >> Head(HID, CLASSES).named("head"))
+    graph = Graph.somatize(expression.frozen().cached() >> Head(HID, CLASSES))
 
     with pytest.raises(ValueError, match="checkpoints"):
         graph.forward(TEXTS[:2], store=str(tmp_path))
