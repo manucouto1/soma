@@ -2,8 +2,9 @@
 
     Graph.somatize(Source() >> (Left() | Right()) >> Mean())
 
-`>>` chains, `|` opens branches, `.on()` places on a device and `.at()` sends to
-another host. A `>>` between two open branches joins them: whatever leaves them
+`>>` chains, `|` opens branches, `.on()` places on a device, `.at()` sends to
+another host, `.frozen()` says the state does not change and `.cached()` says
+the output is worth keeping. A `>>` between two open branches joins them: whatever leaves them
 all enters whatever comes next, which is exactly fan-in — the node on the right
 receives a map keyed by each branch.
 
@@ -30,7 +31,7 @@ class Topology:
 
         The name is validated when the graph is materialized, in Rust.
         """
-        return _placed(self, "device", device)
+        return _fill(self, "device", device)
 
     def at(self, host):
         """The same piece, in another process. The innermost one wins alike, and
@@ -39,7 +40,31 @@ class Topology:
         A host is a **name**: what it resolves to is said by whoever executes,
         with `forward(..., workers={...})`.
         """
-        return _placed(self, "host", host)
+        return _fill(self, "host", host)
+
+    def frozen(self):
+        """The same piece, settled: its state does not change while the graph
+        runs. The innermost one wins alike.
+
+        Here it is **declared**; making it true is `soma_next.torch.freeze`,
+        which turns the gradient off and hashes the weights. The same division as
+        `.on()`, where the core says where and the node moves itself.
+        """
+        return _fill(self, "frozen", True)
+
+    def cached(self, salt=None):
+        """The same piece, worth keeping: what each of its nodes produces is
+        looked up before being computed, and kept after.
+
+        It costs to keep, so it is opt-in — and a node without it **does not
+        break the chain**: its key is still computed and passed on, it is just
+        not stored.
+
+        `salt` tells apart two runs the key cannot tell apart on its own:
+        `.cached(salt="a100-fp16")`. What is **not** in the key is the device,
+        nor the fingerprint of the code.
+        """
+        return _fill(self, "cached", _Kept(salt))
 
     def __rshift__(self, other):
         return Chain(_steps(self) + _steps(_wrap(other)))
@@ -68,18 +93,36 @@ class Fork(Topology):
         self.branches = branches
 
 
-class Declared(Topology):
-    """An object declared as a node, with its id and its place if you gave it one."""
+class _Kept:
+    """`.cached()` was said, with the salt it was said with.
 
-    def __init__(self, obj, node_id=None, device=None, host=None):
+    A class of one field and not the salt itself, because `None` is a salt that
+    was not given and that is **not** the same as never having said `.cached()`.
+    """
+
+    def __init__(self, salt):
+        self.salt = salt
+
+
+class Declared(Topology):
+    """An object declared as a node, with its id and whatever was said about it.
+
+    What was said lives in a **dict** and not in four attributes, because
+    `.frozen()` and `.cached()` are already methods of `Topology` and an
+    attribute of the same name would shadow them: you would declare one node and
+    then find the second `.frozen()` was not callable. A key that is not there
+    means nothing was said, which is not the same as having been said `None` —
+    `.cached(salt=None)` is a cache without salt.
+    """
+
+    def __init__(self, obj, node_id=None, **said):
         self.obj = obj
         self.node_id = node_id
-        self.device = device
-        self.host = host
+        self.said = dict(said)
 
     def named(self, node_id):
-        """The same node, with the id you say. `.named`, `.on` and `.at` commute."""
-        return Declared(self.obj, node_id, self.device, self.host)
+        """The same node, with the id you say. `.named` and the rest commute."""
+        return Declared(self.obj, node_id, **self.said)
 
 
 class Node(Topology, ABC):
@@ -98,24 +141,24 @@ class Node(Topology, ABC):
         return Declared(self, node_id)
 
 
-def _placed(topology, field, value):
-    """Hands a place out to the leaves that do not already have one.
+def _fill(topology, field, value):
+    """Hands one thing out to the leaves that were not told it already.
 
     It is handed out at declaration time because a piece stops existing once
-    materialized: placing is a per-node fact. `field` is `"device"` or `"host"`,
-    and each looks at only its own, which is what makes them independent.
+    materialized: all of this is a per-node fact. Each field looks at only its
+    own, which is what makes them independent — a node can be settled without
+    being kept, placed without being settled, and any combination of the rest.
     """
     topology = _wrap(topology)
     if isinstance(topology, Chain):
-        return Chain([_placed(step, field, value) for step in topology.steps])
+        return Chain([_fill(step, field, value) for step in topology.steps])
     if isinstance(topology, Fork):
-        return Fork([_placed(branch, field, value) for branch in topology.branches])
-    # `is not None` and not an `or`: `.on("")` has to reach `place()` and fail
-    # there, not vanish for being an empty string.
-    place = {"device": topology.device, "host": topology.host}
-    if place[field] is None:
-        place[field] = value
-    return Declared(topology.obj, topology.node_id, **place)
+        return Fork([_fill(branch, field, value) for branch in topology.branches])
+    # `setdefault` and not a check against `None`: `.on("")` has to reach
+    # `place()` and fail there, not vanish for being an empty string.
+    said = dict(topology.said)
+    said.setdefault(field, value)
+    return Declared(topology.obj, topology.node_id, **said)
 
 
 def _wrap(obj):
@@ -137,6 +180,24 @@ def _steps(topology):
 
 def _branches(topology):
     return topology.branches if isinstance(topology, Fork) else [topology]
+
+
+def _note_the_code(g, node_id, obj):
+    """Which version of the class this graph was written against.
+
+    **Metadata**, never part of a key: a cosmetic refactor must not invalidate
+    half a store in silence. It gets compared on a hit and said on `stderr`.
+
+    Only for what is kept, because computing it means parsing an AST. And a
+    class with no source to read — a notebook, an `exec` — simply has none: it
+    is a comparison that cannot be made, not a reason to fail.
+    """
+    from soma_next import _fingerprint
+
+    try:
+        g.written_as(node_id, _fingerprint.digest(type(obj)))
+    except _fingerprint.CannotVersion:
+        pass
 
 
 def somatize(graph_cls, topology):
@@ -168,12 +229,18 @@ def _walk(g, topology, sources):
     node_id = (
         g.node(topology.node_id, topology.obj) if topology.node_id else g.node(topology.obj)
     )
-    if topology.device is not None:
+    said = topology.said
+    if "device" in said:
         # `.on()` is not another path: it ends at the same `place` used by
         # whoever builds the graph by hand, and inherits its validation.
-        g.place(node_id, topology.device)
-    if topology.host is not None:
-        g.place_at(node_id, topology.host)
+        g.place(node_id, said["device"])
+    if "host" in said:
+        g.place_at(node_id, said["host"])
+    if "frozen" in said:
+        g.freeze(node_id)
+    if "cached" in said:
+        g.cache(node_id, said["cached"].salt)
+        _note_the_code(g, node_id, topology.obj)
     for source in sources:
         g.edge(source, node_id)
     return [node_id]

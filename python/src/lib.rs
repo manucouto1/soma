@@ -5,19 +5,22 @@
 //! cannot have: the id → Python object map, and the two calling conventions. If
 //! a domain rule ends up written here, it is in the wrong place.
 
+mod codec;
 mod node;
 mod remote;
 mod value;
 
+use codec::Packing;
 use node::{PyAwait, PyCtx, PyDone, PyDriver, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use remote::PyWorker;
 use soma_next_core::{
-    Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, NodeId,
-    Placement, RunError, compile, distribute,
+    Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Memory,
+    MemoryError, NodeId, Placement, RunError, cacheable, compile, distribute,
 };
+use soma_next_store::{Cache, Local};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -36,6 +39,17 @@ fn compile_err(e: CompileError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
+/// The same for a cache that was declared where it cannot be honoured. It is
+/// raised **before** the first node runs, which is the whole point of asking.
+fn memory_err(e: MemoryError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// The same for a store that cannot be opened.
+fn store_err(e: soma_next_store::StoreError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
 /// The same for a run failure.
 fn run_err(e: RunError) -> PyErr {
     PyValueError::new_err(e.to_string())
@@ -49,6 +63,9 @@ struct PyGraph {
     catalog: Catalog,
     /// Where each node runs, for those it was said about.
     placement: Placement,
+    /// What is remembered about each node: what it is, whether it is settled,
+    /// whether its output is worth keeping.
+    memory: Memory,
     /// The object exactly as the user passed it, unwrapped, so it can be
     /// handed back.
     implementations: HashMap<String, PyObject>,
@@ -62,6 +79,7 @@ impl PyGraph {
             graph: Graph::new(),
             catalog: Catalog::new(),
             placement: Placement::new(),
+            memory: Memory::new(),
             implementations: HashMap::new(),
         }
     }
@@ -76,6 +94,10 @@ impl PyGraph {
         let wrapped = PyNode::new(&implementation)?;
 
         self.graph.add_node(id.clone()).map_err(to_py_err)?;
+        // What implements it, said here because here is where the object is:
+        // the class's name is half of what a key is built out of.
+        self.memory
+            .identify(id.clone(), type_name(&implementation)?);
         self.catalog.insert(id.clone(), Arc::new(wrapped));
         self.implementations
             .insert(id.to_string(), implementation.unbind());
@@ -103,6 +125,70 @@ impl PyGraph {
         let id = self.known(node_id)?;
         self.placement.place_at(id, Host::from(host));
         Ok(())
+    }
+
+    /// Says this node's state does not change from here on, with the digest of
+    /// the state it is settled at if whoever calls knows how to hash weights.
+    ///
+    /// The primitive `.frozen()` ends at, and it **declares**: making it true is
+    /// `soma_next.torch.freeze`, exactly as moving a tensor to a GPU is the
+    /// node's job and not the core's.
+    #[pyo3(signature = (node_id, state = None))]
+    fn freeze(&mut self, node_id: &str, state: Option<String>) -> PyResult<()> {
+        let id = self.known(node_id)?;
+        self.memory.freeze(id, state);
+        Ok(())
+    }
+
+    /// Says this node's output is worth keeping, with the salt that tells apart
+    /// two runs the key cannot tell apart on its own.
+    #[pyo3(signature = (node_id, salt = None))]
+    fn cache(&mut self, node_id: &str, salt: Option<String>) -> PyResult<()> {
+        let id = self.known(node_id)?;
+        self.memory.cache(id, salt);
+        Ok(())
+    }
+
+    /// Notes which version of the code this graph was written against.
+    /// **Metadata**: never in a key, compared on a hit and said on `stderr` if
+    /// it differs.
+    fn written_as(&mut self, node_id: &str, fingerprint: &str) -> PyResult<()> {
+        let id = self.known(node_id)?;
+        self.memory.written_as(id, fingerprint);
+        Ok(())
+    }
+
+    /// Which nodes are settled, and at what state — `None` for one with none.
+    fn frozen<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.about(py, |memory, id| {
+            memory
+                .is_frozen(id)
+                .then(|| memory.state_of(id).map(str::to_string))
+        })
+    }
+
+    /// Which nodes are kept, and under what salt.
+    fn cached<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.about(py, |memory, id| {
+            memory
+                .is_cached(id)
+                .then(|| memory.salt_of(id).map(str::to_string))
+        })
+    }
+
+    /// What implements each node, by name.
+    fn identities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.about(py, |memory, id| {
+            memory.identity_of(id).map(|what| Some(what.to_string()))
+        })
+    }
+
+    /// Which version of the code each node was written against, for those
+    /// where it was noted.
+    fn fingerprints<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.about(py, |memory, id| {
+            memory.fingerprint_of(id).map(|what| Some(what.to_string()))
+        })
     }
 
     /// Which host each node sent away runs on, in declaration order.
@@ -207,13 +293,20 @@ impl PyGraph {
     /// `driver=` is an object with `perform(requests)`; `workers=` says what
     /// each host resolves to. A node sent to a host that is not there is **not
     /// executed here just in case**.
-    #[pyo3(signature = (input = None, *, driver = None, workers = None))]
+    ///
+    /// `store=` is a directory: with one, whatever was declared `.cached()` is
+    /// looked up before being computed and kept after. Whether what was
+    /// declared can honestly be kept is asked **here**, before the first node
+    /// runs, so a `.cached()` in the wrong place fails at once and not as a net
+    /// that quietly stopped training.
+    #[pyo3(signature = (input = None, *, driver = None, workers = None, store = None))]
     fn forward(
         &self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         driver: Option<&Bound<'_, PyAny>>,
         workers: Option<&Bound<'_, PyDict>>,
+        store: Option<&str>,
     ) -> PyResult<PyObject> {
         let start = match input {
             Some(obj) => value::from_py(obj)?,
@@ -239,10 +332,27 @@ impl PyGraph {
                 .collect::<PyResult<Vec<_>>>()?,
         };
 
+        // Before anything else, because a cache declared where it cannot be
+        // honoured is a question with an answer and not a surprise.
+        let kept = match store {
+            None => None,
+            Some(where_) => {
+                cacheable(&self.graph, &self.memory).map_err(memory_err)?;
+                Some(Local::at(where_).map_err(store_err)?)
+            }
+        };
+        let cache = kept.as_ref().map(|kept| Cache::over(kept));
+        // The codecs in front, so what reaches the store is bytes and the store
+        // never learns Python exists.
+        let packing = cache.as_ref().map(|cache| Packing::over(cache));
+
         let driver = driver.map(PyDriver::new).transpose()?;
         let mut executor = Executor::new(&self.catalog).placed(&self.placement);
         for (host, worker) in &reachable {
             executor = executor.reaching(host.clone(), worker.as_ref());
+        }
+        if let Some(packing) = &packing {
+            executor = executor.keeping(packing, &self.memory);
         }
         let executor = match &driver {
             Some(d) => executor.with_driver(d),
@@ -297,6 +407,23 @@ impl PyGraph {
         }
     }
 
+    /// What is remembered about each node that has anything said about it, in
+    /// declaration order. The shape of `devices()` and `hosts()`, written once
+    /// for the four questions it answers.
+    fn about<'py>(
+        &self,
+        py: Python<'py>,
+        what: impl Fn(&Memory, &NodeId) -> Option<Option<String>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let out = PyDict::new(py);
+        for id in self.graph.nodes() {
+            if let Some(said) = what(&self.memory, id) {
+                out.set_item(id.to_string(), said)?;
+            }
+        }
+        Ok(out)
+    }
+
     /// An id we know is in the graph, or the same error the core would give.
     fn known(&self, node_id: &str) -> PyResult<NodeId> {
         let id = NodeId::from(node_id);
@@ -337,6 +464,8 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAwait>()?;
     m.add_class::<value::PyOpaque>()?;
     m.add_class::<PyWorker>()?;
+    m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
+    m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;
     m.add_function(wrap_pyfunction!(remote::serve, m)?)?;
     m.add_function(wrap_pyfunction!(remote::serve_provisioned, m)?)?;
     m.add_function(wrap_pyfunction!(remote::listen, m)?)?;

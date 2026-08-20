@@ -22,7 +22,7 @@ class Graph(_RustGraph):
     inherited from the Rust class.
     """
 
-    def forward(self, input=None, *, driver=None, workers=None):
+    def forward(self, input=None, *, driver=None, workers=None, store=None):
         """Executes the whole graph and returns what it produced.
 
         With `workers={"w1": Worker.at(...)}` you say what each host resolves
@@ -32,10 +32,13 @@ class Graph(_RustGraph):
         The `driver` goes with them. It serves what the steps ask for here and
         over there alike, so a node that returns `Await` does not stop being
         executable for having been sent away.
+
+        `store` is a directory: with one, whatever was declared `.cached()` is
+        looked up before being computed and kept afterwards.
         """
         for worker, nodes in self._share_out(workers or {}).items():
             worker.carry(nodes, driver)
-        return super().forward(input, driver=driver, workers=workers)
+        return super().forward(input, driver=driver, workers=workers, store=store)
 
     def _share_out(self, workers):
         """Which nodes fall to each worker, grouped by worker and not by host.

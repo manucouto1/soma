@@ -26,6 +26,7 @@ from __future__ import annotations
 import torch
 
 from soma_next import Opaque
+from soma_next.torch._freeze import freeze
 from soma_next.torch._params import parameters
 
 
@@ -73,6 +74,10 @@ class Trainer:
         self.graph = graph
         self.objective = objective
         self.optimizer = optimizer
+        # Whatever the expression declared settled has to **be** settled before
+        # the first step, not after somebody notices the loss going flat where
+        # it should not. Declaring is the graph's, obeying is torch's.
+        freeze(graph)
 
     def step(self, batch):
         """One step: forward, loss, backward, update. Returns the loss.

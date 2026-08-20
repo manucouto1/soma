@@ -12,6 +12,9 @@ implementor. So it lives here, in Python, and `core/` does not change a line::
                 optimizer=torch.optim.Adam(parameters(g), lr=1e-3))
     t.fit(data, epochs=10)
 
+Importing this also says how a tensor is written down, which is what lets a
+graph keep what it produces: see `soma_next.torch._codec`.
+
 Training does not touch the graph: afterwards its nodes, its edges, its plan and
 its placement are the same. What changes are the weights, which live inside the
 nodes and always did.
@@ -20,7 +23,14 @@ That the package is called `torch` does not shadow the real one: in Python 3
 imports are absolute, so `import torch` in here brings the usual one.
 """
 
+from soma_next.torch._codec import register as _register_the_tensor_codec
+from soma_next.torch._freeze import freeze
 from soma_next.torch._params import parameters
 from soma_next.torch._trainer import Result, Trainer
 
-__all__ = ["Result", "Trainer", "parameters"]
+# On being imported, and not on being asked: a graph that keeps what it produces
+# needs a tensor to be writable **before** the first node runs, and by then
+# nobody is going to remember to say so.
+_register_the_tensor_codec()
+
+__all__ = ["Result", "Trainer", "freeze", "parameters"]

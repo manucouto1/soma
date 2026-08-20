@@ -298,6 +298,7 @@ version = "0.1.0"
 dependencies = [
  "pyo3",
  "soma-next-core",
+ "soma-next-store",
  "soma-next-transport",
 ]
 
