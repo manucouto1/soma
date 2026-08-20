@@ -55,7 +55,7 @@ from __future__ import annotations
 from soma_next._dsl import Node
 from soma_next._soma_next import Done, Opaque
 
-__all__ = ["Held", "Stage", "Tap", "stages"]
+__all__ = ["Held", "Stage", "Tap", "learns", "stages"]
 
 _TAP = "out:{}"
 """How a tap is named after the node it reads."""
@@ -144,7 +144,7 @@ def _levels(graph):
     hosts = graph.hosts()
     side, level = {}, {}
     for node_id in graph.topological_sort():
-        side[node_id] = (hosts.get(node_id), _learns(graph.implementation(node_id)))
+        side[node_id] = (hosts.get(node_id), learns(graph.implementation(node_id)))
         level[node_id] = max(
             (
                 level[before] + int(side[before] != side[node_id])
@@ -155,8 +155,12 @@ def _levels(graph):
     return level
 
 
-def _learns(implementation):
-    """Whether the node trains itself, asked with the same duck as `parameters()`."""
+def learns(implementation):
+    """Whether the node trains itself, asked with the same duck as `parameters()`.
+
+    Here and nowhere else: where a graph gets cut and what its optimizer leaves
+    alone are the same question, and two spellings of it would drift apart.
+    """
     return getattr(implementation, "learn", None) is not None
 
 

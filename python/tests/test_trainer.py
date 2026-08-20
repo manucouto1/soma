@@ -16,7 +16,7 @@ look good and are not.
 import pytest
 
 from soma_next import Done, Graph, Node, Opaque
-from soma_next.torch import Trainer, parameters
+from soma_next.torch import Learns, Trainer, parameters
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
@@ -39,6 +39,20 @@ class Layer(Node):
                 self.placed = ctx.device
             x = x.to(ctx.device)
         return Done(Opaque(self.lin(x)))
+
+    def parameters(self):
+        return list(self.lin.parameters())
+
+
+class Alone(Learns):
+    """A node that trains itself, wherever it runs. Its weights are not this
+    graph's optimizer's business, and saying so is the `learn` it inherits."""
+
+    def __init__(self, in_, out):
+        self.lin = nn.Linear(in_, out)
+
+    def compute(self, x, ctx):
+        return self.lin(x)
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -102,6 +116,15 @@ def test_a_shared_module_does_not_come_out_twice():
     assert len(parameters(g)) == 2
 
 
+def test_a_node_that_trains_itself_is_not_in_them():
+    # Two optimizers over one tensor is what this avoids, and it is also what
+    # keeps `NoGradient` meaning what it means.
+    g = Graph.somatize(
+        Layer(IN, MID).named("layer") >> Alone(MID, CLASSES).named("alone")
+    )
+    assert len(parameters(g)) == 2
+
+
 # ── Building the Trainer: what gets rejected ──
 
 
@@ -120,6 +143,39 @@ def test_an_optimizer_from_another_graph_fails():
             objective=nn.functional.cross_entropy,
             optimizer=torch.optim.Adam(parameters(other), lr=0.1),
         )
+
+
+def test_a_graph_where_everything_trains_itself_needs_no_optimizer():
+    g = Graph.somatize(Alone(IN, MID).named("alone"))
+    built = Trainer(g, objective=nn.functional.cross_entropy)
+    assert repr(built) == "Trainer(0 parameters)"
+
+
+def test_weights_here_and_no_optimizer_is_refused():
+    with pytest.raises(ValueError, match="no optimizer to move them"):
+        Trainer(net(), objective=nn.functional.cross_entropy)
+
+
+def test_an_optimizer_over_a_graph_that_trains_itself_is_refused():
+    alone = Alone(IN, MID)
+    g = Graph.somatize(alone.named("alone"))
+    with pytest.raises(ValueError, match="nothing to update"):
+        Trainer(
+            g,
+            objective=nn.functional.cross_entropy,
+            optimizer=torch.optim.Adam(alone.parameters(), lr=0.1),
+        )
+
+
+def test_settled_and_training_itself_is_a_contradiction():
+    # One says its state does not change while the graph runs and the other
+    # changes it every step. Before the first one, not after a cache gives back
+    # the wrong tensor.
+    g = Graph.somatize(
+        Layer(IN, MID).named("layer") >> Alone(MID, CLASSES).named("alone").frozen()
+    )
+    with pytest.raises(ValueError, match="settled and train itself"):
+        trainer(g)
 
 
 def test_freezing_a_part_is_legitimate_and_passes():

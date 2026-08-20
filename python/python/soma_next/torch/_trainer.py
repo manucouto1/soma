@@ -26,6 +26,7 @@ from __future__ import annotations
 import torch
 
 from soma_next import Opaque
+from soma_next._stage import learns
 from soma_next.torch._freeze import freeze
 from soma_next.torch._params import parameters
 
@@ -77,20 +78,23 @@ class Trainer:
     `workers` says what each host resolves to, exactly as in
     `Graph.forward`. Training a graph with a slice on another machine is
     **not** training that slice: what crosses a wire is the value and not the
-    graph that made it, so its parameters get no gradient here. Say so by
-    leaving them out of the optimizer — the far side runs its own backward, and
-    that is split learning — or the first step stops with `NoGradient`.
+    graph that made it, so its parameters get no gradient here. A node that
+    trains itself says so with `Learns`, and then it is left out of
+    `parameters()` on its own; anything else that ends up without a gradient
+    stops the first step with `NoGradient`.
+
+    `optimizer` may be left out **only** when every node with weights trains
+    itself: there is nothing here for it to update, and each of them says what it
+    trains with through `.learns_with(...)`.
     """
 
-    def __init__(self, graph, *, objective, optimizer, store=None, workers=None):
+    def __init__(
+        self, graph, *, objective, optimizer=None, store=None, workers=None
+    ):
         params = parameters(graph)
-        if not params:
-            raise ValueError(
-                "this graph has no parameters: no node answers `.parameters()`, "
-                "so training it would change nothing and the loss would come out "
-                "flat"
-            )
-        _check_they_talk(params, optimizer)
+        learning = _who_learns(graph)
+        _check_somebody_moves_them(params, learning, optimizer)
+        _check_nobody_is_settled_and_learning(graph, learning)
 
         self.graph = graph
         self.objective = objective
@@ -210,6 +214,63 @@ def _where_the_output_is(target, output):
     if torch.is_tensor(target) and torch.is_tensor(output):
         return target.to(output.device)
     return target
+
+
+def _who_learns(graph):
+    """Which nodes train themselves, which are exactly the ones `parameters()`
+    leaves out."""
+    return [
+        node_id
+        for node_id in graph.nodes()
+        if learns(graph.implementation(node_id))
+    ]
+
+
+def _check_somebody_moves_them(params, learning, optimizer):
+    """That every weight in this graph has somebody who will update it.
+
+    Said before the first step, because the symptom otherwise is the one this
+    class exists to prevent: a loss that comes down while half the net stands
+    still.
+    """
+    if not params and not learning:
+        raise ValueError(
+            "this graph has no parameters: no node answers `.parameters()`, "
+            "so training it would change nothing and the loss would come out "
+            "flat"
+        )
+    if params and optimizer is None:
+        raise ValueError(
+            f"this graph has {len(params)} parameter(s) and no optimizer to move "
+            f"them: leaving `optimizer` out is only for a graph where **every** "
+            f"node with weights trains itself, and these do not"
+        )
+    if optimizer is None:
+        return
+    if not params:
+        raise ValueError(
+            "every node with weights in this graph trains itself, so an optimizer "
+            "here has nothing to update: what each of them trains with is said "
+            "with `.learns_with(...)`, over the parameters of wherever it runs"
+        )
+    _check_they_talk(params, optimizer)
+
+
+def _check_nobody_is_settled_and_learning(graph, learning):
+    """That nobody was declared settled **and** writes its own weights.
+
+    `.frozen()` says this node's state does not change while the graph runs, and
+    learning changes it every step. Both at once is a contradiction, and it is
+    the kind that a cache would turn into the wrong tensor coming back.
+    """
+    both = [f"`{node_id}`" for node_id in learning if node_id in graph.frozen()]
+    if both:
+        raise ValueError(
+            f"a node cannot be settled and train itself at the same time, and "
+            f"these are both: {', '.join(both)}. `.frozen()` says its state does "
+            f"not change while the graph runs, and learning is changing it every "
+            f"step"
+        )
 
 
 def _check_they_talk(params, optimizer):
