@@ -59,9 +59,13 @@ class Trainer:
 
         t = Trainer(g, objective=cross_entropy,
                     optimizer=torch.optim.Adam(parameters(g), lr=1e-3))
+
+    `store` is a directory, and it is what makes the case all of this was for
+    work: a settled prefix declared `.cached()` runs **once per batch** and is
+    read from there on every epoch after the first.
     """
 
-    def __init__(self, graph, *, objective, optimizer):
+    def __init__(self, graph, *, objective, optimizer, store=None):
         params = parameters(graph)
         if not params:
             raise ValueError(
@@ -74,6 +78,7 @@ class Trainer:
         self.graph = graph
         self.objective = objective
         self.optimizer = optimizer
+        self.store = store
         # Whatever the expression declared settled has to **be** settled before
         # the first step, not after somebody notices the loss going flat where
         # it should not. Declaring is the graph's, obeying is torch's.
@@ -87,7 +92,7 @@ class Trainer:
         """
         input_, target = batch
         self.optimizer.zero_grad()
-        output = self.graph.forward(_crossable(input_))
+        output = self.graph.forward(_crossable(input_), store=self.store)
         loss = self.objective(output, _where_the_output_is(target, output))
         loss.backward()
         self.optimizer.step()
@@ -106,7 +111,8 @@ class Trainer:
         return Result(history)
 
     def __repr__(self):
-        return f"Trainer({len(parameters(self.graph))} parameters)"
+        kept = f", keeping in {self.store}" if self.store else ""
+        return f"Trainer({len(parameters(self.graph))} parameters{kept})"
 
 
 def _crossable(input_):

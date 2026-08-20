@@ -201,3 +201,22 @@ def test_a_class_without_source_says_so(write):
 
     with pytest.raises(CannotVersion, match="notebook"):
         digest(scope["MadeUp"])
+
+
+def test_a_global_named_like_an_attribute_does_not_get_in(write):
+    # `self.model` puts `model` in the code's `co_names`, which mixes globals
+    # with attribute names. Read raw, a module that happens to have a global
+    # called `model` too had its **value** hashed into the version of a class
+    # that never named it. The version then changed on its own: the cache said
+    # the code had changed, and a `--strict` worker refused to run over a
+    # mismatch that did not exist.
+    holds_one = """
+    from soma_next import Done, Node
+
+    class Filter(Node):
+        def forward(self, words, ctx):
+            return Done(self.model(words))
+    """
+    and_a_global = holds_one + '\n    model = "nobody\'s business"\n'
+
+    assert digest(write(holds_one)) == digest(write(and_a_global))

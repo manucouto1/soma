@@ -46,6 +46,7 @@ rule declares its inputs badly, and there is no closing it by looking at code.
 from __future__ import annotations
 
 import ast
+import dis
 import hashlib
 import inspect
 import sys
@@ -139,11 +140,24 @@ def _follow_names(member, pieces, seen):
             pieces.add(f"{name}={pointed!r}")
 
 
+#: The instructions that read or write a **global**. Anything else that carries
+#: a name — an attribute, above all — is not one.
+GLOBALS = ("LOAD_GLOBAL", "STORE_GLOBAL", "DELETE_GLOBAL")
+
+
 def _names(code):
     """The global names this code and everything nested mention — descending
     into comprehensions, lambdas and inner functions, whose names live in `code`
-    objects inside `co_consts`."""
-    out = set(code.co_names)
+    objects inside `co_consts`.
+
+    Read off the **instructions** and not off `co_names`, which mixes globals
+    with attribute names: `self.model` puts `model` in there, and if the module
+    happens to have a global called `model` too, its value ends up in the
+    fingerprint of a class that never named it. Then the version changes on its
+    own, the cache says the code changed, and a `--strict` worker refuses to run
+    over a mismatch that does not exist.
+    """
+    out = {i.argval for i in dis.get_instructions(code) if i.opname in GLOBALS}
     for constant in code.co_consts:
         if isinstance(constant, types.CodeType):
             out |= _names(constant)
