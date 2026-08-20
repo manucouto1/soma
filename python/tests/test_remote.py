@@ -521,3 +521,56 @@ def test_two_graphs_over_the_same_nodes_are_one_artifact():
         return _pack(nodes, None, "network", ())
 
     assert artifact(forward) == artifact(backward)
+
+
+# ── What a worker is told it is going to need ──
+
+
+def test_provision_says_out_loud_what_forward_says_on_its_own():
+    # The same handover, so saying it first does not make the artifact travel
+    # twice: `HowManyTimes` would go back to 1 if it did.
+    how_many = HowManyTimes()
+    g = Graph.somatize(how_many.named("how_many").at("w1"))
+    w = generic()
+
+    g.provision({"w1": w})
+    assert [g.forward(None, workers={"w1": w}) for _ in range(2)] == [1.0, 2.0]
+
+
+def test_a_worker_that_gets_nothing_is_told_nothing():
+    # An artifact with no nodes in it is a catalog too, and offering it to a
+    # worker already serving one is refused. It is the case of a stage with
+    # nothing on that host, in the middle of a graph run in pieces.
+    w = generic()
+    Graph.somatize(Add(1).named("there").at("w1")).forward(0, workers={"w1": w})
+
+    nothing_of_its_own = Graph.somatize(Add(2).named("here"))
+    assert nothing_of_its_own.forward(0, workers={"w1": w}) == 2.0
+
+
+def test_a_graph_run_in_pieces_keeps_the_worker_it_had():
+    # Three stages over one live worker and two of them with nodes on it. Each
+    # provisions the **whole** graph, so the artifact is one: the objects over
+    # there survive from stage to stage and from pass to pass, which is what a
+    # backward pass against a live optimizer is going to need.
+    from soma_next._stage import stages
+
+    how_many = HowManyTimes()
+    g = Graph.somatize(
+        how_many.named("how_many").at("w1")
+        >> Add(1).named("here")
+        >> Add(10).named("back_there").at("w1")
+    )
+    w = generic()
+
+    def pass_over():
+        produced = {}
+        for stage in stages(g):
+            stage.fill(produced)
+            out = stage.graph.forward(
+                None if stage.level else 0.0, workers={"w1": w}
+            )
+            produced.update(stage.read(out))
+        return produced["back_there"]
+
+    assert [pass_over(), pass_over()] == [12.0, 13.0]

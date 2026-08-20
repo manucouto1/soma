@@ -23,6 +23,16 @@ class Learner(Add):
         return signal
 
 
+class Noting:
+    """A worker that only writes down what it was told it would need."""
+
+    def __init__(self):
+        self.carried = []
+
+    def carry(self, nodes, driver=None):
+        self.carried.append(sorted(nodes))
+
+
 def cut(graph, source, target):
     """Whether that edge is a cut, said the way the module says it."""
     hosts = graph.hosts()
@@ -294,3 +304,22 @@ def test_the_stages_run_to_what_the_whole_graph_runs_to(g):
         g.edge(source, target)
 
     assert walk(g, 0)["join"] == g.forward(0)
+
+
+def test_a_stage_provisions_the_whole_graph_and_not_its_half(g):
+    """A worker has **one** catalog, and half of one is a different catalog: the
+    stage that holds `a` and the one that holds `c` say the same thing, and it is
+    what the whole graph would have said."""
+    g.node("a", Add(1))
+    g.node("b", Add(2))
+    g.node("c", Add(3))
+    g.edge("a", "b")
+    g.edge("b", "c")
+    g.place_at("a", "w1")
+    g.place_at("c", "w1")
+    worker = Noting()
+
+    for stage in stages(g):
+        stage.graph.provision({"w1": worker})
+    assert worker.carried == [["a", "c"], ["a", "c"], ["a", "c"]]
+

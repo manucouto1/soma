@@ -22,6 +22,9 @@ class Graph(_RustGraph):
     inherited from the Rust class.
     """
 
+    _slice_of = None
+    """The graph this one is a piece of, for a graph run in pieces."""
+
     def forward(self, input=None, *, driver=None, workers=None, store=None):
         """Executes the whole graph and returns what it produced.
 
@@ -37,9 +40,31 @@ class Graph(_RustGraph):
         looked up before being computed and kept afterwards.
         """
         self._check_it_was_obeyed()
-        for worker, nodes in self._share_out(workers or {}).items():
-            worker.carry(nodes, driver)
+        self.provision(workers, driver)
         return super().forward(input, driver=driver, workers=workers, store=store)
+
+    def provision(self, workers, driver=None):
+        """Tells each worker what it is going to need, before the first node runs.
+
+        `forward` calls it, so whoever runs a graph in one go never says it out
+        loud. Whoever runs one **in pieces** — stage by stage, or its transpose —
+        does not have to either: a piece provisions the graph it is a piece of,
+        entire.
+
+        That is the whole reason for the method to exist, and it is not a
+        courtesy: a worker has **one** catalog, and half of one is a different
+        catalog. Handing it over is refused mid-session and swallowed in silence
+        by a worker that has not greeted yet, taking with it every activation and
+        every optimizer state that lived over there.
+
+        A worker that gets nothing is told nothing, for the same reason: an
+        artifact with no nodes in it is a catalog too, and it would take the
+        place of the one the next graph is about to send.
+        """
+        whole = self._slice_of or self
+        for worker, nodes in whole._share_out(workers or {}).items():
+            if nodes:
+                worker.carry(nodes, driver)
 
     def _check_it_was_obeyed(self):
         """That whoever was declared settled really was settled.

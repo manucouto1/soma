@@ -37,10 +37,14 @@ back only the terminals and without one the value of a node that feeds inside
 *and* outside never comes back.
 
 `Held` and `Tap` are never placed: they do not show up in `hosts()`, do not go
-into `_share_out` and are in no artifact. And a `Held` gives back what it was
-handed, **verbatim**: whoever fills it says how it crosses — an `Opaque` for a
-tensor staying in this process, plain data when there is a cable ahead. A `Tap`
-can wrap, because it is the last one and its value goes straight to Python.
+into `_share_out` and are in no artifact. And a stage knows **whose piece it
+is**, so running it tells a worker what the whole graph would have told it: half
+a catalog is another catalog, and a worker has only one.
+
+A `Held` gives back what it was handed, **verbatim**: whoever fills it says how
+it crosses — an `Opaque` for a tensor staying in this process, plain data when
+there is a cable ahead. A `Tap` can wrap, because it is the last one and its
+value goes straight to Python.
 
 There is no torch here on purpose: how many cuts a graph has is a fact of the
 graph, not of the training.
@@ -163,6 +167,9 @@ def _stage(graph, level, mine):
     hosts, devices = graph.hosts(), graph.devices()
     frozen, cached, fingerprints = graph.frozen(), graph.cached(), graph.fingerprints()
     stage, holds, taps = type(graph)(), {}, {}
+    # Whose catalog a worker of this stage is holding: its own half is another
+    # catalog, and one host's worker keeps only one.
+    stage._slice_of = graph._slice_of or graph
 
     for node_id in mine:
         for producer in graph.predecessors(node_id):
