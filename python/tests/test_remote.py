@@ -485,3 +485,39 @@ def test_send_does_not_leave_cloudpickles_global_registry_touched():
     generic(send=["sample_net"])
 
     assert cloudpickle.dumps(sample_net.Greet) == before
+
+
+# ── What an artifact is called, which decides what a worker keeps ──
+
+
+def test_the_artifact_does_not_depend_on_the_order_the_nodes_came_in():
+    # The id is the digest of these bytes and a dict pickles in insertion order,
+    # so the same nodes handed over in another order **were another artifact**.
+    # Reaching for a private here on purpose: what is being pinned is the bytes,
+    # and from outside the only symptom is a worker that quietly starts over.
+    from soma_next._remote import _pack
+
+    one, other = Add(1), Add(2)
+    for mode in ("network", "project"):
+        assert _pack({"a": one, "b": other}, None, mode, ()) == _pack(
+            {"b": other, "a": one}, None, mode, ()
+        ), f"`{mode}` still depends on the order"
+
+
+def test_two_graphs_over_the_same_nodes_are_one_artifact():
+    # Which is what lets a **second** graph — the transpose of the first, which
+    # is how a backward pass crosses a wire — reach a worker without provisioning
+    # it again and swapping the catalog it has live.
+    from soma_next._remote import _pack
+
+    # The same two objects in both, which is what the real case does: the
+    # transpose is the forward graph with its edges the other way round.
+    one, other = Add(1), Add(2)
+    forward = Graph.somatize(one.named("n") >> other.named("m"))
+    backward = Graph.somatize(other.named("m") >> one.named("n"))
+
+    def artifact(graph):
+        nodes = {i: graph.implementation(i) for i in graph.nodes()}
+        return _pack(nodes, None, "network", ())
+
+    assert artifact(forward) == artifact(backward)

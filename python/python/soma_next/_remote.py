@@ -101,7 +101,21 @@ def _remember(worker, mode, send):
 
 
 def _pack(nodes, driver, mode, send):
-    """The nodes and the driver as an artifact, whichever way applies."""
+    """The nodes and the driver as an artifact, whichever way applies.
+
+    **By id, always.** The artifact's id is the digest of these bytes, and a dict
+    pickles in insertion order — so the same nodes handed over in another order
+    were another artifact. Two things fell out of that, and neither was
+    intentional: a `Worker` serving two hosts changed id when the caller
+    reordered `workers={...}`, which defeats the `have`/`want` and the store's
+    artifact cache; and a second graph over the same nodes — the transpose of the
+    first, which is how a backward pass crosses a wire — provisioned the worker
+    again, **swapping the catalog it had live** and losing with it every
+    activation and every optimizer state over there.
+
+    Sorting makes the id depend on what is in the artifact and on nothing else.
+    """
+    nodes = dict(sorted(nodes.items()))
     if mode == "project":
         from soma_next import _manifest
 

@@ -275,3 +275,31 @@ def test_split_learning_trains_the_far_half_over_the_wire(gpu, sends_the_code):
     assert losses[-1] < losses[0], "the loss did not come down"
     assert weights[-1] != weights[0], "the far half never moved: the gradient did not arrive"
     assert back["host"] != os.uname().nodename, "it all happened here"
+
+
+def test_the_transpose_reaches_the_catalog_the_worker_has_live(sends_the_code):
+    # A backward pass across a wire is a **second graph**: the same nodes with
+    # the edges the other way round. It has to find the activation the first one
+    # left alive over there, and it does only if the artifact comes out with the
+    # same id.
+    #
+    # It does not come out the same on its own. The transpose declares the nodes
+    # in the other order, a dict pickles in insertion order, and the id is the
+    # digest of those bytes — so until they were sorted before packing, the
+    # worker was provisioned again and unpacked new objects. Two sessions here,
+    # one per `Worker`, so the artifact really is offered a second time.
+    # Named by hand and told apart on purpose: with derived ids the transpose
+    # would swap which object is called what, and with identical state the two
+    # pickles would be the same bytes whatever the order — a test comparing
+    # itself with itself.
+    one, other = nodes.Counts("first"), nodes.Counts("second")
+
+    forward = Graph.somatize((one.named("a1") >> other.named("a2")).at("a"))
+    assert forward.forward(None, workers={"a": sends_the_code("a")})["times"] == 1.0
+
+    transpose = Graph.somatize((other.named("a2") >> one.named("a1")).at("a"))
+    landed = transpose.forward(None, workers={"a": sends_the_code("a")})
+    assert landed["called"] == "first", "the ids moved: another object answered"
+    assert landed["times"] == 2.0, (
+        "the worker started over: the transpose provisioned it again"
+    )

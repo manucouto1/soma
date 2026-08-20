@@ -198,3 +198,25 @@ class Head(Node):
 
     def parameters(self):
         return list(self.lin.parameters())
+
+
+class Counts(Node):
+    """How many times **this object** has been asked, over there.
+
+    What makes visible from here something that otherwise has no symptom: a
+    second graph reaching the catalog the worker has **live**, instead of
+    provisioning it again. If the artifact came out with another id — and it
+    did, until the nodes were sorted before packing — the worker would unpack a
+    new object and the count would start over.
+    """
+
+    def __init__(self, called="one"):
+        # A name so that two of them are **two different pickles**: with the same
+        # state they are indistinguishable, and a test over their order would be
+        # comparing the same bytes with themselves.
+        self.called = called
+        self.times = 0
+
+    def forward(self, x, ctx):
+        self.times += 1
+        return Done({"times": float(self.times), "called": self.called, **whereabouts()})
