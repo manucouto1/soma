@@ -1429,11 +1429,17 @@ the next slice and is where the `have`/`want` finally got its `have`.
 ## CU13 — What is remembered, and what is not computed twice
 
 ```python
-from soma_next.torch import freeze
+from soma_next.torch import Trainer, freeze, parameters
 
 g = Graph.somatize(Encoder().frozen().cached() >> Head())
-freeze(g)                                     # no gradient, and the weights hashed
-g.forward(Opaque(x), store="/scratch/soma")   # the second time, the encoder does not run
+
+# training: the Trainer settles what was declared, and keeps what was declared kept
+Trainer(g, objective=cross_entropy, optimizer=Adam(head_only, lr=1e-3),
+        store="/scratch/soma").fit(data, epochs=20)
+
+# inference: settle it yourself, and the second run does not touch the encoder
+freeze(g)
+g.forward(Opaque(x), store="/scratch/soma")
 ```
 
 Status: **closed**. 185 tests in the core, 33 in the store, 73 in the transport
@@ -1672,3 +1678,16 @@ two of them were **wrong numbers**, not rough edges:
 - `cacheable` was asked only when a `store=` was given, so a `.cached()` in the
   wrong place stayed silent until somebody added a directory to the call —
   possibly in production. It is asked wherever a cache is declared.
+
+And two more, found writing the worked example that is now `test_pretraining.py`
+— which is the argument for writing one:
+
+- **`Trainer` had no `store=`.** `step` called `graph.forward(input)` and nothing
+  else, so the one case this whole slice exists for could not go through the
+  `Trainer` at all;
+- **a class's fingerprint changed when an unrelated global was defined.**
+  `_names` read `code.co_names`, which mixes global loads with **attribute
+  names**: `self.model` puts `model` in there, and a module with a global called
+  `model` had its *value* hashed into the version of a class that never named it.
+  It is CU12's code, and it is not cosmetic — with `project` and `--strict` a
+  worker refuses to run over a mismatch that does not exist.
