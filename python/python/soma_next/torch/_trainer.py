@@ -26,8 +26,9 @@ from __future__ import annotations
 import torch
 
 from soma_next import Opaque
-from soma_next._stage import learns
+from soma_next._stage import learns, stages
 from soma_next.torch._freeze import freeze
+from soma_next.torch._learns import envelope, gradient, leaf
 from soma_next.torch._params import parameters
 
 
@@ -89,12 +90,20 @@ class Trainer:
     """
 
     def __init__(
-        self, graph, *, objective, optimizer=None, store=None, workers=None
+        self,
+        graph,
+        *,
+        objective,
+        optimizer=None,
+        learns_with=None,
+        store=None,
+        workers=None,
     ):
         params = parameters(graph)
         learning = _who_learns(graph)
         _check_somebody_moves_them(params, learning, optimizer)
         _check_nobody_is_settled_and_learning(graph, learning)
+        _say_what_they_learn_with(graph, learning, learns_with)
 
         self.graph = graph
         self.objective = objective
@@ -102,6 +111,19 @@ class Trainer:
         self.store = store
         self.workers = workers
         self._checked = False
+        # Everything structural, decided once: where this graph is cut does not
+        # change from one step to the next, and neither do the transposes its
+        # backward pass runs.
+        self.stages = stages(graph)
+        # Driven stage by stage when something trains itself, and **only** then.
+        # It is not "when the graph is cut": a lone node that learns is one stage
+        # and still needs its backward run over the transpose, and a slice on
+        # another host with nobody learning needs none of this — for that one the
+        # step below is the one it always was, line for line, which is what keeps
+        # the blast radius of all this to whoever asked for it.
+        self.by_stages = bool(learning)
+        self.backs = [stage.transposed() for stage in self.stages]
+        _check_what_is_kept_is_at_the_front(self.stages)
         # Whatever the expression declared settled has to **be** settled before
         # the first step, not after somebody notices the loss going flat where
         # it should not. Declaring is the graph's, obeying is torch's.
@@ -112,8 +134,15 @@ class Trainer:
 
         **The primitive**, and `fit` is sugar on top: whatever does not fit in an
         epoch loop is written as a `while` over this.
+
+        With something in the graph that trains itself it is the same four
+        movements taken over the stages — forward in order, the loss, backward in
+        reverse — and with nobody it is, line for line, the single pass it always
+        was.
         """
         input_, target = batch
+        if self.by_stages:
+            return self._over_the_stages(input_, target)
         self.optimizer.zero_grad()
         output = self.graph.forward(
             _crossable(input_), store=self.store, workers=self.workers
@@ -123,6 +152,128 @@ class Trainer:
         self._check_the_gradient_arrived()
         self.optimizer.step()
         return loss.item()
+
+    def _over_the_stages(self, input_, target):
+        """One step of a graph that is cut, which is the same step with the
+        stages in between: each one is handed what the ones before it produced,
+        and the gradients go back the way the values came."""
+        if self.optimizer is not None:
+            self.optimizer.zero_grad()
+        produced, seams = {}, {}
+        for stage in self.stages:
+            stage.fill(
+                {
+                    producer: self._handed(stage, producer, produced[producer], seams)
+                    for producer in stage.holds
+                }
+            )
+            produced.update(
+                stage.read(
+                    stage.graph.forward(
+                        self._the_input(input_, stage) if stage.level == 0 else None,
+                        store=self.store if stage.level == 0 else None,
+                        workers=self.workers,
+                    )
+                )
+            )
+        output = self._as_the_output(produced, seams)
+        loss = self.objective(output, _where_the_output_is(target, output))
+        loss.backward()
+        self._hand_the_gradients_back(produced, seams)
+        # After handing them back and not before: with a cut in the middle, a
+        # node on this side gets its gradient from the stage behind it, and
+        # asking any earlier would be calling every one of them an orphan.
+        self._check_the_gradient_arrived()
+        if self.optimizer is not None:
+            self.optimizer.step()
+        return loss.item()
+
+    def _the_input(self, input_, stage):
+        """The batch in whatever shape the first stage can read it. The same
+        question `_handed` asks, asked of the roots: with the first node of the
+        net on another machine, a tensor wrapped to cross an edge here would not
+        cross that one."""
+        if _they_take_data(stage, stage.graph.roots()):
+            return _data(input_)
+        return _crossable(input_)
+
+    def _handed(self, stage, producer, value, seams):
+        """What to hand a stage for something an earlier one produced.
+
+        Three shapes, one rule: a value crosses in whatever way the end that
+        reads it can read it.
+
+        - **data**, when what reads it runs elsewhere or trains itself — a live
+          object does not cross a wire, and a node that learns lets go of the
+          chain anyway;
+        - **the tensor as it is**, when it still carries the chain that made it:
+          no cut was crossed here, and passing it on keeps one backward pass
+          doing the whole job;
+        - **a leaf**, when it does not. That leaf is the seam, and its gradient
+          is the first thing handed back to whoever produced it.
+        """
+        if _they_take_data(stage, stage.graph.successors(producer)):
+            return _data(value)
+        if torch.is_tensor(value) and value.grad_fn is not None:
+            return Opaque(value)
+        seams[producer] = seam = leaf(value)
+        return Opaque(seam)
+
+    def _as_the_output(self, produced, seams):
+        """What the whole graph produced, shaped as `forward` would have given it
+        and differentiable, which after a cut it is not: what came across one
+        enters the loss as a leaf too."""
+        out = {}
+        for node_id in self.graph.leaves():
+            value = produced[node_id]
+            if torch.is_tensor(value) and value.grad_fn is not None:
+                out[node_id] = value
+            else:
+                seams[node_id] = out[node_id] = leaf(value)
+        return out[self.graph.leaves()[0]] if len(out) == 1 else out
+
+    def _hand_the_gradients_back(self, produced, seams):
+        """The stages in reverse, each handed what it is owed.
+
+        Two ways of owing it, and which applies is the **node's** and not the
+        stage's: whoever trains itself is handed the gradient through the
+        transposed stage, so that it arrives where the node runs; whoever does
+        not gets it applied here, over the tensor it produced, and autograd
+        carries on from there into whatever is above.
+
+        Read node by node as we get there and not all at once at the start: a
+        `backward` two stages down adds to a seam further up, and taking the
+        gradients before that would be reading them a step early.
+
+        `retain_graph` because two nodes of one stage can share what is above
+        them, and the second `backward` would find it freed.
+        """
+        owed = {}
+        for stage in reversed(self.stages):
+            here = {}
+            for node_id in stage.taps:
+                seam = seams.get(node_id)
+                got = _both(
+                    owed.pop(node_id, None), None if seam is None else seam.grad
+                )
+                if got is not None:
+                    here[node_id] = got
+            learning = {
+                node_id: got
+                for node_id, got in here.items()
+                if learns(self.graph.implementation(node_id))
+            }
+            for node_id, got in here.items():
+                if node_id not in learning:
+                    landed = produced[node_id]
+                    landed.backward(got.to(landed.device), retain_graph=True)
+            if not learning:
+                continue
+            back = self.backs[stage.level]
+            back.fill({node_id: envelope(got) for node_id, got in learning.items()})
+            given = back.read(back.graph.forward(None, workers=self.workers))
+            for producer, value in given.items():
+                owed[producer] = _both(owed.get(producer), gradient(value))
 
     def _check_the_gradient_arrived(self):
         """That nothing about to be updated was left out of the backward pass.
@@ -140,7 +291,7 @@ class Trainer:
         Without this, the run does not fail: it trains **half the network**, the
         loss goes down because the other half is learning, and nothing says so.
         """
-        if self._checked:
+        if self._checked or self.optimizer is None:
             return
         self._checked = True
         orphans = [
@@ -216,6 +367,32 @@ def _where_the_output_is(target, output):
     return target
 
 
+def _they_take_data(stage, who):
+    """Whether what these nodes read has to be plain data: one that runs
+    elsewhere cannot be handed a live object, and one that trains itself lets go
+    of the chain the moment it gets it."""
+    hosts = stage.graph.hosts()
+    if any(hosts.get(node_id) for node_id in who):
+        return True
+    return all(learns(stage.graph.implementation(node_id)) for node_id in who)
+
+
+def _both(one, other):
+    """Two gradients for the same value add up, and either of them may not be
+    there at all."""
+    if one is None:
+        return other
+    if other is None:
+        return one
+    return one + other.to(one.device)
+
+
+def _data(value):
+    """A tensor as plain data, which is what crosses to a node that runs
+    elsewhere or lets go of the chain on arrival."""
+    return value.detach().tolist() if torch.is_tensor(value) else value
+
+
 def _who_learns(graph):
     """Which nodes train themselves, which are exactly the ones `parameters()`
     leaves out."""
@@ -270,6 +447,57 @@ def _check_nobody_is_settled_and_learning(graph, learning):
             f"these are both: {', '.join(both)}. `.frozen()` says its state does "
             f"not change while the graph runs, and learning is changing it every "
             f"step"
+        )
+
+
+def _say_what_they_learn_with(graph, learning, learns_with):
+    """Installs the optimizer factory on each node that trains itself.
+
+    The rule lives in the node, which is the one that knows what it is; this is
+    the override. A mapping names a node and **wins** over what that node said,
+    a single factory is the default for whoever said nothing. In `__init__` and
+    not at the first step, because by then the node has been packed and sent.
+    """
+    if learns_with is None:
+        return
+    named = learns_with if isinstance(learns_with, dict) else {}
+    strangers = [f"`{node_id}`" for node_id in named if node_id not in learning]
+    if strangers:
+        raise ValueError(
+            f"`learns_with` names {', '.join(strangers)}, which do not train "
+            f"themselves: what a node that does not learn is trained with is the "
+            f"optimizer you built over `parameters(g)`"
+        )
+    for node_id in learning:
+        implementation = graph.implementation(node_id)
+        install = getattr(implementation, "learns_with", None)
+        if install is None:
+            continue
+        if node_id in named:
+            install(named[node_id])
+        elif not named and getattr(implementation, "learning", None) is None:
+            install(learns_with)
+
+
+def _check_what_is_kept_is_at_the_front(stages_of_it):
+    """That nothing beyond the first stage says `.cached()`.
+
+    A root's key comes from the input it was handed, and after a cut the roots of
+    a stage are holds, handed nothing: two different batches would name the same
+    thing. What is kept is named by what came before it, and after a cut this
+    side no longer knows what came before.
+    """
+    kept = [
+        f"`{node_id}`"
+        for stage in stages_of_it[1:]
+        for node_id in stage.graph.cached()
+    ]
+    if kept:
+        raise ValueError(
+            f"{', '.join(kept)} is declared `.cached()` and is not in the first "
+            f"stage of this graph: what is kept is named by what came before it, "
+            f"and after a cut this side no longer knows what came before, so two "
+            f"different batches would be kept under one name"
         )
 
 

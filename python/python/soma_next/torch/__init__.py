@@ -31,7 +31,7 @@ imports are absolute, so `import torch` in here brings the usual one.
 
 from soma_next.torch._codec import register as _register_the_tensor_codec
 from soma_next.torch._freeze import freeze
-from soma_next.torch._learns import Learns, OutOfStep, envelope
+from soma_next.torch._learns import Learns, OutOfStep, envelope, gradient
 from soma_next.torch._params import parameters
 from soma_next.torch._trainer import NoGradient, Result, Trainer
 
@@ -47,6 +47,7 @@ __all__ = [
     "Result",
     "Trainer",
     "envelope",
+    "gradient",
     "freeze",
     "parameters",
 ]

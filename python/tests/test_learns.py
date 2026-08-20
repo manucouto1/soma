@@ -11,16 +11,19 @@ container, and in the use-case docs.
 """
 
 import pickle
+import sys
 from functools import partial
 
 import pytest
 
 torch = pytest.importorskip("torch")
+cloudpickle = pytest.importorskip("cloudpickle")
+cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
-from soma_next import Graph  # noqa: E402
+from soma_next import Done, Graph, Node, Opaque, Worker  # noqa: E402
 
 from conftest import Add  # noqa: E402
-from soma_next.torch import Learns, envelope  # noqa: E402
+from soma_next.torch import Learns, Trainer, envelope, parameters  # noqa: E402
 from soma_next.torch._learns import SIGNAL  # noqa: E402
 
 
@@ -267,3 +270,55 @@ def test_a_learner_cuts_the_graph_where_it_stands():
     g.edge("head", "body")
 
     assert [stage.nodes for stage in stages(g)] == [("head",), ("body",)]
+
+
+# ── Over a wire, which is the case all of this was written for ──
+
+
+class Head(Node):
+    """The near half: plain torch, and the one this side's optimizer updates."""
+
+    def __init__(self, wide=3, tall=2):
+        self.lin = torch.nn.Linear(wide, tall)
+
+    def forward(self, x, ctx):
+        return Done(Opaque(self.lin(x)))
+
+    def parameters(self):
+        return list(self.lin.parameters())
+
+
+def a_run(where, lr_over_there, steps=10):
+    """The same net, the same seed and the same batches, with the body here or
+    on another process. Returns the losses."""
+    torch.manual_seed(0)
+    body, head = Body(4, 3), Head(3, 2)
+    expression = body.named("body")
+    if where:
+        expression = expression.at(where)
+    g = Graph.somatize(expression >> head.named("head"))
+    driven = Trainer(
+        g,
+        objective=torch.nn.functional.cross_entropy,
+        optimizer=torch.optim.SGD(parameters(g), lr=0.1),
+        learns_with=partial(torch.optim.SGD, lr=lr_over_there),
+        workers={where: Worker.generic(mode="network")} if where else None,
+    )
+    torch.manual_seed(7)
+    x, y = torch.randn(16, 4), torch.randint(0, 2, (16,))
+    return [driven.step((x, y)) for _ in range(steps)]
+
+
+def test_a_learner_in_another_process_trains_to_the_same_numbers_as_here():
+    # The use case, end to end and driven by `Trainer.step`: the far half keeps
+    # its activation over there, gets `dL/da` back and steps its own optimizer,
+    # and what crosses is data in both directions. Bit for bit against the same
+    # net trained in one piece, which says the framework changed who writes the
+    # loop and not the arithmetic.
+    assert a_run(None, 0.1) == a_run("w1", 0.1)
+
+
+def test_and_with_the_far_side_standing_still_the_loss_comes_down_less():
+    # The control: the same run with the far side's rate at zero. Without it the
+    # test above would pass just as well with the head doing all the work.
+    assert a_run("w1", 0.1)[-1] < a_run("w1", 0.0)[-1]

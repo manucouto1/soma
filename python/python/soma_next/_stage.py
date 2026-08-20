@@ -109,18 +109,76 @@ class Stage:
 
     def fill(self, produced):
         """Hands in what earlier stages produced: it takes what it holds and
-        ignores the rest, because a stage reads from any stage before it."""
+        ignores the rest, because a stage reads from any stage before it.
+
+        **Every** hold is written, and one that is not there is emptied: a stage
+        is run again every step, and a value left over from the last one is worse
+        than the error saying nobody handed it in.
+        """
         for node_id, held in self.holds.items():
-            if node_id in produced:
-                held.value = produced[node_id]
+            held.value = produced.get(node_id, _NOTHING)
 
     def read(self, out):
         """What `forward` gave back, keyed by the node that produced it instead
-        of by the tap that carried it."""
-        if len(self.taps) == 1:
+        of by the tap that carried it.
+
+        Off the leaves and not off the taps: a transposed stage can end in a node
+        nobody is waiting for, and then what came back is a map even with a
+        single tap in it.
+        """
+        if not self.taps:
+            return {}
+        if len(self.graph.leaves()) == 1:
             [node_id] = self.taps
             return {node_id: out}
         return {node_id: out[tap] for node_id, tap in self.taps.items()}
+
+    def transposed(self):
+        """The same stage with its edges the other way round, which is what a
+        backward pass is: another forward, of the transpose.
+
+        The same node objects, the same ids and the same `.at()`, because the
+        gradient of a node is worked out where the node ran. What swap places are
+        the two ends: what was a `Tap` — a value going out — is a `Held` now — a
+        gradient coming in — and what was a `Held` is a `Tap`. The edges are
+        reversed wholesale, ends included, which is why it is one loop.
+
+        **Only what learns.** A node that does not is not transposed: its
+        gradient is autograd's business, right here, and handing it an envelope
+        would be handing it something it would read as an input. Nothing is lost
+        by leaving it out — an edge inside a stage joins two nodes that agree on
+        learning, or it would have been a cut.
+
+        Nothing about keeping travels either: what runs along these edges is not
+        what the node produces, so there is nothing here to name after it.
+        """
+        mine = [
+            node_id
+            for node_id in self.nodes
+            if learns(self.graph.implementation(node_id))
+        ]
+        hosts, devices = self.graph.hosts(), self.graph.devices()
+        back, holds, taps = type(self.graph)(), {}, {}
+        back._slice_of = self.graph._slice_of or self.graph
+
+        for node_id in mine:
+            if node_id in self.taps:
+                holds[node_id] = Held(node_id)
+                back.node(self.taps[node_id], holds[node_id])
+        for node_id in mine:
+            back.node(node_id, self.graph.implementation(node_id))
+            if node_id in hosts:
+                back.place_at(node_id, hosts[node_id])
+            if node_id in devices:
+                back.place(node_id, devices[node_id])
+        for producer in self.holds:
+            if any(who in mine for who in self.graph.successors(producer)):
+                taps[producer] = producer
+                back.node(producer, Tap())
+        for source, target in self.graph.edges():
+            if source in back and target in back:
+                back.edge(target, source)
+        return Stage(self.level, back, mine, holds, taps)
 
     def __repr__(self):
         return f"Stage({self.level}: {', '.join(self.nodes)})"

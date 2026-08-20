@@ -84,6 +84,14 @@ def envelope(gradient):
     return {SIGNAL: _data(gradient)}
 
 
+def gradient(value, device=None):
+    """What an envelope carries, as a tensor — or the sum of what a map of them
+    carries. `None` if this is not a backward message at all, which is the same
+    question `forward` asks to know which of the two it was handed."""
+    inside = _envelopes_in(value)
+    return None if inside is None else _added(inside, device)
+
+
 class Learns(Node):
     """A node that runs its own backward pass and its own optimizer.
 
@@ -127,12 +135,12 @@ class Learns(Node):
     def forward(self, value, ctx):
         """The single contract, dispatched: a gradient in an envelope is a
         backward message, anything else is an input."""
-        gradients = _envelopes_in(value)
-        if gradients is None:
-            self.given = _leaf(value, ctx)
+        signal = gradient(value, ctx.device)
+        if signal is None:
+            self.given = leaf(value, ctx.device)
             self.held = self.compute(self.given, ctx)
             return Done(_data(self.held))
-        return Done(envelope(self.learn(_added(gradients, ctx), ctx)))
+        return Done(envelope(self.learn(signal, ctx)))
 
     def learn(self, signal, ctx):
         """Carries on with the chain rule from `dL/d(what I produced)`, steps its
@@ -198,14 +206,14 @@ def _is_an_envelope(value):
     return isinstance(value, dict) and len(value) == 1 and SIGNAL in value
 
 
-def _added(gradients, ctx):
+def _added(gradients, device):
     """The gradients of every consumer, summed — which is what the chain rule
     says a value that was read twice is owed."""
-    return sum(_tensor(each, ctx) for each in gradients)
+    return sum(_tensor(each, device) for each in gradients)
 
 
-def _leaf(value, ctx):
-    """The input as something that can be differentiated back to.
+def leaf(value, device=None):
+    """A value as something that can be differentiated back to.
 
     Detached on purpose, and it is the whole premise: a node that learns lets go
     of the chain that produced its input, which is why it cuts the graph exactly
@@ -218,14 +226,14 @@ def _leaf(value, ctx):
             f"and giving one back per edge is not something the transposed graph "
             f"routes yet"
         )
-    return _tensor(value, ctx).detach().requires_grad_(True)
+    return _tensor(value, device).detach().requires_grad_(True)
 
 
-def _tensor(value, ctx, dtype=torch.float32):
-    """A value as a tensor, on the device this node was placed on."""
+def _tensor(value, device=None, dtype=torch.float32):
+    """A value as a tensor, on the device whoever asks was placed on."""
     if torch.is_tensor(value):
         return value
-    return torch.tensor(value, dtype=dtype, device=ctx.device or None)
+    return torch.tensor(value, dtype=dtype, device=device or None)
 
 
 def _data(value):
