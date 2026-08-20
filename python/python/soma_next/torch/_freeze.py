@@ -45,16 +45,27 @@ def freeze(graph, *node_ids):
 def state_digest(implementation):
     """The digest of the state it is settled at, or `None` if it has none.
 
-    Asked for with the same duck as `parameters()`: whoever has no `state_dict`
-    has no state, and a tokenizer does not stop being a node for it.
-    """
-    state = getattr(implementation, "state_dict", None)
-    if state is None:
-        return None
+    Two ducks and not one, because the project's own nodes use both: whoever has
+    a `state_dict` is asked for it by name; whoever only has `parameters()` is
+    asked for those, in order. Whoever has neither has no state, and a tokenizer
+    does not stop being a node for it.
 
+    It has to be the same two `Graph._check_it_was_obeyed` looks at, or a node
+    would be told to settle and then have nothing to settle with.
+    """
+    named = getattr(implementation, "state_dict", None)
+    if named is not None:
+        return _digest_of(sorted(named().items()))
+    in_order = getattr(implementation, "parameters", None)
+    if in_order is not None:
+        return _digest_of(enumerate(in_order()))
+    return None
+
+
+def _digest_of(state):
     digest = hashlib.sha256()
-    for name, value in sorted(state().items()):
-        digest.update(name.encode())
+    for name, value in state:
+        digest.update(str(name).encode())
         if not torch.is_tensor(value):
             digest.update(repr(value).encode())
             continue

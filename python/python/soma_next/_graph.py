@@ -36,9 +36,44 @@ class Graph(_RustGraph):
         `store` is a directory: with one, whatever was declared `.cached()` is
         looked up before being computed and kept afterwards.
         """
+        self._check_it_was_obeyed()
         for worker, nodes in self._share_out(workers or {}).items():
             worker.carry(nodes, driver)
         return super().forward(input, driver=driver, workers=workers, store=store)
+
+    def _check_it_was_obeyed(self):
+        """That whoever was declared settled really was settled.
+
+        The core cannot ask this. It says `.frozen()` means "this node's state
+        does not change", and it cannot tell a node with **no state to settle** —
+        a tokenizer — from one whose weights **nobody has hashed yet**: both
+        arrive as a state of `None`. Only whoever knows what a weight is can
+        tell, and here that is a duck: something with `state_dict` or
+        `parameters` has state.
+
+        And it is not a detail. Without the digest of the weights the key does
+        not depend on them, so two different checkpoints of the same class share
+        a name — and what comes back is the wrong tensor, with no error and no
+        warning. It is the one failure a cache must not have, and it is checked
+        wherever a cache is declared, store or no store.
+        """
+        if not self.cached():
+            return
+        for node_id, state in self.frozen().items():
+            if state is not None:
+                continue
+            implementation = self.implementation(node_id)
+            if not _has_state(implementation):
+                continue
+            raise ValueError(
+                f"`{node_id}` is declared frozen and has state, and nobody has "
+                f"settled it: the digest of its weights is what puts them in its "
+                f"key, so without it two different checkpoints of "
+                f"`{type(implementation).__name__}` would be kept under one name "
+                f"and you would get the other one back. Call "
+                f"`soma_next.torch.freeze(g)` before running — declaring it is "
+                f"this graph's half, making it true is torch's"
+            )
 
     def _share_out(self, workers):
         """Which nodes fall to each worker, grouped by worker and not by host.
@@ -70,3 +105,13 @@ class Graph(_RustGraph):
             Graph.somatize(Source() >> (Left() | Right()) >> Mean())
         """
         return _dsl.somatize(cls, topology)
+
+
+def _has_state(implementation):
+    """Whether this node has anything worth hashing, asked with the same duck as
+    `parameters()`: whoever answers neither has no state, and does not stop
+    being a node for it."""
+    return any(
+        getattr(implementation, what, None) is not None
+        for what in ("state_dict", "parameters")
+    )

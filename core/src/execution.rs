@@ -26,8 +26,11 @@
 //! [`Value`] grows a wrapper every `forward` would have to unwrap, nor does the
 //! [`Node`](crate::Node) contract change.
 //!
-//! Nothing of this happens without [`Executor::keeping`]: with no keeper the
-//! table stays empty and the engine is what it was.
+//! Nothing of this happens without both [`Executor::remembering`] and
+//! [`Executor::keeping`]: with either missing the table stays empty and the
+//! engine is what it was. They are two calls and not one because they are two
+//! kinds of thing — what is remembered is **declared** and travels, a keeper is
+//! **injected** and does not.
 
 use crate::{
     Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, Keeper, Kept, Key, Memory, NodeError,
@@ -54,10 +57,12 @@ pub struct Executor<'a> {
     catalog: &'a Catalog,
     driver: Option<&'a dyn Driver>,
     placement: Option<&'a Placement>,
-    /// Who hashes and keeps, and what is remembered about each node. The two
-    /// together or neither: a keeper with nothing declared keeps nothing, and a
-    /// declaration with nobody to hash it names nothing.
-    keeping: Option<(&'a dyn Keeper, &'a Memory)>,
+    /// What is remembered about each node. **Declared**, like the placement: it
+    /// belongs to whoever wrote the graph, and it travels.
+    memory: Option<&'a Memory>,
+    /// Who hashes and where what is named ends up. **Injected**, like the driver
+    /// and the transports: it belongs to whoever runs, and it does not travel.
+    keeper: Option<&'a dyn Keeper>,
     /// Which host it knows how to reach, and by what route. A list because
     /// there are two or three of them.
     transports: Vec<(Host, &'a dyn Transport)>,
@@ -71,7 +76,8 @@ impl<'a> Executor<'a> {
             catalog,
             driver: None,
             placement: None,
-            keeping: None,
+            memory: None,
+            keeper: None,
             transports: Vec::new(),
         }
     }
@@ -89,18 +95,30 @@ impl<'a> Executor<'a> {
         self
     }
 
-    /// The same executor, naming what it produces and keeping what was said to
-    /// be worth keeping.
+    /// The same executor, knowing what is remembered about each node.
     ///
-    /// Both at once because neither is any use alone. Without this the keys are
-    /// not even computed, which is why a graph that declares nothing pays
-    /// nothing.
+    /// **Declared and not injected**, which is why it is its own call and not
+    /// half of [`keeping`](Self::keeping): what is remembered belongs to the
+    /// graph, so it **travels** with a slice that goes to another host — and a
+    /// worker that keeps things is of no use if nobody told it what any of the
+    /// nodes are. Whoever coordinates may perfectly well keep nothing itself.
     ///
-    /// Whether what the [`Memory`] declares can honestly be kept is
+    /// Whether what it declares can honestly be kept is
     /// [`cacheable`](crate::cacheable)'s question, and it is asked by whoever
     /// has the graph: the engine never looks at one.
-    pub fn keeping(mut self, keeper: &'a dyn Keeper, memory: &'a Memory) -> Self {
-        self.keeping = Some((keeper, memory));
+    pub fn remembering(mut self, memory: &'a Memory) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
+    /// The same executor, with somewhere to keep what it names.
+    ///
+    /// **Injected**, like the driver and the transports: it is whoever runs who
+    /// says where things are kept, and it does not travel. Without it — or
+    /// without [`remembering`](Self::remembering) — the keys are not even
+    /// computed, which is why a graph that declares nothing pays nothing.
+    pub fn keeping(mut self, keeper: &'a dyn Keeper) -> Self {
+        self.keeper = Some(keeper);
         self
     }
 
@@ -303,7 +321,10 @@ impl<'a> Executor<'a> {
             known: &known,
             keys: &named,
             placement: self.placement.unwrap_or(&nowhere),
-            memory: self.keeping.map_or(&nothing, |(_, memory)| memory),
+            // It travels whether or not there is a keeper here: what is
+            // remembered is the graph's, and the one that keeps things may be
+            // the other side.
+            memory: self.memory.unwrap_or(&nothing),
         };
         let outcome = transport
             .dispatch(inner, &cargo)
@@ -375,7 +396,7 @@ impl<'a> Executor<'a> {
         graph_input: &Value,
         keys: &HashMap<NodeId, Key>,
     ) -> Option<Key> {
-        let (keeper, memory) = self.keeping?;
+        let (keeper, memory) = (self.keeper?, self.memory?);
         let identity = memory.identity_of(node)?;
         // A root reads the graph's input, and the input is the one thing in the
         // whole chain hashed **by its content** — from here down it is hashes
@@ -407,7 +428,7 @@ impl<'a> Executor<'a> {
     /// an optimization, and an optimization that can kill a run at hour three
     /// is not one.
     fn recalled(&self, node: &NodeId, key: Option<&Key>) -> Option<Value> {
-        let (keeper, memory) = self.keeping?;
+        let (keeper, memory) = (self.keeper?, self.memory?);
         let key = key?;
         if !memory.is_cached(node) {
             return None;
@@ -441,7 +462,7 @@ impl<'a> Executor<'a> {
     /// still passed it on — it just does not land anywhere, which is what makes
     /// declaring the cache node by node cost nothing to the chain.
     fn keep(&self, node: &NodeId, key: Option<&Key>, output: &Value) {
-        let (Some((keeper, memory)), Some(key)) = (self.keeping, key) else {
+        let (Some(keeper), Some(memory), Some(key)) = (self.keeper, self.memory, key) else {
             return;
         };
         if !memory.is_cached(node) {

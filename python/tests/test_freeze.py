@@ -210,3 +210,26 @@ def test_what_comes_back_is_a_leaf(tmp_path):
 
     assert read_back.grad_fn is None
     assert not read_back.requires_grad
+
+
+def test_a_node_that_only_answers_parameters_is_settled_too(tmp_path):
+    # Two ducks, because the project's own nodes use both. If `freeze` only knew
+    # `state_dict`, a node like this would be told to settle by the check before
+    # a run and have nothing to settle with.
+    class OnlyParameters(Node):
+        def __init__(self):
+            self.lin = nn.Linear(IN, MID)
+
+        def forward(self, x, ctx):
+            return Done(Opaque(self.lin(x)))
+
+        def parameters(self):
+            return list(self.lin.parameters())
+
+    g = Graph.somatize(OnlyParameters().named("encoder").frozen().cached())
+    freeze(g)
+
+    assert g.frozen()["encoder"].startswith("sha256:")
+    # And the check before a run lets it through, which is the half that would
+    # have been a dead end.
+    g.forward(Opaque(batch()), store=str(tmp_path))

@@ -293,3 +293,79 @@ def test_the_version_of_the_code_is_noted_only_for_what_is_kept():
     g = Graph.somatize(Counts().named("a") >> Counts().named("b").frozen().cached())
 
     assert list(g.fingerprints()) == ["b"]
+
+
+# ── That what was declared was really obeyed ──
+
+
+class Stateful(Node):
+    """Something with weights, without needing torch to say so: what makes a
+    node's state part of its key is that somebody hashed it."""
+
+    def __init__(self, weights):
+        self.weights = weights
+        self.calls = 0
+
+    def forward(self, x, ctx):
+        self.calls += 1
+        return Done(x * self.weights)
+
+    def state_dict(self):
+        return {"weights": self.weights}
+
+
+def test_declared_settled_and_never_settled_is_refused(store):
+    # **The one failure a cache must not have.** Without the digest of the
+    # weights the key does not depend on them, so two checkpoints of the same
+    # class share a name and the second run gets the first one's tensor back —
+    # no error, no warning, wrong numbers. The core cannot see it: `.frozen()`
+    # with no digest is what a tokenizer looks like too.
+    g = Graph.somatize(Stateful(2.0).named("encoder").frozen().cached())
+
+    with pytest.raises(ValueError) as raised:
+        g.forward(3.0, store=store)
+
+    said = str(raised.value)
+    assert "encoder" in said and "checkpoints" in said
+    assert "freeze" in said, said
+
+
+def test_it_is_asked_wherever_a_cache_is_declared(store):
+    # Store or no store: it is wrong today, not the day somebody adds a
+    # directory to the call.
+    g = Graph.somatize(Stateful(2.0).named("encoder").frozen().cached())
+
+    with pytest.raises(ValueError, match="encoder"):
+        g.forward(3.0)
+
+
+def test_settling_it_by_hand_is_enough(store):
+    # There is no torch in this file: what `soma_next.torch.freeze` does is call
+    # this, and hashing weights is the only part of it that needs torch.
+    first, second = Stateful(2.0), Stateful(5.0)
+    a = Graph.somatize(first.named("encoder").frozen().cached())
+    a.freeze("encoder", "sha256:the-weights-of-monday")
+    b = Graph.somatize(second.named("encoder").frozen().cached())
+    b.freeze("encoder", "sha256:the-weights-of-tuesday")
+
+    assert a.forward(3.0, store=store) == 6.0
+    assert b.forward(3.0, store=store) == 15.0, "two checkpoints, two names"
+    assert second.calls == 1
+
+
+def test_two_checkpoints_settled_the_same_are_one_name(store):
+    # The other half: what the digest says is what the key believes.
+    first, second = Stateful(2.0), Stateful(5.0)
+    for graph, node in ((Graph.somatize(first.named("e").frozen().cached()), first),
+                        (Graph.somatize(second.named("e").frozen().cached()), second)):
+        graph.freeze("e", "sha256:the-same-weights")
+        graph.forward(3.0, store=store)
+
+    assert second.calls == 0, "they were said to be the same state, so they are"
+
+
+def test_a_node_with_no_state_needs_nobody_to_settle_it(store):
+    # A tokenizer does not stop being settled for having nothing to hash, and
+    # asking it to be settled by hand would be asking for a digest of nothing.
+    g = Graph.somatize(Counts().named("n").frozen().cached())
+    assert g.forward(1.0, store=store) == 1.0

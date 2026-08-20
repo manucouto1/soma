@@ -1138,7 +1138,8 @@ fn the_name_of_what_ran_over_there_comes_back() {
         &on_hosts(&[("counts", "worker1")]),
     );
     let outcome = Executor::new(&c)
-        .keeping(&cache, &memory)
+        .remembering(&memory)
+        .keeping(&cache)
         .placed(&on_hosts(&[("counts", "worker1")]))
         .reaching("worker1", &w)
         .resume(&plan, Value::Null, Vec::new(), Vec::new())
@@ -1183,9 +1184,38 @@ fn run_counting(c: &Catalog, memory: &Memory, w: &Worker) -> Value {
     let plan = distribute(&compile(&graph_with(&["counts"], &[]), c).unwrap(), &p);
 
     Executor::new(c)
-        .keeping(&cache, memory)
+        .remembering(memory)
+        .keeping(&cache)
         .placed(&p)
         .reaching("worker1", w)
         .run(&plan, Value::Null)
         .unwrap()
+}
+
+#[test]
+fn a_client_that_keeps_nothing_still_lets_the_worker_keep() {
+    // What is remembered belongs to the **graph**, so it travels even when
+    // whoever coordinates has nowhere to keep anything of its own. Before this,
+    // the table only went out if there was a keeper here, and a worker with a
+    // store was told nothing about the nodes and could name none of them.
+    let shared = Dir::new();
+    let w = Worker::spawn(keeping(shared.path())).unwrap();
+    let (c, memory) = counting();
+    let p = on_hosts(&[("counts", "worker1")]);
+    let plan = distribute(&compile(&graph_with(&["counts"], &[]), &c).unwrap(), &p);
+    let run = || {
+        Executor::new(&c)
+            .remembering(&memory)
+            .placed(&p)
+            .reaching("worker1", &w)
+            .run(&plan, Value::Null)
+            .unwrap()
+    };
+
+    assert_eq!(number(&run()), 1.0);
+    assert_eq!(
+        number(&run()),
+        1.0,
+        "the worker kept it, and this side keeps nothing at all"
+    );
 }

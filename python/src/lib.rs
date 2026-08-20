@@ -332,27 +332,31 @@ impl PyGraph {
                 .collect::<PyResult<Vec<_>>>()?,
         };
 
-        // Before anything else, because a cache declared where it cannot be
-        // honoured is a question with an answer and not a surprise.
-        let kept = match store {
-            None => None,
-            Some(where_) => {
-                cacheable(&self.graph, &self.memory).map_err(memory_err)?;
-                Some(Local::at(where_).map_err(store_err)?)
-            }
-        };
+        // Before anything else, and **whether or not there is a store**: a
+        // `.cached()` over something that can still change is wrong today, not
+        // the day somebody adds a directory to the call. It costs a walk of the
+        // graph, and only to whoever declared a cache.
+        if self.keeps_anything() {
+            cacheable(&self.graph, &self.memory).map_err(memory_err)?;
+        }
+        let kept = store.map(Local::at).transpose().map_err(store_err)?;
         let cache = kept.as_ref().map(|kept| Cache::over(kept));
         // The codecs in front, so what reaches the store is bytes and the store
         // never learns Python exists.
         let packing = cache.as_ref().map(|cache| Packing::over(cache));
 
         let driver = driver.map(PyDriver::new).transpose()?;
-        let mut executor = Executor::new(&self.catalog).placed(&self.placement);
+        // What is remembered always goes in, keeper or no keeper: it is the
+        // graph's, and it travels with a slice sent to a worker that may well be
+        // the only one keeping anything.
+        let mut executor = Executor::new(&self.catalog)
+            .placed(&self.placement)
+            .remembering(&self.memory);
         for (host, worker) in &reachable {
             executor = executor.reaching(host.clone(), worker.as_ref());
         }
         if let Some(packing) = &packing {
-            executor = executor.keeping(packing, &self.memory);
+            executor = executor.keeping(packing);
         }
         let executor = match &driver {
             Some(d) => executor.with_driver(d),
@@ -422,6 +426,16 @@ impl PyGraph {
             }
         }
         Ok(out)
+    }
+
+    /// Whether any node of this graph says its output is worth keeping. What
+    /// the checks before a run hang off: a graph that declares nothing pays for
+    /// nothing.
+    fn keeps_anything(&self) -> bool {
+        self.graph
+            .nodes()
+            .iter()
+            .any(|id| self.memory.is_cached(id))
     }
 
     /// An id we know is in the graph, or the same error the core would give.

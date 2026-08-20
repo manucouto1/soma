@@ -387,9 +387,14 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
                     "this worker has no catalog yet: work arrived before the greeting".into(),
                 );
             };
-            let mut executor = Executor::new(&catalog).placed(&placement);
+            // What is remembered arrived with the work and is fed in whether or
+            // not there is anywhere to keep things here: it is the graph's, and a
+            // slice that carries on to a third host has to take it along.
+            let mut executor = Executor::new(&catalog)
+                .placed(&placement)
+                .remembering(&memory);
             if let Some(keeper) = shared.keeper {
-                executor = executor.keeping(keeper, &memory);
+                executor = executor.keeping(keeper);
             }
             // The one that arrived wins: it belongs to the job.
             if let Some(driver) = sent.as_deref().or(shared.driver) {

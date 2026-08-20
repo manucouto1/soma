@@ -1125,11 +1125,13 @@ fn what_is_kept_is_not_computed_again() {
     let notebook = Notebook::new();
 
     let first = Executor::new(&c)
-        .keeping(&notebook, &memory)
+        .remembering(&memory)
+        .keeping(&notebook)
         .run(&plan, Value::number(7.0))
         .unwrap();
     let second = Executor::new(&c)
-        .keeping(&notebook, &memory)
+        .remembering(&memory)
+        .keeping(&notebook)
         .run(&plan, Value::number(7.0))
         .unwrap();
 
@@ -1158,7 +1160,8 @@ fn a_different_input_is_a_different_name_and_the_node_runs() {
 
     for input in [1.0, 2.0] {
         Executor::new(&c)
-            .keeping(&notebook, &memory)
+            .remembering(&memory)
+            .keeping(&notebook)
             .run(&plan, Value::number(input))
             .unwrap();
     }
@@ -1180,7 +1183,8 @@ fn what_is_above_names_what_is_below() {
         let plan = compile(&g, &c).unwrap();
         let notebook = Notebook::new();
         Executor::new(&c)
-            .keeping(&notebook, &memory)
+            .remembering(&memory)
+            .keeping(&notebook)
             .run(&plan, Value::number(0.0))
             .unwrap();
         notebook.names().last().cloned().expect("head was kept")
@@ -1207,11 +1211,13 @@ fn the_fingerprint_of_the_code_is_not_part_of_the_name() {
     written_today.written_as("encoder", "v2");
 
     Executor::new(&c)
-        .keeping(&notebook, &written_yesterday)
+        .remembering(&written_yesterday)
+        .keeping(&notebook)
         .run(&plan, Value::number(7.0))
         .unwrap();
     Executor::new(&c)
-        .keeping(&notebook, &written_today)
+        .remembering(&written_today)
+        .keeping(&notebook)
         .run(&plan, Value::number(7.0))
         .unwrap();
 
@@ -1248,7 +1254,8 @@ fn a_node_that_keeps_nothing_still_passes_its_name_on() {
 
     for _ in 0..2 {
         Executor::new(&c)
-            .keeping(&notebook, &memory)
+            .remembering(&memory)
+            .keeping(&notebook)
             .run(&plan, Value::number(7.0))
             .unwrap();
     }
@@ -1286,7 +1293,8 @@ fn what_cannot_be_named_is_not_kept_and_is_not_an_error() {
 
     for _ in 0..2 {
         Executor::new(&c)
-            .keeping(&notebook, &memory)
+            .remembering(&memory)
+            .keeping(&notebook)
             .run(&plan, Value::opaque(7u32))
             .unwrap();
     }
@@ -1321,7 +1329,8 @@ fn the_names_a_slice_brings_are_not_the_names_it_gives() {
     // As if `encoder` had run at home and only `head` were sent away.
     let brought = Key::new("what-the-encoder-was-called");
     let outcome = Executor::new(&c)
-        .keeping(&notebook, &memory)
+        .remembering(&memory)
+        .keeping(&notebook)
         .resume(
             &Plan::Execute {
                 node: "head".into(),
@@ -1361,7 +1370,8 @@ fn the_names_and_what_is_remembered_cross_to_the_other_side() {
     let mirror = Mirror::new(c.clone());
 
     Executor::new(&c)
-        .keeping(&notebook, &memory)
+        .remembering(&memory)
+        .keeping(&notebook)
         .placed(&placement)
         .reaching("worker1", &mirror)
         .run(&plan, Value::number(0.0))
@@ -1379,4 +1389,34 @@ fn the_names_and_what_is_remembered_cross_to_the_other_side() {
     );
     assert_eq!(trips[0].keys[0].1, notebook.names()[0]);
     assert!(trips[0].memory.is_cached(&"head".into()));
+}
+
+#[test]
+fn what_is_remembered_travels_with_nobody_here_to_keep_anything() {
+    // The two are not one call for exactly this: a coordinator that keeps
+    // nothing still has to say what the nodes are, or whoever does keep things
+    // over there can name none of them.
+    let (g, c, placement, memory) = node("head", Add(1.0))
+        .frozen()
+        .cached()
+        .at("worker1")
+        .somatize()
+        .unwrap();
+    let plan = distribute(&compile(&g, &c).unwrap(), &placement);
+    let mirror = Mirror::new(c.clone());
+
+    Executor::new(&c)
+        .remembering(&memory)
+        .placed(&placement)
+        .reaching("worker1", &mirror)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+
+    let trips = mirror.trips();
+    assert!(trips[0].memory.is_cached(&"head".into()));
+    assert!(trips[0].memory.is_frozen(&"head".into()));
+    assert_eq!(
+        trips[0].memory.identity_of(&"head".into()),
+        Some("unit::doubles::Add")
+    );
 }

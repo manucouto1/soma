@@ -1331,9 +1331,12 @@ cannot reach.
 **4. The frontier of `Opaque` moves rather than disappearing.** From "an opaque
 does not travel" to "an opaque nobody registered a codec for does not travel",
 which is the more precise of the two. `codec(kind, type, dump=, load=)` is the
-register; `soma_next.torch` fills in the tensor's on being imported. What comes
-back is a **leaf**, and there is a test that says so, because it will look like a
-bug the first time somebody sees it.
+register; `soma_next.torch` fills in the tensor's **on being imported**, so a
+graph that keeps tensors and never imports it keeps nothing and says why on
+`stderr`. Importing `torch` is not enough and is not meant to be: registering it
+from `soma_next` would mean importing torch for everyone who does not have it.
+What comes back is a **leaf**, and there is a test that says so, because it will
+look like a bug the first time somebody sees it.
 
 **5. A tensor comes back on the cpu, and `weights_only=True`.** A store shared
 between machines that only reads back where it was written is not shared at all;
@@ -1344,6 +1347,26 @@ it, which is what a placed node already does with its input.
 `value:<key>` and `artifact:<kind>:<id>`. Two questions — a catalog that is not
 sent twice, a node that is not run twice — one directory, and what keeps them
 apart is the name.
+
+**7. Declared versus injected, for the fifth time.** `Memory` is declared, like
+the `Placement`: it belongs to whoever wrote the graph, and it **travels**. A
+`Keeper` is injected, like the `Driver` and the `Transport`: it belongs to
+whoever runs, and it does not. They were one builder call for a while — "neither
+is any use alone" — and that was false: a coordinator that keeps nothing itself
+still has to tell a worker what the nodes are, or the one side that *does* keep
+things can name none of them. `remembering(&Memory)` and `keeping(&dyn Keeper)`,
+and there is a test where this side keeps nothing at all.
+
+**8. Whoever obeys is the only one who can check that obedience happened.** The
+core cannot tell a node with **no state to settle** — a tokenizer — from one
+whose weights **nobody has hashed yet**: both arrive as a state of `None`. Left
+alone, that is the one failure a cache must not have — two checkpoints of the
+same class under one name, the wrong tensor back, no error and no warning. So
+Python asks it, by the same duck it asks for `parameters()`, wherever a cache is
+declared: something with state, settled, and no digest, refuses to run and says
+to call `soma_next.torch.freeze(g)`. There is a test that reproduces the bad hit
+and one that shows two checkpoints settled at the same digest **are** one name,
+because that is what says the digest is what the key believes.
 
 ### Questionnaire
 
@@ -1388,6 +1411,13 @@ apart is the name.
 - [x] a different fingerprint says so on `stderr` and **uses** what is kept
 - [x] an opaque nobody can write down is said and is not fatal
 - [x] what comes back is a leaf
+- [x] a node declared settled that **nobody settled** refuses to run, naming the
+      class whose two checkpoints would collide — and it is asked with or
+      without a store
+- [x] two checkpoints settled at the same digest are one name, and at two
+      digests are two
+- [x] a node that answers `parameters()` and not `state_dict()` is settled all
+      the same
 
 ### What did NOT go in
 
@@ -1406,9 +1436,17 @@ throwaway, and making it the truth would mean a single writer over NFS · a
 arrives the day there is a MinIO to point at, through OpenDAL and as another
 configuration rather than another implementation.
 
-### What is left owing
+### What reviewing this slice found
 
-The **worker's own cache is wired and proven, but the client sends the table only
-if it has a keeper of its own**: `Cargo` gets its `memory` from
-`Executor::keeping`. A coordinator that keeps nothing locally but sends work to
-workers that do would want the table to travel anyway. It has not come up yet.
+Three things, and they went in before it was called closed. Written down because
+two of them were **wrong numbers**, not rough edges:
+
+- a `.frozen()` declared and never obeyed gave a **false hit**: two checkpoints
+  of the same class, the same input, and the second run got the first one's
+  tensor back. Reproduced with a script before being fixed; it is decision 8;
+- `Memory` and `Keeper` went in one builder call, so a coordinator with no store
+  of its own sent an empty table and a worker that *did* have one could name
+  nothing. It is decision 7;
+- `cacheable` was asked only when a `store=` was given, so a `.cached()` in the
+  wrong place stayed silent until somebody added a directory to the call —
+  possibly in production. It is asked wherever a cache is declared.
