@@ -122,3 +122,79 @@ class Stamp(Node):
 
     def forward(self, x, ctx):
         return Done({"when": time.monotonic(), **whereabouts()})
+
+
+class Trainable(Node):
+    """Weights on the far side, and nothing to receive their gradient here.
+
+    From the client this is the trap: it runs, it produces, the loss comes down
+    because whatever is downstream of it **is** learning — and these weights
+    never move. What crosses a wire is the value, not the graph that made it.
+    """
+
+    def __init__(self, wide=8, tall=6):
+        import torch
+
+        self.lin = torch.nn.Linear(wide, tall)
+
+    def forward(self, x, ctx):
+        import torch
+
+        return Done(self.lin(torch.tensor(x, dtype=torch.float32)).tolist())
+
+    def parameters(self):
+        return list(self.lin.parameters())
+
+
+class SplitPart(Node):
+    """The far half of a **split learning** cut, which is the answer to the trap
+    above rather than a way around it.
+
+    Two messages and one node, because a node is one contract: forward keeps its
+    activation alive **here**, where its autograd graph is; backward takes the
+    gradient of the seam — a tensor like any other — and carries on with the
+    chain rule from there, with an optimizer of its own.
+
+    Nothing about the weights ever travels. What goes out is activations, what
+    comes back is `dL/da`, and each side updates what it holds.
+    """
+
+    def __init__(self, wide=8, tall=6, lr=0.1):
+        import torch
+
+        self.lin = torch.nn.Linear(wide, tall)
+        self.opt = torch.optim.SGD(self.lin.parameters(), lr=lr)
+        self.held = None
+
+    def forward(self, msg, ctx):
+        import torch
+
+        value = torch.tensor(msg["value"], dtype=torch.float32)
+        if msg["kind"] == "forward":
+            self.held = self.lin(value).relu()
+            return Done({"value": self.held.detach().tolist(), **whereabouts()})
+        self.opt.zero_grad()
+        self.held.backward(value)
+        self.opt.step()
+        return Done({"weights": float(self.lin.weight.abs().sum()), **whereabouts()})
+
+    def parameters(self):
+        return list(self.lin.parameters())
+
+
+class Head(Node):
+    """The near half: plain torch, and it is the one that gets a gradient."""
+
+    def __init__(self, wide=6, tall=3):
+        import torch
+
+        self.lin = torch.nn.Linear(wide, tall)
+
+    def forward(self, x, ctx):
+        import torch
+        from soma_next import Opaque
+
+        return Done(Opaque(self.lin(torch.tensor(x, dtype=torch.float32))))
+
+    def parameters(self):
+        return list(self.lin.parameters())

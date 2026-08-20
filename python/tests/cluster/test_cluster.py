@@ -215,3 +215,63 @@ def test_the_same_node_on_a_machine_without_one_is_told_nothing(gpu, sends_the_c
 
     assert out["said"] == ""
     assert out["landed"] == "cpu"
+
+
+# ── Training, which a wire cuts unless somebody carries the gradient ──
+
+
+def test_training_a_node_on_another_machine_stops_instead_of_half_learning(gpu, sends_the_code):
+    # The trap, caught. `Trainable` runs over there and produces a value; what
+    # does not cross back is the graph that made it, so its weights get no
+    # gradient here. Left alone, the loss comes down — because whatever is
+    # downstream is learning — and half the net never moves.
+    torch = pytest.importorskip("torch")
+    from soma_next.torch import NoGradient, Trainer, parameters
+
+    # On `gpu` and not on `a`, for a reason worth knowing: the CPU images carry
+    # no torch, and a worker says so instead of guessing.
+    graph = Graph.somatize(nodes.Trainable().at("gpu") >> nodes.Head())
+    trainer = Trainer(
+        graph,
+        objective=torch.nn.functional.cross_entropy,
+        optimizer=torch.optim.SGD(parameters(graph), lr=0.1),
+        workers={"gpu": sends_the_code("gpu")},
+    )
+
+    with pytest.raises(NoGradient) as raised:
+        trainer.step((torch.randn(4, 8).tolist(), torch.tensor([0, 1, 2, 0])))
+
+    assert "`trainable`" in str(raised.value)
+    assert "another host" in str(raised.value)
+
+
+def test_split_learning_trains_the_far_half_over_the_wire(gpu, sends_the_code):
+    # And the way it **is** done: the far side keeps its activation alive, gets
+    # `dL/da` back as a tensor like any other, and carries on with the chain rule
+    # under its own optimizer. Nothing about the weights travels.
+    torch = pytest.importorskip("torch")
+
+    graph = Graph.somatize(nodes.SplitPart().at("gpu"))
+    workers = {"gpu": sends_the_code("gpu")}
+    torch.manual_seed(0)
+    head = torch.nn.Linear(6, 3)
+    head_opt = torch.optim.SGD(head.parameters(), lr=0.1)
+    x, y = torch.randn(16, 8), torch.randint(0, 3, (16,))
+
+    losses, weights = [], []
+    for _ in range(20):
+        sent = graph.forward({"kind": "forward", "value": x.tolist()}, workers=workers)
+        seam = torch.tensor(sent["value"], dtype=torch.float32, requires_grad=True)
+        loss = torch.nn.functional.cross_entropy(head(seam), y)
+        head_opt.zero_grad()
+        loss.backward()
+        head_opt.step()
+        back = graph.forward(
+            {"kind": "backward", "value": seam.grad.tolist()}, workers=workers
+        )
+        losses.append(loss.item())
+        weights.append(back["weights"])
+
+    assert losses[-1] < losses[0], "the loss did not come down"
+    assert weights[-1] != weights[0], "the far half never moved: the gradient did not arrive"
+    assert back["host"] != os.uname().nodename, "it all happened here"

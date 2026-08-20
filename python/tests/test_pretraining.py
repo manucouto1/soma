@@ -31,7 +31,7 @@ from soma_next import Done, Graph, Node, Opaque
 torch = pytest.importorskip("torch")
 nn = torch.nn
 
-from soma_next.torch import Trainer, freeze, parameters  # noqa: E402
+from soma_next.torch import NoGradient, Trainer, freeze, parameters  # noqa: E402
 
 VOCAB, DIM, HID, CLASSES, LENGTH = 32, 8, 6, 3, 4
 TEXTS = ["the dog runs", "a cat sleeps", "birds fly high", "the fish swims"]
@@ -99,7 +99,7 @@ class Decoder(Block):
 class Head(Node):
     """The classifier: logits, and no activation on them."""
 
-    def __init__(self, wide, tall):
+    def __init__(self, wide=HID, tall=CLASSES):
         self.layers = nn.Linear(wide, tall)
         self.calls = 0
 
@@ -312,3 +312,86 @@ def test_the_trainer_settles_what_was_declared_on_its_own(body, batches, tmp_pat
 
     assert graph.frozen()["embed"].startswith("sha256:")
     assert not any(p.requires_grad for p in embed.parameters())
+
+
+# ── That nothing is trained by halves in silence ──
+
+
+class Cut(Node):
+    """Has weights and hands out something the backward pass cannot cross.
+
+    It is what a node on **another host** looks like from here — what crosses a
+    wire is the value, not the graph that made it — without needing another host
+    to see it. A cache hit looks the same, and so does a branch the loss never
+    reads: one symptom, one check.
+    """
+
+    def __init__(self):
+        self.layers = nn.Linear(DIM, HID)
+        self.calls = 0
+
+    def forward(self, x, ctx):
+        self.calls += 1
+        return Done(Opaque(self.layers(x).detach()))
+
+    def parameters(self):
+        return list(self.layers.parameters())
+
+
+@pytest.fixture
+def tensors():
+    """A batch that goes straight into a `Linear`, without the tokenizer."""
+    torch.manual_seed(0)
+    return Opaque(torch.randn(2, DIM)), torch.tensor([0, 1])
+
+
+def test_training_something_the_gradient_never_reaches_stops(tensors):
+    # Without this the run does not fail: it trains the head, the loss comes
+    # down because the head is learning, and the body never moves. Silently
+    # wrong numbers, which is the one failure worth a type of its own.
+    cut = Cut()
+    graph = Graph.somatize(cut >> Head())
+    trainer = Trainer(
+        graph,
+        objective=torch.nn.functional.cross_entropy,
+        optimizer=torch.optim.Adam(parameters(graph), lr=1e-2),
+    )
+
+    with pytest.raises(NoGradient) as raised:
+        trainer.step(tensors)
+
+    said = str(raised.value)
+    assert "`cut`" in said, said
+    assert "another host" in said, said
+
+
+def test_leaving_them_out_of_the_optimizer_is_how_you_say_it_is_deliberate(tensors):
+    # Split learning is exactly this on purpose: the far side runs its own
+    # backward with its own optimizer, and this one holds only what it trains.
+    cut = Cut()
+    graph = Graph.somatize(cut >> Head())
+    head = graph.implementation("head")
+    trainer = Trainer(
+        graph,
+        objective=torch.nn.functional.cross_entropy,
+        optimizer=torch.optim.Adam(head.parameters(), lr=1e-2),
+    )
+
+    assert trainer.step(tensors) > 0.0
+
+
+def test_a_settled_body_is_not_an_orphan(body, batches, tmp_path):
+    # And the everyday case does not trip it: `freeze` leaves `requires_grad`
+    # off, so those parameters are not waiting for a gradient — they are done.
+    expression, _ = body
+    _, trainer = settled(expression, Head(HID, CLASSES), str(tmp_path))
+
+    assert trainer.step(batches[0]) > 0.0
+
+
+def test_it_is_asked_once_and_not_on_every_step(body, batches, tmp_path):
+    expression, _ = body
+    _, trainer = settled(expression, Head(HID, CLASSES), str(tmp_path))
+    trainer.step(batches[0])
+
+    assert trainer._checked, "the second step onwards pays nothing"

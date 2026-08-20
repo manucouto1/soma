@@ -1440,6 +1440,51 @@ existed in Rust and **were not reachable from the shipped worker**. The generic
 worker now takes `--store DIR`, which is what lets two containers share a shelf:
 one keeps what a node produced, and the other reads it.
 
+### Training across the cut, which is where a wire really shows
+
+What crosses a wire is the **value**, not the graph that made it. So a node with
+parameters that runs on another machine gets no gradient here, and — this is the
+part worth writing down — **nothing failed** when that happened: the loss came
+down, because whatever was downstream of it was learning, and half the net never
+moved. Silently wrong numbers of the same family as the cached prefix, and with
+nobody asking the question.
+
+The question is asked now, and at the level that can ask it. After the first
+`backward()`, if the optimizer is about to update a parameter that received no
+gradient, `Trainer` stops with `NoGradient` and names the node. It is more
+general than the case that prompted it: a slice on another host, an output read
+back from a store, a branch the loss never reads — one symptom, one check.
+
+And **`.at()` is not a refusal to train**, which is why the check is about
+gradients and not about hosts. The far half can perfectly well train itself:
+that is [**split learning**](https://arxiv.org/abs/1812.00564), and it works
+today without a line of framework:
+
+```python
+class SplitPart(Node):
+    def forward(self, msg, ctx):
+        if msg["kind"] == "forward":
+            self.held = self.lin(tensor(msg["value"])).relu()   # the graph stays HERE
+            return Done({"value": self.held.detach().tolist()})
+        self.opt.zero_grad()
+        self.held.backward(tensor(msg["value"]))                # dL/da, off the wire
+        self.opt.step()
+```
+
+Three things that were already there make it fall out: a worker **keeps its
+catalog**, so the node object survives between calls and its activation stays
+alive on the far side; a node is **one contract**, so it dispatches on its input
+instead of needing a kind of its own; and a gradient is a tensor like any other,
+so it crosses as data. There is a test that trains the far half over a real
+container and a control that shows it is not the near half doing all the work.
+
+What it is not, yet: it takes two round trips the caller drives, `self.held` is
+hidden state nobody checks the alternation of, activations cross as lists of
+floats rather than tensor bytes — the codec exists, the wire still refuses an
+`Opaque` — and the two halves never overlap. Making it a concept of the framework
+is a use case of its own, and it turns on one question: whether a worker stops
+being dumb and starts holding an optimizer.
+
 ### What did NOT go in
 
 **Authentication and encryption**, on purpose and for good (decision 8) ·

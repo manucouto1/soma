@@ -30,6 +30,16 @@ from soma_next.torch._freeze import freeze
 from soma_next.torch._params import parameters
 
 
+class NoGradient(Exception):
+    """Something the optimizer holds never got a gradient.
+
+    Its own type and not a `ValueError`, because it is worth catching: with a
+    cut on purpose — split learning, where the far side runs its own backward —
+    this is the thing you expect to see, and you say so by taking those
+    parameters out of the optimizer.
+    """
+
+
 class Result:
     """What a training run leaves behind: the loss, step by step."""
 
@@ -63,9 +73,16 @@ class Trainer:
     `store` is a directory, and it is what makes the case all of this was for
     work: a settled prefix declared `.cached()` runs **once per batch** and is
     read from there on every epoch after the first.
+
+    `workers` says what each host resolves to, exactly as in
+    `Graph.forward`. Training a graph with a slice on another machine is
+    **not** training that slice: what crosses a wire is the value and not the
+    graph that made it, so its parameters get no gradient here. Say so by
+    leaving them out of the optimizer — the far side runs its own backward, and
+    that is split learning — or the first step stops with `NoGradient`.
     """
 
-    def __init__(self, graph, *, objective, optimizer, store=None):
+    def __init__(self, graph, *, objective, optimizer, store=None, workers=None):
         params = parameters(graph)
         if not params:
             raise ValueError(
@@ -79,6 +96,8 @@ class Trainer:
         self.objective = objective
         self.optimizer = optimizer
         self.store = store
+        self.workers = workers
+        self._checked = False
         # Whatever the expression declared settled has to **be** settled before
         # the first step, not after somebody notices the loss going flat where
         # it should not. Declaring is the graph's, obeying is torch's.
@@ -92,11 +111,53 @@ class Trainer:
         """
         input_, target = batch
         self.optimizer.zero_grad()
-        output = self.graph.forward(_crossable(input_), store=self.store)
+        output = self.graph.forward(
+            _crossable(input_), store=self.store, workers=self.workers
+        )
         loss = self.objective(output, _where_the_output_is(target, output))
         loss.backward()
+        self._check_the_gradient_arrived()
         self.optimizer.step()
         return loss.item()
+
+    def _check_the_gradient_arrived(self):
+        """That nothing about to be updated was left out of the backward pass.
+
+        Once, on the first step: what is structural is the same on every one
+        afterwards, and this costs a walk of the parameters.
+
+        It is the counterpart, at this level, of the prefix rule the cache is
+        checked against — and it catches more than the cache does, because it
+        asks the question after the fact: **whatever** cut the chain, the symptom
+        is the same. A node that ran on another host, an output restored from a
+        store, a branch that never reached the loss. All of them show up as a
+        parameter the optimizer is about to move with nothing telling it where.
+
+        Without this, the run does not fail: it trains **half the network**, the
+        loss goes down because the other half is learning, and nothing says so.
+        """
+        if self._checked:
+            return
+        self._checked = True
+        orphans = [
+            parameter
+            for group in self.optimizer.param_groups
+            for parameter in group["params"]
+            if parameter.requires_grad and parameter.grad is None
+        ]
+        if not orphans:
+            return
+        whose = _whose(self.graph, orphans)
+        raise NoGradient(
+            f"the optimizer is about to update {len(orphans)} parameter(s) that "
+            f"received no gradient, of {whose}. Nothing joins them to the loss: "
+            f"the usual reasons are a node that ran on **another host** — what "
+            f"crosses a wire is the value, not the graph that made it — an output "
+            f"read back from a store, which is a leaf, or a branch the loss never "
+            f"reads. Training would go on and the loss would come down, because "
+            f"the rest of the net is learning. If it is deliberate, leave them "
+            f"out of the optimizer"
+        )
 
     def fit(self, data, epochs=1):
         """Takes one step per batch, for as many epochs as you say.
@@ -113,6 +174,20 @@ class Trainer:
     def __repr__(self):
         kept = f", keeping in {self.store}" if self.store else ""
         return f"Trainer({len(parameters(self.graph))} parameters{kept})"
+
+
+def _whose(graph, parameters):
+    """Which nodes those parameters belong to, named the way the graph names
+    them. One that belongs to no node at all came from somewhere else, and
+    saying so is more use than a number."""
+    mine = {id(parameter) for parameter in parameters}
+    theirs = []
+    for node_id in graph.nodes():
+        implementation = graph.implementation(node_id)
+        collect = getattr(implementation, "parameters", None)
+        if collect and any(id(p) in mine for p in collect()):
+            theirs.append(f"`{node_id}`")
+    return ", ".join(theirs) if theirs else "no node of this graph"
 
 
 def _crossable(input_):

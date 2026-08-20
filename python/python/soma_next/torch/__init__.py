@@ -26,11 +26,11 @@ imports are absolute, so `import torch` in here brings the usual one.
 from soma_next.torch._codec import register as _register_the_tensor_codec
 from soma_next.torch._freeze import freeze
 from soma_next.torch._params import parameters
-from soma_next.torch._trainer import Result, Trainer
+from soma_next.torch._trainer import NoGradient, Result, Trainer
 
 # On being imported, and not on being asked: a graph that keeps what it produces
 # needs a tensor to be writable **before** the first node runs, and by then
 # nobody is going to remember to say so.
 _register_the_tensor_codec()
 
-__all__ = ["Result", "Trainer", "freeze", "parameters"]
+__all__ = ["NoGradient", "Result", "Trainer", "freeze", "parameters"]
