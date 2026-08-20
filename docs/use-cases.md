@@ -1204,6 +1204,228 @@ question and was not needed here: training locally extracts no state.
 
 ---
 
+## CU12 — A slice that runs in another process
+
+```python
+# A. the worker is your own code, already on that machine
+g = Graph.somatize(Encode() >> Classify().at("gpu-box"))
+g.forward(x, workers={"gpu-box": Worker.at("gpu-box:7000")})
+
+# B. the worker is a bare node: `pip install soma-next` and nothing else
+#    python -m soma_next.worker --listen 0.0.0.0:7000
+g.forward(x, workers={"gpu-box": Worker.at("gpu-box:7000",
+                                           mode="network", send=["my_package"])})
+```
+
+Status: **closed**. A crate of its own, `soma-next-transport`, and the generic
+worker in `soma_next.worker`. 74 tests in the transport crate today — 49 of the
+worker, 22 of the protocol, 3 of the artifact — plus `test_remote.py` (37),
+`test_integration.py` (17), `test_manifest.py` (13) and `test_fingerprint.py`
+(13) in Python.
+
+It comes in two halves. The first is in the core and adds three things: `Host` —
+**a name**, and not a `Device`, which is a place inside a machine — `Plan::Remote`,
+and the `Transport` hole. The second is the crate that fills it, and it lives
+outside the core for the same reason `python/` does: here there are child
+processes, sockets and a byte format, three things a core has no business
+knowing.
+
+The benefit is measurable here, with one machine and no cluster: **two Python
+nodes in a wave interleave but do not overlap**, because of the GIL, and
+`test_waves.py` already said so as a known limitation. In two processes they
+overlap, and there is a test that makes them prove it by meeting in a file.
+
+### The question: who resolves the implementations?
+
+A plan travels; a `Catalog` does not — an `Arc<dyn Node>` has no way of crossing
+a wire. So somebody over there has to turn a name into something executable, and
+there are exactly two answers:
+
+| | where it gets the code | who it is for |
+|---|---|---|
+| `Serving::own` | it brings it: the same binary, the same clone | you control the infrastructure |
+| `Serving::provisioned` | the client sends it, in an `Artifact` | a bare node, and you do not |
+
+**Two constructors and not an optional parameter**, because they reject
+different things: offering the first an artifact is an error, and not offering
+the second one is too. An `Option` would have turned both refusals into a branch
+somebody forgets.
+
+### What travels, and what deliberately does not
+
+The **plan**, the **values the slice reads and does not produce**, and the
+**placement** — three things that are data. And, for an empty worker, an
+**artifact this crate does not look at**, which is where the nodes **and the
+driver** ride: whoever packs one packs the other.
+
+Not the catalog as such. Not the **environment**: that `torch` is installed over
+there is the business of whoever stood the worker up, and putting it in cost the
+original soma 420 lines of environment manager and a hot `pip install`. And not
+a `Value::Opaque`, which points into the process that made it — it fails at
+encoding time, with the host in front of you.
+
+> `Host` is a **name** and `Device` is a place inside a machine, and they are
+> independent: `.on("cuda:0")` and `.at("gpu-box")` can be written in either
+> order. What a name resolves to is said by whoever executes, in
+> `forward(workers=…)`, so the same graph spreads across two processes here or
+> two machines there without touching a line of what was declared.
+
+### The two strategies, asked by `kind` and not tried in a chain
+
+| `mode=` here | `kind` on the wire | what travels | what the worker supplies | size |
+|---|---|---|---|---|
+| `"project"` *(default)* | `project` | names, versions and state | **the code**, from its own clone | 48 bytes for two nodes |
+| `"network"` | `pickle` | the code as well, via `cloudpickle` | nothing | megabytes |
+
+Two vocabularies for the two sides of the same choice, and they are not the same
+word: what you write is what the artifact is **for** — a worker on the network
+that has nothing — and what travels is what it **is**, a pickle. `send=` names
+the modules of yours that have to go inside it, because `cloudpickle` serializes
+by reference anything importable, which leaves out exactly the case a generic
+worker exists for.
+
+`project` is what you want when the worker runs in a clone of the project: tens
+of bytes per node, no coupling between interpreters, and it **checks the
+version**. `pickle` removes all friction when the worker does not have your code
+at all, and pays for it by demanding that both interpreters look very much alike.
+
+**Versioning, which `project` needs and gets almost for free.** A class's
+fingerprint is the hash of its **AST**, plus transitively whatever of yours that
+code names — a helper in the same module, a base class, a module constant. Not
+comments and not docstrings: comparing text would make versioning noise. It stops
+at what is installed, at what has no source, and at `soma_next` itself, which
+goes into the client's identity instead so that upgrading the library does not
+invalidate every class at once.
+
+Where the check lands is the good part: `pickle`'s own `find_class`. The whole
+policy is one method and `pickle` does the rest, nested objects included.
+`--strict` *(the default)* stops with both versions in front of you; `--lucky`
+runs whatever it has and says so on `stderr` — running a different version in
+silence is what gets discovered three days later.
+
+### Decisions taken
+
+**1. The name is announced before the artifact is sent.** `Hello { runtime,
+offering }` carries the artifact's **id**, not the artifact. The saving is real —
+a pickled catalog with weights is megabytes and asking "do you have
+`sha256:abc…`?" is forty bytes — but it is not the point. The point is that the
+day there is a store, a worker answers `Ready` off its own shelf and **the
+protocol does not change a line**. It is git's `have`/`want` and docker's layer
+exchange. (That day came in CU13.)
+
+**2. The client identifies itself in the greeting.** This is the original's
+lesson written as a method: its worker chose an interpreter with `$SOMA_PYTHON`
+or `python3` from the `PATH`, and a pickled filter rebuilt by an interpreter that
+is not close enough comes back as the class's `__dict__` instead of an instance —
+surfacing as `'dict' object is not callable` from inside a subprocess, with
+nothing pointing at the version gap. Refusing on connect, with both runtimes in
+front of you, is cheaper than anything afterwards.
+
+**3. An artifact's `id` is set by whoever produces it.** Hashing the bytes here
+would be the natural thing and it is wrong: without interpreting the content
+there is no criterion for saying when two artifacts are the same one, and two
+pickles of one catalog can differ byte for byte. Whoever produces it knows what
+identifies it; here we compare strings.
+
+**4. The driver travels with the nodes**, in the same artifact and by the same
+strategy. A node that answers `Await` has to be served **where it runs**.
+Declared versus injected is about the **graph** — a node is in it, a driver is
+not — and not about how either one gets there.
+
+**5. One thread per conversation.** See below; it is what the tests found.
+
+**6. A worker holds one catalog.** A second client provisioning it with a
+different artifact would pull it out from under the first, and an id present in
+both would silently run the wrong implementation. Each session remembers what it
+greeted with and is told so, rather than executing somebody else's nodes. Checked
+at the **job** and not at the greeting, because that is where it can go wrong and
+there is no race to lose there.
+
+**7. Chunks with a length in front, and a cap.** A pipe has no messages, it has
+bytes. The cap is not a limit of the format — the length is a `u32` — it is a
+safety net: four ASCII characters on the worker's `stdout` read as a length of
+between 500 MB and 2 GB, and without it a stray `print()` is a hung process with
+no message.
+
+**8. There is no authentication, and there will not be.** Whoever reaches that
+port runs code on that machine as that user — `pickle` artifacts are opened with
+`cloudpickle.loads` and `project` ones resolve classes out of that clone. That is
+`ssh`'s job and `srun`'s, not a framework's, and it is said plainly in
+`soma_next.worker`'s own docstring rather than left to be discovered.
+
+### What the tests found
+
+**Serving one conversation at a time deadlocked.** Two branches of a wave open
+two connections; the second sits in the `accept` queue and the first does not
+release its own until its `forward` finishes. The integration test caught it,
+which is where it had to show. The lesson was not "do not serialize" but
+**serialize at message granularity, not session granularity**.
+
+**A failing test that had stood a worker up hung `cargo test` for ten minutes.**
+The kill was the last line of each test, and a test that fails never reaches its
+last line — so the orphan kept the test binary's inherited `stderr` open and
+cargo waited on that pipe instead of reporting the failure. Twenty milliseconds
+of failure, six hundred seconds of wait. It is a `Drop` now.
+
+**A stray `print()` in a user's node is on the wire.** `stdout` **is** the
+protocol, so there is not one `println!` in a worker and talking goes to
+`stderr`. In Python this is more dangerous, because the `print` can be in a
+library on import, and it is why the frame cap exists.
+
+### Questionnaire
+
+**The core's seam** (`core/tests/unit/execution.rs`, with a double that never
+leaves its seat)
+- [x] what a slice reads and does not produce is what travels with it, and no more
+- [x] the placement travels; the host half does not, having already done its job
+- [x] a host nobody resolves is **not executed here just in case**
+- [x] what comes back is merged as if it had been produced here
+
+**The transport** (`transport/tests/unit/`)
+- [x] a node placed away really runs in another process, and the same graph
+      undistributed runs here
+- [x] a whole wave on one worker goes in a single trip, and two workers really do
+      run at the same time
+- [x] the node over there sees the device it was given here
+- [x] an opaque does not leave this process, in either direction
+- [x] a failure over there comes back with the host and the reason
+- [x] something printed on the worker's `stdout` is reported and does not hang
+- [x] the artifact is sent only once, and cannot be swapped once the session is
+      open
+- [x] a runtime it does not accept, a kind it does not know and a broken artifact
+      are each rejected saying which
+- [x] a standing worker serves whoever connects, outlives the client leaving, and
+      keeps its catalog from one client to the next
+- [x] two simultaneous connections against the same standing worker
+
+**Python** (`test_remote.py`, `test_integration.py`, `test_manifest.py`,
+`test_fingerprint.py`)
+- [x] `.at()` sends the whole piece, the innermost one wins, and the order of
+      `.on()` and `.at()` does not matter
+- [x] a worker with the project receives **only names and state**, and the code
+      does not go over the wire
+- [x] a worker without the project says so instead of guessing
+- [x] another version of the code stops with `--strict` and is reported with
+      `--lucky`
+- [x] the driver's state travels with it, and it runs over there and not here
+- [x] one driver serves both sides of the same run
+- [x] the fingerprint changes with a helper, a base class or a module constant,
+      and not with a comment or a docstring
+
+### What did NOT go in
+
+**Authentication and encryption**, on purpose and for good (decision 8) ·
+**installing the environment**, which is what cost the original 420 lines ·
+**scheduling**: which host gets what is declared, not decided — there is no
+placement policy and no load balancing · **retrying a failed slice**, because a
+node that already ran half of itself is not idempotent and nobody has said what
+it means to run it again · **a protocol version**, since both sides are the same
+binary from the same `cargo build`; the day they stop being so, the place for one
+is the `Hello`, which already negotiates the runtime · and **a store**, which was
+the next slice and is where the `have`/`want` finally got its `have`.
+
+---
+
 ## CU13 — What is remembered, and what is not computed twice
 
 ```python

@@ -82,8 +82,7 @@ Thirteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker and the cache. A graph is declared with `>>`, `|`, `.on("cuda:0")` and
 `.cached()`, executed in Rust, spread across processes with `.at("worker1")`,
-and trained from outside with `soma_next.torch.Trainer`. See `docs/use-cases.md`
-— CU12's section is the one still owing.
+and trained from outside with `soma_next.torch.Trainer`. See `docs/use-cases.md`.
 
 **Five orthogonal facts**, and confusing them is the easy mistake: `Graph` says
 **what** exists, `Catalog` **who** executes it, `Placement` **where**, `Plan`
