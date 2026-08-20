@@ -59,4 +59,12 @@ FROM worker AS worker-gpu
 
 # The CUDA runtime comes in the wheel; what the container needs from outside is
 # the driver, and that is what `devices: [nvidia.com/gpu=all]` hands it.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu128
+#
+# **Pinned**, and to the version the client has. Two reasons, and the second one
+# was found the hard way: this suite compares the numbers a training run gets
+# here against the ones it gets over there, and two torch versions are two
+# arithmetics — and `2.11.0` kills this worker outright, with
+# `_PyThreadState_Attach: non-NULL old thread state`, the moment a node runs
+# `backward()` and another `forward` follows it. Whatever that is, it is not
+# something to discover in a rebuild six months from now.
+RUN pip install --no-cache-dir torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
