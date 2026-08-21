@@ -31,6 +31,12 @@ files: if you feel like splitting it, the operation probably was not a method of
 that type (that was the case of `run`, which needed graph *and* catalog *and*
 input, and ended up a function in `execution.rs`).
 
+A family of types gets a **folder with a `mod.rs`** inside it — never a
+`family.rs` sitting next to a `family/`. The folder is created when the family
+already has members, never in anticipation: nested folders per concept are how
+`soma-runtime/src/optimizer/sampler/mod.rs` happened. The tests mirror the same
+shape.
+
 What cannot be sustained in Rust, and is worth knowing if you come from Java:
 behaviour does not belong to a type, it belongs to the **(type, trait)** pair.
 `impl Filter for PyFilter` lives in another crate. Trait `impl`s scatter out of

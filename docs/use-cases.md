@@ -2614,3 +2614,231 @@ list of wrapped rows proves too clumsy to live with · **a mapped node with two
 producers**, which needs one gradient — one name — per edge and is refused rather
 than guessed · and **a compile-time refusal** for it: today it is refused when the
 map reaches the node, which names it but names it late.
+
+---
+
+## CU17 — Cutting the samples, giving up on a trial, and how much of level 3 is Rust
+
+```python
+from soma_next.study import Partition
+
+for train, test in Partition.stratified(5).folds(len(y), classes=y.tolist()):
+    trainer.fit(data[train], epochs=10)
+    scores.append(evaluate(g, data[test]))
+```
+
+The first piece of the level the vision calls **Study**: hyper-parameter search,
+cross-validation, and whatever else is N training runs rather than one. Opened on
+21 August 2026, and **not closed**: what is in is the cut. The sampler, the
+pruner and how a run is asked to stop are still open.
+
+### The question that came first, and it was not about folds
+
+Whether "as much as possible in Rust" means the **loop** too. It does not, and
+the original measured it without meaning to:
+
+| trait | shape | implementors |
+|---|---|---|
+| `Sampler` | `sample(space, i) -> params` | Bayesian, Grid, Random |
+| `Pruner` | `should_prune(metric, step, history) -> verdict` | Median, Percentile |
+| `TrialExecutor` | `execute_trial(params, ctx) -> outcome` | `FnTrialExecutor<F>` |
+
+The first two **return a decision**: data in, data out, and three and two real
+implementors respectively. The third **calls back out**, and its only implementor
+is a closure wrapper. `TrialExecutor` is not an abstraction, it is the loop
+leaking: the step that trains is torch, so a loop written in Rust has to return
+to Python for it, and the trait is the hole it goes through.
+
+So the line is not drawn by language but by shape:
+
+> Rust keeps everything that is pure, deterministic and hashable. The loop stays
+> in Python, where torch is. **No callback crosses**: Rust returns decisions,
+> Python acts on them.
+
+Which is the same answer CU11 and CU15 gave — level 3 has no type, a federated
+round is a `for` — reached this time from the other side.
+
+### The decision the layer discussion left
+
+A **layer** is a rule about *direction*; a **hole** is a rule about *width*. The
+original obeyed the first — its arrows all point down — and still ended up
+unreadable, because a wide crossing is paid for either with everybody importing
+everything below (`soma-runtime`, 24.592 lines, imported by five crates) or with
+a trait per crossing. `StudyIo`, whose only implementor is `Study`, is what a
+layer boundary looks like when it manufactures its own abstraction.
+
+Hence `study/`: a crate with **no dependencies at all**, not even the core's. A
+partition is arithmetic over indices and does not know what a graph is.
+
+### `Partition`, and why five variants and not sklearn's fifteen
+
+Stratifying and grouping look like two axes crossed with every scheme, and that
+cross product is where `KFold`, `StratifiedKFold`, `GroupKFold`,
+`StratifiedGroupKFold`, `ShuffleSplit`, `StratifiedShuffleSplit`,
+`GroupShuffleSplit`… come from. They are not different algorithms:
+
+- **stratifying** is a k-fold inside each class, the folds concatenated
+- **grouping** is a k-fold over the groups, the samples following theirs
+
+So the scheme is named and the rest is parameters. `LeaveOneOut` is `kfold(n)`. A
+holdout of one part in `k` is fold 0 of a k-fold. Purged and embargoed
+cross-validation are `time_series(k, gap=…)`. A variant that is a parameter is a
+name you have to remember for nothing.
+
+### Decisions taken
+
+- **Each scheme is a type with its own `folds`; the enum is only the family.**
+  `KFold { k: 5, shuffle: None }.folds(&samples)` when you know which cut you
+  want, `Partition` when the scheme arrives as data. The enum forwards —
+  `Self::KFold(cut) => cut.folds(samples)` — so the dispatch is static either
+  way and there is a test that going through it cuts exactly the same.
+- **The family is an enum, and the first reason I gave was wrong.** I said a
+  trait "does not deserialize"; that is true of a *type-erased* trait, not of a
+  trait. With static dispatch each scheme serializes and hashes perfectly well.
+  The three that survive the correction:
+  - **The name is structural, not agreed.** A cut is part of a cache key (CU13).
+    With a trait the name is supplied by the implementor, and two that collide —
+    or one that changes between versions — hand back the wrong fold **in
+    silence**. Derived, it cannot happen, and there is a test that says so as a
+    property.
+  - **Static dispatch needs the type when it compiles, and here it is in the
+    data.** `#[pyclass]` cannot be generic, and a partition read back from a
+    trial record has its type inside the JSON. Without the enum that is a
+    `match` on strings — the same match, minus exhaustiveness — written once per
+    consumer instead of once here.
+  - **A new scheme stops compiling in three places and the compiler lists
+    them.** With a trait it compiles, and what you forgot is the registration.
+- **It is called `Partition`, not `Split`.** `soma_next.torch.Split` is already
+  split learning. Two alike names for two unrelated things is how a framework
+  stops being readable, and this one was caught before it was written.
+- **Indices and keys in, indices out. Never a tensor.** Stratifying does not want
+  the labels, it wants the classes *as numbers*; turning `y` into them is one
+  line where `y` already lives. That contract is the whole reason this can be
+  Rust while the core never learns what a dataset is.
+- **Keys decide nothing; the scheme does.** A variant that needs classes and is
+  not given them fails; one that does not need them and is handed them ignores
+  them without complaining. The asymmetry lets one `Samples` be cut several ways
+  to compare them, and makes stratifying *by accident* impossible.
+- **What cannot be honoured is an error, not a warning.** A class with fewer
+  members than folds, fewer groups than folds, a gap that eats the first
+  training set. sklearn warns and carries on, which leaves a result you cannot
+  tell from a good one.
+- **`shuffle: Option<u64>`.** The seed both switches shuffling on and makes it
+  repeatable, so "shuffled but not reproducible" cannot be written down.
+  Fisher-Yates over splitmix64, ten lines rather than a dependency: the seed has
+  to mean the same thing on every machine that reads the same record, which
+  rules out whatever `rand` defaults to this year.
+- **Both sides come out ascending.** The shuffle decides *who* is in a fold,
+  never the order they are listed in.
+- **No `Explicit { folds }` escape hatch.** Three lines the day someone needs it,
+  and until then a variant with no consumer.
+
+### Questionnaire (from sklearn, because the original has none)
+
+`grep -ri 'kfold|cross.?valid|stratif'` over the original: **zero hits**. This is
+the first piece written with no old version pulling at it.
+
+**The cut** (`study/tests/unit/partition.rs`, `test_partition.py`)
+- [x] k folds are a partition: every sample held out exactly once, never held out
+      and training at once
+- [x] what does not divide is spread one at a time (10 over 3 is 4-3-3)
+- [x] the same seed gives the same cut on any machine; a different one does not
+- [x] stratifying keeps every class's share in every fold
+- [x] grouping never puts a group on both sides, and places the heaviest first so
+      the folds stay comparable
+- [x] both at once keeps the groups whole and the classes as even as that allows
+- [x] time series never trains on its own future, and a `gap` drops what sits
+      between — the one scheme that is deliberately **not** a partition, because
+      the first block has nothing before it to learn from
+- [x] `LeaveOneOut` is `k = n` and not a variant
+- [x] keys that are spare change nothing; keys that are missing name the call
+      that supplies them
+- [x] every refusal happens before a single index comes out
+- [x] two cuts that differ are written down differently
+- [x] going through the enum cuts exactly the same as not going through it, and a
+      scheme writes itself the same wrapped or not
+
+### The pruner, and the question it was going to force
+
+The one piece expected to touch level 2: a pruner needs a training run that can
+be **stopped from outside**, and there was no such call. There still is not, and
+there is not going to be — `Trainer.step` was already documented as the
+primitive and `fit` as sugar over it, "whatever does not fit in an epoch loop is
+written as a `while` over this". So a pruner **stops nothing**:
+
+```python
+for epoch in range(50):
+    reported.append(trainer.fit(data, epochs=1).loss)
+    if why := pruner.verdict(reported, finished):
+        break
+```
+
+It answers, and the loop stops calling. **Zero lines in level 2**, and the
+`Trainer` never finds out there was a pruner in the room — there is a test that
+says exactly that. Anything else would have been a callback crossing the
+boundary, which is what the original's `TrialExecutor` turned out to be.
+
+### Three schemes, and they differ in what they judge against
+
+| scheme | judged against | needs other trials |
+|---|---|---|
+| `Percentile` | **the others** at the same step | yes |
+| `Threshold` | **a constant** already known to be hopeless | no |
+| `Patience` | **itself**: it has stopped improving | no |
+
+`Median` is not a fourth — it is `Percentile { p: 50 }`, and the original having
+both is the same "a scheme that is a parameter" that gave sklearn fifteen ways
+of cutting. `median()` is a constructor.
+
+**Successive halving and Hyperband are deliberately out.** They are not verdicts
+on a trial, they are a way of handing budget out across the whole population.
+That is the shape of the loop, and the loop belongs to whoever writes it.
+
+### More decisions taken
+
+- **`Goal` is told, never inferred.** Nothing in a number says whether it should
+  go up or down, so it lives on the piece that compares — a pruner without a
+  direction is a state that cannot be written. `min`/`max`, and a typo is caught
+  where it was typed rather than becoming a search that optimised backwards.
+- **What is not a number is pruned by every scheme, warmup or no warmup.** A
+  `NaN` loss does not recover, and the epochs spent finding that out are the
+  cheapest a pruner can save.
+- **`Percentile` compares each trial's best so far, not its latest value.** One
+  bad epoch is noise; a run that already touched a good number has shown it can.
+- **`p` is the share that is *kept*** — smaller prunes more, optuna's way round.
+  Written the other way in the first draft, and it was a test that found it.
+- **`Patience.steps` is a `NonZeroUsize`.** Zero patience would prune every trial
+  at its first report, improvement or not: made impossible rather than validated.
+- **`Reason` is structured, not a string.** "How many were pruned, and for which
+  of the three reasons" is the question you ask of a search that pruned too much.
+
+### Questionnaire — the pruner
+
+**The schemes** (`study/tests/unit/pruner/`, `test_pruner.py`)
+- [x] the median drops what is behind the finished trials and keeps what is not,
+      and a trial that ties is not pruned for tying
+- [x] `warmup` buys a slow starter its epochs; `startup` stops the first trial to
+      finish becoming the bar; only the trials that got this far have a say
+- [x] it compares the best so far, so a run that touched a good number survives a
+      bad epoch
+- [x] maximizing is the same thing read from the other end
+- [x] a threshold works with no other trial at all, which is where a diverged
+      configuration costs most
+- [x] patience prunes a trial the field has no complaint about, and a delta stops
+      noise from looking like progress
+- [x] what diverged goes under all three, inside the warmup
+- [x] going through the enum judges exactly the same as not going through it
+- [x] every reason says enough to act on without the curve in front of you
+
+**And the point of it** (`test_pruner.py`)
+- [x] **a pruned trial simply stops being stepped** — no callback, no flag, no
+      `trainer.stop()`
+- [x] one that is holding its own runs to the end, same loop, same trainer
+
+### What is NOT in it yet
+
+**The sampler**, the last piece of the same shape · **naming a dataset by its
+content**, which is what a fold's cache key needs — `(dataset, partition, i)` —
+and which CV is now the consumer for · **recording** what was pruned and why,
+which wants the store and not this crate · and **the loop itself**, which is a
+`for` and will stay one.
