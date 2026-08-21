@@ -646,3 +646,139 @@ def test_a_technique_that_names_its_own_group_wins_over_the_trainers():
 
     assert t.every == 2
     assert trains["encoder"].every == 3
+
+
+# ── A batch that does not fit, cut into pieces ──
+
+
+def with_micro(g, micro, every=1, lr=0.1, trains=None):
+    return Trainer(
+        g,
+        objective=nn.functional.cross_entropy,
+        optimizer=torch.optim.SGD(parameters(g, without=trains or {}), lr=lr),
+        trains=trains,
+        every=every,
+        micro=micro,
+    )
+
+
+def test_a_batch_in_pieces_comes_out_where_the_whole_one_does():
+    # The claim, and the same control as accumulation's: cutting a batch changes
+    # how much has to fit at once and nothing else.
+    torch.manual_seed(0)
+    cut, whole = net(), net()
+    for node_id in ("encoder", "head"):
+        whole.implementation(node_id).lin.load_state_dict(
+            cut.implementation(node_id).lin.state_dict()
+        )
+    batch = batches(1)[0]
+
+    with_micro(cut, micro=2).step(batch)
+    with_micro(whole, micro=1).step(batch)
+
+    for node_id in ("encoder", "head"):
+        assert torch.allclose(
+            cut.implementation(node_id).lin.weight,
+            whole.implementation(node_id).lin.weight,
+            atol=1e-6,
+        ), node_id
+
+
+def test_the_optimizer_still_moves_once_a_step():
+    g = net()
+    t = with_micro(g, micro=3)  # six rows into three
+    before = g.implementation("head").lin.weight.clone()
+
+    t.step(batches(1)[0])
+
+    assert not torch.equal(g.implementation("head").lin.weight, before)
+    assert t.seen == 0, "the step left a group half open"
+
+
+def test_the_two_multiply_rather_than_compete():
+    # `every=2, micro=2` is eight halves of a batch to a group... no: four. The
+    # point is that neither of them is ignored.
+    g = net()
+    t = with_micro(g, micro=2, every=2)
+    before = g.implementation("head").lin.weight.clone()
+    data = batches(2)
+
+    assert t.pieces == 4
+    t.step(data[0])
+    assert torch.equal(g.implementation("head").lin.weight, before), "it moved early"
+    t.step(data[1])
+    assert not torch.equal(g.implementation("head").lin.weight, before)
+
+
+def test_the_loss_it_gives_back_is_still_the_batch_it_was_handed():
+    # The mean of what the pieces said, which for equal pieces is the number the
+    # whole batch would have said: a history stays comparable across `micro`.
+    torch.manual_seed(0)
+    one = net()
+    torch.manual_seed(0)
+    other = net()
+    batch = batches(1)[0]
+
+    said = with_micro(one, micro=1).step(batch)
+    in_pieces = with_micro(other, micro=3).step(batch)
+
+    assert in_pieces == pytest.approx(said, rel=1e-5)
+
+
+def test_a_batch_that_does_not_divide_is_refused_with_both_numbers():
+    # Found by running it: `chunk` gives **at most** what it is asked for, so six
+    # rows into four is three pieces — and a group that counts four while three
+    # run never closes. Across a cut it is worse: the far side counts what it
+    # sees and the two fall out of step in silence.
+    g = net()
+    t = with_micro(g, micro=4)
+
+    with pytest.raises(ValueError) as e:
+        t.step(batches(1)[0])  # six rows
+
+    assert "micro=4" in str(e.value) and "6 long" in str(e.value)
+    assert "drop_last" in str(e.value)
+
+
+def test_something_it_cannot_cut_is_refused_with_its_type_and_which_half():
+    g = net()
+    t = with_micro(g, micro=2)
+
+    with pytest.raises(TypeError) as e:
+        t.step(("a batch of text", batches(1)[0][1]))
+
+    assert "`str`" in str(e.value)
+    assert "input" in str(e.value)
+
+
+def test_an_input_and_a_target_of_different_lengths_are_refused():
+    # Both of them divide by two and they still do not go together: a piece of
+    # one has to be a piece of the other.
+    g = net()
+    t = with_micro(g, micro=2)
+
+    with pytest.raises(ValueError, match="have to line up"):
+        t.step((torch.randn(8, IN), torch.randint(0, CLASSES, (4,))))
+
+
+def test_micro_is_a_whole_number_of_pieces_and_at_least_one():
+    for wrong in (0, -1, 1.5, True, "2"):
+        with pytest.raises(ValueError, match="`micro` is a count"):
+            with_micro(net(), micro=wrong)
+
+
+def test_and_across_a_cut_the_far_side_counts_the_pieces_too():
+    # The phase argument again: a piece is a `learn` over there, so the far side
+    # has to make its group out of pieces and not out of steps. Out by a factor
+    # of `micro` and the two optimizers move on different steps.
+    cut, whole = two_of_them()
+    trains = {"encoder": split()}
+    driven = with_micro(cut, micro=2, trains=trains)
+    in_one_go = with_micro(whole, micro=2)
+    data = batches(3)
+
+    assert [driven.step(b) for b in data] == [in_one_go.step(b) for b in data]
+    assert torch.equal(
+        cut.implementation("encoder").lin.weight,
+        whole.implementation("encoder").lin.weight,
+    )

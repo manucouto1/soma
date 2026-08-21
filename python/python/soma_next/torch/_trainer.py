@@ -113,6 +113,20 @@ class Trainer:
     named its own (`Split(SGD, lr=0.1, every=8)`) keeps it: two numbers is then
     something somebody meant.
 
+    `micro` is the other half of the same idea, for the batch that does not fit
+    rather than the one that is not big enough::
+
+        Trainer(g, objective=..., optimizer=..., micro=4)
+
+    One `step`, cut into four, one update — and the two **multiply** rather than
+    compete: `every=2, micro=4` is eight pieces to a group. `every` stays a count
+    of **steps**, because that is what somebody writing a loop counts, and
+    `micro` a count of pieces inside one.
+
+    Who knows how to cut a batch is this module and nobody else, which is what
+    keeps the core out of it: a tensor and a map of tensors are what a batch is,
+    and anything else is refused with its type rather than guessed at.
+
     A group the run ends in the middle of is closed by `update`, which `fit`
     calls at the end of every epoch and whoever writes their own loop calls when
     theirs ends.
@@ -126,11 +140,12 @@ class Trainer:
         optimizer=None,
         trains=None,
         every=1,
+        micro=1,
         store=None,
         workers=None,
     ):
         trains = dict(trains or {})
-        _check_the_group(every)
+        _check_the_group(every, micro)
         _check_who_is_trained(graph, trains)
         theirs = {
             id(parameter)
@@ -150,6 +165,12 @@ class Trainer:
         self.trains = trains
         self.theirs = theirs
         self.every = every
+        self.micro = micro
+        # What a group is made of, counted in **pieces** and not in steps: with
+        # `micro` there are several of them to a step, and the two multiply
+        # rather than compete. `every` stays a number of steps because that is
+        # what somebody writing a loop counts.
+        self.pieces = every * micro
         self.seen = 0
         self._checked = False
         # Everything structural, decided once: where this graph is cut does not
@@ -167,7 +188,7 @@ class Trainer:
             self.running, beside = around(
                 graph,
                 {
-                    node_id: learning.accumulating(every)
+                    node_id: learning.accumulating(self.pieces)
                     .of(graph.implementation(node_id))
                     .beside()
                     for node_id, learning in trains.items()
@@ -186,7 +207,8 @@ class Trainer:
     def step(self, batch):
         """One step: forward, loss, backward, and update when the group closes.
         Returns the loss, **whole** — divided for the backward pass and not for
-        whoever is reading, or a history would change shape with `every`.
+        whoever is reading, or a history would change shape with `every`. With
+        `micro`, the mean of what the pieces said, which is the same number.
 
         **The primitive**, and `fit` is sugar on top: whatever does not fit in an
         epoch loop is written as a `while` over this.
@@ -196,6 +218,16 @@ class Trainer:
         reverse — and with nobody it is, line for line, the single pass it always
         was. With `every=1`, which is the default, so is the update.
         """
+        if self.micro == 1:
+            return self._once(batch)
+        # The pieces are steps in every way that matters — each one a forward, a
+        # loss and a backward, each one counted — so the group closes on the last
+        # of them and the optimizer moves once, which is the whole point.
+        pieces = _in_pieces(batch, self.micro)
+        return sum(self._once(piece) for piece in pieces) / len(pieces)
+
+    def _once(self, batch):
+        """One pass: a whole batch, or one piece of one."""
         input_, target = batch
         if self.by_stages:
             return self._over_the_stages(input_, target)
@@ -255,7 +287,7 @@ class Trainer:
 
     def _closes(self):
         """Whether this step ends one, which is where the optimizer moves."""
-        return self.seen + 1 >= self.every
+        return self.seen + 1 >= self.pieces
 
     def _counted(self):
         """This step, gone by. The far side counts the same steps from the same
@@ -274,7 +306,7 @@ class Trainer:
         Untouched with a group of one, so that the graph a `backward` walks is
         the same graph it always was.
         """
-        return loss if self.every == 1 else loss / self.every
+        return loss if self.pieces == 1 else loss / self.pieces
 
     def update(self):
         """Applies what has been accumulated so far and starts a new group.
@@ -563,13 +595,63 @@ def _the_weights(graph):
             yield node_id, state
 
 
-def _check_the_group(every):
-    """That a group is a whole number of steps, and at least one of them."""
-    if isinstance(every, bool) or not isinstance(every, int) or every < 1:
+def _check_the_group(every, micro):
+    """That a group is a whole number of pieces, and at least one of them."""
+    for what, how_many in (("every", every), ("micro", micro)):
+        if isinstance(how_many, bool) or not isinstance(how_many, int) or how_many < 1:
+            raise ValueError(
+                f"`{what}` is a count of {'steps' if what == 'every' else 'pieces'}"
+                f", so it is a whole number and at least 1; `{how_many!r}` is not"
+            )
+
+
+def _in_pieces(batch, micro):
+    """One batch cut into `micro`, both halves of it the same way.
+
+    **Who knows how to cut a batch is this module and nobody else**, and that is
+    on purpose: at this level the batch is the caller's — they hand it in — so
+    `torch.chunk` reaches it without the core ever learning what an item is. The
+    engine's version of that question is a different question with a different
+    answer.
+
+    **It has to divide, and that is checked** rather than assumed. `chunk` gives
+    *at most* the pieces it is asked for — six rows into four is three pieces of
+    two — and a group that counts four while three run never closes: the
+    optimizer stops moving, and across a cut the far side counts the pieces it
+    sees and the two fall out of step in silence.
+
+    A tensor is what it knows how to cut. A batch that is a map of them does not
+    cross an edge today with or without this, so there is nothing here for it
+    yet — the day it does, this is where it goes.
+    """
+    input_, target = batch
+    if torch.is_tensor(input_) and torch.is_tensor(target) and len(input_) != len(target):
         raise ValueError(
-            f"`every` is how many steps go into one update, so it is a whole "
-            f"number and at least 1; `{every!r}` is not"
+            f"the input is {len(input_)} long and the target {len(target)}: they "
+            f"have to line up along the batch dimension for a piece of one to go "
+            f"with a piece of the other"
         )
+    return list(zip(*(_cut(half, micro, which) for which, half in enumerate(batch))))
+
+
+def _cut(half, micro, which):
+    """One half of a batch — the input or the target — in `micro` equal pieces."""
+    where = "input" if which == 0 else "target"
+    if not torch.is_tensor(half):
+        raise TypeError(
+            f"`micro` cuts a batch into pieces and the {where} is a "
+            f"`{type(half).__name__}`, which this does not know how to cut: a "
+            f"tensor is what it cuts. Cut it yourself and take one step per "
+            f"piece, which is what `every` is for"
+        )
+    if len(half) % micro:
+        raise ValueError(
+            f"`micro={micro}` cuts a batch into {micro} equal pieces and the "
+            f"{where} is {len(half)} long, which does not divide. Drop the short "
+            f"batch — `drop_last=True` on a `DataLoader` — or pick a `micro` "
+            f"that divides"
+        )
+    return list(torch.chunk(half, micro))
 
 
 def _whose(graph, parameters):
