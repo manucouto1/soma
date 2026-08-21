@@ -105,7 +105,10 @@ deliberately does not live in the plan.
 **Four holes, and the core provides them without filling any**: `Node` is the
 user's, `Driver` serves what a step asks for, `Transport` carries a slice
 elsewhere, `Keeper` hashes a recipe and keeps what it names. The core still has
-no dependencies.
+no dependencies. `transport` has two of its own, filled from `python/`:
+`Provision` turns an artifact into a catalog, and `Codec` writes down what only
+exists in one process — so an `Opaque` crosses a wire, and what does not is the
+one nobody registered a codec for.
 
 **Where a graph gets cut is the pair `(host, trained)`**: `.at()` already said
 the first half and the graph owns it; the second is a fact of the training run,
