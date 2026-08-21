@@ -2255,3 +2255,111 @@ run of groups of one.
 - [x] eight deliberate mutations — not scaling, closing every step, not counting,
       the far side stepping always, the far side not counting, not telling it the
       number, ignoring being told — every one caught
+
+---
+
+## CU15 — What a training run exports
+
+```python
+for _ in range(rounds):
+    for client in clients:
+        client.fit(client.data)
+    average = fedavg([client.export() for client in clients])
+    for client in clients:
+        client.load(average)
+```
+
+Status: **first slice closed**, clients in one process. 375 tests in Python.
+
+### The question CU11 put off, and how it changed shape on the way
+
+CU11 asked *is a node's state a `Value`?* and put it off. It came back as a
+better question — **what does a training run export?** — and the answer is the
+smallest one that is true: its weights, node by node, `{node_id: {key: tensor}}`.
+
+By **the same two ducks** the rest of the project asks by: a `state_dict` by
+name, `parameters()` in order, and a node with neither has no weights and does
+not stop being a node. It has to be the same two `state_digest` and
+`Graph._check_it_was_obeyed` use, or a node could be told to settle and then have
+no way of being exported — one state, two questions, and a project that answers
+them differently in two places.
+
+### A `for` over a list, and it stays one
+
+A federated round has **no dependencies to declare**: the clients do not read
+each other and the order they run in is nobody's business. A graph earns its keep
+when there are dependencies, so this is not one — the original put training runs
+and graph slices in the same enum, and that was the mistake the three levels
+exist to avoid.
+
+FedAvg, FedProx, FedYogi and SCAFFOLD differ in **arithmetic**. That is what a
+function is for, so `fedavg` is one. The day a topology stops being flat —
+hierarchical, gossip — that day it is a graph, and not before.
+
+### Three things it had to decide
+
+- **What is trained where it runs cannot be exported from here.** Those weights
+  are on the other machine; what is here is the copy that was sent, and it never
+  learnt anything. Handing it back would be silent, which is the only way this
+  could go wrong, so it is refused with the node named. `trains` on its own is
+  fine — running elsewhere is the half that matters.
+- **The optimizer's state is not in it.** Momentum is a client's own, and
+  averaging it is not what averaging weights means.
+- **What is not a number you can halve is not halved.** A `num_batches_tracked`
+  is a count and the mean of two counts is not a count; the first one's stands.
+  Every implementation of this does it and none of them says so out loud.
+
+### The test that was written twice
+
+The demonstration has to be a **control**, not a loss going down: a net says that
+just as loudly when only a third of it is learning.
+
+The first attempt gave each client one class. Cross-entropy then pushes its own
+logit up for ever, each client diverges alone, and the average of three diverged
+nets is a lesson about learning rates — measured, a loss of 2.7e8 against 4.5 for
+the client that stayed home. **The task has to be the same for everyone**; only
+where they draw their inputs from may differ. Three clients, one corner of the
+input space each, a fixed teacher they are all trying to learn, and a fourth
+trained alone on its corner for exactly as long. The average reads the union
+better.
+
+### Questionnaire
+
+**What it exports** (`python/tests/test_federated.py`)
+- [x] the weights node by node, and a node with none is simply not in there
+- [x] a node that says what its weights are called is asked by name, and one that
+      does not is asked in order
+- [x] what comes out is a snapshot and not a view
+- [x] it goes back in where it came from
+- [x] the optimizer's state is not in it
+
+**What it refuses**
+- [x] loading something this graph does not have, by name
+- [x] loading a weight of the wrong shape, with both shapes
+- [x] and a refusal leaves the net as it was rather than half loaded
+- [x] exporting or loading what is trained **where it runs**, which is not here
+- [x] but one trained here is exported like any other
+
+**Putting several together**
+- [x] the average of one is that one, and of two is halfway between
+- [x] `sizes` is what it weighs by, and ten times the data pulls ten times
+- [x] what is not a number you can halve is not halved
+- [x] two different networks, the same node with a different shape, nothing at
+      all, and the wrong number of sizes: all refused before anything is computed
+- [x] three clients that each see a corner average into one that reads the union
+      better than the one that stayed home
+- [x] and a round leaves every client at the same weights
+- [x] three mutations — returning the first export, ignoring `sizes`, averaging
+      the integers — every one caught
+
+### What is NOT in it yet
+
+**The clients on different machines.** The design is already agreed and needs
+nothing from the graph's distribution: a shared store where each client
+**claims** its work atomically with a `rename`, trains locally with `Trainer`,
+and writes what it exported; Slurm hands the work out. Zero network, zero
+`Plan::Remote`. Putting it through the graph's transport would be the original's
+mistake wearing a different hat · **FedProx, FedYogi, SCAFFOLD**, which are the
+same shape with different arithmetic and go in when somebody runs one ·
+**secure aggregation** · and **what a round is worth remembering by**, which is
+where the store's digest of a state stops being only a cache key.

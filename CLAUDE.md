@@ -127,6 +127,12 @@ handed the same shape wherever it runs; and `Trainer(every=N)` makes **a group o
 steps into one update**, with whatever trains itself elsewhere making the same
 group out of the same steps.
 
-Next up: **CU15, federated**, which is what a training run exports rather than
-what it does; and micro-batches, which is where the grain per item (`.mapped()`)
-joins them. See the distribution report for the full order.
+**CU15 is open and its first slice is closed**: a training run exports its
+weights node by node, `fedavg` is a **function**, and a federated round is a
+`for` over a list of `Trainer`s — level 3 has no type and that is on purpose.
+What is left of it is the clients on **different machines**, which needs nothing
+from the graph's distribution: a shared store, each client claiming its work with
+an atomic `rename`, Slurm handing it out.
+
+Then micro-batches, which is where the grain per item (`.mapped()`) joins them.
+See the distribution report for the full order.
