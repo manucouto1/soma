@@ -91,6 +91,30 @@ class WhatAmIGiven(Node):
         return Done(type(x).__name__)
 
 
+class CountsATensor(Node):
+    """Says in a tensor how many times it was really asked.
+
+    A hit is invisible from outside unless somebody counts, and it has to be a
+    **tensor** for this to be about anything: a number is kept by a worker with
+    no codecs in front of its store just as well.
+    """
+
+    def __init__(self):
+        import torch
+
+        self.calls = 0
+        self.settled = [torch.tensor([1.0])]
+
+    def parameters(self):
+        return self.settled
+
+    def forward(self, x, ctx):
+        import torch
+
+        self.calls += 1
+        return Done(Opaque(torch.tensor([float(self.calls)])))
+
+
 class Chatterbox(Node):
     """Prints to `stdout`, which is where the wire runs.
 
@@ -664,3 +688,28 @@ def test_a_graph_run_in_pieces_keeps_the_worker_it_had():
         return produced["back_there"]
 
     assert [pass_over(), pass_over()] == [12.0, 13.0]
+
+
+def test_a_cached_tensor_is_kept_by_the_worker_too(tmp_path):
+    """CU13's hole, which only a codec could close: a worker keeps what is made
+    of numbers and, with nothing in front of its store, quietly keeps nothing
+    else — so the same `.cached()` node hit here and missed there for no reason
+    anybody could see."""
+    torch = pytest.importorskip("torch")
+    import soma_next.torch
+
+    counts = CountsATensor()
+    g = Graph.somatize(counts.named("counts").frozen().cached().at("w1"))
+    # Declaring it is the graph's half; making it true is torch's, and without
+    # the digest of its weights two checkpoints would share one name.
+    soma_next.torch.freeze(g)
+    w = Worker.spawn(
+        [sys.executable, "-m", "soma_next.worker", "--store", str(tmp_path)],
+        mode="network",
+    )
+
+    first = g.forward(None, workers={"w1": w})
+    second = g.forward(None, workers={"w1": w})
+
+    assert torch.equal(first, torch.tensor([1.0])), first
+    assert torch.equal(second, torch.tensor([1.0])), "the worker ran it again"

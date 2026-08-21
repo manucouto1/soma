@@ -14,7 +14,7 @@
 //! boundary as three other places — the core does not know what a node asks for,
 //! what an `Opaque` carries, or what a serialized catalog is.
 
-use crate::codec::Codecs;
+use crate::codec::{Codecs, Packing};
 use crate::node::{PyDriver, PyNode};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -288,17 +288,23 @@ fn opened(store: Option<&str>) -> PyResult<Option<Local>> {
 /// One directory answers the two questions and they stay two: a catalog that is
 /// not sent twice, and a node that is not run twice. Neither is on unless a
 /// `store` was given.
+///
+/// **With the codecs in front of the second**, exactly as the client puts them
+/// in front of its own: without them a worker keeps what is made of numbers and
+/// quietly keeps nothing else, so the same `.cached()` node would hit here and
+/// miss there for no reason the user could see. What reaches the store is bytes
+/// either way, and the store never learns Python exists.
 fn keeping<'a>(
     serving: Serving<'a>,
     kept: Option<&'a Local>,
-    cache: Option<&'a Cache<'a>>,
+    packing: Option<&'a Packing<'a>>,
 ) -> Serving<'a> {
     let serving = match kept {
         Some(kept) => serving.store(kept),
         None => serving,
     };
-    match cache {
-        Some(cache) => serving.keeping(cache),
+    match packing {
+        Some(packing) => serving.keeping(packing),
         None => serving,
     }
 }
@@ -320,11 +326,12 @@ pub fn serve_provisioned(
     let driver = driver.map(PyDriver::new).transpose()?;
     let kept = opened(store)?;
     let cache = kept.as_ref().map(|kept| Cache::over(kept));
+    let packing = cache.as_ref().map(|cache| Packing::over(cache));
     py.allow_threads(|| {
         keeping(
             serving_provisioned(&provision, driver.as_ref()),
             kept.as_ref(),
-            cache.as_ref(),
+            packing.as_ref(),
         )
         .over_stdin()
     })
@@ -347,11 +354,12 @@ pub fn listen_provisioned(
     let driver = driver.map(PyDriver::new).transpose()?;
     let kept = self::opened(store)?;
     let cache = kept.as_ref().map(|kept| Cache::over(kept));
+    let packing = cache.as_ref().map(|cache| Packing::over(cache));
     py.allow_threads(|| {
         keeping(
             serving_provisioned(&provision, driver.as_ref()),
             kept.as_ref(),
-            cache.as_ref(),
+            packing.as_ref(),
         )
         .listen_at(addr, |where_| {
             if let Some(notify) = opened {
