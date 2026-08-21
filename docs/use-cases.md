@@ -2617,7 +2617,7 @@ map reaches the node, which names it but names it late.
 
 ---
 
-## CU17 — Cutting the samples, giving up on a trial, and how much of level 3 is Rust
+## CU17 — Level 3: where to look, how to cut, and when to give up
 
 ```python
 from soma_next.study import Partition
@@ -2835,10 +2835,83 @@ That is the shape of the loop, and the loop belongs to whoever writes it.
       `trainer.stop()`
 - [x] one that is holding its own runs to the end, same loop, same trainer
 
+### The sampler, and the decision the original did not take
+
+Three schemes again, and again what tells them apart is **what each one looks
+at**:
+
+| scheme | looks at | runs out | derivable from the index |
+|---|---|---|---|
+| `Grid` | the space's shape | **yes** | yes |
+| `Random` | nothing | no | yes |
+| `Tpe` | what already happened | no | **no** |
+
+The column that matters is the last one. The original's `Sampler` took
+`&mut self` and had a `prepare` to build its state up front; this one takes
+neither, so a grid's combination is arithmetic on the index and a random point
+comes from `(seed, trial)`. Asking for trial 7 twice gives the same answer, and
+**asking for it without having asked for the first six gives the same answer
+too**.
+
+That is not tidiness. It is what lets a study spread over a shared folder work
+with **nobody in charge**: `claim` hands a machine the number 7 and it derives
+the point on its own — the same shape as CU15's federated round, and for the
+same reason. `Tpe` is the honest exception and says so in its own docstring: it
+is guided, so it depends on what the asking machine had seen, and a study spread
+over four machines gets a different search than one in a single process.
+
+`Grid` running out is the other half of it: `ask` answering `None` is how a `for`
+stops **without being told a number**, which is the one thing a level-3 loop
+would otherwise need a `Study` type to hold.
+
+### More decisions taken
+
+- **`log` is a property of the knob, not a transform the caller applies.** Drawn
+  linearly, four fifths of `1e-5..1e-1` sits above `0.02` and a search never sees
+  a small learning rate at all. A logarithmic range starting at zero is refused
+  where it is written rather than becoming a `-inf` inside a draw.
+- **A `Point` is a mapping in Python and a name in the record.** `build(**point)`
+  works, and `str(point)` is `lr=0.001,batch=32` — derived from the values in the
+  space's order, so two machines that never spoke file a configuration
+  identically. It is half of what a trial's cache key will be.
+- **`Tpe` keeps an option nobody tried reachable**, by counting one imaginary
+  observation of each. A search that can never revisit a discarded option cannot
+  recover from three unlucky trials.
+- **A trial that scored `NaN` is dropped, not counted as terrible.** Counted, it
+  would drag the good/bad split about; dropped, the proposal does not move at
+  all, and there is a test that says so.
+- **The generator is ours again**, splitmix64 as in the folds and for the same
+  reason: a seed has to mean the same thing on every machine that reads the same
+  record, which is not something `rand` promises across versions.
+
+### Questionnaire — the sampler
+
+**The space** (`study/tests/unit/space.rs`, `test_sampler.py`)
+- [x] the knobs keep declaration order, which is what a grid and a name depend on
+- [x] a duplicate name, an empty choice, a reversed range and a logarithmic range
+      starting at zero are all refused where they were written
+- [x] a space is built up and every call gives back a new one
+
+**The schemes** (`study/tests/unit/sampler/`, `test_sampler.py`)
+- [x] a grid walks every combination exactly once, takes **both ends** of a
+      range, takes a narrow `int` whole, and then answers `None`
+- [x] the same seed and index give the same point however it is asked for —
+      including out of order and after everything else
+- [x] what is drawn stays inside every knob, and a logarithmic one spreads over
+      the decades rather than over the line
+- [x] tpe concentrates where the good trials were, prefers the option they chose,
+      and keeps one nobody tried reachable
+- [x] before it has anything to learn from it is **exactly** the random one, seed
+      for seed
+- [x] maximizing looks at the other end of the scores
+- [x] two of the three ignore what finished, which is why there are three
+- [x] going through the enum asks exactly the same as not going through it
+
 ### What is NOT in it yet
 
-**The sampler**, the last piece of the same shape · **naming a dataset by its
-content**, which is what a fold's cache key needs — `(dataset, partition, i)` —
-and which CV is now the consumer for · **recording** what was pruned and why,
-which wants the store and not this crate · and **the loop itself**, which is a
-`for` and will stay one.
+**Naming a dataset by its content**, which is what a fold's cache key needs —
+`(dataset, partition, i)` — and which CV is now the consumer for · **recording**
+what was tried and what was pruned, which wants the store and not this crate ·
+**conditional dimensions**, a knob that only exists when another took a
+particular value, which needs a consumer before it needs a design · and **the
+loop itself**, which is a `for` and will stay one.

@@ -28,6 +28,21 @@
 //! | [`Partition`] | whichever of them, when that is decided by data |
 //! | [`Fold`] | one cut: which indices train, which are held out |
 //!
+//! # Deciding where to look next
+//!
+//! | piece | looks at |
+//! |---|---|
+//! | [`Space`] | not a scheme: the named knobs and what each may be |
+//! | [`Grid`] | **the space's shape** — and it is the one that runs out |
+//! | [`Random`] | **nothing**, which over a space where few knobs matter beats a grid |
+//! | [`Tpe`] | **what already happened**: imitate the good, avoid the bad |
+//! | [`Sampler`] | whichever of them, when that is decided by data |
+//! | [`Point`] | one configuration, which is also a trial's **name** |
+//!
+//! `ask` is a function of the **index**, not of what was asked before, so a
+//! machine that claimed trial 7 out of a shared folder derives the same point
+//! without replaying six. [`Tpe`] is the exception and says so.
+//!
 //! # Deciding a trial is not worth another epoch
 //!
 //! | piece | judged against |
@@ -56,12 +71,18 @@
 
 mod goal;
 mod partition;
+mod point;
 mod pruner;
+mod sampler;
 mod samples;
+mod space;
 
 pub use goal::{Goal, GoalError};
 pub use partition::{
     Fold, Grouped, KFold, Partition, PartitionError, Stratified, StratifiedGrouped, TimeSeries,
 };
+pub use point::{Point, Setting};
 pub use pruner::{Patience, Percentile, Pruner, Reason, Threshold, Verdict};
+pub use sampler::{Grid, Random, Sampler, Tpe};
 pub use samples::{Samples, SamplesError};
+pub use space::{Dimension, Space, SpaceError};

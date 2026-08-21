@@ -144,6 +144,18 @@ distributes.
 **CU16 closed**, and it split what the plan had joined: micro-batches are level 2
 —the batch is the caller's, so `torch.chunk` reaches it— while `.mapped()` is the
 engine's, because caching item by item has to **name** each item and a name comes
-from its **content and not its place**. Sixteen use cases closed.
+from its **content and not its place**.
+
+**CU17 closed**: `study/`, the first crate with **no dependencies at all, not
+even the core's** — level 3, the one that has no type. Three families of the same
+shape, each an enum of structs: `Partition` (where to cut), `Sampler` (where to
+look) and `Pruner` (when to give up). The line between the languages is drawn by
+**shape and not by language**: Rust keeps what is pure, deterministic and
+hashable; the loop stays in Python where torch is, and **no callback crosses** —
+the original's `TrialExecutor` has one implementor and it is a closure wrapper.
+So nothing is asked of a `Trainer`: a pruner answers and the loop stops calling.
+And `ask` is a function of the **index**, not of what was asked before, so a
+machine that claimed trial 7 from a shared folder derives it without replaying
+six. Seventeen use cases closed.
 
 See the distribution report for the full order.

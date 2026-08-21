@@ -6,5 +6,8 @@
 mod goal;
 mod invariants;
 mod partition;
+mod point;
 mod pruner;
+mod sampler;
 mod samples;
+mod space;

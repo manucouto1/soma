@@ -496,6 +496,9 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<store::PyBound>()?;
     m.add_class::<study::PyPartition>()?;
     m.add_class::<study::PyPruner>()?;
+    m.add_class::<study::PySampler>()?;
+    m.add_class::<study::PySpace>()?;
+    m.add_class::<study::PyPoint>()?;
     m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;
     m.add_function(wrap_pyfunction!(remote::serve, m)?)?;

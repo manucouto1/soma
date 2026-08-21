@@ -7,11 +7,14 @@ federated round it has **no type**: N training runs are a ``for``::
     from soma_next.study import Partition
     from soma_next.torch import Trainer
 
-    scores = []
-    for train, test in Partition.stratified(5).folds(len(y), classes=y.tolist()):
+    space = Space().real("lr", 1e-5, 1e-1, log=True).choice("opt", ["adam", "sgd"])
+    sampler, finished = Sampler.tpe(goal="min"), []
+
+    for trial in range(50):
+        point = sampler.ask(space, trial, finished)
+        g = build(**point)                       # a Point is a mapping
         t = Trainer(g, objective=cross_entropy, optimizer=Adam(parameters(g)))
-        t.fit(data[train], epochs=10)
-        scores.append(evaluate(g, data[test]))
+        finished.append((point, t.fit(data, epochs=10).loss))
 
 What lives here are the pieces that ``for`` asks for, and they all have the same
 shape: **numbers in, a decision out — never a tensor**. That is what lets all of
@@ -38,6 +41,13 @@ this added a line to level 2. The three schemes differ in what they judge
 against: ``median``/``percentile`` the other trials, ``threshold`` a constant,
 ``patience`` the trial itself.
 
+The three samplers differ in **what they look at**: ``grid`` at the space's
+shape — and it is the one that runs out, so ``ask`` answering ``None`` is how a
+``for`` stops without being told a number —, ``random`` at nothing, and ``tpe``
+at what already happened. The first two derive their point from the seed and the
+**index**, so a machine that claimed trial 7 out of a shared folder gets the same
+point without replaying six; ``tpe`` cannot, and that is what being guided means.
+
 ``Partition`` is five schemes and not sklearn's fifteen, because stratifying and
 grouping are not different algorithms — stratifying is a k-fold inside each
 class, grouping is a k-fold over the groups. What is left over is parameters:
@@ -47,6 +57,6 @@ k-fold, and purged cross-validation is ``time_series(k, gap=...)``.
 It is not called ``Split``: ``soma_next.torch.Split`` is already split learning.
 """
 
-from soma_next._soma_next import Partition, Pruner
+from soma_next._soma_next import Partition, Point, Pruner, Sampler, Space
 
-__all__ = ["Partition", "Pruner"]
+__all__ = ["Partition", "Point", "Pruner", "Sampler", "Space"]
