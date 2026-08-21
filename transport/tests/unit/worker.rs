@@ -10,7 +10,7 @@ use soma_next_core::{
     distribute, node,
 };
 use soma_next_store::{Cache, Local};
-use soma_next_transport::Worker;
+use soma_next_transport::{Codec, CodecError, Worker};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -329,6 +329,131 @@ fn an_opaque_produced_over_there_does_not_come_back_either() {
     let said = run(&g, &c, &p, &w, Value::Null).unwrap_err().to_string();
 
     assert!(said.contains("does not cross"), "{said}");
+}
+
+// ── With a codec, which is where the frontier really is ──
+
+/// The same one the worker runs with `--codec`: two ends that do not agree on
+/// how something is written down do not understand each other.
+struct U32s;
+
+const WRITTEN: &str = "__a_u32__";
+
+impl Codec for U32s {
+    fn packed(&self, value: &Value) -> Result<Value, CodecError> {
+        match value.downcast::<u32>() {
+            Some(n) => Ok(Value::map(vec![(
+                WRITTEN.to_string(),
+                Value::number(*n as f64),
+            )])),
+            None => match value {
+                Value::Opaque(_) => Err(CodecError::new("only a `u32` is written down here")),
+                other => Ok(other.clone()),
+            },
+        }
+    }
+
+    fn unpacked(&self, value: &Value) -> Result<Value, CodecError> {
+        let Value::Map(pairs) = value else {
+            return Ok(value.clone());
+        };
+        match &pairs[..] {
+            [(key, Value::Number(n))] if key == WRITTEN => Ok(Value::opaque(*n as u32)),
+            _ => Ok(value.clone()),
+        }
+    }
+}
+
+fn worker_with_codec() -> Worker {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_test-worker"));
+    cmd.arg("--codec");
+    Worker::spawn(cmd)
+        .expect("cargo just built the binary")
+        .packing(Arc::new(U32s))
+}
+
+#[test]
+fn with_a_codec_an_opaque_produced_over_there_does_come_back() {
+    // The frontier did not go away, it moved: from "an opaque" to "an opaque
+    // nobody registered a codec for".
+    let g = graph_with(&["opaque"], &[]);
+    let c = catalog();
+    let p = on_hosts(&[("opaque", "worker1")]);
+    let w = worker_with_codec();
+
+    let out = run(&g, &c, &p, &w, Value::Null).expect("it can be written down now");
+
+    assert_eq!(
+        out.downcast::<u32>().copied(),
+        Some(7),
+        "what came back is not the value that was produced over there"
+    );
+}
+
+#[test]
+fn and_one_bound_for_over_there_arrives_as_what_it_was() {
+    // The other direction, and the one `reads` can answer: it says `1.0` only if
+    // what it was handed is still an opaque on arrival.
+    let g = graph_with(&["opaque", "reads"], &[("opaque", "reads")]);
+    let c = catalog();
+    let p = on_hosts(&[("reads", "worker1")]);
+    let w = worker_with_codec();
+
+    let out = run(&g, &c, &p, &w, Value::Null).expect("it crosses now");
+
+    assert_eq!(number(&out), 1.0, "it did not arrive as an opaque");
+}
+
+#[test]
+fn a_codec_that_cannot_write_the_slices_own_value_refuses_in_its_own_words() {
+    // `last` is the value of the slice itself and has a reader here by
+    // definition, so there is no leaving it behind: the codec's words are the
+    // answer, and they are better than the wire's. **The words are the far
+    // end's**, which is the half of this that could not be tested in one
+    // process: the codec that failed is the one standing next to the node.
+    let g = graph_with(&["unwritable"], &[]);
+    let c = catalog();
+    let p = on_hosts(&[("unwritable", "worker1")]);
+    let w = worker_with_codec();
+
+    let said = run(&g, &c, &p, &w, Value::Null).unwrap_err().to_string();
+
+    assert!(
+        said.contains("is all this codec knows how to write down"),
+        "the codec over there did not speak: {said}"
+    );
+    assert!(said.contains("worker1"), "the host is missing: {said}");
+}
+
+#[test]
+fn but_one_it_cannot_write_and_nobody_asked_for_stays_where_it_ran() {
+    // CU14's rule, unchanged by any of this: an intermediate value is read by
+    // the steps that ran with it, and one that cannot be written down is left
+    // behind rather than refusing the whole answer.
+    let g = graph_with(&["unwritable", "reads"], &[("unwritable", "reads")]);
+    let c = catalog();
+    let p = on_hosts(&[("unwritable", "worker1"), ("reads", "worker1")]);
+    let w = worker_with_codec();
+
+    let out = run(&g, &c, &p, &w, Value::Null).expect("nobody here reads the opaque");
+
+    assert_eq!(number(&out), 1.0, "what it read was not the opaque");
+}
+
+#[test]
+fn a_worker_that_does_not_pack_hands_the_node_what_it_was_sent() {
+    // Both ends or neither. The client writes it down and the worker, with no
+    // codec, never reads it back — so `reads` is handed a map and says so. It is
+    // the failure this is allowed to have, and it is quiet: which is why nothing
+    // installs one end without the other.
+    let g = graph_with(&["opaque", "reads"], &[("opaque", "reads")]);
+    let c = catalog();
+    let p = on_hosts(&[("reads", "worker1")]);
+    let w = worker().packing(Arc::new(U32s));
+
+    let out = run(&g, &c, &p, &w, Value::Null).expect("what crosses is a map, and a map crosses");
+
+    assert_eq!(number(&out), 0.0, "the worker cannot have read it back");
 }
 
 #[test]

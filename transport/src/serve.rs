@@ -52,9 +52,10 @@
 //! for exactly that. In Python this is more dangerous, because a stray `print`
 //! in a user's node — or in a library on import — does the same thing.
 
+use crate::codec::{self, Codec};
 use crate::frame;
 use crate::{Answer, Label, Provision, Provisioned, Request};
-use soma_next_core::{Catalog, Driver, Executor, Keeper};
+use soma_next_core::{Catalog, Driver, Executor, Keeper, Outcome};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
@@ -66,6 +67,7 @@ pub struct Serving<'a> {
     driver: Option<&'a dyn Driver>,
     store: Option<&'a dyn Store>,
     keeper: Option<&'a dyn Keeper>,
+    codec: Option<&'a dyn Codec>,
 }
 
 impl<'a> Serving<'a> {
@@ -76,6 +78,7 @@ impl<'a> Serving<'a> {
             driver: None,
             store: None,
             keeper: None,
+            codec: None,
         }
     }
 
@@ -87,6 +90,7 @@ impl<'a> Serving<'a> {
             driver: None,
             store: None,
             keeper: None,
+            codec: None,
         }
     }
 
@@ -123,6 +127,18 @@ impl<'a> Serving<'a> {
     /// there.
     pub fn keeping(mut self, keeper: &'a dyn Keeper) -> Self {
         self.keeper = Some(keeper);
+        self
+    }
+
+    /// The same worker, able to read and write down what only exists in a
+    /// process.
+    ///
+    /// **The same codecs as the client's**, or the two ends do not understand
+    /// each other — which is what the error says when it happens. Whoever stands
+    /// this worker up installs it; here it is one more thing that was lent, like
+    /// the driver and the store, and it does not travel.
+    pub fn packing(mut self, codec: &'a dyn Codec) -> Self {
+        self.codec = Some(codec);
         self
     }
 
@@ -190,6 +206,7 @@ struct Shared<'a> {
     driver: Option<&'a dyn Driver>,
     store: Option<&'a dyn Store>,
     keeper: Option<&'a dyn Keeper>,
+    codec: Option<&'a dyn Codec>,
     loaded: Mutex<Loaded<'a>>,
 }
 
@@ -204,6 +221,7 @@ impl<'a> Shared<'a> {
             driver: serving.driver,
             store: serving.store,
             keeper: serving.keeper,
+            codec: serving.codec,
             loaded: Mutex::new(loaded),
         }
     }
@@ -400,15 +418,62 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
             if let Some(driver) = sent.as_deref().or(shared.driver) {
                 executor = executor.with_driver(driver);
             }
+            // Alive again before anything reads it, and not at the boundary
+            // where a node is handed its argument: a value that only passes
+            // through here is never handed to anybody, and the two ends have to
+            // be the same one or this is impossible to explain.
+            let (input, known) = match shared.codec {
+                None => (input, known),
+                Some(codec) => match (codec.unpacked(&input), codec::unpacking(codec, &known)) {
+                    (Ok(input), Ok(known)) => (input, known),
+                    (Err(e), _) | (_, Err(e)) => return Answer::Failed(e.to_string()),
+                },
+            };
             // What arrived is fed in as if this run had produced it.
             match executor.resume(&plan, input, known, keys) {
-                // Whatever only exists here stays here: it was read by the steps
-                // that ran here, and nobody there is waiting for it.
-                Ok(outcome) => Answer::Done(outcome.travelling()),
+                Ok(outcome) => answering(shared.codec, outcome),
                 Err(e) => Answer::Failed(e.to_string()),
             }
         }
     }
+}
+
+/// The answer to a slice that ran: written down, and with whatever stays here
+/// left out of it.
+///
+/// **Packing goes first.** `travelling` drops what does not travel, and a tensor
+/// with a codec does travel — asking before writing it down would leave behind
+/// exactly what this exists to carry.
+///
+/// The two halves are not treated alike, and it is the same rule as ever:
+/// `produced` is what the steps here read, so one that cannot be written down
+/// **stays here** and is named by `RunError::Lost` if anybody reads it; `last`
+/// is the value of the slice itself and has a reader over there by definition,
+/// so there the codec's own words are the answer.
+fn answering(codec: Option<&dyn Codec>, outcome: Outcome) -> Answer {
+    let Some(codec) = codec else {
+        return Answer::Done(outcome.travelling());
+    };
+    let last = match codec.packed(&outcome.last) {
+        Ok(last) => last,
+        Err(e) => return Answer::Failed(e.to_string()),
+    };
+    let produced = outcome
+        .produced
+        .into_iter()
+        .map(|(id, value)| {
+            let written = codec.packed(&value).unwrap_or(value);
+            (id, written)
+        })
+        .collect();
+    Answer::Done(
+        Outcome {
+            last,
+            produced,
+            keys: outcome.keys,
+        }
+        .travelling(),
+    )
 }
 
 /// What the store has for this artifact, opened. `None` if it does not have it.

@@ -54,6 +54,7 @@
 #![warn(missing_docs)]
 
 mod artifact;
+mod codec;
 mod frame;
 mod protocol;
 mod provision;
@@ -61,6 +62,7 @@ mod serve;
 mod worker;
 
 pub use artifact::{Artifact, Label};
+pub use codec::{Codec, CodecError};
 pub use protocol::{Answer, MessageError, Request};
 pub use provision::{Provision, ProvisionError, Provisioned};
 pub use serve::Serving;

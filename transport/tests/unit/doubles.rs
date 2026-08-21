@@ -104,7 +104,7 @@ pub fn catalog() -> Catalog {
     // These only run in the worker. They are here so `compile` finds them, and
     // they fail if anyone executes them in this process — which is exactly what
     // their tests have to rule out.
-    for id in ["meet_one", "meet_two", "ask"] {
+    for id in ["meet_one", "meet_two", "ask", "unwritable"] {
         catalog.insert(id, Arc::new(Fail));
     }
     catalog

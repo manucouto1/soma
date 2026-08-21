@@ -34,13 +34,14 @@
 //! this library does not know what your binary is called, nor what environment
 //! it needs, nor whether it goes inside an `srun`.
 
+use crate::codec::{self, Codec};
 use crate::frame;
 use crate::{Answer, Artifact, Request};
 use soma_next_core::{Cargo, Outcome, Plan, Transport, TransportError};
 use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// A process that executes the slices it is sent.
 pub struct Worker {
@@ -51,6 +52,12 @@ pub struct Worker {
     /// is a worker that brings its own catalog. Behind a lock because it is set
     /// **after** opening: which nodes go here is known at run time.
     carries: Mutex<Option<(Artifact, String)>>,
+    /// Who writes down what would not otherwise cross. `None` is the whole of
+    /// Rust: there, an opaque carries something nobody has said how to write.
+    ///
+    /// Owned and not lent, unlike [`Serving`](crate::Serving)'s: this type has
+    /// no lifetime and is held inside an `Arc` by whoever executes.
+    codec: Option<Arc<dyn Codec>>,
 }
 
 struct Open {
@@ -165,6 +172,17 @@ impl Worker {
         Ok(())
     }
 
+    /// The same worker, with somebody who knows how to write down what an
+    /// opaque carries.
+    ///
+    /// Without one, a value that only exists in this process is refused at
+    /// encoding time, as it always was. With one, it crosses as bytes and the
+    /// refusal is left for what nobody registered a codec for.
+    pub fn packing(mut self, codec: Arc<dyn Codec>) -> Self {
+        self.codec = Some(codec);
+        self
+    }
+
     fn greeted(&self) -> bool {
         match self.open.lock() {
             Ok(open) => open.greeted,
@@ -179,6 +197,7 @@ impl Worker {
                 greeted: false,
             }),
             carries: Mutex::new(None),
+            codec: None,
         }
     }
 }
@@ -250,20 +269,52 @@ impl Transport for Worker {
         }
         drop(carries);
 
+        // Written down before the message is built, so the refusal in
+        // `Request::to_bytes` is untouched and still guards: by the time it
+        // looks, whatever had a codec is already bytes. Nothing to write down
+        // means nothing is copied.
+        let (input, known) = match self.codec.as_deref() {
+            None => (cargo.input.clone(), cargo.known.to_vec()),
+            Some(codec) => (
+                codec.packed(cargo.input).map_err(as_transport_error)?,
+                codec::packing(codec, cargo.known).map_err(as_transport_error)?,
+            ),
+        };
         let work = Request::Work {
             plan: plan.clone(),
-            input: cargo.input.clone(),
-            known: cargo.known.to_vec(),
+            input,
+            known,
             keys: cargo.keys.to_vec(),
             placement: cargo.placement.clone(),
             memory: cargo.memory.clone(),
         };
         match open.say(&work)? {
-            Answer::Done(outcome) => Ok(outcome),
+            Answer::Done(outcome) => match self.codec.as_deref() {
+                None => Ok(outcome),
+                Some(codec) => live(codec, outcome),
+            },
             Answer::Failed(why) => Err(TransportError::new(why)),
             other => Err(unexpected("working", &other)),
         }
     }
+}
+
+/// What came back, alive again.
+///
+/// A failure here is not a value left behind: everything in this answer was
+/// written down by the other side a moment ago, so one that cannot be read back
+/// means the two ends do not register the same codecs — and that is the answer,
+/// not a value to work around.
+fn live(codec: &dyn Codec, outcome: Outcome) -> Result<Outcome, TransportError> {
+    Ok(Outcome {
+        last: codec.unpacked(&outcome.last).map_err(as_transport_error)?,
+        produced: codec::unpacking(codec, &outcome.produced).map_err(as_transport_error)?,
+        keys: outcome.keys,
+    })
+}
+
+fn as_transport_error(e: crate::CodecError) -> TransportError {
+    TransportError::new(e.to_string())
 }
 
 /// What it answered does not match what it was asked: not a job failure, but

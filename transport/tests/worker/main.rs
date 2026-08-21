@@ -7,6 +7,7 @@
 //! test-worker --noisy                writes on `stdout` before serving
 //! test-worker --store DIR            keeps what it is sent, and looks there first
 //! test-worker --store DIR --keeper   and also keeps what the nodes produce
+//! test-worker --codec                writes down the one opaque it knows
 //! test-worker --listen 127.0.0.1:0   standing,    own catalog
 //! test-worker --listen … --empty     standing,    catalog sent
 //! ```
@@ -30,7 +31,7 @@
 
 use soma_next_core::{Catalog, Ctx, Driver, DriverError, Node, NodeError, Transition, Value};
 use soma_next_store::{Cache, Local};
-use soma_next_transport::{Provision, ProvisionError, Provisioned, Serving};
+use soma_next_transport::{Codec, CodecError, Provision, ProvisionError, Provisioned, Serving};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -74,6 +75,68 @@ struct WhereIRan;
 impl Node for WhereIRan {
     fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
         Ok(Transition::Done(Value::number(std::process::id() as f64)))
+    }
+}
+
+/// Writes down the one thing it knows how to: a `u32` behind an opaque.
+///
+/// Deliberately not Python's, and deliberately trivial. What it shows is that
+/// the hole is a hole — whoever knows what an opaque carries fills it, and this
+/// crate is none the wiser — and that **both ends have to agree**, which here
+/// they do by both being this.
+struct U32s;
+
+/// What a written-down `u32` looks like once it is only maps and numbers.
+const WRITTEN: &str = "__a_u32__";
+
+impl Codec for U32s {
+    fn packed(&self, value: &Value) -> Result<Value, CodecError> {
+        match value {
+            Value::Opaque(_) => match value.downcast::<u32>() {
+                Some(n) => Ok(Value::map(vec![(
+                    WRITTEN.to_string(),
+                    Value::number(*n as f64),
+                )])),
+                None => Err(CodecError::new(
+                    "this opaque carries something that is not a `u32`, and a `u32` \
+                     is all this codec knows how to write down",
+                )),
+            },
+            Value::Map(pairs) => {
+                let mut written = Vec::with_capacity(pairs.len());
+                for (key, value) in pairs.iter() {
+                    written.push((key.clone(), self.packed(value)?));
+                }
+                Ok(Value::map(written))
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    fn unpacked(&self, value: &Value) -> Result<Value, CodecError> {
+        let Value::Map(pairs) = value else {
+            return Ok(value.clone());
+        };
+        if let [(key, Value::Number(n))] = &pairs[..]
+            && key == WRITTEN
+        {
+            return Ok(Value::opaque(*n as u32));
+        }
+        let mut alive = Vec::with_capacity(pairs.len());
+        for (key, value) in pairs.iter() {
+            alive.push((key.clone(), self.unpacked(value)?));
+        }
+        Ok(Value::map(alive))
+    }
+}
+
+/// An opaque carrying something the codec above cannot write down, so that the
+/// two halves of the answer can be told apart.
+struct Unwritable;
+
+impl Node for Unwritable {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::opaque(String::from("alive"))))
     }
 }
 
@@ -221,6 +284,7 @@ fn catalog() -> Catalog {
     catalog.insert("join", Arc::new(Mean));
     catalog.insert("where", Arc::new(WhereIRan));
     catalog.insert("opaque", Arc::new(Opaque));
+    catalog.insert("unwritable", Arc::new(Unwritable));
     catalog.insert("reads", Arc::new(Reads));
     catalog.insert("broken", Arc::new(Fail));
     catalog.insert("device", Arc::new(WhichDevice));
@@ -339,6 +403,12 @@ fn main() -> std::io::Result<()> {
     let cache = store.as_ref().map(|store| Cache::over(store));
     if let (true, Some(cache)) = (args.iter().any(|a| a == "--keeper"), &cache) {
         serving = serving.keeping(cache);
+    }
+    // The same codec as the client's, which is the whole requirement: two ends
+    // that do not agree on how something is written down do not understand each
+    // other, and say so.
+    if args.iter().any(|a| a == "--codec") {
+        serving = serving.packing(&U32s);
     }
     match where_ {
         Some(addr) => serving.listen_at(addr.as_str(), opened),
