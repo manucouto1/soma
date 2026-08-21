@@ -139,6 +139,95 @@ def test_keeping_gives_back_the_digest_so_a_round_can_be_named_by_it(store):
     assert store.get(digest) is not None
 
 
+# ── Claiming, which is how work gets handed out ──
+
+
+def test_a_name_nobody_has_can_be_claimed_and_one_somebody_has_cannot(store):
+    mine, theirs = store.put(b"me"), store.put(b"somebody else")
+
+    assert store.claim("the/work", mine) is True
+    assert store.claim("the/work", theirs) is False
+    assert store.resolve("the/work").digest == mine, "the second one overwrote it"
+
+
+def test_what_bind_replaces_claim_refuses(store):
+    # Next to each other on purpose, and they are not the same question: a name
+    # whose answer can be refreshed, and a name that is a piece of work somebody
+    # took.
+    one, other = store.put(b"one"), store.put(b"other")
+
+    store.bind("latest", one)
+    store.bind("latest", other)
+    store.claim("taken", one)
+    store.claim("taken", other)
+
+    assert store.resolve("latest").digest == other
+    assert store.resolve("taken").digest == one
+
+
+def test_a_claim_carries_what_was_said_beside_it_like_any_other_record(store):
+    store.claim("work", store.put(b"me"), {"who": "node3"})
+
+    assert store.resolve("work").meta == [("who", "node3")]
+
+
+RACER = """
+import sys
+from soma_next import Store
+store = Store(sys.argv[1])
+mine = store.put(sys.argv[2].encode())
+print("won" if store.claim("one/piece/of/work", mine) else "lost")
+"""
+
+
+def test_eight_processes_at_once_and_exactly_one_of_them_wins(tmp_path):
+    # The whole point, and the only way to check it is to really race — and to
+    # race **processes**, because that is what this is for: eight Slurm tasks on
+    # a folder they all mounted. `resolve` and then `bind` passes every test
+    # above and loses this one.
+    where = str(tmp_path / "shared")
+    Store(where)  # so that the eight of them find it made
+
+    racing = [
+        subprocess.Popen(
+            [sys.executable, "-c", RACER, where, f"racer {which}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for which in range(8)
+    ]
+    said = []
+    for racer in racing:
+        out, err = racer.communicate()
+        assert racer.returncode == 0, err
+        said.append(out.strip())
+
+    assert said.count("won") == 1, said
+
+
+def test_and_whoever_was_told_they_won_is_the_one_written_down(tmp_path):
+    # Not enough that one wins: the record has to be **that** one's, or the
+    # winner does the work and somebody else's name is on it.
+    where = str(tmp_path / "shared")
+    store = Store(where)
+
+    racing = {
+        which: subprocess.Popen(
+            [sys.executable, "-c", RACER, where, f"racer {which}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for which in range(8)
+    }
+    won = [which for which, r in racing.items() if r.communicate()[0].strip() == "won"]
+
+    assert len(won) == 1, won
+    digest = store.resolve("one/piece/of/work").digest
+    assert store.get(digest) == f"racer {won[0]}".encode()
+
+
 # ── And the point of all of it: it crosses a process ──
 
 

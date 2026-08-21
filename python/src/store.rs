@@ -81,6 +81,24 @@ impl PyStore {
             .map_err(failed)
     }
 
+    /// Points a name at some bytes **only if nobody has**, and says whether it
+    /// did. This is how work gets handed out.
+    ///
+    /// Not `resolve` and then `bind`: between the two somebody else does the
+    /// same, and two machines train the same round while nobody trains the next
+    /// one. Whoever is told `True` does the work; whoever is told `False` goes
+    /// and asks for the next thing::
+    ///
+    ///     me = store.put(f"{socket.gethostname()}/{os.getpid()}".encode())
+    ///     if store.claim(f"round/{r}/client/{k}", me):
+    ///         ...
+    #[pyo3(signature = (name, digest, meta = None))]
+    fn claim(&self, name: &str, digest: &str, meta: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
+        self.inner
+            .claim(name, &as_digest(digest), as_meta(meta)?)
+            .map_err(failed)
+    }
+
     /// What that name points at, or `None`.
     fn resolve(&self, name: &str) -> PyResult<Option<PyBound>> {
         Ok(self.inner.resolve(name).map_err(failed)?.map(PyBound::of))

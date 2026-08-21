@@ -65,13 +65,20 @@ impl Local {
         if let Some(directory) = at.parent() {
             fs::create_dir_all(directory).map_err(io_error)?;
         }
-        let landing = self.root.join("tmp").join(format!(
+        let landing = self.landing();
+        fs::write(&landing, bytes).map_err(io_error)?;
+        fs::rename(&landing, at).map_err(io_error)
+    }
+
+    /// A path nobody else is writing to: this process, and a number that only
+    /// goes up. Inside the store's own `tmp`, so that landing it is a move
+    /// within one filesystem and never a copy.
+    fn landing(&self) -> PathBuf {
+        self.root.join("tmp").join(format!(
             "{}-{}",
             std::process::id(),
             LANDINGS.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::write(&landing, bytes).map_err(io_error)?;
-        fs::rename(&landing, at).map_err(io_error)
+        ))
     }
 }
 
@@ -95,18 +102,33 @@ impl Store for Local {
     }
 
     fn bind(&self, name: &str, digest: &Digest, meta: Meta) -> Result<(), StoreError> {
-        let bound = Bound {
-            name: name.to_string(),
-            digest: digest.clone(),
-            meta,
-            when: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|since| since.as_secs())
-                .unwrap_or(0),
+        self.land(&self.record(name), &record(name, digest, meta)?)
+    }
+
+    fn claim(&self, name: &str, digest: &Digest, meta: Meta) -> Result<bool, StoreError> {
+        let at = self.record(name);
+        if let Some(directory) = at.parent() {
+            fs::create_dir_all(directory).map_err(io_error)?;
+        }
+        let written = record(name, digest, meta)?;
+        let landing = self.landing();
+        fs::write(&landing, &written).map_err(io_error)?;
+        // **`link` and not `rename`**, which is the whole difference: a rename
+        // replaces what is there and would hand the same work to everybody, and
+        // `link` fails when the name is taken. It is also the one that has
+        // always been trusted over NFS, where `O_EXCL` has not.
+        let taken = match fs::hard_link(&landing, &at) {
+            Ok(()) => true,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
+            Err(e) => {
+                let _ = fs::remove_file(&landing);
+                return Err(io_error(e));
+            }
         };
-        let written = serde_json::to_vec_pretty(&bound)
-            .map_err(|e| StoreError::Corrupt(format!("that record cannot be written: {e}")))?;
-        self.land(&self.record(name), &written)
+        // The temporary is the second name for the same bytes, and one name is
+        // enough. Failing to tidy up is not failing to claim.
+        let _ = fs::remove_file(&landing);
+        Ok(taken)
     }
 
     fn resolve(&self, name: &str) -> Result<Option<Bound>, StoreError> {
@@ -146,6 +168,25 @@ fn read_dir(at: &Path) -> Result<Vec<PathBuf>, StoreError> {
 fn read_record(bytes: &[u8]) -> Result<Bound, StoreError> {
     serde_json::from_slice(bytes)
         .map_err(|e| StoreError::Corrupt(format!("that record cannot be read: {e}")))
+}
+
+/// One record, in the JSON it is kept as.
+///
+/// Readable with `cat`, which was a requirement before it was a format: a store
+/// whose truth you cannot look at is one you cannot debug at three in the
+/// morning.
+fn record(name: &str, digest: &Digest, meta: Meta) -> Result<Vec<u8>, StoreError> {
+    let bound = Bound {
+        name: name.to_string(),
+        digest: digest.clone(),
+        meta,
+        when: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or(0),
+    };
+    serde_json::to_vec_pretty(&bound)
+        .map_err(|e| StoreError::Corrupt(format!("that record cannot be written: {e}")))
 }
 
 fn io_error(e: io::Error) -> StoreError {

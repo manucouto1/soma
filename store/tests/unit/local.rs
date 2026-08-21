@@ -5,7 +5,7 @@
 //! in memory.
 
 use crate::tempdir;
-use soma_next_store::{Digest, Local, Store, StoreError};
+use soma_next_store::{Digest, Local, Meta, Store, StoreError};
 
 /// A store of its own, in a directory nobody else is using.
 fn store() -> (Local, tempdir::Dir) {
@@ -303,4 +303,164 @@ fn many_threads_writing_at_once_do_not_tread_on_each_other() {
     for (digest, bytes) in digests.iter().zip(&payloads) {
         assert_eq!(store.get(digest).unwrap().as_ref(), Some(bytes));
     }
+}
+
+// ── Claiming, which is how work gets handed out ──
+
+#[test]
+fn a_name_nobody_has_can_be_claimed() {
+    let (store, _dir) = store();
+    let mine = store.put(b"me").unwrap();
+
+    assert!(store.claim("round/0/client/2", &mine, Meta::new()).unwrap());
+    assert_eq!(
+        store.resolve("round/0/client/2").unwrap().unwrap().digest,
+        mine
+    );
+}
+
+#[test]
+fn and_a_name_somebody_has_cannot() {
+    let (store, _dir) = store();
+    let first = store.put(b"me").unwrap();
+    let second = store.put(b"somebody else").unwrap();
+
+    assert!(store.claim("the/work", &first, Meta::new()).unwrap());
+
+    assert!(!store.claim("the/work", &second, Meta::new()).unwrap());
+    assert_eq!(
+        store.resolve("the/work").unwrap().unwrap().digest,
+        first,
+        "the second one overwrote the first, which is what `bind` does and this must not"
+    );
+}
+
+#[test]
+fn what_bind_replaces_claim_refuses() {
+    // The two are next to each other on purpose and they are not the same
+    // question: a name whose answer can be refreshed, and a name that is a piece
+    // of work somebody took.
+    let (store, _dir) = store();
+    let first = store.put(b"one").unwrap();
+    let second = store.put(b"other").unwrap();
+
+    store.bind("latest", &first, Meta::new()).unwrap();
+    store.bind("latest", &second, Meta::new()).unwrap();
+    assert_eq!(store.resolve("latest").unwrap().unwrap().digest, second);
+
+    store.claim("taken", &first, Meta::new()).unwrap();
+    store.claim("taken", &second, Meta::new()).unwrap();
+    assert_eq!(store.resolve("taken").unwrap().unwrap().digest, first);
+}
+
+#[test]
+fn a_claim_carries_what_was_said_beside_it_like_any_other_record() {
+    let (store, _dir) = store();
+    let mine = store.put(b"me").unwrap();
+
+    store
+        .claim("work", &mine, vec![("who".into(), "node3".into())])
+        .unwrap();
+
+    let found = store.resolve("work").unwrap().unwrap();
+    assert_eq!(found.meta, vec![("who".to_string(), "node3".to_string())]);
+    assert!(found.when > 0);
+}
+
+#[test]
+fn eight_at_once_and_exactly_one_of_them_wins() {
+    // The whole point, and the only way to check it is to really race: eight
+    // threads on one name, and seven of them have to be told no. `resolve` and
+    // then `bind` passes every test above and loses this one.
+    let (store, dir) = store();
+    let racers = 8;
+    let start = std::sync::Barrier::new(racers);
+
+    let won: usize = std::thread::scope(|threads| {
+        let handles: Vec<_> = (0..racers)
+            .map(|which| {
+                let (store, start) = (&store, &start);
+                threads.spawn(move || {
+                    let mine = store.put(format!("racer {which}").as_bytes()).unwrap();
+                    start.wait();
+                    store
+                        .claim("one/piece/of/work", &mine, Meta::new())
+                        .unwrap()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|won| *won)
+            .count()
+    });
+
+    assert_eq!(
+        won, 1,
+        "eight racers and {won} of them were told they had it"
+    );
+    let _ = dir;
+}
+
+#[test]
+fn and_whoever_was_told_they_won_is_the_one_written_down() {
+    // Not enough that one wins: the record has to be **that** one's, or the
+    // winner does the work and somebody else's name is on it.
+    let (store, _dir) = store();
+    let racers = 8;
+    let start = std::sync::Barrier::new(racers);
+
+    let winner: Vec<usize> = std::thread::scope(|threads| {
+        let handles: Vec<_> = (0..racers)
+            .map(|which| {
+                let (store, start) = (&store, &start);
+                threads.spawn(move || {
+                    let mine = store.put(format!("racer {which}").as_bytes()).unwrap();
+                    start.wait();
+                    match store.claim("work", &mine, Meta::new()).unwrap() {
+                        true => Some(which),
+                        false => None,
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().unwrap())
+            .collect()
+    });
+
+    let [which] = winner[..] else {
+        panic!("expected exactly one winner, got {winner:?}")
+    };
+    let digest = store.resolve("work").unwrap().unwrap().digest;
+    assert_eq!(
+        store.get(&digest).unwrap().unwrap(),
+        format!("racer {which}").as_bytes()
+    );
+}
+
+#[test]
+fn a_claim_leaves_nothing_behind_in_the_temporaries() {
+    // It writes the record somewhere else and links it into place, and the
+    // somewhere else has to go: a store that grows a file per claim is one that
+    // fills a network folder over a weekend.
+    let (store, dir) = store();
+    let mine = store.put(b"me").unwrap();
+
+    for round in 0..20 {
+        store
+            .claim(&format!("round/{round}"), &mine, Meta::new())
+            .unwrap();
+        store
+            .claim(&format!("round/{round}"), &mine, Meta::new())
+            .unwrap();
+    }
+
+    let left: Vec<_> = std::fs::read_dir(dir.path().join("tmp"))
+        .unwrap()
+        .map(|each| each.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
 }

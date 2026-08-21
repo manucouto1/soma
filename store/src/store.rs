@@ -42,6 +42,19 @@ pub trait Store: Send + Sync {
     /// answer can be refreshed — which is what `.overwrite()` will do.
     fn bind(&self, name: &str, digest: &Digest, meta: Meta) -> Result<(), StoreError>;
 
+    /// Points a name at some bytes **only if nobody has**, and says whether it
+    /// did. This is how work gets handed out.
+    ///
+    /// Not `resolve` and then `bind`: between the two, somebody else does the
+    /// same, and two machines train the same round while nobody trains the next
+    /// one. It has to be **one** operation that either takes the name or finds
+    /// it taken, which is why it is on the trait and has no default — a default
+    /// written out of the other two would be a race with a doc comment on it.
+    ///
+    /// Whoever claims it does the work. Whoever is told `false` goes and asks
+    /// for the next thing.
+    fn claim(&self, name: &str, digest: &Digest, meta: Meta) -> Result<bool, StoreError>;
+
     /// What that name points at, if anything.
     fn resolve(&self, name: &str) -> Result<Option<Bound>, StoreError>;
 
