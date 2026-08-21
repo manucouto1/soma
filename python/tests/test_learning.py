@@ -33,6 +33,19 @@ from soma_next.torch import (  # noqa: E402
     parameters,
 )
 from soma_next.torch._learning import SIGNAL, Enters  # noqa: E402
+from soma_next.torch._learning import gradient  # noqa: E402
+
+
+def carried(sent):
+    """The numbers an envelope carries, read through the same door the code
+    reads them by.
+
+    Not `sent[SIGNAL]` compared against a list: what an envelope carries is a
+    tensor written down to cross a wire, and pinning the shape of it here would
+    make these tests about the representation rather than about the arithmetic,
+    which is the part that has to be true.
+    """
+    return gradient(sent).tolist()
 
 
 class Body(Node):
@@ -136,7 +149,7 @@ def test_an_ordinary_value_is_the_activation_and_an_envelope_is_a_gradient():
 
     back = out(learning.forward(envelope([1.0, 1.0]), HERE))
     assert node.seen == ["computed"], "the gradient did not go into the node"
-    assert back == {SIGNAL: [2.0, 2.0]}, "what goes back is dL/d(what it was given)"
+    assert carried(back) == [2.0, 2.0], "what goes back is dL/d(what it was given)"
     assert node.weight.grad.tolist() == [8.0], "and dL/dw stayed here"
 
 
@@ -148,7 +161,7 @@ def test_a_fan_in_of_gradients_is_summed():
     a_pass(learning, entering, [1.0])
 
     back = learning.forward({"left": envelope([1.0]), "right": envelope([10.0])}, HERE)
-    assert out(back) == {SIGNAL: [22.0]}
+    assert carried(out(back)) == [22.0]
 
 
 def test_a_map_that_is_not_all_envelopes_is_an_input():

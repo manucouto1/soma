@@ -257,13 +257,26 @@ def _added(gradients, device):
 
 
 def _tensor(value, device=None, dtype=torch.float32):
-    """A value as a tensor, on the device whoever asks was placed on."""
+    """A value as a tensor, on the device whoever asks was placed on.
+
+    It takes a wrapped one as well as a bare one: an envelope built here and read
+    here never crossed anything, and one that crossed came back out of its
+    wrapper — and neither of those is the caller's business.
+    """
+    if isinstance(value, Opaque):
+        value = value.value
     if torch.is_tensor(value):
         return value
     return torch.tensor(value, dtype=dtype, device=device or None)
 
 
 def _data(value):
-    """A tensor as plain data, which is what crosses an edge here: this slice
-    does not touch the wire, so activations and gradients cross as floats."""
-    return value.detach().tolist() if torch.is_tensor(value) else value
+    """A tensor wrapped so that it crosses an edge whole.
+
+    It used to be `tolist()`, and the docstring here used to say that this slice
+    did not touch the wire — so a gradient crossed as floats. Now a codec writes
+    a tensor down and it crosses as bytes, in this direction as in the other one:
+    a backward pass is a forward pass, and it should not be paying a different
+    price.
+    """
+    return Opaque(value.detach()) if torch.is_tensor(value) else value

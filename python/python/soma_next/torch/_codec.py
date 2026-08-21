@@ -36,9 +36,16 @@ def register():
 
 
 def dump(tensor):
-    """A tensor in bytes, `torch.save`'s own."""
+    """A tensor in bytes, `torch.save`'s own, and **detached**.
+
+    What `load` gives back is a leaf whatever is done here, so carrying
+    `requires_grad` across preserves nothing — and it costs: a tensor that
+    arrives on a worker still asking for a gradient builds a graph there that
+    nobody reads, in a `forward` that is not training anything. Whoever does
+    train across a cut says so itself, once, on the input of the stage.
+    """
     buffer = io.BytesIO()
-    torch.save(tensor, buffer)
+    torch.save(tensor.detach(), buffer)
     return buffer.getvalue()
 
 
