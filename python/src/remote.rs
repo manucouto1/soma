@@ -44,11 +44,11 @@ pub struct PyWorker {
 fn artifact(
     kind: Option<String>,
     id: Option<String>,
-    blob: Option<Vec<u8>>,
+    blob: Option<&[u8]>,
 ) -> PyResult<Option<Artifact>> {
     match (kind, id, blob) {
         (None, None, None) => Ok(None),
-        (Some(kind), Some(id), Some(blob)) => Ok(Some(Artifact::new(kind, id, blob))),
+        (Some(kind), Some(id), Some(blob)) => Ok(Some(Artifact::new(kind, id, blob.to_vec()))),
         _ => Err(PyValueError::new_err(
             "provisioning a worker needs `kind`, `id` and `blob`: all three or none",
         )),
@@ -72,7 +72,7 @@ impl PyWorker {
         target: &Bound<'_, PyAny>,
         kind: Option<String>,
         id: Option<String>,
-        blob: Option<Vec<u8>>,
+        blob: Option<&[u8]>,
         runtime: &str,
     ) -> PyResult<Self> {
         let carries = artifact(kind, id, blob)?;
@@ -117,9 +117,13 @@ impl PyWorker {
 
     /// Tells it what to provision itself with, before the first job. The graph
     /// calls it once it knows which nodes go here.
-    fn provision(&self, kind: String, id: String, blob: Vec<u8>, runtime: &str) -> PyResult<()> {
+    /// `blob` is borrowed and copied once, on purpose: taken as a `Vec<u8>`,
+    /// PyO3 reads it out of the `bytes` **one byte at a time** — measured at
+    /// 10 MB/s, which on a 4 MB artifact is 400 ms, three times a step, and was
+    /// the whole cost of training across a wire.
+    fn provision(&self, kind: String, id: String, blob: &[u8], runtime: &str) -> PyResult<()> {
         self.inner
-            .offering(Artifact::new(kind, id, blob), runtime)
+            .offering(Artifact::new(kind, id, blob.to_vec()), runtime)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
