@@ -2269,7 +2269,8 @@ for _ in range(rounds):
         client.load(average)
 ```
 
-Status: **first slice closed**, clients in one process. 375 tests in Python.
+Status: **open**. Clients in one process, and a store both machines can see.
+392 tests in Python.
 
 ### The question CU11 put off, and how it changed shape on the way
 
@@ -2352,14 +2353,57 @@ better.
 - [x] three mutations — returning the first export, ignoring `sizes`, averaging
       the integers — every one caught
 
+### The store, opened by hand
+
+The second piece, and what makes the first one reach another machine. Until now
+the store was a **string** you handed the engine — `forward(store=...)` — a place
+it kept things in and nobody else could open. That is enough while the only thing
+kept is what the engine decided to keep, and it stops being enough the moment a
+training run has weights of its own to write down.
+
+```python
+store.keep("round/3", trainer.export())
+trainer.load(store.recall("round/3"))
+```
+
+`Store(directory)` has the four the Rust trait has, one for one, dealing in
+**bytes** — `put`, `get`, `bind`, `resolve`, and `bound()` to look — and two
+more dealing in **values**, tensors included, by the codecs. The two are
+`Keeper`'s vocabulary and not new, and they are there because the thing this was
+opened for is a map of tensors: without them everybody writes their own
+`torch.save`, and whoever gets `weights_only` wrong writes a way into a shared
+directory.
+
+Two things it found by being used:
+
+- **An export's keys were integers.** The positional duck numbered them, and the
+  one thing a map that crosses anything here may have for a key is text. Found by
+  handing an export to a `Store`, which is what it was built for.
+- **An edge and a store do not want the same rule.** On an edge a bare tensor is
+  refused and that is a feature — the mistake has two right answers, convert it
+  or say `Opaque` and mean it, and refusing makes the cost of the first visible.
+  In a store it is bytes either way, so the refusal defends nothing. One private
+  `Unknown::{Refused, Wrapped}` is the whole difference.
+
+**The two tests that matter run a real second interpreter**: it trains, writes
+what it learnt, and this one reads it back to the same weights — a federated
+round's client half with nothing between the two but a folder both can see. And
+twice over: the same weights written by two processes are one blob, which is what
+makes a round that changed nothing free.
+
 ### What is NOT in it yet
 
-**The clients on different machines.** The design is already agreed and needs
-nothing from the graph's distribution: a shared store where each client
-**claims** its work atomically with a `rename`, trains locally with `Trainer`,
-and writes what it exported; Slurm hands the work out. Zero network, zero
-`Plan::Remote`. Putting it through the graph's transport would be the original's
-mistake wearing a different hat · **FedProx, FedYogi, SCAFFOLD**, which are the
-same shape with different arithmetic and go in when somebody runs one ·
-**secure aggregation** · and **what a round is worth remembering by**, which is
-where the store's digest of a state stops being only a cache key.
+**Claiming.** `bind` **replaces**, so there is nothing to claim work with: two
+processes handed the same round would both do it. The primitive is one atomic
+create-only bind — a `hard_link` from the temporary, which is what fails when
+somebody already has it — and it is what federated and a study of trials both
+need · **the barrier**, which is the half the study's design never had: trials
+are independent and rounds are not, so somebody has to wait for all N exports of
+round R and average them · **FedProx, FedYogi, SCAFFOLD**, the same shape with
+different arithmetic · **secure aggregation** · and **what a round is worth
+remembering by**, which is where the digest of a state stops being only a cache
+key.
+
+Putting any of it through the graph's transport would be the original's mistake
+wearing a different hat: none of this needs `Plan::Remote`, and Slurm hands the
+work out.
