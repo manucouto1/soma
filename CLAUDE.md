@@ -121,6 +121,12 @@ the scale of one `forward` —, the `Trainer` is a training run — the scale of
 afternoon —, and N training runs are a Python list, not a type and certainly not
 a graph. A graph earns its keep when there are dependencies to declare.
 
+The two pendings CU14 left are closed: an `Opaque` **crosses a wire** with a
+codec in front of it, so an activation travels as bytes and the same node is
+handed the same shape wherever it runs; and `Trainer(every=N)` makes **a group of
+steps into one update**, with whatever trains itself elsewhere making the same
+group out of the same steps.
+
 Next up: **CU15, federated**, which is what a training run exports rather than
 what it does; and micro-batches, which is where the grain per item (`.mapped()`)
 joins them. See the distribution report for the full order.

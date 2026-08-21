@@ -2166,3 +2166,92 @@ was handed a list of floats the day somebody placed its producer elsewhere.
 - [x] bytes written as a list of numbers are still read as bytes, so a store
       written before this still opens — and what is written now is the size of
       the data and not twice it
+
+---
+
+## After CU14 — A group of steps, and one update
+
+CU12's candidate A, written down as *gradient accumulation* and left for last
+because it is small. The other pending closed before CU15.
+
+Status: **closed**. 353 in Python; nothing else moved.
+
+```python
+Trainer(g, objective=cross_entropy, optimizer=..., every=4)
+```
+
+Four steps, one update, and the loss of each divided by four so that the four
+together pull exactly as one step over the four batches would. The idiom
+everybody writes by hand, written once. The loss `step` gives back is **whole**:
+divided for the backward pass and not for whoever is reading, or a history would
+change shape with `every`.
+
+### Said here, for the third time
+
+`.at()` says where, `trains` says who trains whom, and `every` says how many
+steps make an update — all three are facts of **this training run** and none of
+them is a fact of the graph. The graph is the scale of one `forward`; a group of
+four steps is not something a `forward` could have an opinion about.
+
+And the same rule `trains` already follows: a technique that named its own
+(`Split(SGD, lr=0.1, every=8)`) **wins**, and the trainer's is the default for
+whoever did not say. Two numbers is then something somebody meant rather than
+something nobody noticed — which was the objection worth answering, because the
+number is the user's to choose and choosing it per node is a thing somebody may
+want.
+
+### The far side is never told which step it is on
+
+Only how many make a group, and it counts its own `learn` calls from the same
+start. Told once, at the only moment there is one number: **before the trainer
+that travels is packed**. No message, no round trip, no field in the protocol —
+the same answer CU14 found when it asked where the trainer lives.
+
+Out of phase by one and the two optimizers would move on different steps, so the
+test that says it is the CU14 bar: the same run bit for bit with the far half in
+another process, with `every=3`, plus the control that a group of three is not a
+run of groups of one.
+
+### What executing it said
+
+- **The counter is the framework's, what to do about it is the technique's.**
+  `Learning.forward` ticks; `learn` asks `opens()` and `closes()` and never has
+  to remember to tick anything. One thing less for whoever fills the hole.
+- **A group of one is the line it was**, on both sides — `opens` and `closes` are
+  both true every step, the loss is not divided, and `Split`'s three movements
+  fall back together. The 340 tests that existed before pass without one moving,
+  which is the only acceptable answer for a default.
+- **Closing a group across a cut costs a pass and not a step.** No forward, no
+  gradient: the fact that the group is over goes the road a gradient goes, in an
+  envelope carrying nothing. Only what takes a gradient is transposed, so every
+  hold of a transposed stage feeds a trainer directly and reaches all of them and
+  nothing else.
+- **There is no `bool` on an edge**, so the marker carries nothing and its
+  presence is the fact. The closed set of variants stopped one being invented as
+  `1.0`, which is what that rule is for.
+
+### Questionnaire
+
+**The group** (`python/tests/test_trainer.py`)
+- [x] a group of steps comes out where one step over all of them does
+- [x] the optimizer moves once per group and not once per step
+- [x] a group of one is what there was before it could be said, loss for loss and
+      weight for weight
+- [x] the loss it gives back is the one the objective said, not the divided one
+- [x] a group the epoch ended in the middle of is still a group, and the epoch
+      does not leave one open
+- [x] closing a group that is not open does nothing and says so
+- [x] a group is a whole number of steps and at least one
+
+**Across a cut** (`test_trainer.py` in one process, `test_learning.py` in two)
+- [x] a cut graph accumulates in step with the whole one, weights included
+- [x] the one trained beside the node does not move until the group closes either
+- [x] closing a group across a cut reaches it, with no step and no gradient
+- [x] a technique that names its own group wins over the trainer's
+- [x] **in another process**: a group of three is the same group on both sides,
+      bit for bit — and a group of three is not a run of groups of one
+
+**That the tests say something**
+- [x] eight deliberate mutations — not scaling, closing every step, not counting,
+      the far side stepping always, the far side not counting, not telling it the
+      number, ignoring being told — every one caught
