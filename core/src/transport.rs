@@ -62,6 +62,25 @@ pub struct Outcome {
     pub keys: Vec<(NodeId, Key)>,
 }
 
+impl Outcome {
+    /// The same outcome with whatever cannot leave this process left out of
+    /// `produced`.
+    ///
+    /// An intermediate value of a slice is read by the steps of that slice,
+    /// which ran where it did: sending it back was never the point, and
+    /// refusing the whole answer over one is refusing the case this exists for —
+    /// two steps on one host, with something live in between them. What is
+    /// **not** filtered is `last`, which is the value of the slice itself: that
+    /// one has a reader here by definition.
+    ///
+    /// Whoever does read one of the dropped values gets [`RunError::Lost`],
+    /// naming both ends.
+    pub fn travelling(mut self) -> Self {
+        self.produced.retain(|(_, value)| value.travels());
+        self
+    }
+}
+
 /// What a transport can answer when it cannot carry something.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportError(String);

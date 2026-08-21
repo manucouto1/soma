@@ -211,7 +211,7 @@ impl<'a> Executor<'a> {
                 let output = match self.recalled(node, key.as_ref()) {
                     Some(kept) => kept,
                     None => {
-                        let input = gather(from, graph_input, produced);
+                        let input = gather(node, from, graph_input, produced)?;
                         let output = self.advance(node, input)?;
                         self.keep(node, key.as_ref(), &output);
                         output
@@ -524,6 +524,14 @@ pub enum RunError {
         /// What the transport said.
         source: TransportError,
     },
+    /// A step reads what another produced, and what it produced never came back
+    /// from wherever it ran.
+    Lost {
+        /// The one that cannot be assembled.
+        node: NodeId,
+        /// What it was reading.
+        from: NodeId,
+    },
     /// The node kept asking for turns without ever finishing.
     TurnLimit {
         /// Which one.
@@ -552,6 +560,11 @@ impl fmt::Display for RunError {
                 "there is a slice placed on `{host}` and this executor cannot reach it"
             ),
             Self::Transport { host, source } => write!(f, "carrying a slice to `{host}`: {source}"),
+            Self::Lost { node, from } => write!(
+                f,
+                "`{node}` reads what `{from}` produced, and that stayed where it ran: \
+                 only what can leave a process comes back from one"
+            ),
             Self::TurnLimit { node, turns } => write!(
                 f,
                 "`{node}` spent all {turns} turns without finishing; it probably cannot stop"
@@ -564,21 +577,29 @@ impl std::error::Error for RunError {}
 
 /// What a node receives: nothing → the graph's input, one thing → that thing,
 /// several → a map keyed by whoever produced each, in edge declaration order.
-fn gather(from: &[NodeId], graph_input: &Value, produced: &HashMap<NodeId, Value>) -> Value {
+fn gather(
+    node: &NodeId,
+    from: &[NodeId],
+    graph_input: &Value,
+    produced: &HashMap<NodeId, Value>,
+) -> Result<Value, RunError> {
+    // Topological order already ran the predecessors, so what is missing here is
+    // not a bug in the walk: it is a value that stayed in the process that made
+    // it, because it could not leave one.
     let recall = |id: &NodeId| {
-        produced
-            .get(id)
-            .cloned()
-            .expect("topological order already executed the predecessors")
+        produced.get(id).cloned().ok_or_else(|| RunError::Lost {
+            node: node.clone(),
+            from: id.clone(),
+        })
     };
     match from {
-        [] => graph_input.clone(),
+        [] => Ok(graph_input.clone()),
         [single] => recall(single),
-        many => Value::map(
+        many => Ok(Value::map(
             many.iter()
-                .map(|id| (id.to_string(), recall(id)))
-                .collect::<Vec<_>>(),
-        ),
+                .map(|id| Ok((id.to_string(), recall(id)?)))
+                .collect::<Result<Vec<_>, RunError>>()?,
+        )),
     }
 }
 

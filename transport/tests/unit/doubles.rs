@@ -57,6 +57,19 @@ impl Node for Opaque {
     }
 }
 
+/// Reads whatever it is handed and says whether it was something that only
+/// exists in the process it ran in: the second step of a stretch on one host.
+pub struct Reads;
+
+impl Node for Reads {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::number(match input {
+            Value::Opaque(_) => 1.0,
+            _ => 0.0,
+        })))
+    }
+}
+
 pub struct Fail;
 
 impl Node for Fail {
@@ -85,6 +98,7 @@ pub fn catalog() -> Catalog {
     catalog.insert("join", Arc::new(Mean));
     catalog.insert("where", Arc::new(WhereIRan));
     catalog.insert("opaque", Arc::new(Opaque));
+    catalog.insert("reads", Arc::new(Reads));
     catalog.insert("broken", Arc::new(Fail));
     catalog.insert("device", Arc::new(WhichDevice));
     // These only run in the worker. They are here so `compile` finds them, and

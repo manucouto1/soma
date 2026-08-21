@@ -27,6 +27,25 @@ impl Node for Add {
 }
 
 /// Always fails.
+/// Produces something that only exists in the process it ran in.
+pub struct Opaquely;
+
+impl Node for Opaquely {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::opaque(7u32)))
+    }
+}
+
+/// Takes whatever it is handed and answers a number: the step that reads one of
+/// those where it was made.
+pub struct Anything;
+
+impl Node for Anything {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::number(1.0)))
+    }
+}
+
 pub struct Fail;
 
 impl Node for Fail {
@@ -370,6 +389,10 @@ impl Transport for Mirror {
                 cargo.known.to_vec(),
                 cargo.keys.to_vec(),
             )
+            // A real one cannot carry back what only exists over there, and
+            // neither does this: a double that answers more than a wire can is a
+            // double that hides the case.
+            .map(Outcome::travelling)
             .map_err(|e| TransportError::new(e.to_string()))
     }
 }

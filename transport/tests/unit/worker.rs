@@ -332,6 +332,22 @@ fn an_opaque_produced_over_there_does_not_come_back_either() {
 }
 
 #[test]
+fn an_opaque_read_only_over_there_does_not_stop_the_slice() {
+    // CU12's debt, paid. An intermediate value of a slice is read by the steps
+    // of that slice, which ran where it did: refusing the whole answer over one
+    // was refusing the case this exists for — two steps on one host with
+    // something live in between them.
+    let g = graph_with(&["opaque", "reads"], &[("opaque", "reads")]);
+    let c = catalog();
+    let p = on_hosts(&[("opaque", "worker1"), ("reads", "worker1")]);
+    let w = worker();
+
+    let out = run(&g, &c, &p, &w, Value::Null).unwrap();
+
+    assert_eq!(number(&out), 1.0, "what it read was not the opaque");
+}
+
+#[test]
 fn an_id_the_worker_does_not_know_is_reported_instead_of_hanging() {
     // The price of the catalog not travelling, said with the name in front.
     let mut c = catalog();

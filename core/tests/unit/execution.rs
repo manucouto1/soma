@@ -1,8 +1,9 @@
 //! The engine, against Rust filters and steps: no Python in the way.
 
 use crate::doubles::{
-    Add, AlwaysNull, Ask, Cable, Fail, Immediate, Insatiable, Journal, Ledger, Mean, MeetingPoint,
-    Mirror, Notebook, Panics, Rendezvous, RendezvousDriver, Shout, Ubiquitous, Witness,
+    Add, AlwaysNull, Anything, Ask, Cable, Fail, Immediate, Insatiable, Journal, Ledger, Mean,
+    MeetingPoint, Mirror, Notebook, Opaquely, Panics, Rendezvous, RendezvousDriver, Shout,
+    Ubiquitous, Witness,
 };
 use soma_next_core::{
     Catalog, Ctx, Device, Executor, Graph, Host, Key, Memory, Node, NodeError, NodeId, Outcome,
@@ -1098,6 +1099,66 @@ fn resume_of_an_empty_plan_returns_its_input_and_nothing_produced() {
             produced: Vec::new(),
             keys: Vec::new(),
         }
+    );
+}
+
+#[test]
+fn what_stayed_over_there_names_both_ends_when_somebody_here_reads_it() {
+    // The slice answers fine: what it produced in the middle was read where it
+    // ran, and its own value travels. What cannot happen is somebody **here**
+    // reading that middle — and the walk says which value and which reader,
+    // instead of finding a hole where a predecessor should be.
+    let mut here = Catalog::new();
+    here.insert("opaque", Arc::new(Immediate));
+    here.insert("reads", Arc::new(Add(1.0)));
+    here.insert("c", Arc::new(Add(1.0)));
+    let mut there = Catalog::new();
+    there.insert("opaque", Arc::new(Opaquely));
+    there.insert("reads", Arc::new(Anything));
+    let mirror = Mirror::new(there);
+
+    let step = |id: &str, from: &[&str]| Plan::Execute {
+        node: id.into(),
+        from: from.iter().map(|each| NodeId::from(*each)).collect(),
+    };
+    let plan = Plan::Sequence(vec![
+        Plan::Remote {
+            host: Host::new("there"),
+            inner: Box::new(Plan::Sequence(vec![
+                step("opaque", &[]),
+                step("reads", &["opaque"]),
+            ])),
+        },
+        step("c", &["opaque"]),
+    ]);
+
+    let said = Executor::new(&here)
+        .reaching("there", &mirror)
+        .run(&plan, Value::Null)
+        .unwrap_err()
+        .to_string();
+
+    assert!(said.contains("`c`") && said.contains("`opaque`"), "{said}");
+    assert!(said.contains("stayed where it ran"), "{said}");
+}
+
+#[test]
+fn an_outcome_leaves_behind_what_cannot_travel_and_keeps_what_it_answers_with() {
+    // `last` is the value of the slice itself and has a reader on the other side
+    // by definition, so it is not filtered: refusing it is the honest answer.
+    // What is filtered is the middle of the slice, which was read where it ran.
+    let outcome = Outcome {
+        last: Value::number(1.0),
+        produced: vec![
+            (NodeId::from("live"), Value::opaque(7u32)),
+            (NodeId::from("plain"), Value::number(2.0)),
+        ],
+        keys: Vec::new(),
+    };
+
+    assert_eq!(
+        outcome.travelling().produced,
+        vec![(NodeId::from("plain"), Value::number(2.0))]
     );
 }
 

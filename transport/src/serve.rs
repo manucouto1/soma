@@ -402,7 +402,9 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
             }
             // What arrived is fed in as if this run had produced it.
             match executor.resume(&plan, input, known, keys) {
-                Ok(outcome) => Answer::Done(outcome),
+                // Whatever only exists here stays here: it was read by the steps
+                // that ran here, and nobody there is waiting for it.
+                Ok(outcome) => Answer::Done(outcome.travelling()),
                 Err(e) => Answer::Failed(e.to_string()),
             }
         }

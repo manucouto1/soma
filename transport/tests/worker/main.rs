@@ -86,6 +86,19 @@ impl Node for Opaque {
     }
 }
 
+/// Reads whatever it is handed and says whether it was something that only
+/// exists in this process: the second step of a stretch on one host.
+struct Reads;
+
+impl Node for Reads {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::number(match input {
+            Value::Opaque(_) => 1.0,
+            _ => 0.0,
+        })))
+    }
+}
+
 /// Always fails, to see how a failure from over there comes back.
 struct Fail;
 
@@ -208,6 +221,7 @@ fn catalog() -> Catalog {
     catalog.insert("join", Arc::new(Mean));
     catalog.insert("where", Arc::new(WhereIRan));
     catalog.insert("opaque", Arc::new(Opaque));
+    catalog.insert("reads", Arc::new(Reads));
     catalog.insert("broken", Arc::new(Fail));
     catalog.insert("device", Arc::new(WhichDevice));
     catalog.insert("ask", Arc::new(Ask));
