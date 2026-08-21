@@ -124,7 +124,7 @@ fn name_of(key: &Key) -> String {
 }
 
 /// A value in bytes, refusing what only exists in this process.
-fn bytes_of(value: &Value) -> Result<Vec<u8>, KeeperError> {
+pub fn bytes_of(value: &Value) -> Result<Vec<u8>, KeeperError> {
     if !value.travels() {
         return Err(KeeperError::new(
             "an opaque value cannot be kept: what it carries only exists in this process, \
@@ -138,7 +138,7 @@ fn bytes_of(value: &Value) -> Result<Vec<u8>, KeeperError> {
 
 /// And back. **Nothing may be left over**: leftovers are as suspicious as
 /// missing bytes, and no format checks that for you.
-fn value_of(bytes: &[u8]) -> Result<Value, KeeperError> {
+pub fn value_of(bytes: &[u8]) -> Result<Value, KeeperError> {
     let mut rest = bytes;
     let value: Value = rmp_serde::from_read(&mut rest)
         .map_err(|e| KeeperError::new(format!("what is kept there cannot be read: {e}")))?;

@@ -51,7 +51,7 @@ mod digest;
 mod local;
 mod store;
 
-pub use cache::Cache;
+pub use cache::{Cache, bytes_of, value_of};
 pub use digest::Digest;
 pub use local::Local;
 pub use store::{Bound, Meta, Store, StoreError};

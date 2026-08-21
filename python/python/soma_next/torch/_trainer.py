@@ -542,6 +542,11 @@ def _the_weights(graph):
     they have to be the same two: a node that can be told to settle and cannot be
     exported would be a node the project asks two different questions about its
     state.
+
+    **The keys are text**, the position written down for the duck that has no
+    names of its own. An export is a record and it gets written into stores and
+    sent down wires, and the one thing a map that crosses anything in this
+    project may have for a key is text. Found by handing one to a `Store`.
     """
     for node_id in graph.nodes():
         implementation = graph.implementation(node_id)
@@ -551,7 +556,9 @@ def _the_weights(graph):
         else:
             in_order = getattr(implementation, "parameters", None)
             state = list(enumerate(in_order())) if in_order is not None else []
-        state = [(key, value) for key, value in state if torch.is_tensor(value)]
+        state = [
+            (str(key), value) for key, value in state if torch.is_tensor(value)
+        ]
         if state:
             yield node_id, state
 

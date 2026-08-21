@@ -43,8 +43,31 @@ impl PyOpaque {
     }
 }
 
+/// What to do with something there is no variant for.
+#[derive(Clone, Copy)]
+enum Unknown {
+    /// Refuse it, which is what an **edge** does: there a bare tensor is a
+    /// mistake with two right answers — convert it, or say `Opaque` and mean it
+    /// — and the refusal is what makes the cost of the first one visible.
+    Refused,
+    /// Wrap it, which is what a **store** does: there it is bytes either way, so
+    /// the refusal defends nothing and only makes whoever is keeping a map of
+    /// tensors write `Opaque` a hundred times.
+    Wrapped,
+}
+
 /// From a Python object to the value that crosses an edge.
 pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    convert(obj, Unknown::Refused)
+}
+
+/// The same, for something on its way into a store: whatever has no variant is
+/// handed to the codecs instead of refused.
+pub fn to_be_kept(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    convert(obj, Unknown::Wrapped)
+}
+
+fn convert(obj: &Bound<'_, PyAny>, unknown: Unknown) -> PyResult<Value> {
     if let Ok(wrapped) = obj.downcast::<PyOpaque>() {
         return Ok(Value::opaque(wrapped.get().value.clone_ref(obj.py())));
     }
@@ -75,7 +98,7 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
                 let key: String = k.extract().map_err(|_| {
                     PyTypeError::new_err("the keys of a dict that crosses an edge have to be text")
                 })?;
-                Ok((key, from_py(&v)?))
+                Ok((key, convert(&v, unknown)?))
             })
             .collect::<PyResult<Vec<_>>>()?;
         return Ok(Value::map(pairs));
@@ -83,16 +106,19 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(list) = obj.downcast::<PyList>() {
         let items: Vec<Value> = list
             .iter()
-            .map(|item| from_py(&item))
+            .map(|item| convert(&item, unknown))
             .collect::<PyResult<_>>()?;
         return Ok(Value::list(items));
     }
-    Err(PyTypeError::new_err(format!(
-        "a `{}` does not cross an edge: today None, str, bytes, numbers, lists \
-         and dicts with text keys do. For something to cross without being \
-         converted, wrap it: Opaque(x)",
-        obj.get_type().name()?
-    )))
+    match unknown {
+        Unknown::Wrapped => Ok(Value::opaque(obj.clone().unbind())),
+        Unknown::Refused => Err(PyTypeError::new_err(format!(
+            "a `{}` does not cross an edge: today None, str, bytes, numbers, lists \
+             and dicts with text keys do. For something to cross without being \
+             converted, wrap it: Opaque(x)",
+            obj.get_type().name()?
+        ))),
+    }
 }
 
 /// From the value that crosses an edge to the object the user sees.

@@ -91,8 +91,8 @@ def test_it_is_the_weights_node_by_node():
     exported = trainer(g).export()
 
     assert sorted(exported) == ["body", "head"]
-    assert sorted(exported["body"]) == [0, 1]  # weight and bias, in order
-    assert exported["body"][0].shape == (MID, IN)
+    assert sorted(exported["body"]) == ["0", "1"]  # weight and bias, in order
+    assert exported["body"]["0"].shape == (MID, IN)
 
 
 def test_a_node_that_says_what_its_weights_are_called_is_asked_by_name():
@@ -119,7 +119,7 @@ def test_what_comes_out_is_a_snapshot_and_not_a_view():
 
     t.step(batch())
 
-    assert not torch.equal(before["head"][0], g.implementation("head").lin.weight)
+    assert not torch.equal(before["head"]["0"], g.implementation("head").lin.weight)
 
 
 def test_it_goes_back_in_where_it_came_from():
@@ -128,10 +128,10 @@ def test_it_goes_back_in_where_it_came_from():
     kept = t.export()
 
     t.step(batch())
-    assert not torch.equal(kept["head"][0], g.implementation("head").lin.weight)
+    assert not torch.equal(kept["head"]["0"], g.implementation("head").lin.weight)
 
     t.load(kept)
-    assert torch.equal(kept["head"][0], g.implementation("head").lin.weight)
+    assert torch.equal(kept["head"]["0"], g.implementation("head").lin.weight)
 
 
 def test_the_optimizer_state_is_not_in_it():
@@ -141,7 +141,7 @@ def test_the_optimizer_state_is_not_in_it():
     exported = trainer(g).export()
 
     assert all(
-        set(state) <= {0, 1} for state in exported.values()
+        set(state) <= {"0", "1"} for state in exported.values()
     ), "something that is not a weight came out"
 
 
@@ -153,7 +153,7 @@ def test_loading_something_this_graph_does_not_have_is_refused_by_name():
     t = trainer(g)
 
     with pytest.raises(ValueError, match="nothing called `elsewhere`"):
-        t.load({"elsewhere": {0: torch.zeros(1)}})
+        t.load({"elsewhere": {"0": torch.zeros(1)}})
 
 
 def test_loading_a_weight_of_the_wrong_shape_is_refused_with_both():
@@ -161,7 +161,7 @@ def test_loading_a_weight_of_the_wrong_shape_is_refused_with_both():
     t = trainer(g)
 
     with pytest.raises(ValueError, match=r"\(1, 1\)"):
-        t.load({"head": {0: torch.zeros(1, 1)}})
+        t.load({"head": {"0": torch.zeros(1, 1)}})
 
 
 def test_a_refusal_leaves_the_net_as_it_was_rather_than_half_loaded():
@@ -172,9 +172,9 @@ def test_a_refusal_leaves_the_net_as_it_was_rather_than_half_loaded():
     before = t.export()
 
     with pytest.raises(ValueError):
-        t.load({"body": {0: torch.zeros(MID, IN)}, "head": {0: torch.zeros(1, 1)}})
+        t.load({"body": {"0": torch.zeros(MID, IN)}, "head": {"0": torch.zeros(1, 1)}})
 
-    assert torch.equal(before["body"][0], g.implementation("body").lin.weight)
+    assert torch.equal(before["body"]["0"], g.implementation("body").lin.weight)
 
 
 def test_what_is_trained_where_it_runs_cannot_be_exported_from_here():
@@ -213,7 +213,7 @@ def test_the_average_of_one_is_that_one():
 
     averaged = fedavg([only])
 
-    assert torch.equal(averaged["head"][0], only["head"][0])
+    assert torch.equal(averaged["head"]["0"], only["head"]["0"])
 
 
 def test_the_average_of_two_is_halfway_between_them():
@@ -222,7 +222,7 @@ def test_the_average_of_two_is_halfway_between_them():
     averaged = fedavg([one, other])
 
     assert torch.allclose(
-        averaged["head"][0], (one["head"][0] + other["head"][0]) / 2
+        averaged["head"]["0"], (one["head"]["0"] + other["head"]["0"]) / 2
     )
 
 
@@ -232,7 +232,7 @@ def test_sizes_are_what_it_weighs_by_and_ten_times_the_data_pulls_ten_times():
     averaged = fedavg([one, other], sizes=[900, 100])
 
     assert torch.allclose(
-        averaged["head"][0], one["head"][0] * 0.9 + other["head"][0] * 0.1
+        averaged["head"]["0"], one["head"]["0"] * 0.9 + other["head"]["0"] * 0.1
     )
 
 
@@ -259,8 +259,8 @@ def test_averaging_two_different_networks_is_refused_and_not_computed():
 
 
 def test_averaging_the_same_node_with_a_different_shape_says_both():
-    one = {"n": {0: torch.ones(2, 3)}}
-    other = {"n": {0: torch.ones(2, 4)}}
+    one = {"n": {"0": torch.ones(2, 3)}}
+    other = {"n": {"0": torch.ones(2, 4)}}
 
     with pytest.raises(ValueError, match=r"\(2, 4\).*\(2, 3\)"):
         fedavg([one, other])
