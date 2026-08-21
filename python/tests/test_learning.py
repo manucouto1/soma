@@ -243,7 +243,7 @@ def test_a_trainer_rebuilt_by_pickle_still_trains():
 # ── Driven by the Trainer, which is how anybody would write it ──
 
 
-def driving(node, technique=None, lr=0.1, at=None, seed=0, **how):
+def driving(node, technique=None, lr=0.1, at=None, seed=0, every=1, **how):
     """A `body >> head` graph with `body` trained where it runs, its trainer and
     a batch. The same setup for every technique, so what tells them apart is the
     `learn` and nothing else."""
@@ -257,6 +257,7 @@ def driving(node, technique=None, lr=0.1, at=None, seed=0, **how):
         objective=torch.nn.functional.cross_entropy,
         optimizer=torch.optim.SGD(parameters(g, without=trains), lr=0.1),
         trains=trains,
+        every=every,
         workers={at: Worker.generic(mode="network")} if at else None,
     )
     seeded(7)
@@ -317,11 +318,11 @@ def test_the_same_weights_in_two_optimizers_is_refused():
 # ── Over a wire, which is the case all of this was written for ──
 
 
-def a_run(at, lr, steps=10):
+def a_run(at, lr, steps=10, every=1):
     """The same net, the same seed and the same batches, with the body here or on
     another process. Returns the losses."""
     seeded()
-    _, driven, batch = driving(Body(4, 3), lr=lr, at=at)
+    _, driven, batch = driving(Body(4, 3), lr=lr, at=at, every=every)
     return [driven.step(batch) for _ in range(steps)]
 
 
@@ -332,6 +333,20 @@ def test_a_node_trained_in_another_process_comes_out_the_same_as_here():
     # the same net trained in one piece, which says the framework changed who
     # writes the loop and not the arithmetic.
     assert a_run(None, 0.1) == a_run("w1", 0.1)
+
+
+def test_a_group_of_steps_is_the_same_group_on_both_sides_of_a_process():
+    # The far side counts its own `learn` calls: it is never told which step it
+    # is on, only how many make a group. Out of phase by one and the two
+    # optimizers would move on different steps, and these losses would part
+    # company on the third — they are bit for bit here.
+    assert a_run(None, 0.1, every=3) == a_run("w1", 0.1, every=3)
+
+
+def test_and_a_group_of_three_is_not_the_same_run_as_a_group_of_one():
+    # The control. Without it the test above would pass just as well with `every`
+    # doing nothing at all on either side.
+    assert a_run("w1", 0.1, every=3) != a_run("w1", 0.1, every=1)
 
 
 def test_and_with_the_far_side_standing_still_the_loss_comes_down_less():

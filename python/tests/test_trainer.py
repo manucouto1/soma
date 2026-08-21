@@ -448,3 +448,201 @@ def test_kept_after_a_cut_is_refused():
 
 def _weights(graph, node_id):
     return float(graph.implementation(node_id).lin.weight.detach().abs().sum())
+
+
+# ── A group of steps, and one update ──
+
+
+def in_two_halves(batch):
+    """One batch cut down the middle, so the two halves put back together are it.
+
+    The control every one of these needs: accumulating over the halves has to
+    come out where one step over the whole thing does, or `every` means something
+    other than what it says.
+    """
+    x, y = batch
+    half = len(x) // 2
+    return (x[:half], y[:half]), (x[half:], y[half:])
+
+
+def accumulating(g, every, lr=0.1, trains=None):
+    return Trainer(
+        g,
+        objective=nn.functional.cross_entropy,
+        optimizer=torch.optim.SGD(parameters(g, without=trains or {}), lr=lr),
+        trains=trains,
+        every=every,
+    )
+
+
+def test_a_group_of_steps_comes_out_where_one_step_over_all_of_them_does():
+    # The whole claim, and the reason the loss is divided by the size of the
+    # group: an objective that takes the mean of its batch has to be, or two
+    # halves would each pull with the weight of a whole.
+    torch.manual_seed(0)
+    apart, together = net(), net()
+    together.implementation("encoder").lin.load_state_dict(
+        apart.implementation("encoder").lin.state_dict()
+    )
+    together.implementation("head").lin.load_state_dict(
+        apart.implementation("head").lin.state_dict()
+    )
+    batch = batches(1)[0]
+
+    by_halves = accumulating(apart, every=2)
+    for half in in_two_halves(batch):
+        by_halves.step(half)
+    accumulating(together, every=1).step(batch)
+
+    for node_id in ("encoder", "head"):
+        assert torch.allclose(
+            apart.implementation(node_id).lin.weight,
+            together.implementation(node_id).lin.weight,
+            atol=1e-6,
+        ), node_id
+
+
+def test_the_optimizer_moves_once_per_group_and_not_once_per_step():
+    g = net()
+    t = accumulating(g, every=3)
+    before = g.implementation("head").lin.weight.clone()
+    data = batches(3)
+
+    t.step(data[0])
+    assert torch.equal(g.implementation("head").lin.weight, before), "it moved early"
+    t.step(data[1])
+    assert torch.equal(g.implementation("head").lin.weight, before), "it moved early"
+    t.step(data[2])
+    assert not torch.equal(g.implementation("head").lin.weight, before)
+
+
+def test_a_group_of_one_is_what_there_was_before_it_could_be_said():
+    torch.manual_seed(0)
+    said, unsaid = net(), net()
+    unsaid.implementation("encoder").lin.load_state_dict(
+        said.implementation("encoder").lin.state_dict()
+    )
+    unsaid.implementation("head").lin.load_state_dict(
+        said.implementation("head").lin.state_dict()
+    )
+    data = batches(3)
+
+    with_it = accumulating(said, every=1)
+    without = Trainer(
+        unsaid,
+        objective=nn.functional.cross_entropy,
+        optimizer=torch.optim.SGD(parameters(unsaid), lr=0.1),
+    )
+
+    assert [with_it.step(b) for b in data] == [without.step(b) for b in data]
+    assert torch.equal(
+        said.implementation("head").lin.weight,
+        unsaid.implementation("head").lin.weight,
+    )
+
+
+def test_the_loss_it_gives_back_is_the_one_the_objective_said():
+    # Divided for the backward pass, whole for whoever is reading: a history that
+    # changed shape with the size of the group would be unreadable across runs.
+    torch.manual_seed(0)
+    g = net()
+    t = accumulating(g, every=4)
+    batch = batches(1)[0]
+
+    said = t.step(batch)
+
+    expected = nn.functional.cross_entropy(
+        g.forward(Opaque(batch[0])), batch[1]
+    ).item()
+    assert said == pytest.approx(expected, rel=1e-5)
+
+
+def test_a_group_the_epoch_ended_in_the_middle_of_is_still_a_group():
+    # Three batches into groups of two: without closing it, the third would have
+    # pulled nothing at all, and next epoch's first would have closed a group
+    # made of two epochs.
+    g = net()
+    t = accumulating(g, every=2)
+    before = g.implementation("head").lin.weight.clone()
+
+    t.fit(batches(3))
+
+    assert not torch.equal(g.implementation("head").lin.weight, before)
+    assert t.seen == 0, "the epoch left a group open"
+
+
+def test_closing_a_group_that_is_not_open_does_nothing_and_says_so():
+    g = net()
+    t = accumulating(g, every=2)
+
+    assert t.update() is False, "nothing had been accumulated"
+    t.step(batches(1)[0])
+    assert t.update() is True
+    assert t.update() is False
+
+
+def test_a_group_is_a_whole_number_of_steps_and_at_least_one():
+    for wrong in (0, -1, 1.5, True, "2"):
+        with pytest.raises(ValueError, match="whole number"):
+            accumulating(net(), every=wrong)
+
+
+# ── And across a cut, where the far side has to count the same steps ──
+
+
+def test_a_cut_graph_accumulates_in_step_with_the_whole_one():
+    # The one that catches a far side out of phase: it counts its own `learn`
+    # calls, so if the two groups were not the same group the weights over there
+    # would move on a different step and this would not close.
+    cut, whole = two_of_them()
+    trains = {"encoder": split()}
+    driven = accumulating(cut, every=2, trains=trains)
+    in_one_go = accumulating(whole, every=2)
+    data = batches(4)
+
+    assert [driven.step(b) for b in data] == [in_one_go.step(b) for b in data]
+    assert torch.equal(
+        cut.implementation("encoder").lin.weight,
+        whole.implementation("encoder").lin.weight,
+    )
+
+
+def test_the_far_side_does_not_move_until_the_group_closes_either():
+    cut, _ = two_of_them()
+    trains = {"encoder": split()}
+    t = accumulating(cut, every=2, trains=trains)
+    before = cut.implementation("encoder").lin.weight.clone()
+    data = batches(2)
+
+    t.step(data[0])
+    assert torch.equal(
+        cut.implementation("encoder").lin.weight, before
+    ), "the one trained beside the node moved early"
+    t.step(data[1])
+    assert not torch.equal(cut.implementation("encoder").lin.weight, before)
+
+
+def test_closing_a_group_across_a_cut_reaches_the_one_that_trains_itself():
+    # `update` with a trained node elsewhere: no forward, no gradient, and the
+    # fact that the group is over travels the road a gradient goes.
+    cut, _ = two_of_them()
+    trains = {"encoder": split()}
+    t = accumulating(cut, every=4, trains=trains)
+    before = cut.implementation("encoder").lin.weight.clone()
+
+    t.step(batches(1)[0])
+    assert torch.equal(cut.implementation("encoder").lin.weight, before)
+
+    assert t.update() is True
+    assert not torch.equal(cut.implementation("encoder").lin.weight, before)
+
+
+def test_a_technique_that_names_its_own_group_wins_over_the_trainers():
+    # Two numbers is a thing somebody meant, not a thing nobody noticed: the
+    # trainer's is the default for whoever did not say.
+    cut, _ = two_of_them()
+    trains = {"encoder": Split(torch.optim.SGD, lr=0.1, every=3)}
+    t = accumulating(cut, every=2, trains=trains)
+
+    assert t.every == 2
+    assert trains["encoder"].every == 3

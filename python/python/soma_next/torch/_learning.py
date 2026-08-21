@@ -70,7 +70,14 @@ import torch
 from soma_next import Done, Node, Opaque
 
 SIGNAL = "__soma_gradient__"
-"""The reserved key that says a value is not a value: it is the gradient of one."""
+"""The reserved key that makes a map a gradient instead of a map."""
+
+CLOSING = "__soma_closes__"
+"""And the one beside it whose **presence** says this gradient ends a group of
+accumulated ones. It carries nothing. Absent, every step is its own group."""
+
+_OURS = {SIGNAL, CLOSING}
+"""What may be in an envelope. Anything else in there and it is a user's map."""
 
 
 class OutOfStep(Exception):
@@ -81,10 +88,23 @@ class OutOfStep(Exception):
     """
 
 
-def envelope(gradient):
+def envelope(gradient, closing=False):
     """A gradient in its envelope, which is how one crosses an edge. What a
-    transposed stage is fed with, by a `Trainer` or by hand."""
-    return {SIGNAL: _data(gradient)}
+    transposed stage is fed with, by a `Trainer` or by hand.
+
+    `closing` says that this is the gradient that ends a group of accumulated
+    ones, so whoever is accumulating applies what it has. It rides on the
+    envelope and not on a message of its own because it is the same fact seen
+    from the other end: *how many steps make an update* is the training run's,
+    and the training run is here.
+    """
+    sent = {SIGNAL: _data(gradient)}
+    if closing:
+        # The key being there **is** the fact, so it carries nothing — which is
+        # also the only shape that crosses: there is no `bool` on an edge, and a
+        # closed set of variants is what stops one being invented as `1.0`.
+        sent[CLOSING] = None
+    return sent
 
 
 def gradient(value, device=None):
@@ -127,9 +147,38 @@ class Learning(Node):
     """Nothing of what one step leaves is set in `__init__`: `pickle` does not
     call it, and being rebuilt on another machine is this object's normal life."""
 
-    def __init__(self, optimizer, **how):
+    every = None
+    seen = 0
+    told = False
+    """How many steps make an update, how many have gone by, and whether this one
+    was told to be the last. `None` is *whatever the trainer says*, and the same
+    class-attribute rule as above applies: an object rebuilt over there reads
+    them before anything sets them."""
+
+    def __init__(self, optimizer, *, every=None, **how):
         self.making = partial(optimizer, **how)
         self.node = None
+        self.every = every
+
+    def accumulating(self, every):
+        """How many steps go into one update, unless this one already said.
+
+        The trainer's number is the default and a technique that named its own
+        **wins** — the same rule `trains` follows for who trains whom. Saying it
+        twice is then a thing somebody meant, not a thing nobody noticed.
+        """
+        if self.every is None:
+            self.every = every
+        return self
+
+    def opens(self):
+        """Whether this step starts a group, which is where gradients are cleared
+        rather than added to."""
+        return self.seen == 0
+
+    def closes(self):
+        """Whether this step ends one, which is where the optimizer moves."""
+        return self.told or self.seen + 1 >= (self.every or 1)
 
     def of(self, node):
         """The node it trains. Said when the graph is put together, because that
@@ -150,7 +199,14 @@ class Learning(Node):
         if inside is None:
             self.held = value
             return Done(_data(value))
-        return Done(envelope(self.learn(_added(inside, ctx.device), ctx)))
+        # Counting is the framework's and what to do about it is the technique's:
+        # `learn` asks `opens` and `closes` and never has to remember to tick
+        # anything, which is one thing less for whoever fills this hole.
+        self.told = _closes(value)
+        back = self.learn(_added(inside, ctx.device), ctx)
+        self.seen = 0 if self.closes() else self.seen + 1
+        self.told = False
+        return Done(envelope(back))
 
     def entering(self, value, ctx):
         """The input as a leaf, remembered, which is what makes `dL/d(input)` a
@@ -208,16 +264,29 @@ class Learning(Node):
 
 class Split(Learning):
     """Split learning: carry on with the chain rule from the gradient of the
-    seam, step, and hand back the gradient of the input."""
+    seam, step, and hand back the gradient of the input.
+
+    With a group of more than one step it is the same three movements taken
+    apart: the gradients are cleared where the group **opens**, added to in
+    between, and the optimizer moves where it **closes**. With a group of one —
+    which is the default — the three fall back together into the line they were.
+    """
 
     def learn(self, signal, ctx):
         if signal is None:
+            # Nothing owed this step. If it is also the one that closes the
+            # group, what was added before it still has to be applied — and if
+            # nothing was, there is not even an optimizer worth building.
+            if self.closes() and not self.opens():
+                self.optimizer.step()
             self.done()
             return None
         held = self.waiting()
-        self.optimizer.zero_grad()
+        if self.opens():
+            self.optimizer.zero_grad()
         held.backward(signal)
-        self.optimizer.step()
+        if self.closes():
+            self.optimizer.step()
         return self.done().grad
 
 
@@ -244,8 +313,23 @@ def _envelopes_in(value):
 
 
 def _is_an_envelope(value):
-    """The cheap check, before anything is built: one key, and it is the one."""
-    return isinstance(value, dict) and len(value) == 1 and SIGNAL in value
+    """The cheap check, before anything is built: the key is there, and nothing
+    that is not one of ours is."""
+    return isinstance(value, dict) and SIGNAL in value and not set(value) - _OURS
+
+
+def _closes(value):
+    """Whether what arrived says the group of accumulated gradients ends here.
+
+    Asked of the whole thing and not of one envelope: a fan-in is one step, so
+    either all of them close it or none does, and a single one saying so is the
+    step saying so.
+    """
+    if _is_an_envelope(value):
+        return CLOSING in value
+    if isinstance(value, dict):
+        return any(_closes(each) for each in value.values())
+    return False
 
 
 def _added(gradients, device):

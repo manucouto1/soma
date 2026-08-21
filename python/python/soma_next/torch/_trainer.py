@@ -99,6 +99,23 @@ class Trainer:
 
     `optimizer` may be left out **only** when everything with weights is trained
     that way: there is nothing here for it to update.
+
+    `every` is how many steps go into one update, for a batch that does not fit
+    but whose gradient does::
+
+        Trainer(g, objective=cross_entropy, optimizer=..., every=4)
+
+    Four `step`s, one update, and the loss of each divided by four so that the
+    four together pull exactly as one step over the four batches would. Said
+    **here** for the same reason `trains` is — how many steps make an update is
+    a fact of this training run — and told to whatever trains itself elsewhere,
+    so both sides make the same group out of the same steps. A technique that
+    named its own (`Split(SGD, lr=0.1, every=8)`) keeps it: two numbers is then
+    something somebody meant.
+
+    A group the run ends in the middle of is closed by `update`, which `fit`
+    calls at the end of every epoch and whoever writes their own loop calls when
+    theirs ends.
     """
 
     def __init__(
@@ -108,10 +125,12 @@ class Trainer:
         objective,
         optimizer=None,
         trains=None,
+        every=1,
         store=None,
         workers=None,
     ):
         trains = dict(trains or {})
+        _check_the_group(every)
         _check_who_is_trained(graph, trains)
         theirs = {
             id(parameter)
@@ -130,6 +149,8 @@ class Trainer:
         self.workers = workers
         self.trains = trains
         self.theirs = theirs
+        self.every = every
+        self.seen = 0
         self._checked = False
         # Everything structural, decided once: where this graph is cut does not
         # change from one step to the next, and neither do the transposes its
@@ -146,7 +167,9 @@ class Trainer:
             self.running, beside = around(
                 graph,
                 {
-                    node_id: learning.of(graph.implementation(node_id)).beside()
+                    node_id: learning.accumulating(every)
+                    .of(graph.implementation(node_id))
+                    .beside()
                     for node_id, learning in trains.items()
                 },
             )
@@ -161,7 +184,9 @@ class Trainer:
         freeze(graph)
 
     def step(self, batch):
-        """One step: forward, loss, backward, update. Returns the loss.
+        """One step: forward, loss, backward, and update when the group closes.
+        Returns the loss, **whole** — divided for the backward pass and not for
+        whoever is reading, or a history would change shape with `every`.
 
         **The primitive**, and `fit` is sugar on top: whatever does not fit in an
         epoch loop is written as a `while` over this.
@@ -169,26 +194,29 @@ class Trainer:
         With something in the graph trained where it runs it is the same four
         movements taken over the stages — forward in order, the loss, backward in
         reverse — and with nobody it is, line for line, the single pass it always
-        was.
+        was. With `every=1`, which is the default, so is the update.
         """
         input_, target = batch
         if self.by_stages:
             return self._over_the_stages(input_, target)
-        self.optimizer.zero_grad()
+        if self._opens():
+            self.optimizer.zero_grad()
         output = self.graph.forward(
             _crossable(input_), store=self.store, workers=self.workers
         )
         loss = self.objective(output, _where_the_output_is(target, output))
-        loss.backward()
+        self._shared(loss).backward()
         self._check_the_gradient_arrived()
-        self.optimizer.step()
+        if self._closes():
+            self.optimizer.step()
+        self._counted()
         return loss.item()
 
     def _over_the_stages(self, input_, target):
         """One step of a graph that is cut, which is the same step with the
         stages in between: each one is handed what the ones before it produced,
         and the gradients go back the way the values came."""
-        if self.optimizer is not None:
+        if self.optimizer is not None and self._opens():
             self.optimizer.zero_grad()
         produced, seams = {}, {}
         for stage in self.stages:
@@ -209,15 +237,78 @@ class Trainer:
             )
         output = self._as_the_output(produced, seams)
         loss = self.objective(output, _where_the_output_is(target, output))
-        loss.backward()
-        self._hand_the_gradients_back(produced, seams)
+        self._shared(loss).backward()
+        self._hand_the_gradients_back(produced, seams, closing=self._closes())
         # After handing them back and not before: with a cut in the middle, a
         # node on this side gets its gradient from the stage behind it, and
         # asking any earlier would be calling every one of them an orphan.
         self._check_the_gradient_arrived()
+        if self.optimizer is not None and self._closes():
+            self.optimizer.step()
+        self._counted()
+        return loss.item()
+
+    def _opens(self):
+        """Whether this step starts a group, which is where gradients are cleared
+        rather than added to."""
+        return self.seen == 0
+
+    def _closes(self):
+        """Whether this step ends one, which is where the optimizer moves."""
+        return self.seen + 1 >= self.every
+
+    def _counted(self):
+        """This step, gone by. The far side counts the same steps from the same
+        start, which is what keeps the two groups the same group."""
+        self.seen = 0 if self._closes() else self.seen + 1
+
+    def _shared(self, loss):
+        """The loss each step of a group is answerable for.
+
+        The usual idiom written down: `N` steps accumulated are meant to be the
+        one step of a batch `N` times as long, and an objective that takes the
+        mean of its batch has to be divided for that to be true. It assumes the
+        steps are the same size, which is the assumption everybody makes and
+        nobody says: whoever accumulates uneven ones divides them themselves.
+
+        Untouched with a group of one, so that the graph a `backward` walks is
+        the same graph it always was.
+        """
+        return loss if self.every == 1 else loss / self.every
+
+    def update(self):
+        """Applies what has been accumulated so far and starts a new group.
+
+        For the group that a run ends in the middle of: `fit` calls it at the end
+        of every epoch, and whoever writes their own loop over `step` calls it
+        when their loop ends. Does nothing, and says so, if no step is waiting.
+
+        Across a cut it costs one pass over the transposed stages — not a step,
+        no forward, no gradient: what travels is the fact that the group is over,
+        by the same road a gradient goes and in an envelope carrying nothing.
+        """
+        if self.seen == 0:
+            return False
+        if self.by_stages:
+            self._close_the_group()
         if self.optimizer is not None:
             self.optimizer.step()
-        return loss.item()
+        self.seen = 0
+        return True
+
+    def _close_the_group(self):
+        """Tells whoever trains itself elsewhere that the group is over.
+
+        Every hold of a transposed stage feeds a trainer directly — only what
+        takes a gradient is transposed — so an envelope carrying nothing reaches
+        all of them and nothing else. A stage with nobody training in it has no
+        transpose to run.
+        """
+        for back in reversed(self.backs):
+            if not back.nodes:
+                continue
+            back.fill({node_id: envelope(None, closing=True) for node_id in back.holds})
+            back.graph.forward(None, workers=self.workers)
 
     def _the_input(self, input_, stage):
         """The batch in whatever shape the first stage can read it. The same
@@ -263,7 +354,7 @@ class Trainer:
                 seams[node_id] = out[node_id] = leaf(value)
         return out[self.graph.leaves()[0]] if len(out) == 1 else out
 
-    def _hand_the_gradients_back(self, produced, seams):
+    def _hand_the_gradients_back(self, produced, seams, closing=True):
         """The stages in reverse, each handed what it is owed.
 
         Two ways of owing it, and which applies is the **node's** and not the
@@ -306,7 +397,7 @@ class Trainer:
             back = self.backs[stage.level]
             back.fill(
                 {
-                    node_id: envelope(learning.get(node_id))
+                    node_id: envelope(learning.get(node_id), closing=closing)
                     for node_id in back.holds
                 }
             )
@@ -365,11 +456,23 @@ class Trainer:
         for _ in range(epochs):
             for batch in data:
                 history.append(self.step(batch))
+            # A group the epoch ended in the middle of is still a group: with
+            # `every=1` there is never one, and this costs nothing.
+            self.update()
         return Result(history)
 
     def __repr__(self):
         kept = f", keeping in {self.store}" if self.store else ""
         return f"Trainer({len(parameters(self.graph))} parameters{kept})"
+
+
+def _check_the_group(every):
+    """That a group is a whole number of steps, and at least one of them."""
+    if isinstance(every, bool) or not isinstance(every, int) or every < 1:
+        raise ValueError(
+            f"`every` is how many steps go into one update, so it is a whole "
+            f"number and at least 1; `{every!r}` is not"
+        )
 
 
 def _whose(graph, parameters):
