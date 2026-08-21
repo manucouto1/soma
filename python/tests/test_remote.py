@@ -65,6 +65,32 @@ class Fail(Node):
         raise ValueError("I broke in the worker")
 
 
+class Doubles(Node):
+    """A tensor in, the same tensor out, still wrapped so it crosses."""
+
+    def forward(self, x, ctx):
+        return Done(Opaque(x * 2))
+
+
+class Shape(Node):
+    """Answers something only a tensor could answer."""
+
+    def forward(self, x, ctx):
+        return Done([float(n) for n in x.shape])
+
+
+class MakesATensor(Node):
+    def forward(self, x, ctx):
+        import torch
+
+        return Done(Opaque(torch.tensor([1.0, 2.0, 3.0])))
+
+
+class WhatAmIGiven(Node):
+    def forward(self, x, ctx):
+        return Done(type(x).__name__)
+
+
 class Chatterbox(Node):
     """Prints to `stdout`, which is where the wire runs.
 
@@ -374,22 +400,86 @@ def test_a_failure_over_there_comes_back_with_the_host_and_the_reason():
     assert "I broke in the worker" in said, said
 
 
-def test_an_opaque_does_not_leave_this_process():
+def test_an_opaque_nobody_can_write_down_does_not_leave_this_process():
+    """The frontier did not disappear when a codec appeared, it moved: from "an
+    opaque" to "an opaque nobody registered a codec for", which is the more
+    precise of the two. An `object()` is on the far side of it forever."""
     opaquely, add = Opaquely(), Add(1)
     g = Graph.somatize(opaquely.named("opaquely") >> add.named("a").at("w1"))
     w = generic()
 
-    with pytest.raises(ValueError, match="does not cross"):
+    with pytest.raises(ValueError, match="nothing says how to write one down"):
         g.forward(None, workers={"w1": w})
 
 
-def test_an_opaque_produced_over_there_does_not_come_back_either():
+def test_and_it_says_which_type_it_was_and_how_to_say_so():
+    opaquely, add = Opaquely(), Add(1)
+    g = Graph.somatize(opaquely.named("opaquely") >> add.named("a").at("w1"))
+    w = generic()
+
+    with pytest.raises(ValueError) as e:
+        g.forward(None, workers={"w1": w})
+
+    said = str(e.value)
+    assert "`object`" in said, said
+    assert "codec(" in said, said
+
+
+def test_an_opaque_produced_over_there_that_nobody_can_write_down_stays_there():
+    """It is the slice's own value, so somebody here is waiting for it: refusing
+    is the honest answer, and it comes back with the codec's words rather than
+    the wire's."""
     opaquely = Opaquely()
     g = Graph.somatize(opaquely.named("opaquely").at("w1"))
     w = generic()
 
-    with pytest.raises(ValueError, match="does not cross"):
+    with pytest.raises(ValueError, match="nothing says how to write one down"):
         g.forward(None, workers={"w1": w})
+
+
+# ── And the half that is new: with a codec, it crosses ──
+
+
+def test_a_tensor_crosses_whole_and_is_the_same_tensor_over_there():
+    torch = pytest.importorskip("torch")
+    import soma_next.torch  # noqa: F401  — registers the codec for a tensor
+
+    doubles, shape = Doubles(), Shape()
+    g = Graph.somatize(doubles.named("doubles") >> shape.named("shape").at("w1"))
+    w = generic()
+
+    # `shape` runs over there and answers about the object it was handed: a
+    # list of floats has no `shape`, so this only passes if a tensor arrived.
+    out = g.forward(Opaque(torch.ones(3, 4)), workers={"w1": w})
+
+    assert out == [3.0, 4.0], out
+
+
+def test_a_tensor_produced_over_there_comes_back_a_tensor():
+    torch = pytest.importorskip("torch")
+    import soma_next.torch  # noqa: F401
+
+    makes = MakesATensor()
+    g = Graph.somatize(makes.named("makes").at("w1"))
+    w = generic()
+
+    out = g.forward(None, workers={"w1": w})
+
+    assert torch.is_tensor(out), type(out)
+    assert torch.equal(out, torch.tensor([1.0, 2.0, 3.0])), out
+
+
+def test_what_crosses_are_the_bytes_of_the_tensor_and_not_its_floats():
+    """The point of the whole thing, made observable: what a node is handed on
+    the other side is a tensor and not a list, so it is the same node here and
+    there — which is the entire argument of `.at()`."""
+    torch = pytest.importorskip("torch")
+    import soma_next.torch  # noqa: F401
+
+    what, w = WhatAmIGiven(), generic()
+    g = Graph.somatize(what.named("what").at("w1"))
+
+    assert g.forward(Opaque(torch.ones(2)), workers={"w1": w}) == "Tensor"
 
 
 def test_a_runtime_the_worker_does_not_accept_is_rejected_on_connect():

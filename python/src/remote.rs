@@ -14,6 +14,7 @@
 //! boundary as three other places — the core does not know what a node asks for,
 //! what an `Opaque` carries, or what a serialized catalog is.
 
+use crate::codec::Codecs;
 use crate::node::{PyDriver, PyNode};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -101,6 +102,10 @@ impl PyWorker {
             }
         };
 
+        // Always, and not on request: from Python an opaque carries a Python
+        // object, and one that nobody registered a codec for is refused with its
+        // type in front of you either way. There is nothing here to turn off.
+        let inner = inner.packing(Arc::new(Codecs));
         Ok(Self {
             where_,
             inner: Arc::new(match carries {
@@ -240,7 +245,7 @@ pub fn serve(
 
 /// A worker with its own catalog, and its own driver if it was given one.
 fn serving<'a>(catalog: &'a Catalog, driver: Option<&'a PyDriver>) -> Serving<'a> {
-    let serving = Serving::own(catalog);
+    let serving = Serving::own(catalog).packing(&CODECS);
     match driver {
         Some(driver) => serving.driver(driver),
         None => serving,
@@ -252,12 +257,19 @@ fn serving_provisioned<'a>(
     provision: &'a PyProvision,
     driver: Option<&'a PyDriver>,
 ) -> Serving<'a> {
-    let serving = Serving::provisioned(provision);
+    let serving = Serving::provisioned(provision).packing(&CODECS);
     match driver {
         Some(driver) => serving.driver(driver),
         None => serving,
     }
 }
+
+/// The codecs this side reads, which are the process's and not an object's.
+///
+/// It is installed on every worker stood up from Python and there is no way to
+/// ask for one without it: the client always packs, so a worker that did not
+/// unpack would be handed maps where its nodes expect what they were sent.
+static CODECS: Codecs = Codecs;
 
 /// The store this worker was pointed at, if it was pointed at one.
 fn opened(store: Option<&str>) -> PyResult<Option<Local>> {

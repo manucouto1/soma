@@ -11,13 +11,22 @@
 //! codec("torch.Tensor", torch.Tensor, dump=..., load=...)
 //! ```
 //!
-//! # A decorator, so the store never learns Python exists
+//! # Two callers, one pair of passes
 //!
-//! [`Packing`] wraps another [`Keeper`] and does one pass each way: opaques out
-//! on the way in, opaques back on the way out. Underneath,
-//! `soma_next_store::Cache` sees a value made of maps and bytes and has no idea
-//! any of it was ever a tensor. It is the same division as everywhere else —
-//! this crate translates, it does not decide.
+//! | who | what it fills | what it does not learn |
+//! |---|---|---|
+//! | [`Packing`] | a [`Keeper`], decorating another one | `soma_next_store` never learns Python exists |
+//! | [`Codecs`] | `soma_next_transport::Codec`, on both ends of a wire | the transport never learns what an opaque carries |
+//!
+//! One pass each way in both: opaques out on the way in, opaques back on the way
+//! out. Underneath, a store sees a value made of maps and bytes and a socket
+//! sees the same, and neither has any idea any of it was ever a tensor. It is
+//! the same division as everywhere else — this crate translates, it does not
+//! decide.
+//!
+//! What a tensor weighs written down is **one** question, so it has one answer
+//! whether the bytes are going to a directory or down a socket, and the two
+//! callers share it rather than each keeping a registry.
 //!
 //! What a packed opaque looks like, and what the risk of it is:
 //!
@@ -41,6 +50,7 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 use soma_next_core::{Keeper, KeeperError, Kept, Key, Value};
+use soma_next_transport::{Codec, CodecError};
 use std::sync::Arc;
 
 /// The reserved key that says a map is not a map.
@@ -118,7 +128,7 @@ impl Keeper for Packing<'_> {
             .map(|kept| match kept {
                 None => Ok(None),
                 Some(kept) => Ok(Some(Kept {
-                    value: unpack(&kept.value)?,
+                    value: unpack(&kept.value).map_err(KeeperError::new)?,
                     meta: kept.meta,
                 })),
             })
@@ -126,17 +136,36 @@ impl Keeper for Packing<'_> {
     }
 
     fn keep(&self, key: &Key, value: &Value, meta: &[(&str, &str)]) -> Result<(), KeeperError> {
-        self.inner.keep(key, &pack(value)?, meta)
+        self.inner
+            .keep(key, &pack(value).map_err(KeeperError::new)?, meta)
+    }
+}
+
+/// The same two passes, for a wire instead of a store.
+///
+/// Nothing of its own: what a tensor weighs in bytes is one question, and it has
+/// one answer whether the bytes are going to a directory or down a socket. It is
+/// a unit struct because the registry it reads is the process's, not this
+/// object's.
+pub struct Codecs;
+
+impl Codec for Codecs {
+    fn packed(&self, value: &Value) -> Result<Value, CodecError> {
+        pack(value).map_err(CodecError::new)
+    }
+
+    fn unpacked(&self, value: &Value) -> Result<Value, CodecError> {
+        unpack(value).map_err(CodecError::new)
     }
 }
 
 /// Every opaque in there, written down. Whatever carries none comes back
 /// untouched and without the GIL ever being taken.
-fn pack(value: &Value) -> Result<Value, KeeperError> {
+pub(crate) fn pack(value: &Value) -> Result<Value, String> {
     if value.travels() {
         return Ok(value.clone());
     }
-    Python::with_gil(|py| written(py, value)).map_err(as_keeper_error)
+    Python::with_gil(|py| written(py, value)).map_err(|e| e.to_string())
 }
 
 fn written(py: Python<'_>, value: &Value) -> PyResult<Value> {
@@ -190,26 +219,34 @@ fn codec_for<'py>(
     py: Python<'py>,
     obj: &Bound<'py, PyAny>,
 ) -> PyResult<(String, Bound<'py, PyAny>)> {
-    for (kind, entry) in codecs(py).iter() {
-        let entry = entry.downcast::<PyTuple>()?;
-        if obj.is_instance(&entry.get_item(0)?)? {
-            return Ok((kind.extract()?, entry.get_item(1)?));
-        }
+    if let Some(found) = matching(py, obj)? {
+        return Ok(found);
+    }
+    // The same second chance as reading back, asked the other way round: there
+    // no object had arrived and the `kind` was the only name; here the object is
+    // in hand and its type is the name. That the two meet is not luck — a kind
+    // is named after the type, which is what makes a record readable by hand
+    // years later.
+    for name in type_names(obj)? {
+        summon(py, &name);
+    }
+    if let Some(found) = matching(py, obj)? {
+        return Ok(found);
     }
     Err(PyValueError::new_err(format!(
-        "a `{}` cannot be kept: nothing says how to write one down. Register it \
-         with `codec(\"a name\", {0}, dump=..., load=...)`, which is what \
-         `soma_next.torch` does for a tensor on being imported",
+        "a `{}` cannot leave this process: nothing says how to write one down. \
+         Register it with `codec(\"a name\", {0}, dump=..., load=...)`, which is \
+         what `soma_next.torch` does for a tensor on being imported",
         obj.get_type().name()?
     )))
 }
 
 /// And the way back.
-fn unpack(value: &Value) -> Result<Value, KeeperError> {
+pub(crate) fn unpack(value: &Value) -> Result<Value, String> {
     if !packed_inside(value) {
         return Ok(value.clone());
     }
-    Python::with_gil(|py| read(py, value)).map_err(as_keeper_error)
+    Python::with_gil(|py| read(py, value)).map_err(|e| e.to_string())
 }
 
 fn read(py: Python<'_>, value: &Value) -> PyResult<Value> {
@@ -237,7 +274,19 @@ fn read(py: Python<'_>, value: &Value) -> PyResult<Value> {
 
 /// The codec registered under that name.
 fn named<'py>(py: Python<'py>, kind: &str) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-    let entry = codecs(py).get_item(kind)?.ok_or_else(|| {
+    let entry = match codecs(py).get_item(kind)? {
+        Some(entry) => Some(entry),
+        // Nothing registers it **yet**. What wrote these bytes may be a codec
+        // this library ships and this process never had a reason to import —
+        // a worker being the case, since it starts empty. Asked here and not on
+        // standing up, because here it is known to be needed: something written
+        // by it has just arrived.
+        None => {
+            summon(py, kind);
+            codecs(py).get_item(kind)?
+        }
+    };
+    let entry = entry.ok_or_else(|| {
         PyValueError::new_err(format!(
             "what is kept there was written by the codec for `{kind}`, and nothing \
              registers one now: importing whatever registered it is what is missing"
@@ -245,6 +294,52 @@ fn named<'py>(py: Python<'py>, kind: &str) -> PyResult<(Bound<'py, PyAny>, Bound
     })?;
     let entry = entry.downcast::<PyTuple>()?;
     Ok((entry.get_item(0)?, entry.get_item(2)?))
+}
+
+/// The first registered type this object is an instance of, if any is.
+fn matching<'py>(
+    py: Python<'py>,
+    obj: &Bound<'py, PyAny>,
+) -> PyResult<Option<(String, Bound<'py, PyAny>)>> {
+    for (kind, entry) in codecs(py).iter() {
+        let entry = entry.downcast::<PyTuple>()?;
+        if obj.is_instance(&entry.get_item(0)?)? {
+            return Ok(Some((kind.extract()?, entry.get_item(1)?)));
+        }
+    }
+    Ok(None)
+}
+
+/// What this object's type is called, and every type it inherits from, the way
+/// a codec would have been named after it: `torch.Tensor`.
+///
+/// The whole line and not just the type, so that an `nn.Parameter` finds the
+/// codec registered for a tensor rather than a codec of its own that nobody
+/// wrote.
+fn type_names(obj: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    let mut names = Vec::new();
+    for class in obj.get_type().mro().iter() {
+        let module = class
+            .getattr("__module__")
+            .and_then(|m| m.extract::<String>());
+        let name = class
+            .getattr("__qualname__")
+            .and_then(|n| n.extract::<String>());
+        if let (Ok(module), Ok(name)) = (module, name) {
+            names.push(format!("{module}.{name}"));
+        }
+    }
+    Ok(names)
+}
+
+/// Imports whoever registers this kind, if it is one of this library's.
+///
+/// Says nothing when it cannot: the caller is about to fail with the name of
+/// what is missing, and that message is the better one.
+fn summon(py: Python<'_>, kind: &str) {
+    let _ = py
+        .import("soma_next._codecs")
+        .and_then(|module| module.call_method1("summon", (kind,)));
 }
 
 /// This value, if it is a written-down opaque and not a map somebody meant.
@@ -271,8 +366,4 @@ fn packed_inside(value: &Value) -> bool {
         Value::List(items) => items.iter().any(packed_inside),
         _ => false,
     }
-}
-
-fn as_keeper_error(e: PyErr) -> KeeperError {
-    KeeperError::new(e.to_string())
 }
