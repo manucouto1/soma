@@ -39,6 +39,7 @@ from soma_next.torch._federated import fedavg
 from soma_next.torch._freeze import freeze
 from soma_next.torch._learning import Learning, OutOfStep, Split, envelope, gradient
 from soma_next.torch._params import parameters
+from soma_next.torch._round import gather
 from soma_next.torch._trainer import NoGradient, Result, Trainer
 
 # On being imported, and not on being asked: a graph that keeps what it produces
@@ -56,6 +57,7 @@ __all__ = [
     "envelope",
     "fedavg",
     "freeze",
+    "gather",
     "gradient",
     "parameters",
 ]
