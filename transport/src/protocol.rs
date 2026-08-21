@@ -64,7 +64,7 @@
 
 use crate::{Label, Outcome};
 use serde::{Deserialize, Serialize};
-use soma_next_core::{Device, Key, Memory, NodeId, Placement, Plan, Value};
+use soma_next_core::{Device, Keys, Memory, NodeId, Placement, Plan, Value};
 use std::fmt;
 
 /// What the client says.
@@ -104,7 +104,7 @@ pub enum Request {
         known: Vec<(NodeId, Value)>,
         /// What each of those is called, so what runs here can name what it
         /// produces and the chain of keys does not stop at the wire.
-        keys: Vec<(NodeId, Key)>,
+        keys: Vec<(NodeId, Keys)>,
         /// Where each node of this slice runs.
         placement: Placement,
         /// What is remembered about the nodes of this slice: what implements
@@ -220,7 +220,7 @@ enum Sending<'a> {
         plan: &'a Plan,
         input: &'a Value,
         known: &'a [(NodeId, Value)],
-        keys: &'a [(NodeId, Key)],
+        keys: &'a [(NodeId, Keys)],
         devices: Vec<(&'a NodeId, &'a Device)>,
         memory: Memory,
     },
@@ -240,7 +240,7 @@ enum Received {
         plan: Plan,
         input: Value,
         known: Vec<(NodeId, Value)>,
-        keys: Vec<(NodeId, Key)>,
+        keys: Vec<(NodeId, Keys)>,
         devices: Vec<(NodeId, Device)>,
         memory: Memory,
     },
@@ -313,6 +313,12 @@ fn devices_in<'a>(plan: &'a Plan, placement: &'a Placement) -> Vec<(&'a NodeId, 
 }
 
 /// What is remembered about each node of this plan, and about no other.
+///
+/// **Written out one fact at a time, which is a hole with a name on it**: a new
+/// thing to remember that is not added here does not fail — it simply stops
+/// being true on the other side of the wire, which is the worst way for anything
+/// to be wrong. Whoever adds a fifth thing to [`Memory`] adds a line here and a
+/// test that crosses.
 fn memory_in(plan: &Plan, memory: &Memory) -> Memory {
     let mut ids = Vec::new();
     nodes_in(plan, &mut ids);
@@ -326,6 +332,9 @@ fn memory_in(plan: &Plan, memory: &Memory) -> Memory {
         }
         if memory.is_cached(id) {
             mine.cache(id.clone(), memory.salt_of(id).map(str::to_string));
+        }
+        if memory.is_mapped(id) {
+            mine.map(id.clone());
         }
         if let Some(written) = memory.fingerprint_of(id) {
             mine.written_as(id.clone(), written);

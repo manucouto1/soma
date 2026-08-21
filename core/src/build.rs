@@ -47,6 +47,8 @@ struct Parts {
     /// telling apart two runs the key cannot is a knob for whoever runs them,
     /// and it is [`Memory::cache`] for anyone who wants it.
     cached: Vec<(NodeId, Option<String>)>,
+    /// The ones that map over the items of their input.
+    mapped: Vec<NodeId>,
 }
 
 /// A lone node.
@@ -75,6 +77,7 @@ fn single(id: NodeId, identity: &str, implementation: Arc<dyn Node>) -> Wire {
             identities: vec![(id, identity.to_string())],
             frozen: Vec::new(),
             cached: Vec::new(),
+            mapped: Vec::new(),
         }),
     }
 }
@@ -104,6 +107,7 @@ impl Shr for Wire {
                 .collect(),
             frozen: left.frozen.into_iter().chain(right.frozen).collect(),
             cached: left.cached.into_iter().chain(right.cached).collect(),
+            mapped: left.mapped.into_iter().chain(right.mapped).collect(),
         })
     }
 }
@@ -128,6 +132,7 @@ impl BitOr for Wire {
                 .collect(),
             frozen: left.frozen.into_iter().chain(right.frozen).collect(),
             cached: left.cached.into_iter().chain(right.cached).collect(),
+            mapped: left.mapped.into_iter().chain(right.mapped).collect(),
         })
     }
 }
@@ -208,6 +213,23 @@ impl Wire {
         }
     }
 
+    /// This whole piece maps over the items of its input: hand it a list and it
+    /// answers with a list as long, item for item.
+    ///
+    /// It is what gives a cache the grain of an **item**: without it, adding one
+    /// document to a list of a thousand changes the name of the list and all
+    /// thousand miss.
+    pub fn mapped(self) -> Wire {
+        Wire {
+            parts: self.parts.map(|mut parts| {
+                parts
+                    .mapped
+                    .extend(parts.nodes.iter().map(|(id, _)| id.clone()));
+                parts
+            }),
+        }
+    }
+
     /// Materializes what was declared: the structure, the store, the placement
     /// and what is remembered, none containing the others. Fails on a repeated
     /// id, above all.
@@ -239,6 +261,9 @@ impl Wire {
         }
         for (id, salt) in parts.cached {
             memory.cache(id, salt);
+        }
+        for id in parts.mapped {
+            memory.map(id);
         }
         Ok((graph, catalog, placement, memory))
     }

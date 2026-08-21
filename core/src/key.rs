@@ -11,13 +11,14 @@
 //! is only the shape it arrives in — the same division of labour as
 //! [`Host`](crate::Host), which is a name and not an address.
 //!
-//! # Why there is no `Keys` yet
+//! # And `Keys`, which arrived the day something produced one
 //!
-//! Caching item by item wants a key **per item** and not per node, and the plan
-//! for it is written. It is not here because nothing produces one today, and a
-//! variant nobody can construct is worse than a variant that arrives late: the
-//! day it does, every `match` on it stops compiling and someone decides, which
-//! is exactly what [`Plan`](crate::Plan) has no `#[non_exhaustive]` for.
+//! Caching item by item wants a key **per item** and not per node. This module
+//! used to say there was no `Keys` because nothing produced one, and that a
+//! variant nobody can construct is worse than one that arrives late. Something
+//! produces one now — a node declared `.mapped()` — so it is here, and every
+//! `match` on it had to be written by somebody deciding, which is exactly what
+//! [`Plan`](crate::Plan) has no `#[non_exhaustive]` for.
 
 use std::fmt;
 
@@ -51,5 +52,54 @@ impl Key {
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// What a node's output is called: one name, or one per item.
+///
+/// The second is what a [`.mapped()`](crate::Memory::map) node produces, and the
+/// whole reason it exists: with one name per node, adding a document to a list
+/// of a thousand changes the name of the list and every one of the thousand
+/// misses. With one per item, the thousand hit and the new one runs.
+///
+/// **Not `#[non_exhaustive]`**, like every other enum here: the day a third
+/// shape is needed, every `match` stops compiling and somebody decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Keys {
+    /// The output is one thing and has one name.
+    One(Key),
+    /// The output is a list, and each item is named on its own — in order, and
+    /// as long as the list.
+    PerItem(Vec<Key>),
+}
+
+impl Keys {
+    /// The one name, if there is one. `None` for a list of them: a caller that
+    /// wants to keep the whole thing under a single name has to say what that
+    /// name is made of, and [`Keeper::combine`](crate::Keeper::combine) is where
+    /// that is decided rather than here.
+    pub fn one(&self) -> Option<&Key> {
+        match self {
+            Self::One(key) => Some(key),
+            Self::PerItem(_) => None,
+        }
+    }
+
+    /// Every name in it, in order: one, or as many as there are items.
+    pub fn each(&self) -> &[Key] {
+        match self {
+            Self::One(key) => std::slice::from_ref(key),
+            Self::PerItem(keys) => keys,
+        }
+    }
+}
+
+impl fmt::Display for Keys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::One(key) => key.fmt(f),
+            Self::PerItem(keys) => write!(f, "{} items", keys.len()),
+        }
     }
 }

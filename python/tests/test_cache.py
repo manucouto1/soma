@@ -370,3 +370,126 @@ def test_a_node_with_no_state_needs_nobody_to_settle_it(store):
     # asking it to be settled by hand would be asking for a digest of nothing.
     g = Graph.somatize(Counts().named("n").frozen().cached())
     assert g.forward(1.0, store=store) == 1.0
+
+
+# ── With the grain of an item ──
+
+
+class Embeds(Node):
+    """Maps over the items it is handed, and remembers which ones it was made to
+    look at — which is the only thing worth observing here."""
+
+    def __init__(self):
+        self.seen = []
+
+    def forward(self, items, ctx):
+        self.seen += list(items)
+        return Done([x * 10 for x in items])
+
+
+class Miscounts(Node):
+    def forward(self, items, ctx):
+        return Done([1.0])
+
+
+def mapping():
+    embeds = Embeds()
+    return embeds, Graph.somatize(
+        embeds.named("embed").frozen().mapped().cached()
+    )
+
+
+def test_a_node_that_maps_answers_one_for_each_item(store):
+    _, g = mapping()
+
+    assert g.forward([1.0, 2.0, 3.0], store=store) == [10.0, 20.0, 30.0]
+
+
+def test_and_it_maps_with_no_store_at_all():
+    # `.mapped()` is a contract before it is an optimization: a list in, a list
+    # as long out. That stays true with nowhere to keep anything.
+    _, g = mapping()
+
+    assert g.forward([4.0]) == [40.0]
+
+
+def test_a_new_item_among_old_ones_is_the_only_one_looked_at(store):
+    # **The whole reason this exists.** With one name per node, adding a document
+    # changes the name of the list and all of them miss; with one per item, the
+    # old ones are read back and the new one runs. And the answer comes out in
+    # the order it was asked for, not the order things were computed.
+    embeds, g = mapping()
+
+    assert g.forward([1.0, 2.0, 3.0], store=store) == [10.0, 20.0, 30.0]
+    assert g.forward([9.0, 1.0, 2.0, 3.0], store=store) == [90.0, 10.0, 20.0, 30.0]
+
+    assert embeds.seen == [1.0, 2.0, 3.0, 9.0], "it looked at some of them twice"
+
+
+def test_an_item_is_named_after_itself_and_not_after_where_it_sits(store):
+    # The same document in another list is the same item. Were a name built out
+    # of a position, this would miss on all four — which is the design this was
+    # chosen over.
+    embeds, g = mapping()
+
+    g.forward([1.0, 2.0, 3.0, 4.0], store=store)
+    g.forward([4.0, 3.0, 2.0, 1.0], store=store)
+
+    assert embeds.seen == [1.0, 2.0, 3.0, 4.0], "the same four in another order"
+
+
+def test_the_second_run_of_the_same_list_looks_at_nothing(store):
+    embeds, g = mapping()
+
+    g.forward([1.0, 2.0], store=store)
+    g.forward([1.0, 2.0], store=store)
+
+    assert embeds.seen == [1.0, 2.0]
+
+
+def test_what_reads_a_mapped_node_is_named_after_the_whole_list(store):
+    # A node downstream is not mapped: it reads the list, all of it, so its name
+    # depends on all of it. Change one item and it has to run again.
+    embeds, counts = Embeds(), Counts()
+    g = Graph.somatize(
+        embeds.named("embed").frozen().mapped().cached()
+        >> counts.named("head").frozen().cached()
+    )
+
+    g.forward([1.0, 2.0], store=store)
+    g.forward([1.0, 2.0], store=store)
+    assert counts.calls == 1, "the same list: the head had its answer already"
+
+    g.forward([1.0, 3.0], store=store)
+    assert counts.calls == 2, "one item changed and the head has to run again"
+
+
+def test_something_that_is_not_a_list_is_refused_with_the_node_and_what_arrived():
+    _, g = mapping()
+
+    with pytest.raises(ValueError) as e:
+        g.forward(1.0)
+
+    assert "embed" in str(e.value)
+    assert "number" in str(e.value)
+
+
+def test_and_so_is_an_answer_with_the_wrong_number_of_items():
+    g = Graph.somatize(Miscounts().named("wrong").mapped())
+
+    with pytest.raises(ValueError, match="3 items and answered with 1"):
+        g.forward([1.0, 2.0, 3.0])
+
+
+def test_a_mapped_node_with_two_producers_is_refused_by_what_reaches_it():
+    # Two producers make its input a **map**, and "item i" stops meaning one
+    # thing. It is refused where it happens, with the node named.
+    g = Graph.somatize(
+        (Add(1).named("left") | Add(2).named("right"))
+        >> Embeds().named("embed").mapped()
+    )
+
+    with pytest.raises(ValueError) as e:
+        g.forward(1.0)
+
+    assert "embed" in str(e.value) and "map" in str(e.value)

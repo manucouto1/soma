@@ -16,7 +16,7 @@
 //! address — the same graph spreads across two processes here or two machines
 //! there without touching a line of what was declared.
 
-use crate::{Key, Memory, NodeId, Placement, Plan, Value};
+use crate::{Keys, Memory, NodeId, Placement, Plan, Value};
 use std::fmt;
 
 /// Knows how to execute a plan elsewhere.
@@ -38,7 +38,7 @@ pub struct Cargo<'a> {
     /// What each of those is called. Without them the slice over there can name
     /// nothing it produces, and a cache that stops at the process boundary is a
     /// cache nobody can rely on.
-    pub keys: &'a [(NodeId, Key)],
+    pub keys: &'a [(NodeId, Keys)],
     /// Where each node runs. It travels because a placement is data and the
     /// catalog is not.
     pub placement: &'a Placement,
@@ -59,7 +59,7 @@ pub struct Outcome {
     pub produced: Vec<(NodeId, Value)>,
     /// And what each of those is called, so the chain of keys carries on below
     /// the slice that went away.
-    pub keys: Vec<(NodeId, Key)>,
+    pub keys: Vec<(NodeId, Keys)>,
 }
 
 impl Outcome {

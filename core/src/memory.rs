@@ -58,6 +58,9 @@ pub struct Memory {
     /// The ones whose output is worth keeping, each with the salt its declarer
     /// added, if any.
     cached: HashMap<NodeId, Option<String>>,
+    /// The ones that map over the items of their input, so that what is
+    /// remembered of them is remembered item by item.
+    mapped: HashSet<NodeId>,
     /// What implements each one, by name.
     identities: HashMap<NodeId, String>,
     /// Which version of that code the graph was written against. Metadata.
@@ -116,6 +119,24 @@ impl Memory {
     /// The salt it is cached under, if it is cached and has one.
     pub fn salt_of(&self, id: &NodeId) -> Option<&str> {
         self.cached.get(id)?.as_deref()
+    }
+
+    /// Says this node maps over the items of its input: hand it a list, it
+    /// answers with a list as long, and item `i` out is what item `i` in became.
+    ///
+    /// It is what makes a cache work **item by item**. Without it, adding one
+    /// document to a list of a thousand changes the name of the list and all
+    /// thousand miss; with it, the thousand hit and the one runs.
+    ///
+    /// Declared and not asked: the core cannot look at a node and tell whether
+    /// it maps, the same way it cannot tell whether one is frozen.
+    pub fn map(&mut self, id: impl Into<NodeId>) {
+        self.mapped.insert(id.into());
+    }
+
+    /// Whether this node was said to map over its items.
+    pub fn is_mapped(&self, id: &NodeId) -> bool {
+        self.mapped.contains(id)
     }
 
     /// Notes which version of the code this graph was written against.

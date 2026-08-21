@@ -66,6 +66,22 @@ class Topology:
         """
         return _fill(self, "cached", _Kept(salt))
 
+    def mapped(self):
+        """The same piece, mapping over the items of its input: hand it a list
+        and it answers with a list as long, item for item.
+
+        It is what gives a cache the grain of an **item**. Without it, adding one
+        document to a list of a thousand changes the name of the list and all
+        thousand miss; with it, the thousand are read back and the one runs.
+
+        The node is handed **only the items that are missing**, so it still
+        batches: what arrives is a list and what goes back is a list of the same
+        length, in the same order. An item is named after **itself** — the same
+        document in another list is the same item — which is why this is worth
+        anything and why its position would not do.
+        """
+        return _fill(self, "mapped", True)
+
     def __rshift__(self, other):
         return Chain(_steps(self) + _steps(_wrap(other)))
 
@@ -241,6 +257,8 @@ def _walk(g, topology, sources):
     if "cached" in said:
         g.cache(node_id, said["cached"].salt)
         _note_the_code(g, node_id, topology.obj)
+    if "mapped" in said:
+        g.mapped(node_id)
     for source in sources:
         g.edge(source, node_id)
     return [node_id]

@@ -4,8 +4,9 @@
 //! the `Transition` variant they return.
 
 use soma_next_core::{
-    Cargo, Catalog, Ctx, Device, Driver, DriverError, Keeper, KeeperError, Kept, Key, Memory, Node,
-    NodeError, NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Driver, DriverError, Keeper, KeeperError, Kept, Key, Keys, Memory,
+    Node, NodeError, NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError,
+    Value,
 };
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
@@ -152,7 +153,7 @@ impl Journal {
         Arc::new(Self::default())
     }
 
-    fn note(&self, who: &str) {
+    pub(crate) fn note(&self, who: &str) {
         self.0
             .lock()
             .expect("nobody poisons this mutex")
@@ -351,7 +352,7 @@ pub struct Trip {
     pub plan: Plan,
     pub input: Value,
     pub known: Vec<(NodeId, Value)>,
-    pub keys: Vec<(NodeId, Key)>,
+    pub keys: Vec<(NodeId, Keys)>,
     pub placement: Placement,
     pub memory: Memory,
 }
@@ -403,6 +404,43 @@ pub struct Cable(pub &'static str);
 impl Transport for Cable {
     fn dispatch(&self, _plan: &Plan, _cargo: &Cargo<'_>) -> Result<Outcome, TransportError> {
         Err(TransportError::new(self.0))
+    }
+}
+
+/// Maps over the items it is handed and writes down which ones it was asked for.
+///
+/// The double the item cache needs: what has to be observable is not what it
+/// answers but **which items it was made to look at**, because the whole claim
+/// is that the ones already kept are not looked at again.
+pub struct EachOne(pub Arc<Journal>);
+
+impl Node for EachOne {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        let Value::List(items) = input else {
+            return Err(NodeError::new("EachOne needs a list"));
+        };
+        for item in items.iter() {
+            self.0.note(&format!("{item:?}"));
+        }
+        Ok(Transition::Done(Value::list(
+            items
+                .iter()
+                .map(|item| match item {
+                    Value::Number(x) => Value::number(x * 10.0),
+                    other => other.clone(),
+                })
+                .collect::<Vec<_>>(),
+        )))
+    }
+}
+
+/// One that answers with the wrong number of items, which nobody can make sense
+/// of.
+pub struct Miscounts;
+
+impl Node for Miscounts {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        Ok(Transition::Done(Value::list(vec![Value::number(1.0)])))
     }
 }
 

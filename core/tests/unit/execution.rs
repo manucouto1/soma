@@ -1,13 +1,13 @@
 //! The engine, against Rust filters and steps: no Python in the way.
 
 use crate::doubles::{
-    Add, AlwaysNull, Anything, Ask, Cable, Fail, Immediate, Insatiable, Journal, Ledger, Mean,
-    MeetingPoint, Mirror, Notebook, Opaquely, Panics, Rendezvous, RendezvousDriver, Shout,
-    Ubiquitous, Witness,
+    Add, AlwaysNull, Anything, Ask, Cable, EachOne, Fail, Immediate, Insatiable, Journal, Ledger,
+    Mean, MeetingPoint, Mirror, Miscounts, Notebook, Opaquely, Panics, Rendezvous,
+    RendezvousDriver, Shout, Ubiquitous, Witness,
 };
 use soma_next_core::{
-    Catalog, Ctx, Device, Executor, Graph, Host, Key, Memory, Node, NodeError, NodeId, Outcome,
-    Placement, Plan, RunError, Transition, Value, compile, distribute, node,
+    Catalog, Ctx, Device, Executor, Graph, Host, Key, Keys, Memory, Node, NodeError, NodeId,
+    Outcome, Placement, Plan, RunError, Transition, Value, compile, distribute, node,
 };
 use std::sync::Arc;
 
@@ -1399,7 +1399,7 @@ fn the_names_a_slice_brings_are_not_the_names_it_gives() {
             },
             Value::Null,
             vec![(NodeId::from("encoder"), Value::number(1.0))],
-            vec![(NodeId::from("encoder"), brought.clone())],
+            vec![(NodeId::from("encoder"), Keys::One(brought.clone()))],
         )
         .unwrap();
 
@@ -1412,8 +1412,8 @@ fn the_names_a_slice_brings_are_not_the_names_it_gives() {
         ["head"],
         "what it was given back is what it named itself"
     );
-    assert_eq!(outcome.keys[0].1, notebook.names()[0]);
-    assert_ne!(outcome.keys[0].1, brought);
+    assert_eq!(outcome.keys[0].1, Keys::One(notebook.names()[0].clone()));
+    assert_ne!(outcome.keys[0].1, Keys::One(brought.clone()));
 }
 
 #[test]
@@ -1448,7 +1448,7 @@ fn the_names_and_what_is_remembered_cross_to_the_other_side() {
         ["encoder"],
         "the names of what it reads, and only those"
     );
-    assert_eq!(trips[0].keys[0].1, notebook.names()[0]);
+    assert_eq!(trips[0].keys[0].1, Keys::One(notebook.names()[0].clone()));
     assert!(trips[0].memory.is_cached(&"head".into()));
 }
 
@@ -1480,4 +1480,201 @@ fn what_is_remembered_travels_with_nobody_here_to_keep_anything() {
         trips[0].memory.identity_of(&"head".into()),
         Some("unit::doubles::Add")
     );
+}
+
+// ── A node that maps, and a cache with the grain of an item ──
+
+/// A one-node graph whose node maps, cached, with a journal of what it was made
+/// to look at.
+fn mapping() -> (Graph, Catalog, Memory, Arc<Journal>) {
+    let journal = Journal::new();
+    let (graph, catalog, _, memory) = node("embed", EachOne(journal.clone()))
+        .frozen()
+        .cached()
+        .mapped()
+        .somatize()
+        .unwrap();
+    (graph, catalog, memory, journal)
+}
+
+fn documents(many: &[f64]) -> Value {
+    Value::list(many.iter().copied().map(Value::number).collect::<Vec<_>>())
+}
+
+fn tens(many: &[f64]) -> Vec<f64> {
+    many.iter().map(|x| x * 10.0).collect()
+}
+
+fn each(out: &Value) -> Vec<f64> {
+    let Value::List(items) = out else {
+        panic!("expected a list, found {}", out.type_name())
+    };
+    items.iter().map(number).collect()
+}
+
+#[test]
+fn a_node_that_maps_answers_one_for_each_item() {
+    let (g, c, memory, _) = mapping();
+    let plan = compile(&g, &c).unwrap();
+
+    let out = Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&Notebook::new())
+        .run(&plan, documents(&[1.0, 2.0, 3.0]))
+        .unwrap();
+
+    assert_eq!(each(&out), tens(&[1.0, 2.0, 3.0]));
+}
+
+#[test]
+fn and_it_maps_with_nobody_keeping_anything_at_all() {
+    // `.mapped()` is a contract before it is an optimization: hand it a list,
+    // get a list as long. That stays true with no keeper in sight.
+    let (g, c, _, _) = mapping();
+    let plan = compile(&g, &c).unwrap();
+
+    let out = Executor::new(&c).run(&plan, documents(&[4.0])).unwrap();
+
+    assert_eq!(each(&out), tens(&[4.0]));
+}
+
+#[test]
+fn the_second_run_looks_at_nothing() {
+    let (g, c, memory, journal) = mapping();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let run = || {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, documents(&[1.0, 2.0, 3.0]))
+            .unwrap()
+    };
+
+    run();
+    let second = run();
+
+    assert_eq!(each(&second), tens(&[1.0, 2.0, 3.0]));
+    assert_eq!(
+        journal.order().len(),
+        3,
+        "it looked at something the second time round"
+    );
+}
+
+#[test]
+fn a_new_item_among_old_ones_is_the_only_one_looked_at() {
+    // **The whole reason this exists.** With one name per node, adding a
+    // document changes the name of the list and all of them miss; with one per
+    // item, the old ones are read back and the new one runs — and the order of
+    // the answer is the order of the input, not the order things were computed.
+    let (g, c, memory, journal) = mapping();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let run = |input: Value| {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, input)
+            .unwrap()
+    };
+
+    run(documents(&[1.0, 2.0, 3.0]));
+    let again = run(documents(&[9.0, 1.0, 2.0, 3.0]));
+
+    assert_eq!(each(&again), tens(&[9.0, 1.0, 2.0, 3.0]));
+    assert_eq!(
+        journal.order(),
+        ["Number(1)", "Number(2)", "Number(3)", "Number(9)"],
+        "the three it already had were looked at again"
+    );
+}
+
+#[test]
+fn an_item_is_named_after_itself_and_not_after_where_it_sits() {
+    // The same document in another list is the same item. If a name were built
+    // out of a position, this would miss on all four.
+    let (g, c, memory, journal) = mapping();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let run = |input: Value| {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, input)
+            .unwrap()
+    };
+
+    run(documents(&[1.0, 2.0, 3.0, 4.0]));
+    let shuffled = run(documents(&[4.0, 3.0, 2.0, 1.0]));
+
+    assert_eq!(each(&shuffled), tens(&[4.0, 3.0, 2.0, 1.0]));
+    assert_eq!(journal.order().len(), 4, "the same four, in another order");
+}
+
+#[test]
+fn what_is_not_a_list_is_refused_with_the_node_and_what_arrived() {
+    let (g, c, memory, _) = mapping();
+    let plan = compile(&g, &c).unwrap();
+
+    let said = Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&Notebook::new())
+        .run(&plan, Value::number(1.0))
+        .unwrap_err()
+        .to_string();
+
+    assert!(said.contains("embed"), "{said}");
+    assert!(said.contains("number"), "{said}");
+}
+
+#[test]
+fn and_so_is_an_answer_with_the_wrong_number_of_items() {
+    let (g, c, _, memory) = node("miscounts", Miscounts).mapped().somatize().unwrap();
+    let plan = compile(&g, &c).unwrap();
+
+    let said = Executor::new(&c)
+        .remembering(&memory)
+        .run(&plan, documents(&[1.0, 2.0, 3.0]))
+        .unwrap_err()
+        .to_string();
+
+    assert!(said.contains("3 items"), "{said}");
+    assert!(said.contains("1"), "{said}");
+}
+
+#[test]
+fn what_reads_a_mapped_node_is_named_after_the_whole_list() {
+    // A node downstream is not mapped: it reads the list, all of it, so its name
+    // has to depend on all of it. Change one item and it has to miss.
+    let journal = Journal::new();
+    let (g, c, _, memory) = (node("embed", EachOne(journal.clone()))
+        .frozen()
+        .cached()
+        .mapped()
+        >> node("head", Witness("head", journal.clone()))
+            .frozen()
+            .cached())
+    .somatize()
+    .unwrap();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let run = |input: Value| {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, input)
+            .unwrap()
+    };
+
+    run(documents(&[1.0, 2.0]));
+    let heads = journal.order().iter().filter(|who| *who == "head").count();
+    run(documents(&[1.0, 2.0]));
+    let same = journal.order().iter().filter(|who| *who == "head").count();
+    run(documents(&[1.0, 3.0]));
+    let changed = journal.order().iter().filter(|who| *who == "head").count();
+
+    assert_eq!(heads, 1);
+    assert_eq!(same, 1, "the same list: the head had its answer already");
+    assert_eq!(changed, 2, "one item changed and the head has to run again");
 }

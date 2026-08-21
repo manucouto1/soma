@@ -33,8 +33,8 @@
 //! **injected** and does not.
 
 use crate::{
-    Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, Keeper, Kept, Key, Memory, NodeError,
-    NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, Keeper, Kept, Key, Keys, Memory,
+    NodeError, NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError, Value,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -134,7 +134,7 @@ impl<'a> Executor<'a> {
     /// the execution.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let mut produced: HashMap<NodeId, Value> = HashMap::new();
-        let mut keys: HashMap<NodeId, Key> = HashMap::new();
+        let mut keys: HashMap<NodeId, Keys> = HashMap::new();
         let last = self.walk(plan, &input, &mut produced, &mut keys)?;
 
         // A graph's output is that of its leaves: one leaf gives that value,
@@ -172,10 +172,10 @@ impl<'a> Executor<'a> {
         plan: &Plan,
         input: Value,
         known: Vec<(NodeId, Value)>,
-        named: Vec<(NodeId, Key)>,
+        named: Vec<(NodeId, Keys)>,
     ) -> Result<Outcome, RunError> {
         let mut produced: HashMap<NodeId, Value> = known.into_iter().collect();
-        let mut keys: HashMap<NodeId, Key> = named.into_iter().collect();
+        let mut keys: HashMap<NodeId, Keys> = named.into_iter().collect();
         let brought: Vec<NodeId> = produced.keys().cloned().collect();
         let named: Vec<NodeId> = keys.keys().cloned().collect();
 
@@ -197,14 +197,17 @@ impl<'a> Executor<'a> {
         plan: &Plan,
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
-        keys: &mut HashMap<NodeId, Key>,
+        keys: &mut HashMap<NodeId, Keys>,
     ) -> Result<Value, RunError> {
         match plan {
             Plan::Empty => Ok(graph_input.clone()),
+            Plan::Execute { node, from } if self.maps(node) => {
+                self.over_items(node, from, graph_input, produced, keys)
+            }
             Plan::Execute { node, from } => {
                 let key = self.key_for(node, from, graph_input, keys);
                 if let Some(key) = &key {
-                    keys.insert(node.clone(), key.clone());
+                    keys.insert(node.clone(), Keys::One(key.clone()));
                 }
                 // A hit is the whole point: the node is not advanced, and its
                 // input is not even assembled.
@@ -234,6 +237,164 @@ impl<'a> Executor<'a> {
         }
     }
 
+    /// Whether this node was declared to map over the items of its input.
+    fn maps(&self, node: &NodeId) -> bool {
+        self.memory.is_some_and(|memory| memory.is_mapped(node))
+    }
+
+    /// One step of a node that maps: the items it is missing, and no more.
+    ///
+    /// The whole difference from an ordinary step is **where the grain is**. An
+    /// ordinary node is named once and either its whole output is there or none
+    /// of it is; a mapped one is named once per item, so a list of a thousand
+    /// where one is new runs once and reads back nine hundred and ninety-nine.
+    ///
+    /// The input is assembled first here, and there is no way around it: an
+    /// ordinary hit does not even build its input, but the names of these items
+    /// are made out of the items, so they have to be in hand.
+    fn over_items(
+        &self,
+        node: &NodeId,
+        from: &[NodeId],
+        graph_input: &Value,
+        produced: &mut HashMap<NodeId, Value>,
+        keys: &mut HashMap<NodeId, Keys>,
+    ) -> Result<Value, RunError> {
+        let input = gather(node, from, graph_input, produced)?;
+        let Value::List(items) = &input else {
+            return Err(RunError::NotItems {
+                node: node.clone(),
+                given: input.type_name().to_string(),
+            });
+        };
+
+        let mine = self.keys_for_items(node, from, items, keys);
+        let kept: Vec<Option<Value>> = match &mine {
+            Some(mine) => self.recalled_items(node, mine),
+            None => vec![None; items.len()],
+        };
+        let missing: Vec<usize> = (0..items.len()).filter(|i| kept[*i].is_none()).collect();
+
+        // Nothing missing is the point of all this: the node is not advanced at
+        // all, exactly as an ordinary hit does not advance it.
+        let mut answers = Vec::new();
+        if !missing.is_empty() {
+            let asked = Value::list(
+                missing
+                    .iter()
+                    .map(|i| items[*i].clone())
+                    .collect::<Vec<_>>(),
+            );
+            let output = self.advance(node, asked)?;
+            let Value::List(back) = &output else {
+                return Err(RunError::NotItems {
+                    node: node.clone(),
+                    given: output.type_name().to_string(),
+                });
+            };
+            if back.len() != missing.len() {
+                return Err(RunError::Uncounted {
+                    node: node.clone(),
+                    asked: missing.len(),
+                    answered: back.len(),
+                });
+            }
+            answers = back.to_vec();
+        }
+
+        let mut out = Vec::with_capacity(items.len());
+        let mut answered = answers.into_iter();
+        for (i, was) in kept.into_iter().enumerate() {
+            match was {
+                Some(value) => out.push(value),
+                None => {
+                    let value = answered.next().expect("one answer per item asked for");
+                    if let Some(mine) = &mine {
+                        self.keep(node, Some(&mine[i]), &value);
+                    }
+                    out.push(value);
+                }
+            }
+        }
+
+        let output = Value::list(out);
+        if let Some(mine) = mine {
+            keys.insert(node.clone(), Keys::PerItem(mine));
+        }
+        produced.insert(node.clone(), output.clone());
+        Ok(output)
+    }
+
+    /// One name per item, or `None` when nothing is being remembered at all.
+    ///
+    /// **Where the per-item chain starts is where content is hashed.** If what
+    /// is above already has a name for each item, these are built out of those
+    /// and nothing is hashed; if it does not — a root, or a list that came out
+    /// of a node nobody mapped — then each item is hashed by its content, which
+    /// is the only thing that makes the same document in another list the same
+    /// item. Its **position** would not: that is the whole point.
+    fn keys_for_items(
+        &self,
+        node: &NodeId,
+        from: &[NodeId],
+        items: &[Value],
+        keys: &HashMap<NodeId, Keys>,
+    ) -> Option<Vec<Key>> {
+        let (keeper, memory) = (self.keeper?, self.memory?);
+        let identity = memory.identity_of(node)?;
+        let above: Vec<Key> = match from {
+            [one] => match keys.get(one) {
+                Some(Keys::PerItem(each)) if each.len() == items.len() => each.clone(),
+                _ => items
+                    .iter()
+                    .map(|item| keeper.key_of(item))
+                    .collect::<Option<Vec<_>>>()?,
+            },
+            _ => items
+                .iter()
+                .map(|item| keeper.key_of(item))
+                .collect::<Option<Vec<_>>>()?,
+        };
+        Some(
+            above
+                .iter()
+                .map(|one| {
+                    keeper.combine(&[
+                        identity,
+                        memory.state_of(node).unwrap_or(""),
+                        memory.salt_of(node).unwrap_or(""),
+                        one.as_str(),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
+    /// What is kept for each of these, asked **in one call**.
+    ///
+    /// Which is why [`Keeper::recall`] has taken a slice since the first day: a
+    /// thousand items against a store on the far end of a network is a thousand
+    /// round trips unless it is one.
+    fn recalled_items(&self, node: &NodeId, mine: &[Key]) -> Vec<Option<Value>> {
+        let nothing = vec![None; mine.len()];
+        let Some((keeper, memory)) = self.keeper.zip(self.memory) else {
+            return nothing;
+        };
+        if !memory.is_cached(node) {
+            return nothing;
+        }
+        match keeper.recall(&mine.iter().collect::<Vec<_>>()) {
+            Ok(answers) => answers
+                .into_iter()
+                .map(|kept| kept.map(|kept| kept.value))
+                .collect(),
+            Err(why) => {
+                eprintln!("what `{node}` produced could not be looked up: {why}");
+                nothing
+            }
+        }
+    }
+
     /// Launches a wave's branches at once and merges what they produced.
     ///
     /// Each branch starts with a **copy** of what was produced so far and
@@ -245,10 +406,10 @@ impl<'a> Executor<'a> {
         branches: &[Plan],
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
-        keys: &mut HashMap<NodeId, Key>,
+        keys: &mut HashMap<NodeId, Keys>,
     ) -> Result<Value, RunError> {
         let earlier: &HashMap<NodeId, Value> = produced;
-        let named: &HashMap<NodeId, Key> = keys;
+        let named: &HashMap<NodeId, Keys> = keys;
         let outcomes = std::thread::scope(|scope| {
             let running: Vec<_> = branches
                 .iter()
@@ -293,7 +454,7 @@ impl<'a> Executor<'a> {
         inner: &Plan,
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
-        keys: &mut HashMap<NodeId, Key>,
+        keys: &mut HashMap<NodeId, Keys>,
     ) -> Result<Value, RunError> {
         let transport = self
             .transports
@@ -309,7 +470,7 @@ impl<'a> Executor<'a> {
             .collect();
         // The keys of the same set: what it reads is what it has to be able to
         // name, and what it produces it names from those.
-        let named: Vec<(NodeId, Key)> = reads
+        let named: Vec<(NodeId, Keys)> = reads
             .iter()
             .filter_map(|id| keys.get(id).map(|key| (id.clone(), key.clone())))
             .collect();
@@ -394,10 +555,11 @@ impl<'a> Executor<'a> {
         node: &NodeId,
         from: &[NodeId],
         graph_input: &Value,
-        keys: &HashMap<NodeId, Key>,
+        keys: &HashMap<NodeId, Keys>,
     ) -> Option<Key> {
         let (keeper, memory) = (self.keeper?, self.memory?);
         let identity = memory.identity_of(node)?;
+        let keeper: &dyn Keeper = keeper;
         // A root reads the graph's input, and the input is the one thing in the
         // whole chain hashed **by its content** — from here down it is hashes
         // of hashes, which is what makes a key knowable before anything runs.
@@ -405,7 +567,7 @@ impl<'a> Executor<'a> {
             [] => vec![keeper.key_of(graph_input)?],
             many => many
                 .iter()
-                .map(|id| keys.get(id).cloned())
+                .map(|id| keys.get(id).map(|keys| whole(keeper, keys)))
                 .collect::<Option<Vec<_>>>()?,
         };
 
@@ -524,6 +686,24 @@ pub enum RunError {
         /// What the transport said.
         source: TransportError,
     },
+    /// A node that maps was handed something that is not a list of items, or
+    /// answered with something that is not one.
+    NotItems {
+        /// Which node.
+        node: NodeId,
+        /// And what arrived instead.
+        given: String,
+    },
+    /// A node that maps answered with a different number of items than it was
+    /// asked for, so nobody knows which answer goes with which item.
+    Uncounted {
+        /// Which node.
+        node: NodeId,
+        /// How many items it was handed.
+        asked: usize,
+        /// And how many came back.
+        answered: usize,
+    },
     /// A step reads what another produced, and what it produced never came back
     /// from wherever it ran.
     Lost {
@@ -548,6 +728,23 @@ impl fmt::Display for RunError {
                 write!(f, "node `{id}` has no registered implementation")
             }
             Self::Node { node, source } => write!(f, "node `{node}` failed: {source}"),
+            Self::NotItems { node, given } => write!(
+                f,
+                "`{node}` maps over the items of its input, so what reaches it and \
+                 what it answers with are lists; a `{given}` is one thing and has \
+                 no items. Either it does not map, or whoever feeds it should be \
+                 handing it a list"
+            ),
+            Self::Uncounted {
+                node,
+                asked,
+                answered,
+            } => write!(
+                f,
+                "`{node}` was handed {asked} items and answered with {answered}: a \
+                 node that maps gives back one for each, in order, or nobody can \
+                 tell which answer belongs to which item"
+            ),
             Self::NoDriver(node) => write!(
                 f,
                 "`{node}` asked for something and this executor has no driver to serve it"
@@ -600,6 +797,20 @@ fn gather(
                 .map(|id| Ok((id.to_string(), recall(id)?)))
                 .collect::<Result<Vec<_>, RunError>>()?,
         )),
+    }
+}
+
+/// One name for what a node produced, whether it has one or a thousand.
+///
+/// A list of item keys becomes a single key by being combined, and it is
+/// [`Keeper::combine`] that decides how rather than anything here: the core does
+/// not know what a hash is. What matters is that it is **deterministic and
+/// depends on all of them**, so that whatever reads the whole list is named
+/// after the whole list.
+fn whole(keeper: &dyn Keeper, keys: &Keys) -> Key {
+    match keys {
+        Keys::One(key) => key.clone(),
+        Keys::PerItem(each) => keeper.combine(&each.iter().map(Key::as_str).collect::<Vec<_>>()),
     }
 }
 

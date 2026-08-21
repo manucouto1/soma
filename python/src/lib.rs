@@ -141,6 +141,18 @@ impl PyGraph {
         Ok(())
     }
 
+    /// Says this node maps over the items of its input: hand it a list and it
+    /// answers with a list as long, item for item.
+    ///
+    /// What it buys is a cache with the grain of an **item**: without it, adding
+    /// one document to a list of a thousand changes the name of the list and all
+    /// thousand miss.
+    fn mapped(&mut self, node_id: &str) -> PyResult<()> {
+        let id = self.known(node_id)?;
+        self.memory.map(id);
+        Ok(())
+    }
+
     /// Says this node's output is worth keeping, with the salt that tells apart
     /// two runs the key cannot tell apart on its own.
     #[pyo3(signature = (node_id, salt = None))]

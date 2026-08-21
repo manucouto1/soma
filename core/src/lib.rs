@@ -54,7 +54,7 @@ pub use execution::{Executor, RunError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;
 pub use keeper::{Keeper, KeeperError, Kept};
-pub use key::Key;
+pub use key::{Key, Keys};
 pub use memory::{Memory, MemoryError, cacheable};
 pub use node::{Ctx, Node, NodeError, Transition};
 pub use placement::Placement;

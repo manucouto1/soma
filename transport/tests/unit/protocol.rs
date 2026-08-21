@@ -4,7 +4,7 @@
 //! you do not need a worker to find out. What does need testing here and nowhere
 //! else is what **does not** cross.
 
-use soma_next_core::{Device, Host, Key, Memory, NodeId, Outcome, Placement, Plan, Value};
+use soma_next_core::{Device, Host, Key, Keys, Memory, NodeId, Outcome, Placement, Plan, Value};
 use soma_next_transport::{Answer, Label, MessageError, Request};
 
 fn work(input: Value) -> Request {
@@ -194,7 +194,7 @@ fn the_names_of_what_it_reads_cross_the_wire() {
         plan: Plan::Empty,
         input: Value::Null,
         known: vec![(NodeId::from("a"), Value::number(1.0))],
-        keys: vec![(NodeId::from("a"), Key::new("sha256:abc"))],
+        keys: vec![(NodeId::from("a"), Keys::One(Key::new("sha256:abc")))],
         placement: Placement::new(),
         memory: Memory::new(),
     })
@@ -203,7 +203,10 @@ fn the_names_of_what_it_reads_cross_the_wire() {
     let Request::Work { keys, .. } = Request::from_bytes(&bytes).unwrap() else {
         panic!("not a work message")
     };
-    assert_eq!(keys, [(NodeId::from("a"), Key::new("sha256:abc"))]);
+    assert_eq!(
+        keys,
+        [(NodeId::from("a"), Keys::One(Key::new("sha256:abc")))]
+    );
 }
 
 #[test]
@@ -331,7 +334,7 @@ fn the_answers_go_and_come_back_equal() {
                 (NodeId::from("a"), Value::number(1.0)),
                 (NodeId::from("b"), Value::number(42.0)),
             ],
-            keys: vec![(NodeId::from("a"), Key::new("sha256:abc"))],
+            keys: vec![(NodeId::from("a"), Keys::One(Key::new("sha256:abc")))],
         }),
     ] {
         let bytes = bytes_of_answer(&answer).unwrap();
@@ -489,5 +492,39 @@ fn and_what_is_written_now_is_the_size_of_the_data_and_not_twice_it() {
         then.len() > 2 * RAW,
         "then: {} bytes for {RAW} of data",
         then.len()
+    );
+}
+
+#[test]
+fn what_maps_still_maps_on_the_other_side() {
+    // The projection is written out one fact at a time, so a new one that is not
+    // added to it does not fail: it stops being true over there, and a node goes
+    // on answering the same thing while its cache quietly loses the grain it was
+    // asked for. Nothing catches that but a test that crosses.
+    let mut memory = Memory::new();
+    memory.identify("embed", "Embed");
+    memory.map("embed");
+    memory.map("elsewhere");
+
+    let bytes = bytes_of(&Request::Work {
+        plan: Plan::Execute {
+            node: "embed".into(),
+            from: Vec::new(),
+        },
+        input: Value::Null,
+        known: Vec::new(),
+        keys: Vec::new(),
+        placement: Placement::new(),
+        memory,
+    })
+    .unwrap();
+
+    let Request::Work { memory, .. } = Request::from_bytes(&bytes).unwrap() else {
+        panic!("not a work message")
+    };
+    assert!(memory.is_mapped(&NodeId::from("embed")));
+    assert!(
+        !memory.is_mapped(&NodeId::from("elsewhere")),
+        "what is remembered of a node that is not in this plan does not travel"
     );
 }
