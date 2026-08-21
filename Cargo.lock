@@ -299,6 +299,7 @@ dependencies = [
  "pyo3",
  "soma-next-core",
  "soma-next-store",
+ "soma-next-study",
  "soma-next-transport",
 ]
 
@@ -312,6 +313,10 @@ dependencies = [
  "sha2",
  "soma-next-core",
 ]
+
+[[package]]
+name = "soma-next-study"
+version = "0.1.0"
 
 [[package]]
 name = "soma-next-transport"

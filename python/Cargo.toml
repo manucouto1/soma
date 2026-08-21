@@ -12,4 +12,5 @@ crate-type = ["cdylib"]
 soma-next-core.workspace = true
 soma-next-transport = { path = "../transport" }
 soma-next-store = { workspace = true }
+soma-next-study = { path = "../study" }
 pyo3 = { version = "0.24", features = ["extension-module"] }

@@ -9,6 +9,7 @@ mod codec;
 mod node;
 mod remote;
 mod store;
+mod study;
 mod value;
 
 use codec::Packing;
@@ -493,6 +494,8 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWorker>()?;
     m.add_class::<store::PyStore>()?;
     m.add_class::<store::PyBound>()?;
+    m.add_class::<study::PyPartition>()?;
+    m.add_class::<study::PyPruner>()?;
     m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;
     m.add_function(wrap_pyfunction!(remote::serve, m)?)?;
