@@ -2269,8 +2269,7 @@ for _ in range(rounds):
         client.load(average)
 ```
 
-Status: **open**. Clients in one process, a store both machines can see, and a
-way to hand work out. 397 tests in Python, 40 in the store.
+Status: **closed**. 410 tests in Python, 40 in the store.
 
 ### The question CU11 put off, and how it changed shape on the way
 
@@ -2418,15 +2417,82 @@ down, or the winner does the work with somebody else's name on it. Against the
 mutant written as `resolve` then `bind`, every other test still passes and these
 say seven of the eight racers were told they had it.
 
+### The barrier, with nobody in charge
+
+The last piece, and the half the study's design never had: trials are independent
+and rounds are not.
+
+```python
+for r in range(rounds):
+    trainer.fit(my_data)
+    trainer.load(gather(store, trainer.export(), run="cifar", round=r,
+                        clients=4, mine=int(os.environ["SLURM_PROCID"])))
+```
+
+The same script on every machine. The obvious answer is a coordinator, and a
+coordinator is a process that has to stay alive — and a run that hangs over a
+weekend when it does not. Instead: **whoever finds the round complete claims the
+averaging**, and exactly one can win that, because that is what a claim is. One
+client does a little more work than the rest, once a round, and nobody babysits
+anything.
+
+A round, on disk:
+
+```text
+<run>/round/<r>/client/<k>    what client k learnt   (its size in the record)
+<run>/round/<r>/averaging     who is doing the mean  (claimed, so exactly one)
+<run>/round/<r>/average       the mean               (what everybody leaves with)
+```
+
+**The deadline says who is missing by name**, and in two messages rather than
+one, because they are not the same thing: somebody missing is a client that never
+came; **nobody** missing is worse — the round is complete, so whoever claimed the
+averaging died holding it, and no one else will try. That is what a claim is,
+said from the other side.
+
+Waiting longer is a number. Going on without them is a **policy**, and not this
+function's to make: `fedavg` takes whatever list it is handed.
+
+### Questionnaire, the distributed half
+
+**The store, opened by hand** (`python/tests/test_store.py`)
+- [x] bytes by what they are, names that point at them, and both directions of
+      each
+- [x] a value with tensors in it goes in and comes out alive, and a bare tensor
+      is kept although it would not cross an edge
+- [x] something nobody registered a codec for says which type it was
+- [x] a training run written down by **another interpreter** is read back here to
+      the same weights, and two processes that wrote the same weights wrote them
+      once
+
+**Claiming** (`store/tests/unit/local.rs`, `test_store.py`)
+- [x] a name nobody has can be claimed and one somebody has cannot
+- [x] what `bind` replaces, `claim` refuses
+- [x] eight threads and eight **processes** on one name: exactly one wins, and
+      the one told it won is the one written down
+- [x] a claim leaves nothing behind in the temporaries
+- [x] against the mutant written as `resolve` then `bind`, seven of the eight
+      racers were told they had it
+
+**The round** (`python/tests/test_round.py`)
+- [x] the only client of a round averages it itself, and publishes it
+- [x] a client that arrives after the average finds it and does not wait
+- [x] two runs sharing a directory are two runs, and so are two rounds of one
+- [x] the deadline says which clients are missing — and says a different thing
+      when the round is complete and the average never came
+- [x] the size travels in the record; all of them saying it or none
+- [x] **four processes, one folder, two rounds**: all four leave with the same
+      number, and exactly two averagings happen, which nobody arranged
+- [x] a client that never starts stops the others **by name**
+- [x] four mutations — `bind` for `claim`, never waiting, never publishing, not
+      weighing — every one caught
+
 ### What is NOT in it yet
 
-**the barrier**, which is the half the study's design never had: trials
-are independent and rounds are not, so somebody has to wait for all N exports of
-round R and average them · **FedProx, FedYogi, SCAFFOLD**, the same shape with
-different arithmetic · **secure aggregation** · and **what a round is worth
-remembering by**, which is where the digest of a state stops being only a cache
-key.
+**FedProx, FedYogi, SCAFFOLD**, the same shape with different arithmetic ·
+**secure aggregation** · **partial rounds**, which is a policy and belongs to
+whoever is running one · and **what a round is worth remembering by**, which is
+where the digest of a state stops being only a cache key.
 
-Putting any of it through the graph's transport would be the original's mistake
-wearing a different hat: none of this needs `Plan::Remote`, and Slurm hands the
-work out.
+None of it went through the graph's transport, and that was the point: no
+`Plan::Remote`, no port, no protocol. A folder, and Slurm hands the work out.
