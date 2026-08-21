@@ -2269,8 +2269,8 @@ for _ in range(rounds):
         client.load(average)
 ```
 
-Status: **open**. Clients in one process, and a store both machines can see.
-392 tests in Python.
+Status: **open**. Clients in one process, a store both machines can see, and a
+way to hand work out. 397 tests in Python, 40 in the store.
 
 ### The question CU11 put off, and how it changed shape on the way
 
@@ -2391,13 +2391,36 @@ round's client half with nothing between the two but a folder both can see. And
 twice over: the same weights written by two processes are one blob, which is what
 makes a round that changed nothing free.
 
+### Claiming, which is how work gets handed out
+
+The third piece. `bind` **replaces**, and that is right for what it is for — a
+name is a question and its answer can be refreshed. It is exactly wrong for
+handing out work: two processes given the same round would both bind it, both do
+it, and nobody would do the next one.
+
+```python
+me = store.put(f"{gethostname()}/{getpid()}".encode())
+if store.claim(f"round/{r}/client/{k}", me):
+    ...
+```
+
+One operation that either takes the name or finds it taken, on the trait and
+**with no default**: one written out of `resolve` and `bind` would be a race with
+a doc comment on it. `link` and not `rename` is the whole difference — a rename
+replaces, and `link` fails when the name is taken. It is also the one that has
+always been trusted over NFS, where `O_EXCL` has not, and a network folder is
+where this is going to live.
+
+**The tests really race.** Eight threads in Rust, eight **processes** in Python,
+because that is the case this exists for: Slurm tasks on a folder they all
+mounted. And not just that one wins — that the one told it won is the one written
+down, or the winner does the work with somebody else's name on it. Against the
+mutant written as `resolve` then `bind`, every other test still passes and these
+say seven of the eight racers were told they had it.
+
 ### What is NOT in it yet
 
-**Claiming.** `bind` **replaces**, so there is nothing to claim work with: two
-processes handed the same round would both do it. The primitive is one atomic
-create-only bind — a `hard_link` from the temporary, which is what fails when
-somebody already has it — and it is what federated and a study of trials both
-need · **the barrier**, which is the half the study's design never had: trials
+**the barrier**, which is the half the study's design never had: trials
 are independent and rounds are not, so somebody has to wait for all N exports of
 round R and average them · **FedProx, FedYogi, SCAFFOLD**, the same shape with
 different arithmetic · **secure aggregation** · and **what a round is worth
