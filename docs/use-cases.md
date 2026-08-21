@@ -2053,8 +2053,116 @@ a reader here by definition, so refusing it is the honest answer.
 
 **FedAvg**, which is CU15 and is what a training run *exports* rather than what it
 does · **`Opaque` over the wire**: activations still cross as floats, and the
-codec that would fix it exists — the wire is what refuses · **micro-batches**,
+codec that would fix it exists — the wire is what refuses. *(Closed afterwards,
+below.)* · **micro-batches**,
 which open together with the grain per item (`.mapped()`) · **a trained node with
 two producers**, which would owe a different gradient to each and is refused in as
 many words, because routing one gradient per edge is not something the transpose
 alone does · and **`resume` exposed to Python**.
+
+---
+
+## After CU14 — `Opaque` over the wire
+
+The pending CU14 wrote down, closed before starting CU15. Not a use case of its
+own: no new call shape, nothing new to declare. What changes is what a wire will
+carry, and it is measured rather than argued.
+
+Status: **closed**. 188 in core, 33 in store, 80 in transport, 340 in Python, 18
+in containers.
+
+### It does not move the frontier, it moves what falls on which side
+
+`Value::travels` does not change and stays true: what comes out of a codec
+**does** travel, being maps and bytes. A codec does not relax the limit — it
+turns a value that could not cross into one that can, before anybody asks. The
+frontier goes from "the variant" to "the variant nobody registered a codec for",
+which is the more precise statement of the two, and it is CU13's sentence about a
+store said again about a socket.
+
+### Not a fifth hole
+
+The first shape this was given had `Serving` taking a new trait and `CLAUDE.md`
+going from four holes to five. That was wrong, and the tree already said so:
+**`transport` has a hole of its own**, `Provision`, filled from `python/`, and
+nobody counts it among the core's. The core's four are what *the core* provides
+and does not fill. This one is about the wire's alphabet, and the wire belongs to
+`transport`.
+
+So: one trait in `transport`, one implementor in `python/`, and `core` untouched.
+
+| | on the way out | on the way back |
+|---|---|---|
+| the client, `Worker::packing` | the input and what is known, packed | what came back, unpacked |
+| the worker, `Serving::packing` | what it produced, packed | the input and what is known, unpacked |
+
+Packing happens **before** a message is built, so the refusal in
+`Answer::to_bytes` is untouched and still guards: by the time it looks, whatever
+had a codec is already bytes.
+
+### What executing it said that the design did not
+
+- **Packing goes before `travelling`.** `Outcome::travelling` drops what does not
+  travel, and a tensor with a codec does travel — asking first leaves behind
+  exactly what this exists to carry.
+- **Failing is not the same in the two directions.** Going out, a value nobody
+  can write down is an error: somebody over there is waiting for it. Coming back,
+  it stays where it ran and is named by `RunError::Lost`, which is CU14's rule
+  unchanged. And unlike a `Keeper`, a codec that fails **does** stop the run: a
+  cache that cannot answer recomputes, a wire has nothing to fall back on.
+- **A worker never imports `soma_next.torch`.** It starts empty, and the nodes
+  that arrive may never mention `torch` while a tensor goes past them all the
+  same. Importing it on standing up works and costs two seconds per worker —
+  most of a suite that stands up twenty. So it is summoned at the moment it is
+  known to be needed: something written by that codec arrived and nothing here
+  reads it. Both ways round, because a kind is named after its type.
+- **Two things were slower than the wire**, and neither was the wire. An artifact
+  taken as `Vec<u8>` is read out of a `bytes` one element at a time — 10 MB/s,
+  413 ms on a 4 MB artifact, three times a step. And `Value::Bytes` went through
+  serde as a **sequence**, one element per byte, so a megabyte of tensor was a
+  million integers. Both were older than this slice and only became visible
+  because it made the wire fast enough for them to show.
+
+### The consumer, which is what makes it worth anything
+
+Two `_data`s, one per direction, and the one in `_learning.py` said it out loud:
+*"this slice does not touch the wire, so activations and gradients cross as
+floats"*. Both are now a tensor wrapped to cross, `detach` included — the graph
+does not cross a wire and never did, so letting go of it here says out loud what
+the wire does anyway.
+
+| a step, half of it in another process | floats | bytes | |
+|---|---|---|---|
+| 64×256 | 103.9 ms | 11.1 ms | **9.4×** |
+| 256×1024 | 1051.7 ms | 69.9 ms | **15.1×** |
+
+Worth more than the number: **the same node is handed the same shape wherever it
+runs**, which is the whole argument of `.at()`. Until now a node that worked here
+was handed a list of floats the day somebody placed its producer elsewhere.
+
+### Questionnaire
+
+**The seam** (`transport/tests/unit/worker.rs`, no Python in it)
+- [x] with a codec, an opaque produced over there comes back what it was
+- [x] and one bound for over there arrives as what it was
+- [x] one the codec cannot write and the slice answers with is refused **in the
+      codec's own words, which are the far end's**
+- [x] one it cannot write and nobody asked for stays where it ran
+- [x] a worker that does not pack hands its node what it was sent, and the
+      failure is quiet — which is why nothing installs one end without the other
+
+**From Python** (`python/tests/test_remote.py`)
+- [x] an opaque nobody can write down still does not leave, and says which type
+      it was and how to say so
+- [x] one produced over there that nobody can write down stays there
+- [x] a tensor crosses whole and is a tensor over there — asked of the object
+      itself, since a list of floats has no `shape`
+- [x] one produced over there comes back a tensor, equal
+- [x] what a node is handed on the far side is a `Tensor` and not a `list`
+
+**Nothing else moved**
+- [x] the 18 container tests, the bit-for-bit cross-process training of CU14, and
+      everything CU13 keeps
+- [x] bytes written as a list of numbers are still read as bytes, so a store
+      written before this still opens — and what is written now is the size of
+      the data and not twice it

@@ -17,6 +17,11 @@ serde = { workspace = true }
 # bytes can be read with any MessagePack tool when something goes wrong.
 rmp-serde = "1" 
 
+[dev-dependencies]
+# The same one, so a test can write a message the way an **older** binary would
+# have and check that this one still reads it. Nothing new in the tree.
+rmp-serde = "1"
+
 # The worker the tests use. A binary and not an `example` because a test needs to
 # know its path, and `CARGO_BIN_EXE_` only exists for binaries — but its source
 # lives under `tests/`, because `src/` is what the library is.

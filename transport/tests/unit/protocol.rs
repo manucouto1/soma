@@ -430,3 +430,64 @@ fn bytes_that_are_not_a_message_are_reported() {
         MessageError::Malformed(_)
     ));
 }
+
+// ── That what is already written still opens ──
+
+/// A value the way it was written down before bytes were asked for by name.
+///
+/// The same variants in the same order, so the same encoding — except `Bytes`,
+/// which here has no `serialize_bytes` behind it and so goes out as serde's
+/// default for a slice: **a sequence, one element per byte**. That is what a
+/// store filled last week has in it.
+#[derive(serde::Serialize)]
+enum Older<'a> {
+    #[allow(dead_code)]
+    Null,
+    #[allow(dead_code)]
+    Number(f64),
+    #[allow(dead_code)]
+    Text(&'a str),
+    Bytes(&'a [u8]),
+    #[allow(dead_code)]
+    List(Vec<Older<'a>>),
+    #[allow(dead_code)]
+    Map(Vec<(&'a str, Older<'a>)>),
+}
+
+#[test]
+fn bytes_written_as_a_list_of_numbers_are_still_read_as_bytes() {
+    // A store outlives every binary that wrote into it, so the day the encoding
+    // gets narrower is the day reading has to take both.
+    let old = rmp_serde::to_vec(&Older::Bytes(b"a tensor, once")).expect("it writes");
+
+    let read: Value = rmp_serde::from_slice(&old).expect("and it still reads");
+
+    assert_eq!(
+        read,
+        Value::Bytes(std::sync::Arc::new(b"a tensor, once".to_vec()))
+    );
+}
+
+#[test]
+fn and_what_is_written_now_is_the_size_of_the_data_and_not_twice_it() {
+    // The size is the visible half. The invisible half — an element of work per
+    // byte, at each end — is the one that cost the time, and it does not fit in
+    // an assert. Bytes over 127 on purpose: those are the ones msgpack spends
+    // two bytes on as numbers, and a tensor's bytes are uniformly spread.
+    const RAW: usize = 1024;
+    let value = Value::Bytes(std::sync::Arc::new(vec![200u8; RAW]));
+
+    let now = rmp_serde::to_vec(&value).expect("it writes");
+    let then = rmp_serde::to_vec(&Older::Bytes(&[200u8; RAW])).expect("it writes");
+
+    assert!(
+        now.len() < RAW + 32,
+        "now: {} bytes for {RAW} of data",
+        now.len()
+    );
+    assert!(
+        then.len() > 2 * RAW,
+        "then: {} bytes for {RAW} of data",
+        then.len()
+    );
+}
