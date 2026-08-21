@@ -135,5 +135,9 @@ where **whoever finds it complete claims the averaging** so there is no
 coordinator to keep alive. No port, no protocol, no `Plan::Remote`; Slurm
 distributes.
 
-Next: micro-batches, which is where the grain per item (`.mapped()`) joins them.
+**CU16 closed**, and it split what the plan had joined: micro-batches are level 2
+—the batch is the caller's, so `torch.chunk` reaches it— while `.mapped()` is the
+engine's, because caching item by item has to **name** each item and a name comes
+from its **content and not its place**. Sixteen use cases closed.
+
 See the distribution report for the full order.

@@ -2496,3 +2496,121 @@ where the digest of a state stops being only a cache key.
 
 None of it went through the graph's transport, and that was the point: no
 `Plan::Remote`, no port, no protocol. A folder, and Slurm hands the work out.
+
+---
+
+## CU16 — The grain of an item
+
+```python
+embed.named("embed").frozen().mapped().cached()
+Trainer(g, objective=..., optimizer=..., micro=4)
+```
+
+Status: **closed**. 196 in core, 40 in store, 83 in transport, 428 in Python.
+
+The two things the plan had written down as opening together. They do not, and
+finding out why was most of the design.
+
+### The question they share, and where it splits them
+
+**What is an item, and who can see them.** Two facts settle it:
+
+1. The engine sees items only inside a `Value::List`. Everything else is one
+   thing.
+2. And the case that matters is exactly what it cannot see: a batch of images is
+   `Opaque(tensor[128, …])` and its items are rows. That is not an oversight of
+   the API — it is the whole point of `Opaque`.
+
+Caching item by item has to **name** each item, and a name comes from content:
+the same document in another list has to be the same item, or labchain's argument
+is gone. So the engine has to be able to look. A micro-batch names nothing — and
+at level 2 the batch belongs to the caller, who hands it in, so `torch.chunk`
+reaches it and the core never learns what an item is.
+
+**They separate.** One is `_trainer.py`; the other is the engine.
+
+### An item's name is its content, not its place
+
+The cheap design is `key(item i) = H(key of the whole thing, i)` — free, and
+worth nothing. It hits exactly when the whole-value cache of CU13 already hits,
+and misses exactly when it misses: add one document and the root's content hash
+changes, and with it all thousand item keys. The middle case — fifty new
+documents on a thousand old ones — is the only thing per-item grain buys, and it
+requires each item's name to depend on **its own** content.
+
+The cost is not a toll to dodge: it *is* the feature. And it is far smaller than
+it first looked — the engine hashes text, bytes and numbers itself, and the case
+this exists for has text at the root. Only opaque items cost a codec's write.
+
+### Where the chain starts is where content is hashed
+
+If what is above already names each item, these are built out of those and
+nothing is hashed. If it does not — a root, or a list from a node nobody mapped —
+each item is hashed by itself. And what reads a mapped node **without** mapping
+is named after the whole list, so changing one item makes it run again. Which of
+those a list of names collapses into is `Keeper::combine`'s to decide, not the
+core's.
+
+### Three ways to see an item, and why (A)
+
+- **(A)** an item is a list element, and `.mapped()` refuses an opaque — nothing
+  new in the core, and the node stacks what it is handed. **Chosen.**
+- **(B)** a third hole that knows how to cut an opaque. More powerful; costs a
+  hole. And what would justify it — the cost — is inherent to the idea rather
+  than to the choice, so it buys **convenience, not capability**. It fits on top
+  later if (A)'s ergonomics prove wrong.
+- **(C)** the node cuts, told which items are wanted. The `Device` pattern
+  exactly, and **it does not reach**: the node can cut what the engine cannot
+  hash.
+
+### What executing it said
+
+- **`torch.chunk` gives at most what it is asked for.** Six rows into four is
+  three pieces, and a group counting four while three run never closes — the
+  optimizer stops moving, and across a cut the far side counts what it sees and
+  the two fall out of step in silence. So a batch that does not divide is
+  refused, which also makes accumulation's "equal pieces" assumption true rather
+  than stated.
+- **`memory_in` is written out one fact at a time, and that is a hole with a name
+  on it.** A fifth thing to remember that is not added there does not fail: it
+  stops being true on the other side of the wire. A mapped node would go on
+  answering the same thing while its cache quietly lost its grain. Found by going
+  to look, and there is a test that crosses now.
+- **A branch of mine went in the bin.** I wrote a cut for a batch that is a map
+  of tensors and then found such a batch does not cross an edge today with or
+  without it. The project's first rule, applied to my own code.
+- **`Keeper::recall` has taken a slice since the first day**, and its docstring
+  says it is not for symmetry. This is what it was for.
+
+### Questionnaire
+
+**Cutting a batch** (`python/tests/test_trainer.py`)
+- [x] a batch in pieces comes out where the whole one does
+- [x] the optimizer still moves once a step, and `every` and `micro` multiply
+- [x] the loss it gives back is still the number the whole batch would have said
+- [x] a batch that does not divide is refused with both numbers and the flag that
+      fixes it; so is something it cannot cut, and halves that do not line up
+- [x] across a cut, the far side counts the **pieces**
+
+**The grain of an item** (`core/tests/unit/execution.rs`, `test_cache.py`)
+- [x] a node that maps answers one for each item, and does so with nobody keeping
+      anything at all
+- [x] the second run of the same list looks at nothing
+- [x] **a new item among old ones is the only one looked at**
+- [x] an item is named after itself and not after where it sits: the same four
+      shuffled are the same four
+- [x] what reads a mapped node without mapping is named after the whole list, so
+      one item changing makes it run again
+- [x] what is not a list, an answer with the wrong number of items, and a mapped
+      node with two producers: refused where it happens with the node named
+- [x] what maps still maps **on the other side of a wire**
+- [x] three mutations — naming an item after its position, running all of them,
+      losing the order on the way back — every one caught
+
+### What is NOT in it yet
+
+**(B), the hole that cuts an opaque**, which goes in the day `.mapped()` over a
+list of wrapped rows proves too clumsy to live with · **a mapped node with two
+producers**, which needs one gradient — one name — per edge and is refused rather
+than guessed · and **a compile-time refusal** for it: today it is refused when the
+map reaches the node, which names it but names it late.
