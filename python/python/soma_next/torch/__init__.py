@@ -35,6 +35,7 @@ imports are absolute, so `import torch` in here brings the usual one.
 """
 
 from soma_next.torch._codec import register as _register_the_tensor_codec
+from soma_next.torch._federated import fedavg
 from soma_next.torch._freeze import freeze
 from soma_next.torch._learning import Learning, OutOfStep, Split, envelope, gradient
 from soma_next.torch._params import parameters
@@ -53,6 +54,7 @@ __all__ = [
     "Split",
     "Trainer",
     "envelope",
+    "fedavg",
     "freeze",
     "gradient",
     "parameters",

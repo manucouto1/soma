@@ -446,6 +446,75 @@ class Trainer:
             f"out of the optimizer"
         )
 
+    def export(self):
+        """What this training run learnt: its weights, node by node.
+
+        `{node_id: {key: tensor}}`, and the keys are whatever the node answers
+        with — **the same two ducks** everything else in here asks by, a
+        `state_dict` by name or `parameters()` in order. A node that has neither
+        has no weights and is simply not in there; a tokenizer does not stop
+        being a node for it.
+
+        A **snapshot** and not a view: what comes out is detached and copied, so
+        the next step does not move it under whoever is holding it. That is the
+        whole point of exporting one.
+
+        What is **not** in it is the optimizer's state: momentum is this client's
+        and averaging it is not what averaging weights means.
+
+        Refused for a node that is trained **and** runs elsewhere: those weights
+        are over there and the copy here is the one that was sent, so handing it
+        back would be handing back a net that never learnt — in silence, which is
+        the only way this could go wrong and the reason it is checked.
+        """
+        self._check_they_are_here("exported")
+        return {
+            node_id: {key: value.detach().clone() for key, value in state}
+            for node_id, state in _the_weights(self.graph)
+        }
+
+    def load(self, weights):
+        """The mirror: takes what an `export` gave back and puts it in.
+
+        Every node it names has to be here and have the weights it says, with the
+        shapes it says. Nothing is copied in until all of that is true, so a
+        refusal leaves the net as it was rather than half loaded.
+        """
+        self._check_they_are_here("loaded")
+        mine = dict(_the_weights(self.graph))
+        putting = []
+        for node_id, state in weights.items():
+            if node_id not in mine:
+                raise ValueError(
+                    f"there is nothing called `{node_id}` with weights in this "
+                    f"graph, and `{'`, `'.join(sorted(mine))}` is what there is"
+                )
+            here = dict(mine[node_id])
+            for key, value in state.items():
+                if key not in here:
+                    raise ValueError(f"`{node_id}` has no `{key}` to load into")
+                if here[key].shape != value.shape:
+                    raise ValueError(
+                        f"`{node_id}`'s `{key}` is {tuple(here[key].shape)} here "
+                        f"and what arrived is {tuple(value.shape)}"
+                    )
+                putting.append((here[key], value))
+        with torch.no_grad():
+            for mine_, theirs in putting:
+                mine_.copy_(theirs.to(mine_.device, mine_.dtype))
+
+    def _check_they_are_here(self, what):
+        """That nothing this is about to speak for is being trained on another
+        machine."""
+        hosts = self.graph.hosts()
+        elsewhere = sorted(node_id for node_id in self.trains if hosts.get(node_id))
+        if elsewhere:
+            raise ValueError(
+                f"`{'`, `'.join(elsewhere)}` is trained where it runs, which is "
+                f"not here, so its weights cannot be {what} from this side: what "
+                f"is here is the copy that was sent, and it never learnt anything"
+            )
+
     def fit(self, data, epochs=1):
         """Takes one step per batch, for as many epochs as you say.
 
@@ -464,6 +533,27 @@ class Trainer:
     def __repr__(self):
         kept = f", keeping in {self.store}" if self.store else ""
         return f"Trainer({len(parameters(self.graph))} parameters{kept})"
+
+
+def _the_weights(graph):
+    """Every node that has any, and what its weights are called.
+
+    The same two ducks as `state_digest` and `Graph._check_it_was_obeyed`, and
+    they have to be the same two: a node that can be told to settle and cannot be
+    exported would be a node the project asks two different questions about its
+    state.
+    """
+    for node_id in graph.nodes():
+        implementation = graph.implementation(node_id)
+        named = getattr(implementation, "state_dict", None)
+        if named is not None:
+            state = sorted(named().items())
+        else:
+            in_order = getattr(implementation, "parameters", None)
+            state = list(enumerate(in_order())) if in_order is not None else []
+        state = [(key, value) for key, value in state if torch.is_tensor(value)]
+        if state:
+            yield node_id, state
 
 
 def _check_the_group(every):
