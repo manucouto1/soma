@@ -184,9 +184,60 @@ mod shadow {
         Null,
         Number(f64),
         Text(Cow<'a, str>),
-        Bytes(Cow<'a, [u8]>),
+        Bytes(#[serde(with = "as_bytes")] Cow<'a, [u8]>),
         List(Vec<Shadow<'a>>),
         Map(Vec<(Cow<'a, str>, Shadow<'a>)>),
+    }
+
+    /// A byte string, and **not** a list of numbers.
+    ///
+    /// What serde does with a slice by default is a sequence, one element per
+    /// byte: a megabyte of tensor goes on the wire as a million integers, which
+    /// costs both the size and — by far the worse half — a element of work per
+    /// byte at each end. Every format has `serialize_bytes` for exactly this,
+    /// and asking for it by hand is cheaper than a dependency.
+    ///
+    /// Reading takes **both** shapes, so anything written before this still
+    /// opens: a store outlives every binary that wrote into it.
+    mod as_bytes {
+        use super::{Cow, Deserializer, Serializer};
+        use serde::de::{Error, SeqAccess, Visitor};
+        use std::fmt;
+
+        pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+            s.serialize_bytes(bytes)
+        }
+
+        pub fn deserialize<'de, 'a, D: Deserializer<'de>>(d: D) -> Result<Cow<'a, [u8]>, D::Error> {
+            d.deserialize_byte_buf(Bytes).map(Cow::Owned)
+        }
+
+        struct Bytes;
+
+        impl<'de> Visitor<'de> for Bytes {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("bytes")
+            }
+
+            fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
+                Ok(bytes.to_vec())
+            }
+
+            fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(bytes)
+            }
+
+            /// What was written before bytes were asked for by name.
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(byte) = seq.next_element()? {
+                    bytes.push(byte);
+                }
+                Ok(bytes)
+            }
+        }
     }
 
     /// The one thing that cannot become a [`Shadow`].
