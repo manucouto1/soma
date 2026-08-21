@@ -305,10 +305,8 @@ impl From<Received> for Request {
 
 /// The device of each node of this plan that has one.
 fn devices_in<'a>(plan: &'a Plan, placement: &'a Placement) -> Vec<(&'a NodeId, &'a Device)> {
-    let mut ids = Vec::new();
-    nodes_in(plan, &mut ids);
-    ids.into_iter()
-        .filter_map(|id| placement.of(id).map(|device| (id, device)))
+    plan.steps()
+        .filter_map(|step| placement.of(step.node).map(|device| (step.node, device)))
         .collect()
 }
 
@@ -320,10 +318,8 @@ fn devices_in<'a>(plan: &'a Plan, placement: &'a Placement) -> Vec<(&'a NodeId, 
 /// to be wrong. Whoever adds a fifth thing to [`Memory`] adds a line here and a
 /// test that crosses.
 fn memory_in(plan: &Plan, memory: &Memory) -> Memory {
-    let mut ids = Vec::new();
-    nodes_in(plan, &mut ids);
     let mut mine = Memory::new();
-    for id in ids {
+    for id in plan.steps().map(|step| step.node) {
         if let Some(what) = memory.identity_of(id) {
             mine.identify(id.clone(), what);
         }
@@ -341,19 +337,6 @@ fn memory_in(plan: &Plan, memory: &Memory) -> Memory {
         }
     }
     mine
-}
-
-fn nodes_in<'p>(plan: &'p Plan, out: &mut Vec<&'p NodeId>) {
-    match plan {
-        Plan::Empty => {}
-        Plan::Execute { node, .. } => out.push(node),
-        Plan::Sequence(plans) | Plan::Wave(plans) => {
-            for plan in plans {
-                nodes_in(plan, out);
-            }
-        }
-        Plan::Remote { inner, .. } => nodes_in(inner, out),
-    }
 }
 
 /// Why a message could not be put on the wire, or taken off it.

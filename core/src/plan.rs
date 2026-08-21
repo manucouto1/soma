@@ -108,6 +108,91 @@ pub fn compile(graph: &Graph, catalog: &Catalog) -> Result<Plan, CompileError> {
     Ok(decompose(graph, &order))
 }
 
+/// One step of a plan: a node, and where its input comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Step<'p> {
+    /// Which node.
+    pub node: &'p NodeId,
+    /// Which nodes it reads. Empty means the graph's input.
+    pub from: &'p [NodeId],
+}
+
+/// What decides where one part of a plan runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Destination<'p> {
+    /// A node, whose host — if it has one — the [`Placement`] knows.
+    Node(&'p NodeId),
+    /// A slice that already says where it goes.
+    Away(&'p Host),
+}
+
+impl Plan {
+    /// Every step, in declaration order, **wherever it runs**: what a plan does
+    /// does not depend on where, so a [`Remote`](Plan::Remote) is entered.
+    ///
+    /// This is the walk that "which nodes are in here?" wants, and there were
+    /// three copies of it before there was one — one of them in another crate,
+    /// which had rewritten a private helper of this one because there was no way
+    /// to ask.
+    pub fn steps(&self) -> impl Iterator<Item = Step<'_>> {
+        Steps { left: vec![self] }
+    }
+
+    /// What decides where each part of this plan runs, in declaration order.
+    ///
+    /// The other walk, and it differs in one line: a [`Remote`](Plan::Remote) is
+    /// **not** entered, because it already says where it goes. That is what
+    /// makes [`distribute`] idempotent — a plan that has already travelled is
+    /// not opened up and sent again.
+    pub fn destinations(&self) -> impl Iterator<Item = Destination<'_>> {
+        Destinations { left: vec![self] }
+    }
+}
+
+/// The stack of [`Plan::steps`]. Children are pushed in reverse so that popping
+/// gives them back in the order they were declared, which is observable.
+struct Steps<'p> {
+    left: Vec<&'p Plan>,
+}
+
+impl<'p> Iterator for Steps<'p> {
+    type Item = Step<'p>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(plan) = self.left.pop() {
+            match plan {
+                Plan::Empty => {}
+                Plan::Execute { node, from } => return Some(Step { node, from }),
+                Plan::Sequence(plans) | Plan::Wave(plans) => self.left.extend(plans.iter().rev()),
+                Plan::Remote { inner, .. } => self.left.push(inner),
+            }
+        }
+        None
+    }
+}
+
+/// The stack of [`Plan::destinations`]. The same walk, stopping where the other
+/// descends.
+struct Destinations<'p> {
+    left: Vec<&'p Plan>,
+}
+
+impl<'p> Iterator for Destinations<'p> {
+    type Item = Destination<'p>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(plan) = self.left.pop() {
+            match plan {
+                Plan::Empty => {}
+                Plan::Execute { node, .. } => return Some(Destination::Node(node)),
+                Plan::Sequence(plans) | Plan::Wave(plans) => self.left.extend(plans.iter().rev()),
+                Plan::Remote { host, .. } => return Some(Destination::Away(host)),
+            }
+        }
+        None
+    }
+}
+
 /// Wraps the slices that run on another host in [`Plan::Remote`].
 ///
 /// It groups **as much as it can**, descending only where a slice is spread
@@ -196,29 +281,19 @@ fn close(out: &mut Vec<Plan>, run: &mut Vec<Plan>, destination: Option<Host>) {
     });
 }
 
-/// Whether the whole plan lands in the same place.
+/// Whether the whole plan lands in the same place. `None` means "here".
 fn uniform(plan: &Plan, placement: &Placement) -> Where {
-    let mut places = Vec::new();
-    hosts_in(plan, placement, &mut places);
+    let places: Vec<Option<Host>> = plan
+        .destinations()
+        .map(|destination| match destination {
+            Destination::Node(node) => placement.host_of(node).cloned(),
+            Destination::Away(host) => Some(host.clone()),
+        })
+        .collect();
     match places.split_first() {
         None => Where::Nothing,
         Some((first, rest)) if rest.iter().all(|host| host == first) => Where::All(first.clone()),
         Some(_) => Where::Mixed,
-    }
-}
-
-/// The host of each node in the plan, with repeats. `None` means "here". A
-/// [`Plan::Remote`] counts as its host and is not descended into.
-fn hosts_in(plan: &Plan, placement: &Placement, out: &mut Vec<Option<Host>>) {
-    match plan {
-        Plan::Empty => {}
-        Plan::Execute { node, .. } => out.push(placement.host_of(node).cloned()),
-        Plan::Sequence(plans) | Plan::Wave(plans) => {
-            for plan in plans {
-                hosts_in(plan, placement, out);
-            }
-        }
-        Plan::Remote { host, .. } => out.push(Some(host.clone())),
     }
 }
 

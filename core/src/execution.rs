@@ -832,14 +832,11 @@ fn fingerprint(kept: &Kept) -> Option<&str> {
 
 /// What this plan reads and does not produce: what has to travel with it.
 fn needs(plan: &Plan) -> Vec<NodeId> {
-    let mut produced = Vec::new();
-    let mut consumed = Vec::new();
-    collect(plan, &mut produced, &mut consumed);
-
+    let produced: Vec<&NodeId> = plan.steps().map(|step| step.node).collect();
     let mut out: Vec<NodeId> = Vec::new();
-    for id in consumed {
-        if !produced.contains(&id) && !out.contains(&id) {
-            out.push(id);
+    for id in plan.steps().flat_map(|step| step.from) {
+        if !produced.contains(&id) && !out.contains(id) {
+            out.push(id.clone());
         }
     }
     out
@@ -847,29 +844,10 @@ fn needs(plan: &Plan) -> Vec<NodeId> {
 
 /// The plan's nodes whose output no other node reads: the leaves.
 fn terminals(plan: &Plan) -> Vec<NodeId> {
-    let mut produced = Vec::new();
-    let mut consumed = Vec::new();
-    collect(plan, &mut produced, &mut consumed);
-    produced
-        .into_iter()
-        .filter(|id| !consumed.contains(id))
+    let consumed: Vec<&NodeId> = plan.steps().flat_map(|step| step.from).collect();
+    plan.steps()
+        .map(|step| step.node)
+        .filter(|node| !consumed.contains(node))
+        .cloned()
         .collect()
-}
-
-/// What each step produces and what it reads. Neither when nor where matters
-/// here, so waves, sequences and remotes walk the same.
-fn collect(plan: &Plan, produced: &mut Vec<NodeId>, consumed: &mut Vec<NodeId>) {
-    match plan {
-        Plan::Empty => {}
-        Plan::Execute { node, from } => {
-            produced.push(node.clone());
-            consumed.extend(from.iter().cloned());
-        }
-        Plan::Sequence(plans) | Plan::Wave(plans) => {
-            for plan in plans {
-                collect(plan, produced, consumed);
-            }
-        }
-        Plan::Remote { inner, .. } => collect(inner, produced, consumed),
-    }
 }

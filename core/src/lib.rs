@@ -19,6 +19,7 @@
 //! | [`Transport`] | who **carries** a slice of plan to another host |
 //! | [`Keeper`] | who **hashes** a recipe and **keeps** what it names |
 //! | [`Plan`] | the **decided shape** of an execution |
+//! | [`Step`], [`Destination`] | the two ways of walking one: what it does, and where |
 //! | [`compile`] | from the structure to the shape |
 //! | [`distribute`] | and from the placement, which slices travel together |
 //! | [`Executor`] | the **engine** |
@@ -58,6 +59,6 @@ pub use key::{Key, Keys};
 pub use memory::{Memory, MemoryError, cacheable};
 pub use node::{Ctx, Node, NodeError, Transition};
 pub use placement::Placement;
-pub use plan::{CompileError, Plan, compile, distribute};
+pub use plan::{CompileError, Destination, Plan, Step, compile, distribute};
 pub use transport::{Cargo, Outcome, Transport, TransportError};
 pub use value::Value;

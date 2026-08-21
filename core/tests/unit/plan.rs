@@ -9,7 +9,8 @@
 
 use crate::doubles::{Add, Ask};
 use soma_next_core::{
-    Catalog, CompileError, Device, Graph, Host, NodeId, Placement, Plan, compile, distribute, node,
+    Catalog, CompileError, Destination, Device, Graph, Host, NodeId, Placement, Plan, compile,
+    distribute, node,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -455,14 +456,11 @@ fn battery() -> Vec<Topology> {
 /// A wave's branches are flattened one after another: since they are
 /// independent, any interleaving will do, and that is the easiest to read.
 fn steps(plan: &Plan) -> Vec<(NodeId, Vec<NodeId>)> {
-    match plan {
-        Plan::Empty => Vec::new(),
-        Plan::Execute { node, from } => vec![(node.clone(), from.clone())],
-        Plan::Sequence(plans) | Plan::Wave(plans) => plans.iter().flat_map(steps).collect(),
-        // What runs on another host is the same steps: distributing changes
-        // neither what executes nor where its input comes from.
-        Plan::Remote { inner, .. } => steps(inner),
-    }
+    // The core walks its own plan now; this is here so the invariants below read
+    // as they did, and so a change to that walk is felt from outside the crate.
+    plan.steps()
+        .map(|step| (step.node.clone(), step.from.to_vec()))
+        .collect()
 }
 
 #[test]
@@ -812,4 +810,112 @@ fn the_same_plan_and_the_same_placement_always_distribute_the_same() {
     for _ in 0..5 {
         assert_eq!(distribute(&plan, &placement), first);
     }
+}
+
+// ── The two ways of walking a plan ──
+
+#[test]
+fn the_steps_come_out_in_the_order_they_were_declared() {
+    // Observable: it is the order a sequence runs in and the order a wave's
+    // branches were written. A walk that reversed it would pass every count.
+    let plan = plan_of(&["a", "b", "c"], &[("a", "b"), ("b", "c")]);
+
+    assert_eq!(
+        plan.steps()
+            .map(|step| step.node.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "c"]
+    );
+}
+
+#[test]
+fn a_step_carries_what_it_reads_and_not_only_who_it_is() {
+    let plan = plan_of(&["a", "b", "mean"], &[("a", "mean"), ("b", "mean")]);
+    let join = plan
+        .steps()
+        .find(|step| step.node.as_str() == "mean")
+        .expect("the join is in there");
+
+    assert_eq!(
+        join.from.iter().map(NodeId::as_str).collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
+}
+
+#[test]
+fn every_node_of_the_graph_is_a_step_of_its_plan_exactly_once() {
+    for Topology { name, nodes, edges } in battery() {
+        let plan = plan_of(&nodes, &edges);
+        let walked: Vec<&NodeId> = plan.steps().map(|step| step.node).collect();
+
+        assert_eq!(walked.len(), nodes.len(), "{name}");
+        assert_eq!(
+            walked.iter().collect::<HashSet<_>>().len(),
+            nodes.len(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn the_steps_of_a_distributed_plan_are_the_same_steps() {
+    // What a plan **does** does not depend on where it does it, which is why
+    // this walk enters a `Remote` and the other one does not.
+    let plan = plan_of(&["a", "b"], &[("a", "b")]);
+    let mut placement = Placement::new();
+    placement.place_at(NodeId::from("b"), Host::from("gpu"));
+    let spread = distribute(&plan, &placement);
+
+    assert_ne!(spread, plan, "it did travel");
+    assert_eq!(
+        spread.steps().collect::<Vec<_>>(),
+        plan.steps().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn nothing_to_do_walks_to_nothing() {
+    assert_eq!(Plan::Empty.steps().count(), 0);
+    assert_eq!(Plan::Empty.destinations().count(), 0);
+}
+
+#[test]
+fn destinations_stop_where_a_slice_already_says_where_it_goes() {
+    // The one line the two walks differ in, and what makes `distribute`
+    // idempotent: a plan that has already travelled is not opened up again.
+    let plan = plan_of(&["a", "b"], &[("a", "b")]);
+    let mut placement = Placement::new();
+    placement.place_at(NodeId::from("b"), Host::from("gpu"));
+    let spread = distribute(&plan, &placement);
+
+    let seen: Vec<Destination<'_>> = spread.destinations().collect();
+    assert_eq!(seen.len(), 2, "{spread:?}");
+    assert!(matches!(seen[0], Destination::Node(node) if node.as_str() == "a"));
+    assert!(matches!(seen[1], Destination::Away(host) if host.to_string() == "gpu"));
+}
+
+#[test]
+fn a_plan_that_has_not_travelled_has_a_destination_per_node() {
+    let plan = plan_of(&["a", "b", "c"], &[("a", "b"), ("b", "c")]);
+
+    assert!(
+        plan.destinations()
+            .all(|destination| matches!(destination, Destination::Node(_)))
+    );
+    assert_eq!(plan.destinations().count(), 3);
+}
+
+#[test]
+fn a_device_is_not_a_destination_because_it_is_not_a_place_to_send_to() {
+    // `.on("cuda:0")` says where inside a machine, `.at("gpu")` says which
+    // machine. Only the second decides what travels.
+    let plan = plan_of(&["a"], &[]);
+    let mut placement = Placement::new();
+    placement.place(NodeId::from("a"), Device::Cuda(0));
+
+    assert_eq!(distribute(&plan, &placement), plan);
+    assert!(matches!(
+        plan.destinations().next(),
+        Some(Destination::Node(_))
+    ));
 }
