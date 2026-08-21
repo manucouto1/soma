@@ -194,7 +194,32 @@ class Head(Node):
         import torch
         from soma_next import Opaque
 
-        return Done(Opaque(self.lin(torch.tensor(x, dtype=torch.float32))))
+        # A tensor as it is: what a `Trainer` hands the near half of a cut is the
+        # **seam**, and building a tensor out of a tensor detaches it — the
+        # gradient would never reach the far side.
+        landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
+        return Done(Opaque(self.lin(landed)))
+
+    def parameters(self):
+        return list(self.lin.parameters())
+
+
+class Slab(Node):
+    """A layer, and nothing else: no optimizer, no state between calls, no idea
+    anybody is going to train it. The same class whether it runs here or there,
+    and the same one a `Trainer` hands to a `Split`."""
+
+    def __init__(self, wide=8, tall=6):
+        import torch
+
+        self.lin = torch.nn.Linear(wide, tall)
+
+    def forward(self, x, ctx):
+        import torch
+        from soma_next import Opaque
+
+        landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
+        return Done(Opaque(self.lin(landed).relu()))
 
     def parameters(self):
         return list(self.lin.parameters())

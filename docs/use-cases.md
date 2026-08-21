@@ -1764,3 +1764,297 @@ And two more, found writing the worked example that is now `test_pretraining.py`
   `model` had its *value* hashed into the version of a class that never named it.
   It is CU12's code, and it is not cosmetic — with `project` and `--strict` a
   worker refuses to run over a mismatch that does not exist.
+
+---
+
+## CU14 — Training the half that is not here
+
+```python
+from soma_next.torch import Split, Trainer, parameters
+
+class Body(Node):                        # a node. It knows nothing about any of this
+    def __init__(self):
+        self.lin = nn.Linear(8, 6)
+
+    def forward(self, x, ctx):
+        return Done(Opaque(self.lin(x).relu()))
+
+    def parameters(self):
+        return list(self.lin.parameters())
+
+g = Graph.somatize(Body().at("gpu") >> Head())
+trains = {"body": Split(SGD, lr=0.1)}    # what trains it, where it runs
+
+Trainer(g, objective=cross_entropy,
+        optimizer=SGD(parameters(g, without=trains), lr=0.1),   # the half that is here
+        trains=trains,                                          # the half that is not
+        workers={"gpu": Worker.at("node3:7000")}).fit(data, epochs=10)
+```
+
+Status: **closed**.
+
+### The question CU12 left open
+
+> Making it a concept of the framework is a use case of its own, and it turns on
+> one question: whether a worker stops being dumb and starts holding an
+> optimizer.
+
+It does not. **The worker holds nothing new: it holds a catalog, as always, and
+what went into it is a trainer.** Dumb means *does not decide*, not *cannot do* —
+it is told what to do and knows how, exactly as it is told a `Device` and moves
+itself. Nothing in the worker, the protocol or the core learns that training
+exists.
+
+And the node holds nothing new either, which is the second answer and the one
+that took a redesign to get to. The first version of this slice had the node
+inherit a mixin and grow a `learn`: it worked, it was measured, and it was
+wrong — *how I am trained* is a fact of a training run, and a node is the scale
+of one `forward`. It is the same mistake CU11 rejected as `fit` in the contract,
+one step disguised.
+
+### What is not negotiable, and what is
+
+The optimizer has to point at the tensors that execute, and those live on the
+machine the node runs on: the client's copy of the weights is other objects in
+another process. Something has to be **there**, and it has to survive between the
+call that produces the activation and the call that brings the gradient. That is
+physics, and no reshuffling of responsibilities moves it.
+
+What is negotiable is who writes that something and where it is declared. Here it
+is written by nobody — it is `Split`, or whatever else is put in the `Learning`
+hole — and it is declared by whoever trains, in one dict.
+
+### Two positions in the graph, one object
+
+`around` puts the trainer on both sides of the node it trains, and the stage
+machinery does the rest:
+
+```text
+    …  →  body:in  →  body:computes  →  body   →  …
+          the trainer   the node        the trainer
+          leafs the     computes        keeps the activation,
+          input                         gives out what it let go of
+```
+
+Both positions are the **same object**, and `pickle` keeps that: two entries of
+one catalog, one trainer, one optimizer, pointing at the weights that are there.
+The id the graph knew stays with the **last** position, because what the rest of
+the graph calls `body` is what `body` gives out — so nobody downstream is told
+anything and their fan-in maps are keyed as they always were.
+
+The backward pass is the transpose of the stage, and only what takes a gradient
+is transposed — which is the trainer and never the node. What sits between them
+is walked **through**: the gradient a trainer gives back is owed to whoever fed
+the chain that reached it.
+
+### What cuts a graph, and why it is not declared in the graph
+
+A pass stops being one `forward` where the chain that joins the output to the
+input breaks, and that happens for two reasons that look different and are the
+same one: the value **crossed a cable** — what arrives on the other side is data,
+not the graph that produced it — or **somebody trained the node that produced
+it**, and a trainer lets go of the activation by construction.
+
+```text
+trained(n)  said by whoever trains, and never asked of the node
+where(n)    hosts().get(n), None meaning here
+cut(p, c)   (where(p), trained(p)) != (where(c), trained(c))
+level(n)    0 with no predecessors, else max(level(p) + cut(p, n))
+stage k     the nodes with level(n) == k
+```
+
+Where a thing **runs** is declared in the graph and is nobody else's business;
+which of them is **trained where it runs** is a fact of the training run, and the
+same graph is the same graph either way. So `stages` is told and a node is never
+asked — and grouping by the pair is what makes local greedy and split learning
+the same path through the code.
+
+Three properties fall out, and they are what make the backward pass
+demonstrable: every cut edge crosses a stage boundary, no cut edge stays inside a
+stage, and no edge goes backwards — so the stages in reverse are a valid order to
+walk back through.
+
+A stage is **not uniform in host on purpose**: `A.at("a") | B.at("b")` is one
+stage and a single `forward`, and the plan of that stage still has the `Wave`
+with both `Remote`s inside it. The waves are kept by not being clever about them.
+
+### One hole, four techniques
+
+`learn(signal, ctx)` receives `dL/d(what the node produced)` and gives back
+`dL/d(what it was given)`. `Split` is the one that ships; the other three are a
+subclass each, written in the tests as a user would write them.
+
+| technique | what crosses | the control that says it is real |
+|---|---|---|
+| split learning | activations out, gradients back | the same run with nothing handed back leaves it where it was |
+| local greedy | nothing | whatever is above it gets no gradient, and `NoGradient` names it |
+| forward-forward | nothing | the goodness separates; with the rate at zero, it does not |
+| synthetic gradients | nothing | `‖ĝ − g‖` gets closer; with the guesser frozen it is exactly 1, every step |
+
+What tells a backward message from an input is an **envelope**, on the precedent
+of `__soma_opaque__`: a reserved key and a cheap check before anything is built.
+One key and not two, because unlike a packed opaque there is no kind to carry. In
+a learning pass every value on every edge is an envelope, so a **map** of
+envelopes is not a fan-in of inputs but a fan-in of gradients — and an envelope
+carrying nothing is how "no gradient for you this step" is said, which is what a
+technique that gives none back answers.
+
+### The evidence
+
+Bit for bit against the same net trained in one piece: the same weights, the same
+batches, ten steps, `==` on the losses and `torch.equal` on the weights
+afterwards — and again with the far half in **another process**, where it also
+comes out identical. Everything in between — `tolist` on a float32, a detached
+leaf, an optimizer of its own with the same rule — is the same operations in the
+same order.
+
+And in the cluster, against a real container with a GPU, the hand-written loop
+CU12 left behind and `Trainer.step` side by side, producing the same losses. It
+is the strongest thing a framework can be asked to show: **it changed who writes
+the loop, not the arithmetic** — and the node it trained is a plain `Slab` that
+does not know any of it happened.
+
+### Decisions taken
+
+**1. The trainer travels and lives in the catalog.** It is the one thing a worker
+keeps between calls, so it is where anything that has to survive between them
+goes. Reaching it is a `forward` like everything else, because that is the only
+channel a worker has — and what matters is that it is **not the user's node and
+not written by the user**: it has the same standing as `Held` and `Tap`.
+
+**2. The optimizer is built at first use, never in `__init__`.** `pickle` does
+not call `__init__`, and being rebuilt on another machine is this object's normal
+life. What travels is a **factory** — `Split(SGD, lr=0.1)` keeps a `partial` —
+and the optimizer is built there, over the parameters that are there. Everything
+a rebuilt object reads is a class attribute, for the same reason.
+
+**3. Two positions and not one.** The trainer has to be *before* the node, so the
+input becomes a leaf a gradient can be asked of, and *after* it, to keep the
+activation. One position cannot do: in front it never sees the output, and behind
+it the input was already built inside the node and there is no leaf to go back
+to.
+
+**4. It is driven in stages when something is trained where it runs, and only
+then.** Not "when the graph is cut": a lone trained node is a single stage and
+still needs its backward over the transpose, while a slice on another host with
+nobody training it needs none of this — and for that one `step` is, line for
+line, the one it always was.
+
+**5. The wire is not touched.** Activations and gradients cross as lists of
+floats. It is the known bill of this slice.
+
+**6. A piece of a graph provisions the whole graph.** `Graph.provision` came out
+of `forward` and came out **public**, because the graph is not the `Trainer`'s:
+whoever runs one in pieces has to be able to do it with no trainer in sight and
+no rule to remember. A worker has **one** catalog, and half of one is a different
+catalog — refused mid-session by an open one, and swallowed in silence by a
+worker that has not greeted yet, taking with it every live activation and every
+optimizer state over there. Both measured against a real worker before anything
+was changed.
+
+**7. The same weights in two optimizers is refused.** Where a trained node runs
+may well be here, and then this side's optimizer and its trainer would both move
+it every step: two updates for one gradient, which is a worse loss and not a
+wrong one — the kind nobody notices. `parameters(g, without=trains)` is how they
+come out, and holding them anyway stops the `Trainer` from being built.
+
+**8. The gradient check comes after the gradients are handed back.** With a
+trained node in the middle, everything above it is an orphan until the stage
+behind it answers; asking any earlier calls the whole near half orphaned. And
+what is trained elsewhere is never an orphan: `NoGradient` knows, because it was
+told.
+
+**9. `.cached()` only in the first stage.** A root's key comes from the input it
+was handed, and after a cut the roots of a stage are holds handed nothing: two
+different batches would be kept under one name. Refused in `__init__`, with that
+as the reason.
+
+**10. `.frozen()` and being trained are a contradiction**, refused before the
+first step: one says the state does not change while the graph runs, the other
+changes it every step.
+
+### CU12's debt, paid on the way
+
+An **intermediate `Opaque` did not survive a remote stretch of two nodes**: an
+answer carries back the output of *every* node it ran, and one that cannot leave
+the process refused the whole message. It made `(A() >> B()).at("w1")` with
+tensors unwritable — and this slice needs exactly that, three nodes on one host
+with something live between them.
+
+The fix is one line each way and it is where the rule belongs: a worker sends
+back what **can** travel (`Outcome::travelling`), and whoever reads what stayed
+behind is told so by name (`RunError::Lost`), rather than the walk finding a hole
+where a predecessor should be. `last` is not filtered — the slice's own value has
+a reader here by definition, so refusing it is the honest answer.
+
+### Questionnaire
+
+**Cutting the graph** (`python/tests/test_stage.py`, no torch anywhere in it)
+- [x] another host cuts, a node somebody trains cuts, and nobody saying so does
+      not
+- [x] two hosts side by side are **one** stage, and the wave is still inside it
+- [x] a fan lands the join after the deepest branch, and coming back here cuts
+      again
+- [x] a hold is named after the real producer, so the fan-in map is the one the
+      whole graph gave
+- [x] a node that feeds inside **and** outside comes back, which is what the tap
+      is for
+- [x] holds and taps are never placed, and a stage keeps everything that was said
+      about its nodes
+- [x] every cut edge crosses a boundary, none stays inside one, and no edge goes
+      backwards — over five topologies
+- [x] `around` puts two positions and leaves the id on the last, the company
+      stands where the node stands, and what was said about a node stays with the
+      node
+- [x] the transpose keeps only what takes a gradient and walks up **through** the
+      rest
+- [x] a stage provisions the **whole** graph and not its half
+- [x] the stages run to what the whole graph runs to
+
+**The trainer** (`python/tests/test_learning.py`)
+- [x] the input becomes a leaf and the node never finds out
+- [x] an ordinary value is the activation, an envelope is a gradient, and a map
+      of them is summed
+- [x] what it gives back is `dL/d(what the node was given)`, checked by hand on
+      `y = wx`
+- [x] it lets go of the chain that produced its input: nothing above it gets a
+      gradient
+- [x] the activation is let go of after each `learn`, and a gradient with none is
+      `OutOfStep`
+- [x] the optimizer is built at first use over the node's parameters, and a
+      trainer rebuilt by `pickle` still trains — with **one** copy of the node
+      between its two positions
+- [x] thirty steps with a head above it: the loss comes down, its weights move,
+      and the graph is the same graph afterwards
+- [x] the same net in another process, bit for bit against this one, and with the
+      far rate at zero the loss comes down less
+- [x] the same weights in two optimizers is refused
+- [x] the four techniques, each with the control in the table above
+
+**Driving it** (`python/tests/test_trainer.py`)
+- [x] a cut graph trains to the same numbers as the whole one, weights included
+- [x] it is driven in stages only when something is trained where it runs
+- [x] what is above a trained node gets its gradient through it, and nobody
+      stands still
+- [x] a graph where everything is trained elsewhere takes no optimizer here
+- [x] `.cached()` after a cut, `trains` naming somebody who is not there,
+      settled-and-trained, and a node that does not say what its parameters are:
+      all refused when the trainer is built
+
+**The wire** (`core`, `transport`, and the cluster)
+- [x] an opaque read only over there does not stop the slice — and reading it
+      from here names both ends
+- [x] an outcome leaves behind what cannot travel and keeps what it answers with
+- [x] the hand-written loop and `Trainer.step` come out with the same losses,
+      against a real container
+- [x] the transpose reaches the catalog the worker has live
+
+### What did NOT go in
+
+**FedAvg**, which is CU15 and is what a training run *exports* rather than what it
+does · **`Opaque` over the wire**: activations still cross as floats, and the
+codec that would fix it exists — the wire is what refuses · **micro-batches**,
+which open together with the grain per item (`.mapped()`) · **a trained node with
+two producers**, which would owe a different gradient to each and is refused in as
+many words, because routing one gradient per edge is not something the transpose
+alone does · and **`resume` exposed to Python**.

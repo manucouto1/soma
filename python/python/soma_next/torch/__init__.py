@@ -12,11 +12,16 @@ implementor. So it lives here, in Python, and `core/` does not change a line::
                 optimizer=torch.optim.Adam(parameters(g), lr=1e-3))
     t.fit(data, epochs=10)
 
-`Learns` is for the half that cannot be trained from here: a node on another
-machine gets no gradient from a `backward()` run in this process, so it keeps its
-activation where its autograd graph is, is handed `dL/d(what it produced)` and
-carries on with its own optimizer. Split learning, greedy, forward-forward and
-synthetic gradients are the same hole answered four ways.
+`Split` — and whatever else is written into the `Learning` hole — is for the half
+that cannot be trained from here. A node on another machine gets no gradient from
+a `backward()` run in this process, so a **trainer travels to it**: it keeps the
+activation where its autograd graph is, is handed `dL/d(what the node produced)`
+and carries on under an optimizer of its own. The node is not asked to know any
+of it. Split learning, greedy, forward-forward and synthetic gradients are the
+same hole answered four ways::
+
+    Trainer(g, objective=cross_entropy, optimizer=Adam(parameters(g), lr=1e-3),
+            trains={"body": Split(SGD, lr=0.1)}, workers={"gpu": worker})
 
 Importing this also says how a tensor is written down, which is what lets a
 graph keep what it produces: see `soma_next.torch._codec`.
@@ -31,7 +36,7 @@ imports are absolute, so `import torch` in here brings the usual one.
 
 from soma_next.torch._codec import register as _register_the_tensor_codec
 from soma_next.torch._freeze import freeze
-from soma_next.torch._learns import Learns, OutOfStep, envelope, gradient
+from soma_next.torch._learning import Learning, OutOfStep, Split, envelope, gradient
 from soma_next.torch._params import parameters
 from soma_next.torch._trainer import NoGradient, Result, Trainer
 
@@ -41,13 +46,14 @@ from soma_next.torch._trainer import NoGradient, Result, Trainer
 _register_the_tensor_codec()
 
 __all__ = [
-    "Learns",
+    "Learning",
     "NoGradient",
     "OutOfStep",
     "Result",
+    "Split",
     "Trainer",
     "envelope",
-    "gradient",
     "freeze",
+    "gradient",
     "parameters",
 ]

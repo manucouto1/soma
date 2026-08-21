@@ -277,6 +277,65 @@ def test_split_learning_trains_the_far_half_over_the_wire(gpu, sends_the_code):
     assert back["host"] != os.uname().nodename, "it all happened here"
 
 
+def test_the_trainer_writes_that_same_loop(gpu, sends_the_code):
+    # The best control a framework can be asked for: the loop above, written by
+    # hand against a container, and the same thing driven by `Trainer.step` with
+    # a trainer sent to stand beside a plain node over there. Same weights, same
+    # batches, same rates — and the losses come out equal, step for step. What
+    # changed is who writes the loop, and `Slab` does not know any of it happened.
+    torch = pytest.importorskip("torch")
+
+    from soma_next.torch import Split, Trainer, parameters
+
+    def by_hand():
+        torch.manual_seed(0)
+        far = nodes.SplitPart(8, 6, lr=0.1)
+        torch.manual_seed(1)
+        head = torch.nn.Linear(6, 3)
+        graph = Graph.somatize(far.named("far").at("gpu"))
+        workers = {"gpu": sends_the_code("gpu")}
+        optimizer = torch.optim.SGD(head.parameters(), lr=0.1)
+        losses = []
+        for x, y in batches():
+            sent = graph.forward(
+                {"kind": "forward", "value": x.tolist()}, workers=workers
+            )
+            seam = torch.tensor(sent["value"], requires_grad=True)
+            loss = torch.nn.functional.cross_entropy(head(seam), y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            graph.forward(
+                {"kind": "backward", "value": seam.grad.tolist()}, workers=workers
+            )
+            losses.append(loss.item())
+        return losses
+
+    def driven():
+        torch.manual_seed(0)
+        far = nodes.Slab(8, 6)
+        torch.manual_seed(1)
+        graph = Graph.somatize(far.named("far").at("gpu") >> nodes.Head(6, 3))
+        trains = {"far": Split(torch.optim.SGD, lr=0.1)}
+        trainer = Trainer(
+            graph,
+            objective=torch.nn.functional.cross_entropy,
+            optimizer=torch.optim.SGD(parameters(graph, without=trains), lr=0.1),
+            trains=trains,
+            workers={"gpu": sends_the_code("gpu")},
+        )
+        return [trainer.step(batch) for batch in batches()]
+
+    def batches(how_many=10):
+        torch.manual_seed(2)
+        x, y = torch.randn(16, 8), torch.randint(0, 3, (16,))
+        return [(x, y)] * how_many
+
+    written_here, written_there = by_hand(), driven()
+    assert written_there[-1] < written_there[0], "neither of them learnt anything"
+    assert written_here == written_there
+
+
 def test_the_transpose_reaches_the_catalog_the_worker_has_live(sends_the_code):
     # A backward pass across a wire is a **second graph**: the same nodes with
     # the edges the other way round. It has to find the activation the first one

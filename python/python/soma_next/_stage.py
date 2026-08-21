@@ -3,22 +3,24 @@
 A pass stops being a single `forward` where the chain that joins the output to
 the input breaks, and that happens for two reasons that look different and are
 the same one: the value **crossed a cable** — what arrives on the other side is
-data, not the graph that produced it — or the node that produced it **learns on
-its own**, and a node that learns lets go of its activation by construction.
+data, not the graph that produced it — or **something trained the node that
+produced it**, and whoever trains a node lets go of its activation by
+construction.
 
-Hence the pair `(host, learns)`: an edge whose two ends do not share it is a
+Hence the pair `(host, trained)`: an edge whose two ends do not share it is a
 **cut**, and a cut is a stage boundary. Grouping by the pair is what makes local
 greedy and split learning the same path through the code.
 
-The cut is **derived, never declared**: `.at()` already says where each thing
-runs, and asking for it to be said a second time would be repeating what the
-graph knows.
-
-    learns(n)   the implementation has `learn`, asked as a duck
+    trained(n)  said by whoever trains, and not asked of the node
     where(n)    `hosts().get(n)`, `None` meaning here
-    cut(p, c)   `(where(p), learns(p)) != (where(c), learns(c))`
+    cut(p, c)   `(where(p), trained(p)) != (where(c), trained(c))`
     level(n)    0 with no predecessors, else `max(level(p) + cut(p, n))`
     stage k     the nodes with `level(n) == k`
+
+Where a thing **runs** is declared in the graph and is nobody else's business;
+which of them is **trained on its own** is a fact of the training run, and the
+same graph is the same graph with or without one. So `stages` is told, and a
+node is never asked.
 
 Three properties fall out, and they are what make the backward pass
 demonstrable: every cut edge crosses a stage boundary, no cut edge stays inside
@@ -46,8 +48,14 @@ it crosses — an `Opaque` for a tensor staying in this process, plain data when
 there is a cable ahead. A `Tap` can wrap, because it is the last one and its
 value goes straight to Python.
 
-There is no torch here on purpose: how many cuts a graph has is a fact of the
-graph, not of the training.
+`around` is the other half: it puts somebody **beside** a node, in the two
+positions training needs — before it, where the input becomes something a
+gradient can be asked of, and after it, where the activation is kept. Nothing
+here knows what either of them does with that; what it knows is that a node with
+company still has to be a node in a graph.
+
+There is no torch here on purpose: how a graph is cut is a fact of the graph and
+of who trains what, and neither of those is a loss.
 """
 
 from __future__ import annotations
@@ -55,10 +63,19 @@ from __future__ import annotations
 from soma_next._dsl import Node
 from soma_next._soma_next import Done, Opaque
 
-__all__ = ["Held", "Stage", "Tap", "learns", "stages"]
+__all__ = ["Held", "Stage", "Tap", "around", "stages", "takes_a_gradient"]
 
 _TAP = "out:{}"
 """How a tap is named after the node it reads."""
+
+_IN = "{}:in"
+"""The first of the two positions a trainer takes around the node it trains."""
+
+_COMPUTES = "{}:computes"
+"""Where the node itself ends up when a trainer is put around it. The id it was
+called by stays with the **last** position: what the rest of the graph knows as
+`x` is what `x` gives out, and with a trainer around it that is what the trainer
+let go of."""
 
 
 class _Nothing:
@@ -137,17 +154,17 @@ class Stage:
         """The same stage with its edges the other way round, which is what a
         backward pass is: another forward, of the transpose.
 
-        The same node objects, the same ids and the same `.at()`, because the
-        gradient of a node is worked out where the node ran. What swap places are
-        the two ends: what was a `Tap` — a value going out — is a `Held` now — a
-        gradient coming in — and what was a `Held` is a `Tap`. The edges are
-        reversed wholesale, ends included, which is why it is one loop.
+        The same objects, the same ids and the same `.at()`, because the gradient
+        of a node is worked out where the node ran. What swap places are the two
+        ends: what was a `Tap` — a value going out — is a `Held` now — a gradient
+        coming in — and what was a `Held` is a `Tap`.
 
-        **Only what learns.** A node that does not is not transposed: its
-        gradient is autograd's business, right here, and handing it an envelope
-        would be handing it something it would read as an input. Nothing is lost
-        by leaving it out — an edge inside a stage joins two nodes that agree on
-        learning, or it would have been a cut.
+        **Only whatever takes a gradient** is transposed, which is the trainer
+        beside a node and never the node: handing a node an envelope would be
+        handing it something it would read as an input. What sits between them is
+        walked **through**: the gradient a trainer gives back is owed to whoever
+        fed the chain that reached it, however many nodes of its own that chain
+        went through on the way in.
 
         Nothing about keeping travels either: what runs along these edges is not
         what the node produces, so there is nothing here to name after it.
@@ -155,8 +172,9 @@ class Stage:
         mine = [
             node_id
             for node_id in self.nodes
-            if learns(self.graph.implementation(node_id))
+            if takes_a_gradient(self.graph.implementation(node_id))
         ]
+        owes = {node_id: self._fed_by(node_id, mine) for node_id in mine}
         hosts, devices = self.graph.hosts(), self.graph.devices()
         back, holds, taps = type(self.graph)(), {}, {}
         back._slice_of = self.graph._slice_of or self.graph
@@ -171,23 +189,44 @@ class Stage:
                 back.place_at(node_id, hosts[node_id])
             if node_id in devices:
                 back.place(node_id, devices[node_id])
-        for producer in self.holds:
-            if any(who in mine for who in self.graph.successors(producer)):
-                taps[producer] = producer
-                back.node(producer, Tap())
-        for source, target in self.graph.edges():
-            if source in back and target in back:
-                back.edge(target, source)
+        for node_id in mine:
+            for owed in owes[node_id]:
+                if owed not in mine and owed not in taps:
+                    taps[owed] = owed
+                    back.node(owed, Tap())
+        for node_id in mine:
+            if node_id in self.taps:
+                back.edge(self.taps[node_id], node_id)
+            for owed in owes[node_id]:
+                back.edge(node_id, owed)
         return Stage(self.level, back, mine, holds, taps)
 
-    def __repr__(self):
-        return f"Stage({self.level}: {', '.join(self.nodes)})"
+    def _fed_by(self, node_id, mine):
+        """Who fed this one, walking **up through** whatever is not transposed
+        until it reaches something that is — or a hold, which is where this stage
+        was fed by the one before it."""
+        found, seen, pending = [], set(), list(self.graph.predecessors(node_id))
+        while pending:
+            other = pending.pop(0)
+            if other in seen:
+                continue
+            seen.add(other)
+            if other in mine or other in self.holds:
+                found.append(other)
+            else:
+                pending.extend(self.graph.predecessors(other))
+        return found
 
 
-def stages(graph):
-    """The graph cut into stages, in the order they run. One stage means there
-    is no cut and the graph is its own single pass."""
-    level = _levels(graph)
+def stages(graph, learns=()):
+    """The graph cut into stages, in the order they run. One stage means there is
+    no cut and the graph is its own single pass.
+
+    `learns` is the ids of whatever breaks the chain where it stands, said by
+    whoever trains and not asked of the nodes: which of them is trained on its
+    own is a fact of the training run, and a graph is the same graph either way.
+    """
+    level = _levels(graph, set(learns))
     if not level:
         return []
     order = graph.topological_sort()
@@ -197,12 +236,12 @@ def stages(graph):
     ]
 
 
-def _levels(graph):
+def _levels(graph, learns):
     """How many cuts each node is behind, which is the stage it falls in."""
     hosts = graph.hosts()
     side, level = {}, {}
     for node_id in graph.topological_sort():
-        side[node_id] = (hosts.get(node_id), learns(graph.implementation(node_id)))
+        side[node_id] = (hosts.get(node_id), node_id in learns)
         level[node_id] = max(
             (
                 level[before] + int(side[before] != side[node_id])
@@ -213,11 +252,12 @@ def _levels(graph):
     return level
 
 
-def learns(implementation):
-    """Whether the node trains itself, asked with the same duck as `parameters()`.
+def takes_a_gradient(implementation):
+    """Whether this is something that takes a gradient rather than an input.
 
-    Here and nowhere else: where a graph gets cut and what its optimizer leaves
-    alone are the same question, and two spellings of it would drift apart.
+    A duck, and one that only ever meets **the framework's own** objects: a
+    trainer put beside a node by whoever trains. A user's node is never asked
+    this, and never has to answer it.
     """
     return getattr(implementation, "learn", None) is not None
 
@@ -266,3 +306,65 @@ def _is_read_outside(graph, node_id, inside):
     after = graph.successors(node_id)
     return not after or any(other not in inside for other in after)
 
+
+def around(graph, put):
+    """The same graph with somebody standing on each side of the nodes named.
+
+    `put` is `{node_id: (before, after)}`, and what comes back is the graph and
+    the ids of everything the three of them occupy — which is exactly what
+    `stages` has to be told breaks the chain.
+
+    **The id stays with the `after`.** What the rest of the graph calls `x` is
+    what `x` gives out, and with a trainer around it what it gives out is what
+    the trainer let go of, so nobody downstream has to be told anything: their
+    fan-in maps are keyed the same as they always were. The node itself moves to
+    `x:computes`, and the `before` position is `x:in`.
+
+    The original graph is not touched — its nodes are the same objects, and this
+    is another graph over them.
+    """
+    hosts, devices = graph.hosts(), graph.devices()
+    frozen, cached, fingerprints = graph.frozen(), graph.cached(), graph.fingerprints()
+    out, occupied = type(graph)(), set()
+
+    def as_told(node_id, like):
+        """Everything the source graph says about `like`, said about `node_id`."""
+        if like in hosts:
+            out.place_at(node_id, hosts[like])
+        if like in devices:
+            out.place(node_id, devices[like])
+
+    for node_id in graph.topological_sort():
+        if node_id not in put:
+            out.node(node_id, graph.implementation(node_id))
+            as_told(node_id, node_id)
+            if node_id in frozen:
+                out.freeze(node_id, frozen[node_id])
+            if node_id in cached:
+                out.cache(node_id, cached[node_id])
+            if node_id in fingerprints:
+                out.written_as(node_id, fingerprints[node_id])
+            continue
+        before, after = put[node_id]
+        computing = _COMPUTES.format(node_id)
+        beside = (
+            (_IN.format(node_id), before),
+            (computing, graph.implementation(node_id)),
+            (node_id, after),
+        )
+        for each, what in beside:
+            out.node(each, what)
+            as_told(each, node_id)
+            occupied.add(each)
+        # What was said about a node stays with the node, not with its company.
+        if node_id in frozen:
+            out.freeze(computing, frozen[node_id])
+        if node_id in cached:
+            out.cache(computing, cached[node_id])
+        if node_id in fingerprints:
+            out.written_as(computing, fingerprints[node_id])
+        out.edge(_IN.format(node_id), computing)
+        out.edge(computing, node_id)
+    for source, target in graph.edges():
+        out.edge(source, _IN.format(target) if target in put else target)
+    return out, occupied

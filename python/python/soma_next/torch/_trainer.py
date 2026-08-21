@@ -26,9 +26,9 @@ from __future__ import annotations
 import torch
 
 from soma_next import Opaque
-from soma_next._stage import learns, stages
+from soma_next._stage import around, stages, takes_a_gradient
 from soma_next.torch._freeze import freeze
-from soma_next.torch._learns import envelope, gradient, leaf
+from soma_next.torch._learning import envelope, gradient, leaf
 from soma_next.torch._params import parameters
 
 
@@ -76,17 +76,29 @@ class Trainer:
     work: a settled prefix declared `.cached()` runs **once per batch** and is
     read from there on every epoch after the first.
 
-    `workers` says what each host resolves to, exactly as in
-    `Graph.forward`. Training a graph with a slice on another machine is
-    **not** training that slice: what crosses a wire is the value and not the
-    graph that made it, so its parameters get no gradient here. A node that
-    trains itself says so with `Learns`, and then it is left out of
-    `parameters()` on its own; anything else that ends up without a gradient
-    stops the first step with `NoGradient`.
+    `workers` says what each host resolves to, exactly as in `Graph.forward`.
+    Training a graph with a slice on another machine is **not** training that
+    slice: what crosses a wire is the value and not the graph that made it, so
+    its parameters get no gradient here, and the first step stops with
+    `NoGradient`.
 
-    `optimizer` may be left out **only** when every node with weights trains
-    itself: there is nothing here for it to update, and each of them says what it
-    trains with through `.learns_with(...)`.
+    `trains` is how that half gets trained anyway, and it is said **here**
+    because it is a fact of this training run and not of the graph::
+
+        Trainer(g, objective=cross_entropy,
+                optimizer=Adam(parameters(g), lr=1e-3),   # the half that is here
+                trains={"body": Split(SGD, lr=0.1)},      # the half that is not
+                workers={"gpu": Worker.at("node3:7000")})
+
+    What that puts on the far side is a trainer of its own, beside the node and
+    not inside it: the node is not asked to know it is being trained, and the
+    same node runs untouched with or without any of this. Their weights are that
+    trainer's, so they come **out** of this optimizer —
+    `parameters(g, without=trains)` — and holding both is refused rather than
+    quietly updating them twice.
+
+    `optimizer` may be left out **only** when everything with weights is trained
+    that way: there is nothing here for it to update.
     """
 
     def __init__(
@@ -95,35 +107,54 @@ class Trainer:
         *,
         objective,
         optimizer=None,
-        learns_with=None,
+        trains=None,
         store=None,
         workers=None,
     ):
-        params = parameters(graph)
-        learning = _who_learns(graph)
-        _check_somebody_moves_them(params, learning, optimizer)
-        _check_nobody_is_settled_and_learning(graph, learning)
-        _say_what_they_learn_with(graph, learning, learns_with)
+        trains = dict(trains or {})
+        _check_who_is_trained(graph, trains)
+        theirs = {
+            id(parameter)
+            for node_id in trains
+            for parameter in graph.implementation(node_id).parameters()
+        }
+        mine = [p for p in parameters(graph) if id(p) not in theirs]
+        _check_nobody_moves_them_twice(theirs, trains, optimizer)
+        _check_somebody_moves_them(mine, trains, optimizer)
+        _check_nobody_is_settled_and_trained(graph, trains)
 
         self.graph = graph
         self.objective = objective
         self.optimizer = optimizer
         self.store = store
         self.workers = workers
+        self.trains = trains
+        self.theirs = theirs
         self._checked = False
         # Everything structural, decided once: where this graph is cut does not
         # change from one step to the next, and neither do the transposes its
         # backward pass runs.
-        self.stages = stages(graph)
-        # Driven stage by stage when something trains itself, and **only** then.
-        # It is not "when the graph is cut": a lone node that learns is one stage
-        # and still needs its backward run over the transpose, and a slice on
-        # another host with nobody learning needs none of this — for that one the
-        # step below is the one it always was, line for line, which is what keeps
-        # the blast radius of all this to whoever asked for it.
-        self.by_stages = bool(learning)
-        self.backs = [stage.transposed() for stage in self.stages]
-        _check_what_is_kept_is_at_the_front(self.stages)
+        #
+        # Driven stage by stage when something is trained where it runs, and
+        # **only** then. It is not "when the graph is cut": a lone trained node
+        # is one stage and still needs its backward run over the transpose, and a
+        # slice on another host with nobody training it needs none of this — for
+        # that one the step below is the one it always was, line for line, which
+        # is what keeps the blast radius of all this to whoever asked for it.
+        self.by_stages = bool(trains)
+        if self.by_stages:
+            self.running, beside = around(
+                graph,
+                {
+                    node_id: learning.of(graph.implementation(node_id)).beside()
+                    for node_id, learning in trains.items()
+                },
+            )
+            self.stages = stages(self.running, learns=beside)
+            self.backs = [stage.transposed() for stage in self.stages]
+            _check_what_is_kept_is_at_the_front(self.stages)
+        else:
+            self.running, self.stages, self.backs = graph, [], []
         # Whatever the expression declared settled has to **be** settled before
         # the first step, not after somebody notices the loss going flat where
         # it should not. Declaring is the graph's, obeying is torch's.
@@ -135,7 +166,7 @@ class Trainer:
         **The primitive**, and `fit` is sugar on top: whatever does not fit in an
         epoch loop is written as a `while` over this.
 
-        With something in the graph that trains itself it is the same four
+        With something in the graph trained where it runs it is the same four
         movements taken over the stages — forward in order, the loss, backward in
         reverse — and with nobody it is, line for line, the single pass it always
         was.
@@ -261,7 +292,7 @@ class Trainer:
             learning = {
                 node_id: got
                 for node_id, got in here.items()
-                if learns(self.graph.implementation(node_id))
+                if takes_a_gradient(self.running.implementation(node_id))
             }
             for node_id, got in here.items():
                 if node_id not in learning:
@@ -269,8 +300,16 @@ class Trainer:
                     landed.backward(got.to(landed.device), retain_graph=True)
             if not learning:
                 continue
+            # Every hold, and an empty envelope for whoever is owed nothing: a
+            # stage runs whole, and one learner of it having no gradient this
+            # step is not the same as nobody having handed it anything.
             back = self.backs[stage.level]
-            back.fill({node_id: envelope(got) for node_id, got in learning.items()})
+            back.fill(
+                {
+                    node_id: envelope(learning.get(node_id))
+                    for node_id in back.holds
+                }
+            )
             given = back.read(back.graph.forward(None, workers=self.workers))
             for producer, value in given.items():
                 owed[producer] = _both(owed.get(producer), gradient(value))
@@ -298,7 +337,9 @@ class Trainer:
             parameter
             for group in self.optimizer.param_groups
             for parameter in group["params"]
-            if parameter.requires_grad and parameter.grad is None
+            if parameter.requires_grad
+            and parameter.grad is None
+            and id(parameter) not in self.theirs
         ]
         if not orphans:
             return
@@ -369,12 +410,14 @@ def _where_the_output_is(target, output):
 
 def _they_take_data(stage, who):
     """Whether what these nodes read has to be plain data: one that runs
-    elsewhere cannot be handed a live object, and one that trains itself lets go
-    of the chain the moment it gets it."""
+    elsewhere cannot be handed a live object.
+
+    Nothing is asked about training here, and that is the simplification the
+    trainer standing beside the node buys: whoever takes a tensor and has to let
+    go of the chain does that itself, on arrival.
+    """
     hosts = stage.graph.hosts()
-    if any(hosts.get(node_id) for node_id in who):
-        return True
-    return all(learns(stage.graph.implementation(node_id)) for node_id in who)
+    return any(hosts.get(node_id) for node_id in who)
 
 
 def _both(one, other):
@@ -393,90 +436,92 @@ def _data(value):
     return value.detach().tolist() if torch.is_tensor(value) else value
 
 
-def _who_learns(graph):
-    """Which nodes train themselves, which are exactly the ones `parameters()`
-    leaves out."""
-    return [
-        node_id
-        for node_id in graph.nodes()
-        if learns(graph.implementation(node_id))
+def _check_who_is_trained(graph, trains):
+    """That every node `trains` names is in the graph and says what its
+    parameters are, since that is what its trainer will build an optimizer
+    over."""
+    for node_id in trains:
+        if node_id not in graph:
+            raise ValueError(
+                f"`trains` names `{node_id}`, which is not a node of this graph"
+            )
+        if getattr(graph.implementation(node_id), "parameters", None) is None:
+            raise ValueError(
+                f"`{node_id}` is to be trained where it runs and does not say "
+                f"what its parameters are: whoever is trained answers "
+                f"`parameters()`, the same duck the graph asks with"
+            )
+
+
+def _check_nobody_moves_them_twice(theirs, trains, optimizer):
+    """That this optimizer does not hold weights somebody else is training.
+
+    Where they run may well be here, and then both would move them every step —
+    two updates for one gradient, and a loss that is merely worse instead of
+    wrong. Refused, and not left to whoever notices.
+    """
+    if optimizer is None:
+        return
+    also = [
+        parameter
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+        if id(parameter) in theirs
     ]
+    if also:
+        raise ValueError(
+            f"this optimizer holds {len(also)} parameter(s) of "
+            f"{', '.join(f'`{node_id}`' for node_id in trains)}, which "
+            f"`trains={{…}}` says are trained where they run: with the node here "
+            f"that is two updates a step. Leave them out with "
+            f"`parameters(g, without=trains)`"
+        )
 
 
-def _check_somebody_moves_them(params, learning, optimizer):
+def _check_somebody_moves_them(mine, trains, optimizer):
     """That every weight in this graph has somebody who will update it.
 
     Said before the first step, because the symptom otherwise is the one this
     class exists to prevent: a loss that comes down while half the net stands
     still.
     """
-    if not params and not learning:
+    if not mine and not trains:
         raise ValueError(
             "this graph has no parameters: no node answers `.parameters()`, "
             "so training it would change nothing and the loss would come out "
             "flat"
         )
-    if params and optimizer is None:
+    if mine and optimizer is None:
         raise ValueError(
-            f"this graph has {len(params)} parameter(s) and no optimizer to move "
-            f"them: leaving `optimizer` out is only for a graph where **every** "
-            f"node with weights trains itself, and these do not"
+            f"this graph has {len(mine)} parameter(s) that nobody would move: "
+            f"leaving `optimizer` out is only for a graph where **everything** "
+            f"with weights is trained where it runs, and these are not"
         )
     if optimizer is None:
         return
-    if not params:
+    if not mine:
         raise ValueError(
-            "every node with weights in this graph trains itself, so an optimizer "
-            "here has nothing to update: what each of them trains with is said "
-            "with `.learns_with(...)`, over the parameters of wherever it runs"
+            "everything with weights in this graph is trained where it runs, so "
+            "an optimizer here has nothing to update: what each of them is "
+            "trained with is what `trains={...}` says"
         )
-    _check_they_talk(params, optimizer)
+    _check_they_talk(mine, optimizer)
 
 
-def _check_nobody_is_settled_and_learning(graph, learning):
-    """That nobody was declared settled **and** writes its own weights.
+def _check_nobody_is_settled_and_trained(graph, trains):
+    """That nobody was declared settled **and** handed to a trainer.
 
     `.frozen()` says this node's state does not change while the graph runs, and
-    learning changes it every step. Both at once is a contradiction, and it is
+    training changes it every step. Both at once is a contradiction, and it is
     the kind that a cache would turn into the wrong tensor coming back.
     """
-    both = [f"`{node_id}`" for node_id in learning if node_id in graph.frozen()]
+    both = [f"`{node_id}`" for node_id in trains if node_id in graph.frozen()]
     if both:
         raise ValueError(
-            f"a node cannot be settled and train itself at the same time, and "
-            f"these are both: {', '.join(both)}. `.frozen()` says its state does "
-            f"not change while the graph runs, and learning is changing it every "
-            f"step"
+            f"a node cannot be settled and trained at the same time, and these "
+            f"are both: {', '.join(both)}. `.frozen()` says its state does not "
+            f"change while the graph runs, and training is changing it every step"
         )
-
-
-def _say_what_they_learn_with(graph, learning, learns_with):
-    """Installs the optimizer factory on each node that trains itself.
-
-    The rule lives in the node, which is the one that knows what it is; this is
-    the override. A mapping names a node and **wins** over what that node said,
-    a single factory is the default for whoever said nothing. In `__init__` and
-    not at the first step, because by then the node has been packed and sent.
-    """
-    if learns_with is None:
-        return
-    named = learns_with if isinstance(learns_with, dict) else {}
-    strangers = [f"`{node_id}`" for node_id in named if node_id not in learning]
-    if strangers:
-        raise ValueError(
-            f"`learns_with` names {', '.join(strangers)}, which do not train "
-            f"themselves: what a node that does not learn is trained with is the "
-            f"optimizer you built over `parameters(g)`"
-        )
-    for node_id in learning:
-        implementation = graph.implementation(node_id)
-        install = getattr(implementation, "learns_with", None)
-        if install is None:
-            continue
-        if node_id in named:
-            install(named[node_id])
-        elif not named and getattr(implementation, "learning", None) is None:
-            install(learns_with)
 
 
 def _check_what_is_kept_is_at_the_front(stages_of_it):

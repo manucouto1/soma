@@ -88,11 +88,14 @@ means the suite is green about code that is not the code.
 
 ## Status
 
-Thirteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Fourteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
-worker and the cache. A graph is declared with `>>`, `|`, `.on("cuda:0")` and
-`.cached()`, executed in Rust, spread across processes with `.at("worker1")`,
-and trained from outside with `soma_next.torch.Trainer`. See `docs/use-cases.md`.
+worker, the cache and training the half that is not here. A graph is declared
+with `>>`, `|`, `.on("cuda:0")` and `.cached()`, executed in Rust, spread across
+processes with `.at("worker1")`, and trained from outside with
+`soma_next.torch.Trainer` — including the part of it that runs on another
+machine, where a **trainer travels to stand beside the node** and the node is
+never asked to know it. See `docs/use-cases.md`.
 
 **Five orthogonal facts**, and confusing them is the easy mistake: `Graph` says
 **what** exists, `Catalog` **who** executes it, `Placement` **where**, `Plan`
@@ -104,11 +107,17 @@ user's, `Driver` serves what a step asks for, `Transport` carries a slice
 elsewhere, `Keeper` hashes a recipe and keeps what it names. The core still has
 no dependencies.
 
+**Where a graph gets cut is the pair `(host, trained)`**: `.at()` already said
+the first half and the graph owns it; the second is a fact of the training run,
+so `stages` is **told** and no node is ever asked. A trainer lets go of the
+activation exactly as a cable does, and a backward pass is a `forward` of the
+transposed stage — no new variant in `Plan`, nothing new on the wire.
+
 **Three levels, and none knows the one above exists**: the graph is a network —
 the scale of one `forward` —, the `Trainer` is a training run — the scale of an
 afternoon —, and N training runs are a Python list, not a type and certainly not
 a graph. A graph earns its keep when there are dependencies to declare.
 
-Next up: micro-batches, which is where the grain per item (`.mapped()`) joins
-them; and federated, which is what a training run exports. See the distribution
-report for the full order.
+Next up: **CU15, federated**, which is what a training run exports rather than
+what it does; and micro-batches, which is where the grain per item (`.mapped()`)
+joins them. See the distribution report for the full order.

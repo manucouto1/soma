@@ -2,27 +2,31 @@
 
 from __future__ import annotations
 
-from soma_next._stage import learns
 
-
-def parameters(graph):
+def parameters(graph, without=()):
     """The parameters of every node in the graph that has any.
 
     It asks for `.parameters()` and skips whoever lacks it, so a tokenizer does
     not stop being a node for having nothing to train. Without repeats **by
     identity** — two nodes can share a module — and in declaration order.
 
-    And it skips whoever **trains itself**: those weights are updated by an
-    optimizer of their own, wherever the node runs, so putting them in this one
-    would be two optimizers over one tensor. It is also what keeps `NoGradient`
-    meaning what it means — the parameters that legitimately get no gradient
-    here are no longer the ones it is looking at.
+    `without` names the nodes to leave out — the ones somebody else updates::
+
+        trains = {"body": Split(SGD, lr=0.1)}
+        Adam(parameters(g, without=trains), lr=1e-3)
+
+    It takes anything you can ask `in` of, so the same dict you hand the
+    `Trainer` does. Leaving them in is not a detail and is refused there: a node
+    trained where it runs and also held by this optimizer is **updated twice**
+    when where it runs is here.
     """
     seen, all_of_them = set(), []
     for node_id in graph.nodes():
+        if node_id in without:
+            continue
         implementation = graph.implementation(node_id)
         collect = getattr(implementation, "parameters", None)
-        if collect is None or learns(implementation):
+        if collect is None:
             continue
         for parameter in collect():
             if id(parameter) not in seen:

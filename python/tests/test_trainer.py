@@ -13,12 +13,10 @@ factory **do not share weights**, because sharing them would give results that
 look good and are not.
 """
 
-from functools import partial
-
 import pytest
 
 from soma_next import Done, Graph, Node, Opaque
-from soma_next.torch import Learns, Trainer, parameters
+from soma_next.torch import Split, Trainer, parameters
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
@@ -46,18 +44,9 @@ class Layer(Node):
         return list(self.lin.parameters())
 
 
-class Alone(Learns):
-    """A node that trains itself, wherever it runs. Its weights are not this
-    graph's optimizer's business, and saying so is the `learn` it inherits."""
-
-    def __init__(self, in_, out):
-        self.lin = nn.Linear(in_, out)
-
-    def compute(self, x, ctx):
-        return self.lin(x)
-
-    def parameters(self):
-        return list(self.lin.parameters())
+def split(lr=0.1):
+    """A trainer to stand beside a node, with the technique this slice ships."""
+    return Split(torch.optim.SGD, lr=lr)
 
 
 class Label(Node):
@@ -118,13 +107,14 @@ def test_a_shared_module_does_not_come_out_twice():
     assert len(parameters(g)) == 2
 
 
-def test_a_node_that_trains_itself_is_not_in_them():
-    # Two optimizers over one tensor is what this avoids, and it is also what
-    # keeps `NoGradient` meaning what it means.
+def test_whoever_is_trained_elsewhere_is_left_out_by_name():
+    # Two optimizers over one tensor is what this avoids — and the graph is not
+    # the one that knows, so it is told.
     g = Graph.somatize(
-        Layer(IN, MID).named("layer") >> Alone(MID, CLASSES).named("alone")
+        Layer(IN, MID).named("layer") >> Layer(MID, CLASSES).named("alone")
     )
-    assert len(parameters(g)) == 2
+    assert len(parameters(g)) == 4
+    assert len(parameters(g, without={"alone": split()})) == 2
 
 
 # ── Building the Trainer: what gets rejected ──
@@ -147,37 +137,55 @@ def test_an_optimizer_from_another_graph_fails():
         )
 
 
-def test_a_graph_where_everything_trains_itself_needs_no_optimizer():
-    g = Graph.somatize(Alone(IN, MID).named("alone"))
-    built = Trainer(g, objective=nn.functional.cross_entropy)
-    assert repr(built) == "Trainer(0 parameters)"
+def test_a_graph_where_everything_is_trained_elsewhere_needs_no_optimizer():
+    g = Graph.somatize(Layer(IN, MID).named("alone"))
+    built = Trainer(
+        g, objective=nn.functional.cross_entropy, trains={"alone": split()}
+    )
+    assert repr(built) == "Trainer(2 parameters)"
 
 
 def test_weights_here_and_no_optimizer_is_refused():
-    with pytest.raises(ValueError, match="no optimizer to move them"):
+    with pytest.raises(ValueError, match="nobody would move"):
         Trainer(net(), objective=nn.functional.cross_entropy)
 
 
-def test_an_optimizer_over_a_graph_that_trains_itself_is_refused():
-    alone = Alone(IN, MID)
+def test_an_optimizer_with_nothing_of_its_own_to_update_is_refused():
+    alone = Layer(IN, MID)
     g = Graph.somatize(alone.named("alone"))
     with pytest.raises(ValueError, match="nothing to update"):
         Trainer(
             g,
             objective=nn.functional.cross_entropy,
-            optimizer=torch.optim.Adam(alone.parameters(), lr=0.1),
+            optimizer=torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=0.1),
+            trains={"alone": split()},
         )
 
 
-def test_settled_and_training_itself_is_a_contradiction():
+def test_trains_naming_somebody_who_is_not_there():
+    with pytest.raises(ValueError, match="not a node of this graph"):
+        Trainer(
+            net(),
+            objective=nn.functional.cross_entropy,
+            optimizer=torch.optim.Adam(parameters(net()), lr=0.1),
+            trains={"nobody": split()},
+        )
+
+
+def test_settled_and_trained_is_a_contradiction():
     # One says its state does not change while the graph runs and the other
     # changes it every step. Before the first one, not after a cache gives back
     # the wrong tensor.
     g = Graph.somatize(
-        Layer(IN, MID).named("layer") >> Alone(MID, CLASSES).named("alone").frozen()
+        Layer(IN, MID).named("layer") >> Layer(MID, CLASSES).named("alone").frozen()
     )
-    with pytest.raises(ValueError, match="settled and train itself"):
-        trainer(g)
+    with pytest.raises(ValueError, match="settled and trained"):
+        Trainer(
+            g,
+            objective=nn.functional.cross_entropy,
+            optimizer=torch.optim.Adam(parameters(g, without={"alone"}), lr=0.1),
+            trains={"alone": split()},
+        )
 
 
 def test_freezing_a_part_is_legitimate_and_passes():
@@ -323,17 +331,16 @@ def test_the_target_goes_to_meet_the_output_on_its_device():
 # ── A graph that is cut: the Trainer drives ──
 
 
-def cut_and_whole():
-    """The same network twice, weight for weight: once in one piece, once with
-    its first half training itself."""
+def two_of_them():
+    """The same network twice, weight for weight."""
     torch.manual_seed(0)
-    whole = Graph.somatize(Layer(IN, MID).named("a") >> Layer(MID, CLASSES).named("b"))
-    cut = Graph.somatize(Alone(IN, MID).named("a") >> Layer(MID, CLASSES).named("b"))
-    for node_id in ("a", "b"):
-        cut.implementation(node_id).lin.load_state_dict(
+    whole = net()
+    other = net()
+    for node_id in ("encoder", "head"):
+        other.implementation(node_id).lin.load_state_dict(
             whole.implementation(node_id).lin.state_dict()
         )
-    return cut, whole
+    return other, whole
 
 
 def test_a_cut_graph_trains_to_the_same_numbers_as_the_whole_one():
@@ -341,12 +348,13 @@ def test_a_cut_graph_trains_to_the_same_numbers_as_the_whole_one():
     # only who writes the loop. Bit for bit, because everything in between —
     # `tolist` on a float32, a detached leaf, an optimizer of its own with the
     # same rule — is the same operations in the same order.
-    cut, whole = cut_and_whole()
+    cut, whole = two_of_them()
+    trains = {"encoder": split()}
     driven = Trainer(
         cut,
         objective=nn.functional.cross_entropy,
-        optimizer=torch.optim.SGD(parameters(cut), lr=0.1),
-        learns_with=partial(torch.optim.SGD, lr=0.1),
+        optimizer=torch.optim.SGD(parameters(cut, without=trains), lr=0.1),
+        trains=trains,
     )
     in_one_go = Trainer(
         whole,
@@ -359,42 +367,45 @@ def test_a_cut_graph_trains_to_the_same_numbers_as_the_whole_one():
         in_one_go.step(batch) for _ in range(10)
     ]
     assert torch.equal(
-        cut.implementation("a").lin.weight, whole.implementation("a").lin.weight
+        cut.implementation("encoder").lin.weight,
+        whole.implementation("encoder").lin.weight,
     )
 
 
-def test_it_is_driven_in_stages_only_when_something_trains_itself():
-    # A slice on another host with nobody learning is the step it always was:
+def test_it_is_driven_in_stages_only_when_something_is_trained_where_it_runs():
+    # A slice on another host with nobody training it is the step it always was:
     # the whole point of asking is to keep this out of everybody else's way.
     away = Graph.somatize(
         Layer(IN, MID).named("a") >> Layer(MID, CLASSES).named("b").at("w1")
     )
     assert not trainer(away).by_stages
 
-    cut, _ = cut_and_whole()
+    cut, _ = two_of_them()
+    trains = {"encoder": split()}
     assert Trainer(
         cut,
         objective=nn.functional.cross_entropy,
-        optimizer=torch.optim.SGD(parameters(cut), lr=0.1),
-        learns_with=partial(torch.optim.SGD, lr=0.1),
+        optimizer=torch.optim.SGD(parameters(cut, without=trains), lr=0.1),
+        trains=trains,
     ).by_stages
 
 
-def test_what_is_above_a_learner_gets_its_gradient_through_it():
+def test_what_is_above_a_trained_node_gets_its_gradient_through_it():
     # Three stages, and the middle one breaks the chain by construction: `a` is
-    # only trained if the gradient the learner gives back is applied here. And
-    # if it were asked for too early, `NoGradient` would call `a` an orphan.
+    # only trained if the gradient the trainer gives back is applied here. And if
+    # it were asked for too early, `NoGradient` would call `a` an orphan.
     torch.manual_seed(0)
     g = Graph.somatize(
         Layer(IN, MID).named("a")
-        >> Alone(MID, MID).named("b")
+        >> Layer(MID, MID).named("b")
         >> Layer(MID, CLASSES).named("c")
     )
+    trains = {"b": split()}
     driven = Trainer(
         g,
         objective=nn.functional.cross_entropy,
-        optimizer=torch.optim.SGD(parameters(g), lr=0.1),
-        learns_with=partial(torch.optim.SGD, lr=0.1),
+        optimizer=torch.optim.SGD(parameters(g, without=trains), lr=0.1),
+        trains=trains,
     )
     before = {i: _weights(g, i) for i in g.nodes()}
     losses = [driven.step(batches(1)[0]) for _ in range(20)]
@@ -403,14 +414,14 @@ def test_what_is_above_a_learner_gets_its_gradient_through_it():
     assert all(before[i] != _weights(g, i) for i in g.nodes()), "somebody stood still"
 
 
-def test_a_graph_that_only_trains_itself_takes_no_optimizer_here():
+def test_a_graph_where_everything_is_trained_elsewhere_takes_no_optimizer():
     torch.manual_seed(0)
-    alone = Alone(IN, CLASSES)
+    alone = Layer(IN, CLASSES)
     g = Graph.somatize(alone.named("alone"))
     driven = Trainer(
         g,
         objective=nn.functional.cross_entropy,
-        learns_with=partial(torch.optim.SGD, lr=0.1),
+        trains={"alone": split()},
     )
     before = _weights(g, "alone")
 
@@ -423,55 +434,16 @@ def test_kept_after_a_cut_is_refused():
     # A root's key comes from the input it was handed, and after a cut the roots
     # of a stage are holds handed nothing: two batches would name one thing.
     g = Graph.somatize(
-        Alone(IN, MID).named("a") >> Layer(MID, CLASSES).named("b").cached()
+        Layer(IN, MID).named("a") >> Layer(MID, CLASSES).named("b").cached()
     )
+    trains = {"a": split()}
     with pytest.raises(ValueError, match="no longer knows what came before"):
         Trainer(
             g,
             objective=nn.functional.cross_entropy,
-            optimizer=torch.optim.SGD(parameters(g), lr=0.1),
-            learns_with=partial(torch.optim.SGD, lr=0.1),
+            optimizer=torch.optim.SGD(parameters(g, without=trains), lr=0.1),
+            trains=trains,
         )
-
-
-def test_learns_with_naming_somebody_who_does_not_learn():
-    g = net()
-    with pytest.raises(ValueError, match="do not train themselves"):
-        Trainer(
-            g,
-            objective=nn.functional.cross_entropy,
-            optimizer=torch.optim.Adam(parameters(g), lr=0.1),
-            learns_with={"encoder": partial(torch.optim.SGD, lr=0.1)},
-        )
-
-
-def test_the_node_keeps_its_own_rule_and_a_named_one_overrides_it():
-    said_by_the_node = partial(torch.optim.SGD, lr=0.5)
-    mine, theirs = Alone(IN, MID), Alone(IN, MID)
-    mine.learns_with(said_by_the_node)
-    theirs.learns_with(said_by_the_node)
-    g = Graph()
-    g.node("mine", mine)
-    g.node("theirs", theirs)
-    named = partial(torch.optim.Adam, lr=0.1)
-
-    Trainer(g, objective=nn.functional.cross_entropy, learns_with={"theirs": named})
-    assert mine.learning is said_by_the_node, "nobody named it, nobody touched it"
-    assert theirs.learning is named, "naming it is the override"
-
-
-def test_a_factory_for_everybody_fills_in_only_whoever_said_nothing():
-    said_by_the_node = partial(torch.optim.SGD, lr=0.5)
-    mine, silent = Alone(IN, MID), Alone(IN, MID)
-    mine.learns_with(said_by_the_node)
-    g = Graph()
-    g.node("mine", mine)
-    g.node("silent", silent)
-    for_everybody = partial(torch.optim.Adam, lr=0.1)
-
-    Trainer(g, objective=nn.functional.cross_entropy, learns_with=for_everybody)
-    assert mine.learning is said_by_the_node, "the rule lives in the node"
-    assert silent.learning is for_everybody
 
 
 def _weights(graph, node_id):
