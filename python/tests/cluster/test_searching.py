@@ -1,25 +1,22 @@
-"""The whole thing at once: a real dataset, a cut graph, and a study spread out.
+"""What is asserted about the study in `searching.py`.
+
+**The code being tested is not here.** It is in two files next to this one, and
+they are the point — this file only starts them and checks what came out:
+
+* `spam.py` — the domain: the messages, and the three nodes that classify them.
+  What a user's own project would contain.
+* `searching.py` — the study: the space, the sampler, the pruner, how a
+  configuration becomes a graph, and the loop. **Read this one.** It is the whole
+  use case in one screen and there is nothing test-shaped in it.
 
 Everything else in this directory tests one property against containers. This
-tests the use case they add up to — and it is the first test of level 3 that has
-a real pipeline under it rather than a tensor of noise.
-
-Two distributions at the same time, and confusing them is the easy mistake:
-
-* **the graph** is cut across machines with `.at()` — preprocessing on a worker
-  with no torch in it at all, the embedding on the one that has it, trained over
-  there by a `Split` while the classifier stays here;
-* **the study** is cut across machines by `claim` — processes over one
-  directory, each taking whichever trial numbers nobody took, deriving its own
-  configuration from the index, and pruning against curves the others drew.
-
-There is no coordinator in either of them. `searching.py` is the script they all
-run, and it is worth reading: nothing in it is told what the others are doing.
+tests the use case they add up to, and it is the first test of level 3 with a
+real pipeline under it rather than a tensor of noise.
 
 Each machine gets **workers of its own**, and that is not a detail: a worker
 holds one catalog, so two machines running different graphs against the same one
 is the second of them being told to reconnect. What they share is the directory,
-which is the only thing they should share. Both graphs still say `.at("a")` and
+which is the only thing they should share. Both machines still say `.at("a")` and
 `.at("gpu")` — what those names resolve to is each machine's business, which is
 the whole reason a host is a name.
 """
@@ -37,7 +34,7 @@ from soma_next import Store
 from soma_next.study import DONE, PRUNED, finished, trials
 
 from . import spam
-from .searching import SAMPLER, SPACE, STUDY
+from .searching import EPOCHS, STUDY, TRIALS, sampler, space
 
 HERE = Path(__file__).resolve().parent
 
@@ -45,8 +42,6 @@ HERE = Path(__file__).resolve().parent
 #: two workers with torch in them and a machine searching needs one to itself.
 PAIRS = [("a", "gpu"), ("b", "gpu-b")]
 
-TRIALS = 8
-EPOCHS = 3
 MESSAGES = 600
 
 
@@ -71,8 +66,7 @@ def searched(tmp_path_factory, cluster, two_with_torch, data):
         subprocess.Popen(
             [
                 sys.executable, str(HERE / "searching.py"), where, f"m{which}",
-                str(TRIALS), str(cluster[cheap]), str(cluster[with_torch]),
-                str(MESSAGES), str(EPOCHS),
+                str(cluster[cheap]), str(cluster[with_torch]), str(MESSAGES),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -110,15 +104,15 @@ def test_and_they_searched_what_one_machine_alone_would_have(searched):
     # would be two different searches and neither would mean anything.
     store, _ = searched
 
-    tried = [str(one["point"]) for one in trials(store, SPACE, study=STUDY)]
+    tried = [str(one["point"]) for one in trials(store, space, study=STUDY)]
 
-    assert tried == [str(SAMPLER.ask(SPACE, trial, [])) for trial in range(TRIALS)]
+    assert tried == [str(sampler.ask(space, trial, [])) for trial in range(TRIALS)]
 
 
 def test_the_record_says_which_machine_ran_which(searched):
     store, _ = searched
 
-    who = {one["who"] for one in trials(store, SPACE, study=STUDY)}
+    who = {one["who"] for one in trials(store, space, study=STUDY)}
 
     assert who <= {f"m{which}" for which in range(len(PAIRS))}
     assert len(who) >= 2
@@ -145,7 +139,7 @@ def test_the_configurations_are_not_all_the_same_one(searched):
     # above. Eight trials, eight configurations, spread over the space.
     store, _ = searched
 
-    tried = [str(one["point"]) for one in trials(store, SPACE, study=STUDY)]
+    tried = [str(one["point"]) for one in trials(store, space, study=STUDY)]
 
     assert len(set(tried)) == TRIALS
 
@@ -172,9 +166,9 @@ def test_a_trial_that_was_given_up_on_is_not_a_configuration_that_scored_badly(s
     # epochs. What a sampler learns from is what ran to the end.
     store, _ = searched
 
-    ran_out = [one for one in trials(store, SPACE, study=STUDY) if one["state"] == DONE]
+    ran_out = [one for one in trials(store, space, study=STUDY) if one["state"] == DONE]
 
-    assert len(finished(store, SPACE, study=STUDY)) == len(ran_out)
+    assert len(finished(store, space, study=STUDY)) == len(ran_out)
 
 
 # ── And the half of it that is the cluster ──
