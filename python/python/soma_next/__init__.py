@@ -1,21 +1,24 @@
 """soma-next: the re-derived twin of Soma, one use case at a time.
 
-A node is anything that knows how to advance one turn::
+A node is anything with a `forward`. It takes what arrived along the edges and
+returns what it produced — there is no wrapper around either::
 
-    from soma_next import Await, Done, Graph, Node
+    from soma_next import Graph, Node
 
     class Clean(Node):
         def forward(self, x, ctx):
-            return Done(x.strip())
+            return x.strip()
 
-    class Ask(Node):
+    class Shout(Node):
         def forward(self, x, ctx):
-            if ctx.turn == 0:
-                return Await([f"and {x}?"])
-            return Done(ctx.results[0])
+            return x.upper()
 
-    g = Graph.somatize(Clean() >> Ask())
-    g.forward("  hello  ", driver=MyDriver())
+    g = Graph.somatize(Clean() >> Shout())
+    g.forward("  hello  ")
+
+Whatever a node takes to answer — a retry, a model, three rounds of something —
+happens **inside it**, holding whatever client that takes. The engine runs it
+once and takes what comes back.
 
 `Graph()` with `node()` and `edge()` is still there for when the topology is
 built in a loop or comes from outside.
@@ -36,10 +39,8 @@ from soma_next._dsl import Node
 from soma_next._graph import Graph
 from soma_next._remote import Worker
 from soma_next._soma_next import (
-    Await,
     Bound,
     Ctx,
-    Done,
     Opaque,
     Store,
     codec,
@@ -47,10 +48,8 @@ from soma_next._soma_next import (
 )
 
 __all__ = [
-    "Await",
     "Bound",
     "Ctx",
-    "Done",
     "Graph",
     "Node",
     "Opaque",

@@ -326,11 +326,14 @@ above *is* the diamond.
 
 ```rust
 pub trait Node: Send + Sync {
-    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError>;
+    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Value, NodeError>;
 }
 ```
 
-Status: **closed**. 48 tests in Rust, 61 in Python.
+Status: **closed** — and see *After CU18* below, where the conclusion survived
+its own mechanism. What is written here is what was true in August 2026, with
+`Transition` still in the signature; the reasoning is what matters and none of
+it changed.
 
 ### The question: why two types?
 
@@ -389,6 +392,12 @@ one.
 **A node can evolve.** It starts always returning `Done`, and the day it needs to
 consult something an `Await` branch is added to the same body, without changing
 type or registration. With two traits that was `error[E0119]`. There is a test.
+
+> **Read this again after *After CU18*.** The variant that made a filter and a
+> step one type was itself removed, and the conclusion did not need it: with one
+> shape there is nothing left for the distinction to live in. What CU6 got right
+> was the diagnosis — the distinction was in the return value and not in the type
+> — and it turned out the return value did not have to carry it either.
 
 ## CU7 — The same mechanism in both languages
 
@@ -3109,3 +3118,96 @@ machines are looking at costs nothing to know · **a bus**, which earns its plac
 in observability and not in coordination, and would turn every crate it touches
 async for no subscriber · **a held-out score for a cut graph**, which is scoring
 that travels · and **retries**, which have a name on disk and no reader.
+
+## After CU18 — What a node is, once the agentic seam is taken out
+
+```rust
+pub trait Node: Send + Sync {
+    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Value, NodeError>;
+}
+```
+
+`Transition` and `Driver` are gone. A node is a function. Decided and done on
+22 August 2026, and the argument is short enough to fit here.
+
+### What they were
+
+`Transition::Await(requests)` let a node **suspend**: it said what it needed, an
+injected `Driver` served it, and the node was asked again with the answers in
+`ctx.results`. It was the seam of an agentic layer — `driver.rs` said so in its
+own docstring, *"that ignorance is what keeps the agentic layer out of the
+core"*.
+
+### What it cost, measured
+
+| | |
+|---|---|
+| `Done(...)` written by hand across the repo | **164** |
+| places that returned `Await` | **14** |
+| ...of those, outside the tests | **0** |
+| core surface | `Transition`, `Driver`, `ctx.turn`, `ctx.results`, `MAX_TURNS`, 3 `RunError` variants, the turn loop |
+| plumbing beyond the core | 12 files — bindings, transport, worker |
+
+Every node anybody wrote paid for the wrapper, and after eighteen use cases half
+the enum had **no tenant**. The project's first rule is that nothing is written
+without a real consumer today; this was the largest exception in it.
+
+### The three things only suspension bought, honestly
+
+1. **The engine could bound a runaway loop.** `MAX_TURNS = 64`, a node that
+   cannot stop failing instead of hanging. Real.
+2. **The engine saw each turn.** A base for traces, replay, checkpoints — and
+   **nothing used it**, not one hook.
+3. **A suspended node is resumable**: a value and a turn number. The big
+   theoretical justification, and **the design did not deliver it** — a node that
+   accumulates does so in its own object, which is serialized nowhere. A durable
+   agent was not checkpointable however much you wanted one.
+
+One works, one is unused, one is not delivered.
+
+### What was kept, which is what makes it reversible
+
+**`Ctx` stays.** Not `turn`, not `results` — the type, carrying `device`. It is
+the **channel** by which whoever executes hands a node what it knows, and the
+day an agentic layer wants something injected it goes there and **no node
+signature changes**. That was the one strong argument for keeping `Await` — cheap
+now, breaking to add back — and keeping the channel dissolves it.
+
+### Where the agentic layer goes instead
+
+Not into the core, and not as a variant either: `Transition` was closed on
+purpose (*"adding one should break everyone"*), so an extending crate could never
+have added to it anyway. It goes as **concrete nodes** — one that wraps a model
+call and its retries, one that routes, one that orchestrates several agents —
+each holding whatever client it takes.
+
+Retries in particular belong there and the repo had already said so: CU12's *what
+did not go in* refused them at the engine because *"a node that already ran half
+of itself is not idempotent and nobody has said what it means to run it again"*.
+That reasoning did not change; what changed is that now there is nowhere else to
+put them.
+
+### What is lost, said as a decision and not a side effect
+
+**The engine no longer bounds anything.** A node that does not return does not
+return, the same way a function that does not return does not. It could not
+honestly do better: it has no way to tell a loop that will not end from work
+that is slow, and guessing wrong either way is worse than not guessing.
+
+And **whatever a node keeps is entirely its own business** — which was already
+true, and is now the only thing that is true. The catalog holds the node, not a
+copy per run, so state outlives a `forward`: that is what lets an activation stay
+alive across a cut and what `Split` rests on, and it is a trap from the other
+side. There is a test in both languages saying so.
+
+### What disappeared
+
+`Driver`, `DriverError`, `Transition`, `Ctx::turn`, `Ctx::results`, `MAX_TURNS`,
+`RunError::{NoDriver, Driver, TurnLimit}`, `Executor::with_driver`,
+`Serving::driver`, `Provisioned::served_by`, `PyDone`, `PyAwait`, `PyDriver`, and
+`driver=` from `Graph.forward`, `serve`, `listen` and their provisioned twins.
+
+An artifact carries **the nodes** and not `(nodes, driver)`, so `provide()`
+returns a dict.
+
+`RunError` goes from 11 variants to 8. `advance()` goes from 38 lines to 5.

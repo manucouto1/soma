@@ -25,25 +25,21 @@ class Graph(_RustGraph):
     _slice_of = None
     """The graph this one is a piece of, for a graph run in pieces."""
 
-    def forward(self, input=None, *, driver=None, workers=None, store=None):
+    def forward(self, input=None, *, workers=None, store=None):
         """Executes the whole graph and returns what it produced.
 
         With `workers={"w1": Worker.at(...)}` you say what each host resolves
         to. **This method sends the nodes**, not you: the graph is the one that
         knows which goes where.
 
-        The `driver` goes with them. It serves what the steps ask for here and
-        over there alike, so a node that returns `Await` does not stop being
-        executable for having been sent away.
-
         `store` is a directory: with one, whatever was declared `.cached()` is
         looked up before being computed and kept afterwards.
         """
         self._check_it_was_obeyed()
-        self.provision(workers, driver)
-        return super().forward(input, driver=driver, workers=workers, store=store)
+        self.provision(workers)
+        return super().forward(input, workers=workers, store=store)
 
-    def provision(self, workers, driver=None):
+    def provision(self, workers):
         """Tells each worker what it is going to need, before the first node runs.
 
         `forward` calls it, so whoever runs a graph in one go never says it out
@@ -64,7 +60,7 @@ class Graph(_RustGraph):
         whole = self._slice_of or self
         for worker, nodes in whole._share_out(workers or {}).items():
             if nodes:
-                worker.carry(nodes, driver)
+                worker.carry(nodes)
 
     def _check_it_was_obeyed(self):
         """That whoever was declared settled really was settled.

@@ -22,7 +22,7 @@ worker as the input of a graph, like everything else.
 
 from __future__ import annotations
 
-from soma_next import Done, Node
+from soma_next import Node
 
 NAME = "ucirvine/sms_spam"
 
@@ -54,7 +54,7 @@ class Clean(Node):
         self.width = width
 
     def forward(self, texts, ctx):
-        return Done([_padded(_ids(one), self.width) for one in texts])
+        return [_padded(_ids(one), self.width) for one in texts]
 
 
 class Embed(Node):
@@ -85,7 +85,7 @@ class Embed(Node):
         # cleaned down to nothing at all — dividing by zero would put a `NaN`
         # into the batch, and one `NaN` is the whole batch.
         kept = (ids != 0).unsqueeze(-1).to(said.dtype)
-        return Done(Opaque((said * kept).sum(1) / kept.sum(1).clamp(min=1.0)))
+        return Opaque((said * kept).sum(1) / kept.sum(1).clamp(min=1.0))
 
     def parameters(self):
         return list(self.table.parameters())
@@ -105,7 +105,7 @@ class Classify(Node):
         from soma_next import Opaque
 
         landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
-        return Done(Opaque(self.lin(landed)))
+        return Opaque(self.lin(landed))
 
     def parameters(self):
         return list(self.lin.parameters())

@@ -233,14 +233,14 @@ def test_and_whoever_was_told_they_won_is_the_one_written_down(tmp_path):
 
 WRITER = """
 import sys, torch, soma_next.torch
-from soma_next import Graph, Node, Done, Opaque, Store
+from soma_next import Graph, Node, Opaque, Store
 from soma_next.torch import Trainer, parameters
 
 class Layer(Node):
     def __init__(self):
         self.lin = torch.nn.Linear(4, 2)
     def forward(self, x, ctx):
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
     def parameters(self):
         return list(self.lin.parameters())
 

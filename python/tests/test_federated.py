@@ -20,7 +20,7 @@ cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
 from torch import nn  # noqa: E402
 
-from soma_next import Done, Graph, Node, Opaque, Worker  # noqa: E402
+from soma_next import Graph, Node, Opaque, Worker  # noqa: E402
 from soma_next.torch import Split, Trainer, fedavg, parameters  # noqa: E402
 
 IN, MID, CLASSES = 6, 5, 3
@@ -31,7 +31,7 @@ class Layer(Node):
         self.lin = nn.Linear(n_in, n_out)
 
     def forward(self, x, ctx):
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -50,14 +50,14 @@ class Named(Node):
         return list(self.lin.parameters())
 
     def forward(self, x, ctx):
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
 
 class Counts(Node):
     """No weights at all. It does not stop being a node for it."""
 
     def forward(self, x, ctx):
-        return Done(x)
+        return x
 
 
 def net(seed=0):

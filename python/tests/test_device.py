@@ -15,7 +15,7 @@ runs, not where.
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 
 from conftest import Add, Identity
 
@@ -28,7 +28,7 @@ class Watch(Node):
 
     def forward(self, x, ctx):
         self.seen = ctx.device
-        return Done(x)
+        return x
 
 
 # ── Declaring where ──
@@ -168,11 +168,11 @@ def test_the_device_shows_up_in_the_ctxs_repr():
 
         def forward(self, x, ctx):
             self.seen = repr(ctx)
-            return Done(x)
+            return x
 
     node = Repr()
     Graph.somatize(node.named("n").on("cpu")).forward(1.0)
-    assert node.seen == "Ctx(turn=0, results=0, device=cpu)"
+    assert node.seen == "Ctx(device=cpu)"
 
 
 # ── What placing does NOT change ──
@@ -208,7 +208,7 @@ class Returns(Node):
         self.value = value
 
     def forward(self, x, ctx):
-        return Done(Opaque(self.value))
+        return Opaque(self.value)
 
 
 def test_a_node_that_returns_something_from_elsewhere_is_caught():
@@ -266,7 +266,7 @@ class Layer(Node):
                 self.lin.to(ctx.device)  # the parameters, once
                 self.placed = ctx.device
             x = x.to(ctx.device)  # the input, every time
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -285,7 +285,7 @@ def test_meta_tests_placement_without_hardware():
 def test_a_node_that_ignores_its_device_is_caught():
     class Deaf(Node):
         def forward(self, x, ctx):
-            return Done(Opaque(torch.zeros(2, 3)))  # born on cpu, whatever happens
+            return Opaque(torch.zeros(2, 3))  # born on cpu, whatever happens
 
     g = Graph.somatize(Deaf().named("deaf").on("meta"))
     with pytest.raises(ValueError, match="declared `meta` but returned a value on `cpu`"):

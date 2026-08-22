@@ -29,7 +29,7 @@ would turn versioning into noise. Docstrings are stripped for the same reason.
   standard-library module by its bare name — it is glued to the interpreter,
   which is already compared at the greeting.
 - At **what has no source**: an extension module cannot be read, so it is
-  treated as installed. `Done` and `Node` are among those.
+  treated as installed. `Node` and `Opaque` are among those.
 - At **`soma_next`**: it is the framework, not your code. Its version goes into
   the client's identity and not into each class's fingerprint; otherwise
   upgrading the library would invalidate them all at once. It is named

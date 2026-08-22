@@ -7,7 +7,7 @@
 //! have caught the bug that killed `Plan::Parallel` in CU4, which is why they
 //! run over a battery of topologies and not over one.
 
-use crate::doubles::{Add, Ask};
+use crate::doubles::Add;
 use soma_next_core::{
     Catalog, CompileError, Destination, Device, Graph, Host, NodeId, Placement, Plan, compile,
     distribute, node,
@@ -86,25 +86,6 @@ fn a_linear_chain_compiles_to_what_it_did_before_waves() {
             execute("c", &["b"]),
             execute("d", &["c"]),
         ])
-    );
-}
-
-#[test]
-fn the_plan_does_not_tell_apart_who_asks_for_turns_from_who_does_not() {
-    // `Ask` asks for something before finishing and `Add` does not, and yet
-    // both compile to the same step: that is said by their `Transition` at run
-    // time, not by the plan.
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("a").unwrap();
-    g.add_node("b").unwrap();
-    g.add_edge("a", "b").unwrap();
-    c.insert("a", Arc::new(Add(1.0)));
-    c.insert("b", Arc::new(Ask(vec![])));
-
-    assert_eq!(
-        compile(&g, &c).unwrap(),
-        Plan::Sequence(vec![execute("a", &[]), execute("b", &["a"])])
     );
 }
 

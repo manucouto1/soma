@@ -22,7 +22,7 @@ torch = pytest.importorskip("torch")
 cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
-from soma_next import Done, Graph, Node, Opaque, Worker  # noqa: E402
+from soma_next import Graph, Node, Opaque, Worker  # noqa: E402
 from soma_next.torch import (  # noqa: E402
     Learning,
     NoGradient,
@@ -56,7 +56,7 @@ class Body(Node):
         self.lin = torch.nn.Linear(wide, tall)
 
     def forward(self, x, ctx):
-        return Done(Opaque(self.lin(x).relu()))
+        return Opaque(self.lin(x).relu())
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -69,7 +69,7 @@ class Head(Node):
         self.lin = torch.nn.Linear(wide, tall)
 
     def forward(self, x, ctx):
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -84,7 +84,7 @@ class Doubles(Node):
 
     def forward(self, x, ctx):
         self.seen.append("computed")
-        return Done(Opaque(x * self.weight))
+        return Opaque(x * self.weight)
 
     def parameters(self):
         return [self.weight]
@@ -106,10 +106,9 @@ def beside(node, technique=Split, lr=0.1, **how):
     return learning, Enters(learning)
 
 
-def out(transition):
+def out(value):
     """What a `forward` produced, seen the way whoever reads it next sees it: a
     node is handed what was wrapped, not the wrapper."""
-    value = transition.value
     return value.value if isinstance(value, Opaque) else value
 
 

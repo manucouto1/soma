@@ -6,7 +6,7 @@ client sends says which version it was written against; this worker compares and
 decides — stopping with `--strict`, and running its own with `--lucky`.
 """
 
-from soma_next import Done, Node
+from soma_next import Node
 
 FACTOR = 3
 
@@ -15,4 +15,4 @@ class Scale(Node):
     """Multiplies. An older version: it multiplies by something else."""
 
     def forward(self, x, ctx):
-        return Done(x * FACTOR)
+        return x * FACTOR

@@ -15,10 +15,6 @@ resolves the implementations**.
 | `project` *(default)* | names, versions and state | **the code**, from its clone |
 | `pickle` | the code and the state | nothing |
 
-The **driver travels with the nodes**, in the same artifact and by the same
-strategy: `g.forward(x, driver=..., workers=...)` sends it, so a node that
-returns `Await` finishes over there too.
-
 `project` is the one you want when the worker runs in a clone of the project: it
 sends tens of bytes per node, couples no interpreters, and **checks the version**
 — if your clone is half-updated, it finds out before executing. `pickle` removes
@@ -98,7 +94,7 @@ def runtime():
 class Pickles:
     """Turns `pickle` artifacts into nodes. Python's `Provision`:
     `accepts(client, kind)` returns `None` or **how this worker identifies
-    itself**, and `provide(kind, blob)` returns `(nodes, driver)`."""
+    itself**, and `provide(kind, blob)` returns the nodes as a dict."""
 
     def accepts(self, client, kind):
         del kind  # `Pickles` only opens one, and checks it in `catalog`
@@ -123,7 +119,7 @@ class Pickles:
                 f'the artifact: Worker.generic(..., send=["{(e.name or "").split(".")[0]}"])'
             ) from e
 
-        return _pair(sent, "pickle")
+        return _nodes(sent, "pickle")
 
 
 class Project:
@@ -143,7 +139,7 @@ class Project:
     def provide(self, kind, blob):
         if kind != _manifest.KIND:
             raise ValueError(f"this does not open `{kind}` artifacts")
-        return _pair(_manifest.unpack(blob, strict=self.strict), _manifest.KIND)
+        return _nodes(_manifest.unpack(blob, strict=self.strict), _manifest.KIND)
 
 
 class Strategies:
@@ -168,16 +164,12 @@ class Strategies:
         return self._who(kind).provide(kind, blob)
 
 
-def _pair(sent, kind):
-    """What an artifact has to unpack to: the nodes and, maybe, a driver."""
-    if (
-        not isinstance(sent, tuple)
-        or len(sent) != 2
-        or not isinstance(sent[0], dict)
-    ):
+def _nodes(sent, kind):
+    """What an artifact has to unpack to: a dict of id → node."""
+    if not isinstance(sent, dict):
         raise TypeError(
-            f"a `{kind}` artifact is a `(nodes, driver)` pair with a dict of "
-            f"id → node, and a `{type(sent).__name__}` arrived"
+            f"a `{kind}` artifact is a dict of id → node, and a "
+            f"`{type(sent).__name__}` arrived"
         )
     return sent
 
@@ -227,6 +219,7 @@ def main(argv=None):
     against; by default it stops. `--store` is a directory to keep things in.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
+    _read_the_codecs()
     which = default(strict="--lucky" not in argv)
     store = _after("--store", argv)
     if "--listen" in argv:
@@ -237,6 +230,31 @@ def main(argv=None):
             store=store,
         )
     return serve_provisioned(which, store=store)
+
+
+def _read_the_codecs():
+    """Registers what this worker knows how to read, **before** it serves.
+
+    A codec has to be there before a value arrives and not be discovered while
+    one is being unpacked. Discovered, the first import of a large native
+    extension happens inside a request thread while the GIL is being handed
+    back and forth, and with torch that is not an error but **heap corruption**:
+    `free(): chunks in smallbin corrupted`, a worker that dies with no
+    traceback, and a client told only that it closed without answering.
+
+    It hid for a long time because the first job a worker got was usually a
+    small one, which imported torch harmlessly; it surfaced the day a second
+    torch worker was stood up whose very first job was a training run.
+
+    This is not the worker learning about your project. `soma_next.torch` is
+    soma-next's own, and a worker that can carry a tensor is one that has read
+    the codec for it. One that has no torch carries no tensors, and that is a
+    worker too.
+    """
+    try:
+        import soma_next.torch  # noqa: F401
+    except ImportError:
+        pass
 
 
 def _after(flag, argv, needed=False):

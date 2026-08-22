@@ -9,7 +9,7 @@ is staged: it is another file, in another image's mount, and the fingerprints
 come out different because the code is different.
 """
 
-from soma_next import Done, Node
+from soma_next import Node
 
 FACTOR = 2
 
@@ -18,4 +18,4 @@ class Scale(Node):
     """Multiplies. The version here is the one the graph is written against."""
 
     def forward(self, x, ctx):
-        return Done(x * FACTOR)
+        return x * FACTOR

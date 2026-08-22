@@ -14,7 +14,7 @@ import threading
 
 import pytest
 
-from soma_next import Done, Graph, Node
+from soma_next import Graph, Node
 from conftest import Add, Mean
 
 DEADLINE = 10
@@ -34,7 +34,7 @@ class Noter(Node):
     def forward(self, x, ctx):
         with self.lock:
             self.journal.append((self.name, threading.get_ident()))
-        return Done(x)
+        return x
 
 
 class Rendezvous(Node):
@@ -54,7 +54,7 @@ class Rendezvous(Node):
         self.barrier.wait()
         if self.fails:
             raise ValueError(self.fails)
-        return Done(x)
+        return x
 
 
 def in_another_process(source):
@@ -281,14 +281,14 @@ def test_the_engine_releases_the_gil_while_it_runs():
     """
     done = in_another_process("""
         import threading
-        from soma_next import Done, Graph, Node
+        from soma_next import Graph, Node
 
         barrier = threading.Barrier(2, timeout=5)
 
         class Rendezvous(Node):
             def forward(self, x, ctx):
                 barrier.wait()
-                return Done(x)
+                return x
 
         g = Graph.somatize(Rendezvous().named("left") | Rendezvous().named("right"))
         assert g.forward("x") == {"left": "x", "right": "x"}
@@ -318,7 +318,7 @@ def test_two_python_nodes_in_the_same_wave_give_the_right_result():
             for _ in range(2000):
                 with lock:
                     counter.append(1)
-            return Done(len(counter))
+            return len(counter)
 
     g = Graph.somatize(Counts().named("one") | Counts().named("other"))
     output = g.forward(0)

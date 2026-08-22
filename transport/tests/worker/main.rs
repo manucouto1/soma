@@ -3,7 +3,6 @@
 //! ```text
 //! test-worker                        over stdin,  own catalog
 //! test-worker --empty                over stdin,  catalog sent
-//! test-worker --driver               a driver of its own, with either catalog
 //! test-worker --noisy                writes on `stdout` before serving
 //! test-worker --store DIR            keeps what it is sent, and looks there first
 //! test-worker --store DIR --keeper   and also keeps what the nodes produce
@@ -29,7 +28,7 @@
 //! mechanism is not a Python one** — what travels is bytes this crate does not
 //! look at, and whoever interprets them can be anyone.
 
-use soma_next_core::{Catalog, Ctx, Driver, DriverError, Node, NodeError, Transition, Value};
+use soma_next_core::{Catalog, Ctx, Node, NodeError, Value};
 use soma_next_store::{Cache, Local};
 use soma_next_transport::{Codec, CodecError, Provision, ProvisionError, Provisioned, Serving};
 use std::sync::Arc;
@@ -39,9 +38,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Add(f64);
 
 impl Node for Add {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         match input {
-            Value::Number(x) => Ok(Transition::Done(Value::number(x + self.0))),
+            Value::Number(x) => Ok(Value::number(x + self.0)),
             other => Err(NodeError::new(format!(
                 "Add needs a number, it was given {}",
                 other.type_name()
@@ -54,7 +53,7 @@ impl Node for Add {
 struct Mean;
 
 impl Node for Mean {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         let Some(values) = input.values() else {
             return Err(NodeError::new("Mean needs a map"));
         };
@@ -65,7 +64,7 @@ impl Node for Mean {
             };
             total += x;
         }
-        Ok(Transition::Done(Value::number(total / values.len() as f64)))
+        Ok(Value::number(total / values.len() as f64))
     }
 }
 
@@ -73,8 +72,8 @@ impl Node for Mean {
 struct WhereIRan;
 
 impl Node for WhereIRan {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(std::process::id() as f64)))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(std::process::id() as f64))
     }
 }
 
@@ -135,8 +134,8 @@ impl Codec for U32s {
 struct Unwritable;
 
 impl Node for Unwritable {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::opaque(String::from("alive"))))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::opaque(String::from("alive")))
     }
 }
 
@@ -144,8 +143,8 @@ impl Node for Unwritable {
 struct Opaque;
 
 impl Node for Opaque {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::opaque(7u32)))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::opaque(7u32))
     }
 }
 
@@ -154,11 +153,11 @@ impl Node for Opaque {
 struct Reads;
 
 impl Node for Reads {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(match input {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(match input {
             Value::Opaque(_) => 1.0,
             _ => 0.0,
-        })))
+        }))
     }
 }
 
@@ -166,41 +165,8 @@ impl Node for Reads {
 struct Fail;
 
 impl Node for Fail {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         Err(NodeError::new("I broke in the worker"))
-    }
-}
-
-/// Asks for something on turn 0 and returns whatever it is told, so it only
-/// finishes if there is a driver **over there**.
-struct Ask;
-
-impl Node for Ask {
-    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        if ctx.turn == 0 {
-            return Ok(Transition::Await(vec![Value::text("hello")]));
-        }
-        Ok(Transition::Done(
-            ctx.results.first().cloned().unwrap_or(Value::Null),
-        ))
-    }
-}
-
-/// Answers every request with its text in upper case.
-struct Shout;
-
-impl Driver for Shout {
-    fn perform(&self, requests: &[Value]) -> Result<Vec<Value>, DriverError> {
-        requests
-            .iter()
-            .map(|r| match r {
-                Value::Text(t) => Ok(Value::text(t.to_uppercase())),
-                other => Err(DriverError::new(format!(
-                    "I only know how to shout text, I was given {}",
-                    other.type_name()
-                ))),
-            })
-            .collect()
     }
 }
 
@@ -208,11 +174,11 @@ impl Driver for Shout {
 struct WhichDevice;
 
 impl Node for WhichDevice {
-    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(match ctx.device {
+    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(match ctx.device {
             Some(device) => Value::text(device.to_string()),
             None => Value::Null,
-        }))
+        })
     }
 }
 
@@ -222,7 +188,7 @@ impl Node for WhichDevice {
 struct Rendezvous;
 
 impl Node for Rendezvous {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         let place = std::env::var("SOMA_RENDEZVOUS")
             .map_err(|_| NodeError::new("this node needs `SOMA_RENDEZVOUS` in the environment"))?;
         let how_many: u64 = std::env::var("SOMA_RENDEZVOUS_COUNT")
@@ -241,7 +207,7 @@ impl Node for Rendezvous {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < until {
             if std::fs::metadata(&place).map(|m| m.len()).unwrap_or(0) >= how_many {
-                return Ok(Transition::Done(Value::number(std::process::id() as f64)));
+                return Ok(Value::number(std::process::id() as f64));
             }
             std::thread::yield_now();
         }
@@ -257,10 +223,10 @@ impl Node for Rendezvous {
 struct Counts(AtomicUsize);
 
 impl Node for Counts {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(
             self.0.fetch_add(1, Ordering::SeqCst) as f64 + 1.0,
-        )))
+        ))
     }
 }
 
@@ -269,10 +235,8 @@ impl Node for Counts {
 struct Times(Arc<AtomicUsize>);
 
 impl Node for Times {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(
-            self.0.load(Ordering::SeqCst) as f64,
-        )))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(self.0.load(Ordering::SeqCst) as f64))
     }
 }
 
@@ -288,7 +252,6 @@ fn catalog() -> Catalog {
     catalog.insert("reads", Arc::new(Reads));
     catalog.insert("broken", Arc::new(Fail));
     catalog.insert("device", Arc::new(WhichDevice));
-    catalog.insert("ask", Arc::new(Ask));
     catalog.insert("counts", Arc::new(Counts(AtomicUsize::new(0))));
     for id in ["meet_one", "meet_two"] {
         catalog.insert(id, Arc::new(Rendezvous));
@@ -322,9 +285,7 @@ impl Provision for Adds {
             std::str::from_utf8(bytes).map_err(|_| ProvisionError::Broken("not UTF-8".into()))?;
 
         let mut catalog = Catalog::new();
-        // `shout` is not a node: it is how this artifact says it also brings a
-        // driver, which is the whole point of it travelling with them.
-        for piece in text.split(',').filter(|p| !p.is_empty() && *p != "shout") {
+        for piece in text.split(',').filter(|p| !p.is_empty()) {
             let (id, how_much) = piece
                 .split_once('=')
                 .ok_or_else(|| ProvisionError::Broken(format!("`{piece}` is not `id=number`")))?;
@@ -337,13 +298,7 @@ impl Provision for Adds {
         times.fetch_add(1, Ordering::SeqCst);
         catalog.insert("times", Arc::new(Times(times)));
         catalog.insert("where", Arc::new(WhereIRan));
-        catalog.insert("ask", Arc::new(Ask));
-        // The driver rides in the artifact, like the nodes: an `adds` artifact
-        // that names a shouter brings one.
-        Ok(match text.contains("shout") {
-            true => Provisioned::new(catalog).served_by(Arc::new(Shout)),
-            false => Provisioned::new(catalog),
-        })
+        Ok(Provisioned::new(catalog))
     }
 }
 
@@ -376,7 +331,6 @@ fn main() -> std::io::Result<()> {
         print!("hello, I am a stray print");
         let _ = std::io::stdout().flush();
     }
-    let with_driver = args.iter().any(|a| a == "--driver");
     let empty = empty();
     let catalog = catalog();
     // A directory shared with whoever else is told to use it: that is where a
@@ -391,9 +345,6 @@ fn main() -> std::io::Result<()> {
         true => Serving::provisioned(&empty),
         false => Serving::own(&catalog),
     };
-    if with_driver {
-        serving = serving.driver(&Shout);
-    }
     if let Some(store) = &store {
         serving = serving.store(store);
     }

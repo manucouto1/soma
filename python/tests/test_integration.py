@@ -12,7 +12,6 @@ The files are in `tests/integration/` and read as an example:
     client_child.py       the client, starting the workers itself
     client_generic.py     the client, sending the code with `cloudpickle`
     client_connects.py    the client, against an **already standing** worker
-    client_asks.py        the same, with a node that needs a driver over there
     client_project.py     the client, against a worker that **has the code**
     client_whole.py       the same graph undistributed, for comparison
 
@@ -250,20 +249,6 @@ def test_the_worker_stays_standing_when_the_client_leaves(tmp_path):
     assert pids == others, "it is not the same process from one client to the next"
 
 
-def test_a_node_that_asks_is_served_by_the_driver_in_the_standing_worker(tmp_path):
-    # The `--listen` half of the driver travelling: the worker was stood up
-    # before this client existed and knows nothing of `Shout`. What serves the
-    # `Await` got there in the artifact, with the nodes.
-    with standing_worker(tmp_path) as w:
-        done = run("client_asks.py", w.addr, cwd=tmp_path)
-
-    output = ast.literal_eval(tagged(done.stdout, "OUTPUT"))
-    here = float(tagged(done.stdout, "HERE"))
-
-    assert output["said"] == "THE"
-    assert output["pid"] != here, "the driver was served in the client"
-
-
 def test_the_two_hosts_can_be_the_same_worker(tmp_path):
     # `w1` and `w2` point at the same process: two names, one destination. The
     # graph does not find out, which is what having a host be a name buys.
@@ -316,8 +301,8 @@ def other_version(tmp_path):
     clone.mkdir()
     source = (HERE / "net.py").read_text()
     changed = source.replace(
-        'return Done({"how_many": float(len(words))',
-        'return Done({"how_many": float(len(words) * 100)',
+        'return {"how_many": float(len(words))',
+        'return {"how_many": float(len(words) * 100)',
     )
     assert changed != source, "the test is changing nothing"
     (clone / "net.py").write_text(changed)

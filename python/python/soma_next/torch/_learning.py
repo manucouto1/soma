@@ -67,7 +67,7 @@ from functools import partial
 
 import torch
 
-from soma_next import Done, Node, Opaque
+from soma_next import Node, Opaque
 
 SIGNAL = "__soma_gradient__"
 """The reserved key that makes a map a gradient instead of a map."""
@@ -198,7 +198,7 @@ class Learning(Node):
         inside = _envelopes_in(value)
         if inside is None:
             self.held = value
-            return Done(_data(value))
+            return _data(value)
         # Counting is the framework's and what to do about it is the technique's:
         # `learn` asks `opens` and `closes` and never has to remember to tick
         # anything, which is one thing less for whoever fills this hole.
@@ -206,7 +206,7 @@ class Learning(Node):
         back = self.learn(_added(inside, ctx.device), ctx)
         self.seen = 0 if self.closes() else self.seen + 1
         self.told = False
-        return Done(envelope(back))
+        return envelope(back)
 
     def entering(self, value, ctx):
         """The input as a leaf, remembered, which is what makes `dL/d(input)` a
@@ -298,7 +298,7 @@ class Enters(Node):
         self.learning = learning
 
     def forward(self, value, ctx):
-        return Done(Opaque(self.learning.entering(value, ctx)))
+        return Opaque(self.learning.entering(value, ctx))
 
 
 def _envelopes_in(value):

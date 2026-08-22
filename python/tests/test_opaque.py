@@ -2,14 +2,14 @@
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 
 
 class Wraps(Node):
     """Returns whatever arrives, opaque."""
 
     def forward(self, x, ctx):
-        return Done(Opaque(x))
+        return Opaque(x)
 
 
 class Remembers(Node):
@@ -20,7 +20,7 @@ class Remembers(Node):
 
     def forward(self, x, ctx):
         self.seen = x
-        return Done(Opaque(x))
+        return Opaque(x)
 
 
 # ── Any object at all ──
@@ -72,7 +72,7 @@ def test_it_fits_in_a_list_and_in_a_map(g):
 
     class AsList(Node):
         def forward(self, x, ctx):
-            return Done([Opaque(one), Opaque(other)])
+            return [Opaque(one), Opaque(other)]
 
     g.node("list", AsList())
     output = g.forward()
@@ -96,7 +96,7 @@ def test_torchs_autograd_survives_the_graph(g):
             self.m = m
 
         def forward(self, x, ctx):
-            return Done(Opaque(self.m(x)))
+            return Opaque(self.m(x))
 
     l1, l2 = nn.Linear(4, 3), nn.Linear(3, 2)
     g.node("l1", Layer(l1))
@@ -122,7 +122,7 @@ def test_converting_to_numbers_breaks_autograd_which_is_why_opaque_exists(g):
 
     class Copy(Node):
         def forward(self, x, ctx):
-            return Done(x.tolist())  # unwrapped: it gets converted
+            return x.tolist()  # unwrapped: it gets converted
 
     g.node("copy", Copy())
     x = torch.randn(3, requires_grad=True)

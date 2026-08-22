@@ -15,7 +15,7 @@ look good and are not.
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 from soma_next.torch import Split, Trainer, parameters
 
 torch = pytest.importorskip("torch")
@@ -38,7 +38,7 @@ class Layer(Node):
                 self.lin.to(ctx.device)
                 self.placed = ctx.device
             x = x.to(ctx.device)
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -53,7 +53,7 @@ class Label(Node):
     """No parameters: not every node trains, and it does not stop being a node."""
 
     def forward(self, x, ctx):
-        return Done(x)
+        return x
 
 
 def net(gpu=None):
@@ -247,7 +247,7 @@ def test_an_input_that_is_not_a_tensor_crosses_as_always():
 
         def forward(self, texts, ctx):
             lengths = torch.tensor([[float(len(t))] for t in texts])
-            return Done(Opaque(self.lin(lengths)))
+            return Opaque(self.lin(lengths))
 
         def parameters(self):
             return list(self.lin.parameters())

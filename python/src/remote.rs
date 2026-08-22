@@ -15,7 +15,7 @@
 //! what an `Opaque` carries, or what a serialized catalog is.
 
 use crate::codec::{Codecs, Packing};
-use crate::node::{PyDriver, PyNode};
+use crate::node::PyNode;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -143,7 +143,7 @@ impl PyWorker {
 ///
 /// - `accepts(runtime, kind)` → `None` if it accepts, or **how this worker
 ///   identifies itself** if not.
-/// - `provide(kind, blob)` → `(nodes, driver)`: a `dict` of `id → node` and
+/// - `provide(kind, blob)` → a `dict` of `id → node`, and
 ///   whoever serves what they ask for, or `None`. It raises if it cannot.
 pub struct PyProvision {
     obj: PyObject,
@@ -193,27 +193,13 @@ impl Provision for PyProvision {
                 .call_method1(py, "provide", (kind, bytes))
                 .map_err(|e| ProvisionError::Broken(e.to_string()))?;
 
-            let (nodes, driver): (PyObject, Option<PyObject>) =
-                built.extract(py).map_err(|_| {
-                    ProvisionError::Broken("provide() must return (nodes, driver)".into())
-                })?;
-
-            let dict = nodes.bind(py).downcast::<PyDict>().map_err(|_| {
+            let dict = built.bind(py).downcast::<PyDict>().map_err(|_| {
                 ProvisionError::Broken("the nodes have to be a dict of id → node".into())
             })?;
             // The same walk as a worker that brings its own catalog: how the
             // nodes got here is not what tells them apart.
             let catalog = catalog_of(dict).map_err(|e| ProvisionError::Broken(e.to_string()))?;
-
-            let provisioned = Provisioned::new(catalog);
-            Ok(match driver {
-                None => provisioned,
-                Some(obj) => {
-                    let driver = PyDriver::new(obj.bind(py))
-                        .map_err(|e| ProvisionError::Broken(e.to_string()))?;
-                    provisioned.served_by(Arc::new(driver))
-                }
-            })
+            Ok(Provisioned::new(catalog))
         })
     }
 }
@@ -232,40 +218,23 @@ fn catalog_of(nodes: &Bound<'_, PyDict>) -> PyResult<Catalog> {
 }
 
 /// Serves slices with the catalog you pass it, `{id: node}`, until the client
-/// closes. `driver` is what serves whatever the steps here ask for.
+/// closes.
 #[pyfunction]
-#[pyo3(signature = (nodes, driver = None))]
-pub fn serve(
-    py: Python<'_>,
-    nodes: &Bound<'_, PyDict>,
-    driver: Option<&Bound<'_, PyAny>>,
-) -> PyResult<()> {
+pub fn serve(py: Python<'_>, nodes: &Bound<'_, PyDict>) -> PyResult<()> {
     let catalog = catalog_of(nodes)?;
-    let driver = driver.map(PyDriver::new).transpose()?;
     // While this blocks on a read, a wave's threads need the interpreter.
-    py.allow_threads(|| serving(&catalog, driver.as_ref()).over_stdin())
+    py.allow_threads(|| serving(&catalog).over_stdin())
         .map_err(|e| PyRuntimeError::new_err(format!("the worker was cut off: {e}")))
 }
 
-/// A worker with its own catalog, and its own driver if it was given one.
-fn serving<'a>(catalog: &'a Catalog, driver: Option<&'a PyDriver>) -> Serving<'a> {
-    let serving = Serving::own(catalog).packing(&CODECS);
-    match driver {
-        Some(driver) => serving.driver(driver),
-        None => serving,
-    }
+/// A worker with its own catalog.
+fn serving(catalog: &Catalog) -> Serving<'_> {
+    Serving::own(catalog).packing(&CODECS)
 }
 
 /// The same for a worker that is sent what to execute.
-fn serving_provisioned<'a>(
-    provision: &'a PyProvision,
-    driver: Option<&'a PyDriver>,
-) -> Serving<'a> {
-    let serving = Serving::provisioned(provision).packing(&CODECS);
-    match driver {
-        Some(driver) => serving.driver(driver),
-        None => serving,
-    }
+fn serving_provisioned(provision: &PyProvision) -> Serving<'_> {
+    Serving::provisioned(provision).packing(&CODECS)
 }
 
 /// The codecs this side reads, which are the process's and not an object's.
@@ -312,24 +281,20 @@ fn keeping<'a>(
 /// Serves slices with what the client sends it: the generic worker. It starts
 /// empty and `provision` turns whatever arrives into nodes and a driver.
 ///
-/// `driver` here is only the fallback for clients that pack none: the one that
-/// arrives in the artifact wins.
 #[pyfunction]
-#[pyo3(signature = (provision, driver = None, store = None))]
+#[pyo3(signature = (provision, store = None))]
 pub fn serve_provisioned(
     py: Python<'_>,
     provision: &Bound<'_, PyAny>,
-    driver: Option<&Bound<'_, PyAny>>,
     store: Option<&str>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
-    let driver = driver.map(PyDriver::new).transpose()?;
     let kept = opened(store)?;
     let cache = kept.as_ref().map(|kept| Cache::over(kept));
     let packing = cache.as_ref().map(|cache| Packing::over(cache));
     py.allow_threads(|| {
         keeping(
-            serving_provisioned(&provision, driver.as_ref()),
+            serving_provisioned(&provision),
             kept.as_ref(),
             packing.as_ref(),
         )
@@ -341,23 +306,21 @@ pub fn serve_provisioned(
 /// Stands on `addr` and serves whoever connects; it does not return. `opened`
 /// is called once with the real address, so port `0` can be asked for.
 #[pyfunction]
-#[pyo3(signature = (addr, provision, opened = None, driver = None, store = None))]
+#[pyo3(signature = (addr, provision, opened = None, store = None))]
 pub fn listen_provisioned(
     py: Python<'_>,
     addr: &str,
     provision: &Bound<'_, PyAny>,
     opened: Option<PyObject>,
-    driver: Option<&Bound<'_, PyAny>>,
     store: Option<&str>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
-    let driver = driver.map(PyDriver::new).transpose()?;
     let kept = self::opened(store)?;
     let cache = kept.as_ref().map(|kept| Cache::over(kept));
     let packing = cache.as_ref().map(|cache| Packing::over(cache));
     py.allow_threads(|| {
         keeping(
-            serving_provisioned(&provision, driver.as_ref()),
+            serving_provisioned(&provision),
             kept.as_ref(),
             packing.as_ref(),
         )
@@ -374,18 +337,16 @@ pub fn listen_provisioned(
 
 /// The same, with the catalog you already bring.
 #[pyfunction]
-#[pyo3(signature = (addr, nodes, opened = None, driver = None))]
+#[pyo3(signature = (addr, nodes, opened = None))]
 pub fn listen(
     py: Python<'_>,
     addr: &str,
     nodes: &Bound<'_, PyDict>,
     opened: Option<PyObject>,
-    driver: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let catalog = catalog_of(nodes)?;
-    let driver = driver.map(PyDriver::new).transpose()?;
     py.allow_threads(|| {
-        serving(&catalog, driver.as_ref()).listen_at(addr, |where_| {
+        serving(&catalog).listen_at(addr, |where_| {
             if let Some(notify) = opened {
                 Python::with_gil(|py| {
                     let _ = notify.call1(py, (where_.to_string(),));

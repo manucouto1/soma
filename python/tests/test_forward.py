@@ -3,12 +3,12 @@
 import pytest
 
 from conftest import Add, Identity, Mean
-from soma_next import Done, Node
+from soma_next import Node
 
 
 class Upper(Node):
     def forward(self, x, ctx):
-        return Done(x.upper())
+        return x.upper()
 
 
 class Fail(Node):
@@ -61,7 +61,7 @@ def test_without_input_the_node_receives_none(g):
     class Receives(Node):
         def forward(self, x, ctx):
             assert x is None
-            return Done("fine")
+            return "fine"
 
     g.node("receives", Receives())
     assert g.forward() == "fine"
@@ -88,7 +88,7 @@ def test_a_nodes_exception_says_which_one_it_was(g):
 def test_a_type_that_does_not_cross_says_so(g):
     class Returns(Node):
         def forward(self, x, ctx):
-            return Done({"I", "do", "not", "cross"})  # a set
+            return {"I", "do", "not", "cross"}  # a set
 
     g.node("returns", Returns())
     with pytest.raises(ValueError, match="a `set` does not cross"):
@@ -107,14 +107,29 @@ def test_a_key_that_is_not_text_says_so(g):
         g.forward({1: "one"})
 
 
-def test_returning_something_that_is_not_a_transition_says_so(g):
-    class Confused(Node):
-        def forward(self, x, ctx):
-            return "I forgot the Done"
+def test_what_a_node_keeps_outlives_the_run(g):
+    # The catalog holds **the node**, not a copy per run, so its state survives a
+    # `forward`. That is not incidental — a worker keeping its catalog is what
+    # lets an activation stay alive on the far side of a cut, which is what
+    # `Split` is built on.
+    #
+    # The other face is a trap, and this is where it is written down: a node that
+    # counts answers the second run differently from the first, and nothing
+    # warns. The engine promises the same **plan**, not that a node without
+    # memory is the only kind there is. What a node keeps is its own business,
+    # and now that it runs to the end on its own it is entirely so.
+    class Counts(Node):
+        def __init__(self):
+            self.times = 0
 
-    g.node("confused", Confused())
-    with pytest.raises(ValueError, match="must return Done"):
-        g.forward(1)
+        def forward(self, x, ctx):
+            self.times += 1
+            return self.times
+
+    g.node("counts", Counts())
+
+    assert g.forward(None) == 1
+    assert g.forward(None) == 2, "the second run started from scratch"
 
 
 # ── Fans, in both directions ──
@@ -154,7 +169,7 @@ def test_a_diamond_comes_back_round(g):
 def test_the_map_keeps_the_order_the_edges_were_declared_in(g):
     class Keys(Node):
         def forward(self, inputs, ctx):
-            return Done(list(inputs.keys()))
+            return list(inputs.keys())
 
     g.node("second", Add(1))
     g.node("first", Add(1))

@@ -61,7 +61,7 @@ of who trains what, and neither of those is a loss.
 from __future__ import annotations
 
 from soma_next._dsl import Node
-from soma_next._soma_next import Done, Opaque
+from soma_next._soma_next import Opaque
 
 __all__ = ["Held", "Stage", "Tap", "around", "stages", "takes_a_gradient"]
 
@@ -100,7 +100,7 @@ class Held(Node):
                 f"`{self.node_id}` was never handed in: this stage takes it from "
                 f"an earlier one, and no earlier one produced it"
             )
-        return Done(self.value)
+        return self.value
 
 
 class Tap(Node):
@@ -110,7 +110,7 @@ class Tap(Node):
     def forward(self, x, ctx):
         """The same value, wrapped: a tap is always the last one and always here,
         so nothing it wraps has a cable or a store ahead of it."""
-        return Done(Opaque(x))
+        return Opaque(x)
 
 
 class Stage:

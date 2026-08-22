@@ -12,7 +12,7 @@ is the one that does not know what a training run is. So the tests say it, with
 
 import pytest
 
-from soma_next import Done, Graph, Node
+from soma_next import Graph, Node
 from soma_next._stage import Held, Tap, around, stages
 
 from conftest import Add, Identity, Mean
@@ -32,7 +32,7 @@ class Noting:
     def __init__(self):
         self.carried = []
 
-    def carry(self, nodes, driver=None):
+    def carry(self, nodes):
         self.carried.append(sorted(nodes))
 
 
@@ -176,7 +176,7 @@ def test_the_fan_in_map_is_keyed_the_same_as_in_the_whole_graph(g):
     class Watching(Node):
         def forward(self, inputs, ctx):
             seen.update(inputs)
-            return Done(sum(inputs.values()))
+            return sum(inputs.values())
 
     g.node("left", Add(1))
     g.node("right", Add(2))

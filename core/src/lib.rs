@@ -15,7 +15,6 @@
 //! | [`Device`] | the place inside a machine: `cpu`, `cuda:0`, `meta` |
 //! | [`Host`] | the place that **is** another machine or process, by name |
 //! | [`Node`] | the **contract** for what a node executes |
-//! | [`Driver`] | who **serves** what a step asks for |
 //! | [`Transport`] | who **carries** a slice of plan to another host |
 //! | [`Keeper`] | who **hashes** a recipe and **keeps** what it names |
 //! | [`Plan`] | the **decided shape** of an execution |
@@ -34,7 +33,6 @@
 mod build;
 mod catalog;
 mod device;
-mod driver;
 mod execution;
 mod graph;
 mod host;
@@ -50,14 +48,13 @@ mod value;
 pub use build::{Wire, node};
 pub use catalog::Catalog;
 pub use device::{Device, DeviceError};
-pub use driver::{Driver, DriverError};
 pub use execution::{Executor, RunError};
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;
 pub use keeper::{Keeper, KeeperError, Kept};
 pub use key::{Key, Keys};
 pub use memory::{Memory, MemoryError, cacheable};
-pub use node::{Ctx, Node, NodeError, Transition};
+pub use node::{Ctx, Node, NodeError};
 pub use placement::Placement;
 pub use plan::{CompileError, Destination, Plan, Step, compile, distribute};
 pub use transport::{Cargo, Outcome, Transport, TransportError};

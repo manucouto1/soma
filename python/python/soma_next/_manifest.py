@@ -3,9 +3,8 @@
 It is what gets sent to a worker that **already has the project**. Instead of
 serializing your whole objects, what travels is:
 
-- the **state** of each node and of the driver, with a plain `pickle` — which is
-  a reference to the class by name, plus its `__dict__`. Your hyperparameters go
-  in there;
+- the **state** of each node, with a plain `pickle` — which is a reference to
+  the class by name, plus its `__dict__`. Your hyperparameters go in there;
 - a **manifest** saying which version of the code the client expected for each
   class: `net:Filter → Filter(43b0bf6e)`.
 
@@ -71,19 +70,15 @@ class _Notes(pickle.Pickler):
         return NotImplemented
 
 
-def pack(nodes, driver=None):
-    """The nodes and the driver as a `project` artifact.
-
-    The driver is packed exactly like a node — same pickler, so the same classes
-    get noted and versioned — because how it travels is not what tells them
-    apart.
+def pack(nodes):
+    """The nodes as a `project` artifact.
 
     Raises `CannotVersion` if some class has no source to read — a notebook, an
     `exec` — since those cannot be resolved from a clone at all.
     """
     state = io.BytesIO()
     noting = _Notes(state)
-    noting.dump((nodes, driver))
+    noting.dump(nodes)
 
     manifest = json.dumps({"classes": noting.classes}, sort_keys=True).encode()
     return struct.pack("<I", len(manifest)) + manifest + state.getvalue()
@@ -165,7 +160,7 @@ def _inside(module, name):
 
 
 def unpack(blob, strict=True, warn=None):
-    """The `(nodes, driver)` of a `project` artifact, resolved against this clone.
+    """The nodes of a `project` artifact, resolved against this clone.
 
     Raises `DifferentVersion` if `strict` and some class here is not the one the
     client expected, or if there is no way of finding it.

@@ -15,7 +15,7 @@ a net that quietly stopped training.
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 
 from conftest import Add
 
@@ -29,7 +29,7 @@ class Counts(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(x)
+        return x
 
 
 class Encoder(Node):
@@ -40,7 +40,7 @@ class Encoder(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(x)
+        return x
 
 
 @pytest.fixture
@@ -203,7 +203,7 @@ def _first_version():
 
         def forward(self, x, ctx):
             self.calls += 1
-            return Done(x)
+            return x
 
     return Twin()
 
@@ -217,7 +217,7 @@ def _second_version():
             self.calls += 1
             # The same answer out of other code, which is exactly the case the
             # warning is for.
-            return Done(x + 0.0)
+            return x + 0.0
 
     return Twin()
 
@@ -232,7 +232,7 @@ def test_an_opaque_nobody_can_write_down_is_said_and_not_fatal(store, capfd):
     # codec for.
     class Wraps(Node):
         def forward(self, x, ctx):
-            return Done(Opaque(object()))
+            return Opaque(object())
 
     g = Graph.somatize(Wraps().named("wraps").frozen().cached())
     g.forward(1.0, store=store)
@@ -309,7 +309,7 @@ class Stateful(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(x * self.weights)
+        return x * self.weights
 
     def state_dict(self):
         return {"weights": self.weights}
@@ -384,12 +384,12 @@ class Embeds(Node):
 
     def forward(self, items, ctx):
         self.seen += list(items)
-        return Done([x * 10 for x in items])
+        return [x * 10 for x in items]
 
 
 class Miscounts(Node):
     def forward(self, items, ctx):
-        return Done([1.0])
+        return [1.0]
 
 
 def mapping():

@@ -26,7 +26,7 @@ What this file is defending, beyond the numbers:
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
@@ -54,7 +54,7 @@ class Tokenize(Node):
             words = [sum(map(ord, w)) % VOCAB for w in text.split()][:LENGTH]
             ids.append(words + [0] * (LENGTH - len(words)))
         # A plain list: it crosses, and it is kept, without a codec.
-        return Done(ids)
+        return ids
 
 
 # ── The body: trainable first, settled afterwards ──
@@ -67,7 +67,7 @@ class Embed(Node):
 
     def forward(self, ids, ctx):
         self.calls += 1
-        return Done(Opaque(self.table(torch.tensor(ids).long()).mean(dim=1)))
+        return Opaque(self.table(torch.tensor(ids).long()).mean(dim=1))
 
     def parameters(self):
         return list(self.table.parameters())
@@ -83,7 +83,7 @@ class Block(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(Opaque(self.layers(x)))
+        return Opaque(self.layers(x))
 
     def parameters(self):
         return list(self.layers.parameters())
@@ -105,7 +105,7 @@ class Head(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(Opaque(self.layers(x)))
+        return Opaque(self.layers(x))
 
     def parameters(self):
         return list(self.layers.parameters())
@@ -332,7 +332,7 @@ class Cut(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(Opaque(self.layers(x).detach()))
+        return Opaque(self.layers(x).detach())
 
     def parameters(self):
         return list(self.layers.parameters())

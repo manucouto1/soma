@@ -1,19 +1,28 @@
 //! The contract for what a node executes. Just the one.
 //!
-//! A node advances one turn and says how things continue:
-//! [`Transition::Done`] if it is finished, [`Transition::Await`] if it needs
-//! something from the world first.
+//! A node is a function: a [`Value`] in, a [`Value`] out. There is no second
+//! kind and no second shape.
 //!
-//! **The difference between a filter and a step is that variant, not a type.**
-//! Two traits duplicated in the type system a distinction that was already in
-//! the return value, and propagated upwards — catalog, plan, engine, errors —
-//! the obligation to know which of the two each node was. The side effect that
-//! earns its keep on its own: a node can **evolve**, gaining an `Await` branch
-//! in the same body instead of being rewritten as another type.
+//! **A filter and a step are one type**, which is what CU6 set out to get. It
+//! took a two-variant return value to get there and it turned out not to need
+//! one: with a single shape the distinction has nowhere left to live. Two traits
+//! had duplicated in the type system something that was already in the return
+//! value, and propagated upwards — catalog, plan, engine, errors — the
+//! obligation to know which of the two each node was. None of that comes back.
 //!
-//! What a node asks for is **opaque to the core**: a [`Value`] the
-//! [`Driver`](crate::Driver) knows how to interpret. That is why there are no
-//! LLMs here, no tools, no effect log.
+//! # What is not here, and where it went
+//!
+//! A node that needs something from the world — a model, a tool, an index —
+//! **calls it**, holding whatever client that takes. The core used to offer a
+//! way to ask instead: return `Await(requests)`, have an injected `Driver` serve
+//! them, and be asked again. It was the seam of an agentic layer, it cost every
+//! node the `Done(...)` around its answer, and after eighteen use cases it had
+//! **no consumer outside the tests**. A hole with no tenant is what this project
+//! exists not to build, so it went.
+//!
+//! What is kept is the **channel**: [`Ctx`] is where the executor hands a node
+//! what it knows. An agentic layer that wants something injected puts it there,
+//! and no node signature changes.
 
 use crate::{Device, Value};
 
@@ -22,45 +31,27 @@ use crate::{Device, Value};
 /// `Send + Sync` because a Python `Graph` is a pyclass — which PyO3 requires to
 /// be `Send` — and it carries the catalog.
 pub trait Node: Send + Sync {
-    /// Advances one turn.
+    /// Runs it. `input` is what arrived along the edges.
     ///
-    /// Called with `ctx.turn == 0` and no results; afterwards, with whatever
-    /// the driver returned for the previous turn's requests, in the same
-    /// order. `input` is always the same: what arrived along the edges.
-    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError>;
+    /// It runs to the end: whatever it takes — a retry, a model, three rounds
+    /// of something — happens inside, and the engine neither counts it nor
+    /// bounds it. A node that does not come back does not come back, the same
+    /// way a function that does not return does not return.
+    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Value, NodeError>;
 }
 
 /// What a node knows beyond its input, which travels separately.
+///
+/// One field today, and a type rather than an argument on purpose: this is the
+/// **channel** by which whoever executes hands a node what it knows. Adding to
+/// it is additive; passing the same thing as an argument would not be, and
+/// every node ever written has this signature.
 #[derive(Debug, Clone, Copy)]
 pub struct Ctx<'a> {
-    /// How many times it has already been asked; starts at 0.
-    pub turn: usize,
-    /// What the driver returned for the previous turn's requests, in order.
-    /// Empty on turn 0.
-    ///
-    /// **The previous turn, not the history.** A node that wants what turn 0
-    /// brought while it is on turn 2 keeps it itself — and since `forward`
-    /// takes `&self` and a `Node` is `Send + Sync`, keeping it is interior
-    /// mutability, written on purpose. What it keeps then outlives the run:
-    /// the catalog holds the node, not a copy per `forward`.
-    pub results: &'a [Value],
     /// Where this node was said to run, if it was said. It arrives as
     /// **information**: the core cannot move anything to a GPU, so the one that
     /// obeys is the node.
     pub device: Option<&'a Device>,
-}
-
-/// How things continue after a turn.
-///
-/// No `#[non_exhaustive]`: whoever executes a node has to decide what to do
-/// with each variant, so adding one *should* break everyone.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Transition {
-    /// Finished, with this output.
-    Done(Value),
-    /// Needs someone to do this before continuing. It will be asked again with
-    /// the results.
-    Await(Vec<Value>),
 }
 
 /// What a node can answer when it cannot advance.

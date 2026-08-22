@@ -10,7 +10,7 @@ same class share a name, which is the one kind of cache hit that is a bug.
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
@@ -30,7 +30,7 @@ class Layer(Node):
 
     def forward(self, x, ctx):
         self.calls += 1
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -44,7 +44,7 @@ class Label(Node):
     being a node."""
 
     def forward(self, x, ctx):
-        return Done(x)
+        return x
 
 
 def batch():
@@ -221,7 +221,7 @@ def test_a_node_that_only_answers_parameters_is_settled_too(tmp_path):
             self.lin = nn.Linear(IN, MID)
 
         def forward(self, x, ctx):
-            return Done(Opaque(self.lin(x)))
+            return Opaque(self.lin(x))
 
         def parameters(self):
             return list(self.lin.parameters())

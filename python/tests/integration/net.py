@@ -8,56 +8,38 @@ someone knows how to open.
 
 import os
 
-from soma_next import Await, Done, Node
+from soma_next import Node
 
 
 class Clean(Node):
     def forward(self, text, ctx):
-        return Done(text.strip().lower())
+        return text.strip().lower()
 
 
 class Tokenize(Node):
     def forward(self, text, ctx):
-        return Done(text.split())
+        return text.split()
 
 
 class Count(Node):
     def forward(self, words, ctx):
-        return Done({"how_many": float(len(words)), "pid": float(os.getpid())})
+        return {"how_many": float(len(words)), "pid": float(os.getpid())}
 
 
 class Oddities(Node):
     def forward(self, words, ctx):
-        return Done({"long_ones": [w for w in words if len(w) > 5], "pid": float(os.getpid())})
+        return {"long_ones": [w for w in words if len(w) > 5], "pid": float(os.getpid())}
 
 
 class Join(Node):
     """A fan-in: receives a map keyed by each branch."""
 
     def forward(self, inputs, ctx):
-        return Done(
-            {
-                "how_many": inputs["count"]["how_many"],
-                "long_ones": inputs["oddities"]["long_ones"],
-                "pids": sorted({inputs["count"]["pid"], inputs["oddities"]["pid"]}),
-            }
-        )
-
-
-class Ask(Node):
-    """A node that needs the world before it can finish."""
-
-    def forward(self, words, ctx):
-        if ctx.turn == 0:
-            return Await([words[0]])
-        return Done(ctx.results[0])
-
-
-class Shout:
-    """A driver: answers in upper case, and says where it was served."""
-
-    def perform(self, requests):
-        return [{"said": r.upper(), "pid": float(os.getpid())} for r in requests]
+        return {
+            "how_many": inputs["count"]["how_many"],
+            "long_ones": inputs["oddities"]["long_ones"],
+            "pids": sorted({inputs["count"]["pid"], inputs["oddities"]["pid"]}),
+        }
 
 
 def nodes():
@@ -67,7 +49,6 @@ def nodes():
         "count": Count(),
         "oddities": Oddities(),
         "join": Join(),
-        "ask": Ask(),
     }
 
 
@@ -87,17 +68,4 @@ def graph(Graph, n, distributed=True):
             | away(n["oddities"].named("oddities"), "w2")
         )
         >> n["join"].named("join")
-    )
-
-
-def asking(Graph, n):
-    """The same head, ending in a node that has to ask the world — away from here.
-
-    What it is for: the driver is not in the graph, so it has to reach the
-    worker some other way. It rides in the artifact, with the nodes.
-    """
-    return Graph.somatize(
-        n["clean"].named("clean")
-        >> n["tokenize"].named("tokenize")
-        >> n["ask"].named("ask").at("w1")
     )

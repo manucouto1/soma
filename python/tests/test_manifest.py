@@ -16,14 +16,14 @@ import pytest
 from soma_next._manifest import KIND, DifferentVersion, _find, pack, unpack
 
 BASE = """
-    from soma_next import Done, Node
+    from soma_next import Node
 
     class Filter(Node):
         def __init__(self, threshold):
             self.threshold = threshold
 
         def forward(self, words, ctx):
-            return Done([w for w in words if len(w) > self.threshold])
+            return [w for w in words if len(w) > self.threshold]
 """
 
 
@@ -68,49 +68,9 @@ def test_the_state_travels_and_the_code_does_not(write):
     assert b"forward" not in blob, "the body of the method travelled"
 
 
-DRIVEN = BASE + """
-    class Shout:
-        def __init__(self, suffix):
-            self.suffix = suffix
-
-        def perform(self, requests):
-            return [r.upper() + self.suffix for r in requests]
-"""
-
-
-def test_the_driver_travels_like_a_node_and_is_resolved_the_same_way(write):
-    # Same artifact, same pickler, same versioning: what tells a node and a
-    # driver apart is the graph, not how either one gets here.
-    module = write(DRIVEN)
-    nodes, driver = unpack(pack({"f": module.Filter(5)}, module.Shout("!!")))
-
-    assert list(nodes) == ["f"]
-    assert type(driver) is module.Shout, "it resolved against this clone"
-    assert driver.perform(["hey"]) == ["HEY!!"], "its state travelled"
-
-
-def test_the_drivers_version_is_checked_too(write):
-    # A driver whose code changed on the worker is the same failure as a node
-    # whose code changed: it comes through `find_class` like everything else.
-    module = write(DRIVEN)
-    blob = pack({"f": module.Filter(5)}, module.Shout("!!"))
-
-    write(DRIVEN.replace("r.upper() + self.suffix", "r.lower() + self.suffix"), module.__name__)
-
-    with pytest.raises(DifferentVersion, match="Shout"):
-        unpack(blob)
-
-
-def test_an_artifact_without_a_driver_unpacks_to_none(write):
-    module = write(BASE)
-    _, driver = unpack(pack({"f": module.Filter(5)}))
-
-    assert driver is None
-
-
 def test_the_round_trip_gives_back_the_nodes_with_their_state(write):
     module = write(BASE)
-    nodes, _ = unpack(pack({"f": module.Filter(5)}))
+    nodes = unpack(pack({"f": module.Filter(5)}))
 
     assert list(nodes) == ["f"]
     assert nodes["f"].threshold == 5
@@ -145,7 +105,7 @@ def test_lucky_executes_whatever_it_has_and_warns(write):
           name=module.__name__)
 
     warnings = []
-    nodes, _ = unpack(blob, strict=False, warn=warnings.append)
+    nodes = unpack(blob, strict=False, warn=warnings.append)
 
     assert nodes["f"].threshold == 5
     assert len(warnings) == 1, warnings
@@ -159,7 +119,7 @@ def test_a_class_that_is_not_yours_is_not_versioned(write):
     node = module.Filter(5)
     node.extra = {"a": [1, 2]}
 
-    assert unpack(pack({"f": node}))[0]["f"].extra == {"a": [1, 2]}
+    assert unpack(pack({"f": node}))["f"].extra == {"a": [1, 2]}
 
 
 # ── Finding the class, when the module hint no longer holds ──

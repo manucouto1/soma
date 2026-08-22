@@ -16,7 +16,7 @@ import pytest
 from soma_next._fingerprint import CannotVersion, digest, fingerprint
 
 BASE = """
-    from soma_next import Done, Node
+    from soma_next import Node
 
     THRESHOLD = 5
 
@@ -25,15 +25,15 @@ BASE = """
 
     class Common(Node):
         def forward(self, x, ctx):
-            return Done(x)
+            return x
 
     class Filter(Common):
         def forward(self, words, ctx):
-            return Done(long_ones(words))
+            return long_ones(words)
 
     class NextDoor(Node):
         def forward(self, x, ctx):
-            return Done(x)
+            return x
 """
 
 
@@ -113,7 +113,7 @@ def test_the_fingerprint_does_not_depend_on_the_process(tmp_path):
 
 
 def test_changing_the_body_of_forward_changes_it(write):
-    before, after = changing(write, "return Done(long_ones(words))", "return Done(words)")
+    before, after = changing(write, "return long_ones(words)", "return words")
     assert before != after
 
 
@@ -132,8 +132,8 @@ def test_changing_a_module_constant_changes_it(write):
 def test_changing_the_base_class_changes_it(write):
     before, after = changing(
         write,
-        "class Common(Node):\n        def forward(self, x, ctx):\n            return Done(x)",
-        "class Common(Node):\n        def forward(self, x, ctx):\n            return Done(x or [])",
+        "class Common(Node):\n        def forward(self, x, ctx):\n            return x",
+        "class Common(Node):\n        def forward(self, x, ctx):\n            return x or []",
     )
     assert before != after
 
@@ -147,8 +147,8 @@ def test_a_comment_does_not_change_it(write):
     # noise.
     before, after = changing(
         write,
-        "return Done(long_ones(words))",
-        "return Done(long_ones(words))  # mind the accents",
+        "return long_ones(words)",
+        "return long_ones(words)  # mind the accents",
     )
     assert before == after
 
@@ -176,8 +176,8 @@ def test_another_class_in_the_same_file_does_not_change_it(write):
     # `Filter` and nobody would understand why.
     before, after = changing(
         write,
-        "class NextDoor(Node):\n        def forward(self, x, ctx):\n            return Done(x)",
-        "class NextDoor(Node):\n        def forward(self, x, ctx):\n            return Done(x * 2)",
+        "class NextDoor(Node):\n        def forward(self, x, ctx):\n            return x",
+        "class NextDoor(Node):\n        def forward(self, x, ctx):\n            return x * 2",
     )
     assert before == after
 
@@ -211,11 +211,11 @@ def test_a_global_named_like_an_attribute_does_not_get_in(write):
     # the code had changed, and a `--strict` worker refused to run over a
     # mismatch that did not exist.
     holds_one = """
-    from soma_next import Done, Node
+    from soma_next import Node
 
     class Filter(Node):
         def forward(self, words, ctx):
-            return Done(self.model(words))
+            return self.model(words)
     """
     and_a_global = holds_one + '\n    model = "nobody\'s business"\n'
 

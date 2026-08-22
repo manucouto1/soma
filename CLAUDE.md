@@ -68,10 +68,11 @@ extracted and each one answered with whatever call shape we decide.
 in Rust. `node()`/`edge()` remain for when the topology is built in a loop or
 comes from outside.
 
-**A node is one single thing**, in both languages: `forward(input, ctx)` returns
-`Done(value)` or `Await([requests])`. There is no "filter" type and "step" type
-— a filter is a node that always answers `Done`, and that is said by its
-transition, not by its type.
+**A node is one single thing**, in both languages: `forward(input, ctx)` takes
+what arrived along the edges and returns what it produced. There is no "filter"
+type and "step" type, and after CU18 there is no return type that could tell them
+apart either. Whatever a node takes to answer — a retry, a model, three rounds of
+something — happens **inside it**, holding whatever client that takes.
 
 ## Commands
 
@@ -108,9 +109,15 @@ never asked to know it. See `docs/use-cases.md`.
 **when**, and `Memory` **what is remembered** of each node. The device
 deliberately does not live in the plan.
 
-**Four holes, and the core provides them without filling any**: `Node` is the
-user's, `Driver` serves what a step asks for, `Transport` carries a slice
-elsewhere, `Keeper` hashes a recipe and keeps what it names. The core still has
+**Three holes, and the core provides them without filling any**: `Node` is the
+user's, `Transport` carries a slice elsewhere, `Keeper` hashes a recipe and keeps
+what it names. There were four: `Driver` served what a suspended node asked for,
+and it went — after eighteen use cases it had **no consumer outside the tests**,
+its own docstring said it was there to keep the agentic layer out of the core,
+and a hole with no tenant is what this project exists not to build. What is kept
+is the channel: `Ctx` is where whoever executes hands a node what it knows, so an
+agentic layer that wants something injected puts it there and **no node signature
+changes**. The core still has
 no dependencies. `transport` has two of its own, filled from `python/`:
 `Provision` turns an artifact into a catalog, and `Codec` writes down what only
 exists in one process — so an `Opaque` crosses a wire, and what does not is the

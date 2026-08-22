@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import time
 
-from soma_next import Await, Done, Node
+from soma_next import Node
 
 
 def whereabouts():
@@ -28,14 +28,14 @@ class Shout(Node):
     """Text in, text out. Nothing to install."""
 
     def forward(self, text, ctx):
-        return Done({"text": text.upper(), **whereabouts()})
+        return {"text": text.upper(), **whereabouts()}
 
 
 class Wrap(Node):
     """Reads what the one before it produced, so something really crosses."""
 
     def forward(self, got, ctx):
-        return Done({"text": f"[{got['text']}]", "before": got["host"], **whereabouts()})
+        return {"text": f"[{got['text']}]", "before": got["host"], **whereabouts()}
 
 
 class Slow(Node):
@@ -50,26 +50,7 @@ class Slow(Node):
 
     def forward(self, x, ctx):
         time.sleep(self.SECONDS)
-        return Done(whereabouts())
-
-
-class Asks(Node):
-    """Answers only if there is a driver **where it runs**."""
-
-    def forward(self, x, ctx):
-        if ctx.turn == 0:
-            return Await(["are you there?"])
-        return Done({"heard": ctx.results[0], **whereabouts()})
-
-
-class Answers:
-    """A driver, which travels in the same artifact as the nodes."""
-
-    def __init__(self, with_what="yes"):
-        self.with_what = with_what
-
-    def perform(self, requests):
-        return [f"{self.with_what}: {r}" for r in requests]
+        return whereabouts()
 
 
 class Sized(Node):
@@ -84,7 +65,7 @@ class Sized(Node):
 
     def forward(self, seed, ctx):
         base = int(seed)
-        return Done({"data": [float(base + i) for i in range(self.how_many)], **whereabouts()})
+        return {"data": [float(base + i) for i in range(self.how_many)], **whereabouts()}
 
 
 class OnTheDevice(Node):
@@ -101,14 +82,13 @@ class OnTheDevice(Node):
         tensor = torch.ones(4)
         if ctx.device:
             tensor = tensor.to(ctx.device)
-        return Done(
-            {
-                "said": ctx.device or "",
-                "landed": str(tensor.device),
-                "cuda": float(torch.cuda.is_available()),
-                **whereabouts(),
-            }
-        )
+        return {
+            "said": ctx.device or "",
+            "landed": str(tensor.device),
+            "cuda": float(torch.cuda.is_available()),
+            **whereabouts(),
+        }
+        
 
 
 class Stamp(Node):
@@ -121,7 +101,7 @@ class Stamp(Node):
     """
 
     def forward(self, x, ctx):
-        return Done({"when": time.monotonic(), **whereabouts()})
+        return {"when": time.monotonic(), **whereabouts()}
 
 
 class Trainable(Node):
@@ -140,7 +120,7 @@ class Trainable(Node):
     def forward(self, x, ctx):
         import torch
 
-        return Done(self.lin(torch.tensor(x, dtype=torch.float32)).tolist())
+        return self.lin(torch.tensor(x, dtype=torch.float32)).tolist()
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -182,11 +162,11 @@ class ByHand(Node):
         value = torch.tensor(msg["value"], dtype=torch.float32)
         if msg["kind"] == "forward":
             self.held = self.lin(value).relu()
-            return Done({"value": self.held.detach().tolist(), **whereabouts()})
+            return {"value": self.held.detach().tolist(), **whereabouts()}
         self.opt.zero_grad()
         self.held.backward(value)
         self.opt.step()
-        return Done({"weights": float(self.lin.weight.abs().sum()), **whereabouts()})
+        return {"weights": float(self.lin.weight.abs().sum()), **whereabouts()}
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -208,7 +188,7 @@ class Head(Node):
         # **seam**, and building a tensor out of a tensor detaches it — the
         # gradient would never reach the far side.
         landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
-        return Done(Opaque(self.lin(landed)))
+        return Opaque(self.lin(landed))
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -236,7 +216,7 @@ class Slab(Node):
         from soma_next import Opaque
 
         landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
-        return Done(Opaque(self.lin(landed).relu()))
+        return Opaque(self.lin(landed).relu())
 
     def parameters(self):
         return list(self.lin.parameters())
@@ -261,4 +241,4 @@ class Counts(Node):
 
     def forward(self, x, ctx):
         self.times += 1
-        return Done({"times": float(self.times), "called": self.called, **whereabouts()})
+        return {"times": float(self.times), "called": self.called, **whereabouts()}

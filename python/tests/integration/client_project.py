@@ -29,4 +29,4 @@ print("OUTPUT", output)
 print("HERE", float(os.getpid()))
 from soma_next._remote import _pack  # noqa: E402
 
-print("SIZE", len(_pack(n, None, "project", ())[1]))
+print("SIZE", len(_pack(n, "project", ())[1]))

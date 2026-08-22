@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-from soma_next import Await, Done, Graph, Node, Opaque, Worker
+from soma_next import Graph, Node, Opaque, Worker
 
 cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
@@ -31,17 +31,17 @@ class Add(Node):
         self.how_much = how_much
 
     def forward(self, x, ctx):
-        return Done(x + self.how_much)
+        return x + self.how_much
 
 
 class Mean(Node):
     def forward(self, inputs, ctx):
-        return Done(sum(inputs.values()) / len(inputs))
+        return sum(inputs.values()) / len(inputs)
 
 
 class WhereIRan(Node):
     def forward(self, x, ctx):
-        return Done(float(os.getpid()))
+        return float(os.getpid())
 
 
 class HowManyTimes(Node):
@@ -57,7 +57,7 @@ class HowManyTimes(Node):
 
     def forward(self, x, ctx):
         self.times += 1
-        return Done(float(self.times))
+        return float(self.times)
 
 
 class Fail(Node):
@@ -69,26 +69,26 @@ class Doubles(Node):
     """A tensor in, the same tensor out, still wrapped so it crosses."""
 
     def forward(self, x, ctx):
-        return Done(Opaque(x * 2))
+        return Opaque(x * 2)
 
 
 class Shape(Node):
     """Answers something only a tensor could answer."""
 
     def forward(self, x, ctx):
-        return Done([float(n) for n in x.shape])
+        return [float(n) for n in x.shape]
 
 
 class MakesATensor(Node):
     def forward(self, x, ctx):
         import torch
 
-        return Done(Opaque(torch.tensor([1.0, 2.0, 3.0])))
+        return Opaque(torch.tensor([1.0, 2.0, 3.0]))
 
 
 class WhatAmIGiven(Node):
     def forward(self, x, ctx):
-        return Done(type(x).__name__)
+        return type(x).__name__
 
 
 class CountsATensor(Node):
@@ -112,7 +112,7 @@ class CountsATensor(Node):
         import torch
 
         self.calls += 1
-        return Done(Opaque(torch.tensor([float(self.calls)])))
+        return Opaque(torch.tensor([float(self.calls)]))
 
 
 class Chatterbox(Node):
@@ -126,43 +126,17 @@ class Chatterbox(Node):
 
     def forward(self, x, ctx):
         print("hello from the worker", flush=True)
-        return Done(x)
+        return x
 
 
 class Opaquely(Node):
     def forward(self, x, ctx):
-        return Done(Opaque(object()))
+        return Opaque(object())
 
 
 class WhichDevice(Node):
     def forward(self, x, ctx):
-        return Done(ctx.device)
-
-
-class Ask(Node):
-    """Asks for something before finishing. Needs a driver where it runs."""
-
-    def forward(self, x, ctx):
-        if ctx.turn == 0:
-            return Await(["hello"])
-        return Done(ctx.results[0])
-
-
-class Shout:
-    """A driver. Declared here, and not in `conftest`, so it travels by value."""
-
-    def __init__(self, suffix=""):
-        self.suffix = suffix
-
-    def perform(self, requests):
-        return [r.upper() + self.suffix for r in requests]
-
-
-class WhereIServed:
-    """A driver that answers with the pid of whoever served the request."""
-
-    def perform(self, requests):
-        return [float(os.getpid()) for _ in requests]
+        return ctx.device
 
 
 def generic(**how):
@@ -343,63 +317,6 @@ def test_a_print_in_a_node_does_not_break_the_wire():
 def test_a_mode_that_is_not_one_of_the_two_is_rejected():
     with pytest.raises(ValueError, match="'project' or 'network'"):
         Worker.generic(mode="carrier-pigeon")
-
-
-def test_a_node_that_asks_for_something_is_served_where_it_runs():
-    # The driver travels in the artifact, like the nodes: the graph packs the
-    # one this run was given and sends it to every worker it uses.
-    g = Graph.somatize(Ask().named("ask").at("w1"))
-    w = generic()
-
-    assert g.forward(None, driver=Shout(), workers={"w1": w}) == "HELLO"
-
-
-def test_without_a_driver_it_still_fails_where_it_runs():
-    # The boundary that remains, and it is the same one as at home: a node that
-    # asks for something needs someone to serve it. Not having packed one is
-    # not "it cannot be sent away".
-    g = Graph.somatize(Ask().named("ask").at("w1"))
-    w = generic()
-
-    with pytest.raises(ValueError) as e:
-        g.forward(None, workers={"w1": w})
-
-    said = str(e.value)
-    assert "w1" in said, said
-    assert "no driver" in said, said
-
-
-def test_the_same_node_runs_here_because_here_there_is_a_driver():
-    # The other half: nothing is wrong with the node.
-    g = Graph.somatize(Ask().named("ask"))
-    assert g.forward(None, driver=Shout()) == "HELLO"
-
-
-def test_one_driver_serves_both_sides_of_the_same_run():
-    # A node here and a node there, both asking. One `driver=` covers both,
-    # which is what makes the seam invisible from where it is written.
-    g = Graph.somatize(Ask().named("here") >> Ask().named("there").at("w1"))
-    w = generic()
-
-    assert g.forward(None, driver=Shout(), workers={"w1": w}) == "HELLO"
-
-
-def test_the_drivers_state_travels_with_it():
-    # It is packed exactly like a node: what is in its `__dict__` arrives.
-    g = Graph.somatize(Ask().named("ask").at("w1"))
-    w = generic()
-
-    assert g.forward(None, driver=Shout("!!"), workers={"w1": w}) == "HELLO!!"
-
-
-def test_the_driver_runs_over_there_and_not_here():
-    # Which process serves it is the question, and the answer has to be the one
-    # the node runs in: a driver that reports its pid proves it.
-    g = Graph.somatize(Ask().named("ask").at("w1"))
-    w = generic()
-
-    where = g.forward(None, driver=WhereIServed(), workers={"w1": w})
-    assert where != os.getpid(), "the driver was served in the client"
 
 
 def test_a_host_without_a_worker_is_not_executed_here_just_in_case():
@@ -613,9 +530,7 @@ def test_the_artifact_does_not_depend_on_the_order_the_nodes_came_in():
 
     one, other = Add(1), Add(2)
     for mode in ("network", "project"):
-        assert _pack({"a": one, "b": other}, None, mode, ()) == _pack(
-            {"b": other, "a": one}, None, mode, ()
-        ), f"`{mode}` still depends on the order"
+        assert _pack({"a": one, "b": other}, mode, ()) == _pack({"b": other, "a": one}, mode, ()), f"`{mode}` still depends on the order"
 
 
 def test_two_graphs_over_the_same_nodes_are_one_artifact():
@@ -632,7 +547,7 @@ def test_two_graphs_over_the_same_nodes_are_one_artifact():
 
     def artifact(graph):
         nodes = {i: graph.implementation(i) for i in graph.nodes()}
-        return _pack(nodes, None, "network", ())
+        return _pack(nodes, "network", ())
 
     assert artifact(forward) == artifact(backward)
 

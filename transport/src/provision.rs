@@ -20,9 +20,8 @@
 //! Hence the client **identifies itself** in the greeting: refusing on connect,
 //! with both versions in front of you, is cheaper than anything afterwards.
 
-use soma_next_core::{Catalog, Driver};
+use soma_next_core::Catalog;
 use std::fmt;
-use std::sync::Arc;
 
 /// Knows how to turn an artifact into a catalog.
 pub trait Provision: Send + Sync {
@@ -37,35 +36,16 @@ pub trait Provision: Send + Sync {
     fn provide(&self, kind: &str, bytes: &[u8]) -> Result<Provisioned, ProvisionError>;
 }
 
-/// What comes out of an artifact: the implementations and, if the client packed
-/// one, whoever serves what they ask for.
-///
-/// The driver travels **exactly like the nodes** — same artifact, same kinds,
-/// same versioning — because how it gets here is not what tells them apart. A
-/// [`Node`](soma_next_core::Node) is declared in the graph and a
-/// [`Driver`](soma_next_core::Driver) is not, and that stays true on both sides
-/// of the wire.
+/// What comes out of an artifact: the implementations.
 pub struct Provisioned {
     /// Who executes each node.
     pub catalog: Catalog,
-    /// Who serves what they ask for, if one came. Owned, because it arrived
-    /// rather than being lent by whoever stood this worker up.
-    pub driver: Option<Arc<dyn Driver>>,
 }
 
 impl Provisioned {
-    /// An artifact that only brought implementations.
+    /// An artifact's implementations, unpacked.
     pub fn new(catalog: Catalog) -> Self {
-        Self {
-            catalog,
-            driver: None,
-        }
-    }
-
-    /// The same, with whoever serves what they ask for.
-    pub fn served_by(mut self, driver: Arc<dyn Driver>) -> Self {
-        self.driver = Some(driver);
-        self
+        Self { catalog }
     }
 }
 

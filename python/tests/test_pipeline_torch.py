@@ -12,7 +12,7 @@ is identical.
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
@@ -38,7 +38,7 @@ def _ids(texts):
 
 class Lemmatizer(Node):
     def forward(self, texts, ctx):
-        return Done([t.strip().lower().replace("running", "run") for t in texts])
+        return [t.strip().lower().replace("running", "run") for t in texts]
 
 
 # ── The three with parameters. Note: they hold the modules, they do not
@@ -59,7 +59,7 @@ class Encoder(Node):
 
     def forward(self, texts, ctx):
         self.last_output = self.enc(self.emb(_ids(texts)))
-        return Done(Opaque(self.last_output))
+        return Opaque(self.last_output)
 
     def parameters(self):
         return list(self.emb.parameters()) + list(self.enc.parameters())
@@ -72,7 +72,7 @@ class Bottleneck(Node):
 
     def forward(self, h, ctx):
         self.last_input = h
-        return Done(Opaque(self.proj(h)))
+        return Opaque(self.proj(h))
 
     def parameters(self):
         return list(self.proj.parameters())
@@ -85,7 +85,7 @@ class Classifier(Node):
 
     def forward(self, h, ctx):
         output, _ = self.lstm(h)
-        return Done(Opaque(self.head(output[:, -1, :])))
+        return Opaque(self.head(output[:, -1, :]))
 
     def parameters(self):
         return list(self.lstm.parameters()) + list(self.head.parameters())
@@ -143,7 +143,7 @@ def test_the_node_without_gradients_coexists_without_breaking_anything(pipeline)
     g, (lemmatizer, _, _, _) = pipeline
     # It has no parameters, and its output crosses converted (text), not opaque.
     assert not hasattr(lemmatizer, "parameters")
-    assert lemmatizer.forward(["  Running  "], None).value == ["run"]
+    assert lemmatizer.forward(["  Running  "], None) == ["run"]
 
     g.forward(TEXTS)  # and the whole pipeline still works
 

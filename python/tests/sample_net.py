@@ -10,9 +10,9 @@ process inherits the working directory, which is `python/`, and `tests/` is not
 on its `sys.path`.
 """
 
-from soma_next import Done, Node
+from soma_next import Node
 
 
 class Greet(Node):
     def forward(self, x, ctx):
-        return Done(f"hello, {x}")
+        return f"hello, {x}"

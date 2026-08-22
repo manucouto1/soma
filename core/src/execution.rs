@@ -33,15 +33,11 @@
 //! **injected** and does not.
 
 use crate::{
-    Cargo, Catalog, Ctx, Device, Driver, DriverError, Host, Keeper, Kept, Key, Keys, Memory,
-    NodeError, NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Host, Keeper, Kept, Key, Keys, Memory, NodeError, NodeId, Outcome,
+    Placement, Plan, Transport, TransportError, Value,
 };
 use std::collections::HashMap;
 use std::fmt;
-
-/// How many times a node is asked before it is given up for hung. A node that
-/// does not finish is a bug in the node, not a legitimate wait.
-const MAX_TURNS: usize = 64;
 
 /// What the engine writes beside a value it keeps. Private because the engine
 /// is the only one that writes it and the only one that reads it back: to a
@@ -52,16 +48,15 @@ const FINGERPRINT: &str = "fingerprint";
 /// Executes plans.
 ///
 /// A type and not a bare function because executing needs context: today the
-/// store, the driver, the placement and the transports.
+/// store, the placement and the transports.
 pub struct Executor<'a> {
     catalog: &'a Catalog,
-    driver: Option<&'a dyn Driver>,
     placement: Option<&'a Placement>,
     /// What is remembered about each node. **Declared**, like the placement: it
     /// belongs to whoever wrote the graph, and it travels.
     memory: Option<&'a Memory>,
-    /// Who hashes and where what is named ends up. **Injected**, like the driver
-    /// and the transports: it belongs to whoever runs, and it does not travel.
+    /// Who hashes and where what is named ends up. **Injected**, like the
+    /// transports: it belongs to whoever runs, and it does not travel.
     keeper: Option<&'a dyn Keeper>,
     /// Which host it knows how to reach, and by what route. A list because
     /// there are two or three of them.
@@ -69,23 +64,15 @@ pub struct Executor<'a> {
 }
 
 impl<'a> Executor<'a> {
-    /// An executor with no driver: a plan whose steps ask for something fails
-    /// with [`RunError::NoDriver`].
+    /// An executor over this catalog, with nothing else said yet.
     pub fn new(catalog: &'a Catalog) -> Self {
         Self {
             catalog,
-            driver: None,
             placement: None,
             memory: None,
             keeper: None,
             transports: Vec::new(),
         }
-    }
-
-    /// The same executor, with whoever will serve what the steps ask for.
-    pub fn with_driver(mut self, driver: &'a dyn Driver) -> Self {
-        self.driver = Some(driver);
-        self
     }
 
     /// The same executor, knowing where each node runs. Without this every
@@ -113,7 +100,7 @@ impl<'a> Executor<'a> {
 
     /// The same executor, with somewhere to keep what it names.
     ///
-    /// **Injected**, like the driver and the transports: it is whoever runs who
+    /// **Injected**, like the transports: it is whoever runs who
     /// says where things are kept, and it does not travel. Without it — or
     /// without [`remembering`](Self::remembering) — the keys are not even
     /// computed, which is why a graph that declares nothing pays nothing.
@@ -499,44 +486,23 @@ impl<'a> Executor<'a> {
         Ok(outcome.last)
     }
 
-    /// Ask, serve whatever it asks for, ask again. Until it finishes.
+    /// Run it, and attribute whatever it says to it.
+    ///
+    /// Whatever the node takes to answer — a retry, a model, three rounds of
+    /// something — happens inside it, and the engine neither counts it nor
+    /// bounds it. It cannot: it has no way to tell a loop that will not end from
+    /// work that is slow, and guessing wrong either way is worse than not
+    /// guessing.
     fn advance(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
-        let implementation = self.implementation(node)?;
-        let device = self.device(node);
-        let mut results: Vec<Value> = Vec::new();
-
-        for turn in 0..MAX_TURNS {
-            let ctx = Ctx {
-                turn,
-                results: &results,
-                device,
-            };
-            let transition =
-                implementation
-                    .forward(&input, &ctx)
-                    .map_err(|source| RunError::Node {
-                        node: node.clone(),
-                        source,
-                    })?;
-            match transition {
-                Transition::Done(output) => return Ok(output),
-                Transition::Await(requests) => {
-                    let driver = self
-                        .driver
-                        .ok_or_else(|| RunError::NoDriver(node.clone()))?;
-                    results = driver
-                        .perform(&requests)
-                        .map_err(|source| RunError::Driver {
-                            node: node.clone(),
-                            source,
-                        })?;
-                }
-            }
-        }
-        Err(RunError::TurnLimit {
-            node: node.clone(),
-            turns: MAX_TURNS,
-        })
+        let ctx = Ctx {
+            device: self.device(node),
+        };
+        self.implementation(node)?
+            .forward(&input, &ctx)
+            .map_err(|source| RunError::Node {
+                node: node.clone(),
+                source,
+            })
     }
 
     /// The name this node's output will have, **before** it has one.
@@ -668,15 +634,6 @@ pub enum RunError {
         /// What it said.
         source: NodeError,
     },
-    /// The node asked for something and there is nobody to serve it.
-    NoDriver(NodeId),
-    /// The driver could not serve what the node asked for.
-    Driver {
-        /// Which node the request came from.
-        node: NodeId,
-        /// What the driver said.
-        source: DriverError,
-    },
     /// The plan sends a slice to a host nobody knows how to reach.
     NoTransport(Host),
     /// The transport could not carry the slice, or what ran there failed.
@@ -712,13 +669,6 @@ pub enum RunError {
         /// What it was reading.
         from: NodeId,
     },
-    /// The node kept asking for turns without ever finishing.
-    TurnLimit {
-        /// Which one.
-        node: NodeId,
-        /// How many turns it was given.
-        turns: usize,
-    },
 }
 
 impl fmt::Display for RunError {
@@ -745,13 +695,6 @@ impl fmt::Display for RunError {
                  node that maps gives back one for each, in order, or nobody can \
                  tell which answer belongs to which item"
             ),
-            Self::NoDriver(node) => write!(
-                f,
-                "`{node}` asked for something and this executor has no driver to serve it"
-            ),
-            Self::Driver { node, source } => {
-                write!(f, "serving what `{node}` asked for: {source}")
-            }
             Self::NoTransport(host) => write!(
                 f,
                 "there is a slice placed on `{host}` and this executor cannot reach it"
@@ -761,10 +704,6 @@ impl fmt::Display for RunError {
                 f,
                 "`{node}` reads what `{from}` produced, and that stayed where it ran: \
                  only what can leave a process comes back from one"
-            ),
-            Self::TurnLimit { node, turns } => write!(
-                f,
-                "`{node}` spent all {turns} turns without finishing; it probably cannot stop"
             ),
         }
     }

@@ -20,18 +20,10 @@
 //! second one is too. An `Option` would have turned both rejections into a
 //! branch that gets forgotten.
 //!
-//! # Where the driver comes from, which is the same place as the nodes
+//! # Where the catalog comes from
 //!
-//! A worker that brings its own catalog brings its own driver, with
-//! [`Serving::driver`]. One that is provisioned gets both **in the artifact**:
-//! whoever packs the nodes packs the driver, and this side rebuilds them
-//! together. Declared versus injected is about the **graph** — a node is in it
-//! and a driver is not — and not about how either one gets here.
-//!
-//! When both are there, the one that **arrived** wins: it belongs to the job,
-//! and the local one is what serves clients that pack none.
-//!
-//! What arrives is **cached by the artifact's id**, so a second run resends
+//! A worker either brings its own or is sent one in an artifact, and that is
+//! the whole of it. What arrives is **cached by the artifact's id**, so a second run resends
 //! nothing. One is kept, not a map: collecting Python catalogs would be
 //! collecting live objects with nobody saying when they are released.
 //!
@@ -55,16 +47,15 @@
 use crate::codec::{self, Codec};
 use crate::frame;
 use crate::{Answer, Label, Provision, Provisioned, Request};
-use soma_next_core::{Catalog, Driver, Executor, Keeper, Outcome};
+use soma_next_core::{Catalog, Executor, Keeper, Outcome};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
 /// A worker about to serve: what it executes with, and where it listens.
 pub struct Serving<'a> {
     source: Source<'a>,
-    driver: Option<&'a dyn Driver>,
     store: Option<&'a dyn Store>,
     keeper: Option<&'a dyn Keeper>,
     codec: Option<&'a dyn Codec>,
@@ -75,7 +66,6 @@ impl<'a> Serving<'a> {
     pub fn own(catalog: &'a Catalog) -> Self {
         Self {
             source: Source::Own(catalog),
-            driver: None,
             store: None,
             keeper: None,
             codec: None,
@@ -87,20 +77,10 @@ impl<'a> Serving<'a> {
     pub fn provisioned(provision: &'a dyn Provision) -> Self {
         Self {
             source: Source::Sent(provision),
-            driver: None,
             store: None,
             keeper: None,
             codec: None,
         }
-    }
-
-    /// The same worker, with whoever serves what the steps here ask for.
-    ///
-    /// For a provisioned one this is the fallback: a driver that arrives in an
-    /// artifact wins over it.
-    pub fn driver(mut self, driver: &'a dyn Driver) -> Self {
-        self.driver = Some(driver);
-        self
     }
 
     /// The same worker, with somewhere to keep the artifacts it is sent.
@@ -136,7 +116,7 @@ impl<'a> Serving<'a> {
     /// **The same codecs as the client's**, or the two ends do not understand
     /// each other — which is what the error says when it happens. Whoever stands
     /// this worker up installs it; here it is one more thing that was lent, like
-    /// the driver and the store, and it does not travel.
+    /// the store, and it does not travel.
     pub fn packing(mut self, codec: &'a dyn Codec) -> Self {
         self.codec = Some(codec);
         self
@@ -203,7 +183,6 @@ impl<'a> Serving<'a> {
 /// to each session, so the catalog that arrives serves the next client too.
 struct Shared<'a> {
     source: Source<'a>,
-    driver: Option<&'a dyn Driver>,
     store: Option<&'a dyn Store>,
     keeper: Option<&'a dyn Keeper>,
     codec: Option<&'a dyn Codec>,
@@ -218,7 +197,6 @@ impl<'a> Shared<'a> {
         };
         Self {
             source: serving.source,
-            driver: serving.driver,
             store: serving.store,
             keeper: serving.keeper,
             codec: serving.codec,
@@ -263,23 +241,16 @@ enum Loaded<'a> {
     /// The one it brought.
     Own(&'a Catalog),
     /// One that arrived, and which artifact it came from.
-    Sent {
-        id: String,
-        catalog: Catalog,
-        driver: Option<Arc<dyn Driver>>,
-    },
+    Sent { id: String, catalog: Catalog },
 }
 
 impl Loaded<'_> {
-    /// What to execute with right now: the catalog, and the driver that came
-    /// with it if one did.
-    fn ready(&self) -> Option<(Catalog, Option<Arc<dyn Driver>>)> {
+    /// The catalog to execute with right now, if there is one.
+    fn ready(&self) -> Option<Catalog> {
         match self {
             Self::Empty => None,
-            Self::Own(catalog) => Some(((*catalog).clone(), None)),
-            Self::Sent {
-                catalog, driver, ..
-            } => Some((catalog.clone(), driver.clone())),
+            Self::Own(catalog) => Some((*catalog).clone()),
+            Self::Sent { catalog, .. } => Some(catalog.clone()),
         }
     }
 }
@@ -334,7 +305,6 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
                         *shared.held() = Loaded::Sent {
                             id: label.id,
                             catalog: provisioned.catalog,
-                            driver: provisioned.driver,
                         };
                         Answer::Ready
                     }
@@ -364,7 +334,6 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
                     *shared.held() = Loaded::Sent {
                         id,
                         catalog: provisioned.catalog,
-                        driver: provisioned.driver,
                     };
                     Answer::Ready
                 }
@@ -400,7 +369,7 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
                     _ => loaded.ready(),
                 }
             };
-            let Some((catalog, sent)) = ready else {
+            let Some(catalog) = ready else {
                 return Answer::Failed(
                     "this worker has no catalog yet: work arrived before the greeting".into(),
                 );
@@ -413,10 +382,6 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
                 .remembering(&memory);
             if let Some(keeper) = shared.keeper {
                 executor = executor.keeping(keeper);
-            }
-            // The one that arrived wins: it belongs to the job.
-            if let Some(driver) = sent.as_deref().or(shared.driver) {
-                executor = executor.with_driver(driver);
             }
             // Alive again before anything reads it, and not at the boundary
             // where a node is handed its argument: a value that only passes

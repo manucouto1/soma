@@ -7,7 +7,7 @@ this slice added zero lines to level 2.
 
 import pytest
 
-from soma_next import Done, Graph, Node, Opaque
+from soma_next import Graph, Node, Opaque
 from soma_next.study import Pruner
 from soma_next.torch import Trainer, parameters
 
@@ -24,7 +24,7 @@ class Layer(Node):
         self.lin = nn.Linear(in_, out)
 
     def forward(self, x, ctx):
-        return Done(Opaque(self.lin(x)))
+        return Opaque(self.lin(x))
 
     def parameters(self):
         return list(self.lin.parameters())

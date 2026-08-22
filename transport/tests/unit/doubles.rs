@@ -5,15 +5,15 @@
 //! knowing who `a` is is exactly the contract. In a real system they would be
 //! two calls to the same factory function.
 
-use soma_next_core::{Catalog, Ctx, Node, NodeError, Transition, Value};
+use soma_next_core::{Catalog, Ctx, Node, NodeError, Value};
 use std::sync::Arc;
 
 pub struct Add(pub f64);
 
 impl Node for Add {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         match input {
-            Value::Number(x) => Ok(Transition::Done(Value::number(x + self.0))),
+            Value::Number(x) => Ok(Value::number(x + self.0)),
             other => Err(NodeError::new(format!(
                 "Add needs a number, it was given {}",
                 other.type_name()
@@ -25,7 +25,7 @@ impl Node for Add {
 pub struct Mean;
 
 impl Node for Mean {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         let Some(values) = input.values() else {
             return Err(NodeError::new("Mean needs a map"));
         };
@@ -36,7 +36,7 @@ impl Node for Mean {
             };
             total += x;
         }
-        Ok(Transition::Done(Value::number(total / values.len() as f64)))
+        Ok(Value::number(total / values.len() as f64))
     }
 }
 
@@ -44,16 +44,16 @@ impl Node for Mean {
 pub struct WhereIRan;
 
 impl Node for WhereIRan {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(std::process::id() as f64)))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(std::process::id() as f64))
     }
 }
 
 pub struct Opaque;
 
 impl Node for Opaque {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::opaque(7u32)))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::opaque(7u32))
     }
 }
 
@@ -62,18 +62,18 @@ impl Node for Opaque {
 pub struct Reads;
 
 impl Node for Reads {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(match input {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(match input {
             Value::Opaque(_) => 1.0,
             _ => 0.0,
-        })))
+        }))
     }
 }
 
 pub struct Fail;
 
 impl Node for Fail {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         Err(NodeError::new("I broke"))
     }
 }
@@ -81,11 +81,11 @@ impl Node for Fail {
 pub struct WhichDevice;
 
 impl Node for WhichDevice {
-    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(match ctx.device {
+    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(match ctx.device {
             Some(device) => Value::text(device.to_string()),
             None => Value::Null,
-        }))
+        })
     }
 }
 

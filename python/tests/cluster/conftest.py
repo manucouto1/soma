@@ -129,8 +129,7 @@ def has_the_code(cluster):
 def gpu(cluster):
     """The worker with the device, up. Skips if it is not there — its image is
     eleven gigabytes and nobody has to have built it."""
-    up = compose("--profile", "gpu", "up", "-d", "worker-gpu", check=False)
-    if up.returncode != 0 or not _ready("worker-gpu", PORTS["gpu"]):
+    if not _up_with_torch("worker-gpu", PORTS["gpu"]):
         pytest.skip("there is no `worker-gpu`: build it with `--profile gpu`")
     return "gpu"
 
@@ -144,10 +143,23 @@ def two_with_torch(gpu):
     A machine searching a space needs a worker of its own — which is what it
     would have on Slurm anyway.
     """
-    up = compose("--profile", "gpu", "up", "-d", "worker-gpu-b", check=False)
-    if up.returncode != 0 or not _ready("worker-gpu-b", PORTS["gpu-b"]):
+    if not _up_with_torch("worker-gpu-b", PORTS["gpu-b"]):
         pytest.skip("there is no `worker-gpu-b`: build it with `--profile gpu`")
     return ("gpu", "gpu-b")
+
+
+def _up_with_torch(service, port):
+    """Brings one of the profiled workers up, rebuilding it if that was asked.
+
+    The `--build` matters and was missing for a long time: these two are behind a
+    compose profile, so a plain `up` never reaches them and `SOMA_CLUSTER=build`
+    would rebuild the four cheap workers and leave the expensive ones on last
+    week's wheel. What that looks like from a test is the **worker** complaining
+    about a protocol the client no longer speaks.
+    """
+    rebuild = ["--build"] if os.environ.get("SOMA_CLUSTER") == "build" else []
+    up = compose("--profile", "gpu", "up", "-d", *rebuild, service, check=False)
+    return up.returncode == 0 and _ready(service, port)
 
 
 @pytest.fixture(scope="session")

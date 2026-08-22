@@ -1,12 +1,11 @@
 //! Fake nodes and drivers, shared by the other modules.
 //!
 //! Note that none of them declares what "kind" it is: what tells them apart is
-//! the `Transition` variant they return.
+//! what they answer.
 
 use soma_next_core::{
-    Cargo, Catalog, Ctx, Device, Driver, DriverError, Keeper, KeeperError, Kept, Key, Keys, Memory,
-    Node, NodeError, NodeId, Outcome, Placement, Plan, Transition, Transport, TransportError,
-    Value,
+    Cargo, Catalog, Ctx, Device, Keeper, KeeperError, Kept, Key, Keys, Memory, Node, NodeError,
+    NodeId, Outcome, Placement, Plan, Transport, TransportError, Value,
 };
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
@@ -16,9 +15,9 @@ use std::time::Duration;
 pub struct Add(pub f64);
 
 impl Node for Add {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         match input {
-            Value::Number(x) => Ok(Transition::Done(Value::number(x + self.0))),
+            Value::Number(x) => Ok(Value::number(x + self.0)),
             other => Err(NodeError::new(format!(
                 "Add needs a number, it was given {}",
                 other.type_name()
@@ -32,8 +31,8 @@ impl Node for Add {
 pub struct Opaquely;
 
 impl Node for Opaquely {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::opaque(7u32)))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::opaque(7u32))
     }
 }
 
@@ -42,15 +41,15 @@ impl Node for Opaquely {
 pub struct Anything;
 
 impl Node for Anything {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::number(1.0)))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::number(1.0))
     }
 }
 
 pub struct Fail;
 
 impl Node for Fail {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         Err(NodeError::new("I broke"))
     }
 }
@@ -60,7 +59,7 @@ impl Node for Fail {
 pub struct Mean;
 
 impl Node for Mean {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         let Some(values) = input.values() else {
             return Err(NodeError::new(format!(
                 "Mean needs several inputs, it got {}",
@@ -77,9 +76,9 @@ impl Node for Mean {
                 ))),
             })
             .collect::<Result<_, _>>()?;
-        Ok(Transition::Done(Value::number(
+        Ok(Value::number(
             numbers.iter().sum::<f64>() / numbers.len() as f64,
-        )))
+        ))
     }
 }
 
@@ -87,101 +86,8 @@ impl Node for Mean {
 pub struct Immediate;
 
 impl Node for Immediate {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(input.clone()))
-    }
-}
-
-/// Asks for things on turn 0 and returns whatever it is told.
-pub struct Ask(pub Vec<Value>);
-
-impl Node for Ask {
-    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        if ctx.turn == 0 {
-            return Ok(Transition::Await(self.0.clone()));
-        }
-        Ok(Transition::Done(
-            ctx.results.first().cloned().unwrap_or(Value::Null),
-        ))
-    }
-}
-
-/// Keeps what every turn brought, because `ctx.results` does not.
-///
-/// The only node in the repository with state of its own, and it is here to
-/// pin two things. First, `ctx.results` is the **previous** turn's answers and
-/// not the history, so anything that wants more than one turn's worth has to
-/// hold it. Second, `forward` takes `&self` and a `Node` is `Send + Sync`, so
-/// holding it is interior mutability or it is nothing — which makes keeping
-/// state something written on purpose rather than something a field slides
-/// into.
-pub struct Gathers {
-    /// How many turns to ask for before finishing.
-    pub turns: usize,
-    seen: Mutex<Vec<Value>>,
-}
-
-impl Gathers {
-    pub fn new(turns: usize) -> Arc<Self> {
-        Arc::new(Self {
-            turns,
-            seen: Mutex::default(),
-        })
-    }
-
-    /// Everything every turn brought, in the order it arrived.
-    pub fn seen(&self) -> Vec<Value> {
-        self.seen.lock().expect("nobody poisons this mutex").clone()
-    }
-}
-
-impl Node for Gathers {
-    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        let mut seen = self.seen.lock().expect("nobody poisons this mutex");
-        seen.extend(ctx.results.iter().cloned());
-        if ctx.turn < self.turns {
-            return Ok(Transition::Await(vec![Value::text(format!(
-                "t{}",
-                ctx.turn
-            ))]));
-        }
-        Ok(Transition::Done(Value::number(seen.len() as f64)))
-    }
-}
-
-/// Does not know how to stop.
-pub struct Insatiable;
-
-impl Node for Insatiable {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Await(vec![Value::Null]))
-    }
-}
-
-/// Answers every request with its text in upper case.
-pub struct Shout;
-
-impl Driver for Shout {
-    fn perform(&self, requests: &[Value]) -> Result<Vec<Value>, DriverError> {
-        requests
-            .iter()
-            .map(|r| match r {
-                Value::Text(t) => Ok(Value::text(t.to_uppercase())),
-                other => Err(DriverError::new(format!(
-                    "I only know how to shout text, I was given {}",
-                    other.type_name()
-                ))),
-            })
-            .collect()
-    }
-}
-
-/// Answers anything, to exercise the turn limit.
-pub struct AlwaysNull;
-
-impl Driver for AlwaysNull {
-    fn perform(&self, requests: &[Value]) -> Result<Vec<Value>, DriverError> {
-        Ok(vec![Value::Null; requests.len()])
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(input.clone())
     }
 }
 
@@ -229,9 +135,9 @@ impl Journal {
 pub struct Witness(pub &'static str, pub Arc<Journal>);
 
 impl Node for Witness {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         self.1.note(self.0);
-        Ok(Transition::Done(input.clone()))
+        Ok(input.clone())
     }
 }
 
@@ -263,7 +169,7 @@ pub struct Rendezvous {
 }
 
 impl Node for Rendezvous {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         let deadline = Duration::from_secs(5);
         let mut arrived = self.point.arrived.lock().expect("nobody poisons it");
         *arrived += 1;
@@ -287,7 +193,7 @@ impl Node for Rendezvous {
 
         match self.fails {
             Some(message) => Err(NodeError::new(message)),
-            None => Ok(Transition::Done(input.clone())),
+            None => Ok(input.clone()),
         }
     }
 }
@@ -296,41 +202,8 @@ impl Node for Rendezvous {
 pub struct Panics;
 
 impl Node for Panics {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         panic!("I blew up")
-    }
-}
-
-/// Asks for one thing and returns the answer, but only once `how_many` have
-/// arrived at the meeting: checks that two branches can keep the driver busy at
-/// the same time.
-pub struct RendezvousDriver {
-    pub point: Arc<MeetingPoint>,
-    pub how_many: usize,
-}
-
-impl Driver for RendezvousDriver {
-    fn perform(&self, requests: &[Value]) -> Result<Vec<Value>, DriverError> {
-        let deadline = Duration::from_secs(5);
-        let mut arrived = self.point.arrived.lock().expect("nobody poisons it");
-        *arrived += 1;
-        if *arrived >= self.how_many {
-            self.point.notice.notify_all();
-        } else {
-            let (guard, waited) = self
-                .point
-                .notice
-                .wait_timeout_while(arrived, deadline, |n| *n < self.how_many)
-                .expect("nobody poisons it");
-            arrived = guard;
-            if waited.timed_out() {
-                return Err(DriverError::new(
-                    "the driver never got to be serving two branches at the same time",
-                ));
-            }
-        }
-        drop(arrived);
-        Ok(vec![Value::text("served"); requests.len()])
     }
 }
 
@@ -365,13 +238,13 @@ impl Ledger {
 pub struct Ubiquitous(pub &'static str, pub Arc<Ledger>);
 
 impl Node for Ubiquitous {
-    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         self.1
             .0
             .lock()
             .expect("nobody poisons this mutex")
             .push((self.0.to_string(), ctx.device.cloned()));
-        Ok(Transition::Done(input.clone()))
+        Ok(input.clone())
     }
 }
 
@@ -458,14 +331,14 @@ impl Transport for Cable {
 pub struct EachOne(pub Arc<Journal>);
 
 impl Node for EachOne {
-    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
         let Value::List(items) = input else {
             return Err(NodeError::new("EachOne needs a list"));
         };
         for item in items.iter() {
             self.0.note(&format!("{item:?}"));
         }
-        Ok(Transition::Done(Value::list(
+        Ok(Value::list(
             items
                 .iter()
                 .map(|item| match item {
@@ -473,7 +346,7 @@ impl Node for EachOne {
                     other => other.clone(),
                 })
                 .collect::<Vec<_>>(),
-        )))
+        ))
     }
 }
 
@@ -482,8 +355,8 @@ impl Node for EachOne {
 pub struct Miscounts;
 
 impl Node for Miscounts {
-    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-        Ok(Transition::Done(Value::list(vec![Value::number(1.0)])))
+    fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        Ok(Value::list(vec![Value::number(1.0)]))
     }
 }
 

@@ -78,15 +78,10 @@ class Worker(_RustWorker):
             [python or sys.executable, "-m", "soma_next.worker"], mode=mode, send=send
         )
 
-    def carry(self, nodes, driver=None):
-        """Packs these nodes and this driver and tells the worker it is going to
-        need them. `Graph.forward` calls it.
-
-        The driver goes in the same artifact, by the same strategy: a node that
-        returns `Await` has to be served **where it runs**, and the artifact is
-        how anything gets there.
-        """
-        kind, blob = _pack(nodes, driver, self._mode, self._send)
+    def carry(self, nodes):
+        """Packs these nodes and tells the worker it is going to need them.
+        `Graph.forward` calls it — an artifact is how anything gets there."""
+        kind, blob = _pack(nodes, self._mode, self._send)
         self.provision(
             kind, "sha256:" + hashlib.sha256(blob).hexdigest(), blob, _runtime()
         )
@@ -100,8 +95,8 @@ def _remember(worker, mode, send):
     return worker
 
 
-def _pack(nodes, driver, mode, send):
-    """The nodes and the driver as an artifact, whichever way applies.
+def _pack(nodes, mode, send):
+    """The nodes as an artifact, whichever way applies.
 
     **By id, always.** The artifact's id is the digest of these bytes, and a dict
     pickles in insertion order — so the same nodes handed over in another order
@@ -119,12 +114,12 @@ def _pack(nodes, driver, mode, send):
     if mode == "project":
         from soma_next import _manifest
 
-        return _manifest.KIND, _manifest.pack(nodes, driver)
+        return _manifest.KIND, _manifest.pack(nodes)
 
     import cloudpickle
 
     with _by_value(send):
-        return "pickle", cloudpickle.dumps((nodes, driver))
+        return "pickle", cloudpickle.dumps(nodes)
 
 
 def _runtime():

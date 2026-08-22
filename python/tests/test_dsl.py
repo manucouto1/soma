@@ -2,8 +2,8 @@
 
 import pytest
 
-from conftest import Add, Ask, Mean
-from soma_next import Done, Graph, Node
+from conftest import Add, Mean
+from soma_next import Graph, Node
 
 
 # ── Chaining ──
@@ -63,13 +63,6 @@ def test_three_branches():
     assert g.forward(0) == {"a": 1.0, "b": 2.0, "c": 3.0}
 
 
-def test_a_node_that_asks_for_turns_fits_where_any_other_would():
-    from conftest import Shout
-
-    g = Graph.somatize(Add(1) >> Ask("x"))
-    assert g.forward(41, driver=Shout()) == "X"
-
-
 # ── The class forces it, and it is the DSL's only door ──
 
 
@@ -84,7 +77,7 @@ def test_the_class_forces_forward_to_be_implemented():
 def test_in_the_dsl_you_have_to_inherit_from_node():
     class Loose:
         def forward(self, x, ctx):
-            return Done(x)
+            return x
 
     with pytest.raises(TypeError, match="has to inherit from soma_next.Node"):
         Graph.somatize(Loose() >> Add(1))
@@ -98,7 +91,7 @@ def test_what_cannot_be_a_node_says_so():
 def test_an_outside_object_still_comes_in_through_the_lower_door(g):
     class Foreign:  # inherits from nothing of ours
         def forward(self, x, ctx):
-            return Done(x * 2)
+            return x * 2
 
     g.node("foreign", Foreign())
     assert g.forward(21) == 42.0

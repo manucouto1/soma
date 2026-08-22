@@ -68,7 +68,6 @@ services:
     build: *torch
     command: *keeping
     ports: ["127.0.0.1:7006:7000"]
-    devices: ["nvidia.com/gpu=all"]
     volumes: ["store:/store"]
 
 volumes:

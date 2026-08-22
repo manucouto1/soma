@@ -1,13 +1,12 @@
-//! The engine, against Rust filters and steps: no Python in the way.
+//! The engine, against Rust nodes: no Python in the way.
 
 use crate::doubles::{
-    Add, AlwaysNull, Anything, Ask, Cable, EachOne, Fail, Gathers, Immediate, Insatiable, Journal,
-    Ledger, Mean, MeetingPoint, Mirror, Miscounts, Notebook, Opaquely, Panics, Rendezvous,
-    RendezvousDriver, Shout, Ubiquitous, Witness,
+    Add, Anything, Cable, EachOne, Fail, Immediate, Journal, Ledger, Mean, MeetingPoint, Mirror,
+    Miscounts, Notebook, Opaquely, Panics, Rendezvous, Ubiquitous, Witness,
 };
 use soma_next_core::{
     Catalog, Ctx, Device, Executor, Graph, Host, Key, Keys, Memory, Node, NodeError, NodeId,
-    Outcome, Placement, Plan, RunError, Transition, Value, compile, distribute, node,
+    Outcome, Placement, Plan, RunError, Value, compile, distribute, node,
 };
 use std::sync::Arc;
 
@@ -127,175 +126,37 @@ fn a_filters_failure_says_which_node_it_was() {
 
 // ── Steps ──
 
-#[test]
-fn a_step_that_finishes_on_the_first_turn_needs_no_driver() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("already").unwrap();
-    c.insert("already", Arc::new(Immediate));
-
-    let plan = compile(&g, &c).unwrap();
-    let out = Executor::new(&c).run(&plan, Value::text("echo")).unwrap();
-    assert_eq!(out, Value::text("echo"));
-}
+// ── A node keeps whatever it keeps, and the engine keeps nothing ──
 
 #[test]
-fn a_step_asks_for_something_and_the_driver_gives_it() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("question").unwrap();
-    c.insert("question", Arc::new(Ask(vec![Value::text("hello")])));
-
-    let plan = compile(&g, &c).unwrap();
-    let shout = Shout;
-    let out = Executor::new(&c)
-        .with_driver(&shout)
-        .run(&plan, Value::Null)
-        .unwrap();
-    assert_eq!(out, Value::text("HELLO"));
-}
-
-#[test]
-fn without_a_driver_a_step_that_asks_fails_saying_so() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("question").unwrap();
-    c.insert("question", Arc::new(Ask(vec![Value::text("hello")])));
-
-    let plan = compile(&g, &c).unwrap();
-    let err = Executor::new(&c).run(&plan, Value::Null).unwrap_err();
-    assert_eq!(err, RunError::NoDriver("question".into()));
-    assert!(err.to_string().contains("no driver"));
-}
-
-#[test]
-fn the_drivers_failure_is_attributed_to_the_step_that_asked() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("question").unwrap();
-    // Shout only knows text; it is asked with a number.
-    c.insert("question", Arc::new(Ask(vec![Value::number(1.0)])));
-
-    let plan = compile(&g, &c).unwrap();
-    let shout = Shout;
-    let err = Executor::new(&c)
-        .with_driver(&shout)
-        .run(&plan, Value::Null)
-        .unwrap_err();
-    assert!(matches!(err, RunError::Driver { ref node, .. } if node.as_str() == "question"));
-}
-
-#[test]
-fn a_step_that_cannot_stop_spends_its_turns_and_says_so() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("never").unwrap();
-    c.insert("never", Arc::new(Insatiable));
-
-    let plan = compile(&g, &c).unwrap();
-    let driver = AlwaysNull;
-    let err = Executor::new(&c)
-        .with_driver(&driver)
-        .run(&plan, Value::Null)
-        .unwrap_err();
-    assert!(matches!(err, RunError::TurnLimit { ref node, .. } if node.as_str() == "never"));
-    assert!(err.to_string().contains("cannot stop"));
-}
-
-// ── Filters and steps in the same chain ──
-
-#[test]
-fn a_filter_and_a_step_chain_without_knowing_about_each_other() {
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("add").unwrap();
-    g.add_node("echo").unwrap();
-    g.add_edge("add", "echo").unwrap();
-    c.insert("add", Arc::new(Add(1.0)));
-    c.insert("echo", Arc::new(Immediate));
-
-    let plan = compile(&g, &c).unwrap();
-    let out = Executor::new(&c).run(&plan, Value::number(41.0)).unwrap();
-    assert_eq!(number(&out), 42.0);
-}
-
-#[test]
-fn a_node_can_fail_halfway_through_its_turns() {
-    struct GivesUp;
-    impl Node for GivesUp {
-        fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-            Err(NodeError::new("I cannot"))
+fn what_a_node_kept_is_still_there_the_next_time_the_graph_runs() {
+    // The catalog holds **the node**, not a copy per run, so its state outlives
+    // a `forward`. That is not incidental — a worker keeping its catalog is what
+    // lets an activation stay alive on the far side of a cut, and CU14 rests on
+    // it.
+    //
+    // The other face of it is a trap, and this is where it is written down: a
+    // node that counts answers a second run differently from the first, and
+    // nothing warns. The engine promises the same **plan**, not that a node
+    // without memory is the only kind there is — and now that a node runs to the
+    // end on its own, whatever it keeps is entirely its own business.
+    struct Counts(std::sync::Mutex<f64>);
+    impl Node for Counts {
+        fn forward(&self, _input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+            let mut times = self.0.lock().expect("nobody poisons this mutex");
+            *times += 1.0;
+            Ok(Value::number(*times))
         }
     }
 
     let mut g = Graph::new();
     let mut c = Catalog::new();
-    g.add_node("gives_up").unwrap();
-    c.insert("gives_up", Arc::new(GivesUp));
-
+    g.add_node("counts").unwrap();
+    c.insert("counts", Arc::new(Counts(std::sync::Mutex::new(0.0))));
     let plan = compile(&g, &c).unwrap();
-    let err = Executor::new(&c).run(&plan, Value::Null).unwrap_err();
-    assert!(matches!(err, RunError::Node { ref node, .. } if node.as_str() == "gives_up"));
-}
 
-// ── What merging the two contracts makes possible ──
-
-#[test]
-fn a_node_that_wants_more_than_the_last_turn_has_to_keep_it_itself() {
-    // `ctx.results` is what the driver brought for the **previous** turn, not a
-    // history: three turns hand a node three separate answers and never all
-    // three at once. So a node that needs them together keeps them, and
-    // `forward` taking `&self` means keeping them is a `Mutex` written on
-    // purpose — not a field that slid in.
-    let node = Gathers::new(3);
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("gathers").unwrap();
-    c.insert("gathers", node.clone());
-
-    let plan = compile(&g, &c).unwrap();
-    let shout = Shout;
-    let out = Executor::new(&c)
-        .with_driver(&shout)
-        .run(&plan, Value::Null)
-        .unwrap();
-
-    // Three answers arrived, one turn at a time, and only the node has all of
-    // them.
-    assert_eq!(out, Value::number(3.0));
-    assert_eq!(
-        node.seen(),
-        vec![Value::text("T0"), Value::text("T1"), Value::text("T2")]
-    );
-}
-
-#[test]
-fn and_what_it_kept_is_still_there_the_next_time_the_graph_runs() {
-    // The catalog holds **the node**, not a copy per run, so its state outlives
-    // a `forward`. That is not incidental — a worker keeping its catalog is
-    // what lets an activation stay alive on the far side of a cut, and CU14
-    // rests on it.
-    //
-    // The other face of it is a trap, and this test is where it is written
-    // down: a node that accumulates answers a second run differently from the
-    // first, and nothing warns. What the engine promises is that the *plan* is
-    // the same, not that a node without memory is the only kind there is.
-    let node = Gathers::new(1);
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("gathers").unwrap();
-    c.insert("gathers", node.clone());
-    let plan = compile(&g, &c).unwrap();
-    let shout = Shout;
-
-    let once = Executor::new(&c)
-        .with_driver(&shout)
-        .run(&plan, Value::Null)
-        .unwrap();
-    let twice = Executor::new(&c)
-        .with_driver(&shout)
-        .run(&plan, Value::Null)
-        .unwrap();
+    let once = Executor::new(&c).run(&plan, Value::Null).unwrap();
+    let twice = Executor::new(&c).run(&plan, Value::Null).unwrap();
 
     assert_eq!(once, Value::number(1.0));
     assert_eq!(
@@ -303,46 +164,6 @@ fn and_what_it_kept_is_still_there_the_next_time_the_graph_runs() {
         Value::number(2.0),
         "the second run started from scratch"
     );
-    assert_eq!(node.seen(), vec![Value::text("T0"), Value::text("T0")]);
-}
-
-#[test]
-fn a_node_can_evolve_from_always_finishing_to_asking_for_a_turn() {
-    // With two traits this meant rewriting the type (error[E0119] if you tried
-    // to have both). Here it is one more branch in the same body.
-    struct Evolves;
-    impl Node for Evolves {
-        fn forward(&self, input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
-            if ctx.turn > 0 {
-                // We already asked: the answer is what the driver brought.
-                return Ok(Transition::Done(ctx.results[0].clone()));
-            }
-            match input {
-                Value::Number(x) if *x < 0.0 => {
-                    Ok(Transition::Await(vec![Value::text("negative")]))
-                }
-                other => Ok(Transition::Done(other.clone())),
-            }
-        }
-    }
-
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    g.add_node("evolves").unwrap();
-    c.insert("evolves", Arc::new(Evolves));
-    let plan = compile(&g, &c).unwrap();
-
-    // With positive input it asks for nothing, so it does not even need a driver.
-    let out = Executor::new(&c).run(&plan, Value::number(1.0)).unwrap();
-    assert_eq!(out, Value::number(1.0));
-
-    // With negative input it asks for a turn, in the same node.
-    let shout = Shout;
-    let out = Executor::new(&c)
-        .with_driver(&shout)
-        .run(&plan, Value::number(-1.0))
-        .unwrap();
-    assert_eq!(out, Value::text("NEGATIVE"));
 }
 
 // ── Waves: what happens when two branches are launched at once ──
@@ -606,38 +427,6 @@ fn a_panic_inside_a_branch_is_not_swallowed() {
 
     let plan = compile(&g, &c).unwrap();
     let _ = Executor::new(&c).run(&plan, Value::Null);
-}
-
-#[test]
-fn two_branches_can_keep_the_driver_busy_at_the_same_time() {
-    // Where a wave wins beyond argument: two nodes waiting on something
-    // outside. The driver does not serve the second until the first has
-    // arrived, so if they were not concurrent the deadline would run out.
-    let point = MeetingPoint::new();
-    let mut g = Graph::new();
-    let mut c = Catalog::new();
-    for id in ["one", "other"] {
-        g.add_node(id).unwrap();
-        c.insert(id, Arc::new(Ask(vec![Value::text("?")])));
-    }
-    let plan = compile(&g, &c).unwrap();
-
-    let driver = RendezvousDriver {
-        point: Arc::clone(&point),
-        how_many: 2,
-    };
-    let out = Executor::new(&c)
-        .with_driver(&driver)
-        .run(&plan, Value::Null)
-        .unwrap();
-
-    assert_eq!(
-        out,
-        Value::map(vec![
-            ("one".to_string(), Value::text("served")),
-            ("other".to_string(), Value::text("served")),
-        ])
-    );
 }
 
 #[test]

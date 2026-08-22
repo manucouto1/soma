@@ -8,10 +8,10 @@ the output is worth keeping. A `>>` between two open branches joins them: whatev
 all enters whatever comes next, which is exactly fan-in — the node on the right
 receives a map keyed by each branch.
 
-There is **a single kind of node**, just as the core has a single trait. A node
-returns `Done(value)` if it is finished or `Await([requests])` if it needs
-something from the world first; what elsewhere is called a filter is simply a
-node that always answers `Done`.
+There is **a single kind of node**, just as the core has a single trait: a node
+takes what arrived along the edges and returns what it produced. What elsewhere
+is called a filter and what is called a step are the same thing here, and there
+is no return type that could tell them apart.
 
 Mind the precedence, which is Python's (and the same in Rust): `>>` binds
 tighter than `|`, so the branches go in parentheses.
@@ -147,9 +147,9 @@ class Node(Topology, ABC):
 
     @abstractmethod
     def forward(self, input, ctx):
-        """Advances one turn: returns `Done(value)` or `Await([requests])`.
+        """Runs it: takes what arrived along the edges, returns what it made.
 
-        `ctx` carries `turn`, `results` and `device`.
+        `ctx` carries `device`, which is where this node was told to run.
         """
 
     def named(self, node_id):

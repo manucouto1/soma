@@ -13,7 +13,7 @@ mod study;
 mod value;
 
 use codec::Packing;
-use node::{PyAwait, PyCtx, PyDone, PyDriver, PyNode};
+use node::{PyCtx, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -304,21 +304,19 @@ impl PyGraph {
 
     /// Executes the whole graph and returns what it produced.
     ///
-    /// `driver=` is an object with `perform(requests)`; `workers=` says what
-    /// each host resolves to. A node sent to a host that is not there is **not
-    /// executed here just in case**.
+    /// `workers=` says what each host resolves to. A node sent to a host that
+    /// is not there is **not executed here just in case**.
     ///
     /// `store=` is a directory: with one, whatever was declared `.cached()` is
     /// looked up before being computed and kept after. Whether what was
     /// declared can honestly be kept is asked **here**, before the first node
     /// runs, so a `.cached()` in the wrong place fails at once and not as a net
     /// that quietly stopped training.
-    #[pyo3(signature = (input = None, *, driver = None, workers = None, store = None))]
+    #[pyo3(signature = (input = None, *, workers = None, store = None))]
     fn forward(
         &self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
-        driver: Option<&Bound<'_, PyAny>>,
         workers: Option<&Bound<'_, PyDict>>,
         store: Option<&str>,
     ) -> PyResult<PyObject> {
@@ -359,7 +357,6 @@ impl PyGraph {
         // never learns Python exists.
         let packing = cache.as_ref().map(|cache| Packing::over(cache));
 
-        let driver = driver.map(PyDriver::new).transpose()?;
         // What is remembered always goes in, keeper or no keeper: it is the
         // graph's, and it travels with a slice sent to a worker that may well be
         // the only one keeping anything.
@@ -372,11 +369,6 @@ impl PyGraph {
         if let Some(packing) = &packing {
             executor = executor.keeping(packing);
         }
-        let executor = match &driver {
-            Some(d) => executor.with_driver(d),
-            None => executor,
-        };
-
         // Mandatory, not an optimization: a wave spawns threads that call
         // Python `forward`s, and they would all hang waiting for the GIL.
         let out = py
@@ -488,8 +480,6 @@ fn snake_case(name: &str) -> String {
 fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
     m.add_class::<PyCtx>()?;
-    m.add_class::<PyDone>()?;
-    m.add_class::<PyAwait>()?;
     m.add_class::<value::PyOpaque>()?;
     m.add_class::<PyWorker>()?;
     m.add_class::<store::PyStore>()?;

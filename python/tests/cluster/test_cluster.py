@@ -98,20 +98,6 @@ def test_two_branches_on_two_machines_really_overlap(sends_the_code):
     assert took < nodes.Slow.SECONDS * 1.9, f"they queued up: {took:.2f}s"
 
 
-def test_the_driver_travels_with_the_nodes_and_serves_where_they_run(sends_the_code):
-    # A node that answers `Await` finishes over there or not at all, so the
-    # driver rides in the same artifact. There is no driver in that container
-    # other than the one that arrived.
-    g = Graph.somatize(nodes.Asks().at("a"))
-
-    out = g.forward(None, workers={"a": sends_the_code("a")}, driver=nodes.Answers("indeed"))
-
-    assert out["heard"] == "indeed: are you there?"
-
-
-# ── The worker that already has the project ──
-
-
 def test_names_and_state_are_enough_when_the_worker_has_the_code(has_the_code):
     # Forty bytes instead of a pickle, and no coupling between interpreters:
     # `pipeline` is mounted in that container, so only its **name** travels.
