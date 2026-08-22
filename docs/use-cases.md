@@ -3111,10 +3111,7 @@ copied `study/`, so the cluster images had not been rebuildable since CU17.
 
 ### What is NOT in it yet
 
-**TPE spread over machines**, which needs *constant liar* or a penalty for
-trials in flight — and the record already makes that cheap, because `state =
-running` is visible in the same scan that gives `finished`, so what other
-machines are looking at costs nothing to know · **a bus**, which earns its place
+**a bus**, which earns its place
 in observability and not in coordination, and would turn every crate it touches
 async for no subscriber · **a held-out score for a cut graph**, which is scoring
 that travels · and **retries**, which have a name on disk and no reader.
@@ -3199,6 +3196,32 @@ true, and is now the only thing that is true. The catalog holds the node, not a
 copy per run, so state outlives a `forward`: that is what lets an activation stay
 alive across a cut and what `Split` rests on, and it is a trap from the other
 side. There is a test in both languages saying so.
+
+### Closing the other half: what is in flight
+
+A guided sampler spread over machines is worse than random until it knows what
+the others are holding, and the record was shaped so that knowing costs one scan
+and no fetches — `state = running` sits beside `point`.
+
+The plan was to need no Rust: hand the sampler the in-flight points with a
+made-up bad score, which is *constant liar* as the literature has it, and let it
+avoid them. **Measured, that backfires.** `Tpe` sizes the pile it imitates as a
+share of everything handed over, so one more point raises the quota and promotes
+a trial out of the bad pile into the good one — and when that trial sits in the
+same region as the one in flight, the warning pulls the search **towards** it.
+Of two hundred proposals, one landed on the occupied region without the warning
+and thirty-nine with it.
+
+So `ask` takes `&[(Point, Option<f64>)]` and **an absent score means running**.
+Nothing is made up: those points go in the pile to keep away from and do not vote
+on how big the other pile is. Four of the five schemes ignore the argument
+entirely, as they already ignored the history.
+
+`abandoned` is the other half, and it decides nothing. Liveness here is not "does
+it answer" — nothing asks — but "is it still writing", and `report` was already
+paying for that heartbeat. It is measured against the newest write in the study
+and **not against this machine's clock**, because two machines sharing a folder
+are two clocks that disagree by minutes.
 
 ### What disappeared
 

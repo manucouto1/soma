@@ -174,10 +174,13 @@ space **for every prefix** rather than in expectation, which is what stops two
 machines proposing neighbours: `Halton` (arithmetic, no ceiling) and `Sobol`
 (Joe & Kuo's table, 32 knobs). The record keeps the configuration as text beside
 the score, so a sampler's whole history is **one scan and zero fetches**; only a
-pruner's curves cost a fetch each. What is still open is the guided sampler
-spread out — parallel TPE needs *constant liar* and has none.
+pruner's curves cost a fetch each. And a guided sampler spread out now knows what
+the others are holding: `ask` takes a score that **may be absent**, and absent
+means running — those points are kept away from without voting on how big the
+good pile is, which is the part that measurement showed a made-up bad score gets
+backwards.
 
-Eighteen use cases opened, seventeen and a half closed. And the first level-3
+Eighteen use cases closed. And the first level-3
 test with a real pipeline under it: `tests/cluster/test_searching.py` searches
 hyper-parameters over real SMS messages with the graph cut across containers —
 tokenising where there is no torch at all — **and** the study cut across
