@@ -46,6 +46,21 @@ with an ordinary `ModuleNotFoundError`. Installing them belongs to whoever stand
 the worker up, and putting it in here cost the original soma 420 lines of
 environment manager and a hot `pip install`.
 
+Which is a **recipe and not a mechanism**, and it fits in one file::
+
+    #!/usr/bin/env -S uv run --script
+    # /// script
+    # requires-python = "==3.13.*"
+    # dependencies = ["soma-next[remote]", "torch==2.10.0"]
+    # ///
+    from soma_next import worker
+    worker.listen("0.0.0.0:7000", store="/scratch/soma")
+
+`uv lock --script` leaves the resolution beside it, so the machine that claims a
+trial from a shared folder gets the environment the one that wrote it had —
+without a shared env on NFS and without a `module load`. Nothing in here knows
+what `uv` is, and that is the point: it is the same file the worker already was.
+
 ## `stdout` is the wire
 
 The protocol's messages go over this process's standard output, so at startup

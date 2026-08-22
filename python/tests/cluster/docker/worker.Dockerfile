@@ -10,6 +10,13 @@
 #
 # Two stages beyond the build so that the CPU workers stay at ~150 MB: torch is
 # 2.5 GB and only the one with a GPU needs it.
+#
+# Installing is `uv` and not `pip` for one reason, and it is the third stage:
+# `worker-gpu` **is** `worker` plus torch, so any change to the wheel invalidates
+# its layer. With `pip --no-cache-dir` that is 2.5 GB off the network on every
+# `SOMA_CLUSTER=build`; with a cache mount it is a copy from disk. The cache is a
+# **mount and not a layer**, so nothing of it ends up in the image — which is why
+# `--no-cache-dir` was there in the first place.
 
 # ── Building the wheel ────────────────────────────────────────────────────────
 FROM python:3.13-slim AS wheel
@@ -19,7 +26,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --profile minimal --default-toolchain 1.90.0
 ENV PATH="/root/.cargo/bin:${PATH}"
-RUN pip install --no-cache-dir maturin
+
+# Pinned like the toolchain and like torch: an installer that changes under you
+# between two rebuilds is the same class of surprise as a compiler that does.
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
+# The cache and `site-packages` are different filesystems, so a hardlink cannot
+# be made; saying so is what stops uv from warning about it on every layer.
+ENV UV_LINK_MODE=copy UV_SYSTEM_PYTHON=1
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install maturin
 
 WORKDIR /src
 # The manifests first, so that changing a line of Rust does not re-download the
@@ -42,8 +56,12 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # ── A worker with no gradients in it ─────────────────────────────────────────
 FROM python:3.13-slim AS worker
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
+ENV UV_LINK_MODE=copy UV_SYSTEM_PYTHON=1
+
 COPY --from=wheel /wheels/*.whl /wheels/
-RUN pip install --no-cache-dir /wheels/*.whl cloudpickle && rm -rf /wheels
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install /wheels/*.whl cloudpickle && rm -rf /wheels
 
 # Where a `project` worker looks for the code it is expected to have. Empty
 # unless somebody mounts something on it, which is what the version tests do.
@@ -69,4 +87,9 @@ FROM worker AS worker-gpu
 # `_PyThreadState_Attach: non-NULL old thread state`, the moment a node runs
 # `backward()` and another `forward` follows it. Whatever that is, it is not
 # something to discover in a rebuild six months from now.
-RUN pip install --no-cache-dir torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+#
+# `--index-url` and not `--extra-index-url`: the pytorch index carries torch's
+# dependencies as well, and asking two indexes for the same name is how you get
+# the CPU build of it by accident.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128

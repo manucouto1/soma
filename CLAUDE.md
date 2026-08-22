@@ -77,9 +77,14 @@ something — happens **inside it**, holding whatever client that takes.
 ## Commands
 
 ```bash
-conda activate mos                  # PyO3 does not compile outside this env
-cargo test --workspace
-cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check
+# The Rust side needs one thing from Python: an interpreter PyO3 supports, and
+# the system one is ahead of it. `.python-version` says 3.13 and `uv run` puts it
+# on the PATH — there is no environment to activate and none to keep.
+uv run cargo test --workspace
+uv run cargo clippy --workspace -- -D warnings && uv run cargo fmt --all -- --check
+
+# The Python side still needs `mos`, because that is where torch is.
+conda activate mos
 cd python && maturin develop && python -m pytest tests/ -q
 
 # A real cluster: containers, one per host. Opt-in; the images build themselves
