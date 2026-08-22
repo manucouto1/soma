@@ -85,7 +85,7 @@ cd python && maturin develop && python -m pytest tests/ -q
 # the first time. `SOMA_CLUSTER=build` forces a rebuild, which is what you want
 # after touching `python/src` or the Dockerfile. Both live in `tests/cluster/`.
 SOMA_CLUSTER=1 python -m pytest tests/cluster -q
-docker compose -f python/tests/cluster/docker/compose.yaml --profile gpu build worker-gpu
+docker compose -f python/tests/cluster/docker/compose.yaml --profile gpu build worker-gpu worker-gpu-b
 ```
 
 `maturin develop` is not optional before `pytest`: the Python tests run against
@@ -156,6 +156,24 @@ the original's `TrialExecutor` has one implementor and it is a closure wrapper.
 So nothing is asked of a `Trainer`: a pruner answers and the loop stops calling.
 And `ask` is a function of the **index**, not of what was asked before, so a
 machine that claimed trial 7 from a shared folder derives it without replaying
-six. Seventeen use cases closed.
+six.
+
+**CU18, first half**: those pieces now search **together**. `take`, `report`,
+`finished` and `curves` are functions over a `Store` — Python, like `gather`,
+because touching the folder is not pure — and handing out work costs **no
+message**: a trial is a number, `ask` is a function of it, and `claim` settles
+who gets it, so the state *is* the queue. Two samplers were added that cover the
+space **for every prefix** rather than in expectation, which is what stops two
+machines proposing neighbours: `Halton` (arithmetic, no ceiling) and `Sobol`
+(Joe & Kuo's table, 32 knobs). The record keeps the configuration as text beside
+the score, so a sampler's whole history is **one scan and zero fetches**; only a
+pruner's curves cost a fetch each. What is still open is the guided sampler
+spread out — parallel TPE needs *constant liar* and has none.
+
+Eighteen use cases opened, seventeen and a half closed. And the first level-3
+test with a real pipeline under it: `tests/cluster/test_searching.py` searches
+hyper-parameters over real SMS messages with the graph cut across containers —
+tokenising where there is no torch at all — **and** the study cut across
+machines. Two distributions at once, and they are not the same one.
 
 See the distribution report for the full order.

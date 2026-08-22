@@ -27,10 +27,12 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY core/Cargo.toml core/
 COPY store/Cargo.toml store/
+COPY study/Cargo.toml study/
 COPY transport/Cargo.toml transport/
 COPY python/Cargo.toml python/pyproject.toml python/
 COPY core core
 COPY store store
+COPY study study
 COPY transport transport
 COPY python python
 RUN --mount=type=cache,target=/root/.cargo/registry \

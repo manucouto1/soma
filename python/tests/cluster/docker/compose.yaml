@@ -49,12 +49,25 @@ services:
   #     docker compose --profile gpu up -d worker-gpu
   worker-gpu:
     profiles: ["gpu"]
-    build:
+    build: &torch
       context: ../../../..
       dockerfile: python/tests/cluster/docker/worker.Dockerfile
       target: worker-gpu
     command: *keeping
     ports: ["127.0.0.1:7004:7000"]
+    devices: ["nvidia.com/gpu=all"]
+    volumes: ["store:/store"]
+
+  # A second one, from the same image, because **a worker holds one catalog**.
+  # Two clients with different graphs on one worker is the second of them being
+  # told to reconnect, and that is not a limitation to route around: a machine
+  # searching a space needs a worker of its own, exactly as it would on Slurm.
+  # It costs a container, not an image.
+  worker-gpu-b:
+    profiles: ["gpu"]
+    build: *torch
+    command: *keeping
+    ports: ["127.0.0.1:7006:7000"]
     devices: ["nvidia.com/gpu=all"]
     volumes: ["store:/store"]
 

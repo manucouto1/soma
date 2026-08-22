@@ -43,12 +43,13 @@ PORTS = {
     "old": 7003,
     "gpu": 7004,
     "lucky": 7005,
+    "gpu-b": 7006,
 }
 
 #: The ones that come up by default. `worker-gpu` is behind a compose profile:
 #: its image carries torch and CUDA and weighs eleven gigabytes, and nothing but
 #: the two device tests needs it.
-CPU = {name: port for name, port in PORTS.items() if name != "gpu"}
+CPU = {name: port for name, port in PORTS.items() if not name.startswith("gpu")}
 
 #: How long a container gets to start answering before the test gives up. The
 #: images are already built by then: this is a process starting, not a download.
@@ -132,6 +133,21 @@ def gpu(cluster):
     if up.returncode != 0 or not _ready("worker-gpu", PORTS["gpu"]):
         pytest.skip("there is no `worker-gpu`: build it with `--profile gpu`")
     return "gpu"
+
+
+@pytest.fixture(scope="session")
+def two_with_torch(gpu):
+    """Both of the workers that have torch, up.
+
+    Two and not one because **a worker holds one catalog**: two clients running
+    different graphs against the same one is the second being told to reconnect.
+    A machine searching a space needs a worker of its own — which is what it
+    would have on Slurm anyway.
+    """
+    up = compose("--profile", "gpu", "up", "-d", "worker-gpu-b", check=False)
+    if up.returncode != 0 or not _ready("worker-gpu-b", PORTS["gpu-b"]):
+        pytest.skip("there is no `worker-gpu-b`: build it with `--profile gpu`")
+    return ("gpu", "gpu-b")
 
 
 @pytest.fixture(scope="session")

@@ -2915,3 +2915,188 @@ what was tried and what was pruned, which wants the store and not this crate ·
 **conditional dimensions**, a knob that only exists when another took a
 particular value, which needs a consumer before it needs a design · and **the
 loop itself**, which is a `for` and will stay one.
+
+## CU18 — A study handed out of a folder
+
+```python
+# the same script on every machine; Slurm gives out `me`
+for trial in range(100):
+    point = sampler.ask(space, trial, finished(store, space, study="spam"))
+    if not take(store, point, study="spam", trial=trial, me=me):
+        continue                                   # somebody else has that one
+    ...
+    report(store, point, drawn, study="spam", trial=trial, me=me, state="done")
+```
+
+CU17 left the three families and nothing that joined them: `Sampler` said where
+to look, `Pruner` when to stop, and there was no way for two machines to search
+one space together. This is that, and it is the **first half**: the guided
+sampler spread over machines is still open, for a reason given below. Opened on
+22 August 2026.
+
+### The answer was already in the building
+
+`soma-coordinator` in the original is 959 lines and does not contain the word
+`trial` once: it hands out **plans**, not trials. The study never distributed,
+and the reason is mechanical — `StudyIo::save()` writes the whole `Study` as one
+JSON. One file, one writer. Two machines calling `save()` overwrite each other,
+which is why the trait has exactly one implementor.
+
+The `EventBus` is not the answer either. It is a `tokio::broadcast` inside one
+process, and its own docstring says the subscriber path is *"lossy under lag.
+Display / relay only"*. Three different things get called a bus and they have
+opposite semantics:
+
+| | losing a message means |
+|---|---|
+| observation fan-out | nothing |
+| a work queue | a trial never runs |
+| a durable log | both, plus a service to operate |
+
+> **What cannot be lost goes in the store. What only deserves looking at goes on
+> the bus. The store is the truth; the bus is a view of it.**
+
+And the work queue was already here, and is better than a queue: `claim` is an
+atomic `link`. No server, and **no message can be lost because there are no
+messages** — the state *is* the queue, exactly-once by construction. The one
+thing a real queue would add is a visibility timeout.
+
+The deployment argument runs the opposite way to the expected one, too. On
+Slurm/HPC/NFS the directory wins outright because there is no service to deploy;
+on a platform there is no directory but there is S3 with conditional writes
+(`If-None-Match`), which **is** `claim`. The directory is not a limitation to
+outgrow, it is an implementation of `Store`.
+
+### Handing out work costs nothing because nothing is handed out
+
+A trial is a number. `ask` is a function of that number and not of what was asked
+before, so a machine that claims trial 7 works out where to look on its own
+without replaying six and without asking anybody. That is the property CU17 built
+the samplers around, and this is what it was for.
+
+`Sampler.tpe` is the honest exception, and it is why CU18 is only half done: two
+machines asking at the same moment see the same history and propose neighbouring
+points. That is the known cost of parallel Bayesian optimisation — *constant
+liar*, penalising trials in flight — and there is none of it here yet.
+
+### What a trial is, on disk
+
+```text
+<study>/trial/<n>/<attempt>
+```
+
+In the **record**, which a scan already carries: `state`, `point`, `score`,
+`who`. In the **blob**, for whoever wants the detail: the whole curve and why it
+stopped.
+
+The split is not tidiness, it is the cost model, and the tests measure it with a
+store that counts:
+
+| reader | what it does | cost |
+|---|---|---|
+| `finished`, for a sampler | one scan; point and score are both in the record | **zero fetches** |
+| `curves`, for a pruner | the same scan, then the blobs | one fetch per trial |
+
+**One record rewritten as it goes, and not five events.** The original's
+`TrialStarted`/`TrialMetric`/`TrialPruned`/`TrialCompleted`/`TrialFailed` are the
+*diff* of this record. From a state the events derive; from a lossy stream the
+state does not.
+
+The `<attempt>` segment has no reader yet and is paid for anyway, with `0`.
+`claim` is a link, so a trial whose machine died stays claimed for ever and
+rescuing it with a plain write would be a race; a retry is a claim of the next
+attempt and whoever reads keeps the highest. It is paid now because **the name is
+the one part of the design that cannot be refactored later**: changing it means
+migrating directories belonging to people with studies running.
+
+### `Space::read`, and why it is a method of the space
+
+A record keeps the configuration as text beside the score, which is what makes
+the sampler's history one scan. Reading it back needs the knobs in front of it:
+`batch=64` on its own does not say whether 64 is a whole number or an option
+spelt `"64"`. Nothing in the text can settle that, so reading is not something a
+`Point` can do for itself.
+
+And what could not be read back is refused **where it was typed** — a knob name
+or a choice option carrying a `,` or an `=`. Caught at the read it would be too
+late: by then which knob was meant is gone.
+
+### A pruned trial is not a configuration that scored badly
+
+Its score is real and it is **not** comparable with a finished one: it was
+measured after fewer epochs. A sampler handed it as an ordinary result learns
+that a region is bad when all that happened is that it was cut short. So
+`finished` returns what ran to the end, and pruned trials stay visible in
+`trials` where a notebook can see them.
+
+### The end-to-end case, and the two things it found
+
+`tests/cluster/test_searching.py` is the first test of level 3 with a real
+pipeline under it — real SMS messages out of the SMS Spam Collection, a graph of
+preprocessing → embedding → classifier cut across containers, and the study
+itself cut across machines.
+Two distributions at once, and they are not the same distribution:
+
+- **the graph** by `.at()` — tokenising on a worker with 193 MB and *no torch in
+  it at all*, the embedding on the one that has it, trained over there by a
+  `Split` while the classifier stays with the loop;
+- **the study** by `claim` — processes over one directory, each deriving its own
+  configuration from the index and pruning against curves the others drew.
+
+Two things came out of writing it that no unit test was ever going to say:
+
+**A worker holds one catalog.** Two machines running different graphs against the
+same worker is the second of them being told to reconnect. That is not a bug to
+route around — a machine searching a space needs a worker of its own, exactly as
+it would on Slurm. It costs a container, not an image.
+
+**A cut graph cannot be scored on held-out data from here.** `embed` is trained
+where it runs, so `export` refuses to hand back a copy that never learnt
+anything — the right refusal. So the number a study of a cut graph compares is
+the one the loop produces. The day a held-out score is wanted, what has to travel
+is the **scoring**, the same way the trainer travelled in CU14.
+
+And one that was simply broken and nobody had noticed: the worker image never
+copied `study/`, so the cluster images had not been rebuildable since CU17.
+
+### Questionnaire
+
+**Handing out the work** (`test_study.py`, `tests/cluster/test_searching.py`)
+- [x] a trial somebody claimed is not claimable twice, and the loser goes on
+- [x] four processes over one directory run every trial exactly once
+- [x] and what they searched is what one machine alone would have searched
+- [x] two studies sharing a directory are two studies
+- [x] whatever else is in the store is not a trial
+
+**What a scan costs**
+- [x] the history a sampler wants comes back with **zero** fetches
+- [x] the curves a pruner wants cost one fetch per trial
+- [x] a machine that ran none of them rebuilds the whole history
+
+**Reading a point back** (`study/tests/unit/space.rs`)
+- [x] every point the space can produce survives being written down
+- [x] the space is what says whether `64` is a number or a word
+- [x] a record written against another space is refused and not half read
+- [x] a name or an option with a `,` or an `=` is refused where it was typed
+
+**The states, which are not the same state**
+- [x] a pruned trial is not a configuration that scored badly
+- [x] the curve is watchable while it is still being drawn
+- [x] a retry is the next attempt and whoever reads keeps the higher
+
+**The real case** (`tests/cluster/test_searching.py`)
+- [x] something it tried actually learnt to tell spam from ham
+- [x] the configurations are not all the same one
+- [x] what was given up on stopped early, what was not ran to the end
+- [x] the preprocessing ran where there is no torch at all
+- [x] the embedding was trained on the machine that has it
+
+### What is NOT in it yet
+
+**TPE spread over machines**, which needs *constant liar* or a penalty for
+trials in flight — and the record already makes that cheap, because `state =
+running` is visible in the same scan that gives `finished`, so what other
+machines are looking at costs nothing to know · **a bus**, which earns its place
+in observability and not in coordination, and would turn every crate it touches
+async for no subscriber · **a held-out score for a cut graph**, which is scoring
+that travels · and **retries**, which have a name on disk and no reader.
