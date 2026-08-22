@@ -4,6 +4,7 @@
 //! order, a point writes itself down in this order, and both have to give the
 //! same answer on two machines that never spoke.
 
+use crate::{Point, Setting};
 use std::fmt;
 
 /// One knob and what it may be.
@@ -118,8 +119,72 @@ impl Space {
         if !dimension.sound() {
             return Err(SpaceError::Empty(name, dimension));
         }
+        // A point writes itself down as `name=value,name=value`, and a study
+        // reads it back off a shared folder. A name or an option carrying one of
+        // those two characters makes that text ambiguous, and the day it is read
+        // wrong there is nothing left to tell which knob was meant.
+        if let Some(text) = punctuated(&name, &dimension) {
+            return Err(SpaceError::Unreadable(name, text));
+        }
         self.dimensions.push((name, dimension));
         Ok(self)
+    }
+
+    /// The point that text names, read against these knobs.
+    ///
+    /// The other half of [`Point`]'s `Display`, and it needs the space in front
+    /// of it: `batch=64` on its own does not say whether 64 is a whole number or
+    /// an option of a [`Choice`](Dimension::Choice) that happens to be spelt
+    /// `"64"`. The knobs are what settles it.
+    ///
+    /// This is what a study's record costs: a trial's configuration is kept as
+    /// text next to its score, so **the whole history comes back in one scan of
+    /// the folder and not one fetch per trial**.
+    ///
+    /// Every knob of this space has to be there and nothing else may be: a
+    /// record written against another space is a different study, and saying so
+    /// beats quietly reading half of it.
+    ///
+    /// ```
+    /// use soma_next_study::{Dimension, Space};
+    ///
+    /// let space = Space::new()
+    ///     .with("lr", Dimension::Real { low: 1e-5, high: 1e-1, log: true })?
+    ///     .with("opt", Dimension::Choice(vec!["adam".into(), "sgd".into()]))?;
+    /// let point = space.read("lr=0.001,opt=adam")?;
+    ///
+    /// assert_eq!(point.to_string(), "lr=0.001,opt=adam");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn read(&self, said: &str) -> Result<Point, ReadError> {
+        let mut given: Vec<(&str, &str)> = Vec::new();
+        for piece in said.split(',').filter(|piece| !piece.trim().is_empty()) {
+            let (name, value) = piece
+                .split_once('=')
+                .ok_or_else(|| ReadError::Shapeless(piece.trim().to_string()))?;
+            given.push((name.trim(), value.trim()));
+        }
+
+        let mut settings = Vec::with_capacity(self.dimensions.len());
+        for (name, dimension) in &self.dimensions {
+            let value = given
+                .iter()
+                .find(|(said, _)| said == name)
+                .ok_or_else(|| ReadError::Missing(name.clone()))?
+                .1;
+            let setting = understand(dimension, value).ok_or_else(|| {
+                ReadError::NotIn(name.clone(), dimension.clone(), value.to_string())
+            })?;
+            settings.push((name.clone(), setting));
+        }
+
+        if let Some((stranger, _)) = given
+            .iter()
+            .find(|(name, _)| !self.dimensions.iter().any(|(taken, _)| taken == name))
+        {
+            return Err(ReadError::Stranger(stranger.to_string()));
+        }
+        Ok(Point::of(settings))
     }
 
     /// The knobs, in declaration order.
@@ -149,6 +214,42 @@ impl fmt::Display for Space {
     }
 }
 
+/// The name or the option that carries a `,` or an `=`, if either does.
+fn punctuated(name: &str, dimension: &Dimension) -> Option<String> {
+    let loud = |text: &str| text.contains(',') || text.contains('=');
+    if loud(name) {
+        return Some(name.to_string());
+    }
+    match dimension {
+        Dimension::Choice(options) => options.iter().find(|option| loud(option)).cloned(),
+        _ => None,
+    }
+}
+
+/// That text as a setting of that knob, or `None` when it is not one of its
+/// values — the wrong kind, an option nobody declared, or a number outside the
+/// range. Everything a sampler produces sits inside, so this only refuses what
+/// was written against a different space.
+fn understand(dimension: &Dimension, value: &str) -> Option<Setting> {
+    match dimension {
+        Dimension::Real { low, high, .. } => value
+            .parse::<f64>()
+            .ok()
+            .filter(|read| (low..=high).contains(&read))
+            .map(Setting::Real),
+        Dimension::Int { low, high } => value
+            .parse::<i64>()
+            .ok()
+            .filter(|read| (low..=high).contains(&read))
+            .map(Setting::Int),
+        Dimension::Choice(options) => options
+            .iter()
+            .find(|option| *option == value)
+            .cloned()
+            .map(Setting::Choice),
+    }
+}
+
 /// Why that is not a knob that can be searched.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpaceError {
@@ -156,6 +257,9 @@ pub enum SpaceError {
     Taken(String),
     /// A knob with nothing in it, or a range the wrong way round.
     Empty(String, Dimension),
+    /// A name, or one of a choice's options, carrying the punctuation a written
+    /// point is made of.
+    Unreadable(String, String),
 }
 
 impl fmt::Display for SpaceError {
@@ -172,8 +276,58 @@ impl fmt::Display for SpaceError {
                  bottom below its top, a choice needs an option, and a logarithmic range \
                  needs to start above zero"
             ),
+            Self::Unreadable(name, text) => write!(
+                f,
+                "`{text}`, of the knob `{name}`, has a `,` or an `=` in it, and a point \
+                 writes itself down as `name=value,name=value`: kept, it would be a trial \
+                 name that cannot be read back, and by then which knob was meant is gone"
+            ),
         }
     }
 }
 
 impl std::error::Error for SpaceError {}
+
+/// Why that text is not a point of this space.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadError {
+    /// A piece with no `=` in it.
+    Shapeless(String),
+    /// A knob of this space the text says nothing about.
+    Missing(String),
+    /// A name that is not a knob of this space.
+    Stranger(String),
+    /// A value that is not one this knob could take.
+    NotIn(String, Dimension, String),
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Shapeless(piece) => write!(
+                f,
+                "`{piece}` is not `name=value`, and a point is written down as those \
+                 separated by commas"
+            ),
+            Self::Missing(name) => write!(
+                f,
+                "this space has a knob `{name}` and the text sets nothing for it: a point \
+                 of a space sets every one of its knobs, so this was written against \
+                 another space"
+            ),
+            Self::Stranger(name) => write!(
+                f,
+                "`{name}` is not a knob of this space: the text was written against \
+                 another one, and reading the part that does match would be a point of \
+                 neither"
+            ),
+            Self::NotIn(name, dimension, value) => write!(
+                f,
+                "`{value}` is not a value of `{name}`, which is `{dimension}`: it is \
+                 either the wrong kind, an option nobody declared, or outside the range"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {}

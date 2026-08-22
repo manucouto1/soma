@@ -46,6 +46,19 @@ impl PySpace {
         self.plus(name, Dimension::Choice(options))
     }
 
+    /// The point that text names, read against these knobs.
+    ///
+    /// The other half of `str(point)`, and it needs the space in front of it:
+    /// `batch=64` on its own does not say whether 64 is a whole number or an
+    /// option spelt `"64"`.
+    ///
+    /// It is what makes a study's history come back in **one scan** of the
+    /// shared folder: a trial keeps its configuration as text next to its score,
+    /// so nothing has to be fetched to know where it looked.
+    fn read(&self, said: &str) -> PyResult<PyPoint> {
+        self.space.read(said).map(PyPoint::from).map_err(to_py_err)
+    }
+
     /// The knobs, in declaration order.
     fn names(&self) -> Vec<String> {
         self.space

@@ -1,6 +1,6 @@
 //! The knobs and what each one may be.
 
-use soma_next_study::{Dimension, Space, SpaceError};
+use soma_next_study::{Dimension, Goal, Grid, ReadError, Sampler, Space, SpaceError, Tpe};
 
 fn real(low: f64, high: f64) -> Dimension {
     Dimension::Real {
@@ -109,4 +109,137 @@ fn it_writes_itself_down_and_says_which_ranges_are_logarithmic() {
         space.to_string(),
         "lr=logreal(0.00001,0.1),opt=choice(adam|sgd)"
     );
+}
+
+// ── Reading a point back off a record ──
+
+fn searched() -> Space {
+    Space::new()
+        .with("lr", real(1e-5, 1e-1))
+        .unwrap()
+        .with("batch", Dimension::Int { low: 16, high: 128 })
+        .unwrap()
+        .with("opt", Dimension::Choice(vec!["adam".into(), "sgd".into()]))
+        .unwrap()
+}
+
+#[test]
+fn every_point_the_space_can_produce_survives_being_written_down() {
+    // The property the whole record rests on: a trial keeps its configuration as
+    // text next to its score, and the history comes back in one scan of the
+    // folder rather than one fetch per trial. If the round trip is not exact,
+    // that scan quietly reads points nobody ever tried.
+    let space = searched();
+    let how = Sampler::from(Grid { steps: 5 });
+
+    for trial in 0.. {
+        let Some(point) = how.ask(&space, trial, &[]) else {
+            break;
+        };
+        assert_eq!(space.read(&point.to_string()), Ok(point));
+    }
+}
+
+#[test]
+fn the_space_is_what_says_whether_sixty_four_is_a_number_or_a_word() {
+    // Why this is a method of `Space` and not of `Point`: the text on its own is
+    // ambiguous, and nothing in it can settle the ambiguity.
+    let counted = Space::new()
+        .with("batch", Dimension::Int { low: 16, high: 128 })
+        .unwrap();
+    let named = Space::new()
+        .with("batch", Dimension::Choice(vec!["64".into(), "128".into()]))
+        .unwrap();
+
+    assert_eq!(
+        counted.read("batch=64").unwrap().get("batch"),
+        Some(&soma_next_study::Setting::Int(64))
+    );
+    assert_eq!(
+        named.read("batch=64").unwrap().get("batch"),
+        Some(&soma_next_study::Setting::Choice("64".into()))
+    );
+}
+
+#[test]
+fn a_record_written_against_another_space_is_refused_and_not_half_read() {
+    let space = searched();
+
+    assert_eq!(
+        space.read("lr=0.001,opt=adam"),
+        Err(ReadError::Missing("batch".into()))
+    );
+    assert_eq!(
+        space.read("lr=0.001,batch=32,opt=adam,dropout=0.5"),
+        Err(ReadError::Stranger("dropout".into()))
+    );
+    assert_eq!(
+        space.read("lr=0.001,batch,opt=adam"),
+        Err(ReadError::Shapeless("batch".into()))
+    );
+}
+
+#[test]
+fn a_value_the_knob_could_never_take_is_not_one_of_its_values() {
+    let space = searched();
+
+    // The wrong kind, an option nobody declared, and outside the range.
+    assert!(matches!(
+        space.read("lr=fast,batch=32,opt=adam"),
+        Err(ReadError::NotIn(name, _, _)) if name == "lr"
+    ));
+    assert!(matches!(
+        space.read("lr=0.001,batch=32,opt=lion"),
+        Err(ReadError::NotIn(name, _, _)) if name == "opt"
+    ));
+    assert!(matches!(
+        space.read("lr=0.001,batch=9000,opt=adam"),
+        Err(ReadError::NotIn(name, _, _)) if name == "batch"
+    ));
+}
+
+#[test]
+fn what_could_not_be_read_back_is_refused_where_it_was_typed() {
+    // Not when the record is read — by then which knob was meant is gone. A
+    // point is `name=value,name=value`, so those two characters cannot appear
+    // inside either half.
+    let commad = Space::new().with("a,b", real(0.0, 1.0));
+    assert!(matches!(commad, Err(SpaceError::Unreadable(_, _))));
+
+    let equalled = Space::new().with("lr=x", real(0.0, 1.0));
+    assert!(matches!(equalled, Err(SpaceError::Unreadable(_, _))));
+
+    let inside = Space::new().with("opt", Dimension::Choice(vec!["adam".into(), "a,b".into()]));
+    assert!(matches!(inside, Err(SpaceError::Unreadable(name, text))
+        if name == "opt" && text == "a,b"));
+}
+
+#[test]
+fn it_is_what_hands_a_guided_sampler_a_history_it_never_saw_made() {
+    // What reading is for. The scan of a shared folder gives text and scores; a
+    // machine that ran none of those trials rebuilds `finished` from them and
+    // asks where to look next.
+    let space = searched();
+    let scanned = [
+        ("lr=0.01,batch=32,opt=adam", 0.9),
+        ("lr=0.02,batch=64,opt=adam", 0.8),
+        ("lr=0.09,batch=16,opt=sgd", 0.4),
+        ("lr=0.08,batch=128,opt=sgd", 0.3),
+    ];
+
+    let finished: Vec<_> = scanned
+        .iter()
+        .map(|(said, score)| (space.read(said).unwrap(), *score))
+        .collect();
+    let guided = Tpe {
+        goal: Goal::Maximize,
+        startup: 2,
+        candidates: 24,
+        quantile: 0.5,
+        seed: 3,
+    };
+
+    assert!(guided.ask(&space, 4, &finished).is_some());
+    // And it is guided by them: with nothing scanned it proposes elsewhere.
+    assert_ne!(guided.ask(&space, 4, &finished), guided.ask(&space, 4, &[]));
 }

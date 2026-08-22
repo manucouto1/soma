@@ -93,4 +93,4 @@ pub use point::{Point, Setting};
 pub use pruner::{Patience, Percentile, Pruner, Reason, Threshold, Verdict};
 pub use sampler::{Grid, Halton, KNOBS, Random, Sampler, Sobol, Tpe};
 pub use samples::{Samples, SamplesError};
-pub use space::{Dimension, Space, SpaceError};
+pub use space::{Dimension, ReadError, Space, SpaceError};

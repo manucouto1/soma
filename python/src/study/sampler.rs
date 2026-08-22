@@ -3,7 +3,7 @@
 use super::space::{PyPoint, PySpace};
 use super::{hashed, read};
 use pyo3::prelude::*;
-use soma_next_study::{Grid, Point, Random, Sampler, Tpe};
+use soma_next_study::{Grid, Halton, Point, Random, Sampler, Sobol, Tpe};
 
 /// `soma_next.study.Sampler` — where to look for the next configuration.
 #[pyclass(name = "Sampler", module = "soma_next._soma_next", frozen)]
@@ -27,6 +27,33 @@ impl PySampler {
     #[pyo3(signature = (*, seed = 0))]
     fn random(seed: u64) -> Self {
         Random { seed }.into()
+    }
+
+    /// Cover the space evenly instead of drawing from it evenly, one prime per
+    /// knob.
+    ///
+    /// A uniform draw is even *in expectation*: nothing stops the next two
+    /// trials from landing on top of each other, it is only unlikely. This is
+    /// even *for every prefix*, which is what a study handed out of a shared
+    /// folder wants — two machines taking different numbers do not collide, and
+    /// not because collision is improbable.
+    ///
+    /// Its cover thins once there are many knobs, and it has no ceiling.
+    #[staticmethod]
+    #[pyo3(signature = (*, seed = 0))]
+    fn halton(seed: u64) -> Self {
+        Halton { seed }.into()
+    }
+
+    /// The same, without the seam — and with a ceiling of 32 knobs.
+    ///
+    /// Every knob is read in base two and told apart by a table of direction
+    /// numbers (Joe and Kuo, 2008), so nothing thins out as the knobs grow. Past
+    /// what the table reaches, `ask` answers `None` from the very first trial.
+    #[staticmethod]
+    #[pyo3(signature = (*, seed = 0))]
+    fn sobol(seed: u64) -> Self {
+        Sobol { seed }.into()
     }
 
     /// Guided by what already worked: model the good trials, model the bad ones,
