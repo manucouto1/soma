@@ -1,10 +1,14 @@
 //! The family: what the enum adds over calling a scheme directly.
 
 mod grid;
+mod halton;
 mod random;
+mod sobol;
 mod tpe;
 
-use soma_next_study::{Dimension, Goal, Grid, Point, Random, Sampler, Setting, Space, Tpe};
+use soma_next_study::{
+    Dimension, Goal, Grid, Halton, Point, Random, Sampler, Setting, Sobol, Space, Tpe,
+};
 
 fn space() -> Space {
     Space::new()
@@ -39,6 +43,8 @@ fn one_of_each() -> Vec<Sampler> {
     vec![
         Grid { steps: 4 }.into(),
         Random { seed: 0 }.into(),
+        Halton { seed: 0 }.into(),
+        Sobol { seed: 0 }.into(),
         Tpe {
             goal: Goal::Minimize,
             startup: 4,
@@ -67,6 +73,18 @@ fn going_through_the_enum_asks_exactly_the_same_as_not_going_through_it() {
         how.ask(&space, 3, &history)
     );
 
+    let how = Halton { seed: 9 };
+    assert_eq!(
+        Sampler::from(how.clone()).ask(&space, 3, &history),
+        how.ask(&space, 3, &history)
+    );
+
+    let how = Sobol { seed: 9 };
+    assert_eq!(
+        Sampler::from(how.clone()).ask(&space, 3, &history),
+        how.ask(&space, 3, &history)
+    );
+
     let how = Tpe {
         goal: Goal::Minimize,
         startup: 4,
@@ -87,18 +105,25 @@ fn only_the_grid_runs_out_and_it_does_so_through_the_enum_too() {
 
     assert!(grid.ask(&space, 7, &[]).is_some());
     assert_eq!(grid.ask(&space, 8, &[]), None);
-    let endless = Sampler::from(Random { seed: 0 });
-    assert!(endless.ask(&space, 10_000, &[]).is_some());
+    for endless in [
+        Sampler::from(Random { seed: 0 }),
+        Sampler::from(Halton { seed: 0 }),
+        Sampler::from(Sobol { seed: 0 }),
+    ] {
+        assert!(endless.ask(&space, 10_000, &[]).is_some());
+    }
 }
 
 #[test]
-fn two_of_the_three_ignore_what_finished_and_that_is_why_there_are_three() {
+fn four_of_the_five_ignore_what_finished_and_that_is_why_there_are_five() {
     let space = space();
     let history = history();
 
     for how in [
         Sampler::from(Grid { steps: 4 }),
         Sampler::from(Random { seed: 0 }),
+        Sampler::from(Halton { seed: 0 }),
+        Sampler::from(Sobol { seed: 0 }),
     ] {
         assert_eq!(how.ask(&space, 2, &[]), how.ask(&space, 2, &history));
     }
@@ -124,6 +149,8 @@ fn nothing_to_search_is_nowhere_to_look() {
 fn it_writes_itself_down_for_the_record_of_a_run() {
     assert_eq!(Sampler::from(Grid { steps: 4 }).to_string(), "grid:4");
     assert_eq!(Sampler::from(Random { seed: 7 }).to_string(), "random:7");
+    assert_eq!(Sampler::from(Halton { seed: 7 }).to_string(), "halton:7");
+    assert_eq!(Sampler::from(Sobol { seed: 7 }).to_string(), "sobol:7");
     assert_eq!(
         Sampler::from(Tpe {
             goal: Goal::Minimize,
@@ -142,6 +169,8 @@ fn two_samplers_that_differ_are_written_down_differently() {
     let mut all = one_of_each();
     all.push(Grid { steps: 5 }.into());
     all.push(Random { seed: 1 }.into());
+    all.push(Halton { seed: 1 }.into());
+    all.push(Sobol { seed: 1 }.into());
     all.push(
         Tpe {
             goal: Goal::Maximize,

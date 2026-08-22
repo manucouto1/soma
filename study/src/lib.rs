@@ -35,6 +35,8 @@
 //! | [`Space`] | not a scheme: the named knobs and what each may be |
 //! | [`Grid`] | **the space's shape** — and it is the one that runs out |
 //! | [`Random`] | **nothing**, which over a space where few knobs matter beats a grid |
+//! | [`Halton`] | **nothing** either, but it covers every prefix instead of the whole |
+//! | [`Sobol`] | the same, without Halton's seam and with a table's ceiling |
 //! | [`Tpe`] | **what already happened**: imitate the good, avoid the bad |
 //! | [`Sampler`] | whichever of them, when that is decided by data |
 //! | [`Point`] | one configuration, which is also a trial's **name** |
@@ -42,6 +44,12 @@
 //! `ask` is a function of the **index**, not of what was asked before, so a
 //! machine that claimed trial 7 out of a shared folder derives the same point
 //! without replaying six. [`Tpe`] is the exception and says so.
+//!
+//! Three of them look at nothing and are still three schemes: [`Random`] is
+//! uniform in expectation, so two machines *can* draw neighbouring points and it
+//! is merely unlikely; the other two are uniform for **every prefix**, so there
+//! is no arrangement of the claimed indices that puts two trials on top of each
+//! other. That is what a study handed out of a folder wants.
 //!
 //! # Deciding a trial is not worth another epoch
 //!
@@ -83,6 +91,6 @@ pub use partition::{
 };
 pub use point::{Point, Setting};
 pub use pruner::{Patience, Percentile, Pruner, Reason, Threshold, Verdict};
-pub use sampler::{Grid, Random, Sampler, Tpe};
+pub use sampler::{Grid, Halton, KNOBS, Random, Sampler, Sobol, Tpe};
 pub use samples::{Samples, SamplesError};
 pub use space::{Dimension, Space, SpaceError};
