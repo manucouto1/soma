@@ -83,9 +83,9 @@ cd python && maturin develop && python -m pytest tests/ -q
 
 # A real cluster: containers, one per host. Opt-in; the images build themselves
 # the first time. `SOMA_CLUSTER=build` forces a rebuild, which is what you want
-# after touching `python/src` or the Dockerfile.
+# after touching `python/src` or the Dockerfile. Both live in `tests/cluster/`.
 SOMA_CLUSTER=1 python -m pytest tests/cluster -q
-docker compose -f docker/compose.yaml --profile gpu build worker-gpu   # once, 11 GB
+docker compose -f python/tests/cluster/docker/compose.yaml --profile gpu build worker-gpu
 ```
 
 `maturin develop` is not optional before `pytest`: the Python tests run against

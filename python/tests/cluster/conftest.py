@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent
-COMPOSE = HERE.parents[2] / "docker" / "compose.yaml"
+COMPOSE = HERE / "docker" / "compose.yaml"
 
 # At import time and not in a fixture: the test module asks for `pipeline` while
 # it is being collected, which is before any fixture has run. The client imports

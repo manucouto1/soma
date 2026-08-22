@@ -3,6 +3,10 @@
 #
 #   SOMA_CLUSTER=1 python -m pytest tests/cluster -q
 #
+# It lives beside the tests it exists for, and nowhere else uses it. The build
+# context is still the repository, because the image is built from the source:
+# what is far away here is the root, not the fixtures.
+#
 # The client is pytest, **outside**: that is the real shape — whoever declares
 # the graph is not one of the workers.
 
@@ -12,25 +16,25 @@ services:
   # Two ordinary workers, sharing a store. Neither has a line of your code.
   worker-a:
     build: &worker
-      context: ..
-      dockerfile: docker/worker.Dockerfile
+      context: ../../../..
+      dockerfile: python/tests/cluster/docker/worker.Dockerfile
       target: worker
     command: &keeping ["python", "-m", "soma_next.worker", "--listen", "0.0.0.0:7000", "--store", "/store"]
     ports: ["127.0.0.1:7001:7000"]
-    volumes: ["store:/store", "../python/tests/cluster/clone:/clone:ro"]
+    volumes: ["store:/store", "../clone:/clone:ro"]
 
   worker-b:
     build: *worker
     command: *keeping
     ports: ["127.0.0.1:7002:7000"]
-    volumes: ["store:/store", "../python/tests/cluster/clone:/clone:ro"]
+    volumes: ["store:/store", "../clone:/clone:ro"]
 
   # The same worker with the code at **another version**. It stops rather than
   # run something that is not what the graph was written against.
   worker-old:
     build: *worker
     ports: ["127.0.0.1:7003:7000"]
-    volumes: ["../python/tests/cluster/clone_old:/clone:ro"]
+    volumes: ["../clone_old:/clone:ro"]
 
   # And the same one told to take its chances, which is the other half of the
   # knob: it runs its own version and says so.
@@ -38,7 +42,7 @@ services:
     build: *worker
     command: ["python", "-m", "soma_next.worker", "--listen", "0.0.0.0:7000", "--lucky"]
     ports: ["127.0.0.1:7005:7000"]
-    volumes: ["../python/tests/cluster/clone_old:/clone:ro"]
+    volumes: ["../clone_old:/clone:ro"]
 
   # And one with the GPU, which is what makes the cluster heterogeneous.
   # Eleven gigabytes of torch and CUDA, so it is **not** part of a plain `up`:
@@ -46,8 +50,8 @@ services:
   worker-gpu:
     profiles: ["gpu"]
     build:
-      context: ..
-      dockerfile: docker/worker.Dockerfile
+      context: ../../../..
+      dockerfile: python/tests/cluster/docker/worker.Dockerfile
       target: worker-gpu
     command: *keeping
     ports: ["127.0.0.1:7004:7000"]

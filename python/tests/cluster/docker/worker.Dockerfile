@@ -5,8 +5,8 @@
 # source tree and no `PYTHONPATH` of yours executes your nodes because they
 # **travelled**, and refuses to guess when they did not.
 #
-#   docker build -f docker/worker.Dockerfile --target worker .
-#   docker build -f docker/worker.Dockerfile --target worker-gpu .
+#   docker build -f python/tests/cluster/docker/worker.Dockerfile --target worker .
+#   docker build -f python/tests/cluster/docker/worker.Dockerfile --target worker-gpu .
 #
 # Two stages beyond the build so that the CPU workers stay at ~150 MB: torch is
 # 2.5 GB and only the one with a GPU needs it.

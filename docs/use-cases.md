@@ -1420,9 +1420,9 @@ interpreter and these installed packages, so "the worker cannot import your
 module" is a trick with `sys.path` and "another version of the code" is the file
 rewritten underneath.
 
-`docker/compose.yaml` and `python/tests/cluster/` are the same thing without the
-tricks: four containers, each with **the wheel and nothing else**, and the client
-outside. What only becomes provable there:
+`python/tests/cluster/` is the same thing without the tricks: four containers
+declared in its own `docker/compose.yaml`, each with **the wheel and nothing
+else**, and the client outside. What only becomes provable there:
 
 | | as subprocesses | as containers |
 |---|---|---|
