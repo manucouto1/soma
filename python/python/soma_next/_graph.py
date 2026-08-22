@@ -25,6 +25,40 @@ class Graph(_RustGraph):
     _slice_of = None
     """The graph this one is a piece of, for a graph run in pieces."""
 
+    def figure(self):
+        """The graph drawn, as a `plotly.graph_objects.Figure`.
+
+        Nothing is executed to draw it: everything on the figure was declared.
+        Needs the `viz` extra; without it the error says so.
+        """
+        from soma_next import _figure
+
+        return _figure.figure(self)
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        """What a notebook shows for `g` on its own: the figure.
+
+        The *mimebundle* and not `_repr_html_`, because that is how a plotly
+        figure actually reaches a cell — a notebook sanitises the `<script>` a
+        hand-written HTML repr would need, which is the same wall the original
+        soma hit and answered by writing its own SVG renderer.
+
+        `None` when there is no plotly, when the graph is too big to read, and
+        when plotly itself answers with nothing — which is what it does outside a
+        notebook, where no renderer is configured. In all three the cell falls
+        back to `__repr__`. Asking for `figure()` by hand still draws whatever
+        you asked for: the guard is against a surprise, not against you.
+        """
+        from soma_next import _figure
+
+        if len(self) > _figure.TOO_MANY:
+            return None
+        try:
+            drawn = self.figure()
+        except RuntimeError:
+            return None
+        return drawn._repr_mimebundle_(include=include, exclude=exclude) or None
+
     def forward(self, input=None, *, workers=None, store=None):
         """Executes the whole graph and returns what it produced.
 

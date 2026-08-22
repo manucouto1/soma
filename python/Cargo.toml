@@ -9,8 +9,12 @@ name = "_soma_next"
 crate-type = ["cdylib"]
 
 [dependencies]
-soma-next-core.workspace = true
+soma-next-core = { workspace = true, features = ["serde"] }
 soma-next-transport = { path = "../transport" }
 soma-next-store = { workspace = true }
 soma-next-study = { path = "../study" }
+# The plan travels to Python as data so that whoever draws it does not have
+# to parse a `Debug`. JSON and not MessagePack: the reader is `json.loads`,
+# which is stdlib, and nobody has to install anything to look at a shape.
+serde_json = "1"
 pyo3 = { version = "0.24", features = ["extension-module"] }

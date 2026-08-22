@@ -205,6 +205,21 @@ impl PyGraph {
         })
     }
 
+    /// Which nodes map over the items of their input, in declaration order.
+    ///
+    /// A list and not a dict, unlike `frozen()` and `cached()`: mapping carries
+    /// nothing beside it — there is no state and no salt to answer with. And
+    /// `mapped_nodes` rather than `mapped`, because that name is already the
+    /// setter and a class cannot have both.
+    fn mapped_nodes(&self) -> Vec<String> {
+        self.graph
+            .nodes()
+            .iter()
+            .filter(|id| self.memory.is_mapped(id))
+            .map(NodeId::to_string)
+            .collect()
+    }
+
     /// Which host each node sent away runs on, in declaration order.
     fn hosts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let out = PyDict::new(py);
@@ -300,6 +315,21 @@ impl PyGraph {
     fn plan(&self) -> PyResult<String> {
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
         Ok(format!("{:?}", distribute(&plan, &self.placement)))
+    }
+
+    /// The same shape, as **data**: `Plan`'s own serde form, as JSON text.
+    ///
+    /// Two methods and not one because they answer to different readers.
+    /// `plan()` is for a person and for the tests that already compare its text;
+    /// this one is for whoever draws it, and parsing a `Debug` to find out what
+    /// runs beside what is how a renderer starts lying. JSON so that the reader
+    /// is `json.loads` and nobody installs anything to look at a shape.
+    ///
+    /// The core does not learn to draw. It is asked for the fact.
+    fn plan_json(&self) -> PyResult<String> {
+        let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
+        serde_json::to_string(&distribute(&plan, &self.placement))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Executes the whole graph and returns what it produced.

@@ -104,3 +104,29 @@ def test_parallel_branches_that_rejoin(g):
     order = g.topological_sort()
     assert order[0] == "input"
     assert order[-1] == "join"
+
+
+def test_mapped_is_readable_back(g):
+    g.node("one", Identity())
+    g.node("two", Identity())
+    g.edge("one", "two")
+    assert g.mapped_nodes() == []
+
+    g.mapped("two")
+    assert g.mapped_nodes() == ["two"]
+
+
+def test_the_plan_travels_as_data_and_as_text(g):
+    import json
+
+    g.node("one", Identity())
+    g.node("two", Identity())
+    g.edge("one", "two")
+
+    assert g.plan().startswith("Sequence")
+    assert json.loads(g.plan_json()) == {
+        "Sequence": [
+            {"Execute": {"node": "one", "from": []}},
+            {"Execute": {"node": "two", "from": ["one"]}},
+        ]
+    }

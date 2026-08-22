@@ -11,8 +11,13 @@ dynamic = ["version"]
 # `cloudpickle` is only needed for the generic worker — the one that starts empty
 # and receives the nodes over the wire. A local graph, or a worker that already
 # knows its catalog, never touch it.
+#
+# `plotly` is only needed to draw. A graph declares, executes and trains without
+# it; `g.figure()` says what to install, and a notebook falls back to the text
+# `repr` rather than failing.
 [project.optional-dependencies]
 remote = ["cloudpickle>=3"]
+viz = ["plotly>=5"]
 
 [tool.maturin]
 module-name = "soma_next._soma_next"
