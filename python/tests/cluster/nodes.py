@@ -146,17 +146,27 @@ class Trainable(Node):
         return list(self.lin.parameters())
 
 
-class SplitPart(Node):
-    """The far half of a **split learning** cut, which is the answer to the trap
-    above rather than a way around it.
+class ByHand(Node):
+    """**The control, and nobody should ever write this.** [`Slab`] is the API.
+
+    Split learning done manually: one node that is told which half of the pass it
+    is in and branches on it, keeping its own activation and driving its own
+    optimizer. Every line of it is work the framework is supposed to do, and it
+    is here for exactly one reason — so that
+    `test_the_trainer_writes_that_same_loop` can put it beside a `Trainer` over a
+    plain `Slab` and show the two produce **the same losses, step for step**.
+
+    That comparison is the whole point: a framework that cannot be checked
+    against the thing it replaces is asking to be trusted. So this is what it is
+    checked against, and what it says about the node contract is worth reading —
 
     Two messages and one node, because a node is one contract: forward keeps its
     activation alive **here**, where its autograd graph is; backward takes the
     gradient of the seam — a tensor like any other — and carries on with the
-    chain rule from there, with an optimizer of its own.
+    chain rule from there. Nothing about the weights ever travels.
 
-    Nothing about the weights ever travels. What goes out is activations, what
-    comes back is `dL/da`, and each side updates what it holds.
+    — but a user writes `Slab` and never learns any of it happened. In torch
+    nobody branches on forward versus backward, and nobody does here either.
     """
 
     def __init__(self, wide=8, tall=6, lr=0.1):
@@ -207,7 +217,14 @@ class Head(Node):
 class Slab(Node):
     """A layer, and nothing else: no optimizer, no state between calls, no idea
     anybody is going to train it. The same class whether it runs here or there,
-    and the same one a `Trainer` hands to a `Split`."""
+    and the same one a `Trainer` hands to a `Split`.
+
+    **This is what split learning looks like to a user**, and the contrast with
+    [`ByHand`] is the point: no branch on which half of the pass this is, no
+    activation held by hand, no optimizer of its own. It is a layer. That the two
+    come out equal is what `test_the_trainer_writes_that_same_loop` proves, and
+    `spam.Embed` is the same shape doing real work.
+    """
 
     def __init__(self, wide=8, tall=6):
         import torch

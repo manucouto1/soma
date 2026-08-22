@@ -1461,7 +1461,7 @@ that is [**split learning**](https://arxiv.org/abs/1812.00564), and it works
 today without a line of framework:
 
 ```python
-class SplitPart(Node):
+class ByHand(Node):                        # ← and CU14 made this the framework's job
     def forward(self, msg, ctx):
         if msg["kind"] == "forward":
             self.held = self.lin(tensor(msg["value"])).relu()   # the graph stays HERE
@@ -1471,12 +1471,21 @@ class SplitPart(Node):
         self.opt.step()
 ```
 
+**Nobody writes this any more, and nobody should.** A node being told which half
+of the pass it is in and branching on it is the framework handing the user its
+own work — in torch nobody does that, and there is no reason to here. CU14 took
+it over: what a user writes is a plain layer, `Slab`, and `Split(SGD, lr=0.1)`
+says it trains where it runs. `ByHand` survives in the tests as the **control**,
+because the strongest thing a framework can show is the loop it replaced,
+running beside it, producing the same losses step for step.
+
 Three things that were already there make it fall out: a worker **keeps its
 catalog**, so the node object survives between calls and its activation stays
 alive on the far side; a node is **one contract**, so it dispatches on its input
 instead of needing a kind of its own; and a gradient is a tensor like any other,
-so it crosses as data. There is a test that trains the far half over a real
-container and a control that shows it is not the near half doing all the work.
+so it crosses as data. Those three are why CU14 could take it over without a new
+variant anywhere — the mechanism was already right, it was the **user** who was
+being asked to drive it.
 
 What it is not, yet: it takes two round trips the caller drives, `self.held` is
 hidden state nobody checks the alternation of, activations cross as lists of

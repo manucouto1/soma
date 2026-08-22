@@ -246,12 +246,16 @@ def test_training_a_node_on_another_machine_stops_instead_of_half_learning(gpu, 
 
 
 def test_split_learning_trains_the_far_half_over_the_wire(gpu, sends_the_code):
-    # And the way it **is** done: the far side keeps its activation alive, gets
-    # `dL/da` back as a tensor like any other, and carries on with the chain rule
-    # under its own optimizer. Nothing about the weights travels.
+    # Split learning **by hand**, which is what the framework has to be equal to
+    # and not what anybody should write: the far side keeps its activation alive,
+    # gets `dL/da` back as a tensor like any other, and carries on with the chain
+    # rule under its own optimizer. Nothing about the weights travels.
+    #
+    # What a user writes is the next test down, where the same thing is a `Slab`
+    # that does not know a backward pass exists.
     torch = pytest.importorskip("torch")
 
-    graph = Graph.somatize(nodes.SplitPart().at("gpu"))
+    graph = Graph.somatize(nodes.ByHand().at("gpu"))
     workers = {"gpu": sends_the_code("gpu")}
     torch.manual_seed(0)
     head = torch.nn.Linear(6, 3)
@@ -289,7 +293,7 @@ def test_the_trainer_writes_that_same_loop(gpu, sends_the_code):
 
     def by_hand():
         torch.manual_seed(0)
-        far = nodes.SplitPart(8, 6, lr=0.1)
+        far = nodes.ByHand(8, 6, lr=0.1)
         torch.manual_seed(1)
         head = torch.nn.Linear(6, 3)
         graph = Graph.somatize(far.named("far").at("gpu"))
