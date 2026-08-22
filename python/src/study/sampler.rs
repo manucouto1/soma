@@ -85,23 +85,24 @@ impl PySampler {
     /// left — which is a grid saying it is done, and how a `for` stops without
     /// being told a number.
     ///
-    /// `finished` is `(point, score)` for the trials already scored. Two of the
-    /// three schemes ignore it, and that is the point of having three.
-    #[pyo3(signature = (space, trial, finished = None))]
+    /// `seen` is `(point, score)` for the places somebody has already been.
+    /// **A score of `None` means the trial is still running** — another machine
+    /// is trying it and nobody knows yet how it will do, which is what
+    /// `in_flight` gives back. Four of the five schemes ignore the whole
+    /// argument, and that is the point of having five.
+    #[pyo3(signature = (space, trial, seen = None))]
     fn ask(
         &self,
         space: &PySpace,
         trial: usize,
-        finished: Option<Vec<(PyRef<'_, PyPoint>, f64)>>,
+        seen: Option<Vec<(PyRef<'_, PyPoint>, Option<f64>)>>,
     ) -> Option<PyPoint> {
-        let finished: Vec<(Point, f64)> = finished
+        let seen: Vec<(Point, Option<f64>)> = seen
             .unwrap_or_default()
             .into_iter()
             .map(|(point, score)| (point.point.clone(), score))
             .collect();
-        self.how
-            .ask(&space.space, trial, &finished)
-            .map(PyPoint::from)
+        self.how.ask(&space.space, trial, &seen).map(PyPoint::from)
     }
 
     /// How many combinations there are, for the one scheme that has an answer —

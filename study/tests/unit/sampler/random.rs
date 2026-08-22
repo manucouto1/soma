@@ -88,7 +88,7 @@ fn a_logarithmic_knob_spreads_over_the_decades_and_not_over_the_line() {
 fn it_never_runs_out_and_never_looks_at_the_finished_trials() {
     let how = Random { seed: 1 };
     let space = space();
-    let finished = vec![(how.ask(&space, 0, &[]).unwrap(), 0.5)];
+    let finished = vec![(how.ask(&space, 0, &[]).unwrap(), Some(0.5))];
 
     assert!(how.ask(&space, 10_000, &[]).is_some());
     assert_eq!(how.ask(&space, 5, &[]), how.ask(&space, 5, &finished));

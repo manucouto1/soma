@@ -193,6 +193,104 @@ def trials(store, space, *, study):
     return seen
 
 
+STALE = 3600.0
+"""How far behind the rest of the study a record may fall before whoever wrote
+it is taken to have stopped. Generous on purpose: being early costs one point of
+the space, being late costs a little more of the same, and neither is worth a
+tight number."""
+
+
+def in_flight(store, space, *, study, stale=STALE):
+    """The trials another machine is holding, **each with no score**.
+
+    Hand these to a sampler beside `finished` and a guided one stops proposing
+    next to what somebody else is already trying::
+
+        point = sampler.ask(space, trial,
+                            finished(store, space, study=STUDY)
+                            + in_flight(store, space, study=STUDY))
+
+    That is *constant liar* (Ginsbourger, Le Riche and Carraro, 2010), and it is
+    what parallel Bayesian optimisation needs to stop being worse than random:
+    two machines asking at the same moment see the same history, propose almost
+    the same point, and spend two trials learning one thing.
+
+    # It is not actually a lie, and that was measured
+
+    The name comes from handing the sampler a made-up bad score. Doing that here
+    **backfires**, and not slightly: `Tpe` sizes the pile it imitates as a share
+    of everything it is handed, so one more point raises the quota and promotes a
+    trial out of the bad pile into the good one. If that trial sat in the same
+    region as the one in flight, the warning pulls the search **towards** it.
+    Counted over two hundred proposals: one landed on the occupied region
+    without the warning, thirty-nine with it.
+
+    So nothing is made up. A score that is `None` says *running*, `ask` puts it
+    in the pile to keep away from, and it does not vote on how big the other pile
+    is. The four schemes that look at nothing ignore the whole argument, so
+    passing this to any sampler is safe.
+
+    # What it costs
+
+    One scan and **no fetches**, the same as `finished`: the configuration is in
+    the record and `state = running` is right beside it. Knowing what the other
+    machines are looking at is free, and that is the shape the record was given.
+
+    # When somebody stopped writing
+
+    A record is rewritten on every `report` and the store stamps the time on
+    every write, so a `running` trial that has not moved is a machine that has
+    stopped. There is nobody to ask — this design has no server, no port and no
+    protocol — so liveness is not "does it answer" but "is it still writing".
+
+    `stale` is how far behind it may fall, and it is measured **against the
+    newest write in this study and not against this machine's clock**. Those are
+    two clocks on two machines sharing a folder, and on a cluster they disagree
+    by minutes as a matter of course; comparing writers with writers makes the
+    drift cancel.
+
+    Which leaves one honest hole: a study where **everything** stopped has no
+    newest write to be behind, so nothing looks stale. That costs nothing — if
+    nobody is writing, nobody is asking this either.
+    """
+    running, newest = [], 0
+    for record in _latest(store, study):
+        said = dict(record.meta)
+        newest = max(newest, record.when)
+        if said.get(STATE) == RUNNING and POINT in said:
+            running.append((record.when, space.read(said[POINT])))
+    return [(point, None) for when, point in running if newest - when <= stale]
+
+
+def abandoned(store, *, study, stale=STALE):
+    """Which trials have stopped moving, as `(trial, attempt)` pairs.
+
+    It **decides nothing**, which is the whole of its contract: reclaiming one
+    spends a machine's afternoon, and whether a trial that went quiet is dead, is
+    preempted or is merely on a very long epoch is not something a folder can
+    tell. So this reports and the loop chooses::
+
+        for trial, attempt in abandoned(store, study=STUDY):
+            take(store, point, study=STUDY, trial=trial, me=me, attempt=attempt + 1)
+
+    The same division as a pruner: it answers, and the caller acts. And the same
+    reason `claim` uses a link — reclaiming by writing over the old record would
+    be a race, taking the next attempt is not.
+
+    Being wrong is cheap in both directions: too eager is a trial run twice, and
+    a claim still cannot collide, so it is wasted work and not a wrong answer.
+    """
+    quiet, newest = [], 0
+    for record in _latest(store, study):
+        newest = max(newest, record.when)
+        if dict(record.meta).get(STATE) == RUNNING:
+            quiet.append((record.when, _numbered(record.name, study)))
+    return [
+        numbered for when, numbered in quiet if newest - when > stale
+    ]
+
+
+
 def _latest(store, study):
     """One record per trial — the highest attempt of each — in trial order."""
     best = {}

@@ -21,8 +21,10 @@ from soma_next.study import (
     RUNNING,
     Sampler,
     Space,
+    abandoned,
     curves,
     finished,
+    in_flight,
     report,
     take,
     trials,
@@ -200,6 +202,168 @@ def test_a_retry_is_the_next_attempt_and_whoever_reads_keeps_the_higher(store):
 
     assert [one["who"] for one in trials(store, knobs, study="s")] == ["the next one"]
     assert len(finished(store, knobs, study="s")) == 1
+
+
+# ── Lying about what is in flight, which is what parallel guiding needs ──
+
+
+class Said:
+    """A record, made by hand, so a test can say when it was written."""
+
+    def __init__(self, name, meta, when):
+        self.name, self.meta, self.when, self.digest = name, list(meta.items()), when, "x"
+
+
+class Folder:
+    """A store that holds exactly the records a test hands it."""
+
+    def __init__(self, *records):
+        self.records = list(records)
+
+    def bound(self):
+        return self.records
+
+
+def running_at(trial, point, when=0, who="other"):
+    return Said(f"s/trial/{trial}/0", {"state": RUNNING, "point": str(point), "who": who}, when)
+
+
+def done_at(trial, point, score, when=0):
+    return Said(
+        f"s/trial/{trial}/0",
+        {"state": DONE, "point": str(point), "score": repr(score), "who": "m"},
+        when,
+    )
+
+
+def test_a_trial_another_machine_is_holding_comes_back_with_no_score(store):
+    # Which is what says *running*. Nothing is made up: `ask` puts it in the pile
+    # to keep away from without letting it vote on how big the other pile is.
+    how, knobs = Sampler.sobol(seed=0), space()
+    ran, holding = how.ask(knobs, 0, []), how.ask(knobs, 1, [])
+    folder = Folder(done_at(0, ran, 0.4), running_at(1, holding))
+
+    assert in_flight(folder, knobs, study="s") == [(holding, None)]
+
+
+def test_it_costs_a_scan_and_no_fetches_like_the_history_does(store):
+    how, knobs = Sampler.sobol(seed=0), space()
+    for trial in range(4):
+        ran(store, how, knobs, trial)
+    take(store, how.ask(knobs, 4, []), study="s", trial=4, me="other")
+
+    counting = Counting(store)
+    lied = in_flight(counting, knobs, study="s")
+
+    assert len(lied) == 1
+    assert counting.fetches == 0
+
+
+def test_it_sends_a_guided_sampler_away_from_what_is_being_tried(store):
+    # The point of all of it, end to end: what comes off the folder reaches
+    # `ask` and moves it. Two promising regions and eight scored trials, which
+    # is where the quota tips — the Rust test of the same name says why that is
+    # the number that matters.
+    import math
+
+    knobs = space()
+    scored = [
+        (knobs.read("lr=0.09,batch=64,opt=adam"), 0.10),
+        (knobs.read("lr=0.00011,batch=32,opt=sgd"), 0.11),
+        (knobs.read("lr=0.08,batch=60,opt=adam"), 0.12),
+        (knobs.read("lr=0.00013,batch=30,opt=sgd"), 0.13),
+        (knobs.read("lr=0.005,batch=100,opt=adam"), 5.0),
+        (knobs.read("lr=0.008,batch=90,opt=sgd"), 6.0),
+        (knobs.read("lr=0.003,batch=110,opt=adam"), 7.0),
+        (knobs.read("lr=0.002,batch=120,opt=sgd"), 8.0),
+    ]
+    folder = Folder(
+        *[done_at(i, point, at) for i, (point, at) in enumerate(scored)],
+        running_at(8, knobs.read("lr=0.085,batch=64,opt=adam")),
+    )
+    told = in_flight(folder, knobs, study="s")
+    assert told == [(knobs.read("lr=0.085,batch=64,opt=adam"), None)]
+
+    def busy(seen):
+        return sum(
+            abs(
+                math.log(
+                    float(
+                        Sampler.tpe(goal="min", startup=4, seed=t)
+                        .ask(knobs, t, seen)["lr"]
+                    )
+                )
+                - math.log(0.085)
+            )
+            < 0.7
+            for t in range(200)
+        )
+
+    assert busy(scored + told) < busy(scored), "being told did not move it away"
+
+
+def test_the_schemes_that_look_at_nothing_are_unmoved_by_it(store):
+    # Which is why handing it to every sampler is safe: four of the five ignore
+    # what they are given, so the loop does not have to know which it has.
+    knobs = space()
+    told = [(knobs.read("lr=0.05,batch=64,opt=adam"), None)]
+
+    for how in (Sampler.sobol(seed=0), Sampler.halton(seed=0), Sampler.random(seed=0),
+                Sampler.grid(steps=3)):
+        assert how.ask(knobs, 2, []) == how.ask(knobs, 2, told), str(how)
+
+
+# ── When somebody stopped writing ──
+
+
+def test_a_trial_nobody_has_touched_for_a_while_stops_being_lied_about(store):
+    how, knobs = Sampler.sobol(seed=0), space()
+    folder = Folder(
+        done_at(0, how.ask(knobs, 0, []), 0.4, when=10_000),
+        running_at(1, how.ask(knobs, 1, []), when=100),
+    )
+
+    assert in_flight(folder, knobs, study="s", stale=100_000) != []
+    assert in_flight(folder, knobs, study="s", stale=10) == []
+
+
+def test_it_is_measured_against_the_others_and_not_against_this_clock(store):
+    # Two machines sharing a folder are two clocks, and on a cluster they
+    # disagree by minutes as a matter of course. Everything here was written long
+    # before now, and none of it is stale: what is compared is writers with
+    # writers.
+    how, knobs = Sampler.sobol(seed=0), space()
+    folder = Folder(
+        done_at(0, how.ask(knobs, 0, []), 0.4, when=1),
+        running_at(1, how.ask(knobs, 1, []), when=1),
+    )
+
+    assert in_flight(folder, knobs, study="s", stale=60) != []
+
+
+def test_abandoned_says_which_ones_stopped_and_decides_nothing(store):
+    how, knobs = Sampler.sobol(seed=0), space()
+    folder = Folder(
+        done_at(0, how.ask(knobs, 0, []), 0.4, when=10_000),
+        running_at(1, how.ask(knobs, 1, []), when=100),
+        running_at(2, how.ask(knobs, 2, []), when=10_000),
+    )
+
+    assert abandoned(folder, study="s", stale=10) == [(1, 0)]
+    assert abandoned(folder, study="s", stale=100_000) == []
+
+
+def test_and_a_study_where_everything_stopped_does_not_look_abandoned(store):
+    # The honest hole, written down: staleness is relative, so if nothing is
+    # writing there is nothing to be behind. It costs nothing — if nobody is
+    # writing, nobody is asking this either.
+    how, knobs = Sampler.sobol(seed=0), space()
+    folder = Folder(
+        running_at(1, how.ask(knobs, 1, []), when=100),
+        running_at(2, how.ask(knobs, 2, []), when=100),
+    )
+
+    assert abandoned(folder, study="s", stale=10) == []
 
 
 # ── And the one it is all for: four processes, one folder ──

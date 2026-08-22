@@ -110,7 +110,7 @@ fn a_narrow_int_is_taken_whole_rather_than_cut_into_steps() {
 fn it_looks_at_neither_a_seed_nor_the_finished_trials() {
     let grid = Grid { steps: 3 };
     let space = space();
-    let finished = vec![(grid.ask(&space, 0, &[]).unwrap(), 0.5)];
+    let finished = vec![(grid.ask(&space, 0, &[]).unwrap(), Some(0.5))];
 
     assert_eq!(grid.ask(&space, 4, &[]), grid.ask(&space, 4, &finished));
 }

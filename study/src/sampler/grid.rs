@@ -27,7 +27,12 @@ impl Grid {
     ///
     /// It looks at neither the finished trials nor a seed: a grid is a function
     /// of the space and the index alone.
-    pub fn ask(&self, space: &Space, trial: usize, _finished: &[(Point, f64)]) -> Option<Point> {
+    pub fn ask(
+        &self,
+        space: &Space,
+        trial: usize,
+        _seen: &[(Point, Option<f64>)],
+    ) -> Option<Point> {
         if space.is_empty() || trial >= self.total(space) {
             return None;
         }

@@ -49,6 +49,7 @@ from soma_next.study import (  # noqa: E402
     Space,
     curves,
     finished,
+    in_flight,
     report,
     take,
 )
@@ -91,7 +92,14 @@ def search(store, me, at, messages=600):
     mine = []
 
     for trial in range(TRIALS):
-        point = sampler.ask(space, trial, finished(store, space, study=STUDY))
+        # What has finished **and** what the others are holding: a guided sampler
+        # that is not told the second proposes where somebody already is, and two
+        # machines spend two trials learning one thing.
+        point = sampler.ask(
+            space,
+            trial,
+            finished(store, space, study=STUDY) + in_flight(store, space, study=STUDY),
+        )
         if not take(store, point, study=STUDY, trial=trial, me=me):
             continue  # somebody else got that number; on to the next
 
@@ -100,11 +108,15 @@ def search(store, me, at, messages=600):
         trainer = training(**point, at=at)
 
         drawn, why = [], None
-        for _ in range(EPOCHS):
+        for left in reversed(range(EPOCHS)):
             epoch = trainer.fit(batches)
             drawn.append(sum(epoch.history) / len(epoch.history))
             report(store, point, drawn, study=STUDY, trial=trial, me=me)
-            if why := pruner.verdict(drawn, curves(store, study=STUDY)):
+            # Only while there is another epoch to give up on. Asked after the
+            # last one, a pruner would label a trial that ran the whole course as
+            # pruned — and its score would stop counting as comparable for no
+            # reason at all.
+            if left and (why := pruner.verdict(drawn, curves(store, study=STUDY))):
                 break
 
         state = PRUNED if why else DONE

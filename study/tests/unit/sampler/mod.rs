@@ -25,7 +25,7 @@ fn space() -> Space {
         .unwrap()
 }
 
-fn history() -> Vec<(Point, f64)> {
+fn history() -> Vec<(Point, Option<f64>)> {
     (0..6)
         .map(|i| {
             (
@@ -33,7 +33,7 @@ fn history() -> Vec<(Point, f64)> {
                     ("lr".into(), Setting::Real(0.001 * (i + 1) as f64)),
                     ("opt".into(), Setting::Choice("adam".into())),
                 ]),
-                i as f64,
+                Some(i as f64),
             )
         })
         .collect()

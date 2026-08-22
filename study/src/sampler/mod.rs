@@ -84,15 +84,17 @@ impl Sampler {
     /// Where to look for the `trial`-th time, or `None` when there is nowhere
     /// left — whichever scheme this is.
     ///
-    /// `finished` is the points that have already been scored, with what they
-    /// scored. Four of the five ignore it, and that is the point of having five.
-    pub fn ask(&self, space: &Space, trial: usize, finished: &[(Point, f64)]) -> Option<Point> {
+    /// `seen` is the points somebody has already been to. **A score that is not
+    /// there means the trial is still running**: another machine is trying it
+    /// and nobody knows yet how it will do. Four of the five ignore the whole
+    /// argument, and that is the point of having five.
+    pub fn ask(&self, space: &Space, trial: usize, seen: &[(Point, Option<f64>)]) -> Option<Point> {
         match self {
-            Self::Grid(how) => how.ask(space, trial, finished),
-            Self::Random(how) => how.ask(space, trial, finished),
-            Self::Halton(how) => how.ask(space, trial, finished),
-            Self::Sobol(how) => how.ask(space, trial, finished),
-            Self::Tpe(how) => how.ask(space, trial, finished),
+            Self::Grid(how) => how.ask(space, trial, seen),
+            Self::Random(how) => how.ask(space, trial, seen),
+            Self::Halton(how) => how.ask(space, trial, seen),
+            Self::Sobol(how) => how.ask(space, trial, seen),
+            Self::Tpe(how) => how.ask(space, trial, seen),
         }
     }
 }

@@ -39,7 +39,12 @@ pub struct Halton {
 impl Halton {
     /// The `trial`-th point. It never runs out, and it never looks at what the
     /// finished trials did.
-    pub fn ask(&self, space: &Space, trial: usize, _finished: &[(Point, f64)]) -> Option<Point> {
+    pub fn ask(
+        &self,
+        space: &Space,
+        trial: usize,
+        _seen: &[(Point, Option<f64>)],
+    ) -> Option<Point> {
         if space.is_empty() {
             return None;
         }

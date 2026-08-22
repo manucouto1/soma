@@ -159,7 +159,7 @@ fn everything_it_draws_is_inside_the_knob() {
 fn it_never_runs_out_and_never_looks_at_the_finished_trials() {
     let how = Halton { seed: 1 };
     let space = flat();
-    let finished = vec![(how.ask(&space, 0, &[]).unwrap(), 0.5)];
+    let finished = vec![(how.ask(&space, 0, &[]).unwrap(), Some(0.5))];
 
     assert!(how.ask(&space, 100_000, &[]).is_some());
     assert_eq!(how.ask(&space, 5, &[]), how.ask(&space, 5, &finished));

@@ -229,7 +229,7 @@ fn it_is_what_hands_a_guided_sampler_a_history_it_never_saw_made() {
 
     let finished: Vec<_> = scanned
         .iter()
-        .map(|(said, score)| (space.read(said).unwrap(), *score))
+        .map(|(said, score)| (space.read(said).unwrap(), Some(*score)))
         .collect();
     let guided = Tpe {
         goal: Goal::Maximize,

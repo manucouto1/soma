@@ -44,7 +44,12 @@ impl Sobol {
     /// The `trial`-th point, or `None` when there are more knobs than the table
     /// has. It never runs out, and it never looks at what the finished trials
     /// did.
-    pub fn ask(&self, space: &Space, trial: usize, _finished: &[(Point, f64)]) -> Option<Point> {
+    pub fn ask(
+        &self,
+        space: &Space,
+        trial: usize,
+        _seen: &[(Point, Option<f64>)],
+    ) -> Option<Point> {
         if space.is_empty() || space.len() > KNOBS {
             return None;
         }

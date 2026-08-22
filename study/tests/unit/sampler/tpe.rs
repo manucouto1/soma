@@ -33,18 +33,18 @@ fn lr_of(point: &Point) -> f64 {
 
 /// Ten finished trials where the small learning rates did well and `adam` did
 /// better than `sgd`, scored as a loss.
-fn history() -> Vec<(Point, f64)> {
+fn history() -> Vec<(Point, Option<f64>)> {
     vec![
-        (at(1.1e-5, "adam"), 0.10),
-        (at(2.0e-5, "adam"), 0.12),
-        (at(3.0e-5, "adam"), 0.15),
-        (at(9.0e-3, "sgd"), 5.00),
-        (at(1.5e-2, "sgd"), 6.00),
-        (at(3.0e-2, "adam"), 7.00),
-        (at(5.0e-2, "sgd"), 8.00),
-        (at(7.0e-2, "sgd"), 9.00),
-        (at(8.0e-2, "adam"), 9.50),
-        (at(9.5e-2, "sgd"), 9.90),
+        (at(1.1e-5, "adam"), Some(0.10)),
+        (at(2.0e-5, "adam"), Some(0.12)),
+        (at(3.0e-5, "adam"), Some(0.15)),
+        (at(9.0e-3, "sgd"), Some(5.00)),
+        (at(1.5e-2, "sgd"), Some(6.00)),
+        (at(3.0e-2, "adam"), Some(7.00)),
+        (at(5.0e-2, "sgd"), Some(8.00)),
+        (at(7.0e-2, "sgd"), Some(9.00)),
+        (at(8.0e-2, "adam"), Some(9.50)),
+        (at(9.5e-2, "sgd"), Some(9.90)),
     ]
 }
 
@@ -121,8 +121,8 @@ fn an_option_nobody_tried_stays_reachable() {
     // impossible: a search that can never revisit a discarded option is a
     // search that cannot recover from three unlucky trials.
     let space = space();
-    let history: Vec<(Point, f64)> = (0..8)
-        .map(|i| (at(1e-4 * (i + 1) as f64, "adam"), i as f64))
+    let history: Vec<(Point, Option<f64>)> = (0..8)
+        .map(|i| (at(1e-4 * (i + 1) as f64, "adam"), Some(i as f64)))
         .collect();
 
     let sgd = (0..80)
@@ -158,7 +158,7 @@ fn a_trial_that_scored_nothing_comparable_is_dropped_and_not_counted_as_terrible
     let space = space();
     let clean = history();
     let mut history = clean.clone();
-    history.push((at(2.0e-5, "adam"), f64::NAN));
+    history.push((at(2.0e-5, "adam"), Some(f64::NAN)));
 
     // The NaN sat where the good trials are; counted as a score it would drag
     // the split about. Dropped, the answer does not move at all.
@@ -189,4 +189,50 @@ fn everything_it_proposes_is_still_inside_the_knob() {
         let point = tpe(4).ask(&space, trial, &history).unwrap();
         assert!((1e-5..=1e-1).contains(&lr_of(&point)), "{point}");
     }
+}
+
+#[test]
+fn what_is_in_flight_is_kept_away_from_and_does_not_vote_on_the_split() {
+    // Another machine is trying that point and nobody knows yet how it will do,
+    // so this one should look somewhere else. That is *constant liar*, and the
+    // half of it that is easy to get wrong is the split.
+    //
+    // Sized as a share of **everything handed over**, one more point raises the
+    // quota and promotes a trial out of the bad pile into the good one — and if
+    // that trial sits in the same region as the one in flight, saying "somebody
+    // is there" pulls the search **towards** it. Counted only over what has a
+    // score, it cannot.
+    //
+    // Two promising regions and eight scored trials, which is where the quota
+    // tips from two to three: the best of each region is good, and the second of
+    // the busy region is the one that would be promoted.
+    let space = space();
+    let scored: Vec<(Point, Option<f64>)> = vec![
+        (at(9.0e-2, "adam"), Some(0.10)),
+        (at(1.1e-5, "sgd"), Some(0.11)),
+        (at(8.0e-2, "adam"), Some(0.12)),
+        (at(1.3e-5, "sgd"), Some(0.13)),
+        (at(5.0e-3, "adam"), Some(5.00)),
+        (at(8.0e-3, "sgd"), Some(6.00)),
+        (at(3.0e-3, "adam"), Some(7.00)),
+        (at(2.0e-3, "sgd"), Some(8.00)),
+    ];
+    let mut warned = scored.clone();
+    warned.push((at(8.5e-2, "adam"), None));
+
+    let busy = |seen: &[(Point, Option<f64>)]| {
+        (0..200)
+            .filter(|&trial| {
+                let point = tpe(4).ask(&space, trial, seen).unwrap();
+                (lr_of(&point).ln() - 8.5e-2f64.ln()).abs() < 0.7
+            })
+            .count()
+    };
+
+    let (alone, told) = (busy(&scored), busy(&warned));
+    assert!(
+        told < alone,
+        "being told somebody is at 8.5e-2 sent it there more, not less: \
+         {alone} of 200 without, {told} with"
+    );
 }
