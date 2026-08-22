@@ -1,8 +1,8 @@
 //! The engine, against Rust filters and steps: no Python in the way.
 
 use crate::doubles::{
-    Add, AlwaysNull, Anything, Ask, Cable, EachOne, Fail, Immediate, Insatiable, Journal, Ledger,
-    Mean, MeetingPoint, Mirror, Miscounts, Notebook, Opaquely, Panics, Rendezvous,
+    Add, AlwaysNull, Anything, Ask, Cable, EachOne, Fail, Gathers, Immediate, Insatiable, Journal,
+    Ledger, Mean, MeetingPoint, Mirror, Miscounts, Notebook, Opaquely, Panics, Rendezvous,
     RendezvousDriver, Shout, Ubiquitous, Witness,
 };
 use soma_next_core::{
@@ -239,6 +239,72 @@ fn a_node_can_fail_halfway_through_its_turns() {
 }
 
 // ── What merging the two contracts makes possible ──
+
+#[test]
+fn a_node_that_wants_more_than_the_last_turn_has_to_keep_it_itself() {
+    // `ctx.results` is what the driver brought for the **previous** turn, not a
+    // history: three turns hand a node three separate answers and never all
+    // three at once. So a node that needs them together keeps them, and
+    // `forward` taking `&self` means keeping them is a `Mutex` written on
+    // purpose — not a field that slid in.
+    let node = Gathers::new(3);
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    g.add_node("gathers").unwrap();
+    c.insert("gathers", node.clone());
+
+    let plan = compile(&g, &c).unwrap();
+    let shout = Shout;
+    let out = Executor::new(&c)
+        .with_driver(&shout)
+        .run(&plan, Value::Null)
+        .unwrap();
+
+    // Three answers arrived, one turn at a time, and only the node has all of
+    // them.
+    assert_eq!(out, Value::number(3.0));
+    assert_eq!(
+        node.seen(),
+        vec![Value::text("T0"), Value::text("T1"), Value::text("T2")]
+    );
+}
+
+#[test]
+fn and_what_it_kept_is_still_there_the_next_time_the_graph_runs() {
+    // The catalog holds **the node**, not a copy per run, so its state outlives
+    // a `forward`. That is not incidental — a worker keeping its catalog is
+    // what lets an activation stay alive on the far side of a cut, and CU14
+    // rests on it.
+    //
+    // The other face of it is a trap, and this test is where it is written
+    // down: a node that accumulates answers a second run differently from the
+    // first, and nothing warns. What the engine promises is that the *plan* is
+    // the same, not that a node without memory is the only kind there is.
+    let node = Gathers::new(1);
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    g.add_node("gathers").unwrap();
+    c.insert("gathers", node.clone());
+    let plan = compile(&g, &c).unwrap();
+    let shout = Shout;
+
+    let once = Executor::new(&c)
+        .with_driver(&shout)
+        .run(&plan, Value::Null)
+        .unwrap();
+    let twice = Executor::new(&c)
+        .with_driver(&shout)
+        .run(&plan, Value::Null)
+        .unwrap();
+
+    assert_eq!(once, Value::number(1.0));
+    assert_eq!(
+        twice,
+        Value::number(2.0),
+        "the second run started from scratch"
+    );
+    assert_eq!(node.seen(), vec![Value::text("T0"), Value::text("T0")]);
+}
 
 #[test]
 fn a_node_can_evolve_from_always_finishing_to_asking_for_a_turn() {

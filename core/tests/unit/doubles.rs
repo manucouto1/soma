@@ -106,6 +106,49 @@ impl Node for Ask {
     }
 }
 
+/// Keeps what every turn brought, because `ctx.results` does not.
+///
+/// The only node in the repository with state of its own, and it is here to
+/// pin two things. First, `ctx.results` is the **previous** turn's answers and
+/// not the history, so anything that wants more than one turn's worth has to
+/// hold it. Second, `forward` takes `&self` and a `Node` is `Send + Sync`, so
+/// holding it is interior mutability or it is nothing — which makes keeping
+/// state something written on purpose rather than something a field slides
+/// into.
+pub struct Gathers {
+    /// How many turns to ask for before finishing.
+    pub turns: usize,
+    seen: Mutex<Vec<Value>>,
+}
+
+impl Gathers {
+    pub fn new(turns: usize) -> Arc<Self> {
+        Arc::new(Self {
+            turns,
+            seen: Mutex::default(),
+        })
+    }
+
+    /// Everything every turn brought, in the order it arrived.
+    pub fn seen(&self) -> Vec<Value> {
+        self.seen.lock().expect("nobody poisons this mutex").clone()
+    }
+}
+
+impl Node for Gathers {
+    fn forward(&self, _input: &Value, ctx: &Ctx<'_>) -> Result<Transition, NodeError> {
+        let mut seen = self.seen.lock().expect("nobody poisons this mutex");
+        seen.extend(ctx.results.iter().cloned());
+        if ctx.turn < self.turns {
+            return Ok(Transition::Await(vec![Value::text(format!(
+                "t{}",
+                ctx.turn
+            ))]));
+        }
+        Ok(Transition::Done(Value::number(seen.len() as f64)))
+    }
+}
+
 /// Does not know how to stop.
 pub struct Insatiable;
 

@@ -37,6 +37,12 @@ pub struct Ctx<'a> {
     pub turn: usize,
     /// What the driver returned for the previous turn's requests, in order.
     /// Empty on turn 0.
+    ///
+    /// **The previous turn, not the history.** A node that wants what turn 0
+    /// brought while it is on turn 2 keeps it itself — and since `forward`
+    /// takes `&self` and a `Node` is `Send + Sync`, keeping it is interior
+    /// mutability, written on purpose. What it keeps then outlives the run:
+    /// the catalog holds the node, not a copy per `forward`.
     pub results: &'a [Value],
     /// Where this node was said to run, if it was said. It arrives as
     /// **information**: the core cannot move anything to a GPU, so the one that

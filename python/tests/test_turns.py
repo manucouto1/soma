@@ -98,3 +98,57 @@ def test_the_context_says_the_turn_and_what_the_driver_brought(g):
     g.node("watches", Watches())
     assert g.forward("x", driver=Shout()) == "end"
     assert seen == [(0, []), (1, ["T0"]), (2, ["T1"])]
+
+
+# ── A node that keeps something, which is the only kind `ctx` cannot serve ──
+
+
+class Gathers(Node):
+    """Keeps what every turn brought, because `ctx.results` does not."""
+
+    def __init__(self, turns=3):
+        self.turns, self.seen = turns, []
+
+    def forward(self, x, ctx):
+        self.seen.extend(ctx.results)
+        if ctx.turn < self.turns:
+            return Await([f"t{ctx.turn}"])
+        return Done("|".join(self.seen))
+
+
+def test_a_node_that_wants_more_than_the_last_turn_has_to_keep_it_itself(g):
+    # `ctx.results` is what the driver brought for the **previous** turn and not
+    # a history: three turns hand a node three separate answers and never all
+    # three at once. Whatever wants them together holds them.
+    node = Gathers()
+    g.node("gathers", node)
+
+    assert g.forward("x", driver=Shout()) == "T0|T1|T2"
+    assert node.seen == ["T0", "T1", "T2"]
+
+
+def test_and_what_it_kept_is_still_there_the_next_time_the_graph_runs(g):
+    # The catalog holds **the node**, not a copy per run, so its state outlives
+    # a `forward`. That is not incidental: a worker keeping its catalog is what
+    # lets an activation stay alive on the far side of a cut, which is what
+    # `Split` is built on.
+    #
+    # The other face of it is a trap, and this is where it is written down: a
+    # node that accumulates answers the second run differently from the first,
+    # and nothing warns. The engine promises the same **plan**, not that a node
+    # without memory is the only kind there is.
+    node = Gathers(turns=1)
+    g.node("gathers", node)
+
+    assert g.forward("x", driver=Shout()) == "T0"
+    assert g.forward("x", driver=Shout()) == "T0|T0", "the second run started fresh"
+
+
+def test_a_node_that_keeps_nothing_answers_the_same_thing_every_time(g):
+    # The contrast, and the reason the one above is a choice rather than the
+    # shape of the framework: a node written without state is asked the same
+    # question twice and says the same thing.
+    g.node("evolves", Ask("x"))
+
+    assert g.forward(None, driver=Shout()) == "X"
+    assert g.forward(None, driver=Shout()) == "X"
