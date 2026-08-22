@@ -100,14 +100,16 @@ means the suite is green about code that is not the code.
 
 ## Status
 
-Fourteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Nineteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
-worker, the cache and training the half that is not here. A graph is declared
-with `>>`, `|`, `.on("cuda:0")` and `.cached()`, executed in Rust, spread across
-processes with `.at("worker1")`, and trained from outside with
-`soma_next.torch.Trainer` — including the part of it that runs on another
-machine, where a **trainer travels to stand beside the node** and the node is
-never asked to know it. See `docs/use-cases.md`.
+worker, the cache, training the half that is not here, federated rounds, the
+grain of an item, the study, handing it out of a folder, and a graph that draws
+itself. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+executed in Rust, spread across processes with `.at("worker1")`, trained from
+outside with `soma_next.torch.Trainer` — including the part of it that runs on
+another machine, where a **trainer travels to stand beside the node** and the
+node is never asked to know it — and **printed in a notebook**, where the figure
+shows what runs at once and what leaves the machine. See `docs/use-cases.md`.
 
 **Five orthogonal facts**, and confusing them is the easy mistake: `Graph` says
 **what** exists, `Catalog` **who** executes it, `Placement` **where**, `Plan`
@@ -185,10 +187,27 @@ means running — those points are kept away from without voting on how big the
 good pile is, which is the part that measurement showed a made-up bad score gets
 backwards.
 
-Eighteen use cases closed. And the first level-3
+And the first level-3
 test with a real pipeline under it: `tests/cluster/test_searching.py` searches
 hyper-parameters over real SMS messages with the graph cut across containers —
 tokenising where there is no torch at all — **and** the study cut across
 machines. Two distributions at once, and they are not the same one.
+
+**CU19 opens observability, and the first thing it did was split it in three**:
+the declaration **drawn** — a graph can be drawn having never run —, the record
+of what **happened**, and the **diagnosis**, which is an opinion about the record
+and not a fact in it. The original keeps all three in one enum of 37 variants,
+which is how `NodeStarted` ends up beside `HealthFlag`. The invariant that makes
+the split real is a test: **a diagnosis has to be reproducible from the stored
+record, without training again.** CU19 is the first of the three only, so it
+touches no event, no bus and no store — and a bus is not refused, only deferred
+to where it earns its place.
+
+What is drawn is the **plan**: a `Wave` is what runs at once and a `Remote` what
+leaves the machine. The layout needs no heuristic because `Plan` is a tree. But
+`decompose` falls back to a flat `Sequence` when a graph is not series-parallel,
+and there the nesting stops saying who feeds whom — so **the boxes say *when* and
+the arrows say *what feeds what***, and the `N` (`a→c`, `a→d`, `b→d`) is the test
+that keeps the figure honest.
 
 See the distribution report for the full order.

@@ -3234,3 +3234,176 @@ An artifact carries **the nodes** and not `(nodes, driver)`, so `provide()`
 returns a dict.
 
 `RunError` goes from 11 variants to 8. `advance()` goes from 38 lines to 5.
+
+---
+
+## CU19 — A graph draws itself
+
+```python
+g = Graph.somatize(
+    Tokenize().at("worker1").mapped()
+    >> Embed().on("cuda:0").cached()
+    >> (Svm().named("classic") | Net().on("cuda:1").frozen())
+    >> Vote()
+)
+
+g                  # in a notebook, the figure: what runs at once, and what leaves
+g.figure()         # the same, as a plotly Figure, to show or to compose
+```
+
+The first slice of the layer Manu calls *practically the most important part of
+the framework*: a researcher opens a notebook, declares a graph, prints it and
+**sees** the architecture with the decisions on it. Opened and closed on
+22 August 2026.
+
+Before it there was nothing to see anywhere: no `Instant`, no `elapsed`, no
+`logging` in `core/`, `transport/`, `store/` or `study/` — ten loose `eprintln!`
+and level 3's trial record, which had been observability all along under another
+name.
+
+### Observability is three things, and the original made them one
+
+Splitting them is the whole design, and the rest of the layer rests on it:
+
+| | what it is | needs |
+|---|---|---|
+| the declaration, **drawn** | a graph can be drawn having never run | nothing |
+| the record of what **happened** | facts; the residue of running | a store |
+| the **diagnosis** | *an opinion about the facts*, with arguable thresholds | the record |
+
+The original keeps all three in one `enum Event` of **37 variants**, so
+`NodeStarted` — a fact — sits beside `HealthFlag` — a judgement about a fact —
+and both beside seven agentic variants whose mechanism this project has since
+removed. Underneath: a `Tracker` trait with **one** implementor and an
+`EventSink` with **one**.
+
+> **The invariant that makes the split real, and it is a test and not an
+> aspiration: a diagnosis has to be reproducible from the stored record, without
+> training again.** An alarm that can only be raised live means the layers are
+> tangled.
+
+CU19 is the first row only. It touches no event, no bus and no store, and that
+is what let it be written without deciding anything about the other two.
+
+### What is drawn is the plan, and not the graph
+
+Because the plan is where the decisions show: a `Wave` is what runs at once, a
+`Remote` is what crosses to another machine. A bare list of edges says neither.
+
+| in the plan | on the figure |
+|---|---|
+| `Execute` | a box, filled by the device it runs on |
+| `Sequence` | its children stacked, top to bottom |
+| `Wave` | its children side by side, inside a frame |
+| `Remote` | a frame labelled with the host |
+| `Empty` | an empty figure that says so, not an exception |
+
+`Sequence` gets no frame: top-to-bottom is already how a figure is read, and the
+root is always one — a box around everything is a border.
+
+And **the layout needs no heuristic**, because `Plan` is a *tree* and not a DAG:
+one pass upwards asking each subtree its size, one pass downwards handing out
+positions. No crossing minimisation, no Sugiyama, nothing to tune.
+
+### The arrows are not decoration
+
+`decompose` is a real series-parallel decomposition — components become a `Wave`,
+a series cut becomes a `Sequence` — but it has a way out at the bottom, and it
+says so itself:
+
+```rust
+let Some(cut) = series_cut(graph, nodes) else {
+    // No cut, no tree: walked in sequence, as before waves existed.
+    return Plan::Sequence(nodes.iter().map(|node| step(graph, node)).collect());
+};
+```
+
+A graph that is **not** series-parallel — only reachable through `node()`/`edge()`,
+never through the DSL — falls back to a flat `Sequence`, and there the nesting
+stops saying who feeds whom. The `N` is the case: `a→c`, `a→d`, `b→d` comes out
+as four boxes in a column, with `a` above `b` although neither reads the other.
+
+> **The boxes say *when*. The arrows, from each step's `from`, say *what feeds
+> what*.** For a graph built with `>>` and `|` the two agree; for the other one
+> the arrows are all there is, and a figure without them would be a lie.
+
+### One table of colours, and what a fill is allowed to mean
+
+The fill says **where a node runs** and nothing else. Cached, frozen and mapped
+are badges in the label: three facts do not fit in one colour, and inventing a
+precedence between them would only hide two of the three.
+
+The table is looked up with `[]` and never with `.get(…, default)`. The original
+left the reason written down — the same five strings lived in four tables, two of
+them ending in a catch-all arm meaning *flagged*, so a typo came out as the alarm
+colour instead of failing. Here a typo raises.
+
+### Two things the wall taught, one of them the oracle's
+
+The original wrote **its own SVG renderer** for one reason: a notebook sanitises
+`<script>`, and mermaid needs a JS runtime. The same wall stands in front of
+plotly, and the way through it is the one plotly already uses — a figure reaches
+a cell through the **mimebundle** it publishes, not through hand-written HTML. So
+`Graph._repr_mimebundle_` delegates to the figure's, and there is no
+`_repr_html_` here at all.
+
+The second is plotly's: `Figure._repr_mimebundle_()` answers `{}` when no
+renderer is configured, which is what happens outside a notebook. An empty bundle
+has to become `None`, or the cell shows neither a figure nor a `repr`.
+
+### What the oracle does not have
+
+**The original does not draw placement at all** — not the device, not the host,
+not the worker. Its `NodeOverlay` is `{status, duration_ms, cache_tier, flags,
+sublabel}` and that is the lot. What was asked for here has no answer over there
+and was decided here. What *was* taken, because it is knowledge and not design:
+one palette for every renderer; a diagram stops being readable past **80 nodes**,
+which is measured and not guessed; and an escaping test with a node called
+`<script>`.
+
+### Two gaps closed on the way
+
+`mapped` had a **setter and no reader** from Python, while `frozen`, `cached`,
+`devices`, `hosts`, `identities` and `fingerprints` all had one — hence
+`mapped_nodes()`, a list and not a dict because mapping carries nothing beside
+it. And the plan only came out as a `Debug` string; `plan_json()` hands it over
+as **data**, because parsing a `Debug` to find out what runs beside what is how
+a renderer starts lying. `plan()` stays: it answers to a person, and to the tests
+that already compare its text.
+
+The core still does not learn to draw. It is asked for the fact.
+
+### Questionnaire
+
+**Where the boxes land** (`test_figure.py`, over `boxes`, which is pure)
+- [x] a wave puts its branches side by side, and a sequence stacks its steps
+- [x] a wave is framed and a sequence is not
+- [x] a remote frames its slice, says the host, and contains what it framed
+
+**That the figure does not lie**
+- [x] the `N` has no series cut, falls back to a flat `Sequence`, and its three
+      edges are drawn anyway
+- [x] every edge of a DSL graph is drawn too
+- [x] an arrow crosses into a remote slice
+
+**What is on it**
+- [x] device, host, salt, state, mapping and fingerprint are all on the hover
+- [x] a mapped node is marked in its box
+- [x] a node named after its class does not say so twice; one named by hand does
+
+**What it costs**
+- [x] drawing runs nothing — a node that would raise if it ran is drawn quietly
+- [x] an empty graph is a statement and not an exception
+- [x] a node called `<script>` never reaches the page as live HTML
+- [x] without plotly the notebook falls back to text, and `figure()` says what to
+      install
+- [x] a graph too big to read is not drawn on its own, and still is if asked
+
+### What is NOT in it yet
+
+**An overlay** — what happened while it ran — which is CU20, and which costs this
+nothing: the original left it written that an empty overlay has to give a
+byte-identical drawing · **the plan drawn while it runs**, which is the same
+thing said live · **a text fallback** for a graph past the limit, where the
+original had one and here the notebook just shows the `repr` · and **anything at
+all about a worker's health**, which needs something to report it first.
