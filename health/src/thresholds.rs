@@ -60,6 +60,16 @@ pub struct Thresholds {
     /// weaker and honest claim. Set this yourself if you have a baseline to
     /// compare against, which is what the paper actually asks for.
     pub narrowing_of_usual: f64,
+    /// Below this share of what all the inputs are worth, the model is not
+    /// using that input.
+    ///
+    /// A twentieth: with four inputs an even split is a quarter each, so this
+    /// is five times below its fair share before anything is said. Generous,
+    /// because the finding is loud and being wrong about it sends somebody
+    /// looking at their data for a week.
+    pub ignored_input: f64,
+    /// And above this share, one input is carrying everything.
+    pub sole_reliance: f64,
     /// How fast a thing has to be moving, per step and relative to itself, to
     /// count as growing or shrinking rather than wobbling.
     pub plasticity_growth: f64,
@@ -80,6 +90,8 @@ impl Default for Thresholds {
             dormant_frac: 0.5,
             leakage_cka: 0.95,
             narrowing_of_usual: 0.0,
+            ignored_input: 0.05,
+            sole_reliance: 0.9,
             plasticity_growth: 1e-3,
         }
     }

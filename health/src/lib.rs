@@ -16,6 +16,13 @@
 //! and are judged here. Change a threshold and the same record answers again —
 //! and an alarm you cannot re-ask is an alarm you cannot argue with.
 //!
+//! # Two questions, and they are not the same one
+//!
+//! [`verdict`] asks whether a network is **learning**: gradients, activations,
+//! channels, the update. [`leaning`] asks whether it is learning **what you
+//! think** — which no amount of looking at a gradient will ever say, and which
+//! cost a real research project months to find out the hard way.
+//!
 //! # What it is not allowed to do
 //!
 //! It does not measure. It does not decide **when** to look, or how often, or
@@ -43,10 +50,12 @@
 #![warn(missing_docs)]
 
 mod flag;
+mod leaning;
 mod seen;
 mod thresholds;
 
 pub use flag::Flag;
+pub use leaning::{Contribution, leaning, shares};
 pub use seen::Seen;
 pub use thresholds::Thresholds;
 

@@ -536,6 +536,7 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<study::PySpace>()?;
     m.add_class::<study::PyPoint>()?;
     m.add_function(wrap_pyfunction!(health::verdict, m)?)?;
+    m.add_function(wrap_pyfunction!(health::leaning, m)?)?;
     m.add_function(wrap_pyfunction!(health::about, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;

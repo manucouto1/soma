@@ -170,6 +170,44 @@ pub fn verdict(
         .collect())
 }
 
+/// What each input turned out to be worth: its name, its share, and the raw
+/// difference it made.
+///
+/// A `type` and not a bare tuple in the signature, because clippy is right:
+/// three unnamed numbers in a return position is a thing nobody can read twice.
+type Worth = (String, f64, f64);
+
+/// What each input is worth, and what is wrong with that.
+///
+/// `drops` is `{name: how much worse the score gets without it}`, measured by
+/// whoever has the data — this side only divides and compares. What comes back
+/// is `(shares, flags)`: the share each input is of what all of them are worth,
+/// and the two ways that goes wrong.
+#[pyfunction]
+#[pyo3(signature = (drops, thresholds = None))]
+pub fn leaning(
+    drops: &Bound<'_, PyDict>,
+    thresholds: Option<PyThresholds>,
+) -> PyResult<(Vec<Worth>, Vec<String>)> {
+    let bounds = thresholds.map(|t| t.inner).unwrap_or_default();
+    let mut said = Vec::new();
+    for (name, drop) in drops.iter() {
+        said.push((name.extract::<String>()?, drop.extract::<f64>()?));
+    }
+    let shares = soma_next_health::shares(&said);
+    let flags = soma_next_health::leaning(&shares, &bounds)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    Ok((
+        shares
+            .into_iter()
+            .map(|one| (one.name, one.share, one.drop))
+            .collect(),
+        flags,
+    ))
+}
+
 /// What a flag means and what to do about it, by name.
 ///
 /// Beside the flag and not in whoever draws it: the bounds and the advice are
@@ -191,6 +229,8 @@ pub fn about(flag: &str) -> PyResult<String> {
         Flag::DeadChannels(0),
         Flag::IgnoredChannels(0),
         Flag::Leakage,
+        Flag::IgnoredInput(String::new()),
+        Flag::SoleReliance(String::new()),
         Flag::Narrowing,
         Flag::LosingPlasticity,
     ]

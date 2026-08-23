@@ -66,6 +66,18 @@ pub enum Flag {
     /// loss does, because by the time a loss spikes the damage is already in
     /// the weights.
     Narrowing,
+    /// An input the model is not using: taking it away costs nothing.
+    ///
+    /// The finding that is worth the whole slice. When it is the channel the
+    /// research was **about**, every other diagnosis has been looking in the
+    /// wrong place — and a network with a perfectly healthy gradient can be
+    /// ignoring an input all afternoon without a single other flag firing.
+    IgnoredInput(String),
+    /// One input carries everything, and nothing else would take over.
+    ///
+    /// Not a failure and not always wrong: sometimes one channel really is the
+    /// signal. It is worth knowing before the day that channel is missing.
+    SoleReliance(String),
     /// The weights keep growing, the representation keeps narrowing and the
     /// units keep going quiet — **all three at once**, which is what tells a
     /// network that has stopped being able to learn from one that is training.
@@ -87,6 +99,8 @@ impl Flag {
             Self::Overstepping => "OVERSTEPPING",
             Self::DeadChannels(_) => "DEAD_CHANNELS",
             Self::IgnoredChannels(_) => "IGNORED_CHANNELS",
+            Self::IgnoredInput(_) => "IGNORED_INPUT",
+            Self::SoleReliance(_) => "SOLE_RELIANCE",
             Self::Leakage => "LEAKAGE",
             Self::Narrowing => "NARROWING",
             Self::LosingPlasticity => "LOSING_PLASTICITY",
@@ -125,6 +139,13 @@ impl Flag {
                 "these channels compute something nobody asks for; the \
                                          gradient never comes back for them"
             }
+            Self::IgnoredInput(_) => {
+                "the model is not using this input: taking it away costs nothing. If this is \
+                 the channel the work is about, nothing in the network is the problem"
+            }
+            Self::SoleReliance(_) => {
+                "one input carries everything and nothing else would take over if it went"
+            }
             Self::Leakage => "two groups meant to stay apart carry the same information",
             Self::Narrowing => {
                 "the update has collapsed into a few directions; this moves long \
@@ -142,6 +163,9 @@ impl fmt::Display for Flag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DeadChannels(n) | Self::IgnoredChannels(n) => write!(f, "{}({n})", self.name()),
+            Self::IgnoredInput(what) | Self::SoleReliance(what) => {
+                write!(f, "{}({what})", self.name())
+            }
             _ => f.write_str(self.name()),
         }
     }

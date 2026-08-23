@@ -353,6 +353,17 @@ how far into the `forward` it began, so a `Wave` draws as overlapping bars and a
 remote slice sits inside the round trip it arrived under — an offset into a
 slice is a fact about the slice, and two wall clocks would not have composed.
 
+**And a third question, which is not about the network at all**:
+`soma_next.data.contribution` shuffles one input and scores again, and the drop
+is what that input was worth. `health` asks whether a network is **learning**;
+this asks whether it is learning **what you meant**, which no amount of looking
+at a gradient will ever say. It exists because of a real project — symptom
+channels for a mental-health condition, months on the architecture, and the
+signal was in the self-disclosure. `IGNORED_INPUT` is the finding that would
+have said so in an afternoon; `SOLE_RELIANCE` is the other end of the same
+worry. **Shuffled and not zeroed**: a zero is a value, and what is being asked
+about is the correspondence with the answer.
+
 What is left of health is the **static** half, before a GPU is spent.
 
 See the distribution report for the full order.
