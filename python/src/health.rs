@@ -60,6 +60,7 @@ impl PyThresholds {
                 "leakage_cka" => inner.leakage_cka = what,
                 "narrowing_of_usual" => inner.narrowing_of_usual = what,
                 "plasticity_growth" => inner.plasticity_growth = what,
+                "gain_drift" => inner.gain_drift = what,
                 other => {
                     // Named, and refused. A threshold quietly ignored is an
                     // argument somebody thinks they won.
@@ -67,7 +68,7 @@ impl PyThresholds {
                         "`{other}` is not a threshold; there are: grad_low, grad_high, dead_eps, \
                          dead_frac, saturated_at, saturated_frac, update_low, update_high, \
                          dormant_tau, dormant_frac, leakage_cka, narrowing_of_usual, \
-                         plasticity_growth"
+                         plasticity_growth, gain_drift"
                     )));
                 }
             }
@@ -95,6 +96,7 @@ impl PyThresholds {
             ("leakage_cka", t.leakage_cka),
             ("narrowing_of_usual", t.narrowing_of_usual),
             ("plasticity_growth", t.plasticity_growth),
+            ("gain_drift", t.gain_drift),
         ] {
             said.set_item(name, what)?;
         }
@@ -163,6 +165,9 @@ pub fn verdict(
         param_norm_slope: number("param_norm_slope")?,
         update_rank: number("update_rank")?,
         update_rank_usual: number("update_rank_usual")?,
+        signal_gain: number("signal_gain")?,
+        jacobian_gain: number("jacobian_gain")?,
+        jacobian_spread: number("jacobian_spread")?,
     };
     Ok(taken(&seen, &bounds)
         .iter()
@@ -229,6 +234,14 @@ pub fn about(flag: &str) -> PyResult<String> {
 }
 
 /// The flag that name is, whatever it counts.
+///
+/// A list and not a `match`, because it goes the other way: a name arrives as
+/// text out of a record and has to find its variant. Which means **the compiler
+/// does not keep it** — a variant added to the enum and not added here parses
+/// as nothing, and `about` refuses a flag this library did in fact raise. It
+/// has happened. The tests that catch it are the two that ask every flag a run
+/// raises, and every flag a **probe** raises, what to do about itself — two,
+/// because a flag only one of them can produce is exactly the one that slips.
 fn known(flag: &str) -> PyResult<soma_next_health::Flag> {
     use soma_next_health::Flag;
     let bare = flag.split('(').next().unwrap_or(flag);
@@ -243,6 +256,7 @@ fn known(flag: &str) -> PyResult<soma_next_health::Flag> {
         Flag::Overstepping,
         Flag::DeadChannels(0),
         Flag::IgnoredChannels(0),
+        Flag::MissingNormalisation,
         Flag::Leakage,
         Flag::IgnoredInput(String::new()),
         Flag::SoleReliance(String::new()),

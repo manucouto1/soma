@@ -115,11 +115,12 @@ two real bugs were found.
 
 ## Status
 
-Twenty-one use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty-two use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
-itself, the record of what happened, and the health of a network. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+itself, the record of what happened, the health of a network, and what can be
+said before a step is taken. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
 another machine, where a **trainer travels to stand beside the node** and the
@@ -379,6 +380,43 @@ have said so in an afternoon; `SOLE_RELIANCE` is the other end of the same
 worry. **Shuffled and not zeroed**: a zero is a value, and what is being asked
 about is the correspondence with the answer.
 
-What is left of health is the **static** half, before a GPU is spent.
+**CU22 is the static half, and it costs seconds rather than an afternoon.** CU21
+asked whether a network **is** learning, which needs it to have been learning;
+this asks whether it **can**. `soma_next.torch.probe(g, x)` is **one `forward`
+that was recorded and never trained** — literally `run/<id>/0`, through the same
+`Watcher`, under the same keys — so `diagnose`, `seen`, `profile`, `flags`,
+`where`, `overlaid` and `alerts` all read it with **no new code at all**. That is
+CU20's decision to write a fact as `(kind, pairs)` being paid back: a probe is a
+new producer and not a new vocabulary.
+
+It measures three things and **none of them is a gradient norm**: at
+initialisation there is no loss, so a parameter gradient would be taken against a
+target somebody made up and would land in the very field the audit fills from a
+real one. The backward direction is `jacobian_gain`, a ratio that needs no
+target. The cost is two forwards and `k` backwards **over the whole network** —
+every layer reads its own `Jᵀv` off the same pass — and the second forward is
+`architecture`'s, because the probe takes its scope from **what the figure will
+draw** rather than walking the modules itself. Those two stop being the same set
+once `fx` has had its say, and a finding on a layer with no box lands nowhere.
+
+Of the three, **only one earned an alarm**. `MISSING_NORMALISATION` fires and it
+is a conjunction whose structural half lives in the *measurement*: a
+normalisation resets the reference and reports no gain of its own, because
+changing the scale is its job. It is also **one-sided**, which the measurement
+decided and the design did not — a stack whose signal arrives five
+ten-thousandths of the size it went in trains as well as a healthy one, because
+Adam is scale-invariant per parameter. The two Jacobian numbers raise nothing:
+they **rank** and do not **separate**, and the network with the tighter spectrum
+was the one that failed. Which leaves the rule this slice is really about:
+
+> **What separates is a runaway. What ranks is a proxy.**
+
+The forward scale is geometric — it stays put or leaves by decades, with nothing
+in between to be wrong about. Everything continuous is a ranking, and a ranking
+belongs at level 3 where a number only means something next to another
+candidate's. Which is exactly where the five zero-cost proxies went:
+`soma_next.torch.proxies` is a **cheap objective** a study's loop scores with,
+never a `Flag`, and `health/tests/proxies.py` asks the only question worth asking
+of one — *does it beat counting parameters?*
 
 See the distribution report for the full order.

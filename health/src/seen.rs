@@ -53,4 +53,48 @@ pub struct Seen {
     /// And what that usually was for this run, which is the only reference a
     /// single training run has.
     pub update_rank_usual: Option<f64>,
+    /// The scale of the signal here against where the last normalisation
+    /// upstream left it.
+    ///
+    /// Measured before a step is taken, by a probe rather than by an audit: a
+    /// probe knows what feeds what, because it traced it. Where the last
+    /// normalisation **is** is structure and not a bound, which is why it is
+    /// baked into the number and the threshold stays on this side of the wall.
+    pub signal_gain: Option<f64>,
+    /// The factor a gradient at the output arrives here by:
+    /// `sqrt(E||J^T v||^2)` over random probes, from this layer to the output.
+    ///
+    /// Deliberately not a parameter-gradient norm. At initialisation there is
+    /// no loss, so a gradient norm would be taken against a target somebody
+    /// made up and would land in [`Seen::grad_norm`] at a different scale, to
+    /// be judged by the same bound. This one is a ratio and needs no target.
+    ///
+    /// **It raises nothing, and that was measured.** Walked across criticality,
+    /// the worst network that still trained read 1.41 and the best one that did
+    /// not read 1.95: a factor of 1.4 is where the sampling landed and not a
+    /// bound. See `health/tests/isometry.py`. The number is recorded and drawn,
+    /// because its profile over depth is the vanishing picture and a person can
+    /// read one.
+    pub jacobian_gain: Option<f64>,
+    /// How spread that Jacobian's spectrum is: `s_max / s_rms` of a random
+    /// sketch of it.
+    ///
+    /// Dynamical isometry (Pennington et al., 2017) is a claim about the
+    /// spectrum's **shape** and not its size — a flat one trains dramatically
+    /// faster than one with the same mean and a long tail — and a mean cannot
+    /// see the difference.
+    ///
+    /// **It raises nothing either, and the inversion is the reason**: a network
+    /// reading 1.87 trained and one reading 1.76 did not, so the failing one
+    /// had the tighter spectrum.
+    ///
+    /// There is a rule underneath both of these and it is worth more than
+    /// either. [`Flag::MissingNormalisation`](crate::Flag::MissingNormalisation)
+    /// separates because the forward scale is a **runaway** — a geometric
+    /// process either stays put or leaves by decades, and there is nothing in
+    /// between to be wrong about. These two vary **continuously** with how well
+    /// a network turns out, and something continuous is a ranking. A ranking
+    /// belongs at level 3, beside the proxies, where a number only ever means
+    /// something next to another candidate's.
+    pub jacobian_spread: Option<f64>,
 }

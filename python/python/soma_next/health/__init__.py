@@ -34,11 +34,22 @@ store to it. Change a bound and ask again; the record has not moved.
 | `DEAD_CHANNELS(n)` / `IGNORED_CHANNELS(n)` | part of the width does nothing, or does something nobody asks for |
 | `LEAKAGE` | two groups meant to stay apart carry the same information |
 | `NARROWING` | the update has collapsed into a few directions |
+| `MISSING_NORMALISATION` | the signal grows over a stretch with nothing normalising it |
 | `LOSING_PLASTICITY` | weights growing, rank falling and units going quiet, all at once |
 
 `about(flag)` says what to do about each, and it lives beside the thresholds
 because they are one opinion: splitting them is how a dashboard ends up saying
 something this library never said.
+
+## Before a step is taken
+
+Everything above is read off a training run. The same three functions read a
+**probe** — `soma_next.torch.probe(g, x)`, one forward that was recorded and
+never trained — because a probe writes `run/<id>/0` and nothing here ever asked
+what made a record::
+
+    probe(g, x, watching=Recorder(store, run="before"))
+    diagnose(store, run="before")           # MISSING_NORMALISATION, before a GPU
 
 ## Drawn
 

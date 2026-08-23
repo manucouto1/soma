@@ -22,6 +22,13 @@ fn every_flag_says_what_to_do_about_it() {
     // Part of the flag and not of whoever draws it: the thresholds and the
     // advice are the same opinion, and splitting them is how a dashboard ends
     // up saying something this crate never said.
+    //
+    // The list is kept by hand and a `match` would keep itself, which is the
+    // rule everywhere else in this project. It is written out anyway because
+    // the enum carries values — `DEAD_CHANNELS(n)` — and the point of the test
+    // is that every **variant** answers, not that every value does. Adding one
+    // and not adding it here is the mistake to watch for; it had already
+    // happened twice when this comment was written.
     for flag in [
         Flag::Nan,
         Flag::Inf,
@@ -33,9 +40,12 @@ fn every_flag_says_what_to_do_about_it() {
         Flag::Overstepping,
         Flag::DeadChannels(1),
         Flag::IgnoredChannels(1),
+        Flag::MissingNormalisation,
         Flag::Leakage,
         Flag::Narrowing,
         Flag::LosingPlasticity,
+        Flag::IgnoredInput("audio".into()),
+        Flag::SoleReliance("audio".into()),
     ] {
         assert!(!flag.about().is_empty(), "{flag} says nothing about itself");
         assert!(

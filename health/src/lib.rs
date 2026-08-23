@@ -81,6 +81,15 @@ pub fn verdict(seen: &Seen, thresholds: &Thresholds) -> Vec<Flag> {
             flags.push(Flag::Exploding);
         }
     }
+    // One-sided: growing is the half that was measured to separate. See
+    // `Thresholds::gain_drift`, and `health/tests/normalisation.py` for why
+    // there is no bound underneath it.
+    if seen
+        .signal_gain
+        .is_some_and(|gain| gain > thresholds.gain_drift)
+    {
+        flags.push(Flag::MissingNormalisation);
+    }
     // The maximum over the window, never the mean.
     if seen.zero_frac_max.is_some_and(|f| f > thresholds.dead_frac) {
         flags.push(Flag::Dead);

@@ -20,7 +20,8 @@ torch = pytest.importorskip("torch")
 import soma_next.torch  # noqa: E402, F401
 from soma_next import Graph, Node, Opaque, Recorder, Store  # noqa: E402
 from soma_next.health import Thresholds, about, diagnose, history, seen  # noqa: E402
-from soma_next.torch import Audit, Trainer, parameters  # noqa: E402
+from soma_next.record import forwards  # noqa: E402
+from soma_next.torch import Audit, Trainer, architecture, parameters, probe  # noqa: E402
 
 MACRO = ("VANISHING", "EXPLODING", "DEAD", "SATURATED", "NAN", "INF", "LEAKAGE")
 
@@ -28,7 +29,10 @@ MACRO = ("VANISHING", "EXPLODING", "DEAD", "SATURATED", "NAN", "INF", "LEAKAGE")
 class Block(Node):
     """One layer and a non-linearity, which is all any of these need."""
 
-    def __init__(self, width=16, activation="relu", bias=None, gain=None):
+    def __init__(self, width=16, activation="relu", bias=None, gain=None, norm=False):
+        #: Before the layer and not after it, which is where a normalisation
+        #: resets the scale a probe measures against.
+        self.norm = torch.nn.LayerNorm(width) if norm else None
         self.net = torch.nn.Linear(width, width)
         if bias is not None:
             torch.nn.init.constant_(self.net.bias, bias)
@@ -43,10 +47,11 @@ class Block(Node):
         }[activation]
 
     def forward(self, x, ctx):
-        return Opaque(self.after(self.net(x)))
+        return Opaque(self.after(self.net(self.norm(x) if self.norm else x)))
 
     def parameters(self):
-        return list(self.net.parameters())
+        held = list(self.net.parameters())
+        return held + list(self.norm.parameters()) if self.norm else held
 
 
 def chain(blocks):
@@ -589,3 +594,180 @@ def test_depth_counts_composites_opened_and_not_names():
     assert len(whole.layers) == 1, "one box, and it says what is in it"
     assert whole.layers[0].made_of
     assert len(opened.layers) > 4, "and `depth=1` opens it"
+
+
+# ── Before a step is taken ──
+
+
+def test_a_probe_is_one_forward_that_was_recorded_and_never_trained(store):
+    # Not a metaphor for the record's benefit: literally `run/<id>/0`, which is
+    # why `diagnose`, `seen`, `profile` and `overlaid` read a probe without
+    # knowing one exists. Nothing was added to the record's shape.
+    torch.manual_seed(0)
+    g, _ = chain([Block(gain=4.0) for _ in range(10)])
+
+    probe(g, torch.randn(32, 16), watching=Recorder(store, run="before"))
+
+    assert [one["forward"] for one in forwards(store, run="before")] == [0]
+    assert diagnose(store, run="before"), "a stack this hot is not healthy"
+
+
+def test_nothing_is_trained_and_no_weight_moves(store):
+    torch.manual_seed(0)
+    g, _ = chain([Block(gain=4.0) for _ in range(4)])
+    before = [p.detach().clone() for p in parameters(g)]
+
+    probe(g, torch.randn(32, 16), watching=Recorder(store, run="before"))
+
+    assert all(torch.equal(a, b) for a, b in zip(before, parameters(g)))
+
+
+def test_a_signal_growing_where_nothing_normalises_it_is_found_before_a_step(store):
+    torch.manual_seed(0)
+    g, _ = chain([Block(gain=4.0) for _ in range(10)])
+
+    probe(g, torch.randn(32, 16), watching=Recorder(store, run="before"))
+    said = diagnose(store, run="before")
+
+    assert any("MISSING_NORMALISATION" in flags for flags in said.values())
+
+
+def test_and_the_same_stack_normalised_says_nothing_about_it(store):
+    # The conjunction, and both halves are load-bearing. Structure alone —
+    # "there is no norm layer in this stretch" — would have flagged the stack
+    # above and every healthy one beside it.
+    torch.manual_seed(0)
+    g, _ = chain([Block(gain=4.0, norm=True) for _ in range(10)])
+
+    probe(g, torch.randn(32, 16), watching=Recorder(store, run="before"))
+    said = diagnose(store, run="before")
+
+    assert not any("MISSING_NORMALISATION" in flags for flags in said.values())
+
+
+def test_a_signal_that_shrank_says_nothing_because_that_is_what_was_measured(store):
+    # A plain stack whose output arrives a fraction of the size it went in
+    # trains as well as a healthy one: Adam is scale-invariant per parameter.
+    # The flag has one side and the measurement is `health/tests/normalisation.py`.
+    # The bias has to go, or it is the floor: `Wx * 0.2 + b` stops shrinking as
+    # soon as `b` is the bigger half, and what would be measured is the bias.
+    torch.manual_seed(0)
+    g, _ = chain([Block(gain=0.2, bias=0.0) for _ in range(10)])
+
+    read = probe(g, torch.randn(32, 16), watching=Recorder(store, run="before"))
+    said = diagnose(store, run="before")
+
+    assert min(one["signal_gain"] for one in read.values()) < 1e-9
+    assert not any("MISSING_NORMALISATION" in flags for flags in said.values())
+
+
+def test_everything_a_probe_measures_has_a_box(store):
+    # The same invariant the audit keeps — *every layer that can carry a flag
+    # has a box* — and the probe gets it by construction, because it takes its
+    # scope from what the figure will draw rather than walking the modules
+    # itself. Those are not the same walk: at `depth=1` a module walk opens a
+    # composite the figure keeps whole, and a finding on a layer with no box
+    # lands nowhere.
+    pytest.importorskip("plotly")
+
+    class Held(Node):
+        def __init__(self, width=16):
+            self.body = torch.nn.Sequential(
+                torch.nn.TransformerEncoderLayer(width, 2, 32, batch_first=True),
+                torch.nn.Linear(width, width))
+
+        def forward(self, x, ctx):
+            return Opaque(self.body(x))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    torch.manual_seed(0)
+    g = Graph.somatize(Held().named("enc"))
+    x = torch.randn(4, 6, 16)
+
+    for depth in (0, 1):
+        measured = set(probe(g, x, depth=depth))
+        made = architecture(g, Opaque(x), depth=depth)
+        drawn = {f"{node}.{one.path}" for node, inside in made.items()
+                 for one in inside.layers}
+        folded = {f"{node}.{path}" for node, inside in made.items()
+                  for path in inside.folded}
+
+        assert measured, f"depth={depth} measured nothing"
+        assert measured <= drawn | folded, measured - drawn - folded
+
+
+def test_the_backward_signal_falls_away_with_depth_before_an_optimizer_exists():
+    # The vanishing picture with no loss, no target and no step: `jacobian_gain`
+    # is the factor a gradient at the output arrives by, so it is a ratio and it
+    # means the same thing at every depth.
+    torch.manual_seed(0)
+    g, _ = chain([Block(activation="sigmoid") for _ in range(10)])
+
+    read = probe(g, torch.randn(32, 16))
+
+    assert read["b0.net"]["jacobian_gain"] < read["b9.net"]["jacobian_gain"] / 100
+
+
+def test_every_flag_a_probe_raises_says_what_to_do_about_it(store):
+    # The same guard the run has, and it is here because a name goes back to its
+    # variant through a **list** rather than a `match`: the compiler does not
+    # keep that one, so a flag only a probe can raise is a flag `about` can be
+    # missing without anything failing to compile. It was, once.
+    torch.manual_seed(0)
+    g, _ = chain([Block(gain=4.0) for _ in range(10)])
+    probe(g, torch.randn(32, 16), watching=Recorder(store, run="before"))
+
+    raised = {flag for flags in diagnose(store, run="before").values() for flag in flags}
+
+    assert raised
+    assert all(about(flag) for flag in raised)
+
+
+def test_a_node_holding_no_modules_is_not_probed():
+    class Doubles(Node):
+        def forward(self, x, ctx):
+            return Opaque(x * 2)
+
+    g = Graph.somatize(Doubles().named("twice") >> Block().named("b0"))
+
+    read = probe(g, torch.randn(8, 16))
+
+    assert not any(where.startswith("twice") for where in read)
+
+
+def test_a_normalisation_resets_what_the_gain_is_measured_from(store):
+    # The half of the conjunction that lives in the measurement. Fed data whose
+    # scale is nowhere near one, a stack measured from the **input** reads a
+    # thousandfold drift and cries about a normalisation that is right there.
+    # Measuring from the last norm reads one, which is what is true.
+    torch.manual_seed(0)
+    g, _ = chain([Block(norm=True) for _ in range(6)])
+
+    probe(g, torch.randn(32, 16) * 1e-3, watching=Recorder(store, run="before"))
+    said = diagnose(store, run="before")
+
+    assert not any("MISSING_NORMALISATION" in flags for flags in said.values()), said
+
+
+def test_a_node_whose_modules_never_ran_is_said_out_loud():
+    # A node quietly absent from a diagnosis reads exactly like a healthy one,
+    # which is the mistake `Seen` spends its whole docstring avoiding. The case
+    # that matters is a slice on another machine: the hooks are registered here
+    # and its modules run over there, so it contributes nothing. It is
+    # `architecture` that says so, because the probe now takes its scope from
+    # there — one warning for one fact, and it arrives either way.
+    class Holds(Node):
+        def __init__(self):
+            self.unused = torch.nn.Linear(16, 16)
+
+        def forward(self, x, ctx):
+            return Opaque(x)
+
+    g = Graph.somatize(Block().named("b0") >> Holds().named("idle"))
+
+    with pytest.warns(UserWarning, match="idle"):
+        read = probe(g, torch.randn(8, 16))
+
+    assert not any(where.startswith("idle") for where in read)

@@ -148,6 +148,82 @@ fn a_channel_alive_and_never_asked_for_is_its_own_finding() {
     assert_eq!(said(&seen), ["IGNORED_CHANNELS(3)"]);
 }
 
+// ── The signal, before a step is taken ──
+
+#[test]
+fn a_signal_growing_where_nothing_normalises_it_says_so() {
+    let seen = Seen {
+        signal_gain: Some(100.0),
+        ..Seen::default()
+    };
+
+    assert_eq!(said(&seen), ["MISSING_NORMALISATION"]);
+}
+
+#[test]
+fn a_signal_that_shrank_says_nothing_at_all() {
+    // Measured, and it is the finding rather than an omission: a plain stack
+    // whose output arrives five ten-thousandths of the size it went in trained
+    // as well as a healthy one, because Adam is scale-invariant per parameter.
+    // See `health/tests/normalisation.py`.
+    for gain in [5.5e-4, 4.0e-6, 1e-12] {
+        let seen = Seen {
+            signal_gain: Some(gain),
+            ..Seen::default()
+        };
+        assert!(said(&seen).is_empty(), "{gain} said {:?}", said(&seen));
+    }
+}
+
+#[test]
+fn the_drift_a_residual_trunk_has_anyway_is_not_a_finding() {
+    // Eighty unnormalised residual blocks reach 3.96x, and the notebook that
+    // dropped the normalisation from three of them scored **better** for it. A
+    // bound that fires here teaches somebody else's lesson.
+    for gain in [0.61, 1.01, 2.81, 3.96] {
+        let seen = Seen {
+            signal_gain: Some(gain),
+            ..Seen::default()
+        };
+        assert!(said(&seen).is_empty(), "{gain} said {:?}", said(&seen));
+    }
+}
+
+#[test]
+fn and_whoever_normalises_differently_moves_the_bound() {
+    let seen = Seen {
+        signal_gain: Some(4.0),
+        ..Seen::default()
+    };
+    let tighter = Thresholds {
+        gain_drift: 3.0,
+        ..Thresholds::default()
+    };
+
+    assert!(said(&seen).is_empty());
+    assert_eq!(
+        soma_next_health::verdict(&seen, &tighter)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["MISSING_NORMALISATION"]
+    );
+}
+
+#[test]
+fn a_probe_that_measured_no_signal_is_not_called_healthy() {
+    // The same rule as everywhere else, and it matters most here: a static
+    // probe measures three things and an audit measures fifteen, so most of a
+    // `Seen` is `None` on either side of the wall.
+    let seen = Seen {
+        jacobian_gain: Some(1e-6),
+        jacobian_spread: Some(40.0),
+        ..Seen::default()
+    };
+
+    assert!(said(&seen).is_empty());
+}
+
 #[test]
 fn two_groups_carrying_the_same_information_leak() {
     let seen = Seen {

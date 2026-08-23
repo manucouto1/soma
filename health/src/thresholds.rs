@@ -73,6 +73,20 @@ pub struct Thresholds {
     /// How fast a thing has to be moving, per step and relative to itself, to
     /// count as growing or shrinking rather than wobbling.
     pub plasticity_growth: f64,
+    /// How far the signal may grow over a stretch nobody normalises before
+    /// that is worth saying. **One side only, and it is the upper one.**
+    ///
+    /// A decade, because the drift is geometric and the useful signal is an
+    /// order of magnitude rather than a percentage. Measured: everything that
+    /// trained sat at 2.8x or below and everything that did not was at 100x or
+    /// above, so the bound has 3.6x of margin below it and 10x above.
+    ///
+    /// There is **no lower bound and that is a finding, not an omission**. A
+    /// plain stack whose signal arrives five ten-thousandths of the size it
+    /// went in trained as well as the healthy one — Adam is scale-invariant per
+    /// parameter, so a signal that shrank does not stop a step being taken. See
+    /// `health/tests/normalisation.py`.
+    pub gain_drift: f64,
 }
 
 impl Default for Thresholds {
@@ -93,6 +107,7 @@ impl Default for Thresholds {
             ignored_input: 0.05,
             sole_reliance: 0.9,
             plasticity_growth: 1e-3,
+            gain_drift: 10.0,
         }
     }
 }

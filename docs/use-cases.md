@@ -4196,3 +4196,206 @@ its measurement beside it, the way `NARROWING` did.
 - [x] something that is not a batch is left alone
 - [x] only the inputs asked for are tried
 - [x] no data is nothing and not a failure
+
+## CU22 — What can be said before a step is taken
+
+```python
+from soma_next.torch import probe, proxies
+from soma_next.health import diagnose, overlaid, profile
+
+probe(g, x, watching=Recorder(store, run="before"))   # one forward, nothing trained
+diagnose(store, run="before")                         # {"trunk.4": ["MISSING_NORMALISATION"]}
+overlaid(g, store, run="before", inside=...)          # and where, on the graph
+profile(store, run="before", of="jacobian_gain")      # the vanishing picture, with no optimizer
+
+proxies(candidate, x)                                 # and scoring one without training it
+```
+
+The static half of CU21, and the half that costs seconds rather than an
+afternoon. CU21 asked whether a network **is** learning, which needs it to have
+been learning. This asks whether it **can**.
+
+### A probe is one `forward` that was recorded and never trained
+
+Not a turn of phrase for the record's benefit. It is literally `run/<id>/0`,
+written through the same `Watcher` a `Trainer` writes through, holding `health`
+facts under the same `node.path.to.submodule` keys. Which is why the whole third
+row of observability reads a probe with **no new code at all**: `diagnose`,
+`seen`, `history`, `profile`, `flags`, `where`, `overlaid` and `alerts` never
+asked what made a record, and now they do not have to learn.
+
+That is CU20's decision to write a fact as `(kind, pairs)` — rather than as a
+type each level shares — being paid back. A probe is a new *producer*, not a new
+vocabulary, and the invariant comes free:
+
+> a diagnosis has to be reproducible from the stored record, without training
+> again — and here, without ever having trained.
+
+### The three numbers, and why none of them is a gradient norm
+
+| what | how | why not something else |
+|---|---|---|
+| `signal_gain` | the scale here against the last normalisation upstream | the drift is geometric, so what matters is the ratio and never the size |
+| `jacobian_gain` | `sqrt(E‖Jᵀv‖²)` from here to the output | the backward signal, scale-free, so it means the same thing at every depth |
+| `jacobian_spread` | `s_max / s_rms` of the sketch `JᵀV` | isometry is a claim about the spectrum's *shape*, and a mean cannot see it |
+
+There is deliberately **no `grad_norm`**. At initialisation there is no loss, so
+a parameter gradient would have to be taken against a target somebody made up,
+and the number would land in the very field the audit fills from a real loss —
+at a different scale, to be judged by the same bound. Two things under one name
+is how a threshold quietly stops meaning anything. The backward direction is
+`jacobian_gain`, which needs no target because it is a ratio.
+
+Two forwards and `k` backwards, and the `k` are **over the whole network**
+rather than `k` per layer: every layer reads its own `Jᵀv` off the same pass.
+That is what puts this in front of a training run rather than instead of one.
+
+The second forward is `architecture`'s, and it is what decides *which* layers
+are measured. Walking the modules here instead would be a forward cheaper and
+would break the invariant the whole row rests on — **every layer that can carry
+a flag has a box** — because a module walk and what the figure draws stop being
+the same set once `fx` has had its say. It was written the cheap way first, and
+a `TransformerEncoderLayer` inside a `Sequential` is what said so.
+
+### `MISSING_NORMALISATION`, and both halves of it are load-bearing
+
+The structural half lives in the **measurement** and not beside the bound. Where
+the last normalisation is is structure; resetting the reference there is not a
+threshold, and a normalisation reports no gain of its own because changing the
+scale is its job. So the conjunction is baked in, the shape `LOSING_PLASTICITY`
+already has: drifting alone is a network that is fine, and having no
+normalisation alone is a network that is fine.
+
+Measured, and the numbers are in `health/tests/normalisation.py`. Everything
+that trained sat at **2.81** or below and everything that did not was at **100**
+or above, so a decade sits between them with 3.6x of margin below and 10x above
+— a decade because the drift is geometric and the useful signal is an order of
+magnitude, never a percentage. The row that makes it a conjunction rather than a
+lint is the badly-initialised stack **with** normalisation: it drifts 2.81x and
+trains, and structure alone would have flagged it along with every plain stack
+that trained best.
+
+**It fires only upwards, and that is the measurement's doing rather than the
+design's.** A plain stack whose signal arrives five ten-thousandths of the size
+it went in trained as well as the healthy one, the two ranges overlapping. Adam
+is scale-invariant per parameter, so a signal that shrank does not stop a step
+being taken. There is no lower bound and that is a finding, not an omission.
+
+The false positive it had to stay quiet on was already written down:
+`examples/07-a-real-architecture.ipynb` dropped the normalisation from a
+three-block residual trunk and the un-normalised version scored *better*. An
+unnormalised residual trunk grows like the square root of its depth — eighty
+blocks reach 4x, and it would take some five hundred to trip a decade.
+
+### The isometry half raises nothing, and the reason generalises
+
+Both Jacobian numbers **rank** and neither **separates**, which is not the same
+thing and only one of them is a flag. At criticality the nine rows come out
+almost in order — orthogonal-`tanh` at a spread of 1.10 with the best loss,
+`he-relu` at 1.88 with the worst. Walking the gain off criticality is what
+breaks it: the worst network that still trains reads a first-layer gain of
+**1.41** and the best that does not reads **1.95**, and a factor of 1.4 is where
+the sampling landed rather than a bound. The spread inverts outright — 1.87
+trains and 1.76 does not, so the failing network has the *tighter* spectrum.
+
+So they are recorded and drawn and neither raises anything, which is what
+`NARROWING` established as the thing to do. See `health/tests/isometry.py`.
+
+And there is a rule under all three measurements, worth more than any of them:
+
+> **What separates is a runaway. What ranks is a proxy.**
+
+The forward scale separates because it is geometric — it either stays put or
+leaves by decades, and there is nothing in between to be wrong about. The
+backward numbers vary continuously with how well a network turns out, and
+something continuous is a ranking. A ranking belongs at level 3, where a number
+only ever means something next to another candidate's.
+
+### A proxy is not a `Flag`, and it never was
+
+`synflow` of one network is a number with no meaning. It only means something
+next to another network's, which is level 3 — where a study is a `for` loop and
+there is no type at all — and not the vocabulary of a diagnosis, which is about
+*this* network. So `soma_next.torch.proxies` is a **cheap objective** the loop
+scores with instead of training, it takes a `Graph` the way `probe` and
+`architecture` do, and no `Flag` ever comes out of it.
+
+Which leaves one question, and it is not *does it correlate with the score*:
+
+> **Does it beat counting parameters?**
+
+Size is free. `health/tests/proxies.py` asks it of all five over twenty-four
+candidates, and the answer is not the one the scores alone would give:
+
+| | ρ vs score | ρ vs parameters | beats counting by |
+|---|---|---|---|
+| **parameters** | **0.59** | — | the baseline, and it costs nothing |
+| `snip` | 0.61 | **-0.02** | **+0.02** |
+| `naswot` | **0.69** | **0.97** | +0.10 |
+| `zen` | 0.45 | -0.39 | -0.14 |
+| `grasp` | -0.08 | 0.57 | -0.67 |
+| `synflow` | **-0.16** | 0.42 | -0.75 |
+
+`naswot` scores highest and is the least interesting: at 0.97 with parameter
+count it **is** size, with noise on top. `snip` is the only one that beats
+counting *and* is uncorrelated with it — two hundredths, but two hundredths of
+something orthogonal to what size already says, which is the only kind of gain a
+proxy can honestly claim. And `synflow` comes out **worse than nothing**, because
+on this family it reads *depth*: a `relu` stack at depth eight scores 12 to 21
+where the same widths at depth two score 7 to 9, and depth is what hurts here.
+The published 0.76 is on NAS-Bench-201, where depth and size move together.
+
+So the library ships **all five and picks none**. Which proxy is worth anything
+depends on the family being searched, and that is a question with a cheap answer
+rather than a default somebody has to discover is wrong.
+
+### What is not in it
+
+The **notebook**, which is where somebody would actually meet this: a candidate
+drawn, probed, the flag on the figure, and a fix that makes it quiet.
+
+A probe of a graph whose slices run **elsewhere**. The hooks are registered
+here and a remote slice runs its own forward, so it contributes nothing — said
+out loud, because a node quietly absent from a diagnosis reads exactly like a
+healthy one. Doing better means a probe that travels the way a trainer does,
+which is CU14's shape and a slice of its own.
+
+And two debts older than this one, both still open: CU20's dump policy by
+segments, which the docs assert and the code does not do, and a worker that does
+not write its own record.
+
+### Questionnaire
+
+**The verdict** (`health/tests/unit/verdict.rs`)
+- [x] a signal growing where nothing normalises it says so
+- [x] a signal that shrank says nothing at all, **because that is what was
+      measured** and not because nobody looked
+- [x] the drift a residual trunk has anyway is not a finding
+- [x] and whoever normalises differently moves the bound
+- [x] a probe that measured no signal is not called healthy
+
+**Before a step is taken** (`python/tests/test_health.py`)
+- [x] **a probe is one `forward` that was recorded and never trained**
+- [x] nothing is trained and no weight moves
+- [x] a signal growing where nothing normalises it is found before a step
+- [x] and the same stack normalised says nothing about it
+- [x] a signal that shrank says nothing, because that is what was measured
+- [x] a normalisation resets what the gain is measured from
+- [x] **everything a probe measures has a box**, at every depth
+- [x] the backward signal falls away with depth before an optimizer exists
+- [x] every flag a probe raises says what to do about it
+- [x] a node holding no modules is not probed
+- [x] and a node whose modules never ran is said out loud
+
+**Scoring a candidate** (`python/tests/test_proxies.py`)
+- [x] three of them never see a label
+- [x] and with a loss every one of them answers
+- [x] one that reads a loss and was given none says which
+- [x] something that is not a proxy is refused by name
+- [x] nothing is trained and no weight moves
+- [x] `synflow` puts the signs back
+- [x] no gradient is left hanging off the candidate
+- [x] **a proxy is a ranking and says nothing about one network**
+- [x] the bigger network scores higher on `synflow`, which is the caveat written
+      as a test rather than as a footnote
+- [x] a batch of one has nothing to tell apart

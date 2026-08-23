@@ -39,6 +39,8 @@ from soma_next.torch._federated import fedavg
 from soma_next.torch._freeze import freeze
 from soma_next.torch._learning import Learning, OutOfStep, Split, envelope, gradient
 from soma_next.torch._params import parameters
+from soma_next.torch._probe import probe
+from soma_next.torch._proxies import proxies, proxy
 from soma_next.torch._round import gather
 from soma_next.torch._audit import Audit
 from soma_next.torch._inside import architecture, kind_of, traced
@@ -66,4 +68,7 @@ __all__ = [
     "gather",
     "gradient",
     "parameters",
+    "probe",
+    "proxies",
+    "proxy",
 ]

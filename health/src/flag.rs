@@ -26,6 +26,21 @@ pub enum Flag {
     Vanishing,
     /// The parameter gradients are so large the next step will not be a step.
     Exploding,
+    /// The signal has grown over a stretch nobody is normalising.
+    ///
+    /// **A conjunction, and both halves are load-bearing.** Drifting alone is a
+    /// network that is fine and having no normalisation alone is a network that
+    /// is fine; the structural half is baked into the measurement, which counts
+    /// the gain from the last normalisation upstream rather than from the
+    /// input. A badly-initialised stack *with* a norm layer drifts under 3x and
+    /// trains — structure alone would have flagged it anyway.
+    ///
+    /// **One-sided, and that is measured rather than assumed.** It says nothing
+    /// about a signal that shrank: a stack whose output arrives five
+    /// ten-thousandths of the size it went in trained as well as a healthy one,
+    /// because Adam is scale-invariant per parameter. See
+    /// `health/tests/normalisation.py`.
+    MissingNormalisation,
     /// Most of what this node outputs is zero, on at least one step.
     ///
     /// Read off the **maximum** over the window: a layer that dies one step in
@@ -101,6 +116,7 @@ impl Flag {
             Self::IgnoredChannels(_) => "IGNORED_CHANNELS",
             Self::IgnoredInput(_) => "IGNORED_INPUT",
             Self::SoleReliance(_) => "SOLE_RELIANCE",
+            Self::MissingNormalisation => "MISSING_NORMALISATION",
             Self::Leakage => "LEAKAGE",
             Self::Narrowing => "NARROWING",
             Self::LosingPlasticity => "LOSING_PLASTICITY",
@@ -120,7 +136,7 @@ impl Flag {
     pub fn family(&self) -> &'static str {
         match self {
             Self::Nan | Self::Inf => "numeric",
-            Self::Vanishing | Self::Exploding => "signal",
+            Self::Vanishing | Self::Exploding | Self::MissingNormalisation => "signal",
             Self::Dead | Self::Saturated => "activation",
             Self::Stalled | Self::Overstepping => "step",
             Self::DeadChannels(_)
@@ -170,6 +186,10 @@ impl Flag {
             }
             Self::SoleReliance(_) => {
                 "one input carries everything and nothing else would take over if it went"
+            }
+            Self::MissingNormalisation => {
+                "the signal grows over a stretch with nothing normalising it; the first \
+                 step will be taken on numbers this size"
             }
             Self::Leakage => "two groups meant to stay apart carry the same information",
             Self::Narrowing => {
