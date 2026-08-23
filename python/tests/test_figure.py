@@ -444,3 +444,19 @@ def test_a_branch_of_a_wave_can_be_opened_too():
     placed = _figure.boxes(json.loads(g.plan_json()), inside={"l": made, "r": made})
 
     assert [b.node for b in placed if b.kind == "layer"] == ["l.0", "r.0"]
+
+
+def test_a_layer_that_narrows_is_drawn_wide_at_the_top():
+    # A funnel drawn upside down says the opposite of what it means, and both
+    # branches were the wrong way round.
+    g = Graph.somatize(Identity().named("a"))
+    made = _inside([("0", "learned", "Linear", "4×8"), ("1", "learned", "Linear", "4×2")])
+    made.edges.append(("0", "1"))
+
+    boxes = _figure.boxes(json.loads(g.plan_json()), inside={"a": made})
+    narrowing = next(b for b in boxes if b.node == "a.1")
+    path = _figure._tapered(narrowing, 10.0)
+
+    top = [float(one.split(",")[0]) for one in path.replace("M ", "").split(" L ")[:2]]
+    bottom = [float(one.split(",")[0]) for one in path.replace("M ", "").split(" L ")[2:4]]
+    assert max(top) - min(top) > max(bottom) - min(bottom), f"drawn upside down: {path}"

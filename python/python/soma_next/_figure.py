@@ -351,8 +351,7 @@ def figure(graph, overlay=None, inside=None):
         yaxis={"visible": False, "range": [span_y + 20, -20], "scaleanchor": "x"},
         **_theme.layout(
             margin={"l": 16, "r": 16, "t": 16, "b": 16},
-            width=min(1100, max(360, span_x + 80)),
-            height=min(1400, max(240, span_y + 80)),
+            **_sized(span_x + 80, span_y + 80),
         ),
     )
     return figure
@@ -506,7 +505,21 @@ def _ranked(inside):
     narrows = {}
     for path in layers:
         mine = _last_dim(layers[path].shape)
-        theirs = _width_before(path, layers, feeds, set())
+        # What really went in, when the trace knows it. Only when it does not —
+        # a functional operation `fx` recovered, which no hook ever saw — does
+        # this fall back to whatever is above it on the figure.
+        came_in = getattr(layers[path], "came_in", None)
+        # Only when the two are the same **rank**: an `Embedding` is handed
+        # token indices and returns vectors, and comparing the last number of
+        # one with the last number of the other is comparing a length with a
+        # width. A lookup does not narrow or widen, it replaces.
+        theirs = (
+            _last_dim(came_in)
+            if came_in and layers[path].shape and _rank(came_in) == _rank(layers[path].shape)
+            else None
+        )
+        if theirs is None and came_in is None:
+            theirs = _width_before(path, layers, feeds, set())
         narrows[path] = (
             None if mine is None or theirs is None else (mine < theirs) - (mine > theirs)
         )
@@ -537,6 +550,11 @@ def _width_before(path, layers, feeds, seen):
         if deeper is not None:
             return deeper
     return None
+
+
+def _rank(shape):
+    """How many numbers a shape has, which is what says what they mean."""
+    return len(shape.split("×"))
 
 
 def _last_dim(shape):
@@ -836,7 +854,10 @@ def _tapered(box, skew):
     x, y, w, h = box.x, box.y, box.w, box.h
     if box.narrows is None or box.narrows == 0:
         return f"M {x},{y} L {x + w},{y} L {x + w},{y + h} L {x},{y + h} Z"
-    if box.narrows < 0:
+    if box.narrows > 0:
+        # Narrower coming out than going in: **wide at the top**, which is the
+        # way the data goes. It was the other way round, and a funnel drawn
+        # upside down says the opposite of what it means.
         return f"M {x},{y} L {x + w},{y} L {x + w - skew},{y + h} L {x + skew},{y + h} Z"
     return f"M {x + skew},{y} L {x + w - skew},{y} L {x + w},{y + h} L {x},{y + h} Z"
 
@@ -955,6 +976,26 @@ def _routed(source, target, span, apart):
     )
 
 
+BIGGEST = 1600.0
+"""How large a figure is allowed to get, in pixels, on its longer side."""
+
+
+def _sized(wide, tall):
+    """A figure big enough to hold what is in it, **in proportion**.
+
+    The y axis is anchored to the x so a box is not stretched into a different
+    box. That makes width and height one decision and not two: capping the width
+    of a figure whose contents are wider than the cap does not shrink it, it
+    **cuts the right-hand side off** — and the arrows that reached the node over
+    there went with it.
+
+    So both are scaled by the same factor when either is too big, which is the
+    only way to make a thing smaller without making it shorter.
+    """
+    scale = min(1.0, BIGGEST / max(wide, tall, 1.0))
+    return {"width": max(360, wide * scale), "height": max(240, tall * scale)}
+
+
 def _bent(source, target):
     """One edge with nothing in the way, as `(shapes, annotation)`.
 
@@ -967,7 +1008,10 @@ def _bent(source, target):
     x1, y1 = target.cx, target.y
     if abs(x1 - x0) < 2.0:
         return [], _arrow(x0, y0, x1, y1)
-    lean = max((y1 - y0) * 0.45, 12.0)
+    # Enough to leave and arrive vertically, and no more: a deep bend on a long
+    # drop swings out across the figure, and what was wanted was *this feeds
+    # that* and not a detour.
+    lean = min(max((y1 - y0) * 0.35, 12.0), 70.0)
     path = f"M {x0},{y0} C {x0},{y0 + lean} {x1},{y1 - lean} {x1},{y1 - HEAD}"
     return (
         [{"type": "path", "path": path, "xref": "x", "yref": "y",

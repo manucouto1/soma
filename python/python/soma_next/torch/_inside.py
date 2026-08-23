@@ -165,7 +165,7 @@ def kind_of(what):
 class Layer:
     """One thing in an architecture: where it is, what it is, what it produces."""
 
-    __slots__ = ("path", "kind", "label", "shape", "made_of", "dims")
+    __slots__ = ("path", "kind", "label", "shape", "made_of", "dims", "came_in")
 
     def __init__(self, path, kind, label, shape=None, made_of=None, dims=None):
         self.path = path
@@ -179,6 +179,9 @@ class Layer:
         #: What each number of `shape` is — `("batch", "steps", "dim")`. A shape
         #: nobody can read is three numbers.
         self.dims = dims
+        #: And what went in, so that *does this narrow* is a fact about the
+        #: layer rather than about what happens to sit above it on a figure.
+        self.came_in = None
         #: The shape of what it produces, as text — `(32, 8)`. The one thing
         #: that makes a **bottleneck** visible: `512 → 8 → 512` is a picture and
         #: `Linear · Linear · Linear` is not. `None` when nobody ran it.
@@ -432,7 +435,7 @@ def _tensors(what):
 def _shape(output):
     """What a layer produces, as text. The one thing that makes a bottleneck
     visible at all."""
-    found = _tensors((output,))
+    found = _tensors(output if isinstance(output, list) else (output,))
     if not found:
         return None
     return "×".join(str(one) for one in tuple(found[0].shape))
@@ -595,9 +598,14 @@ def _watch(where, one, layers, edges, made_by, order, batch=None):
     def saw(_module, args, output):
         kind = kind_of(one)
         shape = _shape(output)
-        layers.append(
-            Layer(where, kind, type(one).__name__, shape, _made_of(one), _dims(kind, shape, batch))
+        made = Layer(
+            where, kind, type(one).__name__, shape, _made_of(one), _dims(kind, shape, batch)
         )
+        # What went **in**, which is the only honest way to know whether a layer
+        # narrows: the first layer of a node has nothing above it to compare
+        # with, and it is exactly the one a bottleneck usually starts at.
+        made.came_in = _shape(_tensors(list(args)) and _tensors(list(args))[0:1])
+        layers.append(made)
         known = False
         for before in _tensors(args):
             producer = made_by.get(id(before))
@@ -797,8 +805,16 @@ def _repeated(inside):
         return inside
     del signature
     layers = [
-        Layer(
-            one.path, one.kind, _times(one.label, counts[which]), one.shape, one.made_of, one.dims
+        _carried(
+            Layer(
+                one.path,
+                one.kind,
+                _times(one.label, counts[which]),
+                one.shape,
+                one.made_of,
+                one.dims,
+            ),
+            one,
         )
         for which in kept
         for one in blocks[which]
@@ -907,6 +923,13 @@ def _numbered(which):
     return which.rsplit(".", 1)[-1].isdigit()
 
 
+def _carried(made, from_):
+    """The same layer with what went into it kept. Rebuilding a `Layer` and
+    losing that is how a funnel goes back to being a rectangle."""
+    made.came_in = getattr(from_, "came_in", None)
+    return made
+
+
 def _times(label, count):
     return label if count == 1 else f"{label}  ×{count}"
 
@@ -926,13 +949,16 @@ def _spliced(layers, edges, name, finer):
     out_of = [(a, b) for a, b in edges if a in was and b not in was]
 
     renamed = [
-        Layer(
-            f"{mine}{one.path}",
-            one.kind,
-            one.label,
-            (was.get(f"{mine}{one.path}") or one).shape,
-            (was.get(f"{mine}{one.path}") or one).made_of,
-            (was.get(f"{mine}{one.path}") or one).dims,
+        _carried(
+            Layer(
+                f"{mine}{one.path}",
+                one.kind,
+                one.label,
+                (was.get(f"{mine}{one.path}") or one).shape,
+                (was.get(f"{mine}{one.path}") or one).made_of,
+                (was.get(f"{mine}{one.path}") or one).dims,
+            ),
+            was.get(f"{mine}{one.path}") or one,
         )
         for one in finer.layers
     ]
