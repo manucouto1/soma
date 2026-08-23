@@ -3982,3 +3982,217 @@ reason `finished` leaves pruned trials out.
 - [x] the graph and the run are drawn from the same table
 - [x] without plotly, drawing says how to get it
 - [x] a live view outside a notebook reads as nothing, like the graph's figure
+
+## CU21 — The diagnosis, which says it is an opinion
+
+```python
+from soma_next.health import diagnose, overlaid, alerts
+from soma_next.torch import Trainer, Audit
+
+t = Trainer(g, objective=..., optimizer=..., auditing=Audit(every=10, inside=True),
+            watching=[Recorder(store, summarising=["loss"])])
+t.fit(data, epochs=5)
+
+found = diagnose(store, run=t.run)            # read back, nothing runs again
+alerts(found)                                 # the loud one, cards in a cell
+overlaid(g, store, run=t.run, inside=True)    # and where, on the graph
+```
+
+The third of the three things CU19 split observability into. The first was the
+declaration drawn, the second the record of what happened, and this one is
+**neither**: it is an opinion about the record.
+
+### A crate with no dependencies at all, not even the core's
+
+`health/` takes numbers and gives back flags. It does not measure, it has no
+clock, it never touches a store. That is what turns CU19's invariant from an
+aspiration into a test:
+
+> a diagnosis has to be reproducible from the stored record, without training
+> again.
+
+Change a bound and ask again. The record has not moved, so an argument about a
+threshold costs a scan instead of an afternoon of GPU. It is the shape `study/`
+already had: pure, deterministic, hashable, and the loop that owns a tensor
+stays in Python.
+
+### The taxonomy is inherited, and how it reads is the knowledge
+
+`DEAD` and `SATURATED` read the **maximum** over a window and never the mean. A
+layer that dies one step in four is dead, and an average hides it. **Dormant is
+not dead** — two findings, not one bound with two names.
+
+Three come from the literature. `STALLED` and `OVERSTEPPING` from the
+update-to-weight ratio, which the original measured and never said anything
+about, and which lands a healthy layer at about `1e-3`. `LOSING_PLASTICITY` is a
+**conjunction** on purpose: weights growing, or units going quiet, one at a time,
+is a network that is training.
+
+### A threshold that was measured and did not survive it
+
+`NARROWING` is in the vocabulary and **off by default**. The published monitor's
+certificate is the deviation from a healthy baseline, and one run has none.
+Measured: healthy runs sit at 0.69–0.71 and a destabilised one at 0.43–0.86,
+which overlap. The measurement is in `health/tests/narrowing.py`, the metric is
+recorded and drawn, and the alarm was not invented. `Thresholds` is data, so
+whoever does have a baseline sets the bound and gets the finding.
+
+### Measuring is level 2's, and thresholds never go near it
+
+`Trainer(..., auditing=True)` hooks the nodes and emits `health` facts through
+the same `watching=` CU20 built. A threshold baked into the measurement would
+make disagreeing with it cost another training run.
+
+`Audit(inside=True)` looks **inside** a node, because a node is often a whole
+architecture and *this node is unhealthy* is not an answer when it is twenty
+layers. Findings are keyed `node.path.to.submodule`, and the audit's scope is
+**the same scope the drawing uses** — which is what makes *what is measured has a
+box* true rather than hopeful.
+
+### A node is opened up, and an architecture is a graph
+
+`architecture(g, x)` traces what a node is made of: `fx` where it can, because it
+sees the operations that are **not** modules and a residual connection is exactly
+one; a real forward where it cannot, **saying so**, because a residual that is
+missing looks like a residual that is not there.
+
+`g.figure(inside=...)` draws the node's box as a **frame** — the shape a `Wave`
+and a `Remote` already are — and lays the inside out by what feeds what, so a
+skip runs down a gutter and enters from the side. Five rules make it readable: a
+**kind** decides the silhouette, not a class name; a composite everybody
+recognises is one box and `depth=` opens it; blocks that are the same block
+collapse to `×N`; the **shape is written on the layer**, because that is the only
+thing that makes a bottleneck a picture; and every number **says what it is** —
+`4 batch · 16 steps · 24 dim`, never `4×16×24`.
+
+Findings are coloured by **family** — numeric, signal, activation, step,
+capacity, data — with a legend of the ones on the figure. Six alarms that all
+look the same are one alarm.
+
+### Where is a question the graph answers
+
+Health gets a **channel of its own**: the fill goes on saying where a node runs
+and the outline turns red. On a graph spread over three machines, *where does
+this run* is the answer somebody came for, and taking the fill for a second fact
+would have cost it.
+
+`gantt` is the timeline. Every fact carries how far into the `forward` it began,
+so a `Wave` draws as overlapping bars and a remote slice sits inside the round
+trip it arrived under. An offset into a slice is a fact **about the slice**; two
+wall clocks would not have composed.
+
+### And a third question, which is not about the network at all
+
+`soma_next.data.contribution` shuffles one input and scores again; the drop is
+what that input was worth. `health` asks whether a network is **learning**; this
+asks whether it is learning **what you meant**, which no amount of looking at a
+gradient will ever say.
+
+It exists because of a real project: symptom channels for a mental-health
+condition, months spent on the architecture, and the predictive signal was in the
+self-disclosure and not in the presence of symptoms. `IGNORED_INPUT` is the
+finding that would have said so in an afternoon; `SOLE_RELIANCE` is the other end
+of the same worry.
+
+**Shuffled and not zeroed**: a zero is a value, and what is being asked about is
+the correspondence with the answer.
+
+### What is not in it
+
+The **static** half, before a GPU is spent: signal propagation and dynamical
+isometry at initialisation, where a normalisation layer is missing, and the
+zero-cost proxies. Deferred rather than refused, and with a caveat already
+written down — synflow correlates 0.76 with parameter count, which is close to
+saying it measures size. If it does not separate when measured, it ships off with
+its measurement beside it, the way `NARROWING` did.
+
+### Questionnaire
+
+**The verdict** (`health/tests/unit/verdict.rs`)
+- [x] a gradient too small to train on says so, and one too big to step on, and
+      it cannot be both
+- [x] a layer that dies one step in four is dead, and one that is merely sparse
+      is not
+- [x] a layer pinned where the derivative is nothing says so
+- [x] a node moving too little next to its own weights says so, and one moving
+      so much it forgets where it was
+- [x] a healthy ratio is near a thousandth and says nothing
+- [x] dead channels are counted and are not the same as a dead layer
+- [x] a channel alive and never asked for is its own finding
+- [x] two groups carrying the same information leak
+- [x] a collapsing update says nothing at the default bound, **because it is
+      off** — and says so for whoever has a baseline to set it against
+- [x] an update that is merely low rank all along is not narrowing
+- [x] losing plasticity needs all three signs at once, and any one alone is
+      ordinary
+- [x] what stops a run is read first
+- [x] the same numbers answer differently under other thresholds
+- [x] a node nobody measured is not called healthy and is not flagged
+
+**The vocabulary** (`health/tests/unit/flag.rs`)
+- [x] a flag that counts something says how many, and its name is stable
+      whatever it counts
+- [x] every flag says what to do about it
+
+**The data** (`health/tests/unit/leaning.rs`)
+- [x] shares add up to one, so they read as how much of what matters
+- [x] an input the model is not using says so
+- [x] two inputs that share the work say nothing
+- [x] one input carrying everything is worth knowing before it goes missing
+- [x] a model that loses nothing whatever you take away is using none of it
+- [x] an input the model does better without keeps its negative
+- [x] one input alone says nothing, because there is nothing to compare
+- [x] the bounds are data here too
+
+**Measured and read back** (`python/tests/test_health.py`)
+- [x] **a diagnosis is taken from the record and not from the run**
+- [x] the same record answers differently under other thresholds
+- [x] a threshold nobody has is refused by name
+- [x] a deep sigmoid stack starves its early layers
+- [x] the update ratio lands a healthy layer near a thousandth
+- [x] a block whose relu cuts everything off is dead, and one pinned at the far
+      end of its range is saturated
+- [x] a gradient too big to step on explodes
+- [x] a healthy shallow stack raises nothing
+- [x] a node with no weights is not diagnosed at all
+- [x] a run that is not audited says nothing about health
+- [x] a cadence measures fewer steps and says the same kind of thing
+- [x] **auditing does not change what the network computes**
+
+**What a node is made of** (`python/tests/test_health.py`)
+- [x] a node says what it is made of
+- [x] a skip connection is an edge and not an order
+- [x] a bottleneck is visible in the shapes
+- [x] a module `fx` cannot trace is still drawn, and says how
+- [x] what is drawn is a superset of what is measured
+- [x] a composite everybody recognises is one box, and `depth` counts composites
+      opened and not names
+- [x] blocks that are the same block collapse to one and a count
+- [x] what comes after a stack is not adopted by its last block
+- [x] a tensor nobody holds cannot invent an edge
+- [x] a shape says what each of its numbers is, and something that did not change
+      the shape keeps the names
+- [x] a recurrent cell says its output and not its hidden state
+
+**Drawn** (`python/tests/test_figure.py`)
+- [x] a node with an inside becomes a frame around it, and one without is drawn
+      exactly as before
+- [x] a layer is drawn by what it is and not by its name
+- [x] a layer that narrows is drawn **wide at the top**
+- [x] what feeds what decides the rows, and a skip jumps one
+- [x] every layer sits inside the box it belongs to, named after the node it is in
+- [x] the shape is written on the layer, because a bottleneck is shapes
+- [x] a flag on a layer marks that layer and not the others
+- [x] the overlay marks the node without taking the fill
+- [x] a branch of a wave can be opened too
+
+**The data layer** (`python/tests/test_data.py`)
+- [x] an input the model is not using is found in one afternoon
+- [x] and the shares say how lopsided it is
+- [x] two channels that both carry it say nothing
+- [x] **nothing is trained and nothing is changed**
+- [x] shuffling keeps the channel and breaks only what it lines up with
+- [x] an opaque is unwrapped and wrapped again
+- [x] something that is not a batch is left alone
+- [x] only the inputs asked for are tried
+- [x] no data is nothing and not a failure
