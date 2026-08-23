@@ -105,9 +105,12 @@ the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
 `examples/` holds four notebooks — declaring a graph, watching a run, training,
-a study. They are shipped **without stored outputs** and every cell is verified
-by running its source end to end as a plain script; writing them is also how two
-real bugs were found, so it is worth re-running them when the Python API moves.
+a study — **with their outputs stored**, so opening one shows what it does. Every
+figure is kept twice: the plotly JSON for a live viewer and a PNG for a static
+one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
+time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not
+installed and is not needed, it is only the CLI around it. Writing them is how
+two real bugs were found.
 
 ## Status
 

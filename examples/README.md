@@ -11,10 +11,17 @@ example that fetches a dataset is an example that stops working.
 | [3 — Training](03-training.ipynb) | a `Trainer`, `Opaque`, the loss drawn live, gradient accumulation, freezing, and exporting what a run learnt |
 | [4 — A study](04-a-study.ipynb) | `Space` / `Sampler` / `Pruner`, the distributed loop, a table of results, hyper-parameter influence and parallel coordinates |
 
-They are shipped **without stored outputs**. Every cell was run before it was
-committed — the sources are executed end to end as plain scripts as part of
-writing them — but a notebook full of embedded plotly JSON is a diff nobody can
-read, and GitHub would not render the figures anyway.
+They are shipped **with their outputs**, so opening one shows what it does
+without running anything.
+
+Every figure is stored twice, and that is on purpose: the plotly JSON, so
+JupyterLab and nbviewer draw it live and you can hover a node or zoom a curve;
+and a PNG beside it, so a static viewer — GitHub, a diff, a preview — shows the
+same figure instead of an empty cell. It is the renderer that decides:
+
+```bash
+PLOTLY_RENDERER="plotly_mimetype+png" jupyter lab      # or when re-executing them
+```
 
 ## Running them
 
@@ -29,7 +36,23 @@ extension, so a change in `python/src/` that was not rebuilt means a notebook
 that is green about code that is not the code.
 
 Notebook 3 and 4 need `torch`. Notebook 2 starts a real worker process, which
-needs nothing but the same interpreter.
+needs nothing but the same interpreter. Notebooks 3 and 4 seed torch, so
+re-executing them gives back the numbers that are stored here.
+
+To re-execute them all after a change to the Python API:
+
+```bash
+python - <<'EOF'
+import os, pathlib, nbformat
+from nbclient import NotebookClient
+os.environ["PLOTLY_RENDERER"] = "plotly_mimetype+png"
+for path in sorted(pathlib.Path("examples").glob("*.ipynb")):
+    nb = nbformat.read(path, as_version=4)
+    NotebookClient(nb, timeout=1800, kernel_name="python3").execute()
+    nbformat.write(nb, path)
+    print(path.name, "ok")
+EOF
+```
 
 ## What is not here, and why
 
