@@ -46,14 +46,15 @@
 
 use crate::codec::{self, Codec};
 use crate::frame;
-use crate::machine::Machine;
+use crate::machine::{self, Machine};
 use crate::{Answer, Label, Provision, Provisioned, Request};
 use soma_next_core::{Catalog, Executor, Fact, Keeper, Outcome, Watcher};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// A worker about to serve: what it executes with, and where it listens.
 pub struct Serving<'a> {
@@ -61,6 +62,7 @@ pub struct Serving<'a> {
     store: Option<&'a dyn Store>,
     keeper: Option<&'a dyn Keeper>,
     codec: Option<&'a dyn Codec>,
+    every: Option<Duration>,
 }
 
 impl<'a> Serving<'a> {
@@ -69,6 +71,7 @@ impl<'a> Serving<'a> {
         Self {
             source: Source::Own(catalog),
             store: None,
+            every: None,
             keeper: None,
             codec: None,
         }
@@ -80,6 +83,7 @@ impl<'a> Serving<'a> {
         Self {
             source: Source::Sent(provision),
             store: None,
+            every: None,
             keeper: None,
             codec: None,
         }
@@ -93,6 +97,24 @@ impl<'a> Serving<'a> {
     /// up is provisioned without the client noticing.
     pub fn store(mut self, store: &'a dyn Store) -> Self {
         self.store = Some(store);
+        self
+    }
+
+    /// Writes a reading of this machine to the store this often, whether or not
+    /// anybody is asking it to do anything.
+    ///
+    /// The idle half, and the pipe is CU20's rule rather than a preference:
+    /// *where a connection is open, facts come back down it; where there is
+    /// none, they go to the store*. An idle worker's connection is one **nobody
+    /// is reading** — a client only reads the socket while a job is in flight —
+    /// so beating down it would fill a buffer nobody drains, block this process
+    /// on the write, and hand over the **oldest** beats whenever somebody
+    /// finally looked. Which is the worst available answer to *is it alive now*.
+    ///
+    /// Off unless asked for, and it does nothing without a
+    /// [`store`](Serving::store) to write to.
+    pub fn reporting(mut self, every: Duration) -> Self {
+        self.every = Some(every);
         self
     }
 
@@ -130,11 +152,23 @@ impl<'a> Serving<'a> {
     /// it normally finishes. A failure of what gets executed is not an error
     /// here: it travels back as an answer.
     pub fn over_stdin(self) -> io::Result<()> {
+        let every = self.every;
         let shared = Shared::of(self);
+        let stop = AtomicBool::new(false);
         // The handle and not the lock guard: a `StdoutLock` is not `Send`, and
         // what writes down this pipe is now also whatever is watching the run,
         // from a wave's threads. `attend` holds its own lock over it.
-        attend(&shared, io::stdin().lock(), io::stdout())
+        std::thread::scope(|scope| {
+            if let Some(every) = every {
+                let (shared, stop) = (&shared, &stop);
+                scope.spawn(move || reporting(shared, every, stop));
+            }
+            let said = attend(&shared, io::stdin().lock(), io::stdout());
+            // A pipe ends when the client goes, and the scope will not return
+            // while the clock is still ticking in it.
+            stop.store(true, Ordering::Relaxed);
+            said
+        })
     }
 
     /// Stands on `addr` and serves whoever connects. It does not return: it
@@ -153,10 +187,16 @@ impl<'a> Serving<'a> {
         let listener = TcpListener::bind(addr)?;
         opened(listener.local_addr()?);
 
+        let every = self.every;
         let shared = Shared::of(self);
         let shared = &shared;
+        let stop = AtomicBool::new(false);
+        let stop = &stop;
 
         std::thread::scope(|scope| {
+            if let Some(every) = every {
+                scope.spawn(move || reporting(shared, every, stop));
+            }
             let mut alive: Vec<std::thread::ScopedJoinHandle<'_, ()>> = Vec::new();
             for arrival in listener.incoming() {
                 let socket = match arrival {
@@ -179,6 +219,9 @@ impl<'a> Serving<'a> {
                     }
                 }));
             }
+            // The listener only ends if it broke, and the scope will not
+            // return while the reporting thread is still in it.
+            stop.store(true, Ordering::Relaxed);
         });
         Ok(())
     }
@@ -192,6 +235,14 @@ struct Shared<'a> {
     keeper: Option<&'a dyn Keeper>,
     codec: Option<&'a dyn Codec>,
     loaded: Mutex<Loaded<'a>>,
+    /// When this **process** came up, and how much it has run in total.
+    ///
+    /// Here and not on a `Session`, which is one client's conversation: a
+    /// worker that has served three clients has served them all, and an uptime
+    /// that restarted whenever somebody reconnected would be a figure of
+    /// connections dressed as a figure of machines.
+    since: Instant,
+    served: AtomicU64,
 }
 
 impl<'a> Shared<'a> {
@@ -206,7 +257,14 @@ impl<'a> Shared<'a> {
             keeper: serving.keeper,
             codec: serving.codec,
             loaded: Mutex::new(loaded),
+            since: Instant::now(),
+            served: AtomicU64::new(0),
         }
+    }
+
+    /// A reading of this machine right now.
+    fn reading(&self) -> Machine {
+        Machine::here(self.since.elapsed(), self.served.load(Ordering::Relaxed))
     }
 
     /// What is inside, even if another session broke: a poisoned `Mutex` holds
@@ -229,11 +287,6 @@ struct Session {
     /// The artifact this client greeted with, if it brought one. What it gets
     /// checked against is [`Shared::loaded`], on every job.
     mine: Option<String>,
-    /// When this process started, so a reading can say how long it has been up
-    /// without either end trusting the other's wall clock.
-    since: Option<Instant>,
-    /// How many slices it has run.
-    served: u64,
 }
 
 /// Where this worker's catalog comes from.
@@ -290,6 +343,44 @@ impl<W: Write + Send> Watcher for Relaying<'_, W> {
         };
         if let Ok(mut out) = self.to.lock() {
             let _ = frame::send(&mut *out, &encoded);
+        }
+    }
+}
+
+/// Writes a reading of this machine to the store on a clock, until told to stop.
+///
+/// The idle half. There is no name for a machine here — `w1` is the client's
+/// word and there is no client — so it files under what the machine calls
+/// itself, and whoever reads joins the two by seeing the same `id` on a reading
+/// that **did** come down a wire.
+///
+/// One name, rewritten. The store stamps every write, so a reading that has not
+/// moved is a machine that has stopped, and finding that out is a scan with no
+/// fetches. It is CU18's shape and it is the only one that does not grow while
+/// a worker sits there doing nothing.
+fn reporting(shared: &Shared<'_>, every: Duration, stop: &AtomicBool) {
+    let Some(store) = shared.store else {
+        return;
+    };
+    while !stop.load(Ordering::Relaxed) {
+        let reading = shared.reading();
+        let said = reading.said();
+        let (kind, mut meta) = said.flattened();
+        meta.insert(0, ("fact".into(), kind.to_string()));
+        // The whole of it is in the record and the blob has nothing to add,
+        // which is what the price list is for: this costs a scan to read and
+        // never a fetch.
+        if let Ok(digest) = store.put(&[]) {
+            // A store that will not take it is not something to stop serving
+            // over, and there is nobody to tell: a worker's job is the work.
+            let _ = store.bind(&machine::filed(&reading.id), &digest, meta);
+        }
+        // Slept in slices so shutting down does not wait out the interval.
+        let mut left = every;
+        while left > Duration::ZERO && !stop.load(Ordering::Relaxed) {
+            let nap = left.min(Duration::from_millis(100));
+            std::thread::sleep(nap);
+            left -= nap;
         }
     }
 }
@@ -404,9 +495,8 @@ fn reply<W: Write + Send>(
             // was like while it was asked. It rides the connection that is
             // already open, which is CU20's rule for anything that happens
             // where somebody is listening.
-            session.served += 1;
-            let up = session.since.get_or_insert_with(Instant::now).elapsed();
-            Relaying { to: output }.saw(&Machine::here(up, session.served).said());
+            shared.served.fetch_add(1, Ordering::Relaxed);
+            Relaying { to: output }.saw(&shared.reading().said());
 
             // The lock is released before executing — a `Catalog` clones by
             // `Arc` — or every client would serialize against the run.

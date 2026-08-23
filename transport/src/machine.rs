@@ -68,6 +68,15 @@ pub struct Machine {
     pub memory: Option<f64>,
     /// How many slices this worker has run since it started.
     pub served: u64,
+    /// What this machine calls **itself**: its hostname and this process.
+    ///
+    /// Not the name the graph gave it. **A worker does not know that name** —
+    /// `w1` is the client's word and it is why the client is the one that
+    /// attributes a fact. So a reading written to a store, where there is no
+    /// client to attribute it, has to be filed under something the worker can
+    /// know on its own, and this is it. Whoever reads joins the two by seeing
+    /// the same `id` on a reading that **did** come down a wire.
+    pub id: String,
 }
 
 impl Machine {
@@ -87,6 +96,7 @@ impl Machine {
             cores,
             memory: memory(),
             served,
+            id: mine(),
         }
     }
 
@@ -102,6 +112,9 @@ impl Machine {
             ("up_us".into(), self.up.as_micros().to_string()),
             ("served".into(), self.served.to_string()),
         ];
+        if !self.id.is_empty() {
+            pairs.push(("id".into(), self.id.clone()));
+        }
         for (name, what) in [("busy", self.busy), ("memory", self.memory)] {
             if let Some(one) = what.filter(|one| one.is_finite()) {
                 pairs.push((name.into(), format!("{one:.4}")));
@@ -115,6 +128,30 @@ impl Machine {
             pairs,
         }
     }
+}
+
+/// Where a reading of this machine is filed in a store.
+///
+/// **One name per machine and rewritten every time**, not one per reading. That
+/// is CU18's shape and it buys two things: a store that does not grow while a
+/// worker sits there, and liveness for free — the store stamps every write, so
+/// a reading that has not moved is a machine that has stopped, and finding that
+/// out is a scan with no fetches.
+pub fn filed(id: &str) -> String {
+    format!("machine/{id}")
+}
+
+/// What this machine calls itself: its hostname, and which process on it.
+///
+/// The pid matters: two workers on one box are two workers, and filing both
+/// under the hostname would have the second quietly overwriting the first.
+fn mine() -> String {
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .ok()
+        .map(|one| one.trim().to_string())
+        .filter(|one| !one.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    format!("{host}-{}", std::process::id())
 }
 
 /// The one-minute run queue, out of `/proc/loadavg`.

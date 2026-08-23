@@ -32,6 +32,7 @@ from soma_next.record._read import (
     forwards,
     nodes,
     runs,
+    standing,
 )
 
 __all__ = [
@@ -47,4 +48,5 @@ __all__ = [
     "progress",
     "runs",
     "spent",
+    "standing",
 ]

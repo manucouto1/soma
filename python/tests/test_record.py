@@ -322,3 +322,103 @@ def test_a_run_with_nobody_else_in_it_says_nothing_about_machines(tmp_path):
 
     assert here["host"] == "here"
     assert here["busy"] is None and here["served"] is None
+
+
+# ── The idle half, which is the one no connection can carry ──
+
+
+def _standing(store, port, seconds="0.3"):
+    """A worker on a port, writing readings on a clock, that nobody is using."""
+    import subprocess
+    import time
+
+    said = subprocess.Popen(
+        [
+            sys.executable, "-m", "soma_next.worker",
+            "--listen", f"127.0.0.1:{port}", "--store", str(store), "--reporting", seconds,
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    said.stdout.readline()
+    time.sleep(float(seconds) * 3)
+    return said
+
+
+def test_a_worker_nobody_is_using_still_says_it_is_there(tmp_path):
+    # The reason the clock exists. A worker only speaks down a wire when
+    # somebody gives it work, so the machine sitting idle — the one you most
+    # want to see in a fleet — would otherwise not be in the picture at all.
+    from soma_next.record import standing
+
+    store = Store(str(tmp_path))
+    worker = _standing(tmp_path, 7741)
+    try:
+        said = standing(store)
+    finally:
+        worker.terminate()
+
+    assert len(said) == 1, said
+    one = next(iter(said.values()))
+    assert one["served"] == "0", "it has done nothing, and says so"
+    assert one["fact"] == "machine"
+
+
+def test_and_the_name_the_graph_gave_it_is_joined_on(tmp_path):
+    # A worker does not know it is `w1`, so it files under what it calls itself.
+    # The two names are only ever in the same row on a reading that came down a
+    # wire — where the client attributed it — and that is the join.
+    from soma_next import Worker
+    from soma_next.record import fleet
+
+    store = Store(str(tmp_path))
+    worker = _standing(tmp_path, 7742)
+    try:
+        g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
+        away = Worker.at("127.0.0.1:7742", mode="network", send=["test_record"])
+        g.forward(0.0, workers={"w1": away}, watching=Recorder(store, run="m"))
+
+        said = {one["host"]: one for one in fleet(store, run="m")}
+    finally:
+        worker.terminate()
+
+    assert set(said) == {"here", "w1"}, "and not one row per name for one machine"
+    assert said["w1"]["quiet_s"] == 0, "it wrote, and it is the newest writer"
+    assert said["w1"]["busy"] is not None
+
+
+def test_a_machine_that_wrote_and_was_never_asked_is_there_under_its_own_name(tmp_path):
+    # Which is the honest answer: there is a machine here writing, and the graph
+    # never gave it a name because it never placed anything on it.
+    from soma_next.record import fleet
+
+    store = Store(str(tmp_path))
+    worker = _standing(tmp_path, 7743)
+    try:
+        g = Graph.somatize(Add(1).named("a"))
+        g.forward(0.0, watching=Recorder(store, run="m"))
+        said = {one["host"]: one for one in fleet(store, run="m")}
+    finally:
+        worker.terminate()
+
+    idle = next(one for host, one in said.items() if host != "here")
+    assert idle["slices"] == 0 and idle["ran"] == 0
+    assert idle["busy"] is not None, "it said what it is even though nobody asked"
+
+
+def test_how_quiet_a_machine_is_is_measured_against_the_other_writers(tmp_path):
+    # CU18's rule, and it is not a preference: those are two clocks on two
+    # machines sharing a folder, and on a cluster they disagree by minutes as a
+    # matter of course. Comparing writers with writers makes the drift cancel.
+    from soma_next.record import standing
+
+    store = Store(str(tmp_path))
+    digest = store.put(b"")
+    store.bind("machine/old", digest, {"fact": "machine", "served": "1"})
+    store.bind("machine/new", digest, {"fact": "machine", "served": "2"})
+
+    said = standing(store)
+
+    assert said["new"]["quiet_s"] == 0, "the newest writer is the reference"
+    assert said["old"]["quiet_s"] >= 0
+    assert said["old"]["quiet_s"] >= said["new"]["quiet_s"]

@@ -194,12 +194,12 @@ def default(strict=True):
     return Strategies(**{_manifest.KIND: Project(strict), "pickle": Pickles()})
 
 
-def serve_provisioned(provision=None, store=None):
+def serve_provisioned(provision=None, store=None, reporting=None):
     """Serves slices with the catalog the client sends, until the client closes.
     Without an argument it opens both kinds."""
     _hush()
     return _serve_provisioned(
-        default() if provision is None else provision, store=store
+        default() if provision is None else provision, store=store, reporting=reporting
     )
 
 
@@ -208,7 +208,7 @@ def _hush():
     sys.stdout = sys.stderr
 
 
-def listen(addr, provision=None, opened=None, store=None):
+def listen(addr, provision=None, opened=None, store=None, reporting=None):
     """Stands on `addr` and serves whoever connects. It does not return.
 
     `provision` says what the implementations are resolved with; by default,
@@ -222,7 +222,8 @@ def listen(addr, provision=None, opened=None, store=None):
     network folder — the second one to be stood up starts warm.
     """
     return _listen_provisioned(
-        addr, default() if provision is None else provision, opened, store=store
+        addr, default() if provision is None else provision, opened, store=store,
+        reporting=reporting
     )
 
 
@@ -232,19 +233,30 @@ def main(argv=None):
     Without `--listen` it talks over standard input, which is for testing.
     `--lucky` executes even if its code is not the version the graph was written
     against; by default it stops. `--store` is a directory to keep things in.
+
+    `--reporting SECONDS` writes a reading of this machine into that store on a
+    clock — how loaded it is, how much memory is left, how long it has been up.
+    It is the half of *the health of the workers* that nobody on the other end
+    can work out, and the store is where it goes because an idle worker's
+    connection is one nobody is reading. Off unless asked for, and it needs a
+    `--store`.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     _read_the_codecs()
     which = default(strict="--lucky" not in argv)
     store = _after("--store", argv)
+    every = _after("--reporting", argv)
     if "--listen" in argv:
         return listen(
             _after("--listen", argv, needed=True),
             provision=which,
             opened=lambda where: print(f"listening on {where}", flush=True),
             store=store,
+            reporting=float(every) if every else None,
         )
-    return serve_provisioned(which, store=store)
+    return serve_provisioned(
+        which, store=store, reporting=float(every) if every else None
+    )
 
 
 def _read_the_codecs():

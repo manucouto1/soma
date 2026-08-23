@@ -4561,22 +4561,42 @@ The reading is taken **before** the slice and not after: one taken when the work
 is over is a reading of a machine that has just stopped, and the question is
 what it was like while it was asked.
 
+### The idle machine, which is the one you came to see
+
+A worker only speaks down a wire when somebody gives it work, so the machine
+sitting there doing nothing would not be in the picture at all — and that is the
+one a fleet view exists for. `python -m soma_next.worker --store DIR --reporting
+SECONDS` is the clock.
+
+It goes to the **store** and not down the connection, and the pipe was already
+decided rather than open: CU20's rule is *where a connection is open, facts come
+back down it; where there is none, they go to the store*, and an idle worker's
+connection is one nobody is reading. That is measured against the code rather
+than preferred — the client only reads the socket inside `say`, so a worker
+beating while idle writes into a buffer nobody drains: it blocks on the write,
+stops being able to accept the next job, and what the client eventually reads is
+the **oldest** beats. Which is the worst available answer to *is it alive now*.
+
+**One name per machine, rewritten**, and not one object per reading. That is
+CU18's shape and it buys two things: a store that does not grow while a worker
+sits there, and liveness for free — the store stamps every write, so `quiet_s`
+is a scan with no fetches, measured **writer against writer** and never against
+a local clock.
+
+And the name it files under is what the machine calls **itself**, a hostname and
+a process, because `w1` is the graph's word and *a worker does not know it*.
+Which is a fact about this design and not a wrinkle: the two names only ever
+meet on a reading that came down a wire, where the client attributed it, and
+`fleet` joins them there. A machine that wrote and was never asked for anything
+is in the fleet under its own name with nothing sent to it — which is exactly
+what it is.
+
+`examples/09-a-fleet.ipynb` is the picture of it: three workers, two runs, and
+the bars flip. A cheap slice is 9.4 ms of which almost all is waiting; the same
+shape with a slice worth sending is 810.7 ms of which almost all is work.
+Nothing about the figure changed between them.
+
 ### What is not in it
-
-**The idle machine.** A worker says what it looks like when it is given
-something to do, so one nobody is using contributes nothing. The pipe for that
-one is already decided rather than open: CU20's rule is *where a connection is
-open, facts come back down it; where there is none, they go to the store* — and
-an idle worker's connection is one nobody is reading, which is the same thing.
-So a clock writing readings to the store, and `fleet` scanning them the way
-CU18's liveness already does.
-
-It is not down the wire, and that was measured against the code rather than
-preferred: the client only reads the socket inside `say`, so a worker
-heartbeating while idle writes into a buffer nobody drains — it blocks on write
-and stops being able to accept the next job, and what the client eventually
-reads is the **oldest** beats, which is the worst possible answer to *is it
-alive now*.
 
 **This machine.** `here` says nothing about itself. It is the one you can look at
 with `top`, and inventing a row nobody had to send is not worth the line.
@@ -4591,6 +4611,10 @@ with `top`, and inventing a row nobody had to send is not worth the line.
 - [x] **a machine says what only it can say**
 - [x] and it arrives saying which host, without anybody attributing it
 - [x] a run with nobody else in it says nothing about machines
+- [x] **a worker nobody is using still says it is there**
+- [x] and the name the graph gave it is joined on
+- [x] a machine that wrote and was never asked is there under its own name
+- [x] how quiet a machine is is measured against the other writers
 
 **The reading** (`transport/tests/unit/machine.rs`)
 - [x] a reading crosses as a flat fact and not as a variant of its own

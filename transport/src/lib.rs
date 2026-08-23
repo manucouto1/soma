@@ -64,7 +64,7 @@ mod worker;
 
 pub use artifact::{Artifact, Label};
 pub use codec::{Codec, CodecError};
-pub use machine::Machine;
+pub use machine::{Machine, filed};
 pub use protocol::{Answer, MessageError, Request};
 pub use provision::{Provision, ProvisionError, Provisioned};
 pub use serve::Serving;

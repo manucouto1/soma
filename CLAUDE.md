@@ -104,10 +104,10 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
-`examples/` holds eight notebooks — declaring a graph, watching a run, training,
+`examples/` holds nine notebooks — declaring a graph, watching a run, training,
 a study, the health of a network, one problem end to end, a real architecture
-diagnosed in **problem → symptoms → solution → healthy** cycles, and what can be
-said before a step is taken — **with their outputs stored**, so opening one shows what it does. Every
+diagnosed in **problem → symptoms → solution → healthy** cycles, what can be
+said before a step is taken, and a fleet of machines — **with their outputs stored**, so opening one shows what it does. Every
 figure is kept twice: the plotly JSON for a live viewer and a PNG for a static
 one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
 time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not
@@ -449,8 +449,12 @@ already carries a `Fact` and the engine already wraps what comes back in
 `Elsewhere`, so a reading arrives saying which host without a line attributing
 it. Read and never judged — a bound on it would belong in `health/`.
 
-What is left of it is the **idle** machine, and its pipe is already decided by
-CU20's rule rather than open: an idle worker's connection is one nobody is
-reading, so its readings go to the store on a clock and `fleet` scans them.
+The **idle** machine is in it too, and its pipe follows the same rule rather
+than an exception to it: an idle worker's connection is one nobody is reading,
+so `--reporting SECONDS` writes to the store on a clock — **one name per machine,
+rewritten**, which is CU18's shape and makes `quiet_s` a scan with no fetches,
+measured writer against writer. It files under what the machine calls *itself*,
+because `w1` is the graph's word and a worker does not know it; the two names
+meet only on a reading that came down a wire, and `fleet` joins them there.
 
 See the distribution report for the full order.

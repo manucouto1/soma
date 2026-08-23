@@ -156,6 +156,50 @@ def curve_costs(store, *, run, of="loss.value"):
 #: name would be inventing one nobody wrote down.
 HERE = "here"
 
+#: Where a worker files a reading of itself, one name per machine and rewritten
+#: every time. Not one object per reading: the store stamps every write, so the
+#: newest is the newest and a store does not grow while a worker sits there.
+STANDING = "machine/"
+
+
+def standing(store):
+    """Every machine writing readings into this store, as `{id: reading}`.
+
+    The **idle** half. A worker says what it looks like on a clock whether or
+    not anybody is asking it to do anything, and it goes here rather than down a
+    wire for a reason that is CU20's rule and not a preference: a client only
+    reads the socket while a job is in flight, so an idle worker's connection is
+    one nobody is reading.
+
+    Keyed by what the machine calls **itself** — its hostname and process — and
+    not by the name the graph gave it, because on this path there is no client
+    and `w1` is the client's word. `fleet` joins the two.
+
+    `quiet_s` is how far behind the newest reading in this store each one is,
+    measured **writer against writer** and never against this machine's clock:
+    those are two clocks on two machines and on a cluster they disagree by
+    minutes as a matter of course. It is CU18's liveness rule, and it has the
+    same honest hole — a fleet where **everything** stopped has no newest write
+    to be behind, so nothing looks quiet. Which costs nothing: if nobody is
+    writing, nobody is asking this either.
+
+    One scan and no fetches.
+    """
+    said = {}
+    # Not `_records`, which asks for a run: a reading of a machine belongs to no
+    # run, and that is the point of it — an idle worker is idle between runs.
+    for record in store.bound():
+        if not record.name.startswith(STANDING):
+            continue
+        one = {name: what for name, what in record.meta}
+        one["id"] = record.name[len(STANDING) :]
+        one["when"] = record.when
+        said[one["id"]] = one
+    newest = max((one["when"] for one in said.values()), default=0)
+    for one in said.values():
+        one["quiet_s"] = newest - one["when"]
+    return said
+
 
 def fleet(store, *, run, last=None):
     """What each machine did, as the inverse of `nodes`.
@@ -191,6 +235,11 @@ def fleet(store, *, run, last=None):
     working now.
     """
     seen = {}
+    # What each machine calls itself, learned from the readings that **did**
+    # come down a wire: those arrive with the graph's name attached by the
+    # client, and they carry the machine's own id beside it. It is the only
+    # place the two names are ever in the same row.
+    named = {}
     rows = forwards(store, run=run)
     for row in rows[-last:] if last is not None else rows:
         for fact in facts(store, run=run, forward=row["forward"]) or []:
@@ -210,10 +259,13 @@ def fleet(store, *, run, last=None):
                     "cores": None,
                     "up_us": None,
                     "served": None,
+                    "quiet_s": None,
                 },
             )
             one["last"] = row["forward"]
             if fact["fact"] == "machine":
+                if "id" in fact:
+                    named[one["host"]] = fact["id"]
                 # The half no record can derive, and the newest one wins: a
                 # reading is a snapshot and the question is what the machine is
                 # like now, not what it averaged.
@@ -230,6 +282,39 @@ def fleet(store, *, run, last=None):
             if fact["fact"] in ("ran", "failed"):
                 one[fact["fact"]] += 1
                 one["took_us"] += int(fact.get("took_us", 0))
+    # And now the idle half, joined on. A machine that was working has a name
+    # from the graph and a reading from each; a machine that only wrote is here
+    # under its own id, with nothing sent to it — which is a machine the graph
+    # never placed anything on, and saying so is the point of asking.
+    wrote = standing(store)
+    for host, one in seen.items():
+        idle = wrote.pop(named.get(host, ""), None)
+        if idle is None:
+            one["quiet_s"] = None
+            continue
+        one["quiet_s"] = idle["quiet_s"]
+        for name in ("busy", "memory", "cores", "up_us", "served"):
+            # The newer of the two wins, and while a run is going the wire is
+            # newer: it was sent with the last slice. The store's reading is
+            # what there is once nobody is asking.
+            if one[name] is None and name in idle:
+                one[name] = float(idle[name])
+    for id_, idle in wrote.items():
+        seen[id_] = {
+            "host": id_,
+            "slices": 0,
+            "trip_us": 0,
+            "ran": 0,
+            "took_us": 0,
+            "failed": 0,
+            "nodes": set(),
+            "last": None,
+            "quiet_s": idle["quiet_s"],
+            **{
+                name: (float(idle[name]) if name in idle else None)
+                for name in ("busy", "memory", "cores", "up_us", "served")
+            },
+        }
     for one in seen.values():
         one["nodes"] = sorted(one["nodes"])
         # What the round trip cost over and above the work: the wire, the queue

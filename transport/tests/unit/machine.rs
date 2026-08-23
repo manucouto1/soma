@@ -21,6 +21,7 @@ fn a_reading_crosses_as_a_flat_fact_and_not_as_a_variant_of_its_own() {
         cores: Some(8),
         memory: Some(0.5),
         served: 3,
+        id: "box-7".into(),
     };
 
     let fact = one.said();
@@ -31,6 +32,35 @@ fn a_reading_crosses_as_a_flat_fact_and_not_as_a_variant_of_its_own() {
     assert_eq!(pairs["up_us"], "1234");
     assert_eq!(pairs["served"], "3");
     assert_eq!(pairs["cores"], "8");
+    assert_eq!(
+        pairs["id"], "box-7",
+        "what the machine calls itself, not what the graph does"
+    );
+}
+
+#[test]
+fn a_machine_is_filed_under_what_it_calls_itself() {
+    // `w1` is the client's word for it and there is no client on the idle
+    // path — so a reading written to a store has to be filed under something
+    // the worker can know on its own. Whoever reads joins the two by seeing
+    // the same `id` on a reading that did come down a wire.
+    use soma_next_transport::filed;
+
+    assert_eq!(filed("box-7"), "machine/box-7");
+    assert_ne!(
+        Machine::here(Duration::ZERO, 0).id,
+        "",
+        "a machine always knows something to call itself"
+    );
+}
+
+#[test]
+fn two_workers_on_one_box_are_two_machines() {
+    // Filing under the hostname alone would have the second quietly
+    // overwriting the first, and a fleet of two would read as a fleet of one.
+    let one = Machine::here(Duration::ZERO, 0).id;
+
+    assert!(one.ends_with(&format!("-{}", std::process::id())), "{one}");
 }
 
 #[test]
@@ -79,6 +109,7 @@ fn nothing_in_it_is_a_judgement() {
         cores: Some(1),
         memory: Some(0.99),
         served: 1,
+        id: "box-7".into(),
     });
 
     assert_eq!(pairs["busy"], "9.0000");

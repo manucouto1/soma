@@ -16,6 +16,8 @@
 
 use crate::codec::{Codecs, Packing};
 use crate::node::PyNode;
+use std::time::Duration;
+
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -267,10 +269,18 @@ fn keeping<'a>(
     serving: Serving<'a>,
     kept: Option<&'a Local>,
     packing: Option<&'a Packing<'a>>,
+    reporting: Option<f64>,
 ) -> Serving<'a> {
     let serving = match kept {
         Some(kept) => serving.store(kept),
         None => serving,
+    };
+    let serving = match reporting {
+        // Seconds, because that is what somebody standing a worker up thinks
+        // in. Nothing happens without a store to write to, and `Serving` says
+        // so rather than this asking twice.
+        Some(every) if every > 0.0 => serving.reporting(Duration::from_secs_f64(every)),
+        _ => serving,
     };
     match packing {
         Some(packing) => serving.keeping(packing),
@@ -282,11 +292,12 @@ fn keeping<'a>(
 /// empty and `provision` turns whatever arrives into nodes and a driver.
 ///
 #[pyfunction]
-#[pyo3(signature = (provision, store = None))]
+#[pyo3(signature = (provision, store = None, reporting = None))]
 pub fn serve_provisioned(
     py: Python<'_>,
     provision: &Bound<'_, PyAny>,
     store: Option<&str>,
+    reporting: Option<f64>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
     let kept = opened(store)?;
@@ -297,6 +308,7 @@ pub fn serve_provisioned(
             serving_provisioned(&provision),
             kept.as_ref(),
             packing.as_ref(),
+            reporting,
         )
         .over_stdin()
     })
@@ -306,13 +318,14 @@ pub fn serve_provisioned(
 /// Stands on `addr` and serves whoever connects; it does not return. `opened`
 /// is called once with the real address, so port `0` can be asked for.
 #[pyfunction]
-#[pyo3(signature = (addr, provision, opened = None, store = None))]
+#[pyo3(signature = (addr, provision, opened = None, store = None, reporting = None))]
 pub fn listen_provisioned(
     py: Python<'_>,
     addr: &str,
     provision: &Bound<'_, PyAny>,
     opened: Option<PyObject>,
     store: Option<&str>,
+    reporting: Option<f64>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
     let kept = self::opened(store)?;
@@ -323,6 +336,7 @@ pub fn listen_provisioned(
             serving_provisioned(&provision),
             kept.as_ref(),
             packing.as_ref(),
+            reporting,
         )
         .listen_at(addr, |where_| {
             if let Some(notify) = opened {
