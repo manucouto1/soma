@@ -35,11 +35,14 @@ from __future__ import annotations
 from soma_next._soma_next import Thresholds, about, verdict
 from soma_next.record._read import facts, forwards
 
-__all__ = ["Thresholds", "about", "diagnose", "history", "seen"]
+__all__ = ["Thresholds", "about", "diagnose", "history", "named", "seen", "within"]
 
 
 def diagnose(store, *, run, thresholds=None, last=None):
-    """What is wrong with each node of that run, as `{node: [flag, ...]}`.
+    """What is wrong, as `{where: [flag, ...]}`.
+
+    `where` is a node, or `node.path.to.submodule` when `inside=` was asked to
+    look in.
 
     A node with nothing wrong is **not in the answer**. Empty would say *this
     was checked and is fine*, and no flags does not mean that: a metric nobody
@@ -57,20 +60,38 @@ def diagnose(store, *, run, thresholds=None, last=None):
 
 
 def seen(store, *, run, last=None):
-    """The numbers a verdict would be taken over, per node — the latest of each.
+    """The numbers a verdict would be taken over — the latest of each.
+
+    Keyed by node, and by `node.path.to.submodule` for anything `inside=` was
+    asked to look at. The dot is what lets a figure colour the **node** while
+    the detail says which layer of it: a node is often a whole architecture,
+    and *this node is unhealthy* is not an answer when the node is twenty
+    layers deep.
 
     For looking at what was measured rather than at what somebody thinks of it,
-    and for taking the verdict yourself with `verdict(seen[node], bounds)`.
+    and for taking the verdict yourself with `verdict(seen[where], bounds)`.
     """
     latest = {}
     for row in _rows(store, run=run, last=last):
         for fact in row:
             if fact.get("fact") == "health" and "node" in fact:
-                latest[fact["node"]] = _numbers(fact)
+                latest[named(fact)] = _numbers(fact)
     return latest
 
 
+def named(fact):
+    """Where a health fact was measured: a node, or a submodule of one."""
+    inside = fact.get("inside")
+    return f"{fact['node']}.{inside}" if inside else fact["node"]
+
+
+def within(where):
+    """The node a key belongs to, whether or not it names a submodule of it."""
+    return where.split(".", 1)[0]
+
+
 def history(store, *, run, node, of="grad_norm", last=None):
+    # `node` is a `where`: a node, or `node.submodule`.
     """One measurement of one node over the run, as `(forward, value)` pairs.
 
     What a curve is drawn from — a gradient norm falling away, an update ratio
@@ -81,7 +102,7 @@ def history(store, *, run, node, of="grad_norm", last=None):
     for which, row in enumerate(_rows(store, run=run, last=last, numbered=True)):
         at, row = row
         for fact in row:
-            if fact.get("fact") == "health" and fact.get("node") == node and of in fact:
+            if fact.get("fact") == "health" and named(fact) == node and of in fact:
                 value = _number(fact[of])
                 if value is not None:
                     drawn.append((at, value))
@@ -106,7 +127,7 @@ def _numbers(fact):
     """
     said = {}
     for name, what in fact.items():
-        if name in ("fact", "node"):
+        if name in ("fact", "node", "inside"):
             continue
         if name in ("nan", "inf"):
             said[name] = what not in (False, "False", "false", "0", "", None)

@@ -152,13 +152,24 @@ def boxes(plan, labels=None):
     return out
 
 
-def figure(graph):
+def figure(graph, overlay=None):
     """The graph as a `plotly.graph_objects.Figure`.
 
     Everything drawn is read back from what was declared — `nodes()`, `edges()`,
     `devices()`, `hosts()`, `cached()`, `frozen()`, `mapped_nodes()`,
     `identities()`, `fingerprints()` — so this never runs anything and never
     needs a store.
+
+    `overlay` is what **happened**, laid over what was declared:
+    `{node: [flag, ...]}`, which is what `soma_next.health.overlaid` builds out
+    of a diagnosis. An empty one has to give a byte-identical drawing, and that
+    is a test — it is what lets the declaration keep being drawable by somebody
+    who has never run anything.
+
+    It gets a **channel of its own**. The fill goes on saying where a node runs
+    and nothing else; health is the outline and a badge. Recolouring the fill
+    would be two facts in one channel, and the answer to *is this unhealthy*
+    would have eaten the answer to *where does it run*.
     """
     go = _theme.plotly()
     import json
@@ -169,8 +180,9 @@ def figure(graph):
     mapped, identities = set(graph.mapped_nodes()), graph.identities()
     fingerprints = graph.fingerprints()
 
+    ill = dict(overlay or {})
     labels = {
-        node: _lines(node, identities.get(node), devices.get(node), badges)
+        node: _lines(node, identities.get(node), devices.get(node), badges, ill.get(node))
         for node in graph.nodes()
         for badges in [_badges(node, cached, frozen, mapped)]
     }
@@ -185,7 +197,12 @@ def figure(graph):
     for box in placed:
         if box.kind == "node":
             fill, line, ink = PALETTE[_family(devices.get(box.node))]
-            shapes.append(_rect(box, fill, line, 1.4))
+            width = 1.4
+            if box.node in ill:
+                # The one place in this library where a colour means bad. It is
+                # the outline and never the fill: two facts, two channels.
+                line, width = _theme.SERIES["alarm"], 2.6
+            shapes.append(_rect(box, fill, line, width))
             notes.append(_text(box.cx, box.cy, "<br>".join(labels[box.node]), ink))
         else:
             fill, line, ink = PALETTE[box.kind]
@@ -221,7 +238,10 @@ def figure(graph):
             marker={"size": 1, "opacity": 0},
             hoverinfo="text",
             hovertext=[
-                _hover(node, identities, devices, hosts, cached, frozen, mapped, fingerprints)
+                _hover(
+                    node, identities, devices, hosts, cached, frozen, mapped,
+                    fingerprints, ill.get(node),
+                )
                 for node in where
             ],
             showlegend=False,
@@ -318,15 +338,27 @@ def _badges(node, cached, frozen, mapped):
     return marks
 
 
-def _lines(node, identity, device, badges):
-    """What is written inside a node's box: at most three lines."""
+def _lines(node, identity, device, badges, flags=None):
+    """What is written inside a node's box: at most four lines."""
     lines = [_safe(node)]
     if identity and not _named_after(node, identity):
         lines.append(_safe(identity))
     tail = ([device] if device and device != "cpu" else []) + badges
     if tail:
         lines.append(_safe(" · ".join(tail)))
+    if flags:
+        # The names and not a count: `2 findings` is a number somebody has to go
+        # and look up, and the whole point of putting it on the box is not
+        # having to.
+        said = " · ".join(sorted({_bare(one) for one in flags}))
+        lines.append(f"<span style='color:{_theme.SERIES['alarm']}'>⚠ {_safe(said)}</span>")
     return tuple(lines)
+
+
+def _bare(flag):
+    """A flag without what it counts: `DEAD_CHANNELS(7)` is `DEAD_CHANNELS` on a
+    box, and the seven is on the hover where there is room for it."""
+    return flag.split("(", 1)[0]
 
 
 def _named_after(node, identity):
@@ -341,7 +373,9 @@ def _named_after(node, identity):
     return node == lowered or node.startswith(f"{lowered}_")
 
 
-def _hover(node, identities, devices, hosts, cached, frozen, mapped, fingerprints):
+def _hover(
+    node, identities, devices, hosts, cached, frozen, mapped, fingerprints, flags=None
+):
     """Everything that was said about a node, for the pointer."""
     said = [f"<b>{_safe(node)}</b>"]
     if identity := identities.get(node):
@@ -359,6 +393,10 @@ def _hover(node, identities, devices, hosts, cached, frozen, mapped, fingerprint
         said.append("mapped over its items")
     if written := fingerprints.get(node):
         said.append(f"written as {_safe(written)}")
+    if flags:
+        said.append("")
+        for one in flags:
+            said.append(f"<b>{_safe(one)}</b>")
     return "<br>".join(said)
 
 

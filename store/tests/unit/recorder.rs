@@ -17,6 +17,7 @@ fn store() -> (Arc<dyn Store>, tempdir::Dir) {
 fn ran(who: &str) -> Fact {
     Fact::Ran {
         node: NodeId::from(who),
+        began: Duration::ZERO,
         took: Duration::from_millis(1),
         device: None,
     }
@@ -100,6 +101,7 @@ fn the_detail_is_in_the_blob_in_the_order_it_arrived() {
     recorder.saw(&ran("a"));
     recorder.saw(&Fact::Left {
         host: Host::new("worker1"),
+        began: Duration::ZERO,
         took: Duration::from_millis(4),
     });
     recorder.saw(&over(9));

@@ -323,6 +323,19 @@ invented.
 Measuring is `soma_next.torch`'s: `Trainer(..., auditing=True)` hooks the nodes
 and emits `health` facts through the same `watching=`. Thresholds never go near
 it — baked into the measurement, they would make an argument cost an afternoon
-of GPU. What is left of health is the **static** half, before a GPU is spent.
+of GPU. `Audit(inside=True)` looks **inside** a node, because a node is often a
+whole architecture and *this node is unhealthy* is not an answer when it is
+twenty layers; findings are keyed `node.path.to.submodule`.
+
+**Where is a question the graph answers**: `overlaid` marks the ill nodes on the
+figure, and health gets a **channel of its own** — the fill goes on saying where
+a node runs and the outline turns red, because on a graph over three machines
+*where does this run* is the answer somebody came for. `alerts` is the loud one,
+cards a cell shows on its own. And `gantt` is the timeline: every fact carries
+how far into the `forward` it began, so a `Wave` draws as overlapping bars and a
+remote slice sits inside the round trip it arrived under — an offset into a
+slice is a fact about the slice, and two wall clocks would not have composed.
+
+What is left of health is the **static** half, before a GPU is spent.
 
 See the distribution report for the full order.

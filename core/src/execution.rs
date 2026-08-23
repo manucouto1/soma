@@ -66,6 +66,14 @@ pub struct Executor<'a> {
     /// same reason: where a fact ends up belongs to whoever runs, not to the
     /// graph, so it does not travel.
     watcher: Option<&'a dyn Watcher>,
+    /// Where this walk's timeline starts, so that every fact can say **when**
+    /// and not only how long.
+    ///
+    /// Set once per [`run`](Self::run) or [`resume`](Self::resume) and read all
+    /// the way down, which is why it is a field rather than an argument: it is
+    /// one number for the whole walk and threading it through six signatures
+    /// would say it was six.
+    since: Option<Instant>,
 }
 
 impl<'a> Executor<'a> {
@@ -78,6 +86,7 @@ impl<'a> Executor<'a> {
             keeper: None,
             transports: Vec::new(),
             watcher: None,
+            since: None,
         }
     }
 
@@ -156,16 +165,38 @@ impl<'a> Executor<'a> {
     /// executed for somebody else is not a `forward`.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let began = Instant::now();
-        let answer = self.running(plan, input);
+        let walking = self.since(began);
+        let answer = walking.running(plan, input);
         match &answer {
-            Ok(_) => self.saw(|| Fact::Finished {
+            Ok(_) => walking.saw(|| Fact::Finished {
                 took: began.elapsed(),
             }),
-            Err(why) => self.saw(|| Fact::Broke {
+            Err(why) => walking.saw(|| Fact::Broke {
                 why: why.to_string(),
             }),
         }
         answer
+    }
+
+    /// The same executor with a timeline of its own, for one walk.
+    ///
+    /// A copy and not a mutation, because [`run`](Self::run) takes `&self`: an
+    /// executor is shared, and a run is not.
+    fn since(&self, began: Instant) -> Self {
+        Self {
+            catalog: self.catalog,
+            placement: self.placement,
+            memory: self.memory,
+            keeper: self.keeper,
+            transports: self.transports.clone(),
+            watcher: self.watcher,
+            since: Some(began),
+        }
+    }
+
+    /// How long this walk has been going, or zero if nobody started a clock.
+    fn so_far(&self) -> std::time::Duration {
+        self.since.map(|began| began.elapsed()).unwrap_or_default()
     }
 
     /// The walk itself, so that the two terminal facts wrap one thing and not
@@ -212,12 +243,16 @@ impl<'a> Executor<'a> {
         known: Vec<(NodeId, Value)>,
         named: Vec<(NodeId, Keys)>,
     ) -> Result<Outcome, RunError> {
+        // A slice counts from its own start: what it says about `when` is a
+        // fact about the slice, and whoever draws it adds the offset of the
+        // `Left` it arrived under.
+        let walking = self.since(Instant::now());
         let mut produced: HashMap<NodeId, Value> = known.into_iter().collect();
         let mut keys: HashMap<NodeId, Keys> = named.into_iter().collect();
         let brought: Vec<NodeId> = produced.keys().cloned().collect();
         let named: Vec<NodeId> = keys.keys().cloned().collect();
 
-        let last = self.walk(plan, &input, &mut produced, &mut keys)?;
+        let last = walking.walk(plan, &input, &mut produced, &mut keys)?;
 
         produced.retain(|id, _| !brought.contains(id));
         keys.retain(|id, _| !named.contains(id));
@@ -538,6 +573,7 @@ impl<'a> Executor<'a> {
             host: host.clone(),
             to,
         });
+        let at = self.so_far();
         let began = Instant::now();
         let outcome = transport
             .dispatch(
@@ -551,6 +587,7 @@ impl<'a> Executor<'a> {
             })?;
         self.saw(|| Fact::Left {
             host: host.clone(),
+            began: at,
             took: began.elapsed(),
         });
 
@@ -573,6 +610,7 @@ impl<'a> Executor<'a> {
         // Around the `forward` and nothing else: what is measured is the node,
         // not the bookkeeping around it, so the number means the same thing
         // whether or not this node is cached, mapped or on another machine.
+        let at = self.so_far();
         let began = Instant::now();
         let answer = self.implementation(node)?.forward(&input, &ctx);
         let took = began.elapsed();
@@ -580,6 +618,7 @@ impl<'a> Executor<'a> {
             Ok(output) => {
                 self.saw(|| Fact::Ran {
                     node: node.clone(),
+                    began: at,
                     took,
                     device: self.device(node).cloned(),
                 });

@@ -286,3 +286,72 @@ fn a_slice_that_went_away_says_nothing_about_finishing() {
         "exactly one of these ends the record"
     );
 }
+
+// ── When, and not only how long ──
+
+#[test]
+fn every_node_says_where_it_sat_on_the_run_s_own_timeline() {
+    // What makes a picture of *what ran when* possible at all. A duration from
+    // the run's start and not a wall clock, so it still means something when it
+    // comes back from another machine.
+    let (g, c, _) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
+    let plan = compile(&g, &c).unwrap();
+    let told = Told::new();
+
+    Executor::new(&c)
+        .watching(&told)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+
+    let began: Vec<_> = told
+        .all()
+        .into_iter()
+        .filter_map(|fact| match fact {
+            Fact::Ran { began, .. } => Some(began),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(began.len(), 2);
+    assert!(began[0] <= began[1], "`a` ran before `b`: {began:?}");
+}
+
+#[test]
+fn a_slice_counts_from_its_own_start_and_not_from_the_run_s() {
+    // `resume` is not a run. What a slice says about *when* is a fact about the
+    // slice, and whoever draws a timeline adds the offset of the `Left` it
+    // arrived under — two wall clocks would not have composed at all.
+    let (g, here, there) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
+    let placement = away(&["b"]);
+    let plan = distribute(&compile(&g, &here).unwrap(), &placement);
+    let told = Told::new();
+
+    Executor::new(&here)
+        .placed(&placement)
+        .reaching("there", &Mirror::new(there))
+        .watching(&told)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+
+    let elsewhere = told
+        .all()
+        .into_iter()
+        .find_map(|fact| match fact {
+            Fact::Elsewhere { saw, .. } => Some(*saw),
+            _ => None,
+        })
+        .expect("something ran over there");
+    let Fact::Ran { began, .. } = elsewhere else {
+        panic!("expected a node running over there");
+    };
+    let Some(Fact::Left { began: left, .. }) = told
+        .all()
+        .into_iter()
+        .find(|fact| matches!(fact, Fact::Left { .. }))
+    else {
+        panic!("nothing said the slice left");
+    };
+    assert!(
+        began < left || began.as_micros() < 1_000,
+        "the slice's own offset is small; it is not the run's clock: {began:?} vs {left:?}"
+    );
+}

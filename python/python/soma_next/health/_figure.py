@@ -30,7 +30,7 @@ from __future__ import annotations
 from soma_next import _theme
 from soma_next.health._read import about, diagnose, seen
 
-__all__ = ["flags", "profile"]
+__all__ = ["Alerts", "alerts", "flags", "overlaid", "profile", "where"]
 
 #: What a healthy update-to-weight ratio is, for the line drawn across it.
 HEALTHY_RATIO = 1e-3
@@ -161,3 +161,136 @@ def _nothing(go, what):
         ],
         **_theme.layout(xaxis={"visible": False}, yaxis={"visible": False}, height=140),
     )
+
+
+def overlaid(graph, store, *, run, thresholds=None, last=None):
+    """The graph, with what is wrong marked on the nodes it is wrong in.
+
+    The answer to *where* — which is the question a diagnosis of a distributed
+    graph actually raises. A list of flags says a node is ill; the graph says
+    which node, on which machine, and what feeds it.
+
+    Health gets a **channel of its own**: the fill goes on saying where a node
+    runs, the outline turns to the alarm colour, and the flags are a badge under
+    the name. Recolouring the fill would have let *is this unhealthy* eat *where
+    does this run*, and on a graph spread over three machines that is the
+    answer somebody came for.
+
+    Findings from **inside** a node — `encoder.2` — land on `encoder`, because
+    that is the box there is to mark. The hover carries which layer.
+    """
+    return graph.figure(overlay=where(store, run=run, thresholds=thresholds, last=last))
+
+
+def where(store, *, run, thresholds=None, last=None):
+    """A diagnosis folded onto the nodes of a graph: `{node: [flag, ...]}`.
+
+    What `overlaid` hands to the figure, and what to hand to `graph.figure()`
+    yourself if you are composing something else. A finding inside a node is
+    named on its flag — `LEAKAGE in net.2` — because the box it lands on is the
+    node and the layer would otherwise be lost.
+    """
+    folded = {}
+    for one, raised in diagnose(store, run=run, thresholds=thresholds, last=last).items():
+        node, _, inside = one.partition(".")
+        said = folded.setdefault(node, [])
+        said.extend(f"{flag} in {inside}" if inside else flag for flag in raised)
+    return folded
+
+
+class Alerts:
+    """What is wrong, as cards a notebook cell shows on its own.
+
+        alerts(store, run="tuesday")
+
+    The loud one. A table is for reading and this is for **noticing**: it is
+    what the original framework put on the screen as toasts, and the reason it
+    exists is that a finding nobody saw is a finding nobody had.
+
+    HTML and not a figure, because that is what a card is. It carries the node,
+    the flag, and what to do about it — the advice comes from the same place the
+    thresholds do, so a card cannot say something the verdict did not.
+
+    Outside a notebook it prints, so a script says the same thing without
+    needing a browser.
+    """
+
+    def __init__(self, found, run, measured):
+        self.found = found
+        self.run = run
+        self.measured = measured
+
+    def __bool__(self):
+        return bool(self.found)
+
+    def __len__(self):
+        return sum(len(raised) for raised in self.found.values())
+
+    def __repr__(self):
+        if not self.found:
+            return self._quiet()
+        lines = [f"{self.run} — {len(self)} finding(s)"]
+        for where, raised in self.found.items():
+            for flag in raised:
+                lines.append(f"  ⚠ {where}: {flag}\n      {about(flag)}")
+        return "\n".join(lines)
+
+    def _quiet(self):
+        """What to say when nothing tripped — which is not *healthy*."""
+        if not self.measured:
+            return f"{self.run} — nothing was measured, so nothing can be said"
+        return f"{self.run} — nothing tripped in {len(self.measured)} place(s) measured"
+
+    def _repr_html_(self):
+        if not self.found:
+            return (
+                f'<div style="{_CARD};border-left:3px solid {_theme.SERIES["took"]};'
+                f'color:{_theme.MUTED}">{_escaped(self._quiet())}</div>'
+            )
+        cards = [
+            f'<div style="{_CARD};border-left:3px solid {_theme.SERIES["alarm"]}">'
+            f'<div style="font-size:12px;color:{_theme.SERIES["alarm"]};'
+            f'letter-spacing:.04em">⚠ {_escaped(flag)}</div>'
+            f'<div style="font-size:14px;color:{_theme.INK};margin:2px 0 4px">'
+            f"{_escaped(where)}</div>"
+            f'<div style="font-size:12px;color:{_theme.MUTED};line-height:1.45">'
+            f"{_escaped(about(flag))}</div></div>"
+            for where, raised in self.found.items()
+            for flag in raised
+        ]
+        return (
+            f'<div style="font-family:{_theme.FONT};background:{_theme.GROUND};'
+            f'padding:10px;border-radius:8px">'
+            f'<div style="color:{_theme.MUTED};font-size:12px;margin:2px 0 8px">'
+            f"{_escaped(self.run)} — {len(self)} finding(s)</div>"
+            + "".join(cards)
+            + "</div>"
+        )
+
+
+#: One card. Kept out of the f-strings because repeating it four times is how
+#: two of them end up different.
+_CARD = (
+    "background:#1a1e28;border-radius:6px;padding:8px 12px;margin:0 0 6px;"
+    "font-family:inherit"
+)
+
+
+def alerts(store, *, run, thresholds=None, last=None):
+    """What is wrong, loudly. See [`Alerts`]."""
+    return Alerts(
+        diagnose(store, run=run, thresholds=thresholds, last=last),
+        run,
+        seen(store, run=run, last=last),
+    )
+
+
+def _escaped(text):
+    """What came from a node's name is not markup.
+
+    The same guard the graph figure has, for the same reason: an id is the
+    user's and a card is a page.
+    """
+    import html
+
+    return html.escape(str(text))

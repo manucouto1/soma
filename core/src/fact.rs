@@ -48,6 +48,15 @@ pub enum Fact {
     Ran {
         /// Which one.
         node: NodeId,
+        /// How long after this run started it began.
+        ///
+        /// A **duration and not an instant**, like everything else here, and
+        /// that is what lets it mean something from another machine: an offset
+        /// into a slice is a fact about the slice. A slice that ran elsewhere
+        /// counts from **its own** start, so whoever draws a timeline adds the
+        /// offset of the [`Fact::Left`] it arrived under. Two wall clocks would
+        /// not have composed at all.
+        began: Duration,
         /// How long its `forward` took, and nothing else: whatever it did in
         /// there — a retry, three rounds of something — is inside that number
         /// because the engine does not look inside a node.
@@ -102,6 +111,8 @@ pub enum Fact {
     Left {
         /// Whose machine.
         host: Host,
+        /// How long after this run started it left.
+        began: Duration,
         /// How long the round trip took.
         took: Duration,
     },
@@ -151,8 +162,17 @@ impl Fact {
     /// field on whatever it wrapped, so a reader has columns and not a tree.
     pub fn flattened(&self) -> (&'static str, Vec<(String, String)>) {
         match self {
-            Self::Ran { node, took, device } => {
-                let mut said = vec![("node".into(), node.to_string()), took_us(took)];
+            Self::Ran {
+                node,
+                began,
+                took,
+                device,
+            } => {
+                let mut said = vec![
+                    ("node".into(), node.to_string()),
+                    began_us(began),
+                    took_us(took),
+                ];
                 if let Some(device) = device {
                     said.push(("device".into(), device.to_string()));
                 }
@@ -187,9 +207,13 @@ impl Fact {
                     ("recalled".into(), recalled.to_string()),
                 ],
             ),
-            Self::Left { host, took } => (
+            Self::Left { host, began, took } => (
                 "left",
-                vec![("host".into(), host.to_string()), took_us(took)],
+                vec![
+                    ("host".into(), host.to_string()),
+                    began_us(began),
+                    took_us(took),
+                ],
             ),
             Self::Elsewhere { host, saw } => {
                 let (kind, mut said) = saw.flattened();
@@ -218,4 +242,10 @@ impl Fact {
 /// should have to think about how many decimals were written.
 fn took_us(took: &Duration) -> (String, String) {
     ("took_us".into(), took.as_micros().to_string())
+}
+
+/// And where it sat on the run's own timeline, which is what makes a picture of
+/// *what ran when* possible at all.
+fn began_us(began: &Duration) -> (String, String) {
+    ("began_us".into(), began.as_micros().to_string())
 }

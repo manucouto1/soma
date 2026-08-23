@@ -25,15 +25,19 @@ class Graph(_RustGraph):
     _slice_of = None
     """The graph this one is a piece of, for a graph run in pieces."""
 
-    def figure(self):
+    def figure(self, overlay=None):
         """The graph drawn, as a `plotly.graph_objects.Figure`.
 
         Nothing is executed to draw it: everything on the figure was declared.
         Needs the `viz` extra; without it the error says so.
+
+        `overlay` lays what **happened** over what was declared —
+        `{node: [flag, ...]}`, which `soma_next.health.overlaid` builds out of a
+        diagnosis. An empty one draws exactly what no overlay draws.
         """
         from soma_next import _figure
 
-        return _figure.figure(self)
+        return _figure.figure(self, overlay)
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """What a notebook shows for `g` on its own: the figure.

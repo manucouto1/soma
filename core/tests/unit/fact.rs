@@ -13,6 +13,7 @@ fn said(fact: &Fact) -> (&'static str, std::collections::HashMap<String, String>
 fn a_node_that_ran_says_which_one_how_long_and_where() {
     let (kind, said) = said(&Fact::Ran {
         node: NodeId::from("embed"),
+        began: Duration::ZERO,
         took: Duration::from_millis(12),
         device: Some("cuda:0".parse::<Device>().unwrap()),
     });
@@ -29,6 +30,7 @@ fn a_node_nobody_placed_says_nothing_about_a_device() {
     // string that looks like a device is worse than no column at all.
     let (_, said) = said(&Fact::Ran {
         node: NodeId::from("clean"),
+        began: Duration::ZERO,
         took: Duration::from_micros(3),
         device: None,
     });
@@ -55,6 +57,7 @@ fn what_happened_elsewhere_comes_out_as_a_host_field_and_not_as_a_tree() {
         host: Host::new("worker1"),
         saw: Box::new(Fact::Ran {
             node: NodeId::from("tokenize"),
+            began: Duration::ZERO,
             took: Duration::from_millis(5),
             device: None,
         }),

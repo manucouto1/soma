@@ -209,7 +209,11 @@ def test_a_figure_with_nothing_to_show_reads_as_nothing(g, monkeypatch):
     would show neither a figure nor a `repr`."""
     g.node("one", Identity())
     monkeypatch.setattr(
-        _figure, "figure", lambda graph: type("Blank", (), {"_repr_mimebundle_": lambda s, **kw: {}})()
+        _figure,
+        "figure",
+        lambda graph, overlay=None: type(
+            "Blank", (), {"_repr_mimebundle_": lambda s, **kw: {}}
+        )(),
     )
 
     assert g._repr_mimebundle_() is None
@@ -281,3 +285,42 @@ def test_a_segment_is_tested_against_a_box_exactly():
     assert _figure._hits(0.0, 50.0, 20.0, 50.0, box), "straight through it"
     assert not _figure._hits(0.0, 5.0, 20.0, 5.0, box), "above it"
     assert not _figure._hits(0.0, 50.0, 9.0, 50.0, box), "stops short of it"
+
+
+# ── What happened, laid over what was declared ──
+
+
+def test_an_empty_overlay_draws_exactly_what_no_overlay_draws():
+    # The property that lets the declaration stay drawable by somebody who has
+    # never run anything, and the original left it written down.
+    g = Graph.somatize(Identity().named("a") >> Identity().named("b"))
+
+    plain, empty = g.figure(), g.figure(overlay={})
+
+    assert plain.to_json() == empty.to_json()
+
+
+def test_an_overlay_marks_the_node_without_taking_the_fill():
+    # Two facts, two channels: the fill goes on saying where a node runs and
+    # health is the outline. Recolouring the fill would have let *is this
+    # unhealthy* eat *where does this run*.
+    g = Graph.somatize(Identity().named("a") >> Identity().named("b"))
+
+    plain = {s.fillcolor for s in g.figure().layout.shapes}
+    marked = g.figure(overlay={"a": ["VANISHING"]})
+
+    assert {s.fillcolor for s in marked.layout.shapes} == plain
+    outlines = [s.line.color for s in marked.layout.shapes]
+    assert _theme.SERIES["alarm"] in outlines
+    assert sum(colour == _theme.SERIES["alarm"] for colour in outlines) == 1
+
+
+def test_the_flags_are_written_on_the_box_and_not_counted():
+    # `2 findings` is a number somebody has to go and look up, and the whole
+    # point of putting it on the box is not having to.
+    g = Graph.somatize(Identity().named("a"))
+
+    said = " ".join(n.text for n in g.figure(overlay={"a": ["DEAD_CHANNELS(7)"]}).layout.annotations)
+
+    assert "DEAD_CHANNELS" in said
+    assert "(7)" not in said, "the count is on the hover, where there is room"

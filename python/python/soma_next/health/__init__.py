@@ -49,7 +49,19 @@ library where colour is allowed to mean good-or-bad, because they are the only
 ones drawing opinions.
 """
 
-from soma_next.health._figure import flags, profile
-from soma_next.health._read import Thresholds, about, diagnose, history, seen
+from soma_next.health._figure import alerts, flags, overlaid, profile, where
+from soma_next.health._read import Thresholds, about, diagnose, history, seen, within
 
-__all__ = ["Thresholds", "about", "diagnose", "flags", "history", "profile", "seen"]
+__all__ = [
+    "Thresholds",
+    "alerts",
+    "about",
+    "diagnose",
+    "flags",
+    "history",
+    "overlaid",
+    "profile",
+    "seen",
+    "where",
+    "within",
+]

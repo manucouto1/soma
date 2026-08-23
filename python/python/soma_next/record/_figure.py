@@ -43,9 +43,9 @@ of their own; they do not get to recolour these.
 from __future__ import annotations
 
 from soma_next import _theme
-from soma_next.record._read import forwards, nodes
+from soma_next.record._read import facts, forwards, nodes
 
-__all__ = ["Live", "progress", "spent"]
+__all__ = ["Live", "gantt", "progress", "spent"]
 
 SMOOTH_OVER = 15
 """A rolling mean spans `len // SMOOTH_OVER` points, so that a run of forty and
@@ -63,6 +63,122 @@ def progress(store, *, run, smooth=None):
     what was measured.
     """
     return _drawn(forwards(store, run=run), title=run, smooth=smooth)
+
+
+def gantt(store, *, run, forward=0):
+    """One `forward` on a timeline: what ran when, and what was waiting.
+
+    The picture `spent` cannot draw. A total says a node cost four hundred
+    milliseconds; this says whether those four hundred were **beside** the rest
+    of the graph or in front of it, which is the difference between a slow node
+    and a bottleneck.
+
+    Every fact carries `began_us` — how far into the run it started — so a
+    `Wave` shows as overlapping bars and a `Sequence` as a staircase. A slice
+    that ran on another machine counts from **its own** start, so its bars are
+    shifted by the `left` they arrived under. That is not a fudge: an offset
+    into a slice is a fact about the slice, and two wall clocks would not have
+    composed at all.
+
+    One `forward` and not an average of them, because an average of timelines
+    is not a timeline.
+    """
+    go = _theme.plotly()
+    bars = _bars(facts(store, run=run, forward=forward) or [])
+    if not bars:
+        return _drawn([], title=f"{run} — nothing ran in forward {forward}")
+
+    figure = go.Figure()
+    for which, one in enumerate(bars):
+        figure.add_trace(
+            go.Bar(
+                x=[one["took"]],
+                y=[one["name"]],
+                base=[one["began"]],
+                orientation="h",
+                marker={
+                    "color": _theme.SERIES["recalled"] if one["remote"] else _theme.SERIES["took"],
+                    "line": {"color": _theme.EDGE, "width": 1},
+                },
+                hovertemplate=(
+                    f"<b>{one['name']}</b><br>starts at %{{base:.2f}} ms"
+                    f"<br>takes %{{x:.2f}} ms<br>{one['where']}<extra></extra>"
+                ),
+                showlegend=False,
+                name=one["name"],
+            )
+        )
+    return figure.update_layout(
+        **_theme.layout(
+            title=_theme.titled(f"{run} — forward {forward}, on a timeline"),
+            height=max(180, 34 * len(bars) + 110),
+            barmode="overlay",
+            bargap=0.35,
+        )
+    ).update_xaxes(**_theme.axis(title_text="ms into the forward")).update_yaxes(
+        **_theme.axis(showgrid=False, autorange="reversed", automargin=True)
+    )
+
+
+def _bars(seen):
+    """The facts of one `forward` as `(name, began, took)`, in the order they
+    started.
+
+    A `left` carries the slice it framed, so what ran over there is shifted onto
+    this timeline by adding its offset — and drawn in its own colour, because
+    *this happened elsewhere* is the thing a timeline of a distributed graph is
+    for.
+    """
+    bars, waiting = [], {}
+    for fact in seen:
+        began, took = _read(fact, "began_us"), _read(fact, "took_us")
+        if began is None or took is None:
+            continue
+        if fact["fact"] == "ran" and "host" in fact:
+            # It arrived **before** the `left` that frames it — a relay hands a
+            # fact over while the dispatch is still in flight — so it waits here
+            # until the offset it has to be shifted by turns up.
+            waiting.setdefault(fact["host"], []).append((fact, began, took))
+        elif fact["fact"] == "ran":
+            bars.append(_bar(fact.get("node", "?"), began, took, remote=False, where="here"))
+        elif fact["fact"] == "left":
+            host = fact.get("host", "?")
+            bars.append(
+                _bar(
+                    f"→ {host}",
+                    began,
+                    took,
+                    remote=True,
+                    where=f"the whole round trip to {host}",
+                )
+            )
+            for one, at,lasted in waiting.pop(host, []):
+                bars.append(
+                    _bar(one.get("node", "?"), began + at, lasted, remote=True, where=f"on {host}")
+                )
+    # A slice that never came back leaves its facts unframed: they are still
+    # what happened, and dropping them would be the timeline hiding the failure.
+    for host, held in waiting.items():
+        for one, at, lasted in held:
+            bars.append(_bar(one.get("node", "?"), at, lasted, remote=True, where=f"on {host}"))
+    return sorted(bars, key=lambda one: one["began"])
+
+
+def _bar(name, began, took, *, remote, where):
+    return {
+        "name": name,
+        "began": began / 1000.0,
+        "took": took / 1000.0,
+        "remote": remote,
+        "where": where,
+    }
+
+
+def _read(fact, name):
+    try:
+        return float(fact[name])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def spent(store, *, run, last=None):
