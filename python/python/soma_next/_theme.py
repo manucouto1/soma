@@ -53,6 +53,28 @@ PALETTE = {
     # one would say it was.
     "layer": ("#151821", "#2f3547", "#9aa3b8"),
 }
+
+MARKS = {
+    # What **sort** of thing a layer is. A `Linear` and a `Sigmoid` are not the
+    # same kind of thing, and drawing them the same says they are. By role and
+    # never by class, so a non-linearity nobody has heard of is still drawn as
+    # one.
+    #
+    # Fill, outline, ink, and how tall it is as a fraction of a full row: what
+    # holds weights gets a box, and what does not gets a mark.
+    "learned": ("#1c2333", "#4a5a86", "#cfd8ee", 1.0),
+    "recurrent": ("#1c2333", "#6f7bd1", "#cfd8ee", 1.0),
+    "attention": ("#1b2a2f", "#3f8f9d", "#bfe6ee", 1.0),
+    "norm": ("#20242e", "#3a4152", "#9aa3b8", 0.62),
+    "activation": ("rgba(0,0,0,0)", "#4fc3b0", "#7fd8c9", 0.52),
+    "regular": ("rgba(0,0,0,0)", "#3a4152", "#7c8496", 0.52),
+    "shaping": ("#171a22", "#333a4b", "#868ea3", 0.62),
+    "block": ("#151821", "#4a5a86", "#cfd8ee", 1.0),
+    "other": ("#171a22", "#333a4b", "#868ea3", 0.8),
+}
+"""Fill, outline, ink and height, by what a layer **is**. The second table, and
+it is a different question from the first: `PALETTE` says where a node runs and
+this says what a thing is made to do."""
 """Fill, outline and ink, by what the thing is. The only table."""
 
 SERIES = {

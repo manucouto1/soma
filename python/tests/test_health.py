@@ -274,11 +274,76 @@ def test_a_node_says_what_it_is_made_of():
     torch.manual_seed(0)
     g, _ = chain([Block(activation="sigmoid") for _ in range(2)])
 
-    made = architecture(g)
+    made = architecture(g, torch.randn(4, 16))
 
     # Everything and not only what has parameters: a picture of a sigmoid stack
     # that leaves out the sigmoids is a picture of something else.
-    assert made["b0"] == [("net", "Linear"), ("after", "Sigmoid")]
+    kinds = [one.kind for one in made["b0"].layers]
+    assert "learned" in kinds and "activation" in kinds
+
+
+def test_a_skip_connection_is_an_edge_and_not_an_order():
+    # The thing a list of children cannot show, and the reason the inside is
+    # traced rather than listed.
+    pytest.importorskip("plotly")
+    from soma_next.torch._inside import traced
+
+    class Residual(torch.nn.Module):
+        def __init__(self, width=16):
+            super().__init__()
+            self.lin = torch.nn.Linear(width, width)
+
+        def forward(self, x):
+            return x + self.lin(x)
+
+    inside = traced(Residual(), torch.randn(2, 16))
+
+    joins = [b for _, b in inside.edges if b.endswith("add")]
+    assert len(joins) == 2, f"a residual joins two paths: {inside.edges}"
+
+
+def test_a_bottleneck_is_visible_in_the_shapes():
+    pytest.importorskip("plotly")
+    from soma_next.torch._inside import traced
+
+    class Squeeze(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.down = torch.nn.Linear(64, 4)
+            self.up = torch.nn.Linear(4, 64)
+
+        def forward(self, x):
+            return self.up(torch.relu(self.down(x)))
+
+    inside = traced(Squeeze(), torch.randn(2, 64))
+
+    shapes = [one.shape for one in inside.layers if one.shape]
+    assert any(one.endswith("×4") for one in shapes), shapes
+    assert any(one.endswith("×64") for one in shapes), shapes
+
+
+def test_a_module_fx_cannot_trace_is_still_drawn_and_says_how():
+    # A residual that is missing looks exactly like a residual that is not
+    # there, so which path answered has to be on the figure.
+    pytest.importorskip("plotly")
+    from soma_next.torch._inside import traced
+
+    class Loopy(torch.nn.Module):
+        """Control flow that depends on the values, which `fx` cannot follow."""
+
+        def __init__(self):
+            super().__init__()
+            self.cell = torch.nn.Linear(8, 8)
+
+        def forward(self, x):
+            for _ in range(int(x.shape[1]) // 8):
+                x = self.cell(x)
+            return x
+
+    inside = traced(Loopy(), torch.randn(2, 8))
+
+    assert inside.how == "traced"
+    assert inside.why, "it has to say why the symbolic path was not used"
 
 
 def test_what_is_drawn_is_a_superset_of_what_is_measured(store):
@@ -291,7 +356,10 @@ def test_what_is_drawn_is_a_superset_of_what_is_measured(store):
     g, _ = chain([Block(activation="sigmoid") for _ in range(3)])
     trained(g, store, steps=8, auditing=Audit(inside=True))
 
-    drawn = {f"{node}.{path}" for node, made in architecture(g).items() for path, _ in made}
+    drawn = {
+        f"{node}.{one.path}" for node, made in architecture(g, torch.randn(4, 16)).items()
+        for one in made.layers
+    }
     measured = {one for one in seen(store, run="a-run") if "." in one}
 
     assert measured <= drawn, f"measured but never drawn: {measured - drawn}"

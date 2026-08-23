@@ -40,7 +40,8 @@ from soma_next.torch._freeze import freeze
 from soma_next.torch._learning import Learning, OutOfStep, Split, envelope, gradient
 from soma_next.torch._params import parameters
 from soma_next.torch._round import gather
-from soma_next.torch._audit import Audit, architecture
+from soma_next.torch._audit import Audit
+from soma_next.torch._inside import architecture, kind_of, traced
 from soma_next.torch._trainer import NoGradient, Result, Trainer
 
 # On being imported, and not on being asked: a graph that keeps what it produces
@@ -51,6 +52,8 @@ _register_the_tensor_codec()
 __all__ = [
     "Audit",
     "architecture",
+    "kind_of",
+    "traced",
     "Learning",
     "NoGradient",
     "OutOfStep",

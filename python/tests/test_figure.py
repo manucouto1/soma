@@ -329,24 +329,66 @@ def test_the_flags_are_written_on_the_box_and_not_counted():
 # ── A node opened up ──
 
 
+def _inside(layers, edges=()):
+    """What `architecture` answers with, built by hand: this file has no torch."""
+    from soma_next.torch._inside import Inside, Layer
+
+    return Inside([Layer(*one) for one in layers], edges, "symbolic")
+
+
 def test_a_node_with_an_inside_becomes_a_frame_around_it():
     # The shape a `Wave` and a `Remote` already are, which is the sign the
     # layout was right: nothing new had to be invented for it.
     plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+    made = _inside(
+        [("0", "learned", "Linear"), ("1", "activation", "ReLU")], [("0", "1")]
+    )
 
     plain = _figure.boxes(plan)
-    opened = _figure.boxes(plan, inside={"a": [("0", "Linear"), ("1", "ReLU")]})
+    opened = _figure.boxes(plan, inside={"a": made})
 
     assert [b.kind for b in plain] == ["node"]
     assert [b.kind for b in opened] == ["node", "layer", "layer"]
     assert opened[0].h > plain[0].h, "it has to have grown to hold them"
 
 
+def test_a_layer_is_drawn_by_what_it_is_and_not_by_its_name():
+    # A `Linear` and a `Sigmoid` are not the same kind of thing, and drawing
+    # them the same says they are.
+    plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+    made = _inside([("0", "learned", "Linear"), ("1", "activation", "ReLU")])
+
+    _, learned, activation = _figure.boxes(plan, inside={"a": made})
+
+    assert learned.mark == "learned"
+    assert activation.mark == "activation"
+    assert activation.h < learned.h, "a non-linearity has nothing to live in it"
+
+
+def test_what_feeds_what_decides_the_rows_and_a_skip_jumps_one():
+    # A stack cannot show a skip connection. The rank is the longest way down,
+    # so a skip's two ends land on rows that are not adjacent — and that gap is
+    # the whole reason the picture is worth drawing.
+    plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+    made = _inside(
+        [
+            ("x", "shaping", "input"),
+            ("lin", "learned", "Linear"),
+            ("add", "shaping", "+"),
+        ],
+        [("x", "lin"), ("lin", "add"), ("x", "add")],
+    )
+
+    _, x, lin, add = _figure.boxes(plan, inside={"a": made})
+
+    assert x.y < lin.y < add.y, "three rows, in the order the data flows"
+
+
 def test_every_layer_sits_inside_the_box_it_belongs_to():
     plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+    made = _inside([("0", "learned", "Linear"), ("1", "activation", "ReLU")])
 
-    placed = _figure.boxes(plan, inside={"a": [("0", "Linear"), ("1", "ReLU")]})
-    node, *layers = placed
+    node, *layers = _figure.boxes(plan, inside={"a": made})
 
     for one in layers:
         assert node.x <= one.x and one.x + one.w <= node.x + node.w
@@ -358,16 +400,29 @@ def test_a_layer_is_named_after_the_node_it_is_in():
     # with a flag on it is a layer that has a box.
     plan = json.loads(Graph.somatize(Identity().named("encoder")).plan_json())
 
-    _, first = _figure.boxes(plan, inside={"encoder": [("2", "Linear")]})
+    _, first = _figure.boxes(plan, inside={"encoder": _inside([("2", "learned", "Linear")])})
 
     assert first.node == "encoder.2"
 
 
+def test_the_shape_is_written_on_the_layer_because_a_bottleneck_is_shapes():
+    # `512 → 8 → 512` is a picture; `Linear · Linear · Linear` is not.
+    plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+    made = _inside([("0", "learned", "Linear", "2×8")])
+
+    figure = Graph.somatize(Identity().named("a")).figure(inside={"a": made})
+
+    assert any("2×8" in n.text for n in figure.layout.annotations)
+    del plan
+
+
 def test_a_flag_on_a_layer_marks_that_layer_and_not_the_others():
     g = Graph.somatize(Identity().named("encoder"))
-    made = {"encoder": [("0", "Linear"), ("1", "Sigmoid"), ("2", "Linear")]}
+    made = _inside(
+        [("0", "learned", "Linear"), ("1", "activation", "Sigmoid"), ("2", "learned", "Linear")]
+    )
 
-    figure = g.figure(inside=made, overlay={"encoder.2": ["STALLED"]})
+    figure = g.figure(inside={"encoder": made}, overlay={"encoder.2": ["STALLED"]})
 
     marked = [s for s in figure.layout.shapes if s.line.color == _theme.SERIES["alarm"]]
     assert len(marked) == 1, "one layer, not the node and not its neighbours"

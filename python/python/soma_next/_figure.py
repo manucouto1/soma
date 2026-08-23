@@ -115,7 +115,13 @@ light and whose curves are dark is two products."""
 
 @dataclass(frozen=True)
 class Box:
-    """One rectangle, placed. `kind` is `"node"`, `"wave"` or `"remote"`."""
+    """One rectangle, placed.
+
+    `kind` is `"node"`, `"wave"`, `"remote"` or `"layer"`; a layer's `mark` says
+    what **sort** of thing it is, which is what decides how it is drawn. A
+    `Linear` and a `Sigmoid` are not the same kind of thing and drawing them the
+    same says they are.
+    """
 
     kind: str
     x: float
@@ -124,6 +130,8 @@ class Box:
     h: float
     node: str | None = None
     label: str | None = None
+    mark: str | None = None
+    shape: str | None = None
 
     @property
     def cx(self) -> float:
@@ -224,15 +232,16 @@ def figure(graph, overlay=None, inside=None):
     shapes, notes = [], []
     for box in placed:
         if box.kind == "layer":
-            # What a node is made of. Its own row of the one table, dimmer than
-            # a node: it is not a thing the graph can place, cache or send —
-            # it is what one of those is built out of.
-            fill, line, ink = PALETTE["layer"]
+            # What a node is made of, drawn by **what it is**: something that
+            # holds weights gets a box, and a non-linearity gets a mark, because
+            # a box says *there is something living here* and an activation has
+            # nothing to live.
+            fill, line, ink, _ = _theme.MARKS.get(box.mark or "other", _theme.MARKS["other"])
             if box.node in ill:
                 line, ink = _theme.SERIES["alarm"], _theme.SERIES["alarm"]
             shapes.append(_rect(box, fill, line, 1.0))
             notes.append(
-                _text(box.x + PAD_X, box.cy, _safe(box.label), ink, left=True, size=10)
+                _text(box.cx, box.cy, _safe(_labelled(box)), ink, size=10)
             )
         elif box.kind == "node":
             fill, line, ink = PALETTE[_family(devices.get(box.node))]
@@ -377,38 +386,96 @@ def _node_size(node, labels, inside=None):
     """
     lines = labels.get(node) or (node,)
     tall = max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
-    layers = (inside or {}).get(node)
-    if not layers:
+    held = (inside or {}).get(node)
+    if not held:
         return _width(node, labels), tall
-    widest = max(
-        (CHAR * len(f"{path}  {what}") + 2 * PAD_X for path, what in layers),
-        default=MIN_W,
-    )
+    rows = _rows_of(held)
     return (
-        max(_width(node, labels), widest + 2 * FRAME_PAD),
-        tall + len(layers) * LAYER_H + (len(layers) - 1) * LAYER_GAP + FRAME_PAD,
+        max(_width(node, labels), _inner_width(held) + 2 * FRAME_PAD),
+        tall + rows * LAYER_H + max(rows - 1, 0) * LAYER_GAP + FRAME_PAD,
     )
 
 
-def _stack(node, layers, x, y, width, labels, out):
-    """The layers of an expanded node, stacked inside its frame."""
-    if not layers:
+def _stack(node, inside, x, y, width, labels, out):
+    """The layers of an expanded node, placed **by what feeds what**.
+
+    A stack cannot show a skip connection. What is placed here is a small DAG,
+    by rank — the longest way down from an input — so what runs at the same
+    depth sits on the same row and an edge that jumps a row is a skip and looks
+    like one.
+
+    No crossing minimisation and no Sugiyama: an architecture is mostly a line
+    with a few jumps in it, and a heuristic that reorders rows would move boxes
+    around between two runs of the same figure.
+    """
+    if not inside:
         return
     lines = labels.get(node) or (node,)
     top = y + max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
-    for path, what in layers:
+    for one, place in _ranked(inside):
+        row, across, wide = place
+        # The height is the kind's, and it is decided **here** and not when it
+        # is drawn: a figure that paints something other than the box it laid
+        # out has two truths in it, and the tests can only see one of them.
+        tall = LAYER_H * _theme.MARKS.get(one.kind, _theme.MARKS["other"])[3]
         out.append(
             Box(
                 "layer",
-                x + FRAME_PAD,
-                top,
-                width - 2 * FRAME_PAD,
-                LAYER_H,
-                node=f"{node}.{path}",
-                label=f"{path}  {what}",
+                x + FRAME_PAD + across,
+                top + row * (LAYER_H + LAYER_GAP) + (LAYER_H - tall) / 2,
+                wide,
+                tall,
+                node=f"{node}.{one.path}",
+                label=one.label,
+                mark=one.kind,
+                shape=one.shape,
             )
         )
-        top += LAYER_H + LAYER_GAP
+
+
+def _ranked(inside):
+    """Where each layer goes: `(layer, (row, x, width))`.
+
+    The rank is the longest way down, which is what puts a skip's two ends on
+    rows that are not adjacent — and that gap is the whole reason the picture is
+    worth drawing.
+    """
+    layers = {one.path: one for one in inside.layers}
+    feeds = {path: [] for path in layers}
+    for a, b in inside.edges:
+        if a in layers and b in layers:
+            feeds[b].append(a)
+    rank, order = {}, list(layers)
+    for path in order:
+        rank[path] = 1 + max((rank.get(one, 0) for one in feeds[path]), default=-1)
+    rows = {}
+    for path in order:
+        rows.setdefault(rank[path], []).append(layers[path])
+
+    placed, widest = [], _inner_width(inside)
+    for row, beside in sorted(rows.items()):
+        each = (widest - LAYER_GAP * (len(beside) - 1)) / len(beside)
+        for at, one in enumerate(beside):
+            placed.append((one, (row, at * (each + LAYER_GAP), each)))
+    return placed
+
+
+def _inner_width(inside):
+    """How wide the widest row of an architecture has to be."""
+    return max(
+        (CHAR * len(_layer_text(one)) + 2 * PAD_X for one in inside.layers),
+        default=MIN_W,
+    )
+
+
+def _rows_of(inside):
+    """How many rows deep it is."""
+    return len({place[0] for _, place in _ranked(inside)}) if inside else 0
+
+
+def _layer_text(one):
+    """What is written on a layer: what it is, and what it produces."""
+    return one.label + (f"   {one.shape}" if one.shape else "")
 
 
 def _bare_markup(line):
@@ -451,6 +518,16 @@ def _lines(node, identity, device, badges, flags=None):
         said = " · ".join(sorted({_bare(one) for one in flags}))
         lines.append(f"<span style='color:{_theme.SERIES['alarm']}'>⚠ {_safe(said)}</span>")
     return tuple(lines)
+
+
+def _labelled(box):
+    """What is written on a layer: what it is, and what it produces.
+
+    The shape is on it and not on the hover, because it is the one thing that
+    makes a **bottleneck** a picture: `512 → 8 → 512` is visible and
+    `Linear · Linear · Linear` is not.
+    """
+    return box.label + (f"   {box.shape}" if box.shape else "")
 
 
 def _bare(flag):

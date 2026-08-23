@@ -24,6 +24,18 @@ pub struct PyCtx {
 
 #[pymethods]
 impl PyCtx {
+    /// One by hand, for whoever calls a node's `forward` themselves.
+    ///
+    /// The engine builds these; a test, a trace of an architecture, or somebody
+    /// checking what their node does needs one too, and inventing an object
+    /// with a `device` attribute is what people do when a library will not let
+    /// them make the real thing.
+    #[new]
+    #[pyo3(signature = (device = None))]
+    fn new(device: Option<String>) -> Self {
+        Self { device }
+    }
+
     fn __repr__(&self) -> String {
         match &self.device {
             Some(device) => format!("Ctx(device={device})"),
