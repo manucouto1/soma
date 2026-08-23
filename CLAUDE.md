@@ -106,11 +106,11 @@ means the suite is green about code that is not the code.
 
 ## Status
 
-Nineteen use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
-grain of an item, the study, handing it out of a folder, and a graph that draws
-itself. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+grain of an item, the study, handing it out of a folder, a graph that draws
+itself, and the record of what happened. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
 another machine, where a **trainer travels to stand beside the node** and the
@@ -122,16 +122,19 @@ shows what runs at once and what leaves the machine. See `docs/use-cases.md`.
 **when**, and `Memory` **what is remembered** of each node. The device
 deliberately does not live in the plan.
 
-**Three holes, and the core provides them without filling any**: `Node` is the
+**Four holes, and the core provides them without filling any**: `Node` is the
 user's, `Transport` carries a slice elsewhere, `Keeper` hashes a recipe and keeps
-what it names. There were four: `Driver` served what a suspended node asked for,
-and it went — after eighteen use cases it had **no consumer outside the tests**,
-its own docstring said it was there to keep the agentic layer out of the core,
-and a hole with no tenant is what this project exists not to build. What is kept
-is the channel: `Ctx` is where whoever executes hands a node what it knows, so an
-agentic layer that wants something injected puts it there and **no node signature
-changes**. The core still has
-no dependencies. `transport` has two of its own, filled from `python/`:
+what it names, and `Watcher` is told what happened.
+
+There have been four before, and the one that went is the lesson: `Driver` served
+what a suspended node asked for, and after eighteen use cases it had **no
+consumer outside the tests** — its own docstring said it was there to keep the
+agentic layer out of the core, and a hole with no tenant is what this project
+exists not to build. `Watcher` arrived with two implementors in two crates on the
+first day, which is the bar. What `Driver` left behind is the channel: `Ctx` is
+where whoever executes hands a node what it knows, so an agentic layer that wants
+something injected puts it there and **no node signature changes**. The core
+still has no dependencies. `transport` has two of its own, filled from `python/`:
 `Provision` turns an artifact into a catalog, and `Codec` writes down what only
 exists in one process — so an `Opaque` crosses a wire, and what does not is the
 one nobody registered a codec for.
@@ -226,5 +229,33 @@ endpoint that takes `If-None-Match: *` and writes anyway would give every trial
 to every machine and say nothing, so `Bucket::at` spends **two round trips
 proving it does not** before handing the store over. Nothing above learned a new
 word: `take`, `report` and `gather` never asked what kind of store they had.
+
+**CU20 is the record of what happened**, and the requirement that shaped it was
+not "a log": that somebody training in a notebook, with half the graph on other
+machines, **keeps being told** what is going on. So `run()` cannot hand the facts
+back at the end — there is a `Watcher`, injected like the `Keeper`. **Emitting is
+synchronous and delivering is the implementor's**, which is how live costs no
+runtime: an `async` there would be `async` in every caller and would drag `Store`
+with it.
+
+An enum of facts is fine and the original's 37 variants are not the mistake — the
+mistake is that they are **three vocabularies in one**. Each level keeps its own:
+the engine's in `core/src/fact.rs`, a training run's (`loss`, `updated`) where
+the loss is, a trial's on disk since CU18. **They do not meet in Rust, they meet
+in the record** — a fact is emitted as an enum and written as `(kind, pairs)`,
+which is the shape `Meta` already had, so what you print is what you would find
+in the store.
+
+And what happens on another machine **comes back down the connection that was
+already open**: `dispatch` was blocked in `recv` anyway, so `Answer` gained one
+non-terminal variant and reading one answer became reading until one is terminal.
+No port, no second connection, no bus. The rule: **where a connection is open,
+facts come back down it; where there is none, they go to the store and whoever
+wants them scans** — which is what CU18 was already doing. A relay attributes
+nothing: the client wraps what arrives, because the host's *name* is the graph's.
+
+One record per `forward`, at `run/<id>/<n>`. A loss is computed after the forward
+that made it, so it goes into the record that closed last, rewritten — and there
+is no guessing, because the two vocabularies come through different doors.
 
 See the distribution report for the full order.

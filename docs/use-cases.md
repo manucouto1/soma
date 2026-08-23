@@ -3545,3 +3545,223 @@ this stays true.
 - [x] a map of tensors is kept and recalled — a codec is a fact about the value
 - [x] the same study over a directory and over a bucket gives the same history
 - [x] a trial another machine is holding is visible before it finishes
+
+## CU20 — The record of what happened
+
+```python
+g.forward(x, watching=print)                     # in a notebook
+g.forward(x, watching=Recorder(store))           # kept
+Trainer(g, objective=..., optimizer=..., watching=[Recorder(store), draw])
+```
+
+```text
+{'fact': 'ran',      'node': 'tokenize', 'took_us': '4120', 'host': 'worker1'}
+{'fact': 'recalled', 'node': 'embed',    'key': 'sha256:9c…'}
+{'fact': 'left',     'host': 'worker1',  'took_us': '5330'}
+{'fact': 'finished', 'took_us': '9210'}
+{'fact': 'loss',     'value': '0.2517'}
+```
+
+The second of the three things CU19 split observability into. Before it the
+engine measured nothing at all — not one `Instant`, not one `elapsed`, not one
+line of `logging` in `core/`, `transport/`, `store/` or `study/`.
+
+### The requirement that decided the design
+
+Not "a log". **That a researcher training in a notebook, with half the graph on
+other machines, keeps being told what is going on**: that the nodes reached the
+workers, that the data got there, that nothing failed, that the profiling is
+reasonable, that the training is progressing. Live, and not at the end.
+
+That kills the cheap answer immediately: `run()` cannot return the facts,
+because a curve drawn after the run is a report and not a view. So there is a
+fifth hole, and it is injected exactly like the fourth.
+
+```rust
+pub trait Watcher: Send + Sync {
+    fn saw(&self, fact: &Fact);
+}
+```
+
+### Emitting is synchronous; delivering is not the core's problem
+
+`saw` is called from the walk and returns. What the implementor does then —
+write it, drop it, push it onto a channel another thread drains into a figure —
+is where anything asynchronous belongs.
+
+That is what lets *live* cost no runtime. An `async` here would be `async` in
+every caller of the engine and would drag `Store` with it, which is the
+objection that has twice kept a bus out of this repo. **The core still has no
+dependencies and no executor.**
+
+A wave calls it from several threads at once, hence `Send + Sync` — and hence
+the order facts arrive in is not the order they happened in. Nothing here
+pretends otherwise, and the engine will not serialize a run to make a log tidy.
+
+### An enum of facts is not the original's mistake
+
+The original's `enum Event` has **37 variants**, and the number is not what is
+wrong with it. The project's own rule says an enum is right when the set is
+closed and you know it, and that the compiler keeping count as variants are
+added is the point of one. What is wrong is that those 37 are **three
+vocabularies in one**: `NodeStarted` is a fact, `HealthFlag` is an opinion about
+facts, and seven of them belonged to a layer this project has since removed.
+
+So each level keeps its own, in its own language:
+
+| level | vocabulary | where |
+|---|---|---|
+| the engine | `ran`, `failed`, `recalled`, `kept`, `items`, `left`, `finished`, `broke` | `core/src/fact.rs` |
+| a training run | `loss`, `updated` | `soma_next.torch`, where the loss is |
+| a study | a trial's record | on disk, since CU18 |
+
+> **They do not meet in Rust. They meet in the record.**
+
+The joint is `Fact::flattened`: a fact is **emitted as an enum** and **written as
+a name and text-to-text pairs**, which is the shape `Meta` already had. What is
+typed stays typed where the compiler helps; what crosses to another vocabulary
+crosses as the flattest thing there is. Level 2 produces that shape directly
+from Python and lands in the same record, and the core never learns what a loss
+is.
+
+The same shape is what reaches a notebook, which is worth more than it sounds:
+**what you print is what you would find in the store.**
+
+### What happens on another machine comes back down the connection that is open
+
+The finding that made this cheap: `Worker::dispatch` sends `Work` and then
+blocks in `recv` waiting for `Done`. That blocked read is exactly the moment the
+worker has something to say and nobody is listening.
+
+```text
+→ Work { … }
+← Saw(fact)                     any number, and not the end
+  | Done { … } | Failed(why)
+```
+
+`Answer` gained one non-terminal variant; reading one answer became reading
+until one is terminal; and `attend` hands its writer to the worker's own
+`Executor`, whose watcher does nothing but put the fact back on the socket. **No
+port, no second connection, no thread, no async, no bus.**
+
+> **Where a connection is open, facts come back down it. Where there is none,
+> they go to the store and whoever wants them scans.**
+
+That is not a second design. It is the rule CU18 was already following: a study
+handed out of a folder has no connection, so it scans. The transport already
+tells the two cases apart.
+
+A **relay attributes nothing**. The worker emits exactly what it would emit at
+home, and the client wraps what arrives in `Fact::Elsewhere { host }` — because
+the host's *name* is the graph's, and a worker does not know what it is called.
+Flattening turns the nesting back into a `host` field, so a slice that crossed
+two machines comes out with its route in order and the reader gets columns
+rather than a tree.
+
+### One record per `forward`
+
+Five nodes trained ten thousand steps are fifty thousand node executions. A
+record each is fifty thousand writes and a scan nobody can afford; one for the
+whole run has no step 500 in it. The `forward` is the unit the engine actually
+has, and `Fact::Finished` is emitted by exactly the walk that is one.
+
+```text
+run/<id>/<n>
+```
+
+`<study>/trial/<n>/<attempt>` with a different noun: the level above, and a
+number. In the **record**, so a scan answers with no fetches: `run`, `forward`,
+`took_us`, `state = ok|broke`, `nodes`. In the **blob**: every fact, flattened,
+in the order it arrived.
+
+Three things fall out of the split rather than being decided:
+
+- **Durations, never instants.** A `took` measured on another machine means
+  something; a wall clock from another machine is two clocks that disagree,
+  which is the problem CU18 solved by comparing writers with writers. *When*
+  something was written is the store's, and it stamps it.
+- **How often it is written is a policy of the run**, not of the record — the
+  same ruling that kept `.overwrite(times=1)` out of CU13. Ten thousand objects
+  in a bucket are fixed by flushing in segments, and that is the writer's
+  business.
+- **The client writes it**, with the local and the remote in one record, because
+  the remote already arrived. A worker that dies leaves behind what it did send,
+  plus the failure.
+
+### A loss arrives after the forward it belongs to
+
+The one thing that needed a real decision rather than a derivation. A loss is
+computed **after** the `forward` that produced it has ended, so a recorder that
+only knew how to open records would file every loss one step late and every
+curve would be off by one.
+
+There is no guessing, because the two vocabularies come through different doors:
+`saw` is the engine's and a terminal fact closes a record; `said` is everybody
+else's and goes into the one that closed last, rewriting it. A store already
+does that — a name is a question and its answer can be refreshed — and it is
+what a trial's record has done since CU18.
+
+### What is not in it
+
+**`ctx.saw(...)`** — a node speaking for itself. The engine cannot see a
+gradient norm and the node can, and `Ctx` is already *"where whoever executes
+hands a node what it knows"*, so the mirror of it changes no node's signature.
+It is deferred because today it has neither a tenant nor a vocabulary, which is
+`Driver`'s mistake in miniature — and because deferring it is **cheap**: it is a
+field in one file, where the name in the store was the part that could not be
+refactored later. It is what CU21 opens with, and what a **remote** trainer needs
+before it can say anything about its own loss.
+
+Also out: **the overlay**, which CU19 predicted would arrive here — it does not.
+What arrives is the thing an overlay is made of, and turning a record into one is
+a reader over these facts rather than a change to either end. Also out: a bus,
+still deferred and still not refused · and any judgement whatsoever about what
+any of these numbers mean, which is the whole of CU21.
+
+### Questionnaire
+
+**The vocabulary** (`core/tests/unit/fact.rs`)
+- [x] a node that ran says which one, how long, and where — and nothing about a
+      device nobody declared
+- [x] a duration is whole microseconds and not a float
+- [x] what happened elsewhere comes out as a `host` field and not as a tree
+- [x] a fact that crossed two machines keeps its route in order
+- [x] the two facts that end a run say so, and a node failing is not one of them
+
+**What the engine says** (`core/tests/unit/watcher.rs`)
+- [x] a run nobody watches behaves exactly as it did
+- [x] every node that ran is said so, in the order it ran
+- [x] a run ends with exactly one fact that says it is over — an empty plan too
+- [x] a node that failed says which one **before** the run stops
+- [x] a run that could not finish is still closed
+- [x] a hit and a miss are two different facts, and a hit does not say a node ran
+- [x] a mapped node says how many items it did not have to compute
+- [x] what ran over there arrives here saying where it ran
+- [x] the round trip is its own fact
+- [x] a slice that went away says nothing about finishing
+
+**Over a real process** (`transport/tests/unit/worker.rs`)
+- [x] what a real worker saw comes back saying it was that worker
+- [x] a fact arrives **while the work is still going** and not with the answer —
+      checked against a node that takes 300 ms, because batched or live the
+      facts are the same facts and only *when* differs
+
+**Written down** (`store/tests/unit/recorder.rs`)
+- [x] nothing is written until the `forward` is over
+- [x] a scan says how it went without reading a single blob
+- [x] the detail is in the blob, in the order it arrived
+- [x] each `forward` is its own record, numbered from zero
+- [x] one that broke says so where a scan can see it
+- [x] a run can be given the name it already has, and gets one if not
+- [x] what level 2 says lands in the `forward` it belongs to, rewriting it
+- [x] and the next `forward` still starts a new record
+- [x] rewriting says the same thing about the same facts
+
+**From Python** (`python/tests/test_watching.py`)
+- [x] a fact is a `dict` of text, and what is printed is what is written
+- [x] a list of watchers is told, and something that is not callable is refused
+- [x] a recorder nobody named is still findable
+- [x] what ran on a real worker comes back saying which host
+- [x] a training step says the loss and when it moved
+- [x] a loss lands in the `forward` it belongs to
+- [x] a group of steps moves once and says so once
