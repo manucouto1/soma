@@ -23,11 +23,12 @@ is **another machine's** — there is no connection and a scan is all there is.
 Both answer in the same shape, so whatever draws one draws the other.
 """
 
-from soma_next.record._figure import Live, gantt, progress, spent
+from soma_next.record._figure import Live, gantt, machines, progress, spent
 from soma_next.record._read import (
     curve,
     curve_costs,
     facts,
+    fleet,
     forwards,
     nodes,
     runs,
@@ -38,7 +39,9 @@ __all__ = [
     "curve",
     "curve_costs",
     "facts",
+    "fleet",
     "gantt",
+    "machines",
     "forwards",
     "nodes",
     "progress",

@@ -6,6 +6,8 @@ the detail is in the blob, so a progress view scans and only the per-node
 breakdown fetches.
 """
 
+import sys
+
 import pytest
 
 from soma_next import Graph, Node, Recorder, Store
@@ -174,3 +176,91 @@ def test_a_node_that_was_read_back_is_not_averaged_as_a_fast_one(tmp_path):
     assert a["ran"] == 1, "the second one was read back"
     assert a["recalled"] == 1
     assert a["mean_us"] == a["took_us"], "over the one time it really ran"
+
+
+# ── The fleet, which is the record turned the other way up ──
+
+
+def test_a_run_says_what_each_machine_did(tmp_path):
+    # The record is written run -> forward -> node and *where* is an attribute
+    # of a fact. `fleet` inverts it, because *what is this machine doing* is a
+    # question nobody could ask of it.
+    from soma_next import Worker
+    from soma_next.record import fleet
+
+    g = Graph.somatize(
+        Add(1).named("a") >> Add(10).named("b").at("w1") >> Add(100).named("c").at("w2")
+    )
+    workers = {
+        name: Worker.spawn(
+            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+        )
+        for name in ("w1", "w2")
+    }
+    store = Store(str(tmp_path))
+    recorder = Recorder(store, run="fleet")
+    for _ in range(3):
+        g.forward(0.0, workers=workers, watching=recorder)
+
+    said = {one["host"]: one for one in fleet(store, run="fleet")}
+
+    assert set(said) == {"here", "w1", "w2"}
+    assert said["here"]["nodes"] == ["a"], "a fact with no host ran here"
+    assert said["here"]["slices"] == 0, "nothing was sent to this machine"
+    assert said["w1"]["nodes"] == ["b"]
+    assert said["w1"]["slices"] == 3, "one slice per forward"
+    assert said["w2"]["ran"] == 3
+
+
+def test_and_what_it_was_waited_on_for(tmp_path):
+    # The column that only exists up here: the round trip minus what actually
+    # ran over there — the wire, the queue and the codec. Neither half of the
+    # subtraction belongs to a node, which is why no per-node view can say it.
+    from soma_next import Worker
+    from soma_next.record import fleet
+
+    g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
+    worker = Worker.spawn(
+        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    )
+    store = Store(str(tmp_path))
+    for _ in range(2):
+        g.forward(0.0, workers={"w1": worker}, watching=Recorder(store, run="fleet"))
+
+    away = next(one for one in fleet(store, run="fleet") if one["host"] == "w1")
+
+    assert away["trip_us"] > away["took_us"], "a round trip is more than the work"
+    assert away["waiting_us"] == away["trip_us"] - away["took_us"]
+
+
+def test_a_machine_nobody_sent_anything_to_is_not_in_it(tmp_path):
+    # There is no registry: a machine is in a fleet because it **did**
+    # something. Standing one up and never using it leaves nothing to say, and
+    # inventing a row for it would be inventing the coordinator CU15 removed.
+    from soma_next.record import fleet
+
+    g = Graph.somatize(Add(1).named("a"))
+    store = Store(str(tmp_path))
+    g.forward(0.0, watching=Recorder(store, run="alone"))
+
+    said = fleet(store, run="alone")
+
+    assert [one["host"] for one in said] == ["here"]
+
+
+def test_the_fleet_is_drawn_working_against_waited_on(tmp_path):
+    pytest.importorskip("plotly")
+    from soma_next import Worker
+    from soma_next.record import machines
+
+    g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
+    worker = Worker.spawn(
+        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    )
+    store = Store(str(tmp_path))
+    g.forward(0.0, workers={"w1": worker}, watching=Recorder(store, run="fleet"))
+
+    figure = machines(store, run="fleet")
+
+    assert [one.name for one in figure.data if one.name] == ["working", "waited on"]
+    assert set(figure.data[0].y) == {"here", "w1"}

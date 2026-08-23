@@ -43,7 +43,7 @@ of their own; they do not get to recolour these.
 from __future__ import annotations
 
 from soma_next import _theme
-from soma_next.record._read import facts, forwards, nodes
+from soma_next.record._read import facts, fleet, forwards, nodes
 
 __all__ = ["Live", "gantt", "progress", "spent"]
 
@@ -377,6 +377,90 @@ def _drawn(rows, *, title, smooth=None):
     figure.update_yaxes(_theme.axis(title_text="ms", rangemode="tozero"), row=2, col=1)
     figure.update_xaxes(_theme.axis(showticklabels=False), row=1, col=1)
     figure.update_xaxes(_theme.axis(title_text="forward"), row=2, col=1)
+    return figure
+
+
+def machines(store, *, run, last=None):
+    """The run, per machine: what each one worked and what it was waited on.
+
+    The inverse of `spent`, and the split is the whole of it. A bar is the round
+    trip and it comes in two parts — the time a machine spent **working**, and
+    the time it was **waited on**: the wire, the queue and the codec. Neither
+    half belongs to a node, which is why no per-node view can draw this and why
+    it is worth its own figure.
+
+    It is the answer to *was sending it worth it*, and the answer is often no
+    and obvious the moment it is a picture: a slice with sixty microseconds of
+    work behind a second of round trip is a slice that should have stayed here.
+
+    Costs what `fleet` costs — a scan and a fetch per `forward`.
+    """
+    return _machines(fleet(store, run=run, last=last), title=run)
+
+
+def _machines(tally, *, title):
+    """Working against waited-on, per machine, the longest trip at the top."""
+    go = _theme.plotly()
+    tally = list(reversed(tally))
+    figure = go.Figure()
+    # Working is teal because teal is what `took` is everywhere else here, and
+    # waited-on is the **remote** outline because that colour already means
+    # *another machine* on the graph. Neither is a new colour: one table.
+    for name, of, fill in (
+        ("working", "took_us", _theme.SERIES["took"]),
+        ("waited on", "waiting_us", _theme.PALETTE["remote"][1]),
+    ):
+        figure.add_trace(
+            go.Bar(
+                x=[one[of] / 1000.0 for one in tally],
+                y=[one["host"] for one in tally],
+                orientation="h",
+                name=name,
+                marker={"color": fill, "line": {"color": fill, "width": 1.0}},
+                customdata=[(one["slices"], one["ran"], ", ".join(one["nodes"]) or "—")
+                            for one in tally],
+                hovertemplate=(
+                    f"<b>%{{y}}</b> — {name}<br>%{{x:.1f}} ms"
+                    "<br>%{customdata[0]} slices, %{customdata[1]} runs"
+                    "<br>%{customdata[2]}<extra></extra>"
+                ),
+            )
+        )
+    # The round trip written on the end of the bar, because the working half is
+    # often microseconds against seconds and comes out invisible — which is the
+    # finding, but a reader has to be able to tell *invisible* from *absent*.
+    figure.add_trace(
+        go.Scatter(
+            x=[(one["took_us"] + one["waiting_us"]) / 1000.0 for one in tally],
+            y=[one["host"] for one in tally],
+            mode="text",
+            text=[f"  {(one['took_us'] + one['waiting_us']) / 1000.0:,.1f} ms"
+                  for one in tally],
+            textposition="middle right",
+            textfont={"color": _theme.MUTED, "size": 11},
+            cliponaxis=False,
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    figure.update_layout(
+        barmode="stack",
+        **_theme.layout(
+            title=_theme.titled(f"{title} — what each machine did"),
+            height=max(180, 40 * len(tally) + 130),
+            bargap=0.4,
+        ),
+    )
+    # In the order they stack, so the legend reads the way the bar does. The
+    # theme owns everything else about a legend; this is the one thing that is
+    # this figure's.
+    figure.update_layout(legend_traceorder="normal")
+    # Room on the right for the total, which is written past the end of the bar
+    # and would otherwise be cut off by the axis on the longest one — the very
+    # row somebody is looking at.
+    widest = max((one["took_us"] + one["waiting_us"]) / 1000.0 for one in tally) if tally else 1.0
+    figure.update_xaxes(_theme.axis(title_text="ms", range=[0, widest * 1.22]))
+    figure.update_yaxes(_theme.axis(automargin=True, showgrid=False))
     return figure
 
 

@@ -11,7 +11,7 @@ detail, so the split is a price list::
 
     runs, forwards, curve      one scan, no fetches
     facts                      one fetch
-    nodes                      one scan and a fetch per forward
+    nodes, fleet               one scan and a fetch per forward
 
 Everything a progress view asks for — how far along, how long each step took,
 which broke, what the loss is doing — is on the free side. The per-node detail
@@ -149,6 +149,74 @@ def curve_costs(store, *, run, of="loss.value"):
     """
     rows = forwards(store, run=run)
     return "scan" if rows and of in rows[0] else "fetch"
+
+
+#: What a fact with no `host` on it is: the machine doing the asking. A fleet
+#: view that leaves it out is missing its busiest member, and calling it by a
+#: name would be inventing one nobody wrote down.
+HERE = "here"
+
+
+def fleet(store, *, run, last=None):
+    """What each machine did, as the inverse of `nodes`.
+
+    The record is written run → `forward` → node, and *where* is an attribute of
+    a fact. This turns it the other way up, because *what is this machine doing*
+    is a question nobody could ask of it and is the one somebody with three
+    hosts came for.
+
+    **There is no registry and no heartbeat.** A machine is here because it did
+    something, and what it did is already written down: `left` says a slice
+    crossed to it and how long the whole round trip took, and every fact from
+    over there carries its `host`. The original keeps a coordinator with a
+    `last_heartbeat` and a thirty-second timeout; this has no coordinator to
+    keep one in, and CU18 already answered liveness a different way — not *does
+    it answer* but *is it still writing*.
+
+    `waiting_us` is the column that only exists up here: the round trip **minus**
+    what actually ran over there, which is the wire, the queue and the codec. It
+    is the number that says whether sending it was worth it, and no per-node view
+    can produce it because neither half of the subtraction belongs to a node.
+
+    It costs a scan and a fetch per `forward`, the same as `nodes`. `last=N`
+    reads only the last N, which is the question worth asking of a fleet that is
+    working now.
+    """
+    seen = {}
+    rows = forwards(store, run=run)
+    for row in rows[-last:] if last is not None else rows:
+        for fact in facts(store, run=run, forward=row["forward"]) or []:
+            one = seen.setdefault(
+                fact.get("host", HERE),
+                {
+                    "host": fact.get("host", HERE),
+                    "slices": 0,
+                    "trip_us": 0,
+                    "ran": 0,
+                    "took_us": 0,
+                    "failed": 0,
+                    "nodes": set(),
+                    "last": None,
+                },
+            )
+            one["last"] = row["forward"]
+            if fact["fact"] == "left":
+                one["slices"] += 1
+                one["trip_us"] += int(fact.get("took_us", 0))
+                continue
+            if "node" in fact:
+                one["nodes"].add(fact["node"])
+            if fact["fact"] in ("ran", "failed"):
+                one[fact["fact"]] += 1
+                one["took_us"] += int(fact.get("took_us", 0))
+    for one in seen.values():
+        one["nodes"] = sorted(one["nodes"])
+        # What the round trip cost over and above the work: the wire, the queue
+        # and the codec. Never below zero — a `left` counted on one `forward` and
+        # the work it carried counted on another would otherwise read as a
+        # machine that finished before it was asked.
+        one["waiting_us"] = max(0, one["trip_us"] - one["took_us"])
+    return sorted(seen.values(), key=lambda one: (one["host"] != HERE, one["host"]))
 
 
 def nodes(store, *, run, last=None):
