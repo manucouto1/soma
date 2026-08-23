@@ -107,6 +107,31 @@ impl Flag {
         }
     }
 
+    /// Which family of trouble this is.
+    ///
+    /// A closed set, and it exists so that a figure can give each family a
+    /// colour instead of painting everything one red. Six alarms that all look
+    /// the same are one alarm, and the first thing anybody asks of a network
+    /// with four findings on it is whether they are four problems or one.
+    ///
+    /// The families are by **what to do about them**, not by what was measured:
+    /// `VANISHING` and `EXPLODING` are both the signal not arriving at a usable
+    /// size, and both are answered by looking at depth and initialisation.
+    pub fn family(&self) -> &'static str {
+        match self {
+            Self::Nan | Self::Inf => "numeric",
+            Self::Vanishing | Self::Exploding => "signal",
+            Self::Dead | Self::Saturated => "activation",
+            Self::Stalled | Self::Overstepping => "step",
+            Self::DeadChannels(_)
+            | Self::IgnoredChannels(_)
+            | Self::Leakage
+            | Self::Narrowing
+            | Self::LosingPlasticity => "capacity",
+            Self::IgnoredInput(_) | Self::SoleReliance(_) => "data",
+        }
+    }
+
     /// What to do about it, in one line.
     ///
     /// Part of the flag and not of whoever draws it: the thresholds and the

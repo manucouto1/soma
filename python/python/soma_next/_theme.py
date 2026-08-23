@@ -63,6 +63,7 @@ MARKS = {
     # Fill, outline, ink, and how tall it is as a fraction of a full row: what
     # holds weights gets a box, and what does not gets a mark.
     "learned": ("#1c2333", "#4a5a86", "#cfd8ee", 1.0),
+    "conv": ("#1b2530", "#4d7f8f", "#c7e3ec", 1.0),
     "recurrent": ("#1c2333", "#6f7bd1", "#cfd8ee", 1.0),
     "attention": ("#1b2a2f", "#3f8f9d", "#bfe6ee", 1.0),
     "norm": ("#20242e", "#3a4152", "#9aa3b8", 0.62),
@@ -75,6 +76,39 @@ MARKS = {
 """Fill, outline, ink and height, by what a layer **is**. The second table, and
 it is a different question from the first: `PALETTE` says where a node runs and
 this says what a thing is made to do."""
+
+SHAPES = {
+    # And what **silhouette** it gets. A `Linear`, a convolution, a recurrent
+    # cell and a non-linearity are four different kinds of thing, and drawing
+    # them as four identical rectangles with different words in them makes the
+    # reader do the sorting a picture is supposed to have done already.
+    "learned": "box",
+    "conv": "skewed",  # a window sliding along
+    "recurrent": "looped",  # it feeds itself
+    "attention": "cut",  # a composite, with its corners taken off
+    "norm": "capsule",  # no capacity: rounded, and thin
+    "activation": "lens",  # pointed: nothing lives in it
+    "regular": "dashed",
+    "shaping": "trapezoid",  # it changes the shape, so it says which way
+    "block": "box",
+    "other": "box",
+}
+"""The silhouette each kind is drawn with."""
+
+ALARM = {
+    # One colour per **family** of trouble, not one red for everything. Six
+    # alarms that all look the same are one alarm, and the first thing anybody
+    # asks of a network with four findings is whether they are four problems or
+    # one.
+    "numeric": "#ff5d8f",
+    "signal": "#ef5f6b",
+    "activation": "#f0a35e",
+    "step": "#e6c25a",
+    "capacity": "#a98bdd",
+    "data": "#4fc3b0",
+}
+"""What each family of finding is drawn in. Read with `[]`, like everything
+else: a family this does not know is a family somebody added and did not draw."""
 """Fill, outline and ink, by what the thing is. The only table."""
 
 SERIES = {

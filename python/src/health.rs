@@ -208,6 +208,16 @@ pub fn leaning(
     ))
 }
 
+/// Which family of trouble a flag belongs to, by name.
+///
+/// So a figure can give each family a colour: six alarms that all look the same
+/// are one alarm, and the first question anybody asks of four findings is
+/// whether they are four problems or one.
+#[pyfunction]
+pub fn family(flag: &str) -> PyResult<String> {
+    Ok(known(flag)?.family().to_string())
+}
+
 /// What a flag means and what to do about it, by name.
 ///
 /// Beside the flag and not in whoever draws it: the bounds and the advice are
@@ -215,9 +225,14 @@ pub fn leaning(
 /// this library never said.
 #[pyfunction]
 pub fn about(flag: &str) -> PyResult<String> {
+    Ok(known(flag)?.about().to_string())
+}
+
+/// The flag that name is, whatever it counts.
+fn known(flag: &str) -> PyResult<soma_next_health::Flag> {
     use soma_next_health::Flag;
     let bare = flag.split('(').next().unwrap_or(flag);
-    let said = [
+    [
         Flag::Nan,
         Flag::Inf,
         Flag::Vanishing,
@@ -236,6 +251,5 @@ pub fn about(flag: &str) -> PyResult<String> {
     ]
     .into_iter()
     .find(|one| one.name() == bare)
-    .ok_or_else(|| PyValueError::new_err(format!("`{flag}` is not a flag this library raises")))?;
-    Ok(said.about().to_string())
+    .ok_or_else(|| PyValueError::new_err(format!("`{flag}` is not a flag this library raises")))
 }

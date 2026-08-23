@@ -337,12 +337,21 @@ holding two modules composes them in its own `forward`.
 
 `g.figure(inside=...)` draws its box as a **frame** — the shape a `Wave` and a
 `Remote` already are — and lays the inside out **by what feeds what**, so a skip
-runs down a gutter and enters from the side. Four rules make it readable: a
-kind, not a class name, decides the mark (what holds weights gets a box, a
-non-linearity gets a thinner one); a composite everybody recognises is one box
-and `depth=` opens it; blocks that are the same block collapse to `×N`; and the
-**shape is written on the layer**, because that is the only thing that makes a
-bottleneck a picture.
+runs down a gutter and enters from the side. Five rules make it readable: a
+kind, not a class name, decides the **silhouette** — a convolution is a
+parallelogram, a recurrent cell has a tab, an attention block has its corners
+cut and says what is in it, a normalisation is a capsule, a non-linearity is
+pointed, and anything that changes the width is tapered the way it goes; a
+composite everybody recognises is one box and `depth=` opens it; blocks that are
+the same block collapse to `×N`; and the **shape is written on the layer**,
+because that is the only thing that makes a bottleneck a picture.
+
+Findings are coloured by **family** — numeric, signal, activation, step,
+capacity, data — with a legend of the ones on the figure, because six alarms
+that all look the same are one alarm. And `overlaid(..., inside=...)` puts each
+one on the layer it is about: the audit's scope and the drawing's are now the
+same scope, which is what makes *what is measured has a box* true rather than
+hopeful.
 
 **Where is a question the graph answers**: `overlaid` marks the ill nodes — and
 the ill **layers inside them** — on the figure, and health gets a **channel of

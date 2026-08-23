@@ -122,11 +122,12 @@ class Audit:
             held = graph.implementation(node)
             for name, module in _modules(held):
                 self.watching[(node, None)] = module
-                for path, inner in _scoped(module, self.inside, node, self.most):
+                for path, inner in _scoped(module, self.inside, node, self.most, depth=0):
                     # Prefixed with the attribute it hangs off. A node with two
                     # modules on it would otherwise have two `0`s, and the
-                    # second would quietly overwrite the first.
-                    self.watching[(node, f"{name}.{path}")] = inner
+                    # second would quietly overwrite the first. An empty path is
+                    # the module itself, and `stem.` is not a name.
+                    self.watching[(node, f"{name}.{path}" if path else name)] = inner
         for key, module in self.watching.items():
             self._hooks.append(
                 module.register_forward_hook(_forward_of(self, key), always_call=False)
@@ -442,7 +443,7 @@ def _slope(name, kept):
     return {f"{name}_slope": (over[-1] - over[0]) / (abs(over[0]) * len(over))}
 
 
-def _scoped(root, inside, node, most):
+def _scoped(root, inside, node, most, depth=0):
     """Which submodules of a node to look at, as `[(path, module)]`.
 
     Three ways of saying it, because three questions get asked. `True` is *look
@@ -473,11 +474,13 @@ def _scoped(root, inside, node, most):
     elif isinstance(said, int) and said is not True:
         chosen = [(n, m) for n, m in named if n.count(".") + 1 <= said and has(m)]
     else:
-        chosen = [(n, m) for n, m in root.named_children() if has(m)]
-        if len(chosen) == 1:
-            only, wrapper = chosen[0]
-            deeper = [(f"{only}.{n}", m) for n, m in wrapper.named_children() if has(m)]
-            chosen = deeper or chosen
+        # **The same scope the figure draws**, and that is not a convenience: a
+        # finding lands on a box only if the thing it was measured on has one.
+        # They were two rules for a while, and what that looked like was every
+        # flag piled into the node's label with the layers underneath unmarked.
+        from soma_next.torch._inside import _worth_drawing
+
+        chosen = [(path, one) for path, one in _worth_drawing(root, depth) if has(one)]
 
     if len(chosen) > most:
         # Said out loud, because a cap that quietly drops half a network is a

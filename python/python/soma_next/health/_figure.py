@@ -163,7 +163,7 @@ def _nothing(go, what):
     )
 
 
-def overlaid(graph, store, *, run, thresholds=None, last=None):
+def overlaid(graph, store, *, run, thresholds=None, last=None, inside=None):
     """The graph, with what is wrong marked on the nodes it is wrong in.
 
     The answer to *where* — which is the question a diagnosis of a distributed
@@ -176,13 +176,22 @@ def overlaid(graph, store, *, run, thresholds=None, last=None):
     does this run*, and on a graph spread over three machines that is the
     answer somebody came for.
 
-    Findings from **inside** a node — `encoder.2` — land on `encoder`, because
-    that is the box there is to mark. The hover carries which layer.
+    `inside` is what `soma_next.torch.architecture` gives back, and passing it
+    is what makes a finding land **on the layer it is about** rather than piling
+    every one of them into the node's label. Without it a graph of four nodes
+    with ten findings comes out ten times wider than it is tall with nothing
+    readable in it, which is what it did.
+
+    Findings from inside a node whose architecture was not drawn land on the
+    node, because that is then the only box there is to mark.
     """
-    return graph.figure(overlay=where(store, run=run, thresholds=thresholds, last=last))
+    return graph.figure(
+        overlay=where(store, run=run, thresholds=thresholds, last=last, inside=inside),
+        inside=inside,
+    )
 
 
-def where(store, *, run, thresholds=None, last=None):
+def where(store, *, run, thresholds=None, last=None, inside=None):
     """A diagnosis folded onto the nodes of a graph: `{node: [flag, ...]}`.
 
     What `overlaid` hands to the figure, and what to hand to `graph.figure()`
@@ -190,12 +199,31 @@ def where(store, *, run, thresholds=None, last=None):
     named on its flag — `LEAKAGE in net.2` — because the box it lands on is the
     node and the layer would otherwise be lost.
     """
+    drawn = {
+        f"{node}.{one.path}"
+        for node, made in (inside or {}).items()
+        for one in made.layers
+    }
+    # And where a box was folded away into a `×N`, the box that stands for it.
+    stands_for = {
+        f"{node}.{was}": f"{node}.{now}"
+        for node, made in (inside or {}).items()
+        for was, now in made.folded.items()
+    }
     folded = {}
-    for one, raised in diagnose(store, run=run, thresholds=thresholds, last=last).items():
-        node, _, inside = one.partition(".")
+    for at, raised in diagnose(store, run=run, thresholds=thresholds, last=last).items():
+        one = stands_for.get(at, at)
+        if one in drawn:
+            # It has a box of its own, so it goes on it and the node stays
+            # readable.
+            folded.setdefault(one, []).extend(raised)
+            continue
+        node, _, within = one.partition(".")
         said = folded.setdefault(node, [])
-        said.extend(f"{flag} in {inside}" if inside else flag for flag in raised)
-    return folded
+        said.extend(f"{flag} in {within}" if within else flag for flag in raised)
+    # Six identical blocks folded into one box mean the same finding arrives six
+    # times. Said once, in the order it first arrived.
+    return {where: list(dict.fromkeys(said)) for where, said in folded.items()}
 
 
 class Alerts:

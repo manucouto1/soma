@@ -424,7 +424,7 @@ def test_a_flag_on_a_layer_marks_that_layer_and_not_the_others():
 
     figure = g.figure(inside={"encoder": made}, overlay={"encoder.2": ["STALLED"]})
 
-    marked = [s for s in figure.layout.shapes if s.line.color == _theme.SERIES["alarm"]]
+    marked = [s for s in figure.layout.shapes if s.line.color == _theme.ALARM["step"]]
     assert len(marked) == 1, "one layer, not the node and not its neighbours"
 
 

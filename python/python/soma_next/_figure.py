@@ -139,6 +139,8 @@ class Box:
     mark: str | None = None
     shape: str | None = None
     row: int | None = None
+    narrows: int | None = None
+    made_of: str | None = None
 
     @property
     def cx(self) -> float:
@@ -244,9 +246,14 @@ def figure(graph, overlay=None, inside=None):
             # a box says *there is something living here* and an activation has
             # nothing to live.
             fill, line, ink, _ = _theme.MARKS.get(box.mark or "other", _theme.MARKS["other"])
+            width = 1.0
             if box.node in ill:
-                line, ink = _theme.SERIES["alarm"], _theme.SERIES["alarm"]
-            shapes.append(_rect(box, fill, line, 1.0))
+                line = ink = _worst(ill[box.node])
+                width = 1.8
+            how = _theme.SHAPES.get(box.mark or "other", "box")
+            if how == "box" and box.narrows and _tapers(box.mark):
+                how = "trapezoid"
+            shapes.append(_silhouette(box, fill, line, width, how))
             notes.append(
                 _text(box.cx, box.cy, _safe(_labelled(box)), ink, size=10)
             )
@@ -255,8 +262,10 @@ def figure(graph, overlay=None, inside=None):
             width = 1.4
             if box.node in ill:
                 # The one place in this library where a colour means bad. It is
-                # the outline and never the fill: two facts, two channels.
-                line, width = _theme.SERIES["alarm"], 2.6
+                # the outline and never the fill: two facts, two channels. And
+                # the colour is the **family** of the trouble, because six
+                # alarms that all look the same are one alarm.
+                line, width = _worst(ill[box.node]), 2.6
             shapes.append(_rect(box, fill, line, width))
             lines = labels[box.node]
             # A node that was opened writes its name at the **top**, where a
@@ -323,8 +332,14 @@ def figure(graph, overlay=None, inside=None):
         )
     )
 
+    # A legend, and only of the families that are actually on the figure. Six
+    # colours nobody can read are one colour, and a legend of families that are
+    # not here is a reader looking for something that is not there.
     span_x = max(box.x + box.w for box in placed)
     span_y = max(box.y + box.h for box in placed)
+    if ill:
+        notes.extend(_legend(ill, span_y + 26))
+        span_y += 26
     figure.update_layout(
         shapes=shapes,
         annotations=notes,
@@ -437,7 +452,7 @@ def _stack(node, inside, x, y, width, labels, out):
     lines = labels.get(node) or (node,)
     top = y + max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
     for one, place in _ranked(inside):
-        row, across, wide = place
+        row, across, wide, narrows = place
         # The height is the kind's, and it is decided **here** and not when it
         # is drawn: a figure that paints something other than the box it laid
         # out has two truths in it, and the tests can only see one of them.
@@ -454,6 +469,8 @@ def _stack(node, inside, x, y, width, labels, out):
                 mark=one.kind,
                 shape=one.shape,
                 row=row,
+                narrows=narrows,
+                made_of=one.made_of if one.kind in ("attention", "recurrent") else None,
             )
         )
 
@@ -477,12 +494,51 @@ def _ranked(inside):
     for path in order:
         rows.setdefault(rank[path], []).append(layers[path])
 
+    # Which way each layer changes the width, so a taper can be drawn the way
+    # it really goes. The last dimension of what it produced against the last
+    # dimension of what fed it: `+1` narrower, `-1` wider, `0` neither.
+    narrows = {}
+    for path in layers:
+        mine = _last_dim(layers[path].shape)
+        theirs = _width_before(path, layers, feeds, set())
+        narrows[path] = (
+            None if mine is None or theirs is None else (mine < theirs) - (mine > theirs)
+        )
+
     placed, widest = [], _inner_width(inside)
     for row, beside in sorted(rows.items()):
         each = (widest - LAYER_GAP * (len(beside) - 1)) / len(beside)
         for at, one in enumerate(beside):
-            placed.append((one, (row, at * (each + LAYER_GAP), each)))
+            placed.append((one, (row, at * (each + LAYER_GAP), each, narrows[one.path])))
     return placed
+
+
+def _width_before(path, layers, feeds, seen):
+    """The width of the nearest thing above this that has one.
+
+    Walking back past what has no shape is the whole of it: an `Add` has no
+    shape of its own, and stopping at one is how a pooling layer that really
+    does go from thirty-two to one comes out drawn as a plain box.
+    """
+    for one in feeds.get(path, []):
+        if one in seen or one not in layers:
+            continue
+        seen.add(one)
+        found = _last_dim(layers[one].shape)
+        if found is not None:
+            return found
+        deeper = _width_before(one, layers, feeds, seen)
+        if deeper is not None:
+            return deeper
+    return None
+
+
+def _last_dim(shape):
+    """The last number of a shape as it is written — the width of what came out."""
+    try:
+        return int(shape.split("×")[-1])
+    except (AttributeError, ValueError):
+        return None
 
 
 def _inner_width(inside):
@@ -498,9 +554,19 @@ def _rows_of(inside):
     return len({place[0] for _, place in _ranked(inside)}) if inside else 0
 
 
+def _tapers(kind):
+    """Whether a kind is drawn changing the width when it changes it.
+
+    Only what really carries the shape: a non-linearity that happens to sit
+    where the width changed did not change it.
+    """
+    return kind in ("learned", "shaping")
+
+
 def _layer_text(one):
     """What is written on a layer: what it is, and what it produces."""
-    return one.label + (f"   {one.shape}" if one.shape else "")
+    said = one.label + (f"   {one.shape}" if one.shape else "")
+    return said + (f"   ({one.made_of})" if getattr(one, "made_of", None) else "")
 
 
 def _bare_markup(line):
@@ -537,11 +603,12 @@ def _lines(node, identity, device, badges, flags=None):
     if tail:
         lines.append(_safe(" · ".join(tail)))
     if flags:
-        # The names and not a count: `2 findings` is a number somebody has to go
-        # and look up, and the whole point of putting it on the box is not
-        # having to.
-        said = " · ".join(sorted({_bare(one) for one in flags}))
-        lines.append(f"<span style='color:{_theme.SERIES['alarm']}'>⚠ {_safe(said)}</span>")
+        # At most three names, and then a count. Writing every finding of every
+        # layer into the node's label is what made a graph of four nodes come
+        # out ten times wider than it was tall, with nothing readable in it.
+        names = sorted({_bare(one) for one in flags})
+        said = " · ".join(names[:3]) + (f" +{len(names) - 3}" if len(names) > 3 else "")
+        lines.append(f"<span style='color:{_worst(flags)}'>⚠ {_safe(said)}</span>")
     return tuple(lines)
 
 
@@ -552,7 +619,58 @@ def _labelled(box):
     makes a **bottleneck** a picture: `512 → 8 → 512` is visible and
     `Linear · Linear · Linear` is not.
     """
-    return box.label + (f"   {box.shape}" if box.shape else "")
+    said = box.label + (f"   {box.shape}" if box.shape else "")
+    # Plain text and no markup: an annotation takes a small subset of HTML and
+    # a `<span>` it does not know comes out as the letters `<span …>`, which is
+    # what it did.
+    return said + (f"   · {_safe(box.made_of)}" if box.made_of else "")
+
+
+def _legend(ill, at):
+    """One line saying what each colour on this figure means."""
+    families = []
+    for flags in ill.values():
+        for flag in flags:
+            try:
+                one = _flag_family(_bare(flag))
+            except (TypeError, ValueError):
+                continue
+            if one not in families:
+                families.append(one)
+    across = 0.0
+    said = []
+    for one in families:
+        colour = _theme.ALARM.get(one, _theme.SERIES["alarm"])
+        said.append(_text(across, at, f"■ {one}", colour, left=True, size=10))
+        across += CHAR * (len(one) + 4) + 18
+    return said
+
+
+def _worst(flags):
+    """What colour a set of findings is drawn in: the family of the first one.
+
+    First and not blended: `verdict` already puts what stops a run soonest at
+    the front, so the colour is the family of the thing to look at first. A
+    blend of six families is a seventh colour that means nothing.
+    """
+    for flag in flags:
+        try:
+            return _theme.ALARM[_flag_family(_bare(flag))]
+        except (KeyError, TypeError, ValueError):
+            continue
+    return _theme.SERIES["alarm"]
+
+
+def _flag_family(name):
+    """Which family a flag belongs to, from the crate that decides it.
+
+    Not `_family`, which this file already had and which answers a different
+    question — which device family a node runs on. Two names for two questions,
+    and the day they were one name the graph was drawn with a flag's colour.
+    """
+    from soma_next._soma_next import family
+
+    return family(name)
 
 
 def _bare(flag):
@@ -608,6 +726,80 @@ def _safe(text):
     test for, and this is where it is closed.
     """
     return html.escape(str(text), quote=False)
+
+
+def _silhouette(box, fill, line, width, how):
+    """One layer, drawn as the **kind of thing** it is.
+
+    A `Linear`, a convolution, a recurrent cell and a non-linearity are four
+    different kinds of thing, and four identical rectangles with different words
+    in them make the reader do the sorting a picture was supposed to have done.
+
+    An SVG path in data coordinates, so the silhouette scales with the box and
+    there is nothing to keep in step by hand.
+    """
+    x, y, w, h = box.x, box.y, box.w, box.h
+    r, cut, skew = h / 2, min(h / 2, 10.0), min(w / 8, 12.0)
+    said = {"type": "path", "xref": "x", "yref": "y", "layer": "below",
+            "fillcolor": fill,
+            "line": {"color": line, "width": width}}
+    if how in ("capsule", "dashed"):
+        # Polygons and never arcs: this figure's y axis is **reversed** — a plan
+        # is read downwards — and an SVG arc's sweep flag is about a direction,
+        # so every one of them comes out inside out. A cut corner says *rounded*
+        # well enough and cannot be wrong.
+        said["path"] = (
+            f"M {x + r},{y} L {x + w - r},{y} L {x + w},{y + h / 2} "
+            f"L {x + w - r},{y + h} L {x + r},{y + h} L {x},{y + h / 2} Z"
+        )
+        if how == "dashed":
+            said["line"]["dash"] = "dot"
+    elif how == "lens":
+        # Pointed at both ends: nothing lives in it, it is passed through.
+        said["path"] = (
+            f"M {x},{y + h / 2} L {x + skew},{y} L {x + w - skew},{y} "
+            f"L {x + w},{y + h / 2} L {x + w - skew},{y + h} L {x + skew},{y + h} Z"
+        )
+    elif how == "skewed":
+        # A window sliding along, which is what a convolution is.
+        said["path"] = (
+            f"M {x + skew},{y} L {x + w},{y} L {x + w - skew},{y + h} L {x},{y + h} Z"
+        )
+    elif how == "cut":
+        said["path"] = (
+            f"M {x + cut},{y} L {x + w - cut},{y} L {x + w},{y + cut} "
+            f"L {x + w},{y + h - cut} L {x + w - cut},{y + h} L {x + cut},{y + h} "
+            f"L {x},{y + h - cut} L {x},{y + cut} Z"
+        )
+    elif how == "looped":
+        # It feeds itself, and the tab on the right side is that and nothing
+        # else — drawn out of straight lines for the same reason as the capsule.
+        tab = min(w / 6, 16.0)
+        said["path"] = (
+            f"M {x},{y} L {x + w - tab},{y} L {x + w - tab},{y - h / 4} "
+            f"L {x + w},{y - h / 4} L {x + w},{y + h + h / 4} "
+            f"L {x + w - tab},{y + h + h / 4} L {x + w - tab},{y + h} L {x},{y + h} Z"
+        )
+    elif how == "trapezoid":
+        said["path"] = _tapered(box, skew)
+    else:
+        said["path"] = f"M {x},{y} L {x + w},{y} L {x + w},{y + h} L {x},{y + h} Z"
+    return said
+
+
+def _tapered(box, skew):
+    """A shape that changes the shape, drawn changing: narrowing when what comes
+    out is smaller than what went in, widening when it is bigger.
+
+    This is what makes a **bottleneck** look like one instead of like three
+    identical boxes with different numbers written on them.
+    """
+    x, y, w, h = box.x, box.y, box.w, box.h
+    if box.narrows is None or box.narrows == 0:
+        return f"M {x},{y} L {x + w},{y} L {x + w},{y + h} L {x},{y + h} Z"
+    if box.narrows < 0:
+        return f"M {x},{y} L {x + w},{y} L {x + w - skew},{y + h} L {x + skew},{y + h} Z"
+    return f"M {x + skew},{y} L {x + w - skew},{y} L {x + w},{y + h} L {x},{y + h} Z"
 
 
 def _rect(box, fill, line, width, dash=None):

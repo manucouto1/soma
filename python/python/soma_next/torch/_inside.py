@@ -53,7 +53,8 @@ __all__ = ["KINDS", "Inside", "Layer", "architecture", "kind_of", "traced"]
 #: Closed, and by role rather than by class: whoever writes a new activation
 #: gets the activation treatment without this table learning its name.
 KINDS = (
-    "learned",  # holds weights: Linear, Conv, Embedding, the cell of an LSTM
+    "learned",  # holds weights: Linear, Embedding
+    "conv",  # holds weights and slides them along
     "recurrent",  # holds weights and loops back on itself
     "attention",  # a composite everybody recognises, drawn as one thing
     "norm",  # LayerNorm, BatchNorm — no capacity, changes the scale
@@ -70,12 +71,12 @@ _BY_NAME = {
     "LazyLinear": "learned",
     "Embedding": "learned",
     "EmbeddingBag": "learned",
-    "Conv1d": "learned",
-    "Conv2d": "learned",
-    "Conv3d": "learned",
-    "ConvTranspose1d": "learned",
-    "ConvTranspose2d": "learned",
-    "ConvTranspose3d": "learned",
+    "Conv1d": "conv",
+    "Conv2d": "conv",
+    "Conv3d": "conv",
+    "ConvTranspose1d": "conv",
+    "ConvTranspose2d": "conv",
+    "ConvTranspose3d": "conv",
     "RNN": "recurrent",
     "RNNCell": "recurrent",
     "LSTM": "recurrent",
@@ -146,6 +147,8 @@ def kind_of(what):
         return _BY_NAME[name]
     if name in _ACTIVATIONS:
         return "activation"
+    if "Conv" in name:
+        return "conv"
     if name.endswith("Norm"):
         return "norm"
     if name.endswith("Dropout"):
@@ -162,12 +165,17 @@ def kind_of(what):
 class Layer:
     """One thing in an architecture: where it is, what it is, what it produces."""
 
-    __slots__ = ("path", "kind", "label", "shape")
+    __slots__ = ("path", "kind", "label", "shape", "made_of")
 
-    def __init__(self, path, kind, label, shape=None):
+    def __init__(self, path, kind, label, shape=None, made_of=None):
         self.path = path
         self.kind = kind
         self.label = label
+        #: What is inside it, for a composite that is drawn whole. A
+        #: `TransformerEncoderLayer` kept as one box still owes the reader an
+        #: answer to *one box of what* — and the answer is short enough to write
+        #: on it.
+        self.made_of = made_of
         #: The shape of what it produces, as text — `(32, 8)`. The one thing
         #: that makes a **bottleneck** visible: `512 → 8 → 512` is a picture and
         #: `Linear · Linear · Linear` is not. `None` when nobody ran it.
@@ -180,7 +188,7 @@ class Layer:
         return hash(self._as_tuple())
 
     def _as_tuple(self):
-        return (self.path, self.kind, self.label, self.shape)
+        return (self.path, self.kind, self.label, self.shape, self.made_of)
 
     def __repr__(self):
         said = f"Layer({self.path!r}, {self.kind!r}, {self.label!r}"
@@ -197,12 +205,17 @@ class Inside:
     tell those apart.
     """
 
-    __slots__ = ("layers", "edges", "how", "why")
+    __slots__ = ("layers", "edges", "how", "why", "folded")
 
-    def __init__(self, layers, edges, how, why=None):
+    def __init__(self, layers, edges, how, why=None, folded=None):
         self.layers = list(layers)
         self.edges = list(edges)
         self.how = how
+        #: What was collapsed into what: `{"body.2.norm": "body.0.norm"}`. Six
+        #: identical blocks drawn once leaves five sets of paths with no box,
+        #: and a finding on one of them has to land somewhere — on the box that
+        #: stands for it, which is this.
+        self.folded = dict(folded or {})
         #: Why the symbolic path was not used, when it was not. Kept because
         #: "it did not work" is not something anybody can act on.
         self.why = why
@@ -371,6 +384,29 @@ def _by_running(module, example, why):
     return Inside(layers, edges, "traced", why)
 
 
+def _made_of(module):
+    """What a composite is made of, in one line: `attention · norm ×2 · linear ×2`.
+
+    Only for something kept whole — a leaf is made of itself. It is the answer
+    to *one box of what*, which a reader is owed the moment a fourteen-part
+    block is drawn as one thing.
+    """
+    if torch is None or not any(True for _ in module.children()):
+        return None
+    counted = {}
+    for _, one in module.named_modules():
+        if one is module or any(True for _ in one.children()):
+            continue
+        kind = kind_of(one)
+        counted[kind] = counted.get(kind, 0) + 1
+    if not counted:
+        return None
+    return " · ".join(
+        one + (f" ×{how_many}" if how_many > 1 else "")
+        for one, how_many in sorted(counted.items(), key=lambda kv: -kv[1])
+    )
+
+
 def _tensors(what):
     """Every tensor in whatever a module was handed or returned."""
     found = []
@@ -502,7 +538,9 @@ def _watch(where, one, layers, edges, made_by, order):
     """A hook that writes down what ran and what it was handed."""
 
     def saw(_module, args, output):
-        layers.append(Layer(where, kind_of(one), type(one).__name__, _shape(output)))
+        layers.append(
+            Layer(where, kind_of(one), type(one).__name__, _shape(output), _made_of(one))
+        )
         known = False
         for before in _tensors(args):
             producer = made_by.get(id(before))
@@ -584,6 +622,7 @@ def _without_a_lone_input(inside):
         + [(a, feeds[b]) for a, b in inside.edges if b in lone and b in feeds],
         inside.how,
         inside.why,
+        inside.folded,
     )
 
 
@@ -634,8 +673,9 @@ def _repeated(inside):
 
     if all(count == 1 for count in counts.values()):
         return inside
+    del signature
     layers = [
-        Layer(one.path, one.kind, _times(one.label, counts[which]), one.shape)
+        Layer(one.path, one.kind, _times(one.label, counts[which]), one.shape, one.made_of)
         for which in kept
         for one in blocks[which]
     ]
@@ -652,7 +692,7 @@ def _repeated(inside):
             continue
         seen.add(one)
         edges.append(one)
-    return Inside(layers, edges, inside.how, inside.why)
+    return Inside(layers, edges, inside.how, inside.why, {**inside.folded, **folded})
 
 
 def _blocks_of(inside):
@@ -767,6 +807,7 @@ def _spliced(layers, edges, name, finer):
             one.kind,
             one.label,
             (was.get(f"{mine}{one.path}") or one).shape,
+            (was.get(f"{mine}{one.path}") or one).made_of,
         )
         for one in finer.layers
     ]
@@ -803,6 +844,7 @@ def _at_most(node, inside, most):
         [(a, b) for a, b in inside.edges if a in kept and b in kept],
         inside.how,
         inside.why,
+        inside.folded,
     )
 
 
