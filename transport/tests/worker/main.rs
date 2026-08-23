@@ -240,11 +240,28 @@ impl Node for Times {
     }
 }
 
+/// Takes its time, so that a test can tell a fact that arrived **while** the
+/// work was going from one that arrived with the answer.
+///
+/// It is the only way to check that from the outside: batched or live, the
+/// facts are the same facts and arrive in the same order. What differs is
+/// **when**, and the only way to measure when is to have something slow behind
+/// the first one.
+struct Slow;
+
+impl Node for Slow {
+    fn forward(&self, input: &Value, _ctx: &Ctx<'_>) -> Result<Value, NodeError> {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Ok(input.clone())
+    }
+}
+
 fn catalog() -> Catalog {
     let mut catalog = Catalog::new();
     for id in ["a", "b", "c", "d", "left", "right"] {
         catalog.insert(id, Arc::new(Add(1.0)));
     }
+    catalog.insert("slow", Arc::new(Slow));
     catalog.insert("join", Arc::new(Mean));
     catalog.insert("where", Arc::new(WhereIRan));
     catalog.insert("opaque", Arc::new(Opaque));

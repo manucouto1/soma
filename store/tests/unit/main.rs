@@ -4,4 +4,5 @@ mod cache;
 mod contract;
 mod digest;
 mod local;
+mod recorder;
 mod tempdir;

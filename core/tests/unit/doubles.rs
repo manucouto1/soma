@@ -4,8 +4,8 @@
 //! what they answer.
 
 use soma_next_core::{
-    Cargo, Catalog, Ctx, Device, Keeper, KeeperError, Kept, Key, Keys, Memory, Node, NodeError,
-    NodeId, Outcome, Placement, Plan, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Fact, Keeper, KeeperError, Kept, Key, Keys, Memory, Node,
+    NodeError, NodeId, Outcome, Placement, Plan, Transport, TransportError, Value, Watcher,
 };
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
@@ -288,7 +288,12 @@ impl Mirror {
 }
 
 impl Transport for Mirror {
-    fn dispatch(&self, plan: &Plan, cargo: &Cargo<'_>) -> Result<Outcome, TransportError> {
+    fn dispatch(
+        &self,
+        plan: &Plan,
+        cargo: &Cargo<'_>,
+        seen: Option<&dyn Watcher>,
+    ) -> Result<Outcome, TransportError> {
         self.trips.lock().expect("nobody poisons it").push(Trip {
             plan: plan.clone(),
             input: cargo.input.clone(),
@@ -298,8 +303,14 @@ impl Transport for Mirror {
             memory: cargo.memory.clone(),
         });
 
-        soma_next_core::Executor::new(&self.catalog)
-            .placed(cargo.placement)
+        // What a real worker does: the engine over there is told, and what it
+        // says is handed straight back untouched. A double that swallowed them
+        // would make the far half of the live view untestable without a process.
+        let mut over_there = soma_next_core::Executor::new(&self.catalog).placed(cargo.placement);
+        if let Some(seen) = seen {
+            over_there = over_there.watching(seen);
+        }
+        over_there
             .resume(
                 plan,
                 cargo.input.clone(),
@@ -318,7 +329,12 @@ impl Transport for Mirror {
 pub struct Cable(pub &'static str);
 
 impl Transport for Cable {
-    fn dispatch(&self, _plan: &Plan, _cargo: &Cargo<'_>) -> Result<Outcome, TransportError> {
+    fn dispatch(
+        &self,
+        _plan: &Plan,
+        _cargo: &Cargo<'_>,
+        _seen: Option<&dyn Watcher>,
+    ) -> Result<Outcome, TransportError> {
         Err(TransportError::new(self.0))
     }
 }
@@ -444,5 +460,50 @@ impl Keeper for Notebook {
         inside.retain(|(under, _)| under != key);
         inside.push((key.clone(), kept));
         Ok(())
+    }
+}
+
+/// Keeps every fact it is told, in the order it was told them.
+///
+/// The double a `Watcher` needs: what is being checked is not what the engine
+/// **returned** but what it **said while it was working**, and those two answers
+/// come out of different holes.
+#[derive(Default)]
+pub struct Told(Mutex<Vec<Fact>>);
+
+impl Told {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Everything it was told, in the order it arrived — which for a wave is not
+    /// the order things happened in, and no test here may assume otherwise.
+    pub fn all(&self) -> Vec<Fact> {
+        self.0.lock().expect("nobody poisons this mutex").clone()
+    }
+
+    /// The names of what it was told, which is what most of these assert on.
+    pub fn kinds(&self) -> Vec<&'static str> {
+        self.all().iter().map(|fact| fact.flattened().0).collect()
+    }
+
+    /// The nodes it was told ran, in order.
+    pub fn ran(&self) -> Vec<String> {
+        self.all()
+            .iter()
+            .filter_map(|fact| match fact {
+                Fact::Ran { node, .. } => Some(node.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Watcher for Told {
+    fn saw(&self, fact: &Fact) {
+        self.0
+            .lock()
+            .expect("nobody poisons this mutex")
+            .push(fact.clone());
     }
 }

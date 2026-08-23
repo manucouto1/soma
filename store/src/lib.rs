@@ -23,8 +23,8 @@
 //! A blob is written once and never changes; a binding is a small record written
 //! by **atomic rename**. That is what lets a network folder be shared by
 //! everyone at once without a lock server — the same trick optuna's
-//! `JournalFileStorage` uses to claim trials, and the same one that will work
-//! unchanged against S3.
+//! `JournalFileStorage` uses to claim trials, and the one that turned out to
+//! work unchanged against a bucket.
 //!
 //! # Who asks it for things
 //!
@@ -32,11 +32,14 @@
 //! |---|---|---|
 //! | a worker's `Serving::store` | artifacts, so a catalog is not sent twice | `artifact:<kind>:<id>` |
 //! | [`Cache`] | what a node produced, so it is not computed twice | `value:<key>` |
+//! | [`Recorder`] | what happened while it ran, one record per `forward` | `run/<id>/<n>` |
 //!
-//! Two questions, one directory, and the namespace of the name is what keeps
-//! them apart. [`Cache`] is the [`Keeper`](soma_next_core::Keeper) the core
-//! left a hole for: the core cannot hash and has nowhere to put bytes, and both
-//! of those live here.
+//! Three questions, one directory, and the namespace of the name is what keeps
+//! them apart. [`Cache`] is the [`Keeper`](soma_next_core::Keeper) the core left
+//! a hole for: the core cannot hash and has nowhere to put bytes, and both of
+//! those live here. [`Recorder`] is the [`Watcher`](soma_next_core::Watcher),
+//! which is the same division from the other end: the core knows what happened
+//! and has nowhere to write it down.
 //!
 //! An index that can be queried — what do I have, from which run, from when — is
 //! **derived** from these records and can be thrown away and rebuilt. Making it
@@ -49,6 +52,7 @@
 mod cache;
 mod digest;
 mod local;
+mod recorder;
 #[cfg(feature = "s3")]
 mod s3;
 mod store;
@@ -56,6 +60,7 @@ mod store;
 pub use cache::{Cache, bytes_of, value_of};
 pub use digest::Digest;
 pub use local::Local;
+pub use recorder::Recorder;
 #[cfg(feature = "s3")]
 pub use s3::{Bucket, Credentials, UrlStyle};
 pub use store::{Bound, Meta, Store, StoreError};

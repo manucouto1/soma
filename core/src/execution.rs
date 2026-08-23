@@ -33,11 +33,12 @@
 //! **injected** and does not.
 
 use crate::{
-    Cargo, Catalog, Ctx, Device, Host, Keeper, Kept, Key, Keys, Memory, NodeError, NodeId, Outcome,
-    Placement, Plan, Transport, TransportError, Value,
+    Cargo, Catalog, Ctx, Device, Fact, Host, Keeper, Kept, Key, Keys, Memory, NodeError, NodeId,
+    Outcome, Placement, Plan, Transport, TransportError, Value, Watcher,
 };
 use std::collections::HashMap;
 use std::fmt;
+use std::time::Instant;
 
 /// What the engine writes beside a value it keeps. Private because the engine
 /// is the only one that writes it and the only one that reads it back: to a
@@ -61,6 +62,10 @@ pub struct Executor<'a> {
     /// Which host it knows how to reach, and by what route. A list because
     /// there are two or three of them.
     transports: Vec<(Host, &'a dyn Transport)>,
+    /// Who is told what happened. **Injected**, like the keeper, and for the
+    /// same reason: where a fact ends up belongs to whoever runs, not to the
+    /// graph, so it does not travel.
+    watcher: Option<&'a dyn Watcher>,
 }
 
 impl<'a> Executor<'a> {
@@ -72,6 +77,7 @@ impl<'a> Executor<'a> {
             memory: None,
             keeper: None,
             transports: Vec::new(),
+            watcher: None,
         }
     }
 
@@ -117,9 +123,54 @@ impl<'a> Executor<'a> {
         self
     }
 
+    /// The same executor, telling this one what it sees.
+    ///
+    /// **Injected and does not travel**, like the keeper: a slice sent to
+    /// another host is executed by an engine over there with a watcher of its
+    /// own, and what it sees comes back attributed rather than emitted here.
+    ///
+    /// Without it nothing is measured and no [`Fact`] is built — the emit sites
+    /// take a closure, so a run nobody watches pays a branch and not an
+    /// allocation.
+    pub fn watching(mut self, watcher: &'a dyn Watcher) -> Self {
+        self.watcher = Some(watcher);
+        self
+    }
+
+    /// Hands over one fact, if anybody is listening.
+    ///
+    /// The closure is the whole point: `node.clone()` and a formatted message
+    /// are not paid for by a run that nobody is watching, which is most of them.
+    fn saw(&self, fact: impl FnOnce() -> Fact) {
+        if let Some(watcher) = self.watcher {
+            watcher.saw(&fact());
+        }
+    }
+
     /// Executes the plan and returns what it produced. The first failure stops
     /// the execution.
+    ///
+    /// This is where a run **ends**, and the only place that says so: a
+    /// [`Fact::Finished`] or a [`Fact::Broke`] closes the record either way.
+    /// [`resume`](Self::resume) deliberately says nothing of the sort — a slice
+    /// executed for somebody else is not a `forward`.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
+        let began = Instant::now();
+        let answer = self.running(plan, input);
+        match &answer {
+            Ok(_) => self.saw(|| Fact::Finished {
+                took: began.elapsed(),
+            }),
+            Err(why) => self.saw(|| Fact::Broke {
+                why: why.to_string(),
+            }),
+        }
+        answer
+    }
+
+    /// The walk itself, so that the two terminal facts wrap one thing and not
+    /// every `return` in it.
+    fn running(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let mut produced: HashMap<NodeId, Value> = HashMap::new();
         let mut keys: HashMap<NodeId, Keys> = HashMap::new();
         let last = self.walk(plan, &input, &mut produced, &mut keys)?;
@@ -261,6 +312,11 @@ impl<'a> Executor<'a> {
             None => vec![None; items.len()],
         };
         let missing: Vec<usize> = (0..items.len()).filter(|i| kept[*i].is_none()).collect();
+        self.saw(|| Fact::Items {
+            node: node.clone(),
+            of: items.len(),
+            recalled: items.len() - missing.len(),
+        });
 
         // Nothing missing is the point of all this: the node is not advanced at
         // all, exactly as an ordinary hit does not advance it.
@@ -474,12 +530,29 @@ impl<'a> Executor<'a> {
             // the other side.
             memory: self.memory.unwrap_or(&nothing),
         };
+        // What the far side sees is emitted there and relayed raw; attributing
+        // it to a host happens **here**, because here is where the host has a
+        // name. So a worker's engine emits exactly what it would emit at home,
+        // and nothing that travelled has to be rewritten.
+        let attributed = self.watcher.map(|to| Attributed {
+            host: host.clone(),
+            to,
+        });
+        let began = Instant::now();
         let outcome = transport
-            .dispatch(inner, &cargo)
+            .dispatch(
+                inner,
+                &cargo,
+                attributed.as_ref().map(|one| one as &dyn Watcher),
+            )
             .map_err(|source| RunError::Transport {
                 host: host.clone(),
                 source,
             })?;
+        self.saw(|| Fact::Left {
+            host: host.clone(),
+            took: began.elapsed(),
+        });
 
         produced.extend(outcome.produced);
         keys.extend(outcome.keys);
@@ -497,12 +570,36 @@ impl<'a> Executor<'a> {
         let ctx = Ctx {
             device: self.device(node),
         };
-        self.implementation(node)?
-            .forward(&input, &ctx)
-            .map_err(|source| RunError::Node {
-                node: node.clone(),
-                source,
-            })
+        // Around the `forward` and nothing else: what is measured is the node,
+        // not the bookkeeping around it, so the number means the same thing
+        // whether or not this node is cached, mapped or on another machine.
+        let began = Instant::now();
+        let answer = self.implementation(node)?.forward(&input, &ctx);
+        let took = began.elapsed();
+        match answer {
+            Ok(output) => {
+                self.saw(|| Fact::Ran {
+                    node: node.clone(),
+                    took,
+                    device: self.device(node).cloned(),
+                });
+                Ok(output)
+            }
+            Err(source) => {
+                // Said before the error is returned, which is the whole reason
+                // this is a fact and not a line in `RunError`: by the time the
+                // caller sees the failure the run is over, and whoever is
+                // watching wanted to know **which node** while it was happening.
+                self.saw(|| Fact::Failed {
+                    node: node.clone(),
+                    why: source.to_string(),
+                });
+                Err(RunError::Node {
+                    node: node.clone(),
+                    source,
+                })
+            }
+        }
     }
 
     /// The name this node's output will have, **before** it has one.
@@ -581,6 +678,10 @@ impl<'a> Executor<'a> {
                  `{declared}`: using what is kept, since the fingerprint is not part of the key"
             );
         }
+        self.saw(|| Fact::Recalled {
+            node: node.clone(),
+            key: key.clone(),
+        });
         Some(kept.value)
     }
 
@@ -600,8 +701,12 @@ impl<'a> Executor<'a> {
         if let Some(written) = memory.fingerprint_of(node) {
             meta.push((FINGERPRINT, written));
         }
-        if let Err(why) = keeper.keep(key, output, &meta) {
-            eprintln!("what `{node}` produced could not be kept: {why}");
+        match keeper.keep(key, output, &meta) {
+            Ok(()) => self.saw(|| Fact::Kept {
+                node: node.clone(),
+                key: key.clone(),
+            }),
+            Err(why) => eprintln!("what `{node}` produced could not be kept: {why}"),
         }
     }
 
@@ -615,6 +720,29 @@ impl<'a> Executor<'a> {
         self.catalog
             .get(node)
             .ok_or_else(|| RunError::NoImplementation(node.clone()))
+    }
+}
+
+/// A watcher that says where what it is told happened, and passes it on.
+///
+/// Private, and it belongs to the engine rather than to the transport: a
+/// `Transport` relays what came off the wire untouched — it has no business
+/// knowing what a fact means — while the name of the host it reached is
+/// something only the walk has, because that name is the graph's.
+///
+/// One wrapper per dispatch, so a slice that carries on to a third machine
+/// arrives nested and comes out of [`Fact::flattened`] with the route in order.
+struct Attributed<'a> {
+    host: Host,
+    to: &'a dyn Watcher,
+}
+
+impl Watcher for Attributed<'_> {
+    fn saw(&self, fact: &Fact) {
+        self.to.saw(&Fact::Elsewhere {
+            host: self.host.clone(),
+            saw: Box::new(fact.clone()),
+        });
     }
 }
 

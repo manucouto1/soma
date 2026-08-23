@@ -130,6 +130,23 @@ class Trainer:
     A group the run ends in the middle of is closed by `update`, which `fit`
     calls at the end of every epoch and whoever writes their own loop calls when
     theirs ends.
+
+    `watching` is told what happens as it happens, and it is handed on to every
+    `forward` this makes::
+
+        Trainer(g, objective=..., optimizer=..., watching=Recorder(store))
+
+    So one stream carries both vocabularies: the engine's — which node ran,
+    where, how long, what came back from another machine — and **this level's**,
+    which is `loss` and `updated`. They are not one type and never were: a loss
+    is this object's arithmetic and the engine cannot see it. What makes them
+    one thing is the record they land in, and a loss lands in the `forward` that
+    produced it although it is computed after that forward has ended.
+
+    What a **remote** trainer sees is not in it yet. `trains=` puts a trainer
+    beside a node on another machine, and what that one knows — its own loss,
+    its own step — has no way out until a node can speak for itself, which is
+    CU21. What does come back is everything the engine over there saw.
     """
 
     def __init__(
@@ -143,6 +160,7 @@ class Trainer:
         micro=1,
         store=None,
         workers=None,
+        watching=None,
     ):
         trains = dict(trains or {})
         _check_the_group(every, micro)
@@ -162,6 +180,7 @@ class Trainer:
         self.optimizer = optimizer
         self.store = store
         self.workers = workers
+        self.watching = watching
         self.trains = trains
         self.theirs = theirs
         self.every = every
@@ -234,15 +253,19 @@ class Trainer:
         if self._opens():
             self.optimizer.zero_grad()
         output = self.graph.forward(
-            _crossable(input_), store=self.store, workers=self.workers
+            _crossable(input_),
+            store=self.store,
+            workers=self.workers,
+            watching=self.watching,
         )
         loss = self.objective(output, _where_the_output_is(target, output))
         self._shared(loss).backward()
         self._check_the_gradient_arrived()
         if self._closes():
             self.optimizer.step()
+            self._said("updated")
         self._counted()
-        return loss.item()
+        return self._said_the_loss(loss)
 
     def _over_the_stages(self, input_, target):
         """One step of a graph that is cut, which is the same step with the
@@ -264,6 +287,7 @@ class Trainer:
                         self._the_input(input_, stage) if stage.level == 0 else None,
                         store=self.store if stage.level == 0 else None,
                         workers=self.workers,
+                        watching=self.watching,
                     )
                 )
             )
@@ -277,8 +301,30 @@ class Trainer:
         self._check_the_gradient_arrived()
         if self.optimizer is not None and self._closes():
             self.optimizer.step()
+            self._said("updated")
         self._counted()
-        return loss.item()
+        return self._said_the_loss(loss)
+
+    def _said(self, kind, **fields):
+        """One fact of **this** level, out through the same door as the engine's.
+
+        A loss is not something the engine can see: the graph produced an output
+        and what it cost is this object's arithmetic. So level 2 keeps its own
+        vocabulary — `loss`, `updated` — and the two meet where CU20 says they
+        meet, which is in the record and not in a type either of them shares.
+
+        A fact arrives at the far end as the same `dict` an engine's fact does,
+        so nothing downstream has to know which level said it.
+        """
+        if self.watching is not None:
+            self.watching({"fact": kind, **{k: str(v) for k, v in fields.items()}})
+
+    def _said_the_loss(self, loss):
+        """The loss, said and then returned. Whole, as `step` promises: divided
+        for the backward pass and not for whoever is reading."""
+        whole = loss.item()
+        self._said("loss", value=whole)
+        return whole
 
     def _opens(self):
         """Whether this step starts a group, which is where gradients are cleared

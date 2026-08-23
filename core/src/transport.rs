@@ -3,29 +3,47 @@
 //! The core does not know what a wire is: to it a [`Host`](crate::Host) is a
 //! name and a `Transport` is someone who knows how to reach it. It neither
 //! serializes, nor spawns processes, nor knows about sockets — just as it does
-//! not know what a node's request is, which is why the
-//! [`Driver`](crate::Driver) exists.
+//! not know what a [`Fact`](crate::Fact) is for, which is why a
+//! [`Watcher`] is somebody else's too.
 //!
 //! The same old division of labour, and the reason the core still has no
 //! dependencies: **the core provides the hole; whoever knows what goes in it is
 //! a library.** A wire format would require `serde`.
 //!
 //! Declared versus injected, for the third time: a [`Node`](crate::Node) is put
-//! there by whoever declares the graph; a `Driver` and a `Transport` by whoever
-//! **executes**. That is why a [`Host`](crate::Host) is a name and not an
+//! there by whoever declares the graph; a `Transport` and a [`Watcher`] by
+//! whoever **executes**. That is why a [`Host`](crate::Host) is a name and not an
 //! address — the same graph spreads across two processes here or two machines
 //! there without touching a line of what was declared.
 
-use crate::{Keys, Memory, NodeId, Placement, Plan, Value};
+use crate::{Keys, Memory, NodeId, Placement, Plan, Value, Watcher};
 use std::fmt;
 
 /// Knows how to execute a plan elsewhere.
 pub trait Transport: Send + Sync {
-    /// Executes `plan` over there, with what it needs in order to do so.
+    /// Executes `plan` over there, with what it needs in order to do so, and
+    /// tells `seen` whatever the far side says while it is at it.
     ///
     /// A [`Value::Opaque`] has to fail here: it carries something that only
     /// exists in this process.
-    fn dispatch(&self, plan: &Plan, cargo: &Cargo<'_>) -> Result<Outcome, TransportError>;
+    ///
+    /// # Why `seen` is an argument and not a field of either
+    ///
+    /// It is not in [`Cargo`] because everything in a `Cargo` **travels**, and a
+    /// watcher is injected and stays. And it is not given to the transport when
+    /// the transport is built because a worker is opened once and used for many
+    /// runs, while a watcher belongs to **one** run. A watcher is of the call,
+    /// so it goes in the call.
+    ///
+    /// Whatever comes back is passed on as it was emitted: saying *where* it
+    /// happened is the engine's, which is the only one that knows the host by
+    /// the name the graph gave it.
+    fn dispatch(
+        &self,
+        plan: &Plan,
+        cargo: &Cargo<'_>,
+        seen: Option<&dyn Watcher>,
+    ) -> Result<Outcome, TransportError>;
 }
 
 /// What a plan needs beyond itself in order to run elsewhere.

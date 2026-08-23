@@ -37,7 +37,7 @@
 use crate::codec::{self, Codec};
 use crate::frame;
 use crate::{Answer, Artifact, Request};
-use soma_next_core::{Cargo, Outcome, Plan, Transport, TransportError};
+use soma_next_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
 use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -203,25 +203,56 @@ impl Worker {
 }
 
 impl Open {
-    /// Sends a message and waits for the one that answers it.
-    fn say(&mut self, request: &Request) -> Result<Answer, TransportError> {
+    /// Sends a message and waits for the one that answers it, handing whatever
+    /// the far side says on the way to `seen`.
+    ///
+    /// It reads **until an answer is terminal**, which is the one change the
+    /// whole live half of this needed: [`Answer::Saw`] is not an answer to
+    /// anything, it is the worker talking while it works, and the loop is what
+    /// turns a blocked read into a stream.
+    ///
+    /// A fact is passed on exactly as it was emitted. Attributing it to a host
+    /// is the engine's job, not this one's: here the host is an address, and the
+    /// name the graph gave it is not known.
+    fn say(
+        &mut self,
+        request: &Request,
+        seen: Option<&dyn Watcher>,
+    ) -> Result<Answer, TransportError> {
         let payload = request
             .to_bytes()
             .map_err(|e| TransportError::new(e.to_string()))?;
 
         self.link.send(&payload).map_err(|e| broke(&e))?;
-        let answer = self
-            .link
-            .recv()
-            .map_err(|e| broke(&e))?
-            .ok_or_else(|| TransportError::new("the worker closed without answering"))?;
-
-        Answer::from_bytes(&answer).map_err(|e| TransportError::new(e.to_string()))
+        loop {
+            let answer = self
+                .link
+                .recv()
+                .map_err(|e| broke(&e))?
+                .ok_or_else(|| TransportError::new("the worker closed without answering"))?;
+            match Answer::from_bytes(&answer).map_err(|e| TransportError::new(e.to_string()))? {
+                // Not an answer: keep waiting for one. A client that is not
+                // watching still has to read these off the socket — dropping
+                // them is what it means not to watch, and leaving them there
+                // would desynchronise the conversation.
+                Answer::Saw(fact) => {
+                    if let Some(seen) = seen {
+                        seen.saw(&fact);
+                    }
+                }
+                terminal => return Ok(terminal),
+            }
+        }
     }
 
     /// Opens the session, if it was not open: the artifact's **name** is
     /// announced and the bytes only sent if the worker asks for them.
-    fn greet(&mut self, runtime: &str, artifact: Option<&Artifact>) -> Result<(), TransportError> {
+    fn greet(
+        &mut self,
+        runtime: &str,
+        artifact: Option<&Artifact>,
+        seen: Option<&dyn Watcher>,
+    ) -> Result<(), TransportError> {
         if self.greeted {
             return Ok(());
         }
@@ -229,7 +260,7 @@ impl Open {
             runtime: runtime.to_string(),
             offering: artifact.map(Artifact::label),
         };
-        match self.say(&hello)? {
+        match self.say(&hello, seen)? {
             Answer::Ready => {}
             Answer::Send => {
                 let artifact = artifact.ok_or_else(|| {
@@ -240,7 +271,7 @@ impl Open {
                 let sending = Request::Provision {
                     bytes: artifact.bytes.clone(),
                 };
-                match self.say(&sending)? {
+                match self.say(&sending, seen)? {
                     Answer::Ready => {}
                     other => return Err(unexpected("provisioning", &other)),
                 }
@@ -253,7 +284,12 @@ impl Open {
 }
 
 impl Transport for Worker {
-    fn dispatch(&self, plan: &Plan, cargo: &Cargo<'_>) -> Result<Outcome, TransportError> {
+    fn dispatch(
+        &self,
+        plan: &Plan,
+        cargo: &Cargo<'_>,
+        seen: Option<&dyn Watcher>,
+    ) -> Result<Outcome, TransportError> {
         let carries = self
             .carries
             .lock()
@@ -264,8 +300,8 @@ impl Transport for Worker {
             .map_err(|_| TransportError::new("this worker was poisoned by an earlier panic"))?;
 
         match carries.as_ref() {
-            Some((artifact, runtime)) => open.greet(runtime, Some(artifact))?,
-            None => open.greet("rust", None)?,
+            Some((artifact, runtime)) => open.greet(runtime, Some(artifact), seen)?,
+            None => open.greet("rust", None, seen)?,
         }
         drop(carries);
 
@@ -288,7 +324,7 @@ impl Transport for Worker {
             placement: cargo.placement.clone(),
             memory: cargo.memory.clone(),
         };
-        match open.say(&work)? {
+        match open.say(&work, seen)? {
             Answer::Done(outcome) => match self.codec.as_deref() {
                 None => Ok(outcome),
                 Some(codec) => live(codec, outcome),

@@ -6,13 +6,14 @@
 
 use crate::doubles::{Add, Dir, catalog};
 use soma_next_core::{
-    Catalog, Device, Executor, Graph, Host, Memory, Placement, Plan, RunError, Value, compile,
-    distribute, node,
+    Catalog, Device, Executor, Fact, Graph, Host, Memory, Placement, Plan, RunError, Value,
+    Watcher, compile, distribute, node,
 };
 use soma_next_store::{Cache, Local};
 use soma_next_transport::{Codec, CodecError, Worker};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Stands up the test worker.
 fn worker() -> Worker {
@@ -1283,5 +1284,112 @@ fn a_client_that_keeps_nothing_still_lets_the_worker_keep() {
         number(&run()),
         1.0,
         "the worker kept it, and this side keeps nothing at all"
+    );
+}
+
+// ── What the far side says while it is still working ──
+
+/// Keeps every fact and **when** it arrived, measured from a start the test
+/// gives it.
+struct Told {
+    began: Instant,
+    seen: Mutex<Vec<(Fact, Duration)>>,
+}
+
+impl Told {
+    fn new() -> Self {
+        Self {
+            began: Instant::now(),
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn kinds(&self) -> Vec<&'static str> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(fact, _)| fact.flattened().0)
+            .collect()
+    }
+
+    /// How long after the start the first fact about that node arrived.
+    fn when(&self, node: &str) -> Option<Duration> {
+        self.seen.lock().unwrap().iter().find_map(|(fact, when)| {
+            let (_, fields) = fact.flattened();
+            fields
+                .iter()
+                .any(|(name, what)| name == "node" && what == node)
+                .then_some(*when)
+        })
+    }
+}
+
+impl Watcher for Told {
+    fn saw(&self, fact: &Fact) {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((fact.clone(), self.began.elapsed()));
+    }
+}
+
+#[test]
+fn what_a_real_worker_saw_comes_back_saying_it_was_that_worker() {
+    let g = graph_with(&["a", "b"], &[("a", "b")]);
+    let placement = on_hosts(&[("a", "worker1"), ("b", "worker1")]);
+    let worker = worker();
+    let catalog = catalog();
+    let plan = distribute(&compile(&g, &catalog).unwrap(), &placement);
+    let told = Told::new();
+
+    Executor::new(&catalog)
+        .placed(&placement)
+        .reaching("worker1", &worker)
+        .watching(&told)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+
+    assert_eq!(told.kinds(), ["ran", "ran", "left", "finished"]);
+    let (_, fields) = told.seen.lock().unwrap()[0].0.flattened();
+    let said: std::collections::HashMap<_, _> = fields.into_iter().collect();
+    assert_eq!(said["node"], "a");
+    assert_eq!(
+        said["host"], "worker1",
+        "a worker does not know its own name; the client does"
+    );
+}
+
+#[test]
+fn a_fact_arrives_while_the_work_is_still_going_and_not_with_the_answer() {
+    // The whole point of the slice, and the only assertion that can tell the
+    // two apart: `slow` takes 300 ms, so the fact about `a` — which ran before
+    // it — has to be here long before the answer is. Batched at the end, both
+    // would land together.
+    let g = graph_with(&["a", "slow"], &[("a", "slow")]);
+    let placement = on_hosts(&[("a", "worker1"), ("slow", "worker1")]);
+    let worker = worker();
+    let catalog = catalog();
+    let plan = distribute(&compile(&g, &catalog).unwrap(), &placement);
+    let told = Told::new();
+
+    let began = Instant::now();
+    Executor::new(&catalog)
+        .placed(&placement)
+        .reaching("worker1", &worker)
+        .watching(&told)
+        .run(&plan, Value::number(0.0))
+        .unwrap();
+    let answered = began.elapsed();
+
+    let first = told.when("a").expect("`a` ran and said so");
+    assert!(
+        answered >= Duration::from_millis(250),
+        "the slow node did not take its time, so this proves nothing: {answered:?}"
+    );
+    assert!(
+        first + Duration::from_millis(200) < answered,
+        "the fact about `a` arrived at {first:?} and the answer at {answered:?}: \
+         that is close enough together to be a batch, not a stream"
     );
 }

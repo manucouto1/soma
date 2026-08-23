@@ -11,6 +11,7 @@ mod remote;
 mod store;
 mod study;
 mod value;
+mod watcher;
 
 use codec::Packing;
 use node::{PyCtx, PyNode};
@@ -342,13 +343,19 @@ impl PyGraph {
     /// declared can honestly be kept is asked **here**, before the first node
     /// runs, so a `.cached()` in the wrong place fails at once and not as a net
     /// that quietly stopped training.
-    #[pyo3(signature = (input = None, *, workers = None, store = None))]
+    ///
+    /// `watching=` is told what happens **as it happens**: a `Recorder`, any
+    /// callable, or a list of them. A node on another machine is no different —
+    /// what its worker saw comes back down the connection that was already open
+    /// and arrives here saying which host it was.
+    #[pyo3(signature = (input = None, *, workers = None, store = None, watching = None))]
     fn forward(
         &self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         workers: Option<&Bound<'_, PyDict>>,
         store: Option<&str>,
+        watching: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyObject> {
         let start = match input {
             Some(obj) => value::from_py(obj)?,
@@ -398,6 +405,12 @@ impl PyGraph {
         }
         if let Some(packing) = &packing {
             executor = executor.keeping(packing);
+        }
+        // Built before the GIL is released, like the workers: what it holds is
+        // a Python object, and that cannot be reached for once the GIL is gone.
+        let told = watching.map(watcher::watching).transpose()?;
+        if let Some(told) = &told {
+            executor = executor.watching(told.as_ref());
         }
         // Mandatory, not an optimization: a wave spawns threads that call
         // Python `forward`s, and they would all hang waiting for the GIL.
@@ -514,6 +527,7 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWorker>()?;
     m.add_class::<store::PyStore>()?;
     m.add_class::<store::PyBound>()?;
+    m.add_class::<watcher::PyRecorder>()?;
     m.add_class::<study::PyPartition>()?;
     m.add_class::<study::PyPruner>()?;
     m.add_class::<study::PySampler>()?;

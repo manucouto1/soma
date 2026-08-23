@@ -16,8 +16,22 @@
 //! ← Ready | Refused(why)
 //!
 //! → Work { plan, input, known, keys, placement, memory }     n times
-//! ← Done { last, produced, keys } | Failed(why)
+//! ← Saw(fact)                                                any number, and not the end
+//!   | Done { last, produced, keys } | Failed(why)
 //! ```
+//!
+//! # The one answer that does not end anything
+//!
+//! `Saw` is why an execution on another machine is watchable while it happens
+//! rather than after it. It needed no port, no second connection and no bus:
+//! between sending `Work` and reading `Done` the client is **already blocked**
+//! on this socket, and that idle direction is the whole mechanism. Reading one
+//! answer became reading until one of them is terminal.
+//!
+//! Where there is no connection — a study handed out of a folder, CU18 — facts
+//! go to the store and whoever wants them scans. That is not a second design:
+//! it is the same rule, which is that facts follow whatever channel is already
+//! there.
 //!
 //! # Why it is announced before being sent
 //!
@@ -64,7 +78,7 @@
 
 use crate::{Label, Outcome};
 use serde::{Deserialize, Serialize};
-use soma_next_core::{Device, Keys, Memory, NodeId, Placement, Plan, Value};
+use soma_next_core::{Device, Fact, Keys, Memory, NodeId, Placement, Plan, Value};
 use std::fmt;
 
 /// What the client says.
@@ -128,6 +142,14 @@ pub enum Answer {
     /// What you sent failed over there. Text on purpose: what is needed here is
     /// for whoever launched the run to **read** what happened.
     Failed(String),
+    /// Something happened over there, and the work is **not** over.
+    ///
+    /// The only non-terminal answer there is, and it costs no second connection
+    /// because the client is already blocked reading this one: between `Work`
+    /// and `Done` the socket was idle in one direction, and this is what fills
+    /// it. Last in the enum on purpose — the variant's index is what goes on the
+    /// wire.
+    Saw(Fact),
 }
 
 impl Request {

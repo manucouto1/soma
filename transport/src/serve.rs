@@ -47,7 +47,7 @@
 use crate::codec::{self, Codec};
 use crate::frame;
 use crate::{Answer, Label, Provision, Provisioned, Request};
-use soma_next_core::{Catalog, Executor, Keeper, Outcome};
+use soma_next_core::{Catalog, Executor, Fact, Keeper, Outcome, Watcher};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
@@ -129,7 +129,10 @@ impl<'a> Serving<'a> {
     /// here: it travels back as an answer.
     pub fn over_stdin(self) -> io::Result<()> {
         let shared = Shared::of(self);
-        attend(&shared, io::stdin().lock(), io::stdout().lock())
+        // The handle and not the lock guard: a `StdoutLock` is not `Send`, and
+        // what writes down this pipe is now also whatever is watching the run,
+        // from a wave's threads. `attend` holds its own lock over it.
+        attend(&shared, io::stdin().lock(), io::stdout())
     }
 
     /// Stands on `addr` and serves whoever connects. It does not return: it
@@ -255,14 +258,46 @@ impl Loaded<'_> {
     }
 }
 
+/// A watcher that puts what it saw back down the same connection.
+///
+/// The far half of the live view, and it decides nothing: it does not write, it
+/// does not name, it does not group. A fact goes out exactly as the engine here
+/// emitted it, and the client is the one that says it came from this host —
+/// because the name of this host is the graph's, and a worker does not know it.
+///
+/// Behind a `Mutex` because a [`Wave`](soma_next_core::Plan::Wave) emits from
+/// several threads at once, and half a frame interleaved with half of another is
+/// a connection that cannot be resynchronised.
+struct Relaying<'a, W: Write + Send> {
+    to: &'a Mutex<W>,
+}
+
+impl<W: Write + Send> Watcher for Relaying<'_, W> {
+    fn saw(&self, fact: &Fact) {
+        // Nothing here can be reported and nothing here should stop the run: a
+        // fact that cannot be written means the connection is gone, and the
+        // answer that is about to be sent down it will say so properly. Being
+        // loud once per fact would be the noisiest possible way to say it.
+        let Ok(encoded) = Answer::Saw(fact.clone()).to_bytes() else {
+            return;
+        };
+        if let Ok(mut out) = self.to.lock() {
+            let _ = frame::send(&mut *out, &encoded);
+        }
+    }
+}
+
 /// The loop, with both ends as arguments so it is testable without a process.
-fn attend(shared: &Shared<'_>, mut input: impl Read, mut output: impl Write) -> io::Result<()> {
+fn attend(shared: &Shared<'_>, mut input: impl Read, output: impl Write + Send) -> io::Result<()> {
     let mut session = Session::default();
+    // Shared with whatever is watching the run, which writes down the same
+    // socket while the answer is still being worked out.
+    let output = Mutex::new(output);
 
     while let Some(payload) = frame::recv(&mut input)? {
         let answer = match Request::from_bytes(&payload) {
             Err(e) => Answer::Refused(e.to_string()),
-            Ok(request) => reply(shared, &mut session, request),
+            Ok(request) => reply(shared, &mut session, request, &output),
         };
         let encoded = answer.to_bytes().unwrap_or_else(|e| {
             // If not even the answer can be encoded, that fact is the answer:
@@ -271,12 +306,20 @@ fn attend(shared: &Shared<'_>, mut input: impl Read, mut output: impl Write) -> 
                 .to_bytes()
                 .expect("text can always be written")
         });
-        frame::send(&mut output, &encoded)?;
+        let mut out = output
+            .lock()
+            .map_err(|_| io::Error::other("this connection was poisoned by an earlier panic"))?;
+        frame::send(&mut *out, &encoded)?;
     }
     Ok(())
 }
 
-fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer {
+fn reply<W: Write + Send>(
+    shared: &Shared<'_>,
+    session: &mut Session,
+    request: Request,
+    output: &Mutex<W>,
+) -> Answer {
     match request {
         Request::Hello { runtime, offering } => match (&shared.source, offering) {
             // A worker with its own catalog, and a client that brings nothing.
@@ -377,9 +420,14 @@ fn reply(shared: &Shared<'_>, session: &mut Session, request: Request) -> Answer
             // What is remembered arrived with the work and is fed in whether or
             // not there is anywhere to keep things here: it is the graph's, and a
             // slice that carries on to a third host has to take it along.
+            let relaying = Relaying { to: output };
             let mut executor = Executor::new(&catalog)
                 .placed(&placement)
-                .remembering(&memory);
+                .remembering(&memory)
+                // The engine here is told exactly what the engine at home is
+                // told, and knows no more about where it ends up. That it ends
+                // up on a socket is this file's secret.
+                .watching(&relaying);
             if let Some(keeper) = shared.keeper {
                 executor = executor.keeping(keeper);
             }

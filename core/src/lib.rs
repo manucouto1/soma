@@ -17,6 +17,8 @@
 //! | [`Node`] | the **contract** for what a node executes |
 //! | [`Transport`] | who **carries** a slice of plan to another host |
 //! | [`Keeper`] | who **hashes** a recipe and **keeps** what it names |
+//! | [`Watcher`] | who is **told** what happened, as it happens |
+//! | [`Fact`] | one thing that happened, in the engine's vocabulary |
 //! | [`Plan`] | the **decided shape** of an execution |
 //! | [`Step`], [`Destination`] | the two ways of walking one: what it does, and where |
 //! | [`compile`] | from the structure to the shape |
@@ -34,6 +36,7 @@ mod build;
 mod catalog;
 mod device;
 mod execution;
+mod fact;
 mod graph;
 mod host;
 mod keeper;
@@ -44,11 +47,13 @@ mod placement;
 mod plan;
 mod transport;
 mod value;
+mod watcher;
 
 pub use build::{Wire, node};
 pub use catalog::Catalog;
 pub use device::{Device, DeviceError};
 pub use execution::{Executor, RunError};
+pub use fact::Fact;
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;
 pub use keeper::{Keeper, KeeperError, Kept};
@@ -59,3 +64,4 @@ pub use placement::Placement;
 pub use plan::{CompileError, Destination, Plan, Step, compile, distribute};
 pub use transport::{Cargo, Outcome, Transport, TransportError};
 pub use value::Value;
+pub use watcher::Watcher;

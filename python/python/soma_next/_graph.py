@@ -59,7 +59,7 @@ class Graph(_RustGraph):
             return None
         return drawn._repr_mimebundle_(include=include, exclude=exclude) or None
 
-    def forward(self, input=None, *, workers=None, store=None):
+    def forward(self, input=None, *, workers=None, store=None, watching=None):
         """Executes the whole graph and returns what it produced.
 
         With `workers={"w1": Worker.at(...)}` you say what each host resolves
@@ -68,10 +68,22 @@ class Graph(_RustGraph):
 
         `store` is a directory: with one, whatever was declared `.cached()` is
         looked up before being computed and kept afterwards.
+
+        `watching` is told what happened, as it happens::
+
+            g.forward(x, watching=print)                    # in a notebook
+            g.forward(x, watching=Recorder(store))          # kept
+            g.forward(x, watching=[Recorder(store), draw])  # both
+
+        A fact arrives as a `dict` with a `fact` key naming it and text beside
+        it — the same shape it is written down as, so what you print is what you
+        would find in the store. **A node on another machine is no different**:
+        what its worker saw comes back down the connection that was already
+        open, and says which host it was.
         """
         self._check_it_was_obeyed()
         self.provision(workers)
-        return super().forward(input, workers=workers, store=store)
+        return super().forward(input, workers=workers, store=store, watching=watching)
 
     def provision(self, workers):
         """Tells each worker what it is going to need, before the first node runs.

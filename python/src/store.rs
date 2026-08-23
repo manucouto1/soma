@@ -39,6 +39,7 @@ use soma_next_store::Bound as Record;
 use soma_next_store::{
     Bucket, Credentials, Digest, Local, Meta, Store, UrlStyle, bytes_of, value_of,
 };
+use std::sync::Arc;
 
 /// Something that keeps bytes by their content, and names that point at them.
 ///
@@ -49,9 +50,19 @@ use soma_next_store::{
 /// line of it changing.
 #[pyclass(name = "Store", module = "soma_next._soma_next", frozen)]
 pub struct PyStore {
-    inner: Box<dyn Store>,
+    /// An `Arc` and not a `Box` because a store outlives the call it was passed
+    /// to: a `Recorder` holds on to one across every `forward` of a training
+    /// run, and the same store is still the caller's to read from.
+    inner: Arc<dyn Store>,
     /// Only for the `repr`: a store does not say where it is.
     where_: String,
+}
+
+impl PyStore {
+    /// The store itself, for whoever in this crate needs to hold on to one.
+    pub fn shared(&self) -> Arc<dyn Store> {
+        self.inner.clone()
+    }
 }
 
 #[pymethods]
@@ -60,7 +71,7 @@ impl PyStore {
     #[new]
     fn new(where_: &str) -> PyResult<Self> {
         Ok(Self {
-            inner: Box::new(Local::at(where_).map_err(failed)?),
+            inner: Arc::new(Local::at(where_).map_err(failed)?),
             where_: where_.to_string(),
         })
     }
@@ -105,7 +116,7 @@ impl PyStore {
             UrlStyle::Path
         };
         Ok(Self {
-            inner: Box::new(
+            inner: Arc::new(
                 Bucket::at(endpoint, bucket, region, style, credentials).map_err(failed)?,
             ),
             where_: format!("{endpoint}/{bucket}"),
