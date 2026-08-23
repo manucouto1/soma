@@ -249,6 +249,69 @@ def test_a_loss_lands_in_the_forward_it_belongs_to(tmp_path):
         )
 
 
+def test_a_trainer_takes_the_same_watching_a_forward_does(tmp_path):
+    # Found by writing an example. `Graph.forward` hands `watching=` to the
+    # engine, which resolves a list itself; a `Trainer` calls it from Python, and
+    # for a while a list worked through one door and raised through the other.
+    # `watching=` meaning two things depending on the door is the kind of trap
+    # this project exists not to build.
+    torch = pytest.importorskip("torch")
+    import soma_next.torch  # noqa: F401
+    from soma_next.torch import Trainer, parameters
+
+    class Layer(Node):
+        def __init__(self):
+            self.lin = torch.nn.Linear(4, 2)
+
+        def forward(self, x, ctx):
+            from soma_next import Opaque
+
+            return Opaque(self.lin(x))
+
+        def parameters(self):
+            return list(self.lin.parameters())
+
+    g = Graph.somatize(Layer().named("body"))
+    one, other = [], []
+    t = Trainer(
+        g,
+        objective=torch.nn.functional.mse_loss,
+        optimizer=torch.optim.SGD(parameters(g), lr=0.1),
+        watching=[one.append, other.append],
+    )
+
+    t.step((torch.randn(8, 4), torch.randn(8, 2)))
+
+    assert kinds(one) == kinds(other) == ["ran", "finished", "updated", "loss"]
+
+
+def test_a_trainer_refuses_a_watching_it_cannot_call(tmp_path):
+    torch = pytest.importorskip("torch")
+    import soma_next.torch  # noqa: F401
+    from soma_next.torch import Trainer, parameters
+
+    class Layer(Node):
+        def __init__(self):
+            self.lin = torch.nn.Linear(4, 2)
+
+        def forward(self, x, ctx):
+            from soma_next import Opaque
+
+            return Opaque(self.lin(x))
+
+        def parameters(self):
+            return list(self.lin.parameters())
+
+    g = Graph.somatize(Layer().named("body"))
+    with pytest.raises(ValueError, match="Recorder"):
+        Trainer(
+            g,
+            objective=torch.nn.functional.mse_loss,
+            optimizer=torch.optim.SGD(parameters(g), lr=0.1),
+            watching=7,
+        )
+
+
 def test_a_group_of_steps_moves_once_and_says_so_once(tmp_path):
     # `Trainer(every=N)` makes a group of steps into one update. What is said
     # has to be the same fact: one `updated`, at the end of the group.

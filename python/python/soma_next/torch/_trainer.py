@@ -180,7 +180,11 @@ class Trainer:
         self.optimizer = optimizer
         self.store = store
         self.workers = workers
+        # Kept twice on purpose: `watching` goes on to `forward`, which resolves
+        # a list of watchers itself, and `_telling` is what **this** side calls.
+        # They have to accept the same shapes or `watching=` means two things.
         self.watching = watching
+        self._telling = _telling(watching)
         self.trains = trains
         self.theirs = theirs
         self.every = every
@@ -316,8 +320,8 @@ class Trainer:
         A fact arrives at the far end as the same `dict` an engine's fact does,
         so nothing downstream has to know which level said it.
         """
-        if self.watching is not None:
-            self.watching({"fact": kind, **{k: str(v) for k, v in fields.items()}})
+        if self._telling is not None:
+            self._telling({"fact": kind, **{k: str(v) for k, v in fields.items()}})
 
     def _said_the_loss(self, loss):
         """The loss, said and then returned. Whole, as `step` promises: divided
@@ -649,6 +653,26 @@ def _check_the_group(every, micro):
                 f"`{what}` is a count of {'steps' if what == 'every' else 'pieces'}"
                 f", so it is a whole number and at least 1; `{how_many!r}` is not"
             )
+
+
+def _telling(watching):
+    """Whatever `watching=` was given, as one callable — or `None`.
+
+    `Graph.forward` hands its `watching=` to the engine, which knows how to
+    resolve a `Recorder`, a callable, or a list of them. This side calls it
+    itself, so it has to understand the same shapes: `watching=[recorder, live]`
+    meaning two things depending on which door it went through is exactly the
+    kind of trap this project exists not to build.
+    """
+    if watching is None or callable(watching):
+        return watching
+    if isinstance(watching, (list, tuple)):
+        several = [_telling(one) for one in watching]
+        return lambda fact: [one(fact) for one in several] and None
+    raise ValueError(
+        "`watching` takes a Recorder, anything callable, or a list of them; "
+        f"what arrived is a {type(watching).__name__}"
+    )
 
 
 def _in_pieces(batch, micro):

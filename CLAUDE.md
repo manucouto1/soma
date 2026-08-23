@@ -104,6 +104,11 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
+`examples/` holds four notebooks — declaring a graph, watching a run, training,
+a study. They are shipped **without stored outputs** and every cell is verified
+by running its source end to end as a plain script; writing them is also how two
+real bugs were found, so it is worth re-running them when the Python API moves.
+
 ## Status
 
 Twenty use cases closed: the graph, the engine, the plan, the fans, the DSL, a
