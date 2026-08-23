@@ -20,5 +20,6 @@ inputs away would have said so.
 """
 
 from soma_next.data._ablation import contribution, leaning, shares, shuffled
+from soma_next.data._figure import leaned
 
-__all__ = ["contribution", "leaning", "shares", "shuffled"]
+__all__ = ["contribution", "leaned", "leaning", "shares", "shuffled"]

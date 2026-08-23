@@ -104,8 +104,8 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
-`examples/` holds four notebooks — declaring a graph, watching a run, training,
-a study — **with their outputs stored**, so opening one shows what it does. Every
+`examples/` holds six notebooks — declaring a graph, watching a run, training,
+a study, the health of a network, and one problem end to end — **with their outputs stored**, so opening one shows what it does. Every
 figure is kept twice: the plotly JSON for a live viewer and a PNG for a static
 one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
 time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not

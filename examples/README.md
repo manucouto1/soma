@@ -11,6 +11,7 @@ example that fetches a dataset is an example that stops working.
 | [3 — Training](03-training.ipynb) | a `Trainer`, `Opaque`, the loss drawn live, gradient accumulation, freezing, and exporting what a run learnt |
 | [4 — A study](04-a-study.ipynb) | `Space` / `Sampler` / `Pruner`, the distributed loop, a table of results, hyper-parameter influence and parallel coordinates |
 | [5 — The health of a network](05-the-health-of-a-network.ipynb) | `auditing=`, each pathology built and caught, and the invariant: a diagnosis taken from the record, argued with by moving a bound, and taken again |
+| [6 — A problem, end to end](06-a-problem-end-to-end.ipynb) | the whole loop on one problem: propose an architecture, find what is wrong, fix it, check the fix — five times, and the last one is not a bug in the network at all |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.
@@ -36,7 +37,7 @@ pip install ipywidgets                # optional: `Live` redraws in place with i
 extension, so a change in `python/src/` that was not rebuilt means a notebook
 that is green about code that is not the code.
 
-Notebooks 3, 4 and 5 need `torch`. Notebook 2 starts a real worker process, which
+Notebooks 3 to 6 need `torch`. Notebook 2 starts a real worker process, which
 needs nothing but the same interpreter. Notebooks 3 and 4 seed torch, so
 re-executing them gives back the numbers that are stored here.
 
@@ -57,8 +58,8 @@ EOF
 
 ## What is not here, and why
 
-**The static half of health.** Notebook 5 diagnoses what *happened*, which needs
-a training run. What a graph can be told about itself **before a GPU is spent** —
+**The static half of health.** Notebooks 5 and 6 diagnose what *happened*, which
+needs a training run. What a graph can be told about itself **before a GPU is spent** —
 signal propagation at init, where a normalisation layer is missing, the zero-cost
 proxies that rank architectures without training them — is the next slice. It is
 a different question with different literature behind it, and pretending the two
