@@ -71,6 +71,7 @@ it means migrating directories belonging to people with studies running.
 from __future__ import annotations
 
 import json
+import math
 
 RUNNING = "running"
 """Claimed, and still going."""
@@ -289,6 +290,74 @@ def abandoned(store, *, study, stale=STALE):
         numbered for when, numbered in quiet if newest - when > stale
     ]
 
+
+
+def importance(store, space, *, study):
+    """How decisive each knob was, as `(name, |rho|)`, biggest first.
+
+    **Spearman's rho**, which is a rank correlation: how well the score follows a
+    knob monotonically, without assuming a shape. It is what the original soma
+    actually has — its documentation names fANOVA and says it was deferred, and
+    it never arrived — and it is thirty lines of plain Python, so it stays here
+    rather than becoming a dependency.
+
+    Ranks and not values, so a knob searched in log needs no special case.
+
+    **Only the trials that ran to the end**, for the same reason `finished`
+    leaves pruned ones out: a pruned score is real and was measured after fewer
+    epochs, so ranking the two together says a trial that was stopped early did
+    badly when all that is known is that it was stopped.
+
+    A categorical knob is ranked by its own options in order, which is honest for
+    two of them and gets thin beyond that — a rank correlation over unordered
+    categories is a number not to lean on. It is answered anyway, because leaving
+    it out would be this deciding what you may look at.
+
+    `0.0` where a knob never varied: no evidence, which is not the same as no
+    effect, and a study of one point says nothing about anything.
+    """
+    scored = [one for one in trials(store, space, study=study)
+              if one[STATE] == DONE and one[SCORE] is not None]
+    if len(scored) < 2:
+        return [(name, 0.0) for name in space.names()]
+    scores = [one[SCORE] for one in scored]
+    said = []
+    for name in space.names():
+        values = [one[POINT][name] for one in scored]
+        if any(isinstance(one, str) for one in values):
+            seen = sorted({str(one) for one in values})
+            values = [seen.index(str(one)) for one in values]
+        said.append((name, abs(_rho(values, scores))))
+    return sorted(said, key=lambda one: -one[1])
+
+
+def _rho(xs, ys):
+    """Spearman's rho of two equally long lists."""
+    a, b = _ranked(xs), _ranked(ys)
+    n = len(a)
+    mean_a, mean_b = sum(a) / n, sum(b) / n
+    top = sum((x - mean_a) * (y - mean_b) for x, y in zip(a, b))
+    below = math.sqrt(
+        sum((x - mean_a) ** 2 for x in a) * sum((y - mean_b) ** 2 for y in b)
+    )
+    return top / below if below else 0.0
+
+
+def _ranked(values):
+    """Ranks, **averaging ties** — which is what makes it Spearman rather than
+    Pearson over whatever order the list happened to arrive in."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        shared = (i + j) / 2 + 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = shared
+        i = j + 1
+    return ranks
 
 
 def _latest(store, study):

@@ -287,6 +287,15 @@ libraries. One fact per channel still holds — hue says *where*, never
 good-or-bad, and the only red marks a `forward` that broke, which is a fact.
 The smooth line is a **centred rolling mean** and not a spline: a spline through
 measured points invents the values between them, and a loss dipping below a
-minimum that never happened is a figure that lies.
+minimum that never happened is a figure that lies. And an edge that would cross a
+box it does not belong to is **routed around it**, one lane each — an arrow drawn
+over a node reads as an arrow into it.
+
+A study is drawn from the library and not from a notebook: `table`, `influence`
+and `coordinates` in `soma_next.study`, with `importance` — **Spearman's ρ**,
+which the original names as fANOVA-deferred and never wrote — beside the other
+readers. `coordinates` is hand-drawn out of splines because plotly's `Parcoords`
+only draws straight segments; it trades brushing for a trial reading as one
+curve. In all three, pruned and finished are never ranked together.
 
 See the distribution report for the full order.

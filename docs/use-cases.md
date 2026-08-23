@@ -3888,7 +3888,80 @@ obvious way is five million additions a frame.
 A `forward` with no loss said about it is a **gap** and not a zero: zero on a
 loss curve reads as the best result of the run.
 
+### An edge drawn over a node says something that is not true
+
+CU19 left this: *"the boxes say **when**, the arrows say **what feeds what**"* —
+and where the nesting stops saying who feeds whom, the arrows are all there is.
+They were drawn straight, so in exactly that case — the `N`, a flat `Sequence` —
+`a→c` passed **through** `b`, which reads as an edge into `b`.
+
+Now an edge that would cross a box it does not belong to goes **around**:
+outside everything, down, and in through the side of what reads it. Outside
+everything rather than outside the boxes in the way, because a lane threaded
+between two of them is a lane that will cross a third the next time the layout
+changes. Whether it would cross is asked exactly, with a slab test — sampling
+the segment would miss a thin box, and a figure that is *usually* honest is the
+kind of thing nobody ever finds.
+
+And **one lane per edge**: three edges that all have to go around shared one line
+in the first version, so the figure stopped saying there were three.
+
+### The study, drawn — and the figures belong in the library
+
+`table`, `influence` and `coordinates` in `soma_next.study`, with `importance`
+beside the other readers. They were written in a notebook first and that was
+wrong: a figure hand-rolled in an example is a figure with no tests, no shared
+palette, and a second copy the day somebody wants it elsewhere.
+
+`importance` is **Spearman's ρ** — a rank correlation, so it says *this knob
+orders the results* and not *this knob is worth these many points*. It is what
+the original actually has: its documentation names fANOVA and says it was
+deferred, and it never arrived. Thirty lines of plain Python, so it is not a
+dependency. Ranks and not values, so a knob searched in log needs no special
+case, and `0.0` where a knob never varied — no evidence, which is not the same
+as no effect.
+
+`coordinates` draws every finished trial as a **curve** and not a polyline,
+which meant not using plotly's `Parcoords` at all: it only draws straight
+segments. What that costs is its brushing; what it buys is that a trial reads as
+one continuous thing, which is what makes a bundle visible as a bundle. A curve
+claims nothing — a point exists only where it crosses an axis, and it crosses at
+the value it has — but it is still drawn gently, because a spline bulging past
+the top of an axis reads as a value beyond its range even when it means nothing.
+
+`goal` decides which end of the colour scale is good and it is a **parameter,
+not a guess**: getting it backwards is the quietest lie a figure can tell —
+everything is drawn, nothing raises, and the region you read as promising is the
+one to stay away from.
+
+And in all three, pruned and finished are not ranked together. `table` shows
+both with their state; the other two use only what ran to the end, for the same
+reason `finished` leaves pruned trials out.
+
 ### Questionnaire
+
+**Edges that would cross a node** (`python/tests/test_figure.py`)
+- [x] an edge with something in the way is routed around it
+- [x] one with nothing in the way is still a straight arrow
+- [x] three routed edges do not share one lane
+- [x] a routed edge runs outside every box
+- [x] a segment is tested against a box exactly, not by sampling
+
+**Which knob mattered** (`python/tests/test_study_figure.py`)
+- [x] a knob that decides the score comes out near one
+- [x] one that never varied is zero, because that is no evidence
+- [x] a study with nothing to compare says nothing rather than guessing
+- [x] a pruned trial does not vote
+- [x] the biggest comes first
+
+**The study, drawn**
+- [x] the table shows the pruned ones too, and says which
+- [x] it has a column per knob in the space
+- [x] the influence bars are the numbers `importance` gives
+- [x] every finished trial is a curve, and a pruned one is not
+- [x] a knob searched over orders of magnitude gets a log axis
+- [x] the goal decides which end of the scale is good
+- [x] a study nobody has finished is a statement and not an exception
 
 **One figure, two sources** (`python/tests/test_record_figure.py`)
 - [x] live and read back draw the same series, point for point

@@ -194,10 +194,24 @@ def figure(graph):
                 _text(box.x + FRAME_PAD, box.y + FRAME_HEAD / 2, box.label, ink, left=True)
             )
 
+    # Outside every box, so a routed edge never has to guess which way is clear.
+    span = (min(box.x for box in placed), max(box.x + box.w for box in placed))
+    lanes, boxed = {}, list(where.values())
     for node, comes_from in steps(plan):
         for source in comes_from:
-            if source in where:
-                notes.append(_arrow(where[source], where[node]))
+            if source not in where:
+                continue
+            from_, to = where[source], where[node]
+            if not _crosses(from_, to, boxed):
+                notes.append(_arrow(from_.cx, from_.y + from_.h, to.cx, to.y))
+                continue
+            # One lane per edge on that side, handed out in declaration order so
+            # the same graph is drawn the same way twice.
+            side = -1 if abs(from_.cx - span[0]) <= abs(span[1] - from_.cx) else 1
+            apart = lanes[side] = lanes.get(side, -1) + 1
+            around, head = _routed(from_, to, span, apart)
+            shapes.extend(around)
+            notes.append(head)
 
     figure.add_trace(
         go.Scatter(
@@ -386,13 +400,99 @@ def _text(x, y, said, ink, left=False):
     }
 
 
-def _arrow(source, target):
-    """One edge, from the bottom of what produced to the top of what reads."""
+LANE = 22.0
+"""How far outside everything the first routed edge runs."""
+
+LANE_APART = 14.0
+"""And how far apart the next one runs from it. Without this, three edges that
+all have to go around share one line and the figure stops saying there are
+three."""
+
+BEND = 16.0
+"""How round its corners are."""
+
+HEAD = 12.0
+"""The last straight bit, which is the part that carries the arrowhead."""
+
+
+def _crosses(source, target, obstacles):
+    """Whether the straight edge would pass through a box that is not its ends.
+
+    An edge drawn over a node reads as an edge **into** that node, which is the
+    figure saying something that is not true. Cheap to ask and worth asking: it
+    only happens where the nesting already stopped saying who feeds whom.
+    """
+    x0, y0 = source.cx, source.y + source.h
+    x1, y1 = target.cx, target.y
+    return any(
+        _hits(x0, y0, x1, y1, box)
+        for box in obstacles
+        if box is not source and box is not target
+    )
+
+
+def _hits(x0, y0, x1, y1, box):
+    """Segment against rectangle, by the slab test — exact, and about ten lines.
+
+    Sampling the segment would miss a thin box, and a figure that is *usually*
+    honest is the kind of thing nobody ever finds.
+    """
+    dx, dy = x1 - x0, y1 - y0
+    near, far = 0.0, 1.0
+    for delta, start, low, high in (
+        (dx, x0, box.x, box.x + box.w),
+        (dy, y0, box.y, box.y + box.h),
+    ):
+        if abs(delta) < 1e-9:
+            if start < low or start > high:
+                return False
+            continue
+        one, other = (low - start) / delta, (high - start) / delta
+        near, far = max(near, min(one, other)), min(far, max(one, other))
+        if near > far:
+            return False
+    return True
+
+
+def _routed(source, target, span, apart):
+    """One edge that cannot go straight, as `(shapes, annotation)`.
+
+    Around means **outside everything**, down, and in through the side of what
+    reads it. The lane is outside the whole drawing rather than outside the boxes
+    in the way, because a lane threaded between two of them is a lane that will
+    cross a third the next time the layout changes.
+
+    `apart` is which lane on that side this one gets, so that edges which all
+    have to go around stay countable.
+    """
+    left, right = span
+    # The near side, so an edge that skips one box does not cross the figure.
+    outward = -1 if abs(source.cx - left) <= abs(right - source.cx) else 1
+    out = LANE + apart * LANE_APART
+    lane = (left - out) if outward < 0 else (right + out)
+    x0, y0 = source.cx, source.y + source.h
+    into = target.x if outward < 0 else target.x + target.w
+    y1 = target.cy
+    path = (
+        f"M {x0},{y0} "
+        f"C {x0},{y0 + BEND} {lane},{y0} {lane},{y0 + BEND} "
+        f"L {lane},{y1 - BEND} "
+        f"C {lane},{y1} {lane},{y1} {into - outward * HEAD},{y1}"
+    )
+    return (
+        [{"type": "path", "path": path, "xref": "x", "yref": "y",
+          "line": {"color": _theme.MUTED, "width": 1.2}, "layer": "below"}],
+        _arrow(into - outward * HEAD, y1, into, y1),
+    )
+
+
+def _arrow(ax, ay, x, y):
+    """The head, and whatever straight run carries it."""
     return {
-        "x": target.cx,
-        "y": target.y,
-        "ax": source.cx,
-        "ay": source.y + source.h,
+        "x": x,
+        "y": y,
+        "ax": ax,
+        "ay": ay,
         "xref": "x",
         "yref": "y",
         "axref": "x",

@@ -213,3 +213,71 @@ def test_a_figure_with_nothing_to_show_reads_as_nothing(g, monkeypatch):
     )
 
     assert g._repr_mimebundle_() is None
+
+
+# ── An edge that would cross a node goes around it ──
+
+
+def _paths(figure):
+    """The routed edges: shapes drawn as an SVG path rather than a rectangle."""
+    return [s for s in figure.layout.shapes if s.type == "path"]
+
+
+def _n_graph():
+    """`a→c`, `a→d`, `b→d` — not series-parallel, so it falls back to a flat
+    sequence and `a→c` has `b` sitting between its two ends."""
+    g = Graph()
+    for who in ("a", "b", "c", "d"):
+        g.node(who, Identity())
+    g.edge("a", "c")
+    g.edge("a", "d")
+    g.edge("b", "d")
+    return g
+
+
+def test_an_edge_that_would_cross_a_node_is_routed_around_it():
+    # An edge drawn over a node reads as an edge **into** that node, which is
+    # the figure saying something that is not true.
+    figure = _n_graph().figure()
+
+    assert len(_paths(figure)) == 3, "all three have something in the way"
+
+
+def test_and_an_edge_with_nothing_in_the_way_is_still_a_straight_arrow():
+    g = Graph.somatize(Identity().named("a") >> Identity().named("b"))
+
+    figure = g.figure()
+
+    assert _paths(figure) == []
+    assert len([n for n in figure.layout.annotations if n.showarrow]) == 1
+
+
+def test_three_routed_edges_do_not_share_one_lane():
+    # Without a lane each they draw over one another and the figure stops
+    # saying there are three.
+    figure = _n_graph().figure()
+
+    lanes = set()
+    for shape in _paths(figure):
+        # `M x,y C ...` — the second point of the first curve is the lane.
+        lanes.add(shape.path.split("C")[1].split()[1].split(",")[0])
+    assert len(lanes) == 3
+
+
+def test_a_routed_edge_runs_outside_every_box():
+    boxes = _figure.boxes(json.loads(_n_graph().plan_json()), {})
+    left = min(box.x for box in boxes)
+
+    for shape in _paths(_n_graph().figure()):
+        lane = float(shape.path.split("C")[1].split()[1].split(",")[0])
+        assert lane < left, "a lane threaded between boxes is one that will cross a third"
+
+
+def test_a_segment_is_tested_against_a_box_exactly():
+    # Sampling the segment would miss a thin box, and a figure that is *usually*
+    # honest is the kind of thing nobody ever finds.
+    box = _figure.Box(kind="node", x=10.0, y=10.0, w=1.0, h=100.0)
+
+    assert _figure._hits(0.0, 50.0, 20.0, 50.0, box), "straight through it"
+    assert not _figure._hits(0.0, 5.0, 20.0, 5.0, box), "above it"
+    assert not _figure._hits(0.0, 50.0, 9.0, 50.0, box), "stops short of it"

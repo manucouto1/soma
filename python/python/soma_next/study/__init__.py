@@ -58,6 +58,7 @@ It is not called ``Split``: ``soma_next.torch.Split`` is already split learning.
 """
 
 from soma_next._soma_next import Partition, Point, Pruner, Sampler, Space
+from soma_next.study._figure import coordinates, influence, table
 from soma_next.study._run import (
     DONE,
     FAILED,
@@ -67,6 +68,7 @@ from soma_next.study._run import (
     abandoned,
     curves,
     finished,
+    importance,
     in_flight,
     report,
     take,
@@ -85,10 +87,14 @@ __all__ = [
     "Sampler",
     "Space",
     "abandoned",
+    "coordinates",
     "curves",
     "finished",
+    "importance",
     "in_flight",
+    "influence",
     "report",
+    "table",
     "take",
     "trials",
 ]
