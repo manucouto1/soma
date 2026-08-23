@@ -295,9 +295,12 @@ def _from_fx(one, named):
         held = named.get(one.target)
         return Layer(one.target, kind_of(held), type(held).__name__)
     if one.op == "placeholder":
-        # Kept, and it is not bookkeeping: `x + f(x)` **forks** at the input,
-        # and without a box to fork from the skip has nowhere to start.
-        return Layer(one.name, "shaping", "input")
+        # Kept, and it is not bookkeeping: `x + f(x)` **forks** here, and
+        # without a box to fork from the skip has nowhere to start. Called
+        # `fork` and not `input` because that is what it is wherever it lands —
+        # a module spliced into the middle of a node has its placeholder in the
+        # middle too, and "input" there reads as the node's.
+        return Layer(one.name, "shaping", "fork")
     if one.op in ("call_function", "call_method"):
         name = getattr(one.target, "__name__", str(one.target)).strip("_")
         if name in _NOT_WORTH_A_BOX:
@@ -392,16 +395,16 @@ def _shape(output):
     return "×".join(str(one) for one in tuple(found[0].shape))
 
 
-def architecture(graph, example=None, *, most=48, depth=0):
+def architecture(graph, example=None, *, most=48, depth=0, workers=None):
     """What each node is made of, as `{node: Inside}` — ready for a figure.
 
         g.figure(inside=architecture(g, x))
 
-    **The unit is the node**, and it has to be: a node holding two modules
-    composes them in its own `forward`, and tracing each of them on the same
-    input would not only miss that edge, it would feed the second one the wrong
-    tensor. So the node's `forward` is run once, with hooks on everything it
-    holds, and the edges come out of which tensor each module was handed.
+    **The graph is run once**, with hooks on everything every node holds. That
+    is not an optimisation: a node in the middle of a graph is handed what the
+    nodes above it produced, and tracing it on the graph's own input feeds a
+    fan-in the wrong thing entirely — which is what it did, until a picture with
+    an empty box in it said so.
 
     Then, module by module, `torch.fx` is asked for the same thing. Where it can
     answer it wins, because it sees the operations that are **not** modules —
@@ -411,8 +414,10 @@ def architecture(graph, example=None, *, most=48, depth=0):
     That is the seam, and it is a module boundary rather than a judgement call:
     two paths, one shape, spliced where both of them agree the world divides.
 
-    `example` is one input to run it on. Without one nothing can be traced at
-    all, and every node answers nothing rather than a guess.
+    `example` is one input to run **the graph** on, so it obeys the same rules
+    every input does — a tensor arrives wrapped in an `Opaque`, and a graph with
+    branches is fed a map. Without one nothing can be traced at all, and every
+    node answers nothing rather than a guess.
 
     A composite everybody recognises — an attention block, an LSTM — is **one**
     box and is not opened: read as its fourteen leaves it is fourteen things and
@@ -423,49 +428,74 @@ def architecture(graph, example=None, *, most=48, depth=0):
     """
     if example is None or torch is None:
         return {}
+    watched = {}
+    for node in graph.nodes():
+        for name, module in _held(graph.implementation(node)):
+            for path, one in _worth_drawing(module, depth):
+                watched[(node, f"{name}.{path}" if path else name)] = one
+
+    layers, edges, made_by, order, hooks = {}, {}, {}, {}, []
+    for (node, where), one in watched.items():
+        layers.setdefault(node, [])
+        edges.setdefault(node, [])
+        # One running order **per node**: the fallback edge is *whatever ran
+        # before this*, and across nodes that is a different node's last layer,
+        # which is not an edge inside anything.
+        order.setdefault(node, [])
+        hooks.append(
+            one.register_forward_hook(
+                _watch(where, one, layers[node], edges[node], made_by, order[node])
+            )
+        )
+    try:
+        with torch.no_grad():
+            graph.forward(example, workers=workers)
+    finally:
+        for hook in hooks:
+            hook.remove()
+
     said = {}
     for node in graph.nodes():
-        inside = _of_node(graph.implementation(node), example, depth)
-        if inside is None or not inside.layers:
+        if not layers.get(node):
+            if any(one == node for one, _ in watched):
+                import warnings
+
+                warnings.warn(
+                    f"`{node}` holds modules and none of them ran, so its architecture "
+                    f"is not drawn",
+                    stacklevel=2,
+                )
             continue
-        said[node] = _at_most(node, inside, most)
+        mine, its = layers[node], edges[node]
+        for name, module in _held(graph.implementation(node)):
+            if not any(True for _ in module.children()):
+                continue
+            finer, _ = _symbolic(module, None)
+            if finer is not None:
+                mine, its = _spliced(mine, its, name, finer)
+        said[node] = _at_most(
+            node, _repeated(_without_a_lone_input(Inside(mine, its, "traced", None))), most
+        )
     return said
 
 
-def _of_node(held, example, depth=0):
-    """One node's own `forward`, run once and watched."""
-    from soma_next import Ctx
+def _as_the_engine_would(example):
+    """The input as a node really receives it: with the wrappers off.
 
-    modules = _held(held)
-    if not modules:
-        return None
-    layers, edges, made_by, order = [], [], {}, []
-    hooks = []
-    for name, module in modules:
-        for path, one in _worth_drawing(module, depth):
-            where = f"{name}.{path}" if path else name
-            hooks.append(one.register_forward_hook(_watch(where, one, layers, edges, made_by, order)))
-    try:
-        with torch.no_grad():
-            held.forward(example, Ctx())
-    except Exception as e:
-        for hook in hooks:
-            hook.remove()
-        return Inside([], [], "traced", f"{type(e).__name__}: {e}")
-    for hook in hooks:
-        hook.remove()
+    An `Opaque` is what makes a tensor cross an edge, and the engine unwraps it
+    on the way **in** — a node is handed a tensor. Tracing with the wrapper
+    still on hands a `Conv1d` an `Opaque`, every node raises, and the whole
+    architecture comes back empty without a word about why.
+    """
+    from soma_next import Opaque
 
-    # And now the half `fx` does better, one module at a time — but only for a
-    # module that **contains** something. Asking it about a bare `Linear` gets
-    # back "an input, then a linear", which is one box of noise and the loss of
-    # the name and the shape the run already had.
-    for name, module in modules:
-        if not any(True for _ in module.children()):
-            continue
-        finer, _ = _symbolic(module, None)
-        if finer is not None:
-            layers, edges = _spliced(layers, edges, name, finer)
-    return _repeated(_without_a_lone_input(Inside(layers, edges, "traced", None)))
+    if isinstance(example, Opaque):
+        return example.value
+    if isinstance(example, dict):
+        return {name: _as_the_engine_would(one) for name, one in example.items()}
+    if isinstance(example, (list, tuple)):
+        return type(example)(_as_the_engine_would(one) for one in example)
+    return example
 
 
 def _watch(where, one, layers, edges, made_by, order):
@@ -529,7 +559,7 @@ def _worth_drawing(module, depth=0):
 
 
 def _without_a_lone_input(inside):
-    """Drops an `input` box that nothing forks from.
+    """Drops a `fork` box that nothing actually forks from.
 
     It earns its place when something **other** than the next layer reads it —
     that fork is where a residual starts, and without a box to fork from the
@@ -539,7 +569,7 @@ def _without_a_lone_input(inside):
     lone = {
         one.path
         for one in inside.layers
-        if one.label == "input" and sum(a == one.path for a, _ in inside.edges) <= 1
+        if one.label == "fork" and sum(a == one.path for a, _ in inside.edges) <= 1
     }
     if not lone:
         return inside

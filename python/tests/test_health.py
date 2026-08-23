@@ -274,7 +274,7 @@ def test_a_node_says_what_it_is_made_of():
     torch.manual_seed(0)
     g, _ = chain([Block(activation="sigmoid") for _ in range(2)])
 
-    made = architecture(g, torch.randn(4, 16))
+    made = architecture(g, Opaque(torch.randn(4, 16)))
 
     # Everything and not only what has parameters: a picture of a sigmoid stack
     # that leaves out the sigmoids is a picture of something else.
@@ -357,7 +357,7 @@ def test_what_is_drawn_is_a_superset_of_what_is_measured(store):
     trained(g, store, steps=8, auditing=Audit(inside=True))
 
     drawn = {
-        f"{node}.{one.path}" for node, made in architecture(g, torch.randn(4, 16)).items()
+        f"{node}.{one.path}" for node, made in architecture(g, Opaque(torch.randn(4, 16))).items()
         for one in made.layers
     }
     measured = {one for one in seen(store, run="a-run") if "." in one}
@@ -416,7 +416,7 @@ def test_blocks_that_are_the_same_block_collapse_to_one_and_a_count():
 
     g = Graph.somatize(Deep().named("deep"))
 
-    made = architecture(g, torch.randn(2, 16))
+    made = architecture(g, Opaque(torch.randn(2, 16)))
 
     said = [one.label for one in made["deep"].layers]
     assert any("×5" in one for one in said), said
@@ -445,7 +445,7 @@ def test_what_comes_after_a_stack_is_not_adopted_by_its_last_block():
 
     g = Graph.somatize(Stack().named("net"))
 
-    made = architecture(g, torch.randn(2, 16))
+    made = architecture(g, Opaque(torch.randn(2, 16)))
 
     said = [one.label for one in made["net"].layers]
     assert said == ["Linear  ×4", "Linear"], said
@@ -475,6 +475,6 @@ def test_a_tensor_nobody_holds_cannot_invent_an_edge():
 
     g = Graph.somatize(Apart().named("net"))
 
-    made = architecture(g, torch.randn(4, 16))
+    made = architecture(g, Opaque(torch.randn(4, 16)))
 
     assert made["net"].edges == [("first", "second")], made["net"].edges
