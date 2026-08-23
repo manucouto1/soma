@@ -92,6 +92,12 @@ cd python && maturin develop && python -m pytest tests/ -q
 # after touching `python/src` or the Dockerfile. Both live in `tests/cluster/`.
 SOMA_CLUSTER=1 python -m pytest tests/cluster -q
 docker compose -f python/tests/cluster/docker/compose.yaml --profile gpu build worker-gpu worker-gpu-b
+
+# A bucket, for the half of the store's contract that needs one. Opt-in the same
+# way and with the same handshake on both sides: `SOMA_S3` set means there is one.
+docker compose -f store/tests/docker/compose.yaml up -d
+SOMA_S3=http://127.0.0.1:9000 uv run cargo test -p soma-next-store --features s3
+SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 ```
 
 `maturin develop` is not optional before `pytest`: the Python tests run against
@@ -209,5 +215,16 @@ leaves the machine. The layout needs no heuristic because `Plan` is a tree. But
 and there the nesting stops saying who feeds whom — so **the boxes say *when* and
 the arrows say *what feeds what***, and the `N` (`a→c`, `a→d`, `b→d`) is the test
 that keeps the figure honest.
+
+**A store is a directory or a bucket**, and that is the second implementor of
+the trait — `Store.on_bucket(...)`, behind a `s3` feature that is off by default.
+It went in front of CU20 because only one of the three uses of a store demands a
+shared disk: a cache and an artifact degrade to a miss, but handing out work does
+not. A bucket and a directory are **the same store** — the same layout and the
+same JSON — and what is different is that `claim` is a conditional PUT. An
+endpoint that takes `If-None-Match: *` and writes anyway would give every trial
+to every machine and say nothing, so `Bucket::at` spends **two round trips
+proving it does not** before handing the store over. Nothing above learned a new
+word: `take`, `report` and `gather` never asked what kind of store they had.
 
 See the distribution report for the full order.

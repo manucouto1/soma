@@ -3407,3 +3407,141 @@ byte-identical drawing · **the plan drawn while it runs**, which is the same
 thing said live · **a text fallback** for a graph past the limit, where the
 original had one and here the notebook just shows the `repr` · and **anything at
 all about a worker's health**, which needs something to report it first.
+
+## After CU19 — A store that is a bucket
+
+```python
+store = Store.on_bucket("http://minio:9000", "soma")   # S3, MinIO, R2
+```
+
+```rust
+let store = Bucket::at(endpoint, "soma", "us-east-1", UrlStyle::Path, credentials)?;
+```
+
+Not a use case: the second implementor of a trait that had one, written on
+22 August 2026 and closed on the 23rd, out of a question — **what happens when the workers and whoever
+launched them share no disk?** It went in front of CU20 because the answer
+decides where the record of what happened can live.
+
+### Three uses of a store, and only one of them demands sharing
+
+| what for | who opens it | does it need a shared disk? |
+|---|---|---|
+| the cache of a `.cached()` node | each worker, its own | **no** — it degrades to a miss |
+| artifacts, so a catalog is not sent twice | each worker, its own | **no** — it degrades to resending |
+| federated rounds (CU14) and a study (CU18) | everybody, the same one | **yes, and there was no alternative** |
+
+The store **does not travel**: it is one more thing that was lent, like the
+catalog, and whoever brings a worker up hands it one with `--store`. The keys
+come out of the content, so two stores are two hit rates and never two answers.
+Only the third row was actually stuck, and it is the row where `claim` hands out
+work.
+
+### A bucket and a directory are the same store, deliberately
+
+The same split, from the same `Digest::path`, and the **same JSON** inside. So a
+directory can be moved onto a bucket with `aws s3 sync` and back, and neither end
+has to know. Naming an object after the digest **of the name** rather than after
+the name settles what a key may contain, which on a filesystem was already
+settled the same way.
+
+Two things are genuinely different:
+
+- **`claim` is a conditional PUT.** On a filesystem it is a hard link, which
+  fails when the name is taken; here it is `If-None-Match: *`, the same promise
+  from the other side, and the signature covers the header.
+- **A scan costs a round trip per name.** `bound()` lists and then reads, fanned
+  out sixteen at a time — because S3 has no *"give me these forty objects"*, only
+  forty round trips that need not happen one after another. The way out, when it
+  starts hurting, is the one `Store::bound` already names: an index built from
+  the records, which can be thrown away.
+
+### The two round trips on the way in, which are not optional
+
+`Bucket::at` writes a probe key twice before it hands the store over.
+
+An S3-compatible endpoint that accepts `If-None-Match: *` and **writes anyway**
+— some do — makes every `claim` answer `true`. Every machine then takes every
+trial, and nothing anywhere says so: no error, no warning, just a study whose
+numbers are quietly four times the work and one machine's answer. That failure is
+invisible by construction, so it is refused at the door instead of discovered
+later. There is a test with a server that answers `200` to everything, checking
+that the store is refused **and that the refusal names the reason**.
+
+Measured against MinIO: four processes competing for forty numbers took each of
+them exactly once, and a scan of the forty came back in 0.09 s.
+
+### What CU13 predicted, and what it got wrong
+
+> *"and **S3**, which arrives the day there is a MinIO to point at, through
+> OpenDAL and as another configuration rather than another implementation."*
+
+Both halves. It is **another implementation** — `store/src/s3.rs`, brother of
+`local.rs` — because a configuration would have meant one type with two
+behaviours and a conditional write that is a link in one branch and a header in
+the other. And it is not OpenDAL: what an object store abstraction abstracts over
+is exactly the operation that had to be honest here.
+
+The note in `local.rs` that said HTTP belonged in another crate is rewritten. What
+it was protecting is given instead by a **feature `s3`, off by default** — the
+same shape as the core's optional `serde`, and `cargo build -p soma-next-store`
+still compiles with neither.
+
+### The dependency, which was measured before it was chosen
+
+`rusty-s3` signs and does not fetch — **sans-IO** — with `ureq` doing the
+blocking request. `Cargo.lock` went from **44 packages to 133**, nearly all of it
+TLS plus a date library and an XML parser.
+
+An official SDK would have brought tokio, and **that would have made `Store`
+async**: every caller of `resolve` in the engine, in `serve`, and every level-3
+function in Python. That is the same objection that has kept a bus out of this
+repo twice, and it is the reason a signing library beat the obvious choice.
+
+### What writing the second one found
+
+The contract could not be seen until something other than `Local` had to keep it.
+`store/tests/unit/contract.rs` is every assertion written against `&dyn Store`
+and run against each — a directory always, a bucket when `SOMA_S3` says there is
+one. It has no counterpart in `src/`, the same way `study`'s `invariants` has
+none: what it covers is the trait.
+
+It found the drift immediately: `record` and `read_record` existed **twice**, and
+one used `to_vec_pretty` while the other used `to_vec`. Nothing would have failed
+— the two records would simply have stopped being each other's. They live in
+`store.rs` now, next to `Bound`, and that is what makes the sentence above true
+rather than aspirational.
+
+### Nothing above it learned a new word
+
+`PyStore` holds a `Box<dyn Store>`. `take`, `report`, `finished`, `curves`,
+`trials`, `in_flight` and `gather` did not change a line: they never asked what
+kind of store they had. Level 3 uses it **by duck** — no annotation, no
+`isinstance` — and `test_bucket.py` runs the same small study over a directory
+and over a bucket and compares the two histories, which is the assertion that
+this stays true.
+
+### Questionnaire
+
+**The contract, on every implementor there is** (`contract.rs`, `&dyn Store`)
+- [x] the same bytes are the same digest however often they are written
+- [x] what was never put is absent and not an error
+- [x] a name points at bytes and carries what was said about it
+- [x] binding the same name again replaces it
+- [x] a claimed name cannot be claimed twice, and the first one keeps it
+- [x] a claim does not overwrite what `bind` put there
+- [x] many are answered in the order they were asked, with the gaps where asked
+- [x] a scan finds what was bound, in an order two scans agree on
+- [x] a record that is not a record is corrupt and not missing
+
+**The bucket, and the one thing only it can get wrong**
+- [x] an endpoint that ignores the condition is refused, naming the reason
+
+**And from Python** (`test_bucket.py`, opt-in on `SOMA_S3`)
+- [x] a store opened against nothing says so instead of being found out later
+- [x] credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` when none
+      are given, and the message names the one that was missing
+- [x] bytes, names, meta and `claim` answer as a directory's do
+- [x] a map of tensors is kept and recalled — a codec is a fact about the value
+- [x] the same study over a directory and over a bucket gives the same history
+- [x] a trial another machine is holding is visible before it finishes
