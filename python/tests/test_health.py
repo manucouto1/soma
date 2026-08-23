@@ -262,3 +262,50 @@ def test_every_flag_it_raises_says_what_to_do_about_it(store):
 def test_something_that_is_not_a_flag_says_so():
     with pytest.raises(ValueError, match="not a flag"):
         about("SLIGHTLY_OFF")
+
+
+# ── The architecture a node holds ──
+
+
+def test_a_node_says_what_it_is_made_of():
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    torch.manual_seed(0)
+    g, _ = chain([Block(activation="sigmoid") for _ in range(2)])
+
+    made = architecture(g)
+
+    # Everything and not only what has parameters: a picture of a sigmoid stack
+    # that leaves out the sigmoids is a picture of something else.
+    assert made["b0"] == [("net", "Linear"), ("after", "Sigmoid")]
+
+
+def test_what_is_drawn_is_a_superset_of_what_is_measured(store):
+    # Every layer that can carry a flag has a box. The other way round is fine —
+    # a `Sigmoid` has no gradient of its own to report.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    torch.manual_seed(0)
+    g, _ = chain([Block(activation="sigmoid") for _ in range(3)])
+    trained(g, store, steps=8, auditing=Audit(inside=True))
+
+    drawn = {f"{node}.{path}" for node, made in architecture(g).items() for path, _ in made}
+    measured = {one for one in seen(store, run="a-run") if "." in one}
+
+    assert measured <= drawn, f"measured but never drawn: {measured - drawn}"
+
+
+def test_the_overlay_marks_the_layer_inside_the_node(store):
+    pytest.importorskip("plotly")
+    from soma_next.health import overlaid
+
+    torch.manual_seed(0)
+    g, _ = chain([Block(activation="sigmoid") for _ in range(8)])
+    trained(g, store, steps=15, auditing=Audit(inside=True))
+
+    marked = overlaid(g, store, run="a-run")
+
+    said = " ".join(n.text for n in marked.layout.annotations)
+    assert "STALLED" in said

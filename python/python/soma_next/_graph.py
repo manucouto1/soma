@@ -25,11 +25,15 @@ class Graph(_RustGraph):
     _slice_of = None
     """The graph this one is a piece of, for a graph run in pieces."""
 
-    def figure(self, overlay=None):
+    def figure(self, overlay=None, inside=None):
         """The graph drawn, as a `plotly.graph_objects.Figure`.
 
         Nothing is executed to draw it: everything on the figure was declared.
         Needs the `viz` extra; without it the error says so.
+
+        `inside` opens a node up — `{node: [(path, what), ...]}`, which
+        `soma_next.torch.architecture` reads off the modules it holds. A node is
+        often a whole architecture and a cube is not a picture of one.
 
         `overlay` lays what **happened** over what was declared —
         `{node: [flag, ...]}`, which `soma_next.health.overlaid` builds out of a
@@ -37,7 +41,7 @@ class Graph(_RustGraph):
         """
         from soma_next import _figure
 
-        return _figure.figure(self, overlay)
+        return _figure.figure(self, overlay, inside)
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         """What a notebook shows for `g` on its own: the figure.

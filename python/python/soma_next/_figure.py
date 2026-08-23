@@ -67,13 +67,28 @@ __all__ = ["Box", "TOO_MANY", "boxes", "figure", "steps"]
 CHAR = 7.4
 
 NODE_H = 44.0
-"""How tall a node's box is: two lines of text and the room around them."""
+"""How tall a node's box is with two lines in it, and the floor for any."""
+
+LINE_H = 15.0
+"""One line of label. A box grows with what is written in it — a node with a
+device, three badges and a flag is four lines, and a fixed height would have
+written them over its own outline."""
+
+LAYER_H = 24.0
+"""One layer of an expanded node."""
+
+LAYER_GAP = 5.0
+"""Between two of them. Small: they are a stack and not a sequence, and an
+arrow does not go between them."""
 
 MIN_W = 96.0
 """How narrow a node's box may get, however short its name."""
 
 PAD_X = 14.0
 """The room between a node's longest line and the side of its box."""
+
+PAD_Y = 10.0
+"""And above and below what is written in it."""
 
 GAP_X = 26.0
 """Between two branches of a wave."""
@@ -139,26 +154,39 @@ def steps(plan):
             yield from steps(child)
 
 
-def boxes(plan, labels=None):
+def boxes(plan, labels=None, inside=None):
     """Where every box goes, for a plan as `Graph.plan_json()` gives it.
 
     `labels` maps a node id to the lines that will be written in it, and is only
     read to work out how wide the box has to be; without it a node is as wide as
-    its id. Pure, and with no plotly anywhere near it — which is what makes the
-    layout testable on its own.
+    its id.
+
+    `inside` maps a node to `[(path, what), ...]` — what it is **made of** — and
+    turns its box into a frame with those stacked in it. It is data and this
+    module does not know where it came from: `soma_next.torch.architecture`
+    reads it off the modules, and something that is not torch could answer the
+    same question about itself.
+
+    Pure, and with no plotly anywhere near it — which is what makes the layout
+    testable on its own.
     """
     out: list[Box] = []
-    _place(plan, 0.0, 0.0, labels or {}, out)
+    _place(plan, 0.0, 0.0, labels or {}, out, inside)
     return out
 
 
-def figure(graph, overlay=None):
+def figure(graph, overlay=None, inside=None):
     """The graph as a `plotly.graph_objects.Figure`.
 
     Everything drawn is read back from what was declared — `nodes()`, `edges()`,
     `devices()`, `hosts()`, `cached()`, `frozen()`, `mapped_nodes()`,
     `identities()`, `fingerprints()` — so this never runs anything and never
     needs a store.
+
+    `inside` opens a node up: `{node: [(path, what), ...]}`, which
+    `soma_next.torch.architecture` reads off the modules a node holds. A node is
+    often a whole architecture and a cube is not a picture of one — so its box
+    becomes a **frame**, which is the shape a `Wave` and a `Remote` already are.
 
     `overlay` is what **happened**, laid over what was declared:
     `{node: [flag, ...]}`, which is what `soma_next.health.overlaid` builds out
@@ -186,7 +214,7 @@ def figure(graph, overlay=None):
         for node in graph.nodes()
         for badges in [_badges(node, cached, frozen, mapped)]
     }
-    placed = boxes(plan, labels)
+    placed = boxes(plan, labels, inside)
     where = {box.node: box for box in placed if box.kind == "node"}
 
     figure = go.Figure()
@@ -195,7 +223,18 @@ def figure(graph, overlay=None):
 
     shapes, notes = [], []
     for box in placed:
-        if box.kind == "node":
+        if box.kind == "layer":
+            # What a node is made of. Its own row of the one table, dimmer than
+            # a node: it is not a thing the graph can place, cache or send —
+            # it is what one of those is built out of.
+            fill, line, ink = PALETTE["layer"]
+            if box.node in ill:
+                line, ink = _theme.SERIES["alarm"], _theme.SERIES["alarm"]
+            shapes.append(_rect(box, fill, line, 1.0))
+            notes.append(
+                _text(box.x + PAD_X, box.cy, _safe(box.label), ink, left=True, size=10)
+            )
+        elif box.kind == "node":
             fill, line, ink = PALETTE[_family(devices.get(box.node))]
             width = 1.4
             if box.node in ill:
@@ -203,7 +242,12 @@ def figure(graph, overlay=None):
                 # the outline and never the fill: two facts, two channels.
                 line, width = _theme.SERIES["alarm"], 2.6
             shapes.append(_rect(box, fill, line, width))
-            notes.append(_text(box.cx, box.cy, "<br>".join(labels[box.node]), ink))
+            lines = labels[box.node]
+            # A node that was opened writes its name at the **top**, where a
+            # frame's label goes; a plain one keeps it in the middle.
+            opened = (inside or {}).get(box.node)
+            at = (box.y + PAD_Y + LINE_H * len(lines) / 2) if opened else box.cy
+            notes.append(_text(box.cx, at, "<br>".join(lines), ink))
         else:
             fill, line, ink = PALETTE[box.kind]
             shapes.append(_rect(box, fill, line, 1.6, dash="dot"))
@@ -265,17 +309,17 @@ def figure(graph, overlay=None):
     return figure
 
 
-def _measure(plan, labels):
+def _measure(plan, labels, inside=None):
     """How much room a plan takes, before anybody decides where it goes."""
     if plan == "Empty":
         return 0.0, 0.0
     (kind, body), = plan.items()
     if kind == "Execute":
-        return _width(body["node"], labels), NODE_H
+        return _node_size(body["node"], labels, inside)
     if kind == "Remote":
-        w, h = _measure(body["inner"], labels)
+        w, h = _measure(body["inner"], labels, inside)
         return w + 2 * FRAME_PAD, h + FRAME_PAD + FRAME_HEAD
-    sizes = [_measure(child, labels) for child in body]
+    sizes = [_measure(child, labels, inside) for child in body]
     if kind == "Sequence":
         return (
             max(w for w, _ in sizes),
@@ -287,23 +331,25 @@ def _measure(plan, labels):
     )
 
 
-def _place(plan, x, y, labels, out):
+def _place(plan, x, y, labels, out, inside=None):
     """Hands out positions, top down, from a size already known."""
     if plan == "Empty":
         return
     (kind, body), = plan.items()
-    width, height = _measure(plan, labels)
+    width, height = _measure(plan, labels, inside)
 
     if kind == "Execute":
-        out.append(Box("node", x, y, width, height, node=body["node"]))
+        node = body["node"]
+        out.append(Box("node", x, y, width, height, node=node))
+        _stack(node, (inside or {}).get(node), x, y, width, labels, out)
     elif kind == "Remote":
         out.append(Box("remote", x, y, width, height, label=body["host"]))
-        _place(body["inner"], x + FRAME_PAD, y + FRAME_HEAD, labels, out)
+        _place(body["inner"], x + FRAME_PAD, y + FRAME_HEAD, labels, out, inside)
     elif kind == "Sequence":
         top = y
         for child in body:
-            w, h = _measure(child, labels)
-            _place(child, x + (width - w) / 2, top, labels, out)
+            w, h = _measure(child, labels, inside)
+            _place(child, x + (width - w) / 2, top, labels, out, inside)
             top += h + GAP_Y
     else:
         out.append(Box("wave", x, y, width, height, label="wave"))
@@ -318,7 +364,59 @@ def _place(plan, x, y, labels, out):
 def _width(node, labels):
     """How wide a node's box has to be to hold its longest line."""
     lines = labels.get(node) or (node,)
-    return max(MIN_W, CHAR * max(len(line) for line in lines) + 2 * PAD_X)
+    return max(MIN_W, CHAR * max(len(_bare_markup(line)) for line in lines) + 2 * PAD_X)
+
+
+def _node_size(node, labels, inside=None):
+    """A node's box: its own lines, plus room for what it is made of.
+
+    A node with an `inside` becomes a **frame** — the same shape a `Wave` or a
+    `Remote` already is — because that is what it turns out to be: a thing that
+    contains things. Nothing new had to be invented for it, which is usually the
+    sign that the layout was right.
+    """
+    lines = labels.get(node) or (node,)
+    tall = max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
+    layers = (inside or {}).get(node)
+    if not layers:
+        return _width(node, labels), tall
+    widest = max(
+        (CHAR * len(f"{path}  {what}") + 2 * PAD_X for path, what in layers),
+        default=MIN_W,
+    )
+    return (
+        max(_width(node, labels), widest + 2 * FRAME_PAD),
+        tall + len(layers) * LAYER_H + (len(layers) - 1) * LAYER_GAP + FRAME_PAD,
+    )
+
+
+def _stack(node, layers, x, y, width, labels, out):
+    """The layers of an expanded node, stacked inside its frame."""
+    if not layers:
+        return
+    lines = labels.get(node) or (node,)
+    top = y + max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
+    for path, what in layers:
+        out.append(
+            Box(
+                "layer",
+                x + FRAME_PAD,
+                top,
+                width - 2 * FRAME_PAD,
+                LAYER_H,
+                node=f"{node}.{path}",
+                label=f"{path}  {what}",
+            )
+        )
+        top += LAYER_H + LAYER_GAP
+
+
+def _bare_markup(line):
+    """A label's length as it is read, not as it is written: the flag badge
+    carries a `<span>` that takes no room on the page."""
+    import re
+
+    return re.sub(r"<[^>]+>", "", line)
 
 
 def _family(device):
@@ -424,14 +522,14 @@ def _rect(box, fill, line, width, dash=None):
     }
 
 
-def _text(x, y, said, ink, left=False):
+def _text(x, y, said, ink, left=False, size=11):
     """One label, without an arrow attached to it."""
     return {
         "x": x,
         "y": y,
         "text": said,
         "showarrow": False,
-        "font": {"size": 11, "color": ink, "family": "system-ui, sans-serif"},
+        "font": {"size": size, "color": ink, "family": _theme.FONT},
         "align": "left" if left else "center",
         "xanchor": "left" if left else "center",
         "yanchor": "middle",

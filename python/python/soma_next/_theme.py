@@ -48,6 +48,10 @@ PALETTE = {
     "meta": ("#171921", "#343a49", MUTED),
     "wave": ("rgba(0,0,0,0)", EDGE, MUTED),
     "remote": ("rgba(0,0,0,0)", "#eb6834", "#f2a681"),
+    # What a node is **made of**. Dimmer than a node on purpose: a layer is not
+    # a thing the graph can place, cache or send, and drawing it as loudly as
+    # one would say it was.
+    "layer": ("#151821", "#2f3547", "#9aa3b8"),
 }
 """Fill, outline and ink, by what the thing is. The only table."""
 

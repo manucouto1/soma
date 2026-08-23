@@ -120,10 +120,13 @@ class Audit:
         self.watching = {}
         for node in graph.nodes():
             held = graph.implementation(node)
-            for module in _modules(held):
+            for name, module in _modules(held):
                 self.watching[(node, None)] = module
                 for path, inner in _scoped(module, self.inside, node, self.most):
-                    self.watching[(node, path)] = inner
+                    # Prefixed with the attribute it hangs off. A node with two
+                    # modules on it would otherwise have two `0`s, and the
+                    # second would quietly overwrite the first.
+                    self.watching[(node, f"{name}.{path}")] = inner
         for key, module in self.watching.items():
             self._hooks.append(
                 module.register_forward_hook(_forward_of(self, key), always_call=False)
@@ -401,15 +404,16 @@ def _biggest(held):
 
 
 def _modules(held):
-    """The torch modules a node holds, by looking at what it is made of.
+    """The torch modules a node holds, as `[(attribute, module)]`.
 
     A node is the user's class and there is no protocol for *give me your
     layers* — `parameters()` is all a node promises. Its attributes are where
-    the modules are, which is the same place the original looked.
+    the modules are, which is the same place the original looked, and the
+    attribute's name is what keeps two of them apart.
     """
     if torch is None or isinstance(held, type):
         return []
-    return [one for one in vars(held).values() if isinstance(one, torch.nn.Module)]
+    return [(name, one) for name, one in vars(held).items() if isinstance(one, torch.nn.Module)]
 
 
 def _tensor(output):
@@ -488,3 +492,58 @@ def _scoped(root, inside, node, most):
         )
         chosen = chosen[:most]
     return chosen
+
+
+def architecture(graph, *, deep=False, most=32):
+    """What each node is **made of**, as `{node: [(path, what), ...]}`.
+
+        g.figure(inside=architecture(g))
+
+    A node is often a whole architecture, and drawing it as one cube says
+    nothing about it. This reads the modules a node holds and hands the figure a
+    list of names — **data**, so `_figure` never learns what torch is and
+    something that is not torch could answer the same question about itself.
+
+    **Everything**, and not only what has parameters. The audit measures what it
+    can measure — a `Sigmoid` has no gradient of its own to report — but a
+    picture of a sigmoid stack that leaves out the sigmoids is a picture of
+    something else, and *what the non-linearity is* is the first thing anybody
+    looks for. So the drawing is a superset of the measuring, and every layer
+    that can carry a flag has a box.
+
+    A path is the attribute it hangs off and then the way down: `net.0`. It is
+    the same key the audit measures under, which is what lets a flag land on a
+    box rather than near one.
+
+    `deep=True` walks all the way down instead of taking the direct children;
+    with a real architecture that is usually more boxes than a figure can hold,
+    which is what `most` is for.
+    """
+    said = {}
+    for node in graph.nodes():
+        layers = []
+        for name, module in _modules(graph.implementation(node)):
+            found = [
+                (path, one)
+                for path, one in (module.named_modules() if deep else module.named_children())
+                if path
+            ]
+            # A module with nothing under it **is** the layer: a node holding a
+            # bare `Linear` is made of that Linear, not of nothing.
+            layers.extend(
+                [(f"{name}.{path}", type(one).__name__) for path, one in found]
+                or [(name, type(module).__name__)]
+            )
+        if len(layers) > most:
+            import warnings
+
+            warnings.warn(
+                f"`{node}` is made of {len(layers)} things and the figure holds {most}: "
+                f"drawing the first {most}. Raise `architecture(most=...)`, or draw "
+                f"this node on its own",
+                stacklevel=2,
+            )
+            layers = layers[:most]
+        if layers:
+            said[node] = layers
+    return said

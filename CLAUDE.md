@@ -327,8 +327,17 @@ of GPU. `Audit(inside=True)` looks **inside** a node, because a node is often a
 whole architecture and *this node is unhealthy* is not an answer when it is
 twenty layers; findings are keyed `node.path.to.submodule`.
 
-**Where is a question the graph answers**: `overlaid` marks the ill nodes on the
-figure, and health gets a **channel of its own** — the fill goes on saying where
+**A node is opened up**: `architecture(g)` reads what a node is made of and
+`g.figure(inside=...)` draws its box as a **frame** — the shape a `Wave` and a
+`Remote` already are, so nothing new had to be invented. It is handed over as
+**data**, so the figure never learns what torch is. It draws *everything* and
+not only what has parameters, because a picture of a sigmoid stack without the
+sigmoids is a picture of something else; the audit measures a subset, so every
+layer that can carry a flag has a box.
+
+**Where is a question the graph answers**: `overlaid` marks the ill nodes — and
+the ill **layers inside them** — on the figure, and health gets a **channel of
+its own** — the fill goes on saying where
 a node runs and the outline turns red, because on a graph over three machines
 *where does this run* is the answer somebody came for. `alerts` is the loud one,
 cards a cell shows on its own. And `gantt` is the timeline: every fact carries

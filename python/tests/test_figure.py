@@ -211,7 +211,7 @@ def test_a_figure_with_nothing_to_show_reads_as_nothing(g, monkeypatch):
     monkeypatch.setattr(
         _figure,
         "figure",
-        lambda graph, overlay=None: type(
+        lambda graph, overlay=None, inside=None: type(
             "Blank", (), {"_repr_mimebundle_": lambda s, **kw: {}}
         )(),
     )
@@ -324,3 +324,56 @@ def test_the_flags_are_written_on_the_box_and_not_counted():
 
     assert "DEAD_CHANNELS" in said
     assert "(7)" not in said, "the count is on the hover, where there is room"
+
+
+# ── A node opened up ──
+
+
+def test_a_node_with_an_inside_becomes_a_frame_around_it():
+    # The shape a `Wave` and a `Remote` already are, which is the sign the
+    # layout was right: nothing new had to be invented for it.
+    plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+
+    plain = _figure.boxes(plan)
+    opened = _figure.boxes(plan, inside={"a": [("0", "Linear"), ("1", "ReLU")]})
+
+    assert [b.kind for b in plain] == ["node"]
+    assert [b.kind for b in opened] == ["node", "layer", "layer"]
+    assert opened[0].h > plain[0].h, "it has to have grown to hold them"
+
+
+def test_every_layer_sits_inside_the_box_it_belongs_to():
+    plan = json.loads(Graph.somatize(Identity().named("a")).plan_json())
+
+    placed = _figure.boxes(plan, inside={"a": [("0", "Linear"), ("1", "ReLU")]})
+    node, *layers = placed
+
+    for one in layers:
+        assert node.x <= one.x and one.x + one.w <= node.x + node.w
+        assert node.y <= one.y and one.y + one.h <= node.y + node.h
+
+
+def test_a_layer_is_named_after_the_node_it_is_in():
+    # `encoder.2`, which is the same key the audit measures under — so a layer
+    # with a flag on it is a layer that has a box.
+    plan = json.loads(Graph.somatize(Identity().named("encoder")).plan_json())
+
+    _, first = _figure.boxes(plan, inside={"encoder": [("2", "Linear")]})
+
+    assert first.node == "encoder.2"
+
+
+def test_a_flag_on_a_layer_marks_that_layer_and_not_the_others():
+    g = Graph.somatize(Identity().named("encoder"))
+    made = {"encoder": [("0", "Linear"), ("1", "Sigmoid"), ("2", "Linear")]}
+
+    figure = g.figure(inside=made, overlay={"encoder.2": ["STALLED"]})
+
+    marked = [s for s in figure.layout.shapes if s.line.color == _theme.SERIES["alarm"]]
+    assert len(marked) == 1, "one layer, not the node and not its neighbours"
+
+
+def test_a_node_with_no_inside_is_drawn_exactly_as_before():
+    g = Graph.somatize(Identity().named("a") >> Identity().named("b"))
+
+    assert g.figure().to_json() == g.figure(inside={}).to_json()
