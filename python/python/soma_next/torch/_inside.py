@@ -392,7 +392,7 @@ def _shape(output):
     return "×".join(str(one) for one in tuple(found[0].shape))
 
 
-def architecture(graph, example=None, *, most=48):
+def architecture(graph, example=None, *, most=48, depth=0):
     """What each node is made of, as `{node: Inside}` — ready for a figure.
 
         g.figure(inside=architecture(g, x))
@@ -413,19 +413,26 @@ def architecture(graph, example=None, *, most=48):
 
     `example` is one input to run it on. Without one nothing can be traced at
     all, and every node answers nothing rather than a guess.
+
+    A composite everybody recognises — an attention block, an LSTM — is **one**
+    box and is not opened: read as its fourteen leaves it is fourteen things and
+    a diagram nobody looks at twice. `depth=` opens them, for when the inside of
+    one is exactly what is being asked about. And blocks that are the same block
+    collapse to one and a `×N`, because twelve identical transformer layers
+    drawn twelve times is a figure nobody reads.
     """
     if example is None or torch is None:
         return {}
     said = {}
     for node in graph.nodes():
-        inside = _of_node(graph.implementation(node), example)
+        inside = _of_node(graph.implementation(node), example, depth)
         if inside is None or not inside.layers:
             continue
         said[node] = _at_most(node, inside, most)
     return said
 
 
-def _of_node(held, example):
+def _of_node(held, example, depth=0):
     """One node's own `forward`, run once and watched."""
     from soma_next import Ctx
 
@@ -435,7 +442,7 @@ def _of_node(held, example):
     layers, edges, made_by, order = [], [], {}, []
     hooks = []
     for name, module in modules:
-        for path, one in module.named_modules():
+        for path, one in _worth_drawing(module, depth):
             where = f"{name}.{path}" if path else name
             hooks.append(one.register_forward_hook(_watch(where, one, layers, edges, made_by, order)))
     try:
@@ -458,32 +465,256 @@ def _of_node(held, example):
         finer, _ = _symbolic(module, None)
         if finer is not None:
             layers, edges = _spliced(layers, edges, name, finer)
-    return Inside(layers, edges, "traced", None)
+    return _repeated(_without_a_lone_input(Inside(layers, edges, "traced", None)))
 
 
 def _watch(where, one, layers, edges, made_by, order):
     """A hook that writes down what ran and what it was handed."""
 
     def saw(_module, args, output):
-        # Only the leaves: a container's box is the boxes of what is in it.
-        if any(True for _ in _module.children()):
-            return
         layers.append(Layer(where, kind_of(one), type(one).__name__, _shape(output)))
         known = False
         for before in _tensors(args):
             producer = made_by.get(id(before))
-            if producer is not None and producer != where:
-                edges.append((producer, where))
+            if producer is not None and producer[0] != where:
+                edges.append((producer[0], where))
                 known = True
         if not known and order:
             # Nothing known fed it, so whatever ran before it did — right for a
             # stack, a guess anywhere else, and the reason `fx` is preferred.
             edges.append((order[-1], where))
         for after in _tensors((output,)):
-            made_by[id(after)] = where
+            # The tensor is kept alive beside its id **on purpose**: CPython
+            # reuses an id the moment the object behind it is freed, and an
+            # intermediate that nobody holds is freed at once. Without this, a
+            # later tensor lands on a dead one's id and the figure draws an edge
+            # that never existed — which is worse than a missing one, because a
+            # missing edge looks like a missing edge.
+            made_by[id(after)] = (where, after)
         order.append(where)
 
     return saw
+
+
+#: Composites everybody recognises by name, and nobody wants to read as their
+#: parts. A `TransformerEncoderLayer` is **one** thing on a figure; drawn as its
+#: fourteen leaves it is fourteen things and a diagram nobody looks at twice.
+WHOLE = ("attention", "recurrent")
+
+
+def _worth_drawing(module, depth=0):
+    """Which of a module's parts get a box, as `[(path, module)]`.
+
+    Two rules and they are the same rule: **draw the smallest thing that is
+    still a thing**. A leaf is one. A composite everybody recognises — an
+    attention block, an LSTM — is one too, and is not opened, because reading
+    it as its parts is reading it as something nobody named.
+
+    `depth` opens the composites that many levels further, for when the inside
+    of one is exactly what is being asked about.
+    """
+    said, closed = [], []
+    for path, one in module.named_modules():
+        # `""` is the module itself, and it can be the composite: closing it
+        # has to mean *everything under it*, which an empty prefix does only
+        # if it is written as one.
+        if any(path.startswith(shut) for shut in closed):
+            continue
+        whole = kind_of(one) in WHOLE and path.count(".") >= depth
+        if whole:
+            closed.append(f"{path}." if path else "")
+        if whole or not any(True for _ in one.children()):
+            said.append((path, one))
+    return said
+
+
+def _without_a_lone_input(inside):
+    """Drops an `input` box that nothing forks from.
+
+    It earns its place when something **other** than the next layer reads it —
+    that fork is where a residual starts, and without a box to fork from the
+    skip has nowhere to begin. When one thing reads it, it is a box that says
+    *and then it began*, which every figure already says by having a top.
+    """
+    lone = {
+        one.path
+        for one in inside.layers
+        if one.label == "input" and sum(a == one.path for a, _ in inside.edges) <= 1
+    }
+    if not lone:
+        return inside
+    feeds = {a: b for a, b in inside.edges if a in lone}
+    return Inside(
+        [one for one in inside.layers if one.path not in lone],
+        [
+            (a, b)
+            for a, b in inside.edges
+            if a not in lone and b not in lone
+        ]
+        + [(a, feeds[b]) for a, b in inside.edges if b in lone and b in feeds],
+        inside.how,
+        inside.why,
+    )
+
+
+def _repeated(inside):
+    """Blocks that are the same block, collapsed to one and a count.
+
+    Twelve identical transformer layers drawn twelve times is a figure nobody
+    reads.
+
+    A **block** is whatever a numbered path component names: `body.layers.3` and
+    `body.3.norm` both belong to a third something, and that number is how every
+    container in torch says *these are the same thing repeated*. Sameness is by
+    shape and not by name — the ordered kinds, labels and relative paths of what
+    is in it — and only **consecutive** blocks collapse: two identical ones with
+    something else between them are two blocks, and saying `×2` would move one.
+    """
+    belongs = _blocks_of(inside)
+    blocks, order = {}, []
+    for one in inside.layers:
+        which = belongs[one.path]
+        if which not in blocks:
+            order.append(which)
+        blocks.setdefault(which, []).append(one)
+    # By shape and not by name: the same kinds in the same order, and where
+    # each sits relative to the block. `body.0.norm` and `body.5.norm` are the
+    # same position of two blocks and have to compare equal.
+    signature = {
+        which: tuple((one.kind, one.label, at) for at, one in enumerate(held))
+        for which, held in blocks.items()
+    }
+
+    kept, counts, folded = [], {}, {}
+    at = 0
+    while at < len(order):
+        # A repeating unit is not always one block: `Linear, ReLU, Linear, ReLU`
+        # repeats with a **period of two**, and comparing neighbours one at a
+        # time never sees it. Longest period first, so `A B A B` is two of `A B`
+        # and not four of nothing.
+        period, times = _period(order, signature, at)
+        for step in range(period):
+            which = order[at + step]
+            kept.append(which)
+            counts[which] = times
+            for gone in range(1, times):
+                for one, mine in zip(blocks[order[at + gone * period + step]], blocks[which]):
+                    folded[one.path] = mine.path
+        at += period * times
+
+    if all(count == 1 for count in counts.values()):
+        return inside
+    layers = [
+        Layer(one.path, one.kind, _times(one.label, counts[which]), one.shape)
+        for which in kept
+        for one in blocks[which]
+    ]
+    at = {one.path: which for which, one in enumerate(layers)}
+    edges, seen = [], set()
+    for a, b in inside.edges:
+        one = (folded.get(a, a), folded.get(b, b))
+        if one[0] not in at or one[1] not in at or one in seen:
+            continue
+        # Forwards only. Folding six blocks into one turns the edge from the
+        # sixth back into the first into a loop, and the `×6` already says the
+        # thing repeats — drawing it as an arrow going up says something else.
+        if at[one[0]] >= at[one[1]]:
+            continue
+        seen.add(one)
+        edges.append(one)
+    return Inside(layers, edges, inside.how, inside.why)
+
+
+def _blocks_of(inside):
+    """Which block each layer belongs to.
+
+    A numbered path says it itself. An operation that `fx` recovered does not —
+    `symbolic_trace` flattens a container, so a residual's `+` comes back named
+    at the parent — and it belongs to **the block it consumes from**. Without
+    that, the `+`s sit between the blocks and break the run, and six identical
+    residuals never collapse because no two of them are ever adjacent.
+    """
+    said = {one.path: _block(one.path) for one in inside.layers}
+    feeds = {}
+    for a, b in inside.edges:
+        feeds.setdefault(b, []).append(a)
+    for one in inside.layers:
+        if _numbered(said[one.path]):
+            continue
+        from_ = [said.get(a) for a in feeds.get(one.path, [])]
+        # Only into a block it could belong to: something under the same
+        # container. Without this guard the `Linear` after a stack of encoder
+        # layers gets adopted by the last of them, and four identical blocks
+        # come out as three and an odd one — which is exactly what happened.
+        numbered = [
+            which
+            for which in from_
+            if which and _numbered(which) and one.path.startswith(_container(which))
+        ]
+        if numbered:
+            said[one.path] = max(numbered, key=_ordinal)
+    return said
+
+
+def _container(which):
+    """What a numbered block hangs off: `body.layers.3` hangs off `body.layers.`."""
+    return which.rsplit(".", 1)[0] + "."
+
+
+def _ordinal(which):
+    """The number a block is, for picking the later of two."""
+    return int(which.rsplit(".", 1)[-1])
+
+
+def _period(order, signature, at):
+    """How long the repeating unit starting here is, and how many times it runs.
+
+    **Shortest** first: `A A A A` is four of `A` and not two of `A A`, and a
+    longer period that also fits says the same thing less usefully. `A B A B`
+    then falls out at period two, which is the case a neighbour-at-a-time scan
+    never sees at all. `(1, 1)` when nothing repeats, which is the ordinary case
+    and costs one comparison.
+    """
+    left = len(order) - at
+    for period in range(1, left // 2 + 1):
+        if not all(_numbered(order[at + step]) for step in range(period)):
+            continue
+        times = 1
+        while (at + (times + 1) * period <= len(order)) and all(
+            _numbered(order[at + times * period + step])
+            # And out of the same container: a `Linear` after a stack of them
+            # has the same shape as one of the stack and is not one of them.
+            and _container(order[at + times * period + step]) == _container(order[at + step])
+            and signature[order[at + times * period + step]] == signature[order[at + step]]
+            for step in range(period)
+        ):
+            times += 1
+        if times > 1:
+            return period, times
+    return 1, 1
+
+
+def _block(path):
+    """The numbered thing a path belongs to, or the path itself.
+
+    `body.layers.3.self_attn` belongs to `body.layers.3`; `emb` belongs to
+    itself. The first numeric component is where a container stopped naming and
+    started counting.
+    """
+    parts = path.split(".")
+    for at, one in enumerate(parts):
+        if one.isdigit():
+            return ".".join(parts[: at + 1])
+    return path
+
+
+def _numbered(which):
+    """Whether that block is one of a counted family."""
+    return which.rsplit(".", 1)[-1].isdigit()
+
+
+def _times(label, count):
+    return label if count == 1 else f"{label}  ×{count}"
 
 
 def _spliced(layers, edges, name, finer):
@@ -516,8 +747,9 @@ def _spliced(layers, edges, name, finer):
     first = [one.path for one in renamed if not any(b == one.path for _, b in inner)]
     last = [one.path for one in renamed if not any(a == one.path for a, _ in inner)]
     joined = [(a, b) for a, b in into for b in first] + [(a, b) for _, b in out_of for a in last]
+    at = min((which for which, one in enumerate(layers) if one.path in was), default=len(outside))
     return (
-        outside + renamed,
+        outside[:at] + renamed + outside[at:],
         around + inner + [(a, b) for a, b in joined if a in known or b in known] + [
             (a, b) for a, b in into for b in first
         ],

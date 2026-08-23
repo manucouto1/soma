@@ -432,3 +432,15 @@ def test_a_node_with_no_inside_is_drawn_exactly_as_before():
     g = Graph.somatize(Identity().named("a") >> Identity().named("b"))
 
     assert g.figure().to_json() == g.figure(inside={}).to_json()
+
+
+def test_a_branch_of_a_wave_can_be_opened_too():
+    # Found by looking at a picture: the wave branch had a local called `inside`
+    # of its own, so the argument never reached its children and every node in a
+    # wave drew as a bare box.
+    g = Graph.somatize(Identity().named("a") >> (Identity().named("l") | Identity().named("r")))
+    made = _inside([("0", "learned", "Linear")])
+
+    placed = _figure.boxes(json.loads(g.plan_json()), inside={"l": made, "r": made})
+
+    assert [b.node for b in placed if b.kind == "layer"] == ["l.0", "r.0"]

@@ -327,13 +327,21 @@ of GPU. `Audit(inside=True)` looks **inside** a node, because a node is often a
 whole architecture and *this node is unhealthy* is not an answer when it is
 twenty layers; findings are keyed `node.path.to.submodule`.
 
-**A node is opened up**: `architecture(g)` reads what a node is made of and
+**A node is opened up, and an architecture is a graph**: `architecture(g, x)`
+traces what a node is made of — `fx` where it can, because it sees the
+operations that are **not** modules and a residual connection is exactly one;
+a real forward where it cannot, saying so, because a residual that is missing
+looks like a residual that is not there. The unit is the **node**, since a node
+holding two modules composes them in its own `forward`.
+
 `g.figure(inside=...)` draws its box as a **frame** — the shape a `Wave` and a
-`Remote` already are, so nothing new had to be invented. It is handed over as
-**data**, so the figure never learns what torch is. It draws *everything* and
-not only what has parameters, because a picture of a sigmoid stack without the
-sigmoids is a picture of something else; the audit measures a subset, so every
-layer that can carry a flag has a box.
+`Remote` already are — and lays the inside out **by what feeds what**, so a skip
+runs down a gutter and enters from the side. Four rules make it readable: a
+kind, not a class name, decides the mark (what holds weights gets a box, a
+non-linearity gets a thinner one); a composite everybody recognises is one box
+and `depth=` opens it; blocks that are the same block collapse to `×N`; and the
+**shape is written on the layer**, because that is the only thing that makes a
+bottleneck a picture.
 
 **Where is a question the graph answers**: `overlaid` marks the ill nodes — and
 the ill **layers inside them** — on the figure, and health gets a **channel of

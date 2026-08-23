@@ -377,3 +377,104 @@ def test_the_overlay_marks_the_layer_inside_the_node(store):
 
     said = " ".join(n.text for n in marked.layout.annotations)
     assert "STALLED" in said
+
+
+def test_a_composite_everybody_recognises_is_one_box():
+    # A `TransformerEncoderLayer` read as its fourteen leaves is fourteen things
+    # and a diagram nobody looks at twice.
+    pytest.importorskip("plotly")
+    from soma_next.torch._inside import _worth_drawing
+
+    block = torch.nn.TransformerEncoderLayer(16, 4, 32, batch_first=True)
+
+    drawn = _worth_drawing(block)
+
+    assert [path for path, _ in drawn] == [""], drawn
+    assert len(_worth_drawing(block, depth=1)) > 1, "and `depth=` opens it"
+
+
+def test_blocks_that_are_the_same_block_collapse_to_one_and_a_count():
+    # Twelve identical layers drawn twelve times is a figure nobody reads.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Deep(Node):
+        def __init__(self, width=16, how_many=5):
+            self.body = torch.nn.Sequential(
+                *[
+                    m
+                    for _ in range(how_many)
+                    for m in (torch.nn.Linear(width, width), torch.nn.ReLU())
+                ]
+            )
+
+        def forward(self, x, ctx):
+            return Opaque(self.body(x))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    g = Graph.somatize(Deep().named("deep"))
+
+    made = architecture(g, torch.randn(2, 16))
+
+    said = [one.label for one in made["deep"].layers]
+    assert any("×5" in one for one in said), said
+    assert len(made["deep"].layers) < 10, "five pairs, drawn once"
+
+
+def test_what_comes_after_a_stack_is_not_adopted_by_its_last_block():
+    # Found by looking at a picture: the `Linear` after four encoder layers was
+    # being pulled into the fourth, so four identical blocks came out as three
+    # and an odd one.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Stack(Node):
+        def __init__(self, width=16):
+            self.body = torch.nn.Sequential(
+                *[torch.nn.Linear(width, width) for _ in range(4)]
+            )
+            self.out = torch.nn.Linear(width, 2)
+
+        def forward(self, x, ctx):
+            return Opaque(self.out(self.body(x)))
+
+        def parameters(self):
+            return list(self.body.parameters()) + list(self.out.parameters())
+
+    g = Graph.somatize(Stack().named("net"))
+
+    made = architecture(g, torch.randn(2, 16))
+
+    said = [one.label for one in made["net"].layers]
+    assert said == ["Linear  ×4", "Linear"], said
+
+
+def test_a_tensor_nobody_holds_cannot_invent_an_edge():
+    # CPython reuses an id the moment the object behind it is freed, and an
+    # intermediate nobody holds is freed at once. A later tensor landing on a
+    # dead one's id draws an edge that never existed — worse than a missing one,
+    # because a missing edge looks like a missing edge.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Apart(Node):
+        """Two halves with something functional between them, so the second's
+        input has no producer any hook saw."""
+
+        def __init__(self, width=16):
+            self.first = torch.nn.Linear(width, width)
+            self.second = torch.nn.Linear(width, 2)
+
+        def forward(self, x, ctx):
+            return Opaque(self.second(self.first(x).relu().mean(0, keepdim=True)))
+
+        def parameters(self):
+            return list(self.first.parameters()) + list(self.second.parameters())
+
+    g = Graph.somatize(Apart().named("net"))
+
+    made = architecture(g, torch.randn(4, 16))
+
+    assert made["net"].edges == [("first", "second")], made["net"].edges

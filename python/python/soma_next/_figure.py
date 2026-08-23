@@ -77,9 +77,15 @@ written them over its own outline."""
 LAYER_H = 24.0
 """One layer of an expanded node."""
 
-LAYER_GAP = 5.0
-"""Between two of them. Small: they are a stack and not a sequence, and an
-arrow does not go between them."""
+LAYER_GAP = 16.0
+"""Between two rows of an architecture. An arrow has to fit in here."""
+
+GUTTER = 22.0
+"""The lane down the side of an opened node where a **skip** runs.
+
+Inside the frame and not outside it, because a skip belongs to the architecture
+and drawing it out in the graph's own margin would say it belonged to the
+graph."""
 
 MIN_W = 96.0
 """How narrow a node's box may get, however short its name."""
@@ -132,6 +138,7 @@ class Box:
     label: str | None = None
     mark: str | None = None
     shape: str | None = None
+    row: int | None = None
 
     @property
     def cx(self) -> float:
@@ -264,6 +271,21 @@ def figure(graph, overlay=None, inside=None):
                 _text(box.x + FRAME_PAD, box.y + FRAME_HEAD / 2, box.label, ink, left=True)
             )
 
+    # What a node is made of feeds each other too, and that is the only thing
+    # that can tell a residual from a stack.
+    for node, held in (inside or {}).items():
+        where_in = {box.node: box for box in placed if box.kind == "layer"}
+        frame = next((box for box in placed if box.node == node), None)
+        if frame is None:
+            continue
+        for a, b in held.edges:
+            from_, to = where_in.get(f"{node}.{a}"), where_in.get(f"{node}.{b}")
+            if from_ is None or to is None:
+                continue
+            around, head = _inner_edge(from_, to, frame)
+            shapes.extend(around)
+            notes.append(head)
+
     # Outside every box, so a routed edge never has to guess which way is clear.
     span = (min(box.x for box in placed), max(box.x + box.w for box in placed))
     lanes, boxed = {}, list(where.values())
@@ -362,11 +384,13 @@ def _place(plan, x, y, labels, out, inside=None):
             top += h + GAP_Y
     else:
         out.append(Box("wave", x, y, width, height, label="wave"))
-        left, inside = x + FRAME_PAD, y + FRAME_HEAD
+        # `under` and not `inside`, which is the argument: a wave's branches are
+        # nodes and every one of them may be opened up too.
+        left, under = x + FRAME_PAD, y + FRAME_HEAD
         room = height - FRAME_HEAD - FRAME_PAD
         for child in body:
-            w, h = _measure(child, labels)
-            _place(child, left, inside + (room - h) / 2, labels, out)
+            w, h = _measure(child, labels, inside)
+            _place(child, left, under + (room - h) / 2, labels, out, inside)
             left += w + GAP_X
 
 
@@ -391,7 +415,7 @@ def _node_size(node, labels, inside=None):
         return _width(node, labels), tall
     rows = _rows_of(held)
     return (
-        max(_width(node, labels), _inner_width(held) + 2 * FRAME_PAD),
+        max(_width(node, labels), _inner_width(held) + 2 * FRAME_PAD + GUTTER),
         tall + rows * LAYER_H + max(rows - 1, 0) * LAYER_GAP + FRAME_PAD,
     )
 
@@ -421,7 +445,7 @@ def _stack(node, inside, x, y, width, labels, out):
         out.append(
             Box(
                 "layer",
-                x + FRAME_PAD + across,
+                x + FRAME_PAD + GUTTER + across,
                 top + row * (LAYER_H + LAYER_GAP) + (LAYER_H - tall) / 2,
                 wide,
                 tall,
@@ -429,6 +453,7 @@ def _stack(node, inside, x, y, width, labels, out):
                 label=one.label,
                 mark=one.kind,
                 shape=one.shape,
+                row=row,
             )
         )
 
@@ -699,7 +724,40 @@ def _routed(source, target, span, apart):
     )
 
 
-def _arrow(ax, ay, x, y):
+def _inner_edge(source, target, frame):
+    """One edge between two layers of the same node.
+
+    Straight down when they are next to each other; **out into the gutter** when
+    the edge jumps a row, which is what a skip connection is. Drawing a skip as
+    a long straight arrow through everything between its ends is drawing an
+    arrow into each of them.
+    """
+    # By **row** and not by how far apart they look: a non-linearity is drawn
+    # shorter than a Linear, so two neighbours can be further apart in pixels
+    # than a skip that jumps one — and measuring the picture instead of the
+    # graph got exactly that wrong.
+    if target.row is not None and source.row is not None and target.row - source.row <= 1:
+        return [], _arrow(source.cx, source.y + source.h, target.cx, target.y)
+
+    x0, y0 = source.cx, source.y + source.h
+    # In through the **side**, because a skip does not come from above: coming
+    # down onto the top of a box is what a step does.
+    into, y1 = target.x, target.cy
+    lane = frame.x + FRAME_PAD + GUTTER / 2
+    path = (
+        f"M {x0},{y0} "
+        f"C {x0},{y0 + BEND} {lane},{y0} {lane},{y0 + BEND} "
+        f"L {lane},{y1 - BEND} "
+        f"C {lane},{y1} {lane},{y1} {into - HEAD},{y1}"
+    )
+    return (
+        [{"type": "path", "path": path, "xref": "x", "yref": "y",
+          "line": {"color": _theme.SERIES["took"], "width": 1.2}, "layer": "below"}],
+        _arrow(into - HEAD, y1, into, y1, colour=_theme.SERIES["took"]),
+    )
+
+
+def _arrow(ax, ay, x, y, colour=None):
     """The head, and whatever straight run carries it."""
     return {
         "x": x,
@@ -715,7 +773,7 @@ def _arrow(ax, ay, x, y):
         "arrowhead": 2,
         "arrowsize": 1,
         "arrowwidth": 1.2,
-        "arrowcolor": _theme.MUTED,
+        "arrowcolor": colour or _theme.MUTED,
     }
 
 
