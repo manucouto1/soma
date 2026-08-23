@@ -10,6 +10,7 @@ example that fetches a dataset is an example that stops working.
 | [2 — Watching a run](02-watching-a-run.ipynb) | `watching=`, a `Recorder`, reading a run back, `progress` / `spent` / `Live`, the cache seen, and a node on a real worker |
 | [3 — Training](03-training.ipynb) | a `Trainer`, `Opaque`, the loss drawn live, gradient accumulation, freezing, and exporting what a run learnt |
 | [4 — A study](04-a-study.ipynb) | `Space` / `Sampler` / `Pruner`, the distributed loop, a table of results, hyper-parameter influence and parallel coordinates |
+| [5 — The health of a network](05-the-health-of-a-network.ipynb) | `auditing=`, each pathology built and caught, and the invariant: a diagnosis taken from the record, argued with by moving a bound, and taken again |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.
@@ -35,7 +36,7 @@ pip install ipywidgets                # optional: `Live` redraws in place with i
 extension, so a change in `python/src/` that was not rebuilt means a notebook
 that is green about code that is not the code.
 
-Notebook 3 and 4 need `torch`. Notebook 2 starts a real worker process, which
+Notebooks 3, 4 and 5 need `torch`. Notebook 2 starts a real worker process, which
 needs nothing but the same interpreter. Notebooks 3 and 4 seed torch, so
 re-executing them gives back the numbers that are stored here.
 
@@ -56,19 +57,14 @@ EOF
 
 ## What is not here, and why
 
-**A health audit** — gradients dying or exploding, a layer that is saturated,
-channels nobody is updating. There is no notebook for it because **there is no
-such thing yet**: it is CU21, the third of the three things observability was
-split into, and writing an example of it would be writing an example of code
-that does not exist.
+**The static half of health.** Notebook 5 diagnoses what *happened*, which needs
+a training run. What a graph can be told about itself **before a GPU is spent** —
+signal propagation at init, where a normalisation layer is missing, the zero-cost
+proxies that rank architectures without training them — is the next slice. It is
+a different question with different literature behind it, and pretending the two
+are one is how a framework ends up scoring an architecture with a number that
+mostly measures its parameter count.
 
-What notebook 2 and 3 show is the row below it: the **record**, which is what a
-diagnosis will be made of. The line between them is not a matter of taste and it
-is already written down as an invariant — *a diagnosis has to be reproducible
-from the stored record, without training again* — so everything a health audit
-will need is either in the record already or is the reason CU21 is a slice of
-its own.
-
-Also not here: **`ctx.saw(...)`**, a node speaking for itself. The engine can see
-which node ran and how long it took; it cannot see a gradient norm, and the node
-can. That is what CU21 opens with.
+**The overlay**: the graph figure from notebook 1 coloured by what notebook 5's
+flags say. It needs a channel of its own, because in every other figure here hue
+says *where a node runs* and never good-or-bad.

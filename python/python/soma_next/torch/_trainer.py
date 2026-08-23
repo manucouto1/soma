@@ -161,6 +161,7 @@ class Trainer:
         store=None,
         workers=None,
         watching=None,
+        auditing=None,
     ):
         trains = dict(trains or {})
         _check_the_group(every, micro)
@@ -185,6 +186,11 @@ class Trainer:
         # They have to accept the same shapes or `watching=` means two things.
         self.watching = watching
         self._telling = _telling(watching)
+        # Measuring is opt-in and it is not free: hooks on every node, a handful
+        # of reductions a step, and an SVD on a cadence.
+        self.audit = _auditing(auditing)
+        if self.audit is not None:
+            self.audit.watch(graph)
         self.trains = trains
         self.theirs = theirs
         self.every = every
@@ -268,6 +274,7 @@ class Trainer:
         if self._closes():
             self.optimizer.step()
             self._said("updated")
+        self._audited()
         self._counted()
         return self._said_the_loss(loss)
 
@@ -306,6 +313,7 @@ class Trainer:
         if self.optimizer is not None and self._closes():
             self.optimizer.step()
             self._said("updated")
+        self._audited()
         self._counted()
         return self._said_the_loss(loss)
 
@@ -322,6 +330,19 @@ class Trainer:
         """
         if self._telling is not None:
             self._telling({"fact": kind, **{k: str(v) for k, v in fields.items()}})
+
+    def _audited(self):
+        """What the audit saw this step, out through the same door as the loss.
+
+        **After the optimizer moved**, which is the only moment when this
+        step's update exists: the ratio of update to weight is measured against
+        the weights it just changed, and asking before the step would measure
+        the previous one.
+        """
+        if self.audit is None:
+            return
+        for one in self.audit.observed(self.graph):
+            self._said(one.pop("fact"), **one)
 
     def _said_the_loss(self, loss):
         """The loss, said and then returned. Whole, as `step` promises: divided
@@ -672,6 +693,22 @@ def _telling(watching):
     raise ValueError(
         "`watching` takes a Recorder, anything callable, or a list of them; "
         f"what arrived is a {type(watching).__name__}"
+    )
+
+
+def _auditing(auditing):
+    """Whatever `auditing=` was given, as an `Audit` or `None`."""
+    from soma_next.torch._audit import Audit
+
+    if auditing is None or auditing is False:
+        return None
+    if auditing is True:
+        return Audit()
+    if isinstance(auditing, Audit):
+        return auditing
+    raise ValueError(
+        "`auditing` takes True, or an Audit if you want to choose a cadence; "
+        f"what arrived is a {type(auditing).__name__}"
     )
 
 

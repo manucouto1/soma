@@ -6,6 +6,7 @@
 //! a domain rule ends up written here, it is in the wrong place.
 
 mod codec;
+mod health;
 mod node;
 mod remote;
 mod store;
@@ -528,11 +529,14 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<store::PyStore>()?;
     m.add_class::<store::PyBound>()?;
     m.add_class::<watcher::PyRecorder>()?;
+    m.add_class::<health::PyThresholds>()?;
     m.add_class::<study::PyPartition>()?;
     m.add_class::<study::PyPruner>()?;
     m.add_class::<study::PySampler>()?;
     m.add_class::<study::PySpace>()?;
     m.add_class::<study::PyPoint>()?;
+    m.add_function(wrap_pyfunction!(health::verdict, m)?)?;
+    m.add_function(wrap_pyfunction!(health::about, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;
     m.add_function(wrap_pyfunction!(remote::serve, m)?)?;

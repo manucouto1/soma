@@ -114,11 +114,11 @@ two real bugs were found.
 
 ## Status
 
-Twenty use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty-one use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
-itself, and the record of what happened. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+itself, the record of what happened, and the health of a network. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
 another machine, where a **trainer travels to stand beside the node** and the
@@ -297,5 +297,32 @@ which the original names as fANOVA-deferred and never wrote — beside the other
 readers. `coordinates` is hand-drawn out of splines because plotly's `Parcoords`
 only draws straight segments; it trades brushing for a trial reading as one
 curve. In all three, pruned and finished are never ranked together.
+
+**CU21 is the third row: the diagnosis, and it says it is an opinion.** A crate
+`health/` with **no dependencies at all, not even the core's** — numbers in,
+flags out, no measuring and no clock — which is what makes CU19's invariant a
+test rather than an aspiration: *a diagnosis has to be reproducible from the
+stored record, without training again*. Change a bound and ask again; the record
+has not moved, and an argument about a threshold costs a scan.
+
+It inherits the original's taxonomy with its two findings, which are knowledge
+and not design: **`DEAD` and `SATURATED` read the maximum** over a window and
+never the mean — a layer that dies one step in four is dead — and **dormant is
+not dead**. It adds three from the literature: `STALLED`/`OVERSTEPPING` from the
+update-to-weight ratio, which the original measured and never said anything
+about and which lands a healthy layer at ~1e-3; and `LOSING_PLASTICITY` as a
+**conjunction**, because weights growing or units going quiet alone is a network
+that is training.
+
+`NARROWING` is in the vocabulary and **off by default, because it was measured
+and the measurement did not support it**: the published monitor's certificate is
+the deviation from a healthy baseline and one run has none. See
+`health/tests/narrowing.py`. The metric is recorded and drawn; the alarm was not
+invented.
+
+Measuring is `soma_next.torch`'s: `Trainer(..., auditing=True)` hooks the nodes
+and emits `health` facts through the same `watching=`. Thresholds never go near
+it — baked into the measurement, they would make an argument cost an afternoon
+of GPU. What is left of health is the **static** half, before a GPU is spent.
 
 See the distribution report for the full order.

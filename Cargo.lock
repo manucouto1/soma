@@ -834,6 +834,7 @@ dependencies = [
  "pyo3",
  "serde_json",
  "soma-next-core",
+ "soma-next-health",
  "soma-next-store",
  "soma-next-study",
  "soma-next-transport",
