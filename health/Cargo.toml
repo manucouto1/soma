@@ -1,0 +1,14 @@
+[package]
+name = "soma-next-health"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# No dependencies, and not even the core's, for the same reason `study` has
+# none: a verdict is arithmetic over numbers somebody else measured. It does not
+# know what a graph is, what a tensor is, or that torch exists — and that is
+# what lets the same numbers be judged again tomorrow with other thresholds.
+
+[[test]]
+name = "unit"
+path = "tests/unit/main.rs"

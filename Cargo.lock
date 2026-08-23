@@ -824,6 +824,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "soma-next-health"
+version = "0.1.0"
+
+[[package]]
 name = "soma-next-python"
 version = "0.1.0"
 dependencies = [

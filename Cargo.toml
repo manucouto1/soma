@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "python", "store", "study", "transport"]
+members = ["core", "health", "python", "store", "study", "transport"]
 resolver = "3"
 
 [workspace.package]
