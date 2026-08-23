@@ -22,17 +22,22 @@
 //! In the **record**, which a scan already carries:
 //!
 //! ```text
-//! run     = the id this run was given, or the one it was handed
-//! forward = which one, from zero
-//! took_us = how long all of it took
-//! state   = ok | broke
-//! nodes   = how many ran
+//! run            = the id this run was given, or the one it was handed
+//! forward        = which one, from zero
+//! took_us        = how long all of it took
+//! state          = ok | broke
+//! nodes          = how many ran
+//! <kind>.<field> = whatever was asked for with `summarising`
 //! ```
 //!
 //! In the **blob**, for whoever wants the detail: every fact, flattened, in the
 //! order it arrived. So "how is it going" costs one scan and no fetches, and
 //! only the detail is paid for — the same split, for the same reason, as a
 //! trial's record.
+//!
+//! The last row is what keeps a **training curve** on the cheap side of that
+//! line: ten thousand losses read one blob at a time is ten thousand round
+//! trips, and it is the one number somebody wants from every step.
 //!
 //! # Two ways in, and they are not the same question
 //!
@@ -79,6 +84,9 @@ struct Pending {
 pub struct Recorder {
     store: Arc<dyn Store>,
     run: String,
+    /// Which kinds of fact are worth having in the record itself and not only
+    /// in the blob. See [`summarising`](Self::summarising).
+    summarising: Vec<String>,
     pending: Mutex<Pending>,
 }
 
@@ -98,8 +106,31 @@ impl Recorder {
         Self {
             store,
             run: run.into(),
+            summarising: Vec::new(),
             pending: Mutex::new(Pending::default()),
         }
+    }
+
+    /// The same recorder, with these kinds of fact carried **in the record** and
+    /// not only in the blob, as `<kind>.<field>`.
+    ///
+    /// It is the lesson CU18 already paid for. A trial keeps its score beside
+    /// its configuration in the record, so a sampler rebuilds a whole history
+    /// with **one scan and no fetches**, and only a pruner comparing curves pays
+    /// for blobs. The same question is asked here of every training curve ever
+    /// drawn: ten thousand steps read one at a time is ten thousand round trips
+    /// against a bucket, and the number wanted from each of them is one.
+    ///
+    /// Which kinds those are is the caller's, exactly as the vocabulary is:
+    /// `Recorder::over(store).summarising(["loss"])` is what a training run
+    /// wants, and this crate does not learn what a loss is to know it.
+    ///
+    /// The **last** fact of each kind in a `forward` is the one carried. A
+    /// forward has one loss; if it somehow had two, the one that stands is the
+    /// one that was said last.
+    pub fn summarising(mut self, kinds: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.summarising = kinds.into_iter().map(Into::into).collect();
+        self
     }
 
     /// What this run is called, which is the first half of every name it writes.
@@ -145,8 +176,11 @@ impl Recorder {
             Err(why) => return eprintln!("what happened could not be written down: {why}"),
         };
         let written = self.store.put(&blob).and_then(|digest| {
-            self.store
-                .bind(&self.name(pending.which), &digest, meta(&self.run, pending))
+            self.store.bind(
+                &self.name(pending.which),
+                &digest,
+                meta(&self.run, &self.summarising, pending),
+            )
         });
         if let Err(why) = written {
             eprintln!("what happened could not be kept: {why}");
@@ -180,7 +214,7 @@ impl Watcher for Recorder {
 /// Read back off the facts rather than counted as they arrive: a record that is
 /// rewritten has to say the same thing about the same facts however many times
 /// it is written, and a counter that only goes up would not.
-fn meta(run: &str, pending: &Pending) -> Meta {
+fn meta(run: &str, summarising: &[String], pending: &Pending) -> Meta {
     let how_many = |kind: &str| pending.facts.iter().filter(|(one, _)| one == kind).count();
     let mut meta = vec![
         ("run".to_string(), run.to_string()),
@@ -196,6 +230,14 @@ fn meta(run: &str, pending: &Pending) -> Meta {
     ];
     if let Some(took) = field_of(&pending.facts, "finished", "took_us") {
         meta.push(("took_us".to_string(), took.to_string()));
+    }
+    for kind in summarising {
+        let Some((_, fields)) = pending.facts.iter().rev().find(|(one, _)| one == kind) else {
+            continue;
+        };
+        for (name, what) in fields {
+            meta.push((format!("{kind}.{name}"), what.clone()));
+        }
     }
     meta
 }

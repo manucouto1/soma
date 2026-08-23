@@ -228,3 +228,51 @@ fn rewriting_a_record_says_the_same_thing_about_the_same_facts() {
         5
     );
 }
+
+// ── What is worth having in the record and not only in the blob ──
+
+#[test]
+fn what_was_asked_to_be_summarised_is_in_the_record_itself() {
+    // The lesson CU18 already paid for: ten thousand losses read one blob at a
+    // time is ten thousand round trips, and the number wanted from each of them
+    // is one.
+    let (store, _where) = store();
+    let recorder = Recorder::over(store.clone()).summarising(["loss"]);
+
+    recorder.saw(&ran("body"));
+    recorder.saw(&over(9));
+    recorder.said("loss", vec![("value".into(), "0.25".into())]);
+
+    let said = said(store.as_ref(), &format!("run/{}/0", recorder.run()));
+    assert_eq!(said["loss.value"], "0.25");
+}
+
+#[test]
+fn what_was_not_asked_for_stays_in_the_blob() {
+    let (store, _where) = store();
+    let recorder = Recorder::over(store.clone());
+
+    recorder.saw(&over(9));
+    recorder.said("loss", vec![("value".into(), "0.25".into())]);
+
+    let said = said(store.as_ref(), &format!("run/{}/0", recorder.run()));
+    assert!(!said.contains_key("loss.value"));
+    assert_eq!(
+        detail(store.as_ref(), &format!("run/{}/0", recorder.run())).len(),
+        2,
+        "and it is still there, where the detail goes"
+    );
+}
+
+#[test]
+fn a_summarised_kind_said_twice_leaves_the_last_one_standing() {
+    let (store, _where) = store();
+    let recorder = Recorder::over(store.clone()).summarising(["loss"]);
+
+    recorder.saw(&over(1));
+    recorder.said("loss", vec![("value".into(), "1.0".into())]);
+    recorder.said("loss", vec![("value".into(), "0.5".into())]);
+
+    let said = said(store.as_ref(), &format!("run/{}/0", recorder.run()));
+    assert_eq!(said["loss.value"], "0.5");
+}

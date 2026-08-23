@@ -48,14 +48,28 @@ impl PyRecorder {
     /// A recorder over this store. Without a `run` it makes a name up, and
     /// [`run`](Self::run) says which — a `forward` in a notebook has no reason
     /// to invent one and still has to be findable afterwards.
+    ///
+    /// `summarising` names the kinds of fact that go **into the record** as
+    /// `<kind>.<field>` and not only into its blob, which is what makes reading
+    /// them back cost one scan instead of one fetch per `forward`::
+    ///
+    ///     Recorder(store, run="tuesday", summarising=["loss"])
+    ///
+    /// That is what a training run wants, and it is said here rather than
+    /// guessed there: `loss` is this side's word, and the store does not learn
+    /// it.
     #[new]
-    #[pyo3(signature = (store, *, run = None))]
-    fn new(store: &PyStore, run: Option<String>) -> Self {
+    #[pyo3(signature = (store, *, run = None, summarising = None))]
+    fn new(store: &PyStore, run: Option<String>, summarising: Option<Vec<String>>) -> Self {
         let store = store.shared();
+        let recorder = match run {
+            Some(run) => Recorder::named(store, run),
+            None => Recorder::over(store),
+        };
         Self {
-            inner: Arc::new(match run {
-                Some(run) => Recorder::named(store, run),
-                None => Recorder::over(store),
+            inner: Arc::new(match summarising {
+                Some(kinds) => recorder.summarising(kinds),
+                None => recorder,
             }),
         }
     }
