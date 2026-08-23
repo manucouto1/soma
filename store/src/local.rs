@@ -2,9 +2,9 @@
 //!
 //! No dependencies beyond hashing and a text format, because a shared folder is
 //! what there already is — a network mount, a scratch directory, `/tmp` in a
-//! test. S3 arrives the day there is a MinIO to point at, as another
-//! implementation of the same trait and in another crate: HTTP has no business
-//! here.
+//! test. [`Bucket`](crate::Bucket) is the other one, for a cluster with no
+//! shared mount, and it lays its bytes out exactly like this — so a directory
+//! can be copied onto a bucket and back and neither end has to know.
 //!
 //! ```text
 //! <root>/blobs/ab/sha256_abc…    the bytes, named by their content
@@ -21,12 +21,12 @@
 //! filesystem takes every string a caller can invent. The name itself is inside
 //! the record, so `grep` still finds it.
 
+use crate::store::{read_record, record};
 use crate::{Bound, Digest, Meta, Store, StoreError};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// So no two writes of this process pick the same landing spot. A counter and
 /// not a clock: the pid separates processes, but two threads can read the same
@@ -163,30 +163,6 @@ fn read_dir(at: &Path) -> Result<Vec<PathBuf>, StoreError> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(io_error(e)),
     }
-}
-
-fn read_record(bytes: &[u8]) -> Result<Bound, StoreError> {
-    serde_json::from_slice(bytes)
-        .map_err(|e| StoreError::Corrupt(format!("that record cannot be read: {e}")))
-}
-
-/// One record, in the JSON it is kept as.
-///
-/// Readable with `cat`, which was a requirement before it was a format: a store
-/// whose truth you cannot look at is one you cannot debug at three in the
-/// morning.
-fn record(name: &str, digest: &Digest, meta: Meta) -> Result<Vec<u8>, StoreError> {
-    let bound = Bound {
-        name: name.to_string(),
-        digest: digest.clone(),
-        meta,
-        when: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|since| since.as_secs())
-            .unwrap_or(0),
-    };
-    serde_json::to_vec_pretty(&bound)
-        .map_err(|e| StoreError::Corrupt(format!("that record cannot be written: {e}")))
 }
 
 fn io_error(e: io::Error) -> StoreError {

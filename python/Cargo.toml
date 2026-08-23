@@ -11,7 +11,9 @@ crate-type = ["cdylib"]
 [dependencies]
 soma-next-core = { workspace = true, features = ["serde"] }
 soma-next-transport = { path = "../transport" }
-soma-next-store = { workspace = true }
+# With `s3`, because a study spread over machines with no shared mount is
+# exactly the case `soma_next.Store.on_bucket` exists for.
+soma-next-store = { workspace = true, features = ["s3"] }
 soma-next-study = { path = "../study" }
 # The plan travels to Python as data so that whoever draws it does not have
 # to parse a `Debug`. JSON and not MessagePack: the reader is `json.loads`,

@@ -49,9 +49,13 @@
 mod cache;
 mod digest;
 mod local;
+#[cfg(feature = "s3")]
+mod s3;
 mod store;
 
 pub use cache::{Cache, bytes_of, value_of};
 pub use digest::Digest;
 pub use local::Local;
+#[cfg(feature = "s3")]
+pub use s3::{Bucket, Credentials, UrlStyle};
 pub use store::{Bound, Meta, Store, StoreError};

@@ -81,6 +81,35 @@ pub trait Store: Send + Sync {
     fn bound(&self) -> Result<Vec<Bound>, StoreError>;
 }
 
+/// One record, in the JSON it is kept as.
+///
+/// Readable with `cat`, which was a requirement before it was a format: a store
+/// whose truth you cannot look at is one you cannot debug at three in the
+/// morning.
+///
+/// **Here and not in an implementor**, because it is what makes a directory and
+/// a bucket the same store: two copies of this would drift, and the day they did
+/// nothing would fail — the records would simply stop being each other's.
+pub(crate) fn record(name: &str, digest: &Digest, meta: Meta) -> Result<Vec<u8>, StoreError> {
+    let bound = Bound {
+        name: name.to_string(),
+        digest: digest.clone(),
+        meta,
+        when: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or(0),
+    };
+    serde_json::to_vec_pretty(&bound)
+        .map_err(|e| StoreError::Corrupt(format!("that record cannot be written: {e}")))
+}
+
+/// The other direction.
+pub(crate) fn read_record(bytes: &[u8]) -> Result<Bound, StoreError> {
+    serde_json::from_slice(bytes)
+        .map_err(|e| StoreError::Corrupt(format!("that record cannot be read: {e}")))
+}
+
 /// Why something could not be kept, or found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {

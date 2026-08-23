@@ -18,6 +18,18 @@ sha2 = "0.10"
 # reasons — measured there — but a separate decision: a wire has two ends from
 # the same build, and a store outlives every binary that wrote into it.
 rmp-serde = "1"
+# Only for `s3`, and optional so that nothing else pays for them. **Sans-IO**:
+# `rusty-s3` signs and does not fetch, which is what keeps `Store` synchronous —
+# an SDK with a runtime inside would have made the trait async, and that is the
+# objection that has kept a bus out of this repo twice.
+rusty-s3 = { version = "0.10", optional = true }
+ureq = { version = "3", optional = true }
+
+[features]
+# Off by default: a bucket drags in TLS and an XML parser, some eighty crates,
+# and a directory needs none of it. The same shape as the core's optional
+# `serde` — `cargo build -p soma-next-store` still compiles with neither.
+s3 = ["dep:rusty-s3", "dep:ureq"]
 
 [dev-dependencies]
 # The tests are another crate and see only the public API — including the core's

@@ -36,12 +36,20 @@ use pyo3::types::{PyBytes, PyDict};
 // of them has to give: two same-named types in scope is the same trap the
 // project's rules warn about for traits, one level down.
 use soma_next_store::Bound as Record;
-use soma_next_store::{Digest, Local, Meta, Store, bytes_of, value_of};
+use soma_next_store::{
+    Bucket, Credentials, Digest, Local, Meta, Store, UrlStyle, bytes_of, value_of,
+};
 
-/// A directory that keeps bytes by their content, and names that point at them.
+/// Something that keeps bytes by their content, and names that point at them.
+///
+/// A `dyn Store` and not a `Local`, since there are two: a directory and a
+/// bucket. Which one this is does not reach the rest of Python — `take`,
+/// `report` and `gather` take a store and never ask what kind it is, and that is
+/// what lets a study run over a shared folder here and over S3 there without a
+/// line of it changing.
 #[pyclass(name = "Store", module = "soma_next._soma_next", frozen)]
 pub struct PyStore {
-    inner: Local,
+    inner: Box<dyn Store>,
     /// Only for the `repr`: a store does not say where it is.
     where_: String,
 }
@@ -52,8 +60,55 @@ impl PyStore {
     #[new]
     fn new(where_: &str) -> PyResult<Self> {
         Ok(Self {
-            inner: Local::at(where_).map_err(failed)?,
+            inner: Box::new(Local::at(where_).map_err(failed)?),
             where_: where_.to_string(),
+        })
+    }
+
+    /// The same store, on a bucket: S3, MinIO, R2 — for a cluster where there is
+    /// no directory two machines can both see.
+    ///
+    /// `hosted=True` puts the bucket in the host name, which is what AWS wants
+    /// for anything made recently; the default puts it in the path, which is
+    /// what MinIO wants. Without `key`/`secret` it reads `AWS_ACCESS_KEY_ID` and
+    /// `AWS_SECRET_ACCESS_KEY`, which is where everything else looks.
+    ///
+    /// **It talks to the endpoint before returning**: an endpoint that takes a
+    /// conditional write and writes anyway would hand every trial to every
+    /// machine and never say so, so it is tried rather than assumed.
+    #[staticmethod]
+    #[pyo3(signature = (endpoint, bucket, *, region = "us-east-1", key = None, secret = None, hosted = false))]
+    fn on_bucket(
+        endpoint: &str,
+        bucket: &str,
+        region: &str,
+        key: Option<String>,
+        secret: Option<String>,
+        hosted: bool,
+    ) -> PyResult<Self> {
+        let named = |whose: &str, given: Option<String>| -> PyResult<String> {
+            given.map(Ok).unwrap_or_else(|| {
+                std::env::var(whose).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "no `{whose}` here and none was given: a bucket needs credentials"
+                    ))
+                })
+            })
+        };
+        let credentials = Credentials::new(
+            named("AWS_ACCESS_KEY_ID", key)?,
+            named("AWS_SECRET_ACCESS_KEY", secret)?,
+        );
+        let style = if hosted {
+            UrlStyle::VirtualHost
+        } else {
+            UrlStyle::Path
+        };
+        Ok(Self {
+            inner: Box::new(
+                Bucket::at(endpoint, bucket, region, style, credentials).map_err(failed)?,
+            ),
+            where_: format!("{endpoint}/{bucket}"),
         })
     }
 

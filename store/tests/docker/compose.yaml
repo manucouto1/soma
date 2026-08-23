@@ -1,0 +1,40 @@
+# A bucket that is not a metaphor, for the half of the contract suite that needs
+# one. It lives beside the tests it exists for, and nowhere else uses it.
+#
+#   docker compose -f store/tests/docker/compose.yaml up -d
+#   SOMA_S3=http://127.0.0.1:9000 cargo test -p soma-next-store --features s3
+#
+# MinIO and not a fake, on purpose: what is being checked is that a conditional
+# write is really conditional, and a fake would answer whatever it was written
+# to answer. That is the one thing a stub cannot prove.
+
+name: soma-bucket
+
+services:
+  minio:
+    # Pinned, like the toolchain and like torch. `If-None-Match` on PUT is not
+    # ancient in MinIO, and an older tag would fail the check `Bucket::at` makes
+    # — correctly, which is exactly the confusing way to find out.
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: somanext
+      MINIO_ROOT_PASSWORD: somanextsecret
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # The bucket itself, made once and then gone. A store does not create its own
+  # bucket: that is the administrator's, the same way a directory's parent is.
+  bucket:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - "mc alias set here http://minio:9000 somanext somanextsecret && mc mb --ignore-existing here/soma"

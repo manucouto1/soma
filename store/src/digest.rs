@@ -39,7 +39,12 @@ impl Digest {
     /// would land in a single `sh/`, which is the one directory this split
     /// exists to avoid. The file keeps the whole thing, so the same hex under
     /// two algorithms is still two files.
-    pub(crate) fn path(&self) -> (String, String) {
+    ///
+    /// **Public because it is a fact shared between implementors and not
+    /// `Local`'s private business**: a directory and a bucket lay their bytes
+    /// out the same way, which is what lets one be copied into the other, and
+    /// two copies of this split would drift and quietly end that.
+    pub fn path(&self) -> (String, String) {
         let hash = flatten(self.0.rsplit(':').next().unwrap_or(&self.0));
         let head = hash.get(..2).unwrap_or(hash.as_str()).to_string();
         (head, flatten(&self.0))
