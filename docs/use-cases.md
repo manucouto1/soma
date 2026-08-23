@@ -3701,6 +3701,51 @@ else's and goes into the one that closed last, rewriting it. A store already
 does that — a name is a question and its answer can be refreshed — and it is
 what a trial's record has done since CU18.
 
+### Reading it back, which is a price list
+
+A record written and never read is not a record. `soma_next.record` is the other
+half, and — like `gather` and `take` — it is **functions over a `Store`**: what
+is being read is a folder, and a class around one would be the store with a
+longer name.
+
+| call | what it answers | what it costs |
+|---|---|---|
+| `runs(store)` | what is in here at all | one scan |
+| `forwards(store, run=…)` | step by step: state, time, nodes, loss | one scan |
+| `curve(store, run=…)` | the series somebody plots | one scan\* |
+| `facts(store, run=…, forward=n)` | everything one step did | one fetch |
+| `nodes(store, run=…, last=N)` | who spent the time, added up | a fetch per `forward` |
+
+Everything a progress view asks for is on the free side, and the per-node
+breakdown — the expensive one — is asked once rather than once a step.
+
+\* **only for what the recorder was told to summarise.** That is the one thing
+this made the writer learn:
+
+```python
+Recorder(store, run="tuesday", summarising=["loss"])
+```
+
+Named kinds go into the record itself as `<kind>.<field>` and not only into the
+blob. It is the lesson CU18 already paid for — a trial keeps its score beside
+its configuration so a sampler rebuilds a history with one scan and no fetches —
+and the same question is asked of every training curve ever drawn: ten thousand
+losses read one blob at a time is ten thousand round trips, and the number
+wanted from each is one. Which kinds those are is the **caller's**, so the store
+still does not learn what a loss is.
+
+Without it `curve` still answers, and `curve_costs` says which of the two it
+did. A reader that is quietly a thousand times slower is worse than one that
+says so.
+
+### Live and read back are two paths, and that is not a duplication
+
+While a run is going, what you want arrives at `watching=` and costs nothing to
+get. When it is over — or when it is **another machine's**, where there is no
+connection at all — a scan is the only thing there is. Both answer in the same
+shape, because a fact read back is the very dict a watcher was handed:
+`Fact::flattened`, once, for everybody.
+
 ### What is not in it
 
 **`ctx.saw(...)`** — a node speaking for itself. The engine cannot see a
@@ -3756,6 +3801,20 @@ any of these numbers mean, which is the whole of CU21.
 - [x] what level 2 says lands in the `forward` it belongs to, rewriting it
 - [x] and the next `forward` still starts a new record
 - [x] rewriting says the same thing about the same facts
+
+**Read back** (`python/tests/test_record.py`)
+- [x] a store says which runs it holds, and what is not a run is not read as one
+- [x] a store nobody recorded into says so rather than failing
+- [x] every `forward` comes back in order, with its numbers as numbers
+- [x] one that broke is visible without reading its blob
+- [x] a summarised loss is read with one scan, and without summarising it is
+      still read and says it cost more
+- [x] anything a fact carries can be a curve, `took_us` included
+- [x] the facts of one `forward` are exactly what was seen live
+- [x] a `forward` that is not there is nothing and not a failure
+- [x] who spent the time is added up across `forward`s, slowest first
+- [x] only the last N can be asked for, because each costs a fetch
+- [x] a node that was read back is not averaged as a fast one
 
 **From Python** (`python/tests/test_watching.py`)
 - [x] a fact is a `dict` of text, and what is printed is what is written

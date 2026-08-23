@@ -258,4 +258,13 @@ One record per `forward`, at `run/<id>/<n>`. A loss is computed after the forwar
 that made it, so it goes into the record that closed last, rewritten — and there
 is no guessing, because the two vocabularies come through different doors.
 
+**And `soma_next.record` reads it back**, functions over a `Store` like `gather`
+and `take`. It is a **price list**: `runs`, `forwards` and `curve` are one scan,
+`facts` is one fetch and `nodes` a fetch per forward — so everything a progress
+view asks for is free and the per-node breakdown is asked once, not once a step.
+`Recorder(..., summarising=["loss"])` is what puts a curve on the free side, and
+which kinds those are is the caller's: the store still does not learn what a loss
+is. `curve_costs` says whether it scanned or fetched, because a reader that is
+quietly a thousand times slower is worse than one that says so.
+
 See the distribution report for the full order.
