@@ -3824,3 +3824,88 @@ any of these numbers mean, which is the whole of CU21.
 - [x] a training step says the loss and when it moved
 - [x] a loss lands in the `forward` it belongs to
 - [x] a group of steps moves once and says so once
+
+## After CU20 — A run, drawn
+
+```python
+live = Live()                                   # in a cell, on its own
+t = Trainer(g, objective=..., optimizer=...,
+            watching=[Recorder(store, summarising=["loss"]), live])
+
+progress(store, run="tuesday")                  # afterwards, or another machine's
+spent(store, run="tuesday", last=200)           # where the time went
+```
+
+The presentation half, asked for in the same breath as the reader: *"un módulo
+encargado de leer y presentar al usuario toda la información, de forma
+independiente y agregada"*, and plotly for it, because plotly can redraw in
+place.
+
+### The same figure from two sources, which is the point
+
+`progress` reads a store and `Live` is handed facts as they happen, and they
+fill **one drawing function**. They can, because a fact read back is the very
+dict a watcher was given — `Fact::flattened`, once, for everybody. What that
+buys is not tidiness: a live view and a report that are written twice are two
+things that slowly stop agreeing, and the one you are watching at three in the
+morning is the one that is wrong.
+
+`Live` holds one row per `forward` and not one per fact, so watching a run for an
+afternoon costs what the run is long and not what it is wide.
+
+### Dark, and one table for both figures
+
+CU19 wrote the rule about the graph — one table, looked up with `[]` and never
+with `.get(…, default)`, because the original kept the same strings in four
+tables and a typo came out as the alarm colour. The moment there was a second
+figure the same rule applied one level up, so the table moved to
+`soma_next._theme` and **the graph moved with it**: a library whose graph is
+light and whose curves are dark is two libraries.
+
+The discipline survives the move intact: **one fact per channel**. Hue says
+where a node ran or which series it is, never good-or-bad. The only red on any
+of these figures marks a `forward` that broke, which is a fact in the record and
+not an opinion about one. Whatever CU21 decides is *unhealthy* will need a
+channel of its own, and it does not get to recolour these.
+
+### The smooth line is a mean, and that is not a detail
+
+A spline drawn through measured values invents the values between them, and an
+overshoot on a loss curve dips below a minimum that never happened. The rule
+about figures here has been the same since CU19 — they may simplify and may not
+lie — so the bold line is a **rolling mean**, which is a stated transformation,
+and the raw series stays underneath it thin and faint. Nothing is hidden by the
+smoothing: what was measured is on the figure, and what is easy to read admits
+to being an average.
+
+**Centred and not trailing.** A trailing mean is the same curve shifted right,
+and drawn on top of the raw series that shift reads as the smoothing disagreeing
+with the measurement. Nothing is being predicted — every point of the run is
+already in hand. It is computed off prefix sums, because a live view redraws it
+on every step and a window of five hundred over ten thousand points done the
+obvious way is five million additions a frame.
+
+A `forward` with no loss said about it is a **gap** and not a zero: zero on a
+loss curve reads as the best result of the run.
+
+### Questionnaire
+
+**One figure, two sources** (`python/tests/test_record_figure.py`)
+- [x] live and read back draw the same series, point for point
+- [x] a live view keeps one row per `forward` and not one per fact
+
+**The smoothing, which is where a figure could start lying**
+- [x] the smoothed line stays inside what was measured
+- [x] the mean is centred and not trailing
+- [x] asking for no smoothing gives back what was measured
+- [x] a `forward` with no loss is a gap and not a zero
+
+**What the figure says happened**
+- [x] a `forward` that broke is marked, and only then is it in the legend
+- [x] the title says what the figure is showing
+- [x] a node is coloured by where it ran and by nothing else
+
+**One product**
+- [x] the graph and the run are drawn from the same table
+- [x] without plotly, drawing says how to get it
+- [x] a live view outside a notebook reads as nothing, like the graph's figure

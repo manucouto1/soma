@@ -37,7 +37,7 @@ built with `>>` and `|` the two agree. For the other one the arrows are all ther
 is, and a figure without them would be a lie. The `N` — `a→c`, `a→d`, `b→d` — is
 the case, and it is in the tests.
 
-## One table of colours
+## One table of colours, and it is not in this file any more
 
 The fill says **where a node runs**, and nothing else. Whether it is cached,
 frozen or mapped is a badge in the label: three facts cannot share one fill, and
@@ -47,12 +47,17 @@ The table is looked up with `[]` and never with `.get(…, default)`. In the
 original soma the same colours lived in four tables keyed by the same strings,
 two of which ended in a catch-all arm — so a typo came out as the alarm colour
 instead of failing. Here a typo raises.
+
+When a second figure arrived — a run, drawn — the same rule applied one level up,
+so the table moved to `soma_next._theme` and both read it from there.
 """
 
 from __future__ import annotations
 
 import html
 from dataclasses import dataclass
+
+from soma_next import _theme
 
 __all__ = ["Box", "TOO_MANY", "boxes", "figure", "steps"]
 
@@ -87,14 +92,10 @@ TOO_MANY = 80
 draw one on its own. `figure()` still obeys if you ask it by hand — the guard is
 against a surprise, not against you."""
 
-PALETTE = {
-    "cpu": ("#fcfcfb", "#c3c2b7", "#0b0b0b"),
-    "cuda": ("#e8f5e9", "#2e7d32", "#1b5e20"),
-    "meta": ("#f4f2ef", "#898781", "#52514e"),
-    "wave": ("rgba(0,0,0,0)", "#c3c2b7", "#52514e"),
-    "remote": ("rgba(0,0,0,0)", "#eb6834", "#a5401a"),
-}
-"""Fill, outline and ink, by what the thing is. The only table."""
+PALETTE = _theme.PALETTE
+"""Fill, outline and ink, by what the thing is. **The only table**, and it now
+lives in `_theme` because there is a second figure — a product whose graph is
+light and whose curves are dark is two products."""
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,7 @@ def figure(graph):
     `identities()`, `fingerprints()` — so this never runs anything and never
     needs a store.
     """
-    go = _plotly()
+    go = _theme.plotly()
     import json
 
     plan = json.loads(graph.plan_json())
@@ -221,25 +222,13 @@ def figure(graph):
         xaxis={"visible": False, "range": [-20, span_x + 20]},
         # Reversed, because the layout counts downwards the way a plan reads.
         yaxis={"visible": False, "range": [span_y + 20, -20], "scaleanchor": "x"},
-        plot_bgcolor="#fcfcfb",
-        paper_bgcolor="#fcfcfb",
-        margin={"l": 16, "r": 16, "t": 16, "b": 16},
-        width=min(1100, max(360, span_x + 80)),
-        height=min(1400, max(240, span_y + 80)),
-        hoverlabel={"align": "left"},
+        **_theme.layout(
+            margin={"l": 16, "r": 16, "t": 16, "b": 16},
+            width=min(1100, max(360, span_x + 80)),
+            height=min(1400, max(240, span_y + 80)),
+        ),
     )
     return figure
-
-
-def _plotly():
-    """`plotly.graph_objects`, or an error that says how to get it."""
-    try:
-        import plotly.graph_objects as go
-    except ImportError as e:
-        raise RuntimeError(
-            "drawing a graph needs plotly — install it with: pip install 'soma-next[viz]'"
-        ) from e
-    return go
 
 
 def _measure(plan, labels):
@@ -413,7 +402,7 @@ def _arrow(source, target):
         "arrowhead": 2,
         "arrowsize": 1,
         "arrowwidth": 1.2,
-        "arrowcolor": "#898781",
+        "arrowcolor": _theme.MUTED,
     }
 
 
@@ -421,13 +410,13 @@ def _nothing(figure, go):
     """What a graph with no nodes looks like: a statement, not an exception."""
     del go
     figure.update_layout(
-        annotations=[_text(0.5, 0.5, "empty graph — add nodes with g.node(...)", "#52514e")],
+        annotations=[
+            _text(0.5, 0.5, "empty graph — add nodes with g.node(...)", _theme.MUTED)
+        ],
         xaxis={"visible": False, "range": [0, 1]},
         yaxis={"visible": False, "range": [0, 1]},
-        plot_bgcolor="#fcfcfb",
-        paper_bgcolor="#fcfcfb",
-        width=420,
-        height=160,
-        margin={"l": 16, "r": 16, "t": 16, "b": 16},
+        **_theme.layout(
+            width=420, height=160, margin={"l": 16, "r": 16, "t": 16, "b": 16}
+        ),
     )
     return figure

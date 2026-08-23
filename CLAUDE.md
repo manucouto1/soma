@@ -267,4 +267,18 @@ which kinds those are is the caller's: the store still does not learn what a los
 is. `curve_costs` says whether it scanned or fetched, because a reader that is
 quietly a thousand times slower is worse than one that says so.
 
+**And a run is drawn**, which was asked for in the same breath as the reader:
+`progress` and `spent` read a store, `Live` is handed facts as they happen, and
+the two fill **one drawing function** — they can, because a fact read back is the
+very dict a watcher was given. A live view and a report written twice are two
+things that slowly stop agreeing.
+
+The colours are **one table** in `soma_next._theme` and the graph of CU19 moved
+onto it: a library whose graph is light and whose curves are dark is two
+libraries. One fact per channel still holds — hue says *where*, never
+good-or-bad, and the only red marks a `forward` that broke, which is a fact.
+The smooth line is a **centred rolling mean** and not a spline: a spline through
+measured points invents the values between them, and a loss dipping below a
+minimum that never happened is a figure that lies.
+
 See the distribution report for the full order.

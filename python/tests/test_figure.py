@@ -11,7 +11,7 @@ import pytest
 
 from conftest import Add, Identity
 from soma_next import Graph, Node
-from soma_next import _figure
+from soma_next import _figure, _theme
 
 
 def placed(g):
@@ -171,9 +171,11 @@ def test_without_plotly_the_notebook_falls_back_to_text(g, monkeypatch):
     g.node("one", Identity())
 
     def no_plotly():
-        raise RuntimeError("drawing a graph needs plotly")
+        raise RuntimeError("drawing needs plotly")
 
-    monkeypatch.setattr(_figure, "_plotly", no_plotly)
+    # On `_theme` and not on `_figure`: since there are two figures there is one
+    # place that reaches for plotly, and this is it.
+    monkeypatch.setattr(_theme, "plotly", no_plotly)
     assert g._repr_mimebundle_() is None
     assert repr(g) == "Graph(1 nodes, 0 edges)"
 
