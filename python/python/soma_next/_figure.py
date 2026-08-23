@@ -74,8 +74,10 @@ LINE_H = 15.0
 device, three badges and a flag is four lines, and a fixed height would have
 written them over its own outline."""
 
-LAYER_H = 24.0
-"""One layer of an expanded node."""
+LAYER_H = 36.0
+"""One layer of an expanded node: two lines, because what it is and what it
+produces are two different things and putting them on one line makes a reader
+parse a sentence to find a number."""
 
 LAYER_GAP = 16.0
 """Between two rows of an architecture. An arrow has to fit in here."""
@@ -141,6 +143,7 @@ class Box:
     row: int | None = None
     narrows: int | None = None
     made_of: str | None = None
+    dims: tuple | None = None
 
     @property
     def cx(self) -> float:
@@ -254,9 +257,7 @@ def figure(graph, overlay=None, inside=None):
             if how == "box" and box.narrows and _tapers(box.mark):
                 how = "trapezoid"
             shapes.append(_silhouette(box, fill, line, width, how))
-            notes.append(
-                _text(box.cx, box.cy, _safe(_labelled(box)), ink, size=10)
-            )
+            notes.append(_text(box.cx, box.cy, _labelled(box), ink, size=10))
         elif box.kind == "node":
             fill, line, ink = PALETTE[_family(devices.get(box.node))]
             width = 1.4
@@ -304,7 +305,9 @@ def figure(graph, overlay=None, inside=None):
                 continue
             from_, to = where[source], where[node]
             if not _crosses(from_, to, boxed):
-                notes.append(_arrow(from_.cx, from_.y + from_.h, to.cx, to.y))
+                around, head = _bent(from_, to)
+                shapes.extend(around)
+                notes.append(head)
                 continue
             # One lane per edge on that side, handed out in declaration order so
             # the same graph is drawn the same way twice.
@@ -402,10 +405,12 @@ def _place(plan, x, y, labels, out, inside=None):
         # `under` and not `inside`, which is the argument: a wave's branches are
         # nodes and every one of them may be opened up too.
         left, under = x + FRAME_PAD, y + FRAME_HEAD
-        room = height - FRAME_HEAD - FRAME_PAD
         for child in body:
-            w, h = _measure(child, labels, inside)
-            _place(child, left, under + (room - h) / 2, labels, out, inside)
+            w, _ = _measure(child, labels, inside)
+            # Top-aligned, not centred: everything in a wave starts at the same
+            # moment, and hanging a short branch halfway down the frame says it
+            # starts later.
+            _place(child, left, under, labels, out, inside)
             left += w + GAP_X
 
 
@@ -471,6 +476,7 @@ def _stack(node, inside, x, y, width, labels, out):
                 row=row,
                 narrows=narrows,
                 made_of=one.made_of if one.kind in ("attention", "recurrent") else None,
+                dims=one.dims,
             )
         )
 
@@ -564,9 +570,41 @@ def _tapers(kind):
 
 
 def _layer_text(one):
-    """What is written on a layer: what it is, and what it produces."""
-    said = one.label + (f"   {one.shape}" if one.shape else "")
-    return said + (f"   ({one.made_of})" if getattr(one, "made_of", None) else "")
+    """The longest line a layer needs, for working out how wide its box is."""
+    return max(_two_lines(one), key=len)
+
+
+def _two_lines(one):
+    """What is written on a layer, over two lines.
+
+    What it **is** on the first and what it **produces** on the second. One line
+    makes a reader parse a sentence to find a number, and the number is what
+    they came for.
+
+    A non-linearity and a dropout get **one** line: they cannot change a shape,
+    so writing the one they were handed says nothing and takes the room their
+    silhouette needs to stay thin.
+    """
+    top = one.label + (f"  ·  {one.made_of}" if getattr(one, "made_of", None) else "")
+    if (one.mark if hasattr(one, "mark") else one.kind) in ("activation", "regular"):
+        return (top, "")
+    return (top, _measured(one.shape, getattr(one, "dims", None)))
+
+
+def _measured(shape, dims):
+    """A shape with each number said out loud: `4 batch · 24 ch · 32 len`.
+
+    Three numbers and no way to tell which is the batch, which is time and which
+    is the width is the thing that makes a shape useless at a glance.
+    """
+    if not shape:
+        return ""
+    sizes = shape.split("×")
+    if not dims or len(dims) != len(sizes):
+        return "×".join(sizes)
+    return " · ".join(
+        size if name == "?" else f"{size} {name}" for size, name in zip(sizes, dims)
+    )
 
 
 def _bare_markup(line):
@@ -619,11 +657,12 @@ def _labelled(box):
     makes a **bottleneck** a picture: `512 → 8 → 512` is visible and
     `Linear · Linear · Linear` is not.
     """
-    said = box.label + (f"   {box.shape}" if box.shape else "")
-    # Plain text and no markup: an annotation takes a small subset of HTML and
-    # a `<span>` it does not know comes out as the letters `<span …>`, which is
-    # what it did.
-    return said + (f"   · {_safe(box.made_of)}" if box.made_of else "")
+    top, below = _two_lines(box)
+    # `<br>` and `<i>` an annotation does take; a `<span style=…>` it does not,
+    # and an unknown tag comes out as the letters of the tag.
+    if not below:
+        return _safe(top)
+    return f"{_safe(top)}<br><i>{_safe(below)}</i>"
 
 
 def _legend(ill, at):
@@ -913,6 +952,27 @@ def _routed(source, target, span, apart):
         [{"type": "path", "path": path, "xref": "x", "yref": "y",
           "line": {"color": _theme.MUTED, "width": 1.2}, "layer": "below"}],
         _arrow(into - outward * HEAD, y1, into, y1),
+    )
+
+
+def _bent(source, target):
+    """One edge with nothing in the way, as `(shapes, annotation)`.
+
+    Straight down when it really is straight down; a curve when it has to move
+    across. A long diagonal cutting over a figure is the thing that makes a
+    graph of four nodes look like a cat's cradle, and a bend that leaves and
+    arrives vertically reads as *this feeds that* rather than as a line.
+    """
+    x0, y0 = source.cx, source.y + source.h
+    x1, y1 = target.cx, target.y
+    if abs(x1 - x0) < 2.0:
+        return [], _arrow(x0, y0, x1, y1)
+    lean = max((y1 - y0) * 0.45, 12.0)
+    path = f"M {x0},{y0} C {x0},{y0 + lean} {x1},{y1 - lean} {x1},{y1 - HEAD}"
+    return (
+        [{"type": "path", "path": path, "xref": "x", "yref": "y",
+          "line": {"color": _theme.MUTED, "width": 1.2}, "layer": "below"}],
+        _arrow(x1, y1 - HEAD, x1, y1),
     )
 
 

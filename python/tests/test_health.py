@@ -478,3 +478,114 @@ def test_a_tensor_nobody_holds_cannot_invent_an_edge():
     made = architecture(g, Opaque(torch.randn(4, 16)))
 
     assert made["net"].edges == [("first", "second")], made["net"].edges
+
+
+def test_a_shape_says_what_each_of_its_numbers_is():
+    # Three numbers and no way to tell which is the batch, which is time and
+    # which is the width is what makes a shape useless at a glance.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Conv(Node):
+        def __init__(self):
+            self.stem = torch.nn.Conv1d(1, 8, 3, padding=1)
+            self.act = torch.nn.GELU()
+
+        def forward(self, said, ctx):
+            return Opaque(self.act(self.stem(said)))
+
+        def parameters(self):
+            return list(self.stem.parameters())
+
+    g = Graph.somatize(Conv().named("audio"))
+
+    made = architecture(g, Opaque(torch.randn(4, 1, 16)))
+
+    stem = next(one for one in made["audio"].layers if one.label.startswith("Conv"))
+    assert stem.dims == ("batch", "ch", "len")
+
+
+def test_something_that_did_not_change_the_shape_keeps_the_names():
+    # A `BatchNorm1d` in a convolutional trunk produces `(batch, channels,
+    # length)` because that is what it was handed; naming it by its own kind
+    # gets the right words for the wrong tensor.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Trunk(Node):
+        def __init__(self):
+            self.body = torch.nn.Sequential(
+                torch.nn.Conv1d(1, 8, 3, padding=1),
+                torch.nn.BatchNorm1d(8),
+                torch.nn.AdaptiveAvgPool1d(1),
+            )
+
+        def forward(self, said, ctx):
+            return Opaque(self.body(said))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    g = Graph.somatize(Trunk().named("audio"))
+
+    made = architecture(g, Opaque(torch.randn(4, 1, 16)))
+    said = {one.label.split()[0]: one.dims for one in made["audio"].layers}
+
+    assert said["BatchNorm1d"] == ("batch", "ch", "len")
+    # And a pooling layer keeps them too: it changes what the numbers are, not
+    # what they mean.
+    assert said["AdaptiveAvgPool1d"] == ("batch", "ch", "len")
+
+
+def test_a_recurrent_cell_says_its_output_and_not_its_hidden_state():
+    # `(output, h_n)` reversed shows the hidden state where the output belongs,
+    # which is a wrong number written confidently on a figure.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Cell(Node):
+        def __init__(self):
+            self.gru = torch.nn.GRU(4, 8, batch_first=True)
+
+        def forward(self, said, ctx):
+            return Opaque(self.gru(said)[0][:, -1])
+
+        def parameters(self):
+            return list(self.gru.parameters())
+
+    g = Graph.somatize(Cell().named("vitals"))
+
+    (one,) = architecture(g, Opaque(torch.randn(4, 6, 4)))["vitals"].layers
+
+    assert one.shape == "4×6×8", "the output, not the 1×4×8 hidden state"
+    assert one.dims == ("batch", "steps", "dim")
+
+
+def test_depth_counts_composites_opened_and_not_names():
+    # A `TransformerEncoderLayer` sits three names deep inside a
+    # `TransformerEncoder`, and asking for one level of detail should not have
+    # to know that.
+    pytest.importorskip("plotly")
+    from soma_next.torch import architecture
+
+    class Stack(Node):
+        def __init__(self):
+            self.body = torch.nn.TransformerEncoder(
+                torch.nn.TransformerEncoderLayer(8, 2, 16, batch_first=True), num_layers=2
+            )
+
+        def forward(self, said, ctx):
+            return Opaque(self.body(said))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    g = Graph.somatize(Stack().named("text"))
+    x = Opaque(torch.randn(4, 5, 8))
+
+    whole = architecture(g, x)["text"]
+    opened = architecture(g, x, depth=1)["text"]
+
+    assert len(whole.layers) == 1, "one box, and it says what is in it"
+    assert whole.layers[0].made_of
+    assert len(opened.layers) > 4, "and `depth=1` opens it"

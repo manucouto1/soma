@@ -348,7 +348,12 @@ because that is the only thing that makes a bottleneck a picture.
 
 Findings are coloured by **family** — numeric, signal, activation, step,
 capacity, data — with a legend of the ones on the figure, because six alarms
-that all look the same are one alarm. And `overlaid(..., inside=...)` puts each
+that all look the same are one alarm.
+
+Every number on a layer **says what it is**: `4 batch · 16 steps · 24 dim`, not
+`4×16×24`. The batch is checked rather than assumed — the caller knows how many
+rows went in — and a layer that did not change the shape keeps the names of the
+one that did, so a `BatchNorm1d` in a convolutional trunk says `ch` and `len`. And `overlaid(..., inside=...)` puts each
 one on the layer it is about: the audit's scope and the drawing's are now the
 same scope, which is what makes *what is measured has a box* true rather than
 hopeful.

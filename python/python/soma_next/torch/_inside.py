@@ -165,9 +165,9 @@ def kind_of(what):
 class Layer:
     """One thing in an architecture: where it is, what it is, what it produces."""
 
-    __slots__ = ("path", "kind", "label", "shape", "made_of")
+    __slots__ = ("path", "kind", "label", "shape", "made_of", "dims")
 
-    def __init__(self, path, kind, label, shape=None, made_of=None):
+    def __init__(self, path, kind, label, shape=None, made_of=None, dims=None):
         self.path = path
         self.kind = kind
         self.label = label
@@ -176,6 +176,9 @@ class Layer:
         #: answer to *one box of what* — and the answer is short enough to write
         #: on it.
         self.made_of = made_of
+        #: What each number of `shape` is — `("batch", "steps", "dim")`. A shape
+        #: nobody can read is three numbers.
+        self.dims = dims
         #: The shape of what it produces, as text — `(32, 8)`. The one thing
         #: that makes a **bottleneck** visible: `512 → 8 → 512` is a picture and
         #: `Linear · Linear · Linear` is not. `None` when nobody ran it.
@@ -188,7 +191,7 @@ class Layer:
         return hash(self._as_tuple())
 
     def _as_tuple(self):
-        return (self.path, self.kind, self.label, self.shape, self.made_of)
+        return (self.path, self.kind, self.label, self.shape, self.made_of, self.dims)
 
     def __repr__(self):
         said = f"Layer({self.path!r}, {self.kind!r}, {self.label!r}"
@@ -408,17 +411,21 @@ def _made_of(module):
 
 
 def _tensors(what):
-    """Every tensor in whatever a module was handed or returned."""
+    """Every tensor in whatever a module was handed or returned, **in order**.
+
+    In order and not in whatever a stack pops: a recurrent cell returns
+    `(output, h_n)`, and reversing that shows the hidden state where the output
+    belongs — `1×4×24` for a GRU whose output is `4×16×24`, which is a wrong
+    number written confidently on a figure.
+    """
     found = []
-    stack = list(what)
-    while stack:
-        one = stack.pop()
+    for one in what:
         if torch is not None and isinstance(one, torch.Tensor):
             found.append(one)
         elif isinstance(one, (tuple, list)):
-            stack.extend(one)
+            found.extend(_tensors(one))
         elif isinstance(one, dict):
-            stack.extend(one.values())
+            found.extend(_tensors(list(one.values())))
     return found
 
 
@@ -429,6 +436,44 @@ def _shape(output):
     if not found:
         return None
     return "×".join(str(one) for one in tuple(found[0].shape))
+
+
+def _dims(kind, shape, batch=None):
+    """What each number in a shape **is**: `64×16×24` as batch, steps, dim.
+
+    Unlabelled numbers are the thing that makes a shape useless to read at a
+    glance — three numbers and no way to tell which is the batch, which is time
+    and which is the width. There is no protocol that says so, so this is a
+    reading of the conventions torch itself uses, and it says `?` rather than
+    guessing when it does not know.
+
+    The batch is the one thing that can be **checked** rather than assumed: the
+    caller knows how many rows went in.
+    """
+    if not shape:
+        return None
+    sizes = [int(one) for one in shape.split("×")]
+    named = ["?"] * len(sizes)
+    at = 0
+    if batch is not None and sizes and sizes[0] == batch:
+        named[0] = "batch"
+        at = 1
+    rest = len(sizes) - at
+    if kind == "conv":
+        # `(batch, channels, …)`, and whatever is left is what it slides along.
+        for which in range(at, len(sizes)):
+            named[which] = "ch" if which == at else "len"
+    elif kind == "recurrent":
+        # `batch_first` puts time second; without a batch to anchor on there is
+        # nothing to tell the two apart, and it says so.
+        if rest >= 2:
+            named[at] = "steps" if named[0] == "batch" else "?"
+            named[-1] = "dim"
+    elif rest >= 1:
+        named[-1] = "dim"
+        for which in range(at, len(sizes) - 1):
+            named[which] = "steps"
+    return tuple(named)
 
 
 def architecture(graph, example=None, *, most=48, depth=0, workers=None):
@@ -470,6 +515,7 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
             for path, one in _worth_drawing(module, depth):
                 watched[(node, f"{name}.{path}" if path else name)] = one
 
+    batch = _rows_in(example)
     layers, edges, made_by, order, hooks = {}, {}, {}, {}, []
     for (node, where), one in watched.items():
         layers.setdefault(node, [])
@@ -480,7 +526,7 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
         order.setdefault(node, [])
         hooks.append(
             one.register_forward_hook(
-                _watch(where, one, layers[node], edges[node], made_by, order[node])
+                _watch(where, one, layers[node], edges[node], made_by, order[node], batch)
             )
         )
     try:
@@ -510,9 +556,18 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
             if finer is not None:
                 mine, its = _spliced(mine, its, name, finer)
         said[node] = _at_most(
-            node, _repeated(_without_a_lone_input(Inside(mine, its, "traced", None))), most
+            node,
+            _repeated(_inherited(_without_a_lone_input(Inside(mine, its, "traced", None)))),
+            most,
         )
     return said
+
+
+def _rows_in(example):
+    """How many rows went in, which is the one dimension that can be checked
+    rather than assumed."""
+    found = _tensors([_as_the_engine_would(example)])
+    return int(found[0].shape[0]) if found and found[0].dim() else None
 
 
 def _as_the_engine_would(example):
@@ -534,12 +589,14 @@ def _as_the_engine_would(example):
     return example
 
 
-def _watch(where, one, layers, edges, made_by, order):
+def _watch(where, one, layers, edges, made_by, order, batch=None):
     """A hook that writes down what ran and what it was handed."""
 
     def saw(_module, args, output):
+        kind = kind_of(one)
+        shape = _shape(output)
         layers.append(
-            Layer(where, kind_of(one), type(one).__name__, _shape(output), _made_of(one))
+            Layer(where, kind, type(one).__name__, shape, _made_of(one), _dims(kind, shape, batch))
         )
         known = False
         for before in _tensors(args):
@@ -581,19 +638,84 @@ def _worth_drawing(module, depth=0):
     `depth` opens the composites that many levels further, for when the inside
     of one is exactly what is being asked about.
     """
-    said, closed = [], []
+    said, closed, opened = [], [], []
     for path, one in module.named_modules():
         # `""` is the module itself, and it can be the composite: closing it
         # has to mean *everything under it*, which an empty prefix does only
         # if it is written as one.
         if any(path.startswith(shut) for shut in closed):
             continue
-        whole = kind_of(one) in WHOLE and path.count(".") >= depth
+        composite = kind_of(one) in WHOLE
+        # `depth` counts **composites opened**, not path components: a
+        # `TransformerEncoderLayer` sits three names deep inside a
+        # `TransformerEncoder`, and asking for one level of detail should not
+        # have to know that.
+        under = sum(1 for above in opened if path.startswith(above))
+        whole = composite and under >= depth
+        if composite:
+            opened.append(f"{path}." if path else "")
         if whole:
             closed.append(f"{path}." if path else "")
         if whole or not any(True for _ in one.children()):
             said.append((path, one))
     return said
+
+
+def _inherited(inside):
+    """A layer that did not change the shape keeps the names of the one that did.
+
+    A `BatchNorm1d` in a convolutional trunk produces `(batch, channels, length)`
+    because that is what it was handed — naming it by its own kind gets `steps`
+    and `dim`, which are the right words for the wrong tensor. What a shape's
+    numbers **are** is a fact about where the shape came from.
+    """
+    by_path = {one.path: one for one in inside.layers}
+    feeds = {}
+    for a, b in inside.edges:
+        feeds.setdefault(b, []).append(a)
+    for one in inside.layers:
+        if one.kind in ("conv", "recurrent") or not one.shape:
+            continue
+        older = _same_shape_above(one.path, one.shape, by_path, feeds, set())
+        if older is not None:
+            one.dims = older
+    return inside
+
+
+def _rank(shape):
+    """How many numbers a shape has, which is what says what they mean."""
+    return len(shape.split("×"))
+
+
+def _same_shape_above(path, shape, by_path, feeds, seen):
+    """The names of the nearest thing above with the same shape.
+
+    Walking back past what has no shape is the whole of it: a residual's `+` has
+    none, so stopping at the first predecessor leaves everything after a skip
+    named by its own kind — which is how a `BatchNorm1d` in a convolutional
+    trunk came out with `steps` and `dim` on it.
+    """
+    for before in feeds.get(path, []):
+        if before in seen:
+            continue
+        seen.add(before)
+        older = by_path.get(before)
+        if older is None:
+            continue
+        # Against the **original** shape all the way down: comparing against
+        # whatever we are standing on means comparing against a `+`, which has
+        # no shape, and nothing ever matches.
+        #
+        # By **rank** and not by the exact sizes: a pooling layer changes what
+        # the numbers are, not what they mean — `(batch, channels, length)` with
+        # a shorter length is still a length.
+        if older.dims and older.shape and _rank(older.shape) == _rank(shape):
+            return older.dims
+        if not older.shape:
+            deeper = _same_shape_above(older.path, shape, by_path, feeds, seen)
+            if deeper is not None:
+                return deeper
+    return None
 
 
 def _without_a_lone_input(inside):
@@ -675,7 +797,9 @@ def _repeated(inside):
         return inside
     del signature
     layers = [
-        Layer(one.path, one.kind, _times(one.label, counts[which]), one.shape, one.made_of)
+        Layer(
+            one.path, one.kind, _times(one.label, counts[which]), one.shape, one.made_of, one.dims
+        )
         for which in kept
         for one in blocks[which]
     ]
@@ -808,6 +932,7 @@ def _spliced(layers, edges, name, finer):
             one.label,
             (was.get(f"{mine}{one.path}") or one).shape,
             (was.get(f"{mine}{one.path}") or one).made_of,
+            (was.get(f"{mine}{one.path}") or one).dims,
         )
         for one in finer.layers
     ]
