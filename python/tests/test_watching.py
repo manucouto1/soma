@@ -162,11 +162,15 @@ def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
     out = g.forward(0.0, workers={"w1": worker}, watching=seen.append)
 
     assert out == 11.0
-    assert kinds(seen) == ["ran", "ran", "left", "finished"]
+    # `machine` sits between them: the worker says what it looks like before it
+    # starts the slice, down the connection that is already open.
+    assert kinds(seen) == ["ran", "machine", "ran", "left", "finished"]
     assert seen[0].get("host") is None, "`a` ran here"
-    assert seen[1]["node"] == "b"
-    assert seen[1]["host"] == "w1", "a worker does not know its own name; we do"
-    assert seen[2]["host"] == "w1", "and the round trip is its own fact"
+    assert seen[1]["fact"] == "machine"
+    assert seen[1]["host"] == "w1", "and it is attributed like everything else"
+    assert seen[2]["node"] == "b"
+    assert seen[2]["host"] == "w1", "a worker does not know its own name; we do"
+    assert seen[3]["host"] == "w1", "and the round trip is its own fact"
 
 
 # ── Level 2, which is this side's own vocabulary ──

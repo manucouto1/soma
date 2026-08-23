@@ -173,6 +173,14 @@ def fleet(store, *, run, last=None):
     keep one in, and CU18 already answered liveness a different way — not *does
     it answer* but *is it still writing*.
 
+    `busy`, `memory`, `cores`, `up_us` and `served` are the half **no record can
+    derive** — nobody on this end can work out how loaded another machine is. A
+    worker says them itself, down the connection that is already open, and they
+    arrive under a `host` because the engine wraps whatever comes back. They are
+    the newest reading and not an average: the question is what the machine is
+    like now. `None` is a machine that did not say, which on a kernel with no
+    `/proc` is most of them.
+
     `waiting_us` is the column that only exists up here: the round trip **minus**
     what actually ran over there, which is the wire, the queue and the codec. It
     is the number that says whether sending it was worth it, and no per-node view
@@ -197,9 +205,22 @@ def fleet(store, *, run, last=None):
                     "failed": 0,
                     "nodes": set(),
                     "last": None,
+                    "busy": None,
+                    "memory": None,
+                    "cores": None,
+                    "up_us": None,
+                    "served": None,
                 },
             )
             one["last"] = row["forward"]
+            if fact["fact"] == "machine":
+                # The half no record can derive, and the newest one wins: a
+                # reading is a snapshot and the question is what the machine is
+                # like now, not what it averaged.
+                for name in ("busy", "memory", "cores", "up_us", "served"):
+                    if name in fact:
+                        one[name] = float(fact[name])
+                continue
             if fact["fact"] == "left":
                 one["slices"] += 1
                 one["trip_us"] += int(fact.get("took_us", 0))

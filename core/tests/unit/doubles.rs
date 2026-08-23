@@ -483,8 +483,13 @@ impl Told {
     }
 
     /// The names of what it was told, which is what most of these assert on.
-    pub fn kinds(&self) -> Vec<&'static str> {
-        self.all().iter().map(|fact| fact.flattened().0).collect()
+    pub fn kinds(&self) -> Vec<String> {
+        // Owned: a `Fact::Said` carries a kind that came off a wire, so
+        // `flattened` borrows from the fact and there is nothing static here.
+        self.all()
+            .iter()
+            .map(|fact| fact.flattened().0.to_string())
+            .collect()
     }
 
     /// The nodes it was told ran, in order.

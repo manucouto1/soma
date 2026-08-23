@@ -116,12 +116,12 @@ two real bugs were found.
 
 ## Status
 
-Twenty-two use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty-three use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
-itself, the record of what happened, the health of a network, and what can be
-said before a step is taken. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+itself, the record of what happened, the health of a network, what can be
+said before a step is taken, and the machines it ran on. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
 another machine, where a **trainer travels to stand beside the node** and the
@@ -426,5 +426,31 @@ candidate's. Which is exactly where the five zero-cost proxies went:
 `soma_next.torch.proxies` is a **cheap objective** a study's loop scores with,
 never a `Flag`, and `health/tests/proxies.py` asks the only question worth asking
 of one — *does it beat counting parameters?*
+
+**CU23 is workers and jobs, and the first thing it decided was what not to
+build.** A machine does work here in exactly two ways — a worker serving slices,
+which the client is talking to right now, and a machine claiming trials from a
+folder, which CU18 already watches by *is it still writing* — and there is no
+third case, so there is **no registry and no heartbeat**. The original needs a
+`WorkerStatus` with a `last_heartbeat` because it has a coordinator; CU15
+removed that.
+
+What was missing was a **view**: `fleet(store, run=...)` turns the record the
+other way up, because it is written run → `forward` → node and *where* is an
+attribute. The column that earns it is `waiting_us` — the round trip **minus**
+what ran over there, which is the wire and the queue — and neither half of that
+subtraction belongs to a node.
+
+Plus the half no record can derive: how loaded a machine is. The worker says it,
+in **a vocabulary of its own** in `transport/`, crossing as
+`Fact::Said { kind, pairs }` — a carrier and not a vocabulary, so the core never
+learns what a load average is. That cost **nothing on the wire**: `Answer::Saw`
+already carries a `Fact` and the engine already wraps what comes back in
+`Elsewhere`, so a reading arrives saying which host without a line attributing
+it. Read and never judged — a bound on it would belong in `health/`.
+
+What is left of it is the **idle** machine, and its pipe is already decided by
+CU20's rule rather than open: an idle worker's connection is one nobody is
+reading, so its readings go to the store on a clock and `fleet` scans them.
 
 See the distribution report for the full order.

@@ -264,3 +264,61 @@ def test_the_fleet_is_drawn_working_against_waited_on(tmp_path):
 
     assert [one.name for one in figure.data if one.name] == ["working", "waited on"]
     assert set(figure.data[0].y) == {"here", "w1"}
+
+
+def test_a_machine_says_what_only_it_can_say(tmp_path):
+    # Everything else about a worker can be worked out from what the client
+    # wrote down. How loaded it is cannot: nobody on this end can see it, and it
+    # is the half of *the health of the workers* that no scan answers.
+    from soma_next import Worker
+    from soma_next.record import fleet
+
+    g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
+    worker = Worker.spawn(
+        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    )
+    store = Store(str(tmp_path))
+    recorder = Recorder(store, run="m")
+    for _ in range(2):
+        g.forward(0.0, workers={"w1": worker}, watching=recorder)
+
+    away = next(one for one in fleet(store, run="m") if one["host"] == "w1")
+
+    assert away["served"] == 2, "it counts what it ran, and says so itself"
+    assert away["up_us"] is not None
+    assert away["cores"] is None or away["cores"] >= 1
+
+
+def test_and_it_arrives_saying_which_host_without_anybody_attributing_it(tmp_path):
+    # The reason it cost no message: `Answer::Saw` already carries a `Fact`, the
+    # client already relays one to its watcher, and the engine already wraps
+    # whatever comes back in `Elsewhere`. A flat carrier rides all of that.
+    from soma_next import Worker
+
+    g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
+    worker = Worker.spawn(
+        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    )
+    seen = []
+
+    g.forward(0.0, workers={"w1": worker}, watching=seen.append)
+
+    said = next(one for one in seen if one["fact"] == "machine")
+    assert said["host"] == "w1", "a worker does not know its own name; we do"
+    assert "node" not in said, "a machine is not a node"
+
+
+def test_a_run_with_nobody_else_in_it_says_nothing_about_machines(tmp_path):
+    # This machine does not measure itself. It is the one you can look at with
+    # `top`, and inventing a reading for it would be the only row in the table
+    # nobody had to send.
+    from soma_next.record import fleet
+
+    g = Graph.somatize(Add(1).named("a"))
+    store = Store(str(tmp_path))
+    g.forward(0.0, watching=Recorder(store, run="alone"))
+
+    here = fleet(store, run="alone")[0]
+
+    assert here["host"] == "here"
+    assert here["busy"] is None and here["served"] is None

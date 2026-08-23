@@ -46,12 +46,14 @@
 
 use crate::codec::{self, Codec};
 use crate::frame;
+use crate::machine::Machine;
 use crate::{Answer, Label, Provision, Provisioned, Request};
 use soma_next_core::{Catalog, Executor, Fact, Keeper, Outcome, Watcher};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
 use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
 
 /// A worker about to serve: what it executes with, and where it listens.
 pub struct Serving<'a> {
@@ -227,6 +229,11 @@ struct Session {
     /// The artifact this client greeted with, if it brought one. What it gets
     /// checked against is [`Shared::loaded`], on every job.
     mine: Option<String>,
+    /// When this process started, so a reading can say how long it has been up
+    /// without either end trusting the other's wall clock.
+    since: Option<Instant>,
+    /// How many slices it has run.
+    served: u64,
 }
 
 /// Where this worker's catalog comes from.
@@ -391,6 +398,16 @@ fn reply<W: Write + Send>(
             placement,
             memory,
         } => {
+            // What this machine looks like, said **before** the work rather
+            // than after: a reading taken once the slice is over is a reading
+            // of a machine that has just stopped, and the question is what it
+            // was like while it was asked. It rides the connection that is
+            // already open, which is CU20's rule for anything that happens
+            // where somebody is listening.
+            session.served += 1;
+            let up = session.since.get_or_insert_with(Instant::now).elapsed();
+            Relaying { to: output }.saw(&Machine::here(up, session.served).said());
+
             // The lock is released before executing — a `Catalog` clones by
             // `Arc` — or every client would serialize against the run.
             let ready = {

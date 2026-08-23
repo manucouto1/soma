@@ -227,7 +227,8 @@ fn what_ran_over_there_arrives_here_saying_where_it_ran() {
 
     // `a` here, `b` over there, the round trip, and the end.
     assert_eq!(told.kinds(), ["ran", "ran", "left", "finished"]);
-    let (kind, fields) = told.all()[1].flattened();
+    let facts = told.all();
+    let (kind, fields) = facts[1].flattened();
     let said: std::collections::HashMap<_, _> = fields.into_iter().collect();
     assert_eq!(kind, "ran");
     assert_eq!(said["node"], "b");

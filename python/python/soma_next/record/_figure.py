@@ -417,12 +417,14 @@ def _machines(tally, *, title):
                 orientation="h",
                 name=name,
                 marker={"color": fill, "line": {"color": fill, "width": 1.0}},
-                customdata=[(one["slices"], one["ran"], ", ".join(one["nodes"]) or "—")
-                            for one in tally],
+                customdata=[
+                    (one["slices"], one["ran"], ", ".join(one["nodes"]) or "—", _itself(one))
+                    for one in tally
+                ],
                 hovertemplate=(
                     f"<b>%{{y}}</b> — {name}<br>%{{x:.1f}} ms"
                     "<br>%{customdata[0]} slices, %{customdata[1]} runs"
-                    "<br>%{customdata[2]}<extra></extra>"
+                    "<br>%{customdata[2]}<br>%{customdata[3]}<extra></extra>"
                 ),
             )
         )
@@ -462,6 +464,25 @@ def _machines(tally, *, title):
     figure.update_xaxes(_theme.axis(title_text="ms", range=[0, widest * 1.22]))
     figure.update_yaxes(_theme.axis(automargin=True, showgrid=False))
     return figure
+
+
+def _itself(one):
+    """What the machine said about itself, for the hover.
+
+    On the hover and not on the bar, because the bar is time and this is not:
+    one fact per channel, the same rule the graph's fill obeys. A machine that
+    said nothing says so — `None` is *nobody asked it*, and on this end that is
+    every machine but the ones being sent work.
+    """
+    said = []
+    if one.get("busy") is not None:
+        cores = f" of {one['cores']:.0f}" if one.get("cores") else ""
+        said.append(f"{one['busy']:.0%} busy{cores}")
+    if one.get("memory") is not None:
+        said.append(f"{one['memory']:.0%} memory")
+    if one.get("up_us") is not None:
+        said.append(f"up {one['up_us'] / 1e6:,.0f}s")
+    return " · ".join(said) or "said nothing about itself"
 
 
 def _spent(tally, *, title):

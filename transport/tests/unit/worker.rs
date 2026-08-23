@@ -1304,12 +1304,15 @@ impl Told {
         }
     }
 
-    fn kinds(&self) -> Vec<&'static str> {
+    fn kinds(&self) -> Vec<String> {
+        // Owned: a `Fact::Said` carries a kind that came off a wire, so
+        // `flattened` borrows from the fact and there is nothing static to
+        // hand back.
         self.seen
             .lock()
             .unwrap()
             .iter()
-            .map(|(fact, _)| fact.flattened().0)
+            .map(|(fact, _)| fact.flattened().0.to_string())
             .collect()
     }
 
@@ -1350,13 +1353,24 @@ fn what_a_real_worker_saw_comes_back_saying_it_was_that_worker() {
         .run(&plan, Value::number(0.0))
         .unwrap();
 
-    assert_eq!(told.kinds(), ["ran", "ran", "left", "finished"]);
-    let (_, fields) = told.seen.lock().unwrap()[0].0.flattened();
+    // `machine` first: the worker says what it looks like **before** the work
+    // rather than after, because a reading taken once the slice is over is a
+    // reading of a machine that has just stopped.
+    assert_eq!(told.kinds(), ["machine", "ran", "ran", "left", "finished"]);
+    let seen = told.seen.lock().unwrap();
+    let (_, fields) = seen[1].0.flattened();
     let said: std::collections::HashMap<_, _> = fields.into_iter().collect();
     assert_eq!(said["node"], "a");
     assert_eq!(
         said["host"], "worker1",
         "a worker does not know its own name; the client does"
+    );
+    let (_, fields) = seen[0].0.flattened();
+    let machine: std::collections::HashMap<_, _> = fields.into_iter().collect();
+    assert_eq!(
+        machine["host"], "worker1",
+        "and the reading it sent about itself is attributed the same way, by \
+         riding the fact that was already being wrapped"
     );
 }
 

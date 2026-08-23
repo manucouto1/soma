@@ -129,6 +129,30 @@ pub enum Fact {
         /// What it saw there.
         saw: Box<Fact>,
     },
+    /// A level that is **not** the engine had something to say, already flat.
+    ///
+    /// The carrier and not the vocabulary. The core does not learn what a load
+    /// average is, the same way it never learned what a loss is — what it
+    /// learns is that other levels exist and that one of them may be speaking
+    /// from **another machine**, where a Python object cannot reach the
+    /// notebook and only bytes can.
+    ///
+    /// `(kind, pairs)` is not a new shape either: it is exactly what
+    /// [`flattened`](Fact::flattened) produces, which CU20 named as the one
+    /// place the vocabularies meet. So this crosses the wire in the message
+    /// that already exists, gets wrapped in [`Fact::Elsewhere`] like everything
+    /// else, and arrives saying which host it came from without anybody having
+    /// to attribute it.
+    ///
+    /// Level 2 does **not** use this: a loss is computed where the notebook is
+    /// and goes straight into the record. This is for a level that is over
+    /// there.
+    Said {
+        /// What kind of thing it is, which is what it will be written down as.
+        kind: String,
+        /// And its fields, text to text, already in the written form.
+        pairs: Vec<(String, String)>,
+    },
     /// The whole thing is over.
     ///
     /// Emitted by [`Executor::run`](crate::Executor::run) and **not** by
@@ -160,7 +184,11 @@ impl Fact {
     ///
     /// [`Fact::Elsewhere`] does not survive as a name — it becomes a `host`
     /// field on whatever it wrapped, so a reader has columns and not a tree.
-    pub fn flattened(&self) -> (&'static str, Vec<(String, String)>) {
+    /// The name borrows from `self` rather than being `&'static`: a
+    /// [`Fact::Said`] carries a kind that came off a wire, so it is a `String`
+    /// and there is nothing static about it. Every other variant still hands
+    /// back a literal, which coerces.
+    pub fn flattened(&self) -> (&str, Vec<(String, String)>) {
         match self {
             Self::Ran {
                 node,
@@ -215,6 +243,10 @@ impl Fact {
                     took_us(took),
                 ],
             ),
+            // Already flat, and it stays that way. Copying it into another
+            // shape here would be this crate deciding something about a
+            // vocabulary it deliberately does not know.
+            Self::Said { kind, pairs } => (kind.as_str(), pairs.clone()),
             Self::Elsewhere { host, saw } => {
                 let (kind, mut said) = saw.flattened();
                 // Last, so that a fact which crossed two machines keeps the

@@ -2,5 +2,6 @@
 
 mod artifact;
 mod doubles;
+mod machine;
 mod protocol;
 mod worker;

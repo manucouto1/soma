@@ -4,9 +4,9 @@ use soma_next_core::{Device, Fact, Host, Key, NodeId};
 use std::time::Duration;
 
 /// The fields of a flattened fact, as a map, for asserting on one at a time.
-fn said(fact: &Fact) -> (&'static str, std::collections::HashMap<String, String>) {
+fn said(fact: &Fact) -> (String, std::collections::HashMap<String, String>) {
     let (kind, fields) = fact.flattened();
-    (kind, fields.into_iter().collect())
+    (kind.to_string(), fields.into_iter().collect())
 }
 
 #[test]

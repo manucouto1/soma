@@ -4489,3 +4489,111 @@ to be written.
 - [x] and a block that is one layer keeps its count inline
 - [x] **how many lanes a layer runs is read and never inferred**
 - [x] something that runs one lane says nothing about lanes
+
+## CU23 — Workers and jobs, live
+
+```python
+from soma_next.record import fleet, machines
+
+fleet(store, run="tuesday")        # what each machine did, and what it says it is
+machines(store, run="tuesday")     # drawn: working against waited on
+```
+
+The last row of the observability plan CU19 opened, and the first thing to
+decide about it was what **not** to build.
+
+### There is no registry, and there was never a place for one
+
+A machine does work here in exactly two ways, and each already answers *is it
+alive* without anybody keeping a list:
+
+| | who knows | already there |
+|---|---|---|
+| a worker serving slices (`.at("worker1")`) | the client, which is talking to it now | `left` with the whole round trip, and a `host` on every fact from over there |
+| a machine claiming trials from a folder | the store | `in_flight`, `abandoned`, and *is it still writing* measured writer against writer |
+
+There is no third case. The original keeps a coordinator with a `WorkerStatus`,
+a `last_heartbeat` and a thirty-second timeout — three missed beats at ten
+seconds — and it needs one **because it has a coordinator**. CU15 removed that
+on purpose, and CU18 answered liveness the other way: not *does it answer* but
+*is it still writing*, against the newest write and never against a local clock.
+
+### The record, turned the other way up
+
+What was missing is not state, it is a **view**. The record is written run →
+`forward` → node and *where* is an attribute, so nobody could ask what a machine
+is doing. `fleet` inverts it at the price `nodes` already costs.
+
+The column that earns it is `waiting_us`: the round trip **minus** what actually
+ran over there — the wire, the queue and the codec. Neither half of that
+subtraction belongs to a node, so no per-node view can produce it, and it is the
+answer to *was sending it worth it*. Against a real pair of workers it says the
+thing immediately: sixty microseconds of work behind 1.2 seconds of round trip
+is a slice that should have stayed here.
+
+### And the half no record can derive
+
+How loaded a machine is, how much memory is left, how long it has been up.
+Nobody on this end can work that out. So the worker says it, and three decisions
+fall out of rules that were already written:
+
+**It is a level of its own.** A load average is not a fact about a graph, and a
+variant for it in the core's `Fact` would be the engine learning what a machine
+is — the mistake that keeps `loss` out of the core. So the vocabulary lives in
+`transport/`, where a host is already a thing.
+
+**It crosses flat.** `Fact::Said { kind, pairs }` is a **carrier and not a
+vocabulary**: what the core learns is that other levels exist and one of them
+may be speaking from another machine. `(kind, pairs)` is the shape CU20 named as
+where the levels meet, and it is what `flattened` already produces.
+
+Which turned out to cost **nothing on the wire**. `Answer::Saw` already carries
+a `Fact`, the client already relays one straight to its watcher, and the engine
+already wraps whatever comes back in `Elsewhere` — so a reading **arrives saying
+which host it came from** without one line attributing it. No message was added
+to the protocol and no trait grew a method.
+
+**It is read and never judged.** No bound anywhere near it. Whether 0.9 busy is
+trouble is an opinion at a threshold, and this library keeps those in `health/`
+where they can be argued with against a record that has already been written.
+
+The reading is taken **before** the slice and not after: one taken when the work
+is over is a reading of a machine that has just stopped, and the question is
+what it was like while it was asked.
+
+### What is not in it
+
+**The idle machine.** A worker says what it looks like when it is given
+something to do, so one nobody is using contributes nothing. The pipe for that
+one is already decided rather than open: CU20's rule is *where a connection is
+open, facts come back down it; where there is none, they go to the store* — and
+an idle worker's connection is one nobody is reading, which is the same thing.
+So a clock writing readings to the store, and `fleet` scanning them the way
+CU18's liveness already does.
+
+It is not down the wire, and that was measured against the code rather than
+preferred: the client only reads the socket inside `say`, so a worker
+heartbeating while idle writes into a buffer nobody drains — it blocks on write
+and stops being able to accept the next job, and what the client eventually
+reads is the **oldest** beats, which is the worst possible answer to *is it
+alive now*.
+
+**This machine.** `here` says nothing about itself. It is the one you can look at
+with `top`, and inventing a row nobody had to send is not worth the line.
+
+### Questionnaire
+
+**The fleet** (`python/tests/test_record.py`)
+- [x] a run says what each machine did
+- [x] and what it was waited on for
+- [x] a machine nobody sent anything to is not in it — there is no registry
+- [x] the fleet is drawn working against waited on
+- [x] **a machine says what only it can say**
+- [x] and it arrives saying which host, without anybody attributing it
+- [x] a run with nobody else in it says nothing about machines
+
+**The reading** (`transport/tests/unit/machine.rs`)
+- [x] a reading crosses as a flat fact and not as a variant of its own
+- [x] what nobody measured is absent and not zero
+- [x] a reading of this machine says how long it has been up wherever it runs
+- [x] **nothing in it is a judgement**
