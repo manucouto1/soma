@@ -771,3 +771,90 @@ def test_a_node_whose_modules_never_ran_is_said_out_loud():
         read = probe(g, torch.randn(8, 16))
 
     assert not any(where.startswith("idle") for where in read)
+
+
+def test_a_repeated_block_of_several_layers_puts_its_count_on_the_block():
+    # Four encoder layers opened up are eight boxes each saying `×4`: the count
+    # said eight times and the block itself said none.
+    pytest.importorskip("plotly")
+
+    class Stack(Node):
+        def __init__(self, width=16, layers=4):
+            self.body = torch.nn.TransformerEncoder(
+                torch.nn.TransformerEncoderLayer(width, 2, 32, batch_first=True), layers
+            )
+
+        def forward(self, x, ctx):
+            return Opaque(self.body(x))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    g = Graph.somatize(Stack().named("enc"))
+
+    made = architecture(g, Opaque(torch.randn(2, 5, 16)), depth=1)["enc"]
+
+    assert made.groups, "an opened composite that repeats is a block"
+    assert [count for _, count in made.groups.values()] == [4]
+    assert not any("×" in one.label for one in made.layers), [o.label for o in made.layers]
+    assert all(one.block in made.groups for one in made.layers)
+
+
+def test_and_a_block_that_is_one_layer_keeps_its_count_inline():
+    # A frame around one box is a frame saying nothing a word could not.
+    pytest.importorskip("plotly")
+
+    class Deep(Node):
+        def __init__(self, width=16, how_many=5):
+            self.body = torch.nn.Sequential(
+                *[torch.nn.Linear(width, width) for _ in range(how_many)]
+            )
+
+        def forward(self, x, ctx):
+            return Opaque(self.body(x))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    g = Graph.somatize(Deep().named("deep"))
+
+    made = architecture(g, Opaque(torch.randn(2, 16)))["deep"]
+
+    assert not made.groups
+    assert any("×5" in one.label for one in made.layers), [o.label for o in made.layers]
+
+
+def test_how_many_lanes_a_layer_runs_is_read_and_never_inferred():
+    # Torch packs the heads of a `MultiheadAttention` into one `in_proj_weight`
+    # and a reshape, so there is no second module to find. What is drawn is the
+    # count on the one box that exists, and four boxes wired together would be a
+    # graph nobody built.
+    pytest.importorskip("plotly")
+
+    class Attends(Node):
+        def __init__(self, width=16, heads=4):
+            self.attn = torch.nn.MultiheadAttention(width, heads, batch_first=True)
+
+        def forward(self, x, ctx):
+            return Opaque(self.attn(x, x, x)[0])
+
+        def parameters(self):
+            return list(self.attn.parameters())
+
+    g = Graph.somatize(Attends().named("a"))
+
+    made = architecture(g, Opaque(torch.randn(2, 5, 16)))["a"]
+    one = made.layers[0]
+
+    assert one.parallel == 4
+    assert one.made_of == "4 heads", one.made_of
+    assert len(made.layers) == 1, "one module, one box"
+
+
+def test_something_that_runs_one_lane_says_nothing_about_lanes():
+    pytest.importorskip("plotly")
+    g, _ = chain([Block() for _ in range(2)])
+
+    made = architecture(g, Opaque(torch.randn(2, 16)))
+
+    assert all(one.parallel is None for inside in made.values() for one in inside.layers)

@@ -460,3 +460,171 @@ def test_a_layer_that_narrows_is_drawn_wide_at_the_top():
     top = [float(one.split(",")[0]) for one in path.replace("M ", "").split(" L ")[:2]]
     bottom = [float(one.split(",")[0]) for one in path.replace("M ", "").split(" L ")[2:4]]
     assert max(top) - min(top) > max(bottom) - min(bottom), f"drawn upside down: {path}"
+
+
+# ── A repeated block, and what runs several of itself at once ──
+
+
+def _blocked(layers, edges, groups=None):
+    """The same, with each layer saying which repeated block it belongs to and
+    how many identical lanes it is."""
+    from soma_next.torch._inside import Inside, Layer
+
+    made = []
+    for path, kind, label, block, parallel in layers:
+        one = Layer(path, kind, label, "2×4", parallel=parallel)
+        one.block = block
+        made.append(one)
+    return Inside(made, edges, "traced", None, None, groups or {})
+
+
+def _drawn(g, inside):
+    return _figure.boxes(json.loads(g.plan_json()), None, inside)
+
+
+def test_a_repeated_block_is_a_frame_around_its_layers_with_the_count_on_it(g):
+    # Four encoder layers opened up are eight boxes each saying `×4`: the count
+    # said eight times and the block itself said none.
+    g.node("enc", Identity())
+    inside = {"enc": _blocked(
+        [("emb", "learned", "Embedding", None, None),
+         ("b.0.attn", "attention", "MultiheadAttention", "b.0", None),
+         ("b.0.norm", "norm", "LayerNorm", "b.0", None)],
+        [("emb", "b.0.attn"), ("b.0.attn", "b.0.norm")],
+        {"b.0": ("TransformerEncoderLayer", 4)},
+    )}
+
+    placed = _drawn(g, inside)
+    frames = [box for box in placed if box.kind == "group"]
+    labels = {box.node: box.label for box in placed if box.kind == "layer"}
+
+    assert [box.label for box in frames] == ["TransformerEncoderLayer  ×4"]
+    assert not any("×4" in one for one in labels.values()), labels
+
+
+def test_and_the_frame_holds_every_layer_of_the_block_and_nothing_else(g):
+    g.node("enc", Identity())
+    inside = {"enc": _blocked(
+        [("head", "learned", "Linear", None, None),
+         ("b.0.one", "learned", "Linear", "b.0", None),
+         ("b.0.two", "norm", "LayerNorm", "b.0", None),
+         ("tail", "learned", "Linear", None, None)],
+        [("head", "b.0.one"), ("b.0.one", "b.0.two"), ("b.0.two", "tail")],
+        {"b.0": ("Block", 3)},
+    )}
+
+    placed = _drawn(g, inside)
+    frame = next(box for box in placed if box.kind == "group")
+    where = {box.node: box for box in placed if box.kind == "layer"}
+
+    for path in ("enc.b.0.one", "enc.b.0.two"):
+        one = where[path]
+        assert frame.x <= one.x and one.x + one.w <= frame.x + frame.w, path
+        assert frame.y <= one.y and one.y + one.h <= frame.y + frame.h, path
+    for path in ("enc.head", "enc.tail"):
+        assert not (frame.y <= where[path].y <= frame.y + frame.h), path
+
+
+def test_a_layer_that_runs_identical_lanes_is_drawn_with_them_behind_it(g):
+    # And never as separate boxes: torch packs the heads of a
+    # `MultiheadAttention` into one projection, so four of them wired together
+    # would be a graph nobody built.
+    pytest.importorskip("plotly")
+    g.node("enc", Identity())
+    inside = {"enc": _blocked(
+        [("attn", "attention", "MultiheadAttention", None, 4)], [],
+    )}
+
+    figure = _figure.figure(g, inside=inside)
+    where = {box.node: box for box in _drawn(g, inside) if box.kind == "layer"}
+    lanes = [
+        one for one in figure.layout.shapes
+        if one.type == "path" and one.line.width == 0.8
+    ]
+
+    assert len(lanes) == _figure.PLATES
+    assert len([box for box in _drawn(g, inside) if box.kind == "layer"]) == 1
+    assert where["enc.attn"].parallel == 4
+
+
+def test_one_lane_is_not_several_and_draws_nothing_extra(g):
+    pytest.importorskip("plotly")
+    g.node("enc", Identity())
+    inside = {"enc": _blocked([("attn", "attention", "Attention", None, None)], [])}
+
+    figure = _figure.figure(g, inside=inside)
+
+    assert not [one for one in figure.layout.shapes
+                if one.type == "path" and one.line.width == 0.8]
+
+
+# ── And every arrow inside the picture ──
+
+
+def _points(path):
+    """Every point an svg path passes through, as `(x, y)`.
+
+    A routed edge is a `path` shape and not a rectangle, which is exactly why
+    nobody was checking it: `x0`/`y0` are `None` there and a range check that
+    reads them skips the only shapes that can leave the canvas.
+    """
+    import re
+
+    said = [float(one) for one in re.findall(r"-?\d+(?:\.\d+)?", path)]
+    return list(zip(said[::2], said[1::2]))
+
+
+def _needs_a_lane():
+    """A wave whose middle branch is tall enough that the outer ones cannot
+    reach the join without crossing it — which is the notebook's shape, and the
+    only one that makes an edge go **around**."""
+    g = Graph.somatize(
+        (Identity().named("a") | Identity().named("b") | Identity().named("c"))
+        >> Add(0).named("d")
+    )
+    deep = _blocked(
+        [(f"{at}", "learned", "Linear", None, None) for at in range(8)],
+        [(f"{at}", f"{at + 1}") for at in range(7)],
+    )
+    return g, {"b": deep}
+
+
+def test_an_edge_routed_around_the_drawing_is_still_in_the_drawing():
+    # It was not. The lane is placed **outside every box** on purpose — a lane
+    # threaded between two of them crosses a third the next time the layout
+    # moves — and the canvas was measured from the boxes, so the arrows left the
+    # picture on one side and came back on the other.
+    pytest.importorskip("plotly")
+    g, inside = _needs_a_lane()
+
+    figure = _figure.figure(g, inside=inside)
+    x0, x1 = sorted(figure.layout.xaxis.range)
+    y0, y1 = sorted(figure.layout.yaxis.range)
+    # A lane and not a bend: `_bent` draws a `path` too, so counting paths is
+    # how a test about routing quietly stops being about routing. A lane is the
+    # one that leaves the boxes.
+    everything = [one for one in figure.layout.shapes if one.type == "path"]
+    placed = _figure.boxes(json.loads(g.plan_json()), None, inside)
+    span = max(box.x + box.w for box in placed)
+    routed = [one for one in everything
+              if any(x < 0 or x > span for x, _ in _points(one.path))]
+
+    assert routed, "this graph is meant to need a lane outside the boxes"
+    for one in everything:
+        for x, y in _points(one.path):
+            assert x0 <= x <= x1 and y0 <= y <= y1, (one.path, figure.layout.xaxis.range)
+
+
+def test_and_the_arrowheads_too():
+    pytest.importorskip("plotly")
+    g, inside = _needs_a_lane()
+
+    figure = _figure.figure(g, inside=inside)
+    x0, x1 = sorted(figure.layout.xaxis.range)
+    y0, y1 = sorted(figure.layout.yaxis.range)
+
+    for one in figure.layout.annotations:
+        if one.ax is None or one.axref != "x":
+            continue
+        assert x0 <= one.ax <= x1 and y0 <= one.ay <= y1, one
+        assert x0 <= one.x <= x1 and y0 <= one.y <= y1, one

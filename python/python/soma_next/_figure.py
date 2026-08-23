@@ -55,7 +55,7 @@ so the table moved to `soma_next._theme` and both read it from there.
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from soma_next import _theme
 
@@ -110,6 +110,15 @@ FRAME_PAD = 14.0
 FRAME_HEAD = 24.0
 """The strip at the top of a frame where its label goes."""
 
+GROUP_HEAD = 20.0
+"""And the strip at the top of a repeated block, where its `×N` goes.
+
+Shallower than a frame's, because a block sits **inside** one and two headers
+of the same height read as two frames of the same kind."""
+
+GROUP_PAD = 9.0
+"""How far a block's frame stands off the layers in it."""
+
 TOO_MANY = 80
 """Past this many nodes a diagram stops being readable, so the notebook does not
 draw one on its own. `figure()` still obeys if you ask it by hand — the guard is
@@ -125,10 +134,15 @@ light and whose curves are dark is two products."""
 class Box:
     """One rectangle, placed.
 
-    `kind` is `"node"`, `"wave"`, `"remote"` or `"layer"`; a layer's `mark` says
-    what **sort** of thing it is, which is what decides how it is drawn. A
-    `Linear` and a `Sigmoid` are not the same kind of thing and drawing them the
-    same says they are.
+    `kind` is `"node"`, `"wave"`, `"remote"`, `"layer"` or `"group"`; a layer's
+    `mark` says what **sort** of thing it is, which is what decides how it is
+    drawn. A `Linear` and a `Sigmoid` are not the same kind of thing and drawing
+    them the same says they are.
+
+    A `"group"` is a repeated block, drawn as a frame around the layers in it
+    with its `×N` on the frame — because four encoder layers opened up are eight
+    boxes each saying `×4`, which is the count said eight times and the block
+    said none.
     """
 
     kind: str
@@ -144,6 +158,12 @@ class Box:
     narrows: int | None = None
     made_of: str | None = None
     dims: tuple | None = None
+    parallel: int | None = None
+    """How many identical lanes this one layer is — the heads of an attention
+    block, the groups of a convolution. Drawn as plates behind it and **never**
+    as separate boxes: torch packs the heads into one projection, so there is no
+    second module and edges between four of them would be a graph nobody
+    built."""
 
     @property
     def cx(self) -> float:
@@ -256,6 +276,7 @@ def figure(graph, overlay=None, inside=None):
             how = _theme.SHAPES.get(box.mark or "other", "box")
             if how == "box" and box.narrows and _tapers(box.mark):
                 how = "trapezoid"
+            shapes.extend(_plates(box, line, how))
             shapes.append(_silhouette(box, fill, line, width, how))
             notes.append(_text(box.cx, box.cy, _labelled(box), ink, size=10))
         elif box.kind == "node":
@@ -274,6 +295,16 @@ def figure(graph, overlay=None, inside=None):
             opened = (inside or {}).get(box.node)
             at = (box.y + PAD_Y + LINE_H * len(lines) / 2) if opened else box.cy
             notes.append(_text(box.cx, at, "<br>".join(lines), ink))
+        elif box.kind == "group":
+            # A block that repeats, drawn once with its count on it. Dotted like
+            # a wave, because it is the same statement — *what is in here goes
+            # together* — and a reader who has learnt one has learnt both.
+            _, line, ink = PALETTE["wave"]
+            shapes.append(_rect(box, None, line, 1.0, dash="dot"))
+            notes.append(
+                _text(box.x + GROUP_PAD, box.y + GROUP_HEAD / 2, box.label, ink, left=True,
+                      size=10)
+            )
         else:
             fill, line, ink = PALETTE[box.kind]
             shapes.append(_rect(box, fill, line, 1.6, dash="dot"))
@@ -285,19 +316,37 @@ def figure(graph, overlay=None, inside=None):
     # that can tell a residual from a stack.
     for node, held in (inside or {}).items():
         where_in = {box.node: box for box in placed if box.kind == "layer"}
+        blocks = {box.node: box for box in placed if box.kind == "group"}
         frame = next((box for box in placed if box.node == node), None)
         if frame is None:
             continue
+        mine = {one.path: one.block for one in held.layers}
         for a, b in held.edges:
             from_, to = where_in.get(f"{node}.{a}"), where_in.get(f"{node}.{b}")
             if from_ is None or to is None:
                 continue
-            around, head = _inner_edge(from_, to, frame)
+            # An edge that comes **down** into a block ends at the block, not
+            # at the layer inside it: the frame's header is where the `×N` is
+            # written, and an arrow through a label reads as neither. A skip
+            # comes in through the side and never touches the header, so it
+            # keeps going to the layer it really feeds — which is the `+`, and
+            # saying *into the block* there would lose the one thing the skip
+            # is about.
+            around, head = _inner_edge(
+                from_,
+                _entered(from_, to, blocks.get(f"{node}.{mine.get(b)}"))
+                if mine.get(a) != mine.get(b)
+                else to,
+                frame,
+            )
             shapes.extend(around)
             notes.append(head)
 
     # Outside every box, so a routed edge never has to guess which way is clear.
     span = (min(box.x for box in placed), max(box.x + box.w for box in placed))
+    # What the drawing has to hold, which starts as the boxes and grows to take
+    # in every lane a routed edge asks for.
+    reach = [span[0], span[1]]
     lanes, boxed = {}, list(where.values())
     for node, comes_from in steps(plan):
         for source in comes_from:
@@ -313,9 +362,10 @@ def figure(graph, overlay=None, inside=None):
             # the same graph is drawn the same way twice.
             side = -1 if abs(from_.cx - span[0]) <= abs(span[1] - from_.cx) else 1
             apart = lanes[side] = lanes.get(side, -1) + 1
-            around, head = _routed(from_, to, span, apart)
+            around, head, lane = _routed(from_, to, span, apart)
             shapes.extend(around)
             notes.append(head)
+            reach = [min(reach[0], lane), max(reach[1], lane)]
 
     figure.add_trace(
         go.Scatter(
@@ -338,7 +388,6 @@ def figure(graph, overlay=None, inside=None):
     # A legend, and only of the families that are actually on the figure. Six
     # colours nobody can read are one colour, and a legend of families that are
     # not here is a reader looking for something that is not there.
-    span_x = max(box.x + box.w for box in placed)
     span_y = max(box.y + box.h for box in placed)
     if ill:
         notes.extend(_legend(ill, span_y + 26))
@@ -346,12 +395,12 @@ def figure(graph, overlay=None, inside=None):
     figure.update_layout(
         shapes=shapes,
         annotations=notes,
-        xaxis={"visible": False, "range": [-20, span_x + 20]},
+        xaxis={"visible": False, "range": [reach[0] - 20, reach[1] + 20]},
         # Reversed, because the layout counts downwards the way a plan reads.
         yaxis={"visible": False, "range": [span_y + 20, -20], "scaleanchor": "x"},
         **_theme.layout(
             margin={"l": 16, "r": 16, "t": 16, "b": 16},
-            **_sized(span_x + 80, span_y + 80),
+            **_sized(reach[1] - reach[0] + 80, span_y + 80),
         ),
     )
     return figure
@@ -435,7 +484,11 @@ def _node_size(node, labels, inside=None):
     rows = _rows_of(held)
     return (
         max(_width(node, labels), _inner_width(held) + 2 * FRAME_PAD + GUTTER),
-        tall + rows * LAYER_H + max(rows - 1, 0) * LAYER_GAP + FRAME_PAD,
+        tall
+        + rows * LAYER_H
+        + max(rows - 1, 0) * LAYER_GAP
+        + len(held.groups) * (GROUP_HEAD + GROUP_PAD)
+        + FRAME_PAD,
     )
 
 
@@ -455,29 +508,74 @@ def _stack(node, inside, x, y, width, labels, out):
         return
     lines = labels.get(node) or (node,)
     top = y + max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
-    for one, place in _ranked(inside):
+    placed = _ranked(inside)
+    lifts = _lifted(placed, inside)
+    held = {}
+    for one, place in placed:
         row, across, wide, narrows = place
+        # A layer in a repeated block is indented, so the frame around it has
+        # somewhere to be. It is the only reason the block is narrower.
+        inset = GROUP_PAD if one.block in inside.groups else 0.0
         # The height is the kind's, and it is decided **here** and not when it
         # is drawn: a figure that paints something other than the box it laid
         # out has two truths in it, and the tests can only see one of them.
         tall = LAYER_H * _theme.MARKS.get(one.kind, _theme.MARKS["other"])[3]
+        box = Box(
+            "layer",
+            x + FRAME_PAD + GUTTER + across + inset,
+            top + lifts[row] + row * (LAYER_H + LAYER_GAP) + (LAYER_H - tall) / 2,
+            wide - 2 * inset,
+            tall,
+            node=f"{node}.{one.path}",
+            label=one.label,
+            mark=one.kind,
+            shape=one.shape,
+            row=row,
+            narrows=narrows,
+            made_of=one.made_of if one.kind in ("attention", "recurrent") else None,
+            dims=one.dims,
+            parallel=one.parallel,
+        )
+        out.append(box)
+        if one.block in inside.groups:
+            held.setdefault(one.block, []).append(box)
+    # The frame last, so it is behind nothing and its label is not covered.
+    for block, boxed in held.items():
+        name, count = inside.groups[block]
         out.append(
             Box(
-                "layer",
-                x + FRAME_PAD + GUTTER + across,
-                top + row * (LAYER_H + LAYER_GAP) + (LAYER_H - tall) / 2,
-                wide,
-                tall,
-                node=f"{node}.{one.path}",
-                label=one.label,
-                mark=one.kind,
-                shape=one.shape,
-                row=row,
-                narrows=narrows,
-                made_of=one.made_of if one.kind in ("attention", "recurrent") else None,
-                dims=one.dims,
+                "group",
+                min(one.x for one in boxed) - GROUP_PAD,
+                min(one.y for one in boxed) - GROUP_HEAD,
+                max(one.x + one.w for one in boxed) - min(one.x for one in boxed)
+                + 2 * GROUP_PAD,
+                max(one.y + one.h for one in boxed) - min(one.y for one in boxed)
+                + GROUP_HEAD + GROUP_PAD,
+                node=f"{node}.{block}",
+                label=f"{name}  ×{count}" if name else f"×{count}",
             )
         )
+
+
+def _lifted(placed, inside):
+    """How far each row drops to make room for the headers above it.
+
+    A repeated block gets a strip at the top for its `×N`, and every row from
+    there down moves by that much. Accumulated rather than per block, because
+    two blocks in a row each want their own strip and the second one has to
+    clear the first.
+    """
+    rows = {}
+    for one, (row, *_) in placed:
+        if one.block in inside.groups:
+            rows.setdefault(one.block, []).append(row)
+    opens = {min(where) for where in rows.values()}
+    lifts, so_far = {}, 0.0
+    for row in sorted({place[0] for _, place in placed}):
+        if row in opens:
+            so_far += GROUP_HEAD
+        lifts[row] = so_far
+    return lifts
 
 
 def _ranked(inside):
@@ -844,6 +942,39 @@ def _silhouette(box, fill, line, width, how):
     return said
 
 
+PLATE = 4.0
+"""How far behind a layer each of its lanes is drawn."""
+
+PLATES = 2
+"""And how many of them, at most.
+
+A count and not the count: eight heads drawn as eight plates is a smudge, and
+what says *eight* is the word `8 heads` written on the front one. The plates
+say **there are several of these**, which is the part a shape can carry.
+"""
+
+
+def _plates(box, line, how):
+    """The lanes behind a layer that runs several of itself at once.
+
+    Offset copies of its own silhouette, and **no edges between them**. Torch
+    packs the heads of a `MultiheadAttention` into one projection, so there is
+    no second module anywhere and four boxes wired together would be a graph
+    nobody built. What is true is that this one operation happens several times
+    over, and that is what a stack of plates says.
+    """
+    if not box.parallel or box.parallel < 2:
+        return []
+    said = []
+    for at in range(min(box.parallel - 1, PLATES), 0, -1):
+        # Downwards and to the right, never up: the first layer of a repeated
+        # block has its frame's `×N` immediately above it, and a plate drawn
+        # into a label is two things in one place.
+        behind = replace(box, x=box.x + at * PLATE, y=box.y + at * PLATE)
+        said.append(_silhouette(behind, None, line, 0.8, how))
+    return said
+
+
 def _tapered(box, skew):
     """A shape that changes the shape, drawn changing: narrowing when what comes
     out is smaller than what went in, widening when it is bigger.
@@ -945,7 +1076,7 @@ def _hits(x0, y0, x1, y1, box):
 
 
 def _routed(source, target, span, apart):
-    """One edge that cannot go straight, as `(shapes, annotation)`.
+    """One edge that cannot go straight, as `(shapes, annotation, lane)`.
 
     Around means **outside everything**, down, and in through the side of what
     reads it. The lane is outside the whole drawing rather than outside the boxes
@@ -954,6 +1085,11 @@ def _routed(source, target, span, apart):
 
     `apart` is which lane on that side this one gets, so that edges which all
     have to go around stay countable.
+
+    The lane comes back because **the caller has to make room for it**. Outside
+    every box is outside the extent the boxes gave, and a canvas measured from
+    the boxes alone cuts the lane off — which is a figure whose arrows leave it
+    on one side and come back on the other.
     """
     left, right = span
     # The near side, so an edge that skips one box does not cross the figure.
@@ -973,6 +1109,7 @@ def _routed(source, target, span, apart):
         [{"type": "path", "path": path, "xref": "x", "yref": "y",
           "line": {"color": _theme.MUTED, "width": 1.2}, "layer": "below"}],
         _arrow(into - outward * HEAD, y1, into, y1),
+        lane,
     )
 
 
@@ -1018,6 +1155,22 @@ def _bent(source, target):
           "line": {"color": _theme.MUTED, "width": 1.2}, "layer": "below"}],
         _arrow(x1, y1 - HEAD, x1, y1),
     )
+
+
+def _entered(source, target, block):
+    """The block an edge lands in, when it lands on it from directly above.
+
+    The row is kept from the layer, because a skip is *how many rows it jumps*
+    and a block has no row of its own — measuring the picture instead of the
+    graph is the mistake `_inner_edge` already has a comment about. And the
+    height is trimmed to the header, so the arrow stops on the frame's top edge
+    rather than at the middle of everything inside it.
+    """
+    if block is None or source.row is None or target.row is None:
+        return target
+    if target.row - source.row > 1:
+        return target
+    return replace(block, row=target.row, h=GROUP_HEAD)
 
 
 def _inner_edge(source, target, frame):

@@ -4058,12 +4058,14 @@ missing looks like a residual that is not there.
 
 `g.figure(inside=...)` draws the node's box as a **frame** — the shape a `Wave`
 and a `Remote` already are — and lays the inside out by what feeds what, so a
-skip runs down a gutter and enters from the side. Five rules make it readable: a
-**kind** decides the silhouette, not a class name; a composite everybody
-recognises is one box and `depth=` opens it; blocks that are the same block
-collapse to `×N`; the **shape is written on the layer**, because that is the only
-thing that makes a bottleneck a picture; and every number **says what it is** —
-`4 batch · 16 steps · 24 dim`, never `4×16×24`.
+skip runs down a gutter and enters from the side. The rules that make it
+readable: a **kind** decides the silhouette, not a class name; a composite
+everybody recognises is one box and `depth=` opens it; blocks that are the same
+block collapse to `×N`; the **shape is written on the layer**, because that is
+the only thing that makes a bottleneck a picture; and every number **says what
+it is** — `4 batch · 16 steps · 24 dim`, never `4×16×24`.
+
+Two of those grew after CU22 — see *After CU22 — a block is a box*.
 
 Findings are coloured by **family** — numeric, signal, activation, step,
 capacity, data — with a legend of the ones on the figure. Six alarms that all
@@ -4349,10 +4351,22 @@ So the library ships **all five and picks none**. Which proxy is worth anything
 depends on the family being searched, and that is a question with a cheap answer
 rather than a default somebody has to discover is wrong.
 
-### What is not in it
+### And the notebook
 
-The **notebook**, which is where somebody would actually meet this: a candidate
-drawn, probed, the flag on the figure, and a fix that makes it quiet.
+`examples/08-before-a-step-is-taken.ipynb`: a candidate drawn, probed in a third
+of a second, the flag on the figure, and the fix that makes it quiet — followed
+by training all three for real, because **an opinion that is never checked is a
+habit**. The one the probe flagged lands on the floor; the one it stayed quiet
+about trains.
+
+It also does something the measurements could not do on their own: it runs the
+proxies over six candidates and gets `synflow` at **+0.11 against the baseline**,
+where the twenty-four-candidate measurement has it at **-0.75**. Same proxy,
+same code, different family — here depth helps and `synflow` reads depth. That
+is the argument for shipping all five and picking none, and it is much better
+made by two tables that disagree than by a paragraph.
+
+### What is not in it
 
 A probe of a graph whose slices run **elsewhere**. The hooks are registered
 here and a remote slice runs its own forward, so it contributes nothing — said
@@ -4399,3 +4413,79 @@ not write its own record.
 - [x] the bigger network scores higher on `synflow`, which is the caveat written
       as a test rather than as a footnote
 - [x] a batch of one has nothing to tell apart
+
+## After CU22 — A block is a box, and a lane is inside the picture
+
+Three things about the figure, found by looking at one: `examples/07`'s `In[6]`,
+which is the cell that opens a composite.
+
+### An arrow that left the drawing
+
+A routed edge takes a lane **outside every box** — a lane threaded between two
+of them is a lane that will cross a third the next time the layout moves — and
+the canvas was measured from the boxes. So the lane sat two pixels past the
+axis, and the arrows from the outer branches left the picture on one side and
+came back on the other.
+
+The reason it survived a suite with a figure test in it is worth more than the
+fix: a routed edge is a `path` shape, and a `path` has no `x0`/`y0`. **Every
+range check reads `x0`, so every range check skipped the only shapes that can
+leave the canvas.** The test now parses the path.
+
+### A repeated block is a frame, not a word on every layer
+
+Four encoder layers opened up were eight boxes each saying `×4`: the count said
+eight times, and the block itself said none. Now a block of **two or more**
+layers is a frame around them with `TransformerEncoderLayer ×4` on it, and a
+block that is a single layer keeps its `×N` inline — a frame around one box says
+nothing a word could not.
+
+An edge that comes **down** into a block ends on the block rather than on the
+layer inside it, because the frame's header is where the count is written and an
+arrow through a label reads as neither. A skip comes in through the **side**,
+never touches the header, and goes on to the layer it really feeds: saying *into
+the block* there would lose the one thing a skip is about.
+
+### What runs several of itself at once
+
+`4 heads` on a `MultiheadAttention`, drawn with plates behind the box. Read off
+`num_heads` and **never inferred**, and never drawn as separate boxes: torch
+packs the heads into one `in_proj_weight` and a reshape, so `fx` sees one
+operation and a hook sees one module. Four boxes wired together would be a graph
+nobody built — the same rule that makes a traced residual say *how* it was found.
+
+The plates are capped at two however many lanes there are, because eight plates
+are a smudge and what says *eight* is the word. They go **downwards**, since the
+first layer of a block has its `×N` immediately above it.
+
+### Why this was copied and not adopted
+
+`torchview` does both of these already: `expand_nested=True` puts an expanded
+submodule in a dashed graphviz cluster, and `roll=True` collapses recursively
+used modules. Which is the confirmation that the shape is right, and the reason
+to take the idea rather than the tool.
+
+What none of them has is the half this figure exists for. Netron, torchview and
+`visualtorch` draw a module tree; not one of them draws **placement** — no
+device, no host, no wave, no remote — and none has somewhere to put a health
+overlay. The original soma did not either, which is why CU19 had to invent it.
+Adopting graphviz would cost a system binary, lose plotly's hover and the live
+view, and still leave the wave frames, the remote frames and the health channel
+to be written.
+
+### Questionnaire
+
+**Drawn** (`python/tests/test_figure.py`)
+- [x] **an edge routed around the drawing is still in the drawing**, and the
+      arrowheads too
+- [x] a repeated block is a frame around its layers with the count on it, and
+      not the count on each of them
+- [x] and the frame holds every layer of the block and nothing else
+- [x] a layer that runs identical lanes is drawn with them behind it
+- [x] one lane is not several and draws nothing extra
+
+**What a node is made of** (`python/tests/test_health.py`)
+- [x] a repeated block of several layers puts its count on the block
+- [x] and a block that is one layer keeps its count inline
+- [x] **how many lanes a layer runs is read and never inferred**
+- [x] something that runs one lane says nothing about lanes

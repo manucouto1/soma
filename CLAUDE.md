@@ -104,9 +104,10 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
-`examples/` holds seven notebooks — declaring a graph, watching a run, training,
-a study, the health of a network, one problem end to end, and a real
-architecture diagnosed in **problem → symptoms → solution → healthy** cycles — **with their outputs stored**, so opening one shows what it does. Every
+`examples/` holds eight notebooks — declaring a graph, watching a run, training,
+a study, the health of a network, one problem end to end, a real architecture
+diagnosed in **problem → symptoms → solution → healthy** cycles, and what can be
+said before a step is taken — **with their outputs stored**, so opening one shows what it does. Every
 figure is kept twice: the plotly JSON for a live viewer and a PNG for a static
 one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
 time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not
@@ -338,14 +339,21 @@ holding two modules composes them in its own `forward`.
 
 `g.figure(inside=...)` draws its box as a **frame** — the shape a `Wave` and a
 `Remote` already are — and lays the inside out **by what feeds what**, so a skip
-runs down a gutter and enters from the side. Five rules make it readable: a
+runs down a gutter and enters from the side. The rules that make it readable: a
 kind, not a class name, decides the **silhouette** — a convolution is a
 parallelogram, a recurrent cell has a tab, an attention block has its corners
 cut and says what is in it, a normalisation is a capsule, a non-linearity is
 pointed, and anything that changes the width is tapered the way it goes; a
 composite everybody recognises is one box and `depth=` opens it; blocks that are
-the same block collapse to `×N`; and the **shape is written on the layer**,
-because that is the only thing that makes a bottleneck a picture.
+the same block collapse to `×N`, and when the block is **more than one layer**
+that `×N` goes on a frame **around** them rather than on each of them — four
+encoder layers opened up are eight boxes each saying `×4`, which is the count
+said eight times and the block said none; something that runs identical lanes
+at once — the heads of an attention block, the groups of a convolution — is
+drawn with plates behind it and **never** as separate boxes, because torch packs
+the heads into one projection and four of them wired together would be a graph
+nobody built; and the **shape is written on the layer**, because that is the
+only thing that makes a bottleneck a picture.
 
 Findings are coloured by **family** — numeric, signal, activation, step,
 capacity, data — with a legend of the ones on the figure, because six alarms

@@ -165,9 +165,11 @@ def kind_of(what):
 class Layer:
     """One thing in an architecture: where it is, what it is, what it produces."""
 
-    __slots__ = ("path", "kind", "label", "shape", "made_of", "dims", "came_in")
+    __slots__ = ("path", "kind", "label", "shape", "made_of", "dims", "came_in",
+                 "block", "parallel")
 
-    def __init__(self, path, kind, label, shape=None, made_of=None, dims=None):
+    def __init__(self, path, kind, label, shape=None, made_of=None, dims=None,
+                 parallel=None):
         self.path = path
         self.kind = kind
         self.label = label
@@ -182,6 +184,18 @@ class Layer:
         #: And what went in, so that *does this narrow* is a fact about the
         #: layer rather than about what happens to sit above it on a figure.
         self.came_in = None
+        #: Which repeated block this belongs to, once one has been found. The
+        #: count goes on the **block** and not on each of its layers: four
+        #: encoder layers opened up are eight boxes each saying `×4`, which is
+        #: the count said eight times and the block said none.
+        self.block = None
+        #: How many identical lanes this one layer is, when the module says so
+        #: itself — `num_heads` on an attention block, `groups` on a
+        #: convolution. **Read and never inferred**: the heads of a
+        #: `MultiheadAttention` are one packed projection and a reshape, so
+        #: there is no second module to find and drawing four boxes with edges
+        #: between them would be inventing a graph that is not there.
+        self.parallel = parallel
         #: The shape of what it produces, as text — `(32, 8)`. The one thing
         #: that makes a **bottleneck** visible: `512 → 8 → 512` is a picture and
         #: `Linear · Linear · Linear` is not. `None` when nobody ran it.
@@ -194,7 +208,8 @@ class Layer:
         return hash(self._as_tuple())
 
     def _as_tuple(self):
-        return (self.path, self.kind, self.label, self.shape, self.made_of, self.dims)
+        return (self.path, self.kind, self.label, self.shape, self.made_of, self.dims,
+                self.block, self.parallel)
 
     def __repr__(self):
         said = f"Layer({self.path!r}, {self.kind!r}, {self.label!r}"
@@ -211,12 +226,17 @@ class Inside:
     tell those apart.
     """
 
-    __slots__ = ("layers", "edges", "how", "why", "folded")
+    __slots__ = ("layers", "edges", "how", "why", "folded", "groups")
 
-    def __init__(self, layers, edges, how, why=None, folded=None):
+    def __init__(self, layers, edges, how, why=None, folded=None, groups=None):
         self.layers = list(layers)
         self.edges = list(edges)
         self.how = how
+        #: The repeated blocks worth a frame, as `{block: (label, count)}`. A
+        #: block of two or more layers gets one; a block that is a single layer
+        #: keeps its `×N` inline, because a frame around one box is a frame
+        #: saying nothing a word could not.
+        self.groups = dict(groups or {})
         #: What was collapsed into what: `{"body.2.norm": "body.0.norm"}`. Six
         #: identical blocks drawn once leaves five sets of paths with no box,
         #: and a finding on one of them has to land somewhere — on the box that
@@ -312,7 +332,11 @@ def _from_fx(one, named):
     """One `fx` node as a `Layer`, or `None` for what is not worth a box."""
     if one.op == "call_module":
         held = named.get(one.target)
-        return Layer(one.target, kind_of(held), type(held).__name__)
+        return Layer(
+            one.target, kind_of(held), type(held).__name__,
+            made_of=_made_of(held) if held is not None else None,
+            parallel=_parallel(held) if held is not None else None,
+        )
     if one.op == "placeholder":
         # Kept, and it is not bookkeeping: `x + f(x)` **forks** here, and
         # without a box to fork from the skip has nowhere to start. Called
@@ -390,14 +414,46 @@ def _by_running(module, example, why):
     return Inside(layers, edges, "traced", why)
 
 
+def _parallel(module):
+    """How many identical lanes one module runs at once, **as it says itself**.
+
+    `num_heads` on an attention block, `groups` on a grouped convolution. Read
+    off the module and never inferred, because there is nothing to infer from:
+    torch packs the heads of a `MultiheadAttention` into one `in_proj_weight`
+    and a reshape, so `fx` sees one operation and a hook sees one module. Four
+    boxes with edges between them would be a graph nobody built, and this
+    library's whole position on that is that a structure which is not there must
+    not be drawn as though it were.
+
+    What is drawn instead is the **count**, on the one box that really exists.
+    """
+    if torch is None:
+        return None
+    for name in ("num_heads", "nhead", "groups"):
+        how_many = getattr(module, name, None)
+        if isinstance(how_many, int) and how_many > 1:
+            return how_many
+    return None
+
+
 def _made_of(module):
     """What a composite is made of, in one line: `attention · norm ×2 · linear ×2`.
 
     Only for something kept whole — a leaf is made of itself. It is the answer
     to *one box of what*, which a reader is owed the moment a fourteen-part
     block is drawn as one thing.
+
+    A module that runs identical lanes answers with **those** instead: `4 heads`
+    is what somebody wants to know about a `MultiheadAttention`, and a census of
+    its leaves says `other` — which is the truth about its one child and nothing
+    about the block.
     """
-    if torch is None or not any(True for _ in module.children()):
+    if torch is None:
+        return None
+    lanes = _parallel(module)
+    if lanes is not None and kind_of(module) == "attention":
+        return f"{lanes} heads"
+    if not any(True for _ in module.children()):
         return None
     counted = {}
     for _, one in module.named_modules():
@@ -558,12 +614,41 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
             finer, _ = _symbolic(module, None)
             if finer is not None:
                 mine, its = _spliced(mine, its, name, finer)
-        said[node] = _at_most(
-            node,
-            _repeated(_inherited(_without_a_lone_input(Inside(mine, its, "traced", None)))),
-            most,
+        said[node] = _named(
+            _at_most(
+                node,
+                _repeated(_inherited(_without_a_lone_input(Inside(mine, its, "traced", None)))),
+                most,
+            ),
+            dict(_held(graph.implementation(node))),
         )
     return said
+
+
+def _named(inside, held):
+    """What each framed block is called, taken from the module it is.
+
+    The class name and not the path: `body.layers.0` says where it lives and
+    `TransformerEncoderLayer ×4` says what it is, and only one of those is worth
+    the width. Where the block is not a module — an `fx` operation numbered by
+    its parent — the count stands on its own, which is honest and is what the
+    figure drew before any of this.
+    """
+    for which in list(inside.groups):
+        _, count = inside.groups[which]
+        name, _, rest = which.partition(".")
+        module = held.get(name)
+        if module is not None and rest:
+            try:
+                module = module.get_submodule(rest)
+            except AttributeError:
+                module = None
+        elif module is not None and not rest:
+            pass
+        else:
+            module = None
+        inside.groups[which] = (type(module).__name__ if module is not None else None, count)
+    return inside
 
 
 def _rows_in(example):
@@ -599,7 +684,8 @@ def _watch(where, one, layers, edges, made_by, order, batch=None):
         kind = kind_of(one)
         shape = _shape(output)
         made = Layer(
-            where, kind, type(one).__name__, shape, _made_of(one), _dims(kind, shape, batch)
+            where, kind, type(one).__name__, shape, _made_of(one), _dims(kind, shape, batch),
+            _parallel(one),
         )
         # What went **in**, which is the only honest way to know whether a layer
         # narrows: the first layer of a node has nothing above it to compare
@@ -753,6 +839,7 @@ def _without_a_lone_input(inside):
         inside.how,
         inside.why,
         inside.folded,
+        inside.groups,
     )
 
 
@@ -804,21 +891,28 @@ def _repeated(inside):
     if all(count == 1 for count in counts.values()):
         return inside
     del signature
-    layers = [
-        _carried(
-            Layer(
-                one.path,
-                one.kind,
-                _times(one.label, counts[which]),
-                one.shape,
-                one.made_of,
-                one.dims,
-            ),
-            one,
-        )
-        for which in kept
-        for one in blocks[which]
-    ]
+    # A block of two or more layers becomes a **frame** with its count on it; a
+    # block that is one layer keeps the count inline. Four encoder layers opened
+    # up are eight boxes each saying `×4` — which is the count said eight times
+    # and the block itself said none, and it is why the `×N` moved.
+    framed = {which for which in kept if counts[which] > 1 and len(blocks[which]) > 1}
+    layers = []
+    for which in kept:
+        for one in blocks[which]:
+            made = _carried(
+                Layer(
+                    one.path,
+                    one.kind,
+                    one.label if which in framed else _times(one.label, counts[which]),
+                    one.shape,
+                    one.made_of,
+                    one.dims,
+                    one.parallel,
+                ),
+                one,
+            )
+            made.block = which if which in framed else None
+            layers.append(made)
     at = {one.path: which for which, one in enumerate(layers)}
     edges, seen = [], set()
     for a, b in inside.edges:
@@ -832,7 +926,14 @@ def _repeated(inside):
             continue
         seen.add(one)
         edges.append(one)
-    return Inside(layers, edges, inside.how, inside.why, {**inside.folded, **folded})
+    return Inside(
+        layers,
+        edges,
+        inside.how,
+        inside.why,
+        {**inside.folded, **folded},
+        {**inside.groups, **{which: (None, counts[which]) for which in framed}},
+    )
 
 
 def _blocks_of(inside):
@@ -924,9 +1025,11 @@ def _numbered(which):
 
 
 def _carried(made, from_):
-    """The same layer with what went into it kept. Rebuilding a `Layer` and
-    losing that is how a funnel goes back to being a rectangle."""
+    """The same layer with everything not in the constructor kept. Rebuilding a
+    `Layer` and losing that is how a funnel goes back to being a rectangle."""
     made.came_in = getattr(from_, "came_in", None)
+    made.block = getattr(from_, "block", None)
+    made.parallel = getattr(from_, "parallel", None)
     return made
 
 
@@ -990,12 +1093,16 @@ def _at_most(node, inside, most):
         stacklevel=3,
     )
     kept = {one.path for one in inside.layers[:most]}
+    held = {one.block for one in inside.layers[:most]}
     return Inside(
         inside.layers[:most],
         [(a, b) for a, b in inside.edges if a in kept and b in kept],
         inside.how,
         inside.why,
         inside.folded,
+        # A frame for a block whose layers were all cut is a frame around
+        # nothing, which is worse than the cut it is standing in for.
+        {which: what for which, what in inside.groups.items() if which in held},
     )
 
 
