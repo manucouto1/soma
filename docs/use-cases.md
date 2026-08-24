@@ -5210,7 +5210,11 @@ their weights makes that untrue.
   it since they wear the brackets and are perfectly stable. Past that, the
   answer is `salt=`.
 - **A hard-coded constant.** `self.dim = 512` in a body is code, and code is
-  the fingerprint's question: `STALE`, not `CHANGED`.
+  the fingerprint's question: `STALE`, not `CHANGED`. That line is worth reading
+  twice, because moving one number from an argument to a constant moves the same
+  edit from *the cache will miss* to *the cache will hit and hand back the old
+  code's answer* — two very different afternoons, and the reason the two
+  findings are two words.
 
 ### Questionnaire
 

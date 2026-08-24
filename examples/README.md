@@ -42,6 +42,20 @@ pip install ipywidgets                # optional: `Live` redraws in place with i
 extension, so a change in `python/src/` that was not rebuilt means a notebook
 that is green about code that is not the code.
 
+But it installs a **debug** build, and the numbers stored here were measured
+against a release one. Re-executing a notebook that reports a timing — 3, 10 and
+11 — against the installed extension writes numbers about ten times worse into
+the record: notebook 10's 19 MB toll went from 121 ms to 1112 ms that way, and
+what gave it away was the coordinate, which hashes nothing and slowed down just
+as much. Build the package once and point at it:
+
+```bash
+cargo build --release -p soma-next-python
+cp -r python/python/soma_next /tmp/relpkg/ && rm /tmp/relpkg/soma_next/_soma_next.*.so
+cp target/release/lib_soma_next.so /tmp/relpkg/soma_next/_soma_next.cpython-313-x86_64-linux-gnu.so
+PYTHONPATH=/tmp/relpkg python -  # the loop below
+```
+
 Notebooks 3 to 7 need `torch`. Notebook 2 starts a real worker process, which
 needs nothing but the same interpreter. Notebooks 3 and 4 seed torch, so
 re-executing them gives back the numbers that are stored here. Notebook 11
