@@ -22,9 +22,9 @@ use std::time::Duration;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use soma_fabric_wire::{Artifact, Provision, ProvisionError, Provisioned, Serving, Worker};
 use soma_next_core::Catalog;
 use soma_next_store::{Cache, Store};
-use soma_next_transport::{Artifact, Provision, ProvisionError, Provisioned, Serving, Worker};
 use std::process::Command;
 use std::sync::Arc;
 

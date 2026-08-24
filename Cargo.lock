@@ -1269,6 +1269,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
+name = "soma-fabric-wire"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "soma-next-core",
+ "soma-next-store",
+]
+
+[[package]]
 name = "soma-next-core"
 version = "0.1.0"
 dependencies = [
@@ -1301,12 +1311,12 @@ dependencies = [
  "arrow-schema",
  "pyo3",
  "serde_json",
+ "soma-fabric-wire",
  "soma-next-core",
  "soma-next-data",
  "soma-next-health",
  "soma-next-store",
  "soma-next-study",
- "soma-next-transport",
 ]
 
 [[package]]
@@ -1325,16 +1335,6 @@ dependencies = [
 [[package]]
 name = "soma-next-study"
 version = "0.1.0"
-
-[[package]]
-name = "soma-next-transport"
-version = "0.1.0"
-dependencies = [
- "rmp-serde",
- "serde",
- "soma-next-core",
- "soma-next-store",
-]
 
 [[package]]
 name = "stable_deref_trait"

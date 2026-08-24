@@ -10,7 +10,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soma-next-core = { workspace = true, features = ["serde"] }
-soma-next-transport = { path = "../transport", optional = true }
+# The wire lives in `soma-fabric` now. Path while both repositories move
+# together; a version the day either is published on its own.
+soma-fabric-wire = { path = "../../soma-fabric/wire", optional = true }
 # With `s3`, because a study spread over machines with no shared mount is
 # exactly the case `soma_next.Store.on_bucket` exists for.
 soma-next-store = { workspace = true, features = ["s3"] }
@@ -36,4 +38,4 @@ pyo3 = { version = "0.24", features = ["extension-module"] }
 # repository of its own is a `git mv` and not a redesign.
 [features]
 default = ["remote"]
-remote = ["dep:soma-next-transport"]
+remote = ["dep:soma-fabric-wire"]

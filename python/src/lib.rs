@@ -437,7 +437,7 @@ impl PyGraph {
 
         // Before releasing the GIL: a `PyRef` cannot survive `allow_threads`.
         #[cfg(feature = "remote")]
-        let reachable: Vec<(Host, std::sync::Arc<soma_next_transport::Worker>)> = match workers {
+        let reachable: Vec<(Host, std::sync::Arc<soma_fabric_wire::Worker>)> = match workers {
             None => Vec::new(),
             Some(dict) => dict
                 .iter()
