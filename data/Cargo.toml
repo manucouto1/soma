@@ -1,0 +1,44 @@
+[package]
+name = "soma-next-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# The direction is core <- store <- data, and never the other way: the core
+# stays with no dependencies at all and never learns what a column is.
+soma-next-core = { workspace = true }
+soma-next-store = { workspace = true }
+# Arrow is the **type** and polars would be the tool: what crosses an edge is a
+# batch of columns, and whoever wants expressions over it brings their own
+# engine. Putting polars here would charge 370 crates to the worker that only
+# tokenizes, and it earns nothing this crate needs.
+arrow-array = "59"
+arrow-schema = "59"
+arrow-select = "59"
+# What a frame weighs in bytes: the buffers as they already are, with no
+# encoding pass. It is what lets a frame be kept and be sent, and it is why
+# Arrow is the type rather than a format we convert to at the edges.
+arrow-ipc = "59"
+# **No runtime came in with any of these**: `cargo tree` says zero `tokio` and
+# zero `futures`. That is not a nicety — `Store` is synchronous on purpose, and
+# the day a source is `async` so is `forward`, and so is every caller of it.
+parquet = "59"
+bytes = "1"
+# For the wire's alphabet: `Codec` and the shape a written-down value has, so
+# that what this crate writes and what `python/` writes are the same thing.
+soma-next-transport = { path = "../transport" }
+
+[dev-dependencies]
+# The tests are another crate and see only the public API — so the formats and
+# the store they build fixtures with have to be named again here.
+arrow-array = "59"
+arrow-schema = "59"
+parquet = "59"
+soma-next-core = { workspace = true }
+soma-next-store = { workspace = true }
+soma-next-transport = { path = "../transport" }
+
+[[test]]
+name = "unit"
+path = "tests/unit/main.rs"

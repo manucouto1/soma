@@ -1,6 +1,21 @@
-"""Whether the model is learning what you think it is learning.
+"""Where the data comes from, and whether the model is learning what you meant.
 
-The third question, and the one that is not about the network at all::
+Two halves that meet on the same word. **Where it comes from**::
+
+    from soma_next import Graph, Store
+    from soma_next.data import Parquet, settle, to_polars
+
+    sms = Parquet(Store("/data"), "sms/train")
+    g = Graph.somatize(sms.named("sms").frozen() >> Clean().named("clean").cached())
+    settle(g)
+    g.forward({"at": 0, "take": 64}, store="/data")
+
+A source is a node, what it answers with is Arrow, and what the graph is handed
+is a **coordinate** — which is what stops a cache weighing the batch on every
+step. See `soma_next.data._source`.
+
+And **whether it is learning what you meant**, which is not about the network at
+all::
 
     from soma_next.data import contribution, leaning, shares
 
@@ -21,5 +36,17 @@ inputs away would have said so.
 
 from soma_next.data._ablation import contribution, leaning, shares, shuffled
 from soma_next.data._figure import leaned
+from soma_next.data._frame import to_arrow, to_polars
+from soma_next.data._source import Parquet, settle
 
-__all__ = ["contribution", "leaned", "leaning", "shares", "shuffled"]
+__all__ = [
+    "Parquet",
+    "contribution",
+    "leaned",
+    "leaning",
+    "settle",
+    "shares",
+    "shuffled",
+    "to_arrow",
+    "to_polars",
+]

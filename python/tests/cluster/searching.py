@@ -5,7 +5,7 @@ test-shaped in it: what is being searched over, how the pipeline is put together
 for one configuration, and the loop. `test_searching.py` starts several of these
 against one directory and checks what came out.
 
-    python searching.py <store> <me> <a> <gpu> <messages>
+    python searching.py <store> <me> <a> <gpu>
 
 Run it `n` times against the same `<store>` and that is a distributed study.
 Nothing in here is told what the others are doing: a trial is a number, `ask` is
@@ -41,6 +41,7 @@ import torch  # noqa: E402
 
 from cluster import spam  # noqa: E402
 from soma_next import Graph, Store, Worker  # noqa: E402
+from soma_next.data import Parquet  # noqa: E402
 from soma_next.study import (  # noqa: E402
     DONE,
     PRUNED,
@@ -82,13 +83,16 @@ pruner = Pruner.median(goal="min", warmup=1, startup=2)
 OPTIMIZERS = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD}
 
 
-def search(store, me, at, messages=600):
+def search(store, me, at):
     """Take whichever trials nobody has taken, and run them.
 
     `n` of these against one `store` is the whole thing. There is no server, no
     port and no protocol: a directory, and `claim`.
+
+    The dataset is in that same directory, so this reads spans of it and never
+    goes near a hub. What each batch carries is a **coordinate**.
     """
-    batches = spam.batches(*spam.messages(messages))
+    batches = spam.batches(store)
     mine = []
 
     for trial in range(TRIALS):
@@ -105,7 +109,7 @@ def search(store, me, at, messages=600):
 
         # A `Point` is a mapping, so a configuration goes straight into whatever
         # builds the thing — no unpacking it knob by knob.
-        trainer = training(**point, at=at)
+        trainer = training(**point, at=at, store=store)
 
         drawn, why = [], None
         for left in reversed(range(EPOCHS)):
@@ -130,15 +134,20 @@ def search(store, me, at, messages=600):
     return mine
 
 
-def training(lr, dim, opt, *, at):
+def training(lr, dim, opt, *, at, store):
     """One configuration, as a graph on two machines and a trainer over it.
 
     `at` is which port each host name reaches. The graph says `a` and `gpu`, and
     what those resolve to is this machine's business — which is the whole reason
     a host is a name.
+
+    The dataset is the first node and it stays **here**: the rows are read where
+    the store is, and what crosses to `a` is a frame with a codec in front of
+    it, exactly as an activation crosses to `gpu`.
     """
     graph = Graph.somatize(
-        spam.Clean().named("clean").at("a")
+        Parquet(store, spam.IN_STORE).named("sms")
+        >> spam.Clean().named("clean").at("a")
         >> spam.Embed(dim).named("embed").at("gpu")
         >> spam.Classify(dim, 2).named("head")
     )
@@ -164,12 +173,9 @@ def training(lr, dim, opt, *, at):
 
 
 if __name__ == "__main__":
-    store, me, cheap, with_torch, messages = sys.argv[1:6]
+    store, me, cheap, with_torch = sys.argv[1:5]
     print(
         json.dumps(
-            search(
-                Store(store), me, {"a": int(cheap), "gpu": int(with_torch)},
-                int(messages),
-            )
+            search(Store(store), me, {"a": int(cheap), "gpu": int(with_torch)})
         )
     )

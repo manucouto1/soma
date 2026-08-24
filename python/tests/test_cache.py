@@ -330,7 +330,9 @@ def test_declared_settled_and_never_settled_is_refused(store):
         g.forward(3.0, store=store)
 
     said = str(raised.value)
-    assert "encoder" in said and "checkpoints" in said
+    # On what it says and not on the noun it uses: since a dataset is settled
+    # the same way, the message speaks of state rather than of checkpoints.
+    assert "encoder" in said and "under one name" in said
     assert "freeze" in said, said
 
 

@@ -43,6 +43,59 @@
 
 use soma_next_core::{NodeId, Value};
 use std::fmt;
+use std::sync::Arc;
+
+/// The reserved key that says a map is not a map.
+///
+/// **Here and not in an implementor**, for the same reason a store's record is
+/// in the store and not in the directory: this shape is what makes two codecs
+/// the same codec. A frame written down by the Rust side and read back by the
+/// Python one meet in these two keys and nowhere else, and two copies of them
+/// would drift the day one of them changed.
+const PACKED: &str = "__soma_opaque__";
+
+/// Where the bytes are, next to it.
+const BYTES: &str = "bytes";
+
+/// Something written down: what kind it was, and the bytes it became.
+///
+/// The `kind` is what a store keeps forever, so it is named after the **type or
+/// the format** and never after the run — `torch.Tensor`, `arrow.RecordBatch`.
+/// It is also how the far end knows who to ask to read it back.
+pub fn written_down(kind: impl Into<String>, bytes: Vec<u8>) -> Value {
+    Value::map(vec![
+        (PACKED.to_string(), Value::text(kind.into())),
+        (BYTES.to_string(), Value::Bytes(Arc::new(bytes))),
+    ])
+}
+
+/// What was written down in there, if that is what it is.
+pub fn as_written(value: &Value) -> Option<(&str, &[u8])> {
+    let Value::Map(pairs) = value else {
+        return None;
+    };
+    let kind = pairs.iter().find(|(key, _)| key == PACKED)?;
+    let bytes = pairs.iter().find(|(key, _)| key == BYTES)?;
+    match (&kind.1, &bytes.1) {
+        (Value::Text(kind), Value::Bytes(bytes)) => Some((kind, bytes)),
+        _ => None,
+    }
+}
+
+/// Whether there is anything written down in there at all, at any depth.
+///
+/// Asked before doing the walk, so that the ordinary value — which is most of
+/// them — costs one look and nothing else.
+pub fn anything_written(value: &Value) -> bool {
+    if as_written(value).is_some() {
+        return true;
+    }
+    match value {
+        Value::Map(pairs) => pairs.iter().any(|(_, value)| anything_written(value)),
+        Value::List(items) => items.iter().any(anything_written),
+        _ => false,
+    }
+}
 
 /// Writes down what cannot leave a process, and reads it back.
 pub trait Codec: Send + Sync {

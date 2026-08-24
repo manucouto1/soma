@@ -14,15 +14,16 @@
 //! boundary as three other places — the core does not know what a node asks for,
 //! what an `Opaque` carries, or what a serialized catalog is.
 
-use crate::codec::{Codecs, Packing};
+use crate::codec::Codecs;
 use crate::node::PyNode;
+use soma_next_transport::Packing;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use soma_next_core::Catalog;
-use soma_next_store::{Cache, Local};
+use soma_next_store::{Cache, Store};
 use soma_next_transport::{Artifact, Provision, ProvisionError, Provisioned, Serving, Worker};
 use std::process::Command;
 use std::sync::Arc;
@@ -246,14 +247,6 @@ fn serving_provisioned(provision: &PyProvision) -> Serving<'_> {
 /// unpack would be handed maps where its nodes expect what they were sent.
 static CODECS: Codecs = Codecs;
 
-/// The store this worker was pointed at, if it was pointed at one.
-fn opened(store: Option<&str>) -> PyResult<Option<Local>> {
-    store
-        .map(Local::at)
-        .transpose()
-        .map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
 /// The same worker, keeping what it is sent **and** what its nodes produce.
 ///
 /// One directory answers the two questions and they stay two: a catalog that is
@@ -267,12 +260,12 @@ fn opened(store: Option<&str>) -> PyResult<Option<Local>> {
 /// either way, and the store never learns Python exists.
 fn keeping<'a>(
     serving: Serving<'a>,
-    kept: Option<&'a Local>,
+    kept: Option<&'a Arc<dyn Store>>,
     packing: Option<&'a Packing<'a>>,
     reporting: Option<f64>,
 ) -> Serving<'a> {
     let serving = match kept {
-        Some(kept) => serving.store(kept),
+        Some(kept) => serving.store(&**kept),
         None => serving,
     };
     let serving = match reporting {
@@ -296,13 +289,13 @@ fn keeping<'a>(
 pub fn serve_provisioned(
     py: Python<'_>,
     provision: &Bound<'_, PyAny>,
-    store: Option<&str>,
+    store: Option<&Bound<'_, PyAny>>,
     reporting: Option<f64>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
-    let kept = opened(store)?;
-    let cache = kept.as_ref().map(|kept| Cache::over(kept));
-    let packing = cache.as_ref().map(|cache| Packing::over(cache));
+    let kept = crate::store::opened(store)?;
+    let cache = kept.as_ref().map(|kept| Cache::over(&**kept));
+    let packing = cache.as_ref().map(|cache| Packing::over(cache, &Codecs));
     py.allow_threads(|| {
         keeping(
             serving_provisioned(&provision),
@@ -324,13 +317,13 @@ pub fn listen_provisioned(
     addr: &str,
     provision: &Bound<'_, PyAny>,
     opened: Option<PyObject>,
-    store: Option<&str>,
+    store: Option<&Bound<'_, PyAny>>,
     reporting: Option<f64>,
 ) -> PyResult<()> {
     let provision = PyProvision::new(provision)?;
-    let kept = self::opened(store)?;
-    let cache = kept.as_ref().map(|kept| Cache::over(kept));
-    let packing = cache.as_ref().map(|cache| Packing::over(cache));
+    let kept = crate::store::opened(store)?;
+    let cache = kept.as_ref().map(|kept| Cache::over(&**kept));
+    let packing = cache.as_ref().map(|cache| Packing::over(cache, &Codecs));
     py.allow_threads(|| {
         keeping(
             serving_provisioned(&provision),

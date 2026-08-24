@@ -300,7 +300,7 @@ def test_a_body_declared_settled_and_never_settled_refuses_to_run(body, tmp_path
     expression, _ = body
     graph = Graph.somatize(expression.frozen().cached() >> Head(HID, CLASSES))
 
-    with pytest.raises(ValueError, match="checkpoints"):
+    with pytest.raises(ValueError, match="under one name"):
         graph.forward(TEXTS[:2], store=str(tmp_path))
 
 

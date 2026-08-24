@@ -24,7 +24,7 @@ import os
 
 import pytest
 
-from soma_next import Store
+from soma_next import Graph, Node, Store
 from soma_next.study import DONE, RUNNING, Sampler, Space, finished, report, take, trials
 
 ENDPOINT = os.environ.get("SOMA_S3")
@@ -136,6 +136,33 @@ def test_a_map_of_tensors_goes_in_and_comes_out_a_map_of_tensors(bucket, mine):
 @needs_a_bucket
 def test_recalling_what_nobody_kept_is_nothing_and_not_a_failure(bucket, mine):
     assert bucket.recall(mine("never")) is None
+
+
+# ── A graph's cache, which until now could only be a disk ──
+
+
+class Counts(Node):
+    """Says how many times it was really asked. A hit is invisible otherwise."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def forward(self, x, ctx):
+        self.calls += 1
+        return x
+
+
+@needs_a_bucket
+def test_what_a_graph_keeps_can_live_on_a_bucket(bucket, mine):
+    # `forward(store=...)` took a path and only a path, so a cache could only be
+    # a directory — on a cluster with nothing mounted, no cache at all. It takes
+    # a `Store` now, and the same three lines that ran against a disk run here.
+    counts = Counts()
+    g = Graph.somatize(counts.named("n").frozen().cached(salt=mine("cache")))
+
+    assert g.forward(7.0, store=bucket) == 7.0
+    assert g.forward(7.0, store=bucket) == 7.0
+    assert counts.calls == 1, "the second answer came out of the bucket"
 
 
 # ── And the point of all of it: nothing above knows which one it has ──

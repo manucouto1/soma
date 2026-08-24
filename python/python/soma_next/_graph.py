@@ -74,8 +74,10 @@ class Graph(_RustGraph):
         to. **This method sends the nodes**, not you: the graph is the one that
         knows which goes where.
 
-        `store` is a directory: with one, whatever was declared `.cached()` is
-        looked up before being computed and kept afterwards.
+        `store` is a directory or a `Store`: with one, whatever was declared
+        `.cached()` is looked up before being computed and kept afterwards. Both
+        and not one, because a `Store` is the only one of the two that can say
+        "a bucket" — and a path is what whoever has a directory already has.
 
         `watching` is told what happened, as it happens::
 
@@ -142,12 +144,15 @@ class Graph(_RustGraph):
                 continue
             raise ValueError(
                 f"`{node_id}` is declared frozen and has state, and nobody has "
-                f"settled it: the digest of its weights is what puts them in its "
-                f"key, so without it two different checkpoints of "
-                f"`{type(implementation).__name__}` would be kept under one name "
-                f"and you would get the other one back. Call "
-                f"`soma_next.torch.freeze(g)` before running — declaring it is "
-                f"this graph's half, making it true is torch's"
+                f"settled it: the digest of what it is settled at — weights, or "
+                f"the dataset it reads — is what puts it in its key, so without "
+                f"it two different states of `{type(implementation).__name__}` "
+                f"would be kept under one name and you would get the other one "
+                f"back. Call "
+                f"`soma_next.torch.freeze(g)` before running — or "
+                f"`soma_next.data.settle(g)` if what it holds is a dataset. "
+                f"Declaring it is this graph's half, making it true belongs to "
+                f"whoever knows how to hash what is inside"
             )
 
     def _share_out(self, workers):
@@ -183,10 +188,15 @@ class Graph(_RustGraph):
 
 
 def _has_state(implementation):
-    """Whether this node has anything worth hashing, asked with the same duck as
-    `parameters()`: whoever answers neither has no state, and does not stop
-    being a node for it."""
+    """Whether this node has anything worth hashing, asked as a duck: whoever
+    answers none of them has no state, and does not stop being a node for it.
+
+    Three and not two since there are sources: weights are `state_dict` or
+    `parameters`, and a dataset is `version`. They are the same question — *what
+    is this node settled at* — and the same failure if nobody answers it, which
+    is two different things kept under one name.
+    """
     return any(
         getattr(implementation, what, None) is not None
-        for what in ("state_dict", "parameters")
+        for what in ("state_dict", "parameters", "version")
     )

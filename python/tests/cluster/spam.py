@@ -42,19 +42,23 @@ shape to have a gradient of."""
 
 
 class Clean(Node):
-    """Text in, a rectangle of token ids out — and **not one line of torch**.
+    """Rows in, a rectangle of token ids out — and **not one line of torch**.
 
     Which is the point: this runs on a worker whose image is 193 MB and has no
     tensors in it at all. The expensive machine is for the part that needs it,
     and preprocessing is not that part. A cluster is heterogeneous or it is just
     several of the same computer.
+
+    What arrives is a `Frame`, because what feeds it is a dataset. `column`
+    hands over plain Python values, so this worker needs no dataframe library
+    either — the image stays what it is.
     """
 
     def __init__(self, width=WIDTH):
         self.width = width
 
-    def forward(self, texts, ctx):
-        return [_padded(_ids(one), self.width) for one in texts]
+    def forward(self, frame, ctx):
+        return [_padded(_ids(one), self.width) for one in frame.column("sms")]
 
 
 class Embed(Node):
@@ -152,11 +156,48 @@ def messages(how_many=1600):
     return list(shuffled["sms"]), list(shuffled["label"])
 
 
-def batches(texts, labels, size=64):
-    """The messages in batches, as a `Trainer` takes them."""
+IN_STORE = "sms/train"
+"""The name the dataset is bound under, in the directory every machine shares."""
+
+
+def stored(store, texts, labels, name=IN_STORE):
+    """The messages, written once as parquet into the store everybody shares.
+
+    Fetched by whoever sets the study up and **not** by each machine: the hub is
+    a hub, and a study whose every machine downloads the same file is one that
+    goes red when somebody's wifi does. From here on the dataset is in the store
+    like everything else, and a machine reads the spans it needs.
+    """
+    import pyarrow
+    import pyarrow.parquet
+
+    sink = pyarrow.BufferOutputStream()
+    pyarrow.parquet.write_table(pyarrow.table({"sms": texts, "label": labels}), sink)
+    store.bind(name, store.put(sink.getvalue().to_pybytes()))
+
+
+def batches(store, size=64, name=IN_STORE):
+    """`(span, target)` pairs, as a `Trainer` takes them.
+
+    The input is a **coordinate** and not the messages: the graph reads the rows
+    it names, and what a cache has to weigh is two numbers instead of a batch.
+
+    The labels are the caller's, as they always were — a target is not part of
+    the graph — so they come out of the same file, read here once.
+    """
     import torch
 
-    return [
-        (texts[at : at + size], torch.tensor(labels[at : at + size], dtype=torch.long))
-        for at in range(0, len(labels), size)
-    ]
+    from soma_next.data import Parquet
+
+    source, at, out = Parquet(store, name), 0, []
+    while True:
+        frame = source.forward({"at": at, "take": size}, None)
+        if not frame.rows:
+            return out
+        out.append(
+            (
+                {"at": at, "take": size},
+                torch.tensor(frame.column("label"), dtype=torch.long),
+            )
+        )
+        at += size

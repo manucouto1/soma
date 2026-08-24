@@ -14,6 +14,13 @@ soma-next-transport = { path = "../transport" }
 # With `s3`, because a study spread over machines with no shared mount is
 # exactly the case `soma_next.Store.on_bucket` exists for.
 soma-next-store = { workspace = true, features = ["s3"] }
+# A source is a Rust node, and a frame is what it answers with: this side
+# translates both, which is what `python/` is for.
+soma-next-data = { path = "../data" }
+# To hand one column over as plain Python values, so that a worker with no
+# dataframe library in it can still read a column of text.
+arrow-array = "59"
+arrow-schema = "59"
 soma-next-study = { path = "../study" }
 # The verdict: numbers in, flags out, and no dependencies of its own.
 soma-next-health = { workspace = true }

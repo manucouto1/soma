@@ -57,14 +57,16 @@ mod artifact;
 mod codec;
 mod frame;
 mod machine;
+mod packing;
 mod protocol;
 mod provision;
 mod serve;
 mod worker;
 
 pub use artifact::{Artifact, Label};
-pub use codec::{Codec, CodecError};
+pub use codec::{Codec, CodecError, anything_written, as_written, written_down};
 pub use machine::{Machine, filed};
+pub use packing::Packing;
 pub use protocol::{Answer, MessageError, Request};
 pub use provision::{Provision, ProvisionError, Provisioned};
 pub use serve::Serving;

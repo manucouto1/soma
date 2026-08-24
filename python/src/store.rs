@@ -287,3 +287,30 @@ fn as_meta(meta: Option<&Bound<'_, PyDict>>) -> PyResult<Meta> {
 fn failed(e: soma_next_store::StoreError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
+
+/// The store a call was pointed at: a `Store`, or a path to a directory.
+///
+/// **Both, and not one.** A path is what somebody standing a worker up on a
+/// command line has, and a `Store` is what somebody who opened one by hand has —
+/// and since [`PyStore::on_bucket`] exists, insisting on a path is insisting
+/// that a cache lives on a disk. Two ways of saying the same thing, and only one
+/// of them could say "a bucket".
+pub fn opened(store: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Arc<dyn Store>>> {
+    let Some(store) = store else {
+        return Ok(None);
+    };
+    if let Ok(open) = store.downcast::<PyStore>() {
+        return Ok(Some(open.get().shared()));
+    }
+    let where_: String = store.extract().map_err(|_| {
+        PyValueError::new_err(format!(
+            "`store` takes a directory or a Store, and a `{}` arrived",
+            store
+                .get_type()
+                .name()
+                .map(|name| name.to_string())
+                .unwrap_or_default()
+        ))
+    })?;
+    Ok(Some(Arc::new(Local::at(&where_).map_err(failed)?)))
+}

@@ -6,15 +6,17 @@
 //! a domain rule ends up written here, it is in the wrong place.
 
 mod codec;
+mod frame;
 mod health;
 mod node;
 mod remote;
+mod source;
 mod store;
 mod study;
 mod value;
 mod watcher;
 
-use codec::Packing;
+use codec::Codecs;
 use node::{PyCtx, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -24,7 +26,8 @@ use soma_next_core::{
     Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Memory,
     MemoryError, NodeId, Placement, RunError, cacheable, compile, distribute,
 };
-use soma_next_store::{Cache, Local};
+use soma_next_store::Cache;
+use soma_next_transport::Packing;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -46,11 +49,6 @@ fn compile_err(e: CompileError) -> PyErr {
 /// The same for a cache that was declared where it cannot be honoured. It is
 /// raised **before** the first node runs, which is the whole point of asking.
 fn memory_err(e: MemoryError) -> PyErr {
-    PyValueError::new_err(e.to_string())
-}
-
-/// The same for a store that cannot be opened.
-fn store_err(e: soma_next_store::StoreError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
@@ -355,7 +353,7 @@ impl PyGraph {
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
         workers: Option<&Bound<'_, PyDict>>,
-        store: Option<&str>,
+        store: Option<&Bound<'_, PyAny>>,
         watching: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyObject> {
         let start = match input {
@@ -389,11 +387,11 @@ impl PyGraph {
         if self.keeps_anything() {
             cacheable(&self.graph, &self.memory).map_err(memory_err)?;
         }
-        let kept = store.map(Local::at).transpose().map_err(store_err)?;
-        let cache = kept.as_ref().map(|kept| Cache::over(kept));
+        let kept = store::opened(store)?;
+        let cache = kept.as_ref().map(|kept| Cache::over(&**kept));
         // The codecs in front, so what reaches the store is bytes and the store
         // never learns Python exists.
-        let packing = cache.as_ref().map(|cache| Packing::over(cache));
+        let packing = cache.as_ref().map(|cache| Packing::over(cache, &Codecs));
 
         // What is remembered always goes in, keeper or no keeper: it is the
         // graph's, and it travels with a slice sent to a worker that may well be
@@ -527,6 +525,8 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<value::PyOpaque>()?;
     m.add_class::<PyWorker>()?;
     m.add_class::<store::PyStore>()?;
+    m.add_class::<frame::PyFrame>()?;
+    m.add_class::<source::PySource>()?;
     m.add_class::<store::PyBound>()?;
     m.add_class::<watcher::PyRecorder>()?;
     m.add_class::<health::PyThresholds>()?;

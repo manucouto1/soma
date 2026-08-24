@@ -1,6 +1,6 @@
 # Examples
 
-Four notebooks, in order. Each one runs on its own and needs nothing
+Ten notebooks, in order. Each one runs on its own and needs nothing
 downloaded — the data is made up in the cell that uses it, on purpose: an
 example that fetches a dataset is an example that stops working.
 
@@ -13,6 +13,9 @@ example that fetches a dataset is an example that stops working.
 | [5 — The health of a network](05-the-health-of-a-network.ipynb) | `auditing=`, each pathology built and caught, and the invariant: a diagnosis taken from the record, argued with by moving a bound, and taken again |
 | [6 — A problem, end to end](06-a-problem-end-to-end.ipynb) | the whole loop on one problem: propose an architecture, find what is wrong, fix it, check the fix — five times, and the last one is not a bug in the network at all |
 | [7 — A real architecture](07-a-real-architecture.ipynb) | convolutions with residuals, a transformer stack, a recurrent cell and a bottleneck — some inside one node, some across four — with the architecture drawn inside each; three problems, each with **problem → symptoms → solution → healthy**, and two that showed nothing |
+| [8 — Before a step is taken](08-before-a-step-is-taken.ipynb) | `probe`, one recorded forward that never trained, and the rule: what separates is a runaway, what ranks is a proxy |
+| [9 — A fleet](09-a-fleet.ipynb) | `fleet` and `machines`, working against waited on, what only a machine can say about itself, and the idle one that writes on a clock |
+| [10 — Where the data comes from](10-a-dataset.ipynb) | a source is a node, a graph handed a **coordinate** instead of a batch, what that saves the cache, the version the store already knew, and a frame crossing a wire |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.

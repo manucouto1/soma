@@ -45,14 +45,22 @@ def freeze(graph, *node_ids):
 def state_digest(implementation):
     """The digest of the state it is settled at, or `None` if it has none.
 
-    Two ducks and not one, because the project's own nodes use both: whoever has
-    a `state_dict` is asked for it by name; whoever only has `parameters()` is
-    asked for those, in order. Whoever has neither has no state, and a tokenizer
-    does not stop being a node for it.
+    Three ducks and not one, because the project's own nodes use all three:
+    whoever already knows what it is settled at — a source, whose version the
+    store worked out — is asked first and believed; whoever has a `state_dict`
+    is asked for it by name; whoever only has `parameters()` is asked for those,
+    in order. Whoever has none has no state, and a tokenizer does not stop being
+    a node for it.
 
-    It has to be the same two `Graph._check_it_was_obeyed` looks at, or a node
+    It has to be the same three `Graph._check_it_was_obeyed` looks at, or a node
     would be told to settle and then have nothing to settle with.
     """
+    # A node that already knows what it is settled at is asked first and
+    # believed: a source hashes nothing here, because the store hashed its
+    # content when the bytes went in.
+    said = getattr(implementation, "version", None)
+    if said is not None:
+        return said
     named = getattr(implementation, "state_dict", None)
     if named is not None:
         return _digest_of(sorted(named().items()))

@@ -11,24 +11,21 @@
 //! codec("torch.Tensor", torch.Tensor, dump=..., load=...)
 //! ```
 //!
-//! # Two callers, one pair of passes
+//! # One pair of passes, and two places it is asked for
 //!
-//! | who | what it fills | what it does not learn |
-//! |---|---|---|
-//! | [`Packing`] | a [`Keeper`], decorating another one | `soma_next_store` never learns Python exists |
-//! | [`Codecs`] | `soma_next_transport::Codec`, on both ends of a wire | the transport never learns what an opaque carries |
+//! What this crate fills is [`Codecs`] — `soma_next_transport::Codec` — and
+//! that is all: opaques out on the way in, opaques back on the way out, so the
+//! transport never learns what an opaque carries.
 //!
-//! One pass each way in both: opaques out on the way in, opaques back on the way
-//! out. Underneath, a store sees a value made of maps and bytes and a socket
-//! sees the same, and neither has any idea any of it was ever a tensor. It is
-//! the same division as everywhere else — this crate translates, it does not
-//! decide.
+//! A **store** wants the same two passes, and it is the same answer: what a
+//! tensor weighs written down is one question whether the bytes are going to a
+//! directory or down a socket. So there is no second type here for it —
+//! `Packing::over(keeper, &Codecs)` is `transport`'s, written once for whoever
+//! has a codec, and `soma_next_store` still never learns Python exists.
 //!
-//! What a tensor weighs written down is **one** question, so it has one answer
-//! whether the bytes are going to a directory or down a socket, and the two
-//! callers share it rather than each keeping a registry.
-//!
-//! What a packed opaque looks like, and what the risk of it is:
+//! What a packed opaque looks like — the shape itself lives in `transport`,
+//! beside the trait, so that what this side writes and what `data/` writes are
+//! the same thing — and what the risk of it is:
 //!
 //! ```text
 //! {"__soma_opaque__": "torch.Tensor", "bytes": b"..."}
@@ -49,15 +46,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
-use soma_next_core::{Keeper, KeeperError, Kept, Key, Value};
-use soma_next_transport::{Codec, CodecError};
-use std::sync::Arc;
-
-/// The reserved key that says a map is not a map.
-const PACKED: &str = "__soma_opaque__";
-
-/// Where the bytes are, next to it.
-const BYTES: &str = "bytes";
+use soma_next_core::Value;
+use soma_next_data::{Frame, Ipc};
+use soma_next_transport::{Codec, CodecError, anything_written, as_written, written_down};
 
 /// What is registered, by the name it was registered under: `kind → (type,
 /// dump, load)`.
@@ -100,47 +91,6 @@ pub fn codecs_registered(py: Python<'_>) -> Vec<String> {
         .collect()
 }
 
-/// A keeper that writes opaques down before handing them on.
-pub struct Packing<'a> {
-    inner: &'a dyn Keeper,
-}
-
-impl<'a> Packing<'a> {
-    /// The same keeper, with the codecs in front of it.
-    pub fn over(inner: &'a dyn Keeper) -> Self {
-        Self { inner }
-    }
-}
-
-impl Keeper for Packing<'_> {
-    fn key_of(&self, value: &Value) -> Option<Key> {
-        self.inner.key_of(&pack(value).ok()?)
-    }
-
-    fn combine(&self, parts: &[&str]) -> Key {
-        self.inner.combine(parts)
-    }
-
-    fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Kept>>, KeeperError> {
-        self.inner
-            .recall(keys)?
-            .into_iter()
-            .map(|kept| match kept {
-                None => Ok(None),
-                Some(kept) => Ok(Some(Kept {
-                    value: unpack(&kept.value).map_err(KeeperError::new)?,
-                    meta: kept.meta,
-                })),
-            })
-            .collect()
-    }
-
-    fn keep(&self, key: &Key, value: &Value, meta: &[(&str, &str)]) -> Result<(), KeeperError> {
-        self.inner
-            .keep(key, &pack(value).map_err(KeeperError::new)?, meta)
-    }
-}
-
 /// The same two passes, for a wire instead of a store.
 ///
 /// Nothing of its own: what a tensor weighs in bytes is one question, and it has
@@ -170,11 +120,18 @@ pub(crate) fn pack(value: &Value) -> Result<Value, String> {
 
 fn written(py: Python<'_>, value: &Value) -> PyResult<Value> {
     Ok(match value {
+        // Not everything opaque came from Python. A frame did not, and it does
+        // not need a registry: what it weighs is Arrow IPC and `data/` says so.
+        // Two codecs in one process is what a graph carrying tensors **and**
+        // rows is, and this is the one that asks each in turn.
+        Value::Opaque(_) if Frame::of(value).is_some() => Ipc
+            .packed(value)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
         Value::Opaque(_) => {
             let obj = value.downcast::<PyObject>().ok_or_else(|| {
                 PyValueError::new_err(
-                    "this opaque value was not put there by Python, so there is nothing \
-                     here that knows how to write it down",
+                    "this opaque value was not put there by Python and is not a frame, \
+                     so there is nothing here that knows how to write it down",
                 )
             })?;
             let obj = obj.bind(py);
@@ -190,13 +147,7 @@ fn written(py: Python<'_>, value: &Value) -> PyResult<Value> {
                         .unwrap_or_default()
                 ))
             })?;
-            Value::map(vec![
-                (PACKED.to_string(), Value::text(kind)),
-                (
-                    BYTES.to_string(),
-                    Value::Bytes(Arc::new(bytes.as_bytes().to_vec())),
-                ),
-            ])
+            written_down(kind, bytes.as_bytes().to_vec())
         }
         Value::Map(pairs) => Value::map(
             pairs
@@ -243,14 +194,22 @@ fn codec_for<'py>(
 
 /// And the way back.
 pub(crate) fn unpack(value: &Value) -> Result<Value, String> {
-    if !packed_inside(value) {
+    if !anything_written(value) {
         return Ok(value.clone());
     }
     Python::with_gil(|py| read(py, value)).map_err(|e| e.to_string())
 }
 
 fn read(py: Python<'_>, value: &Value) -> PyResult<Value> {
-    if let Some((kind, bytes)) = as_packed(value) {
+    if let Some((kind, bytes)) = as_written(value) {
+        // Asked before the registry and not after: the format is ours, and a
+        // user who registered something under this name would be overriding
+        // what a frame is rather than adding to it.
+        if kind == Frame::KIND {
+            return Ipc
+                .unpacked(value)
+                .map_err(|e| PyValueError::new_err(e.to_string()));
+        }
         let (_, load) = named(py, kind)?;
         let obj = load.call1((PyBytes::new(py, bytes),))?;
         return Ok(Value::opaque(obj.unbind()));
@@ -340,30 +299,4 @@ fn summon(py: Python<'_>, kind: &str) {
     let _ = py
         .import("soma_next._codecs")
         .and_then(|module| module.call_method1("summon", (kind,)));
-}
-
-/// This value, if it is a written-down opaque and not a map somebody meant.
-fn as_packed(value: &Value) -> Option<(&str, &[u8])> {
-    let Value::Map(pairs) = value else {
-        return None;
-    };
-    let kind = pairs.iter().find(|(key, _)| key == PACKED)?;
-    let bytes = pairs.iter().find(|(key, _)| key == BYTES)?;
-    match (&kind.1, &bytes.1) {
-        (Value::Text(kind), Value::Bytes(bytes)) => Some((kind, bytes)),
-        _ => None,
-    }
-}
-
-/// Whether there is anything to read back in there at all, which is asked
-/// before taking the GIL for nothing.
-fn packed_inside(value: &Value) -> bool {
-    if as_packed(value).is_some() {
-        return true;
-    }
-    match value {
-        Value::Map(pairs) => pairs.iter().any(|(_, value)| packed_inside(value)),
-        Value::List(items) => items.iter().any(packed_inside),
-        _ => false,
-    }
 }

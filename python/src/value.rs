@@ -9,10 +9,12 @@
 //! asked for by hand precisely so it does not happen by accident — an unknown
 //! object still raises rather than slipping through opaque.
 
+use crate::frame::PyFrame;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 use soma_next_core::Value;
+use soma_next_data::Frame;
 use std::sync::Arc;
 
 /// Marks a value so it crosses the graph untouched. The node that receives it
@@ -70,6 +72,11 @@ pub fn to_be_kept(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 fn convert(obj: &Bound<'_, PyAny>, unknown: Unknown) -> PyResult<Value> {
     if let Ok(wrapped) = obj.downcast::<PyOpaque>() {
         return Ok(Value::opaque(wrapped.get().value.clone_ref(obj.py())));
+    }
+    // A frame goes back the way it came: what crosses is the batch itself, an
+    // `Arc` clone of buffers that never left, and not a conversion of anything.
+    if let Ok(frame) = obj.downcast::<PyFrame>() {
+        return Ok(frame.get().frame().clone().value());
     }
     if obj.is_none() {
         return Ok(Value::Null);
@@ -137,12 +144,18 @@ pub fn to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
         }
         Value::Opaque(_) => match value.downcast::<PyObject>() {
             Some(obj) => obj.clone_ref(py),
-            None => {
-                return Err(PyTypeError::new_err(
-                    "this opaque value was not put there by Python, so there is \
-                     nothing to return here",
-                ));
-            }
+            // Not everything opaque was put there by Python any more: a source
+            // is a Rust node, and what it produced has to be something a Python
+            // node can be handed.
+            None => match Frame::of(value) {
+                Some(frame) => Py::new(py, PyFrame::new(frame.clone()))?.into_any(),
+                None => {
+                    return Err(PyTypeError::new_err(
+                        "this opaque value was not put there by Python and is not a \
+                         frame, so there is nothing to return here",
+                    ));
+                }
+            },
         },
         Value::List(items) => {
             let converted = items

@@ -40,11 +40,17 @@ WORKDIR /src
 # whole index.
 COPY Cargo.toml Cargo.lock ./
 COPY core/Cargo.toml core/
+COPY data/Cargo.toml data/
+COPY health/Cargo.toml health/
 COPY store/Cargo.toml store/
 COPY study/Cargo.toml study/
 COPY transport/Cargo.toml transport/
 COPY python/Cargo.toml python/pyproject.toml python/
+# Every member of the workspace, and not only what `python` names: cargo will
+# not load a workspace one of whose members is not there.
 COPY core core
+COPY data data
+COPY health health
 COPY store store
 COPY study study
 COPY transport transport

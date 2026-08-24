@@ -60,13 +60,14 @@ def data():
 def searched(tmp_path_factory, cluster, two_with_torch, data):
     """Every machine, one directory, one study. Run once for the whole file."""
     where = str(tmp_path_factory.mktemp("study") / "shared")
-    Store(where)
+    # The dataset goes in **once**, here, and every machine reads spans of it.
+    spam.stored(Store(where), *data)
 
     running = [
         subprocess.Popen(
             [
                 sys.executable, str(HERE / "searching.py"), where, f"m{which}",
-                str(cluster[cheap]), str(cluster[with_torch]), str(MESSAGES),
+                str(cluster[cheap]), str(cluster[with_torch]),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
