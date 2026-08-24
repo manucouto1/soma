@@ -24,12 +24,17 @@ share.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Iterable
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
+
 import hashlib
 
 import torch
 
 
-def freeze(graph, *node_ids):
+def freeze(graph: "Graph", *node_ids: str) -> None:
     """Settles these nodes — or whatever was already declared `.frozen()`.
 
     With ids it declares and obeys; with none it only obeys, which is what
@@ -42,7 +47,7 @@ def freeze(graph, *node_ids):
         graph.freeze(node_id, state_digest(implementation))
 
 
-def state_digest(implementation):
+def state_digest(implementation: object) -> str | None:
     """The digest of the state it is settled at, or `None` if it has none.
 
     Three ducks and not one, because the project's own nodes use all three:
@@ -70,7 +75,7 @@ def state_digest(implementation):
     return None
 
 
-def _digest_of(state):
+def _digest_of(state: Iterable[tuple[Any, Any]]) -> str:
     digest = hashlib.sha256()
     for name, value in state:
         digest.update(str(name).encode())
@@ -84,7 +89,7 @@ def _digest_of(state):
     return f"sha256:{digest.hexdigest()}"
 
 
-def _raw(tensor):
+def _raw(tensor: "torch.Tensor") -> bytes:
     """The bytes of a tensor, wherever it lives and whatever its dtype.
 
     Through `uint8` and not `numpy()`: half precision has no numpy dtype, and
@@ -94,7 +99,7 @@ def _raw(tensor):
     return flat.view(torch.uint8).numpy().tobytes()
 
 
-def _stop_the_gradient(implementation):
+def _stop_the_gradient(implementation: object) -> None:
     """No parameter of this node asks for a gradient any more.
 
     Freezing a node is not freezing its prefix: the gradient still crosses it

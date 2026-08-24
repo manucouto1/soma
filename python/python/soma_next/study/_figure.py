@@ -33,6 +33,14 @@ read as promising is the one to stay away from.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Sequence
+
+from soma_next._typing import Figure
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Space, Store
+    from soma_next.study._run import Trial
+
 import math
 
 from soma_next import _theme
@@ -46,7 +54,7 @@ drawn in log. The original's rule, and it is measured rather than declared
 because a `Space` does not say how a knob was searched."""
 
 
-def table(store, space, *, study):
+def table(store: "Store", space: "Space", *, study: str) -> Figure:
     """Every scored trial, best first, with the configuration that got it.
 
     One scan and no fetches. Pruned trials are here too and say so: they are
@@ -93,7 +101,7 @@ def table(store, space, *, study):
     )
 
 
-def influence(store, space, *, study):
+def influence(store: "Store", space: "Space", *, study: str) -> Figure:
     """How decisive each knob was: |rho| against the score, biggest first.
 
     A rank correlation, so it says *this knob orders the results* and not *this
@@ -129,7 +137,13 @@ def influence(store, space, *, study):
     )
 
 
-def coordinates(store, space, *, study, goal="min"):
+def coordinates(
+    store: "Store",
+    space: "Space",
+    *,
+    study: str,
+    goal: str = "min",
+) -> Figure:
     """Every finished trial as a **curve** across the knobs, coloured by score.
 
     The one picture that shows a *region* of the space rather than one knob at a
@@ -231,7 +245,7 @@ def coordinates(store, space, *, study, goal="min"):
     )
 
 
-def _axis(name, values):
+def _axis(name: str, values: Sequence[Any]) -> dict[str, Any]:
     """One axis: how to place a value on `[0, 1]`, and what to write beside it.
 
     Three shapes, and the difference is not cosmetic. A **categorical** knob is
@@ -241,7 +255,10 @@ def _axis(name, values):
     """
     if any(isinstance(one, str) for one in values):
         seen = sorted({str(one) for one in values})
-        spread = max(len(seen) - 1, 1)
+        # `float`, because the other two branches below reuse the name for a
+        # span that is one: all three are the divisor that puts a value on
+        # `[0, 1]`, and only the categorical one happens to be whole.
+        spread: float = max(len(seen) - 1, 1)
         return {
             "name": name,
             "at": lambda what: seen.index(str(what)) / spread,
@@ -263,7 +280,7 @@ def _axis(name, values):
     }
 
 
-def _said(what):
+def _said(what: Any) -> str:
     """A value as it goes on a figure: short, and never in scientific notation
     when it does not have to be."""
     if isinstance(what, float):
@@ -271,7 +288,13 @@ def _said(what):
     return str(what)
 
 
-def _label(x, y, text, colour, size=11):
+def _label(
+    x: float,
+    y: float,
+    text: str,
+    colour: str,
+    size: int = 11,
+) -> dict[str, Any]:
     return {
         "x": x, "y": y, "xref": "x", "yref": "y",
         "text": text, "showarrow": False,
@@ -281,7 +304,7 @@ def _label(x, y, text, colour, size=11):
     }
 
 
-def _scored(store, space, *, study):
+def _scored(store: "Store", space: "Space", *, study: str) -> list["Trial"]:
     """Every trial with a score, best first. Pruned ones included."""
     return sorted(
         (
@@ -293,7 +316,7 @@ def _scored(store, space, *, study):
     )
 
 
-def _nothing(go, study):
+def _nothing(go: Any, study: str) -> Figure:
     """A study nobody has scored yet is a statement, not an exception."""
     return go.Figure().update_layout(
         annotations=[_label(0.5, 0.5, f"{study} — nothing has finished yet", _theme.MUTED)],

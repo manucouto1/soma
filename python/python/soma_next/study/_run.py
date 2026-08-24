@@ -70,6 +70,17 @@ it means migrating directories belonging to people with studies running.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Sequence
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Bound, Point, Space, Store
+
+#: One trial as `trials` reports it: its number, its state, the point it
+#: ran and the score it reached. `Any` for the same reason the record's
+#: rows are: the columns are named in the docstring and the store never
+#: learned what any of them mean.
+Trial = dict[str, Any]
+
 import json
 import math
 
@@ -89,7 +100,15 @@ FAILED = "failed"
 STATE, POINT, SCORE, WHO = "state", "point", "score", "who"
 
 
-def take(store, point, *, study, trial, me, attempt=0):
+def take(
+    store: "Store",
+    point: "Point",
+    *,
+    study: str,
+    trial: int,
+    me: object,
+    attempt: int = 0,
+) -> bool:
     """Claims the `trial`-th trial of `study`. `True` when it is this machine's.
 
     `False` means somebody else got there first, and the loop simply goes on to
@@ -104,19 +123,19 @@ def take(store, point, *, study, trial, me, attempt=0):
 
 
 def report(
-    store,
-    point,
-    reports,
+    store: "Store",
+    point: "Point",
+    reports: Sequence[float],
     *,
-    study,
-    trial,
-    me,
-    attempt=0,
-    state=RUNNING,
-    score=None,
-    because=None,
-    took=None,
-):
+    study: str,
+    trial: int,
+    me: object,
+    attempt: int = 0,
+    state: str = RUNNING,
+    score: float | None = None,
+    because: str | None = None,
+    took: float | None = None,
+) -> None:
     """Writes down where this trial has got to.
 
     Called as often as there is something to say — once an epoch is the useful
@@ -136,7 +155,12 @@ def report(
     store.bind(_trial(study, trial, attempt), digest, said)
 
 
-def finished(store, space, *, study):
+def finished(
+    store: "Store",
+    space: "Space",
+    *,
+    study: str,
+) -> list[tuple["Point", float]]:
     """Every trial that ran to the end, as `(point, score)` — what `ask` wants.
 
     **One scan and no fetches**: the configuration and the score are both in the
@@ -148,8 +172,8 @@ def finished(store, space, *, study):
     sampler that treats it as a bad configuration learns something that is not
     true.
     """
-    history = []
-    for record in _latest(store, study):
+    history: list[tuple["Point", float]] = []
+    for _, _, record in _latest(store, study):
         said = dict(record.meta)
         if said.get(STATE) != DONE or SCORE not in said:
             continue
@@ -157,34 +181,34 @@ def finished(store, space, *, study):
     return history
 
 
-def curves(store, *, study):
+def curves(store: "Store", *, study: str) -> list[list[float]]:
     """The reports of every trial that ran to the end — what a `Pruner` wants.
 
     This is the reader that pays: a curve grows, so it lives in the blob, and
     this is a scan **plus one fetch per trial**. It is the price of pruning
     against trials that other machines ran.
     """
-    drawn = []
-    for record in _latest(store, study):
+    drawn: list[list[float]] = []
+    for _, _, record in _latest(store, study):
         if dict(record.meta).get(STATE) != DONE:
             continue
         drawn.append(_read(store, record)["reports"])
     return drawn
 
 
-def trials(store, space, *, study):
+def trials(store: "Store", space: "Space", *, study: str) -> list[Trial]:
     """Every trial of this study, whatever state it is in, as records.
 
     The one for looking rather than deciding: a notebook drawing what is going
     on, and the answer to "is this study done". `state` says which are still
     running, which is also the list of what another machine is holding.
     """
-    seen = []
-    for record in _latest(store, study):
+    seen: list[Trial] = []
+    for trial, _, record in _latest(store, study):
         said = dict(record.meta)
         seen.append(
             {
-                "trial": _numbered(record.name, study)[0],
+                "trial": trial,
                 STATE: said.get(STATE),
                 POINT: space.read(said[POINT]) if POINT in said else None,
                 SCORE: float(said[SCORE]) if SCORE in said else None,
@@ -201,7 +225,13 @@ the space, being late costs a little more of the same, and neither is worth a
 tight number."""
 
 
-def in_flight(store, space, *, study, stale=STALE):
+def in_flight(
+    store: "Store",
+    space: "Space",
+    *,
+    study: str,
+    stale: float = STALE,
+) -> list[tuple["Point", float | None]]:
     """The trials another machine is holding, **each with no score**.
 
     Hand these to a sampler beside `finished` and a guided one stops proposing
@@ -254,8 +284,9 @@ def in_flight(store, space, *, study, stale=STALE):
     newest write to be behind, so nothing looks stale. That costs nothing — if
     nobody is writing, nobody is asking this either.
     """
-    running, newest = [], 0
-    for record in _latest(store, study):
+    running: list[tuple[int, "Point"]] = []
+    newest = 0
+    for _, _, record in _latest(store, study):
         said = dict(record.meta)
         newest = max(newest, record.when)
         if said.get(STATE) == RUNNING and POINT in said:
@@ -263,7 +294,12 @@ def in_flight(store, space, *, study, stale=STALE):
     return [(point, None) for when, point in running if newest - when <= stale]
 
 
-def abandoned(store, *, study, stale=STALE):
+def abandoned(
+    store: "Store",
+    *,
+    study: str,
+    stale: float = STALE,
+) -> list[tuple[int, int]]:
     """Which trials have stopped moving, as `(trial, attempt)` pairs.
 
     It **decides nothing**, which is the whole of its contract: reclaiming one
@@ -281,18 +317,24 @@ def abandoned(store, *, study, stale=STALE):
     Being wrong is cheap in both directions: too eager is a trial run twice, and
     a claim still cannot collide, so it is wasted work and not a wrong answer.
     """
-    quiet, newest = [], 0
-    for record in _latest(store, study):
+    quiet: list[tuple[int, tuple[int, int]]] = []
+    newest = 0
+    for trial, attempt, record in _latest(store, study):
         newest = max(newest, record.when)
         if dict(record.meta).get(STATE) == RUNNING:
-            quiet.append((record.when, _numbered(record.name, study)))
+            quiet.append((record.when, (trial, attempt)))
     return [
         numbered for when, numbered in quiet if newest - when > stale
     ]
 
 
 
-def importance(store, space, *, study):
+def importance(
+    store: "Store",
+    space: "Space",
+    *,
+    study: str,
+) -> list[tuple[str, float]]:
     """How decisive each knob was, as `(name, |rho|)`, biggest first.
 
     **Spearman's rho**, which is a rank correlation: how well the score follows a
@@ -320,10 +362,10 @@ def importance(store, space, *, study):
               if one[STATE] == DONE and one[SCORE] is not None]
     if len(scored) < 2:
         return [(name, 0.0) for name in space.names()]
-    scores = [one[SCORE] for one in scored]
+    scores: list[float] = [one[SCORE] for one in scored]
     said = []
     for name in space.names():
-        values = [one[POINT][name] for one in scored]
+        values: list[Any] = [one[POINT][name] for one in scored]
         if any(isinstance(one, str) for one in values):
             seen = sorted({str(one) for one in values})
             values = [seen.index(str(one)) for one in values]
@@ -331,7 +373,7 @@ def importance(store, space, *, study):
     return sorted(said, key=lambda one: -one[1])
 
 
-def _rho(xs, ys):
+def _rho(xs: Sequence[float], ys: Sequence[float]) -> float:
     """Spearman's rho of two equally long lists."""
     a, b = _ranked(xs), _ranked(ys)
     n = len(a)
@@ -343,7 +385,7 @@ def _rho(xs, ys):
     return top / below if below else 0.0
 
 
-def _ranked(values):
+def _ranked(values: Sequence[Any]) -> list[float]:
     """Ranks, **averaging ties** — which is what makes it Spearman rather than
     Pearson over whatever order the list happened to arrive in."""
     order = sorted(range(len(values)), key=lambda i: values[i])
@@ -360,9 +402,16 @@ def _ranked(values):
     return ranks
 
 
-def _latest(store, study):
-    """One record per trial — the highest attempt of each — in trial order."""
-    best = {}
+def _latest(store: "Store", study: str) -> list[tuple[int, int, "Bound"]]:
+    """One record per trial — the highest attempt of each — in trial order, as
+    `(trial, attempt, record)`.
+
+    The numbers come back with the record because working them out is how the
+    highest attempt is picked in the first place. Throwing them away left two
+    callers parsing the name a second time, and one of those indexed straight
+    into what `_numbered` answers when a name is not one of ours.
+    """
+    best: dict[int, tuple[int, "Bound"]] = {}
     for record in store.bound():
         numbered = _numbered(record.name, study)
         if numbered is None:
@@ -370,10 +419,10 @@ def _latest(store, study):
         trial, attempt = numbered
         if trial not in best or best[trial][0] < attempt:
             best[trial] = (attempt, record)
-    return [record for _, (_, record) in sorted(best.items())]
+    return [(trial, attempt, record) for trial, (attempt, record) in sorted(best.items())]
 
 
-def _numbered(name, study):
+def _numbered(name: str, study: str) -> tuple[int, int] | None:
     """The `(trial, attempt)` that name is, or `None` if it is not one of ours.
 
     A store holds whatever anybody put in it — a cache, another study, an
@@ -391,7 +440,7 @@ def _numbered(name, study):
         return None
 
 
-def _read(store, record):
+def _read(store: "Store", record: "Bound") -> dict[str, Any]:
     """The blob that record points at."""
     bytes_ = store.get(record.digest)
     if bytes_ is None:
@@ -400,10 +449,17 @@ def _read(store, record):
             f"have it: the record and the bytes are two things, and one of them "
             f"is missing"
         )
-    return json.loads(bytes_)
+    read: dict[str, Any] = json.loads(bytes_)
+    return read
 
 
-def _blob(point, reports, state, because, took):
+def _blob(
+    point: "Point",
+    reports: Sequence[float],
+    state: str,
+    because: str | None,
+    took: float | None,
+) -> bytes:
     """What is kept beside the record: the curve, and why it stopped.
 
     JSON and not a pickle, because whoever reads this is another process — often
@@ -422,5 +478,5 @@ def _blob(point, reports, state, because, took):
     ).encode()
 
 
-def _trial(study, trial, attempt):
+def _trial(study: str, trial: int, attempt: int) -> str:
     return f"{study}/trial/{trial}/{attempt}"

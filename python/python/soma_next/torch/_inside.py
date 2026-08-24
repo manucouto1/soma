@@ -41,10 +41,21 @@ have a rule per kind instead of a colour per class name.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
+
+if TYPE_CHECKING:
+    import torch as _torch
+
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Worker
+
+#: An edge between two layers, by path.
+Edge = tuple[str, str]
+
 try:
     import torch
 except ImportError:  # pragma: no cover
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 __all__ = ["KINDS", "Inside", "Layer", "architecture", "kind_of", "traced"]
 
@@ -131,7 +142,7 @@ _FUNCTIONS = {
 }
 
 
-def kind_of(what):
+def kind_of(what: Any) -> str:
     """What kind of thing this is, by role and never by exact class name.
 
     A `Sigmoid` and a `GELU` are the same kind; a `Linear` and a `Conv2d` are
@@ -168,8 +179,16 @@ class Layer:
     __slots__ = ("path", "kind", "label", "shape", "made_of", "dims", "came_in",
                  "block", "parallel")
 
-    def __init__(self, path, kind, label, shape=None, made_of=None, dims=None,
-                 parallel=None):
+    def __init__(
+        self,
+        path: str,
+        kind: str,
+        label: str,
+        shape: str | None = None,
+        made_of: str | None = None,
+        dims: tuple[str, ...] | None = None,
+        parallel: int | None = None,
+    ) -> None:
         self.path = path
         self.kind = kind
         self.label = label
@@ -183,12 +202,12 @@ class Layer:
         self.dims = dims
         #: And what went in, so that *does this narrow* is a fact about the
         #: layer rather than about what happens to sit above it on a figure.
-        self.came_in = None
+        self.came_in: str | None = None
         #: Which repeated block this belongs to, once one has been found. The
         #: count goes on the **block** and not on each of its layers: four
         #: encoder layers opened up are eight boxes each saying `×4`, which is
         #: the count said eight times and the block said none.
-        self.block = None
+        self.block: str | None = None
         #: How many identical lanes this one layer is, when the module says so
         #: itself — `num_heads` on an attention block, `groups` on a
         #: convolution. **Read and never inferred**: the heads of a
@@ -201,17 +220,17 @@ class Layer:
         #: `Linear · Linear · Linear` is not. `None` when nobody ran it.
         self.shape = shape
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, Layer) and self._as_tuple() == other._as_tuple()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self._as_tuple())
 
-    def _as_tuple(self):
+    def _as_tuple(self) -> tuple[Any, ...]:
         return (self.path, self.kind, self.label, self.shape, self.made_of, self.dims,
                 self.block, self.parallel)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         said = f"Layer({self.path!r}, {self.kind!r}, {self.label!r}"
         return said + (f", {self.shape!r})" if self.shape else ")")
 
@@ -228,7 +247,15 @@ class Inside:
 
     __slots__ = ("layers", "edges", "how", "why", "folded", "groups")
 
-    def __init__(self, layers, edges, how, why=None, folded=None, groups=None):
+    def __init__(
+        self,
+        layers: Iterable["Layer"],
+        edges: Iterable[Edge],
+        how: str,
+        why: str | None = None,
+        folded: dict[str, str] | None = None,
+        groups: dict[str, tuple[str | None, int]] | None = None,
+    ) -> None:
         self.layers = list(layers)
         self.edges = list(edges)
         self.how = how
@@ -246,14 +273,14 @@ class Inside:
         #: "it did not work" is not something anybody can act on.
         self.why = why
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.layers)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Inside({len(self.layers)} layers, {len(self.edges)} edges, {self.how})"
 
 
-def traced(module, example=None):
+def traced(module: Any, example: Any = None) -> "Inside | None":
     """What this module is made of. `fx` if it can, a real forward if it cannot.
 
     `example` is an input to run it on. Without one only the symbolic path is
@@ -268,7 +295,7 @@ def traced(module, example=None):
     return _by_running(module, example, why)
 
 
-def _symbolic(module, example=None):
+def _symbolic(module: Any, example: Any = None) -> tuple["Inside | None", str | None]:
     """`torch.fx`, which sees the functional operations — and a residual
     connection is one."""
     try:
@@ -284,12 +311,13 @@ def _symbolic(module, example=None):
 
     shapes = _shapes_of(graphed, example)
     named = dict(module.named_modules())
-    layers, edges = [], []
+    layers: list["Layer"] = []
+    edges: list[Edge] = []
     # What each `fx` node **reaches back to**: itself if it is worth a box, and
     # otherwise whatever fed it. Bridging like this is not a nicety — without
     # it, dropping one uninteresting node silently cuts the path through it and
     # a bottleneck comes out as two boxes and no edges.
-    reaches = {}
+    reaches: dict[str, list[str]] = {}
     for one in graphed.graph.nodes:
         made = _from_fx(one, named)
         before = [where for feeds in one.all_input_nodes for where in reaches.get(feeds.name, ())]
@@ -303,7 +331,7 @@ def _symbolic(module, example=None):
     return Inside(layers, edges, "symbolic"), None
 
 
-def _shapes_of(graphed, example):
+def _shapes_of(graphed: Any, example: Any) -> dict[str, Any]:
     """What each node produces, when there is something to run through it.
 
     `fx` alone knows the shape of nothing — it never saw a number. One pass with
@@ -320,7 +348,7 @@ def _shapes_of(graphed, example):
         # Not worth a word: the graph is still right, it just has no numbers on
         # it, and every box says so by having no shape rather than a wrong one.
         return {}
-    said = {}
+    said: dict[str, Any] = {}
     for one in graphed.graph.nodes:
         meta = one.meta.get("tensor_meta")
         if meta is not None and getattr(meta, "shape", None) is not None:
@@ -328,7 +356,7 @@ def _shapes_of(graphed, example):
     return said
 
 
-def _from_fx(one, named):
+def _from_fx(one: Any, named: dict[str, Any]) -> "Layer | None":
     """One `fx` node as a `Layer`, or `None` for what is not worth a box."""
     if one.op == "call_module":
         held = named.get(one.target)
@@ -354,7 +382,7 @@ def _from_fx(one, named):
     return None
 
 
-def _titled(name):
+def _titled(name: str) -> str:
     """`relu` as `ReLU`-ish, so a functional activation is recognised as one.
 
     Functional and module forms are the same operation written twice, and a
@@ -371,7 +399,7 @@ _NOT_WORTH_A_BOX = frozenset(
 )
 
 
-def _by_running(module, example, why):
+def _by_running(module: Any, example: Any, why: str | None) -> "Inside | None":
     """One real forward, watching which module produced which tensor.
 
     Edges come from **tensor identity**: what a module was handed was produced
@@ -381,10 +409,13 @@ def _by_running(module, example, why):
 
     That blindness is the reason `how` is on the figure.
     """
-    layers, edges, made_by, order = [], [], {}, []
+    layers: list["Layer"] = []
+    edges: list[Edge] = []
+    made_by: dict[int, str] = {}
+    order: list[str] = []
 
-    def watch(path, one):
-        def saw(_module, args, output):
+    def watch(path: str, one: Any) -> Callable[[Any, Any, Any], None]:
+        def saw(_module: Any, args: Any, output: Any) -> None:
             layers.append(Layer(path, kind_of(one), type(one).__name__, _shape(output)))
             for before in _tensors(args):
                 producer = made_by.get(id(before))
@@ -414,7 +445,7 @@ def _by_running(module, example, why):
     return Inside(layers, edges, "traced", why)
 
 
-def _parallel(module):
+def _parallel(module: Any) -> int | None:
     """How many identical lanes one module runs at once, **as it says itself**.
 
     `num_heads` on an attention block, `groups` on a grouped convolution. Read
@@ -436,7 +467,7 @@ def _parallel(module):
     return None
 
 
-def _made_of(module):
+def _made_of(module: Any) -> str | None:
     """What a composite is made of, in one line: `attention · norm ×2 · linear ×2`.
 
     Only for something kept whole — a leaf is made of itself. It is the answer
@@ -455,7 +486,7 @@ def _made_of(module):
         return f"{lanes} heads"
     if not any(True for _ in module.children()):
         return None
-    counted = {}
+    counted: dict[str, int] = {}
     for _, one in module.named_modules():
         if one is module or any(True for _ in one.children()):
             continue
@@ -469,7 +500,7 @@ def _made_of(module):
     )
 
 
-def _tensors(what):
+def _tensors(what: Any) -> list["_torch.Tensor"]:
     """Every tensor in whatever a module was handed or returned, **in order**.
 
     In order and not in whatever a stack pops: a recurrent cell returns
@@ -477,7 +508,7 @@ def _tensors(what):
     belongs — `1×4×24` for a GRU whose output is `4×16×24`, which is a wrong
     number written confidently on a figure.
     """
-    found = []
+    found: list["_torch.Tensor"] = []
     for one in what:
         if torch is not None and isinstance(one, torch.Tensor):
             found.append(one)
@@ -488,7 +519,7 @@ def _tensors(what):
     return found
 
 
-def _shape(output):
+def _shape(output: Any) -> str | None:
     """What a layer produces, as text. The one thing that makes a bottleneck
     visible at all."""
     found = _tensors(output if isinstance(output, list) else (output,))
@@ -497,7 +528,11 @@ def _shape(output):
     return "×".join(str(one) for one in tuple(found[0].shape))
 
 
-def _dims(kind, shape, batch=None):
+def _dims(
+    kind: str,
+    shape: str | None,
+    batch: int | None = None,
+) -> tuple[str, ...] | None:
     """What each number in a shape **is**: `64×16×24` as batch, steps, dim.
 
     Unlabelled numbers are the thing that makes a shape useless to read at a
@@ -535,7 +570,14 @@ def _dims(kind, shape, batch=None):
     return tuple(named)
 
 
-def architecture(graph, example=None, *, most=48, depth=0, workers=None):
+def architecture(
+    graph: "Graph",
+    example: Any = None,
+    *,
+    most: int = 48,
+    depth: int = 0,
+    workers: "dict[str, Worker] | None" = None,
+) -> dict[str, "Inside"]:
     """What each node is made of, as `{node: Inside}` — ready for a figure.
 
         g.figure(inside=architecture(g, x))
@@ -568,14 +610,18 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
     """
     if example is None or torch is None:
         return {}
-    watched = {}
+    watched: dict[tuple[str, str], Any] = {}
     for node in graph.nodes():
         for name, module in _held(graph.implementation(node)):
             for path, one in _worth_drawing(module, depth):
                 watched[(node, f"{name}.{path}" if path else name)] = one
 
     batch = _rows_in(example)
-    layers, edges, made_by, order, hooks = {}, {}, {}, {}, []
+    layers: dict[str, list["Layer"]] = {}
+    edges: dict[str, list[Edge]] = {}
+    made_by: dict[int, tuple[str, Any]] = {}
+    order: dict[str, list[str]] = {}
+    hooks: list[Any] = []
     for (node, where), one in watched.items():
         layers.setdefault(node, [])
         edges.setdefault(node, [])
@@ -595,7 +641,7 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
         for hook in hooks:
             hook.remove()
 
-    said = {}
+    said: dict[str, "Inside"] = {}
     for node in graph.nodes():
         if not layers.get(node):
             if any(one == node for one, _ in watched):
@@ -625,7 +671,7 @@ def architecture(graph, example=None, *, most=48, depth=0, workers=None):
     return said
 
 
-def _named(inside, held):
+def _named(inside: "Inside", held: Any) -> "Inside":
     """What each framed block is called, taken from the module it is.
 
     The class name and not the path: `body.layers.0` says where it lives and
@@ -651,14 +697,14 @@ def _named(inside, held):
     return inside
 
 
-def _rows_in(example):
+def _rows_in(example: Any) -> int | None:
     """How many rows went in, which is the one dimension that can be checked
     rather than assumed."""
     found = _tensors([_as_the_engine_would(example)])
     return int(found[0].shape[0]) if found and found[0].dim() else None
 
 
-def _as_the_engine_would(example):
+def _as_the_engine_would(example: Any) -> Any:
     """The input as a node really receives it: with the wrappers off.
 
     An `Opaque` is what makes a tensor cross an edge, and the engine unwraps it
@@ -677,10 +723,18 @@ def _as_the_engine_would(example):
     return example
 
 
-def _watch(where, one, layers, edges, made_by, order, batch=None):
+def _watch(
+    where: str,
+    one: Any,
+    layers: list["Layer"],
+    edges: list[Edge],
+    made_by: dict[int, tuple[str, Any]],
+    order: list[str],
+    batch: int | None = None,
+) -> Callable[[Any, Any, Any], None]:
     """A hook that writes down what ran and what it was handed."""
 
-    def saw(_module, args, output):
+    def saw(_module: Any, args: Any, output: Any) -> None:
         kind = kind_of(one)
         shape = _shape(output)
         made = Layer(
@@ -721,7 +775,7 @@ def _watch(where, one, layers, edges, made_by, order, batch=None):
 WHOLE = ("attention", "recurrent")
 
 
-def _worth_drawing(module, depth=0):
+def _worth_drawing(module: Any, depth: int = 0) -> list[tuple[str, Any]]:
     """Which of a module's parts get a box, as `[(path, module)]`.
 
     Two rules and they are the same rule: **draw the smallest thing that is
@@ -732,7 +786,9 @@ def _worth_drawing(module, depth=0):
     `depth` opens the composites that many levels further, for when the inside
     of one is exactly what is being asked about.
     """
-    said, closed, opened = [], [], []
+    said: list[tuple[str, Any]] = []
+    closed: list[str] = []
+    opened: list[str] = []
     for path, one in module.named_modules():
         # `""` is the module itself, and it can be the composite: closing it
         # has to mean *everything under it*, which an empty prefix does only
@@ -755,7 +811,7 @@ def _worth_drawing(module, depth=0):
     return said
 
 
-def _inherited(inside):
+def _inherited(inside: "Inside") -> "Inside":
     """A layer that did not change the shape keeps the names of the one that did.
 
     A `BatchNorm1d` in a convolutional trunk produces `(batch, channels, length)`
@@ -764,7 +820,7 @@ def _inherited(inside):
     numbers **are** is a fact about where the shape came from.
     """
     by_path = {one.path: one for one in inside.layers}
-    feeds = {}
+    feeds: dict[str, list[str]] = {}
     for a, b in inside.edges:
         feeds.setdefault(b, []).append(a)
     for one in inside.layers:
@@ -776,12 +832,22 @@ def _inherited(inside):
     return inside
 
 
-def _rank(shape):
-    """How many numbers a shape has, which is what says what they mean."""
-    return len(shape.split("×"))
+def _rank(shape: str | None) -> int:
+    """How many numbers a shape has, which is what says what they mean.
+
+    Nothing written down has no numbers in it, which is what makes two shapes
+    of different rank incomparable rather than equal.
+    """
+    return len(shape.split("×")) if shape else 0
 
 
-def _same_shape_above(path, shape, by_path, feeds, seen):
+def _same_shape_above(
+    path: str,
+    shape: str | None,
+    by_path: dict[str, "Layer"],
+    feeds: dict[str, list[str]],
+    seen: set[str],
+) -> tuple[str, ...] | None:
     """The names of the nearest thing above with the same shape.
 
     Walking back past what has no shape is the whole of it: a residual's `+` has
@@ -812,7 +878,7 @@ def _same_shape_above(path, shape, by_path, feeds, seen):
     return None
 
 
-def _without_a_lone_input(inside):
+def _without_a_lone_input(inside: "Inside") -> "Inside":
     """Drops a `fork` box that nothing actually forks from.
 
     It earns its place when something **other** than the next layer reads it —
@@ -843,7 +909,7 @@ def _without_a_lone_input(inside):
     )
 
 
-def _repeated(inside):
+def _repeated(inside: "Inside") -> "Inside":
     """Blocks that are the same block, collapsed to one and a count.
 
     Twelve identical transformer layers drawn twelve times is a figure nobody
@@ -857,7 +923,8 @@ def _repeated(inside):
     something else between them are two blocks, and saying `×2` would move one.
     """
     belongs = _blocks_of(inside)
-    blocks, order = {}, []
+    blocks: dict[str, list["Layer"]] = {}
+    order: list[str] = []
     for one in inside.layers:
         which = belongs[one.path]
         if which not in blocks:
@@ -871,7 +938,9 @@ def _repeated(inside):
         for which, held in blocks.items()
     }
 
-    kept, counts, folded = [], {}, {}
+    kept: list[str] = []
+    counts: dict[str, int] = {}
+    folded: dict[str, str] = {}
     at = 0
     while at < len(order):
         # A repeating unit is not always one block: `Linear, ReLU, Linear, ReLU`
@@ -896,7 +965,7 @@ def _repeated(inside):
     # up are eight boxes each saying `×4` — which is the count said eight times
     # and the block itself said none, and it is why the `×N` moved.
     framed = {which for which in kept if counts[which] > 1 and len(blocks[which]) > 1}
-    layers = []
+    layers: list["Layer"] = []
     for which in kept:
         for one in blocks[which]:
             made = _carried(
@@ -913,19 +982,24 @@ def _repeated(inside):
             )
             made.block = which if which in framed else None
             layers.append(made)
-    at = {one.path: which for which, one in enumerate(layers)}
-    edges, seen = [], set()
+    # `position` and not `at`, which is the `while` loop's counter further up:
+    # one name for a number and for a table of them.
+    position = {one.path: which for which, one in enumerate(layers)}
+    edges: list[Edge] = []
+    seen: set[Edge] = set()
     for a, b in inside.edges:
-        one = (folded.get(a, a), folded.get(b, b))
-        if one[0] not in at or one[1] not in at or one in seen:
+        # `ends` and not `one`, which is this function's name for a `Layer`
+        # further up: two things under one name in one scope.
+        ends = (folded.get(a, a), folded.get(b, b))
+        if ends[0] not in position or ends[1] not in position or ends in seen:
             continue
         # Forwards only. Folding six blocks into one turns the edge from the
         # sixth back into the first into a loop, and the `×6` already says the
         # thing repeats — drawing it as an arrow going up says something else.
-        if at[one[0]] >= at[one[1]]:
+        if position[ends[0]] >= position[ends[1]]:
             continue
-        seen.add(one)
-        edges.append(one)
+        seen.add(ends)
+        edges.append(ends)
     return Inside(
         layers,
         edges,
@@ -936,7 +1010,7 @@ def _repeated(inside):
     )
 
 
-def _blocks_of(inside):
+def _blocks_of(inside: "Inside") -> dict[str, str]:
     """Which block each layer belongs to.
 
     A numbered path says it itself. An operation that `fx` recovered does not —
@@ -946,7 +1020,7 @@ def _blocks_of(inside):
     residuals never collapse because no two of them are ever adjacent.
     """
     said = {one.path: _block(one.path) for one in inside.layers}
-    feeds = {}
+    feeds: dict[str, list[str]] = {}
     for a, b in inside.edges:
         feeds.setdefault(b, []).append(a)
     for one in inside.layers:
@@ -967,17 +1041,21 @@ def _blocks_of(inside):
     return said
 
 
-def _container(which):
+def _container(which: str) -> str:
     """What a numbered block hangs off: `body.layers.3` hangs off `body.layers.`."""
     return which.rsplit(".", 1)[0] + "."
 
 
-def _ordinal(which):
+def _ordinal(which: str) -> int:
     """The number a block is, for picking the later of two."""
     return int(which.rsplit(".", 1)[-1])
 
 
-def _period(order, signature, at):
+def _period(
+    order: Sequence[str],
+    signature: dict[str, Any],
+    at: int,
+) -> tuple[int, int]:
     """How long the repeating unit starting here is, and how many times it runs.
 
     **Shortest** first: `A A A A` is four of `A` and not two of `A A`, and a
@@ -1005,7 +1083,7 @@ def _period(order, signature, at):
     return 1, 1
 
 
-def _block(path):
+def _block(path: str) -> str:
     """The numbered thing a path belongs to, or the path itself.
 
     `body.layers.3.self_attn` belongs to `body.layers.3`; `emb` belongs to
@@ -1019,12 +1097,12 @@ def _block(path):
     return path
 
 
-def _numbered(which):
+def _numbered(which: str) -> bool:
     """Whether that block is one of a counted family."""
     return which.rsplit(".", 1)[-1].isdigit()
 
 
-def _carried(made, from_):
+def _carried(made: "Layer", from_: "Layer") -> "Layer":
     """The same layer with everything not in the constructor kept. Rebuilding a
     `Layer` and losing that is how a funnel goes back to being a rectangle."""
     made.came_in = getattr(from_, "came_in", None)
@@ -1033,11 +1111,16 @@ def _carried(made, from_):
     return made
 
 
-def _times(label, count):
+def _times(label: str, count: int) -> str:
     return label if count == 1 else f"{label}  ×{count}"
 
 
-def _spliced(layers, edges, name, finer):
+def _spliced(
+    layers: list["Layer"],
+    edges: list[Edge],
+    name: str,
+    finer: "Inside",
+) -> tuple[list["Layer"], list[Edge]]:
     """One module's boxes replaced by what `fx` saw inside it.
 
     The shapes are kept: `fx` traced without data and the run had it, so the
@@ -1081,7 +1164,7 @@ def _spliced(layers, edges, name, finer):
     )
 
 
-def _at_most(node, inside, most):
+def _at_most(node: str, inside: "Inside", most: int) -> "Inside":
     """A figure holds what a figure holds, and says what it dropped."""
     if len(inside.layers) <= most:
         return inside
@@ -1106,7 +1189,7 @@ def _at_most(node, inside, most):
     )
 
 
-def _held(node):
+def _held(node: Any) -> list[tuple[str, Any]]:
     """The torch modules a node holds, as `[(attribute, module)]`."""
     if torch is None or isinstance(node, type):
         return []

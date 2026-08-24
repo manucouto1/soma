@@ -53,6 +53,7 @@ import sys
 import sysconfig
 import textwrap
 import types
+from typing import Any, Callable
 
 __all__ = ["CannotVersion", "digest", "fingerprint"]
 
@@ -65,7 +66,7 @@ class CannotVersion(Exception):
     """There is no source to look at, so there is no version to compute."""
 
 
-def fingerprint(cls):
+def fingerprint(cls: type) -> str:
     """`SVMFilter(a1b2c3d4)` — the class's name and its version.
 
     Deterministic across processes: nothing that depends on the run goes in, and
@@ -74,16 +75,16 @@ def fingerprint(cls):
     return f"{cls.__name__}({digest(cls)})"
 
 
-def digest(cls):
+def digest(cls: type) -> str:
     """Just the version part. Raises `CannotVersion` if the class has no source
     to read — a notebook, an `exec` — which cannot be resolved from a clone
     anyway."""
-    pieces = set()
+    pieces: set[str] = set()
     _collect(cls, pieces, set())
     return hashlib.sha256("\n".join(sorted(pieces)).encode()).hexdigest()[:LENGTH]
 
 
-def _collect(obj, pieces, seen):
+def _collect(obj: object, pieces: set[str], seen: set[str]) -> None:
     """Adds to `pieces` what defines `obj`, and follows what it names.
 
     Memoized by `module:name` but **noted** by name alone, so moving a class
@@ -118,7 +119,7 @@ def _collect(obj, pieces, seen):
     pieces.add(f"{called}={obj!r}")
 
 
-def _follow_names(member, pieces, seen):
+def _follow_names(member: object, pieces: set[str], seen: set[str]) -> None:
     """Follows the global names `member`'s code mentions."""
     function = _function_of(member)
     if function is None:
@@ -145,7 +146,7 @@ def _follow_names(member, pieces, seen):
 GLOBALS = ("LOAD_GLOBAL", "STORE_GLOBAL", "DELETE_GLOBAL")
 
 
-def _names(code):
+def _names(code: types.CodeType) -> set[str]:
     """The global names this code and everything nested mention — descending
     into comprehensions, lambdas and inner functions, whose names live in `code`
     objects inside `co_consts`.
@@ -164,7 +165,7 @@ def _names(code):
     return out
 
 
-def _shape(obj):
+def _shape(obj: type | Callable[..., Any]) -> str:
     """The AST of its source, without comments or docstrings: what is versioned
     is what the code **does**, not what it says."""
     try:
@@ -181,7 +182,7 @@ def _shape(obj):
     return ast.dump(tree, annotate_fields=False)
 
 
-def _strip_docstrings(node):
+def _strip_docstrings(node: ast.AST) -> None:
     """Removes the first string literal from the body of each def and each class."""
     for child in ast.walk(node):
         if not isinstance(
@@ -198,7 +199,7 @@ def _strip_docstrings(node):
             del body[0]
 
 
-def _function_of(member):
+def _function_of(member: object) -> Callable[..., Any] | None:
     """The function behind a method, a `staticmethod` or a `property`."""
     if isinstance(member, types.FunctionType):
         return member
@@ -209,7 +210,7 @@ def _function_of(member):
     return None
 
 
-def _who_is(obj):
+def _who_is(obj: object) -> str:
     """With module: for memoizing, and for what is installed."""
     module = getattr(obj, "__module__", None)
     if module and (name := _what_it_is_called(obj)):
@@ -217,7 +218,7 @@ def _who_is(obj):
     return _what_it_is_called(obj)
 
 
-def _what_it_is_called(obj):
+def _what_it_is_called(obj: object) -> str:
     """Without module: what gets noted in the fingerprint."""
     name = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
     return name or f"value:{type(obj).__module__}.{type(obj).__name__}"
@@ -227,7 +228,7 @@ OURS = "soma_next"
 """The framework is not your code. See why above."""
 
 
-def _is_yours(obj):
+def _is_yours(obj: object) -> bool:
     """Whether it is project code and not a library's or the framework's."""
     if not isinstance(obj, (type, types.FunctionType)):
         return False
@@ -237,25 +238,28 @@ def _is_yours(obj):
     root = name.split(".")[0]
     if root in sys.stdlib_module_names or root == OURS:
         return False
-    file = getattr(sys.modules.get(name), "__file__", None)
+    file: str | None = getattr(sys.modules.get(name), "__file__", None)
     # `.py` and nothing else: an extension module has no source to read.
-    return bool(file) and file.endswith(".py") and not _installed(file)
+    # `is not None` rather than `bool(file)`: the two agree — an empty path does
+    # not end in `.py` either — and only one of them narrows the type away from
+    # `None` for the two calls that follow.
+    return file is not None and file.endswith(".py") and not _installed(file)
 
 
-def _installed(file):
+def _installed(file: str) -> bool:
     """Whether the file lives where `pip` leaves things."""
     paths = sysconfig.get_paths()
     where = [paths.get(k) for k in ("purelib", "platlib", "stdlib", "platstdlib")]
     return any(place and file.startswith(place) for place in where)
 
 
-def _version_of(obj):
+def _version_of(obj: object) -> str:
     """The version of the distribution it comes from, if it can be worked out."""
     name = getattr(obj, "__module__", None) or ""
     return _version(name.split(".")[0])
 
 
-def _version(package):
+def _version(package: str) -> str:
     if package in sys.stdlib_module_names:
         # Glued to the interpreter, whose version is compared at the greeting.
         return "stdlib"

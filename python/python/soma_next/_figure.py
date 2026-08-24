@@ -54,6 +54,25 @@ so the table moved to `soma_next._theme` and both read it from there.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Container, Iterator, Mapping, Sequence
+
+from soma_next._typing import Figure, Inside as InsideMap, Overlay
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
+    from soma_next.torch._inside import Inside, Layer
+
+#: A compiled plan as `Graph.plan_json()` writes it: one key naming the
+#: variant, and either a body or a list of children under it. `"Empty"` is
+#: the one that is a bare string.
+Plan = Any
+
+#: What goes inside a node's box, per node id — the lines already worked out.
+Labels = Mapping[str, Sequence[str]]
+
+#: A layer with where it goes: `(row, across, width, narrows)`.
+Placed = list[tuple["Layer", tuple[int, float, float, int | None]]]
+
 import html
 from dataclasses import dataclass, replace
 
@@ -176,7 +195,7 @@ class Box:
         return self.y + self.h / 2
 
 
-def steps(plan):
+def steps(plan: Plan) -> Iterator[tuple[str, list[str]]]:
     """Every `Execute` in the plan, as `(node, from)`, in declaration order.
 
     A `Remote` is entered: what a plan does does not depend on where it runs, and
@@ -194,7 +213,11 @@ def steps(plan):
             yield from steps(child)
 
 
-def boxes(plan, labels=None, inside=None):
+def boxes(
+    plan: Plan,
+    labels: Labels | None = None,
+    inside: InsideMap | None = None,
+) -> list[Box]:
     """Where every box goes, for a plan as `Graph.plan_json()` gives it.
 
     `labels` maps a node id to the lines that will be written in it, and is only
@@ -215,7 +238,11 @@ def boxes(plan, labels=None, inside=None):
     return out
 
 
-def figure(graph, overlay=None, inside=None):
+def figure(
+    graph: "Graph",
+    overlay: Overlay | None = None,
+    inside: InsideMap | None = None,
+) -> Figure:
     """The graph as a `plotly.graph_objects.Figure`.
 
     Everything drawn is read back from what was declared — `nodes()`, `edges()`,
@@ -255,15 +282,21 @@ def figure(graph, overlay=None, inside=None):
         for badges in [_badges(node, cached, frozen, mapped)]
     }
     placed = boxes(plan, labels, inside)
-    where = {box.node: box for box in placed if box.kind == "node"}
+    where = {
+        box.node: box
+        for box in placed
+        if box.kind == "node"
+        if box.node is not None
+    }
 
     figure = go.Figure()
     if not where:
         return _nothing(figure, go)
 
-    shapes, notes = [], []
+    shapes: list[dict[str, Any]] = []
+    notes: list[dict[str, Any]] = []
     for box in placed:
-        if box.kind == "layer":
+        if box.kind == "layer" and box.node is not None:
             # What a node is made of, drawn by **what it is**: something that
             # holds weights gets a box, and a non-linearity gets a mark, because
             # a box says *there is something living here* and an activation has
@@ -279,7 +312,7 @@ def figure(graph, overlay=None, inside=None):
             shapes.extend(_plates(box, line, how))
             shapes.append(_silhouette(box, fill, line, width, how))
             notes.append(_text(box.cx, box.cy, _labelled(box), ink, size=10))
-        elif box.kind == "node":
+        elif box.kind == "node" and box.node is not None:
             fill, line, ink = PALETTE[_family(devices.get(box.node))]
             width = 1.4
             if box.node in ill:
@@ -315,8 +348,18 @@ def figure(graph, overlay=None, inside=None):
     # What a node is made of feeds each other too, and that is the only thing
     # that can tell a residual from a stack.
     for node, held in (inside or {}).items():
-        where_in = {box.node: box for box in placed if box.kind == "layer"}
-        blocks = {box.node: box for box in placed if box.kind == "group"}
+        where_in = {
+            box.node: box
+            for box in placed
+            if box.kind == "layer"
+            if box.node is not None
+        }
+        blocks = {
+            box.node: box
+            for box in placed
+            if box.kind == "group"
+            if box.node is not None
+        }
         frame = next((box for box in placed if box.node == node), None)
         if frame is None:
             continue
@@ -347,7 +390,8 @@ def figure(graph, overlay=None, inside=None):
     # What the drawing has to hold, which starts as the boxes and grows to take
     # in every lane a routed edge asks for.
     reach = [span[0], span[1]]
-    lanes, boxed = {}, list(where.values())
+    lanes: dict[int, int] = {}
+    boxed = list(where.values())
     for node, comes_from in steps(plan):
         for source in comes_from:
             if source not in where:
@@ -406,7 +450,11 @@ def figure(graph, overlay=None, inside=None):
     return figure
 
 
-def _measure(plan, labels, inside=None):
+def _measure(
+    plan: Plan,
+    labels: Labels,
+    inside: InsideMap | None = None,
+) -> tuple[float, float]:
     """How much room a plan takes, before anybody decides where it goes."""
     if plan == "Empty":
         return 0.0, 0.0
@@ -428,7 +476,14 @@ def _measure(plan, labels, inside=None):
     )
 
 
-def _place(plan, x, y, labels, out, inside=None):
+def _place(
+    plan: Plan,
+    x: float,
+    y: float,
+    labels: Labels,
+    out: list[Box],
+    inside: InsideMap | None = None,
+) -> None:
     """Hands out positions, top down, from a size already known."""
     if plan == "Empty":
         return
@@ -462,13 +517,17 @@ def _place(plan, x, y, labels, out, inside=None):
             left += w + GAP_X
 
 
-def _width(node, labels):
+def _width(node: str, labels: Labels) -> float:
     """How wide a node's box has to be to hold its longest line."""
     lines = labels.get(node) or (node,)
     return max(MIN_W, CHAR * max(len(_bare_markup(line)) for line in lines) + 2 * PAD_X)
 
 
-def _node_size(node, labels, inside=None):
+def _node_size(
+    node: str,
+    labels: Labels,
+    inside: InsideMap | None = None,
+) -> tuple[float, float]:
     """A node's box: its own lines, plus room for what it is made of.
 
     A node with an `inside` becomes a **frame** — the same shape a `Wave` or a
@@ -492,7 +551,15 @@ def _node_size(node, labels, inside=None):
     )
 
 
-def _stack(node, inside, x, y, width, labels, out):
+def _stack(
+    node: str,
+    inside: "Inside | None",
+    x: float,
+    y: float,
+    width: float,
+    labels: Labels,
+    out: list[Box],
+) -> None:
     """The layers of an expanded node, placed **by what feeds what**.
 
     A stack cannot show a skip connection. What is placed here is a small DAG,
@@ -510,7 +577,7 @@ def _stack(node, inside, x, y, width, labels, out):
     top = y + max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
     placed = _ranked(inside)
     lifts = _lifted(placed, inside)
-    held = {}
+    held: dict[str, list[Box]] = {}
     for one, place in placed:
         row, across, wide, narrows = place
         # A layer in a repeated block is indented, so the frame around it has
@@ -537,7 +604,7 @@ def _stack(node, inside, x, y, width, labels, out):
             parallel=one.parallel,
         )
         out.append(box)
-        if one.block in inside.groups:
+        if one.block is not None and one.block in inside.groups:
             held.setdefault(one.block, []).append(box)
     # The frame last, so it is behind nothing and its label is not covered.
     for block, boxed in held.items():
@@ -557,7 +624,7 @@ def _stack(node, inside, x, y, width, labels, out):
         )
 
 
-def _lifted(placed, inside):
+def _lifted(placed: Placed, inside: "Inside") -> dict[int, float]:
     """How far each row drops to make room for the headers above it.
 
     A repeated block gets a strip at the top for its `×N`, and every row from
@@ -565,12 +632,13 @@ def _lifted(placed, inside):
     two blocks in a row each want their own strip and the second one has to
     clear the first.
     """
-    rows = {}
+    rows: dict[str, list[int]] = {}
     for one, (row, *_) in placed:
-        if one.block in inside.groups:
+        if one.block is not None and one.block in inside.groups:
             rows.setdefault(one.block, []).append(row)
     opens = {min(where) for where in rows.values()}
-    lifts, so_far = {}, 0.0
+    lifts: dict[int, float] = {}
+    so_far = 0.0
     for row in sorted({place[0] for _, place in placed}):
         if row in opens:
             so_far += GROUP_HEAD
@@ -578,7 +646,7 @@ def _lifted(placed, inside):
     return lifts
 
 
-def _ranked(inside):
+def _ranked(inside: "Inside") -> Placed:
     """Where each layer goes: `(layer, (row, x, width))`.
 
     The rank is the longest way down, which is what puts a skip's two ends on
@@ -586,21 +654,22 @@ def _ranked(inside):
     worth drawing.
     """
     layers = {one.path: one for one in inside.layers}
-    feeds = {path: [] for path in layers}
+    feeds: dict[str, list[str]] = {path: [] for path in layers}
     for a, b in inside.edges:
         if a in layers and b in layers:
             feeds[b].append(a)
-    rank, order = {}, list(layers)
+    rank: dict[str, int] = {}
+    order = list(layers)
     for path in order:
         rank[path] = 1 + max((rank.get(one, 0) for one in feeds[path]), default=-1)
-    rows = {}
+    rows: dict[int, list["Layer"]] = {}
     for path in order:
         rows.setdefault(rank[path], []).append(layers[path])
 
     # Which way each layer changes the width, so a taper can be drawn the way
     # it really goes. The last dimension of what it produced against the last
     # dimension of what fed it: `+1` narrower, `-1` wider, `0` neither.
-    narrows = {}
+    narrows: dict[str, int | None] = {}
     for path in layers:
         mine = _last_dim(layers[path].shape)
         # What really went in, when the trace knows it. Only when it does not —
@@ -622,7 +691,8 @@ def _ranked(inside):
             None if mine is None or theirs is None else (mine < theirs) - (mine > theirs)
         )
 
-    placed, widest = [], _inner_width(inside)
+    placed: Placed = []
+    widest = _inner_width(inside)
     for row, beside in sorted(rows.items()):
         each = (widest - LAYER_GAP * (len(beside) - 1)) / len(beside)
         for at, one in enumerate(beside):
@@ -630,7 +700,12 @@ def _ranked(inside):
     return placed
 
 
-def _width_before(path, layers, feeds, seen):
+def _width_before(
+    path: str,
+    layers: dict[str, "Layer"],
+    feeds: dict[str, list[str]],
+    seen: set[str],
+) -> int | None:
     """The width of the nearest thing above this that has one.
 
     Walking back past what has no shape is the whole of it: an `Add` has no
@@ -650,20 +725,26 @@ def _width_before(path, layers, feeds, seen):
     return None
 
 
-def _rank(shape):
-    """How many numbers a shape has, which is what says what they mean."""
-    return len(shape.split("×"))
+def _rank(shape: str | None) -> int:
+    """How many numbers a shape has, which is what says what they mean.
+
+    Nothing written down has none, which is what makes an unmeasured shape
+    incomparable with a measured one rather than equal to it.
+    """
+    return len(shape.split("×")) if shape else 0
 
 
-def _last_dim(shape):
+def _last_dim(shape: str | None) -> int | None:
     """The last number of a shape as it is written — the width of what came out."""
+    if shape is None:
+        return None
     try:
         return int(shape.split("×")[-1])
-    except (AttributeError, ValueError):
+    except ValueError:
         return None
 
 
-def _inner_width(inside):
+def _inner_width(inside: "Inside") -> float:
     """How wide the widest row of an architecture has to be."""
     return max(
         (CHAR * len(_layer_text(one)) + 2 * PAD_X for one in inside.layers),
@@ -671,12 +752,12 @@ def _inner_width(inside):
     )
 
 
-def _rows_of(inside):
+def _rows_of(inside: "Inside | None") -> int:
     """How many rows deep it is."""
     return len({place[0] for _, place in _ranked(inside)}) if inside else 0
 
 
-def _tapers(kind):
+def _tapers(kind: str | None) -> bool:
     """Whether a kind is drawn changing the width when it changes it.
 
     Only what really carries the shape: a non-linearity that happens to sit
@@ -685,12 +766,12 @@ def _tapers(kind):
     return kind in ("learned", "shaping")
 
 
-def _layer_text(one):
+def _layer_text(one: "Layer") -> str:
     """The longest line a layer needs, for working out how wide its box is."""
     return max(_two_lines(one), key=len)
 
 
-def _two_lines(one):
+def _two_lines(one: "Layer | Box") -> tuple[str, str]:
     """What is written on a layer, over two lines.
 
     What it **is** on the first and what it **produces** on the second. One line
@@ -701,13 +782,16 @@ def _two_lines(one):
     so writing the one they were handed says nothing and takes the room their
     silhouette needs to stay thin.
     """
-    top = one.label + (f"  ·  {one.made_of}" if getattr(one, "made_of", None) else "")
+    # A `Box`'s label is optional where a `Layer`'s is not, and this takes both.
+    top = (one.label or "") + (
+        f"  ·  {one.made_of}" if getattr(one, "made_of", None) else ""
+    )
     if (one.mark if hasattr(one, "mark") else one.kind) in ("activation", "regular"):
         return (top, "")
     return (top, _measured(one.shape, getattr(one, "dims", None)))
 
 
-def _measured(shape, dims):
+def _measured(shape: str | None, dims: Sequence[str] | None) -> str:
     """A shape with each number said out loud: `4 batch · 24 ch · 32 len`.
 
     Three numbers and no way to tell which is the batch, which is time and which
@@ -723,7 +807,7 @@ def _measured(shape, dims):
     )
 
 
-def _bare_markup(line):
+def _bare_markup(line: str) -> str:
     """A label's length as it is read, not as it is written: the flag badge
     carries a `<span>` that takes no room on the page."""
     import re
@@ -731,14 +815,19 @@ def _bare_markup(line):
     return re.sub(r"<[^>]+>", "", line)
 
 
-def _family(device):
+def _family(device: str | None) -> str:
     """`cuda:0` and `cuda:1` are painted the same; nothing said means `cpu`."""
     return (device or "cpu").split(":")[0]
 
 
-def _badges(node, cached, frozen, mapped):
+def _badges(
+    node: str,
+    cached: Mapping[str, Any],
+    frozen: Mapping[str, Any],
+    mapped: Container[str],
+) -> list[str]:
     """The marks a node carries beside its name, in a fixed order."""
-    marks = []
+    marks: list[str] = []
     if node in cached:
         marks.append("⟳ cached")
     if node in frozen:
@@ -748,12 +837,18 @@ def _badges(node, cached, frozen, mapped):
     return marks
 
 
-def _lines(node, identity, device, badges, flags=None):
+def _lines(
+    node: str,
+    identity: str | None,
+    device: str | None,
+    badges: Sequence[str],
+    flags: Sequence[str] | None = None,
+) -> tuple[str, ...]:
     """What is written inside a node's box: at most four lines."""
     lines = [_safe(node)]
     if identity and not _named_after(node, identity):
         lines.append(_safe(identity))
-    tail = ([device] if device and device != "cpu" else []) + badges
+    tail = ([device] if device and device != "cpu" else []) + list(badges)
     if tail:
         lines.append(_safe(" · ".join(tail)))
     if flags:
@@ -766,7 +861,7 @@ def _lines(node, identity, device, badges, flags=None):
     return tuple(lines)
 
 
-def _labelled(box):
+def _labelled(box: Box) -> str:
     """What is written on a layer: what it is, and what it produces.
 
     The shape is on it and not on the hover, because it is the one thing that
@@ -781,9 +876,9 @@ def _labelled(box):
     return f"{_safe(top)}<br><i>{_safe(below)}</i>"
 
 
-def _legend(ill, at):
+def _legend(ill: Overlay, at: float) -> list[dict[str, Any]]:
     """One line saying what each colour on this figure means."""
-    families = []
+    families: list[str] = []
     for flags in ill.values():
         for flag in flags:
             try:
@@ -793,7 +888,7 @@ def _legend(ill, at):
             if one not in families:
                 families.append(one)
     across = 0.0
-    said = []
+    said: list[dict[str, Any]] = []
     for one in families:
         colour = _theme.ALARM.get(one, _theme.SERIES["alarm"])
         said.append(_text(across, at, f"■ {one}", colour, left=True, size=10))
@@ -801,7 +896,7 @@ def _legend(ill, at):
     return said
 
 
-def _worst(flags):
+def _worst(flags: Sequence[str]) -> str:
     """What colour a set of findings is drawn in: the family of the first one.
 
     First and not blended: `verdict` already puts what stops a run soonest at
@@ -816,7 +911,7 @@ def _worst(flags):
     return _theme.SERIES["alarm"]
 
 
-def _flag_family(name):
+def _flag_family(name: str) -> str:
     """Which family a flag belongs to, from the crate that decides it.
 
     Not `_family`, which this file already had and which answers a different
@@ -828,13 +923,13 @@ def _flag_family(name):
     return family(name)
 
 
-def _bare(flag):
+def _bare(flag: str) -> str:
     """A flag without what it counts: `DEAD_CHANNELS(7)` is `DEAD_CHANNELS` on a
     box, and the seven is on the hover where there is room for it."""
     return flag.split("(", 1)[0]
 
 
-def _named_after(node, identity):
+def _named_after(node: str, identity: str) -> bool:
     """Whether the id says nothing the class name does not.
 
     A node with no id of its own gets the class lowercased — `Tokenize` becomes
@@ -847,8 +942,16 @@ def _named_after(node, identity):
 
 
 def _hover(
-    node, identities, devices, hosts, cached, frozen, mapped, fingerprints, flags=None
-):
+    node: str,
+    identities: Mapping[str, str],
+    devices: Mapping[str, str],
+    hosts: Mapping[str, str],
+    cached: Mapping[str, str | None],
+    frozen: Mapping[str, str | None],
+    mapped: Container[str],
+    fingerprints: Mapping[str, str],
+    flags: Sequence[str] | None = None,
+) -> str:
     """Everything that was said about a node, for the pointer."""
     said = [f"<b>{_safe(node)}</b>"]
     if identity := identities.get(node):
@@ -873,7 +976,7 @@ def _hover(
     return "<br>".join(said)
 
 
-def _safe(text):
+def _safe(text: object) -> str:
     """Escapes what came from whoever declared the graph.
 
     Plotly reads a subset of HTML in labels and in hover text, so a node called
@@ -883,7 +986,13 @@ def _safe(text):
     return html.escape(str(text), quote=False)
 
 
-def _silhouette(box, fill, line, width, how):
+def _silhouette(
+    box: Box,
+    fill: str | None,
+    line: str,
+    width: float,
+    how: str,
+) -> dict[str, Any]:
     """One layer, drawn as the **kind of thing** it is.
 
     A `Linear`, a convolution, a recurrent cell and a non-linearity are four
@@ -895,9 +1004,11 @@ def _silhouette(box, fill, line, width, how):
     """
     x, y, w, h = box.x, box.y, box.w, box.h
     r, cut, skew = h / 2, min(h / 2, 10.0), min(w / 8, 12.0)
-    said = {"type": "path", "xref": "x", "yref": "y", "layer": "below",
-            "fillcolor": fill,
-            "line": {"color": line, "width": width}}
+    said: dict[str, Any] = {
+        "type": "path", "xref": "x", "yref": "y", "layer": "below",
+        "fillcolor": fill,
+        "line": {"color": line, "width": width},
+    }
     if how in ("capsule", "dashed"):
         # Polygons and never arcs: this figure's y axis is **reversed** — a plan
         # is read downwards — and an SVG arc's sweep flag is about a direction,
@@ -954,7 +1065,7 @@ say **there are several of these**, which is the part a shape can carry.
 """
 
 
-def _plates(box, line, how):
+def _plates(box: Box, line: str, how: str) -> list[dict[str, Any]]:
     """The lanes behind a layer that runs several of itself at once.
 
     Offset copies of its own silhouette, and **no edges between them**. Torch
@@ -975,7 +1086,7 @@ def _plates(box, line, how):
     return said
 
 
-def _tapered(box, skew):
+def _tapered(box: Box, skew: float) -> str:
     """A shape that changes the shape, drawn changing: narrowing when what comes
     out is smaller than what went in, widening when it is bigger.
 
@@ -993,7 +1104,13 @@ def _tapered(box, skew):
     return f"M {x + skew},{y} L {x + w - skew},{y} L {x + w},{y + h} L {x},{y + h} Z"
 
 
-def _rect(box, fill, line, width, dash=None):
+def _rect(
+    box: Box,
+    fill: str | None,
+    line: str,
+    width: float,
+    dash: str | None = None,
+) -> dict[str, Any]:
     """One rectangle, in plotly's shape form."""
     return {
         "type": "rect",
@@ -1007,7 +1124,14 @@ def _rect(box, fill, line, width, dash=None):
     }
 
 
-def _text(x, y, said, ink, left=False, size=11):
+def _text(
+    x: float,
+    y: float,
+    said: str | None,
+    ink: str,
+    left: bool = False,
+    size: int = 11,
+) -> dict[str, Any]:
     """One label, without an arrow attached to it."""
     return {
         "x": x,
@@ -1036,7 +1160,7 @@ HEAD = 12.0
 """The last straight bit, which is the part that carries the arrowhead."""
 
 
-def _crosses(source, target, obstacles):
+def _crosses(source: Box, target: Box, obstacles: Sequence[Box]) -> bool:
     """Whether the straight edge would pass through a box that is not its ends.
 
     An edge drawn over a node reads as an edge **into** that node, which is the
@@ -1052,7 +1176,7 @@ def _crosses(source, target, obstacles):
     )
 
 
-def _hits(x0, y0, x1, y1, box):
+def _hits(x0: float, y0: float, x1: float, y1: float, box: Box) -> bool:
     """Segment against rectangle, by the slab test — exact, and about ten lines.
 
     Sampling the segment would miss a thin box, and a figure that is *usually*
@@ -1075,7 +1199,12 @@ def _hits(x0, y0, x1, y1, box):
     return True
 
 
-def _routed(source, target, span, apart):
+def _routed(
+    source: Box,
+    target: Box,
+    span: tuple[float, float],
+    apart: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], float]:
     """One edge that cannot go straight, as `(shapes, annotation, lane)`.
 
     Around means **outside everything**, down, and in through the side of what
@@ -1117,7 +1246,7 @@ BIGGEST = 1600.0
 """How large a figure is allowed to get, in pixels, on its longer side."""
 
 
-def _sized(wide, tall):
+def _sized(wide: float, tall: float) -> dict[str, float]:
     """A figure big enough to hold what is in it, **in proportion**.
 
     The y axis is anchored to the x so a box is not stretched into a different
@@ -1133,7 +1262,7 @@ def _sized(wide, tall):
     return {"width": max(360, wide * scale), "height": max(240, tall * scale)}
 
 
-def _bent(source, target):
+def _bent(source: Box, target: Box) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """One edge with nothing in the way, as `(shapes, annotation)`.
 
     Straight down when it really is straight down; a curve when it has to move
@@ -1157,7 +1286,7 @@ def _bent(source, target):
     )
 
 
-def _entered(source, target, block):
+def _entered(source: Box, target: Box, block: Box | None) -> Box:
     """The block an edge lands in, when it lands on it from directly above.
 
     The row is kept from the layer, because a skip is *how many rows it jumps*
@@ -1173,7 +1302,11 @@ def _entered(source, target, block):
     return replace(block, row=target.row, h=GROUP_HEAD)
 
 
-def _inner_edge(source, target, frame):
+def _inner_edge(
+    source: Box,
+    target: Box,
+    frame: Box,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """One edge between two layers of the same node.
 
     Straight down when they are next to each other; **out into the gutter** when
@@ -1206,7 +1339,13 @@ def _inner_edge(source, target, frame):
     )
 
 
-def _arrow(ax, ay, x, y, colour=None):
+def _arrow(
+    ax: float,
+    ay: float,
+    x: float,
+    y: float,
+    colour: str | None = None,
+) -> dict[str, Any]:
     """The head, and whatever straight run carries it."""
     return {
         "x": x,
@@ -1226,7 +1365,7 @@ def _arrow(ax, ay, x, y, colour=None):
     }
 
 
-def _nothing(figure, go):
+def _nothing(figure: Figure, go: Any) -> Figure:
     """What a graph with no nodes looks like: a statement, not an exception."""
     del go
     figure.update_layout(

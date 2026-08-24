@@ -45,13 +45,23 @@ node's, which is one line and is how everything else here works.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, Iterable
+
+if TYPE_CHECKING:
+    import torch as _torch
+
+    from soma_next._graph import Graph
+
+#: What turns an output and a target into a number to minimise.
+Objective = Callable[[Any, Any], "_torch.Tensor"]
+
 import math
 import warnings
 
 try:
     import torch
 except ImportError:  # pragma: no cover - the trainer module already needs torch
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 from soma_next.torch._inside import _held, _worth_drawing
 from soma_next.torch._params import parameters
@@ -64,7 +74,14 @@ EVERY = ("synflow", "zen", "naswot", "snip", "grasp")
 FREE = ("synflow", "zen", "naswot")
 
 
-def proxy(graph, example, of, *, target=None, objective=None):
+def proxy(
+    graph: "Graph",
+    example: Any,
+    of: str,
+    *,
+    target: Any = None,
+    objective: Objective | None = None,
+) -> float:
     """One cheap score for one candidate, higher being better.
 
     `of` names which — see `EVERY`. `snip` and `grasp` want a `target` and an
@@ -82,16 +99,23 @@ def proxy(graph, example, of, *, target=None, objective=None):
         raise ValueError(f"`{of}` is not a proxy; there are: {', '.join(EVERY)}")
     if of not in FREE and (target is None or objective is None):
         raise ValueError(f"`{of}` reads a loss, so it needs `target=` and `objective=`")
-    return {
+    taken: dict[str, Callable[..., float]] = {
         "synflow": _synflow,
         "snip": _snip,
         "grasp": _grasp,
         "zen": _zen,
         "naswot": _naswot,
-    }[of](graph, example, target, objective)
+    }
+    return taken[of](graph, example, target, objective)
 
 
-def proxies(graph, example, *, target=None, objective=None):
+def proxies(
+    graph: "Graph",
+    example: Any,
+    *,
+    target: Any = None,
+    objective: Objective | None = None,
+) -> dict[str, float]:
     """Every proxy that can be taken with what it was given, as `{name: score}`.
 
     Without a `target` and an `objective` the three that read a loss are **not
@@ -99,7 +123,7 @@ def proxies(graph, example, *, target=None, objective=None):
     and a score that is bad have to look different, which is the same rule
     `Seen` keeps on the other side of the library.
     """
-    said = {}
+    said: dict[str, float] = {}
     for name in EVERY:
         if name not in FREE and (target is None or objective is None):
             continue
@@ -113,7 +137,12 @@ def proxies(graph, example, *, target=None, objective=None):
 # ── The five ──
 
 
-def _synflow(graph, example, _target, _objective):
+def _synflow(
+    graph: "Graph",
+    example: Any,
+    _target: Any,
+    _objective: Objective | None,
+) -> float:
     """Tanaka et al. (2020), and the only one that never sees data at all.
 
     Every weight is made positive and a batch of ones is pushed through, so what
@@ -127,7 +156,13 @@ def _synflow(graph, example, _target, _objective):
         for p in held:
             p.abs_()
     try:
-        made = _ran(graph, torch.ones_like(_tensor(_unwrapped(example))))
+        # A batch of ones **of the example's shape**, so there has to be a
+        # tensor in the example to take a shape from. Without one there is no
+        # `synflow` to take, which is a score that is missing and not a bad one.
+        ones = _tensor(_unwrapped(example))
+        if ones is None:
+            return float("nan")
+        made = _ran(graph, torch.ones_like(ones))
         if made is None:
             return float("nan")
         score = _by_parameter(made.sum(), held)
@@ -140,7 +175,12 @@ def _synflow(graph, example, _target, _objective):
     return math.log(score) if score > 0 else float("-inf")
 
 
-def _snip(graph, example, target, objective):
+def _snip(
+    graph: "Graph",
+    example: Any,
+    target: Any,
+    objective: Objective,
+) -> float:
     """Lee et al. (2019). The same product as `synflow`, against a real loss:
     how much each weight is holding up the answer on data it has seen."""
     made = _ran(graph, example)
@@ -150,7 +190,12 @@ def _snip(graph, example, target, objective):
     return math.log(score) if score > 0 else float("-inf")
 
 
-def _grasp(graph, example, target, objective):
+def _grasp(
+    graph: "Graph",
+    example: Any,
+    target: Any,
+    objective: Objective,
+) -> float:
     """Wang et al. (2020). `-w . H g`: whether a step would make the gradient
     bigger or smaller, which needs the gradient to stay differentiable and is
     why this one costs a second backward through the first."""
@@ -163,12 +208,18 @@ def _grasp(graph, example, target, objective):
     kept = [(p, one) for p, one in zip(held, g) if one is not None]
     if not kept:
         return float("nan")
-    hessian = torch.autograd.grad(sum((one * one).sum() for _, one in kept) / 2,
-                                  [p for p, _ in kept], allow_unused=True)
+    halved = torch.stack([(one * one).sum() for _, one in kept]).sum() / 2
+    hessian = torch.autograd.grad(halved, [p for p, _ in kept], allow_unused=True)
     return -sum(float((p.detach() * h).sum()) for (p, _), h in zip(kept, hessian) if h is not None)
 
 
-def _zen(graph, example, _target, _objective, eps=1e-2):
+def _zen(
+    graph: "Graph",
+    example: Any,
+    _target: Any,
+    _objective: Objective | None,
+    eps: float = 1e-2,
+) -> float:
     """Lin et al. (2021), the expressivity half: how far the output moves when
     the input is nudged. Forward only, twice, and it never sees a label."""
     into = _tensor(_unwrapped(example))
@@ -182,7 +233,12 @@ def _zen(graph, example, _target, _objective, eps=1e-2):
     return math.log(moved / eps) if moved > 0 else float("-inf")
 
 
-def _naswot(graph, example, _target, _objective):
+def _naswot(
+    graph: "Graph",
+    example: Any,
+    _target: Any,
+    _objective: Objective | None,
+) -> float:
     """Mellor et al. (2021). Two inputs that switch the same units the same way
     are two inputs this network cannot tell apart; the log determinant of the
     Hamming kernel is how many it can.
@@ -192,8 +248,8 @@ def _naswot(graph, example, _target, _objective):
     paper is about rectifiers, and this is the obvious extension rather than the
     paper's claim.
     """
-    codes = []
-    hooks = []
+    codes: list[Any] = []
+    hooks: list[Any] = []
     for node in graph.nodes():
         for name, module in _held(graph.implementation(node)):
             for _, one in _worth_drawing(module):
@@ -221,12 +277,15 @@ def _naswot(graph, example, _target, _objective):
 # ── Odds and ends ──
 
 
-def _ran(graph, example):
+def _ran(graph: "Graph", example: Any) -> Any:
     """The graph's output as a tensor, or nothing."""
     return _tensor(_unwrapped(graph.forward(_crossable(example))))
 
 
-def _by_parameter(scalar, held):
+def _by_parameter(
+    scalar: "_torch.Tensor",
+    held: Iterable["_torch.nn.Parameter"],
+) -> float:
     """`sum(abs(w * dL/dw))`, which is what `synflow` and `snip` both are.
 
     One function because they are one measurement asked of two different
@@ -241,7 +300,7 @@ def _by_parameter(scalar, held):
     return score
 
 
-def _switches(module):
+def _switches(module: Any) -> bool:
     """Whether this is a thing whose units are on or off — the only kind that
     has a code to compare."""
     from soma_next.torch._inside import kind_of

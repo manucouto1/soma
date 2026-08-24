@@ -36,6 +36,19 @@ other.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+from soma_next._typing import Fact
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Bound, Store
+
+#: One line of an answer here: a record's fields, or a tally added up over
+#: them. `Any` because the columns differ by question and are named in each
+#: docstring — a `TypedDict` per reader would be six of them for one shape
+#: whose whole point is that the store did not learn what a loss is.
+Row = dict[str, Any]
+
 import json
 
 PREFIX = "run/"
@@ -44,7 +57,7 @@ PREFIX = "run/"
 NUMERIC = ("forward", "took_us", "nodes")
 
 
-def runs(store):
+def runs(store: "Store") -> list[Row]:
     """Every run this store holds, newest last.
 
     One scan and no fetches. What comes back is one dict per run: how many
@@ -54,7 +67,7 @@ def runs(store):
     The one to call first, because a store holds whatever anybody put in it —
     a cache, a study, artifacts — and this is the question "what is in here".
     """
-    seen = {}
+    seen: dict[str, Row] = {}
     for record in _records(store):
         said = dict(record.meta)
         run = said.get("run")
@@ -79,7 +92,7 @@ def runs(store):
     return sorted(seen.values(), key=lambda it: it["first"])
 
 
-def forwards(store, *, run):
+def forwards(store: "Store", *, run: str) -> list[Row]:
     """Every `forward` of that run, in order, as the record says it.
 
     One scan and no fetches — which is what makes this the thing a progress view
@@ -87,12 +100,15 @@ def forwards(store, *, run):
     anything the recorder was told to summarise comes back beside them under its
     own `<kind>.<field>` name, as text.
     """
-    rows = []
+    rows: list[Row] = []
     for record in _records(store):
         said = dict(record.meta)
         if said.get("run") != run:
             continue
-        row = {name: what for name, what in said.items() if name != "run"}
+        # `Row` and not the `dict[str, str]` the meta is: the three fields in
+        # `NUMERIC` become numbers on the next line, which is the whole reason
+        # this is copied out of the record rather than handed over as it lies.
+        row: Row = {name: what for name, what in said.items() if name != "run"}
         for name in NUMERIC:
             if name in row:
                 row[name] = int(row[name])
@@ -101,7 +117,7 @@ def forwards(store, *, run):
     return sorted(rows, key=lambda row: row["forward"])
 
 
-def facts(store, *, run, forward):
+def facts(store: "Store", *, run: str, forward: int) -> list[Fact] | None:
     """Everything that happened in one `forward`, in the order it arrived.
 
     The detail, and the one call that costs a fetch. Each fact is the same dict
@@ -117,7 +133,7 @@ def facts(store, *, run, forward):
     return _blob(store, bound)
 
 
-def curve(store, *, run, of="loss.value"):
+def curve(store: "Store", *, run: str, of: str = "loss.value") -> list[tuple[int, float]]:
     """One number per `forward`, as `(forward, value)` pairs.
 
     What a training curve is. `of` names the field: `loss.value` when the
@@ -141,7 +157,7 @@ def curve(store, *, run, of="loss.value"):
     return drawn
 
 
-def curve_costs(store, *, run, of="loss.value"):
+def curve_costs(store: "Store", *, run: str, of: str = "loss.value") -> str:
     """Whether `curve` would scan or fetch: `"scan"` or `"fetch"`.
 
     Asked before drawing something ten thousand steps long, and the answer is
@@ -162,7 +178,7 @@ HERE = "here"
 STANDING = "machine/"
 
 
-def standing(store):
+def standing(store: "Store") -> dict[str, Row]:
     """Every machine writing readings into this store, as `{id: reading}`.
 
     The **idle** half. A worker says what it looks like on a clock whether or
@@ -185,13 +201,13 @@ def standing(store):
 
     One scan and no fetches.
     """
-    said = {}
+    said: dict[str, Row] = {}
     # Not `_records`, which asks for a run: a reading of a machine belongs to no
     # run, and that is the point of it — an idle worker is idle between runs.
     for record in store.bound():
         if not record.name.startswith(STANDING):
             continue
-        one = {name: what for name, what in record.meta}
+        one: Row = {name: what for name, what in record.meta}
         one["id"] = record.name[len(STANDING) :]
         one["when"] = record.when
         said[one["id"]] = one
@@ -201,7 +217,7 @@ def standing(store):
     return said
 
 
-def fleet(store, *, run, last=None):
+def fleet(store: "Store", *, run: str, last: int | None = None) -> list[Row]:
     """What each machine did, as the inverse of `nodes`.
 
     The record is written run → `forward` → node, and *where* is an attribute of
@@ -234,12 +250,12 @@ def fleet(store, *, run, last=None):
     reads only the last N, which is the question worth asking of a fleet that is
     working now.
     """
-    seen = {}
+    seen: dict[str, Row] = {}
     # What each machine calls itself, learned from the readings that **did**
     # come down a wire: those arrive with the graph's name attached by the
     # client, and they carry the machine's own id beside it. It is the only
     # place the two names are ever in the same row.
-    named = {}
+    named: dict[str, str] = {}
     rows = forwards(store, run=run)
     for row in rows[-last:] if last is not None else rows:
         for fact in facts(store, run=run, forward=row["forward"]) or []:
@@ -325,7 +341,7 @@ def fleet(store, *, run, last=None):
     return sorted(seen.values(), key=lambda one: (one["host"] != HERE, one["host"]))
 
 
-def nodes(store, *, run, last=None):
+def nodes(store: "Store", *, run: str, last: int | None = None) -> list[Row]:
     """What each node did over the run, added up.
 
     The aggregated view, and the one that answers *is the profiling
@@ -339,7 +355,7 @@ def nodes(store, *, run, last=None):
     rows = forwards(store, run=run)
     if last is not None:
         rows = rows[-last:]
-    seen = {}
+    seen: dict[str, Row] = {}
     for row in rows:
         for fact in facts(store, run=run, forward=row["forward"]) or []:
             node = fact.get("node")
@@ -373,7 +389,7 @@ def nodes(store, *, run, last=None):
     return sorted(seen.values(), key=lambda it: -it["took_us"])
 
 
-def _records(store):
+def _records(store: "Store") -> list["Bound"]:
     """Every record of a run in this store.
 
     A store holds whatever anybody put in it, so belonging to a run is a
@@ -387,7 +403,7 @@ def _records(store):
     ]
 
 
-def _numbered(name):
+def _numbered(name: str) -> tuple[str, int] | None:
     """The `(run, forward)` that name is, or `None` if it is not one of ours."""
     rest = name[len(PREFIX) :].rsplit("/", 1)
     if len(rest) != 2:
@@ -398,7 +414,7 @@ def _numbered(name):
         return None
 
 
-def _blob(store, bound):
+def _blob(store: "Store", bound: "Bound") -> list[Fact]:
     """The facts a record points at."""
     bytes_ = store.get(bound.digest)
     if bytes_ is None:
@@ -407,4 +423,5 @@ def _blob(store, bound):
             f"have it: the record and the bytes are two things, and one of them "
             f"is missing"
         )
-    return json.loads(bytes_)
+    read: list[Fact] = json.loads(bytes_)
+    return read

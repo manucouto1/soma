@@ -37,10 +37,18 @@ FedAvg; whoever wants it says so by exporting it themselves.
 
 from __future__ import annotations
 
+from typing import Iterable, Sequence
+
+#: What one training run exported: the state of each node, by node id.
+Export = dict[str, dict[str, "torch.Tensor"]]
+
 import torch
 
 
-def fedavg(exports, sizes=None):
+def fedavg(
+    exports: Iterable[Export],
+    sizes: Sequence[float] | None = None,
+) -> Export:
     """The average of what several training runs exported, weight for weight.
 
     `sizes` is how many samples each one saw, which is what FedAvg weights by —
@@ -56,21 +64,24 @@ def fedavg(exports, sizes=None):
     The first one's is kept, which is what every implementation of this does and
     none of them says out loud.
     """
-    exports = list(exports)
-    if not exports:
+    each = list(exports)
+    if not each:
         raise ValueError("there is nothing to average: no training run exported")
-    _check_they_are_the_same_shape(exports)
-    shares = _shares(len(exports), sizes)
+    _check_they_are_the_same_shape(each)
+    shares = _shares(len(each), sizes)
     return {
         node_id: {
-            key: _mean([export[node_id][key] for export in exports], shares)
+            key: _mean([export[node_id][key] for export in each], shares)
             for key in state
         }
-        for node_id, state in exports[0].items()
+        for node_id, state in each[0].items()
     }
 
 
-def _mean(values, shares):
+def _mean(
+    values: Sequence["torch.Tensor"],
+    shares: Sequence[float],
+) -> "torch.Tensor":
     """These, weighted. What cannot be halved is not: the first one's stands."""
     if not values[0].is_floating_point():
         return values[0].clone()
@@ -80,25 +91,25 @@ def _mean(values, shares):
     return total.to(values[0].device, values[0].dtype)
 
 
-def _shares(how_many, sizes):
+def _shares(how_many: int, sizes: Sequence[float] | None) -> list[float]:
     """What each one is worth, adding up to one."""
     if sizes is None:
         return [1.0 / how_many] * how_many
-    sizes = [float(size) for size in sizes]
-    if len(sizes) != how_many:
+    each = [float(size) for size in sizes]
+    if len(each) != how_many:
         raise ValueError(
-            f"there are {how_many} training runs to average and {len(sizes)} "
+            f"there are {how_many} training runs to average and {len(each)} "
             f"sizes to weigh them by"
         )
-    if any(size < 0 for size in sizes):
+    if any(size < 0 for size in each):
         raise ValueError("a training run cannot have seen a negative number of samples")
-    total = sum(sizes)
+    total = sum(each)
     if total == 0:
         raise ValueError("every training run is said to have seen nothing")
-    return [size / total for size in sizes]
+    return [size / total for size in each]
 
 
-def _check_they_are_the_same_shape(exports):
+def _check_they_are_the_same_shape(exports: Sequence[Export]) -> None:
     """That they are exports of the same network.
 
     Averaging two different nets is not a thing that fails later: it is a thing

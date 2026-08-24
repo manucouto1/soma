@@ -20,12 +20,29 @@ tighter than `|`, so the branches go in parentheses.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, TypeVar, Union
+
+from soma_next._soma_next import Ctx
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
+
+#: The three shapes a piece actually takes once `_wrap` has had a look at it.
+#: `Topology` is the base every one of them shares and is what a user's
+#: expression is typed as; this is the closed set the walk matches on, and
+#: naming it is what lets a checker see that "not a `Chain`, not a `Fork`"
+#: leaves exactly a `Declared`.
+Piece = Union["Chain", "Fork", "Declared"]
+
+#: Whatever `somatize` was handed a class of, so the graph that comes back is
+#: that class and not its base.
+G = TypeVar("G", bound="Graph")
 
 
 class Topology:
     """A half-declared piece of graph."""
 
-    def on(self, device):
+    def on(self, device: str) -> Piece:
         """The same piece, placed on a device. **The innermost one wins**, so
         ``(A().on("cuda:0") >> B()).on("cuda:1")`` leaves `A` on 0 and `B` on 1.
 
@@ -33,7 +50,7 @@ class Topology:
         """
         return _fill(self, "device", device)
 
-    def at(self, host):
+    def at(self, host: str) -> Piece:
         """The same piece, in another process. The innermost one wins alike, and
         **independently** of `.on()`, so the two can be written in any order.
 
@@ -42,7 +59,7 @@ class Topology:
         """
         return _fill(self, "host", host)
 
-    def frozen(self):
+    def frozen(self) -> Piece:
         """The same piece, settled: its state does not change while the graph
         runs. The innermost one wins alike.
 
@@ -52,7 +69,7 @@ class Topology:
         """
         return _fill(self, "frozen", True)
 
-    def cached(self, salt=None):
+    def cached(self, salt: str | None = None) -> Piece:
         """The same piece, worth keeping: what each of its nodes produces is
         looked up before being computed, and kept after.
 
@@ -66,7 +83,7 @@ class Topology:
         """
         return _fill(self, "cached", _Kept(salt))
 
-    def mapped(self):
+    def mapped(self) -> Piece:
         """The same piece, mapping over the items of its input: hand it a list
         and it answers with a list as long, item for item.
 
@@ -82,30 +99,30 @@ class Topology:
         """
         return _fill(self, "mapped", True)
 
-    def __rshift__(self, other):
+    def __rshift__(self, other: object) -> Chain:
         return Chain(_steps(self) + _steps(_wrap(other)))
 
-    def __rrshift__(self, other):
+    def __rrshift__(self, other: object) -> Chain:
         return Chain(_steps(_wrap(other)) + _steps(self))
 
-    def __or__(self, other):
+    def __or__(self, other: object) -> Fork:
         return Fork(_branches(self) + _branches(_wrap(other)))
 
-    def __ror__(self, other):
+    def __ror__(self, other: object) -> Fork:
         return Fork(_branches(_wrap(other)) + _branches(self))
 
 
 class Chain(Topology):
     """One after another."""
 
-    def __init__(self, steps):
+    def __init__(self, steps: list[Topology]) -> None:
         self.steps = steps
 
 
 class Fork(Topology):
     """Branches that do not touch."""
 
-    def __init__(self, branches):
+    def __init__(self, branches: list[Topology]) -> None:
         self.branches = branches
 
 
@@ -116,7 +133,7 @@ class _Kept:
     was not given and that is **not** the same as never having said `.cached()`.
     """
 
-    def __init__(self, salt):
+    def __init__(self, salt: str | None) -> None:
         self.salt = salt
 
 
@@ -131,12 +148,12 @@ class Declared(Topology):
     `.cached(salt=None)` is a cache without salt.
     """
 
-    def __init__(self, obj, node_id=None, **said):
+    def __init__(self, obj: Node, node_id: str | None = None, **said: Any) -> None:
         self.obj = obj
         self.node_id = node_id
-        self.said = dict(said)
+        self.said: dict[str, Any] = dict(said)
 
-    def named(self, node_id):
+    def named(self, node_id: str) -> Declared:
         """The same node, with the id you say. `.named` and the rest commute."""
         return Declared(self.obj, node_id, **self.said)
 
@@ -145,7 +162,7 @@ class Node(Topology, ABC):
     """What a graph node executes. `forward` has to be written or the class
     cannot be instantiated."""
 
-    def __init_subclass__(cls, **said):
+    def __init_subclass__(cls, **said: Any) -> None:
         """Remembers what each instance is **built with**, which is half of its
         key — `Embed(512)` and `Embed(64)` are one class and two answers.
 
@@ -166,18 +183,18 @@ class Node(Topology, ABC):
         _declaration.remember_what_built_it(cls)
 
     @abstractmethod
-    def forward(self, input, ctx):
+    def forward(self, input: Any, ctx: Ctx) -> Any:
         """Runs it: takes what arrived along the edges, returns what it made.
 
         `ctx` carries `device`, which is where this node was told to run.
         """
 
-    def named(self, node_id):
+    def named(self, node_id: str) -> Declared:
         """The same node, with the id you say."""
         return Declared(self, node_id)
 
 
-def _fill(topology, field, value):
+def _fill(topology: Topology, field: str, value: Any) -> Piece:
     """Hands one thing out to the leaves that were not told it already.
 
     It is handed out at declaration time because a piece stops existing once
@@ -185,19 +202,22 @@ def _fill(topology, field, value):
     own, which is what makes them independent — a node can be settled without
     being kept, placed without being settled, and any combination of the rest.
     """
-    topology = _wrap(topology)
-    if isinstance(topology, Chain):
-        return Chain([_fill(step, field, value) for step in topology.steps])
-    if isinstance(topology, Fork):
-        return Fork([_fill(branch, field, value) for branch in topology.branches])
+    # A new name and not a reassignment, so that "neither a `Chain` nor a
+    # `Fork`" narrows to `Declared` and the two attribute reads below are
+    # checked rather than taken on trust.
+    piece = _wrap(topology)
+    if isinstance(piece, Chain):
+        return Chain([_fill(step, field, value) for step in piece.steps])
+    if isinstance(piece, Fork):
+        return Fork([_fill(branch, field, value) for branch in piece.branches])
     # `setdefault` and not a check against `None`: `.on("")` has to reach
     # `place()` and fail there, not vanish for being an empty string.
-    said = dict(topology.said)
+    said = dict(piece.said)
     said.setdefault(field, value)
-    return Declared(topology.obj, topology.node_id, **said)
+    return Declared(piece.obj, piece.node_id, **said)
 
 
-def _wrap(obj):
+def _wrap(obj: object) -> Piece:
     """Anything, seen as a topology. A user's `Node` is one, but it is not a
     declared node yet."""
     if isinstance(obj, (Chain, Fork, Declared)):
@@ -210,15 +230,15 @@ def _wrap(obj):
     )
 
 
-def _steps(topology):
+def _steps(topology: Topology) -> list[Topology]:
     return topology.steps if isinstance(topology, Chain) else [topology]
 
 
-def _branches(topology):
+def _branches(topology: Topology) -> list[Topology]:
     return topology.branches if isinstance(topology, Fork) else [topology]
 
 
-def _note_the_code(g, node_id, obj):
+def _note_the_code(g: "Graph", node_id: str, obj: object) -> None:
     """Which version of the class this graph was written against.
 
     **Metadata**, never part of a key: a cosmetic refactor must not invalidate
@@ -236,7 +256,7 @@ def _note_the_code(g, node_id, obj):
         pass
 
 
-def somatize(graph_cls, topology):
+def somatize(graph_cls: type[G], topology: Topology) -> G:
     """Materializes the expression into a graph of the class you are given.
 
     The class comes in as a parameter and is not imported here: `soma_next._graph`
@@ -247,7 +267,7 @@ def somatize(graph_cls, topology):
     return g
 
 
-def _walk(g, topology, sources):
+def _walk(g: "Graph", topology: Piece, sources: list[str]) -> list[str]:
     """Adds what was declared and returns where this piece leaves from."""
     if isinstance(topology, Chain):
         cursor = sources

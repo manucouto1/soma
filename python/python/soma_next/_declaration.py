@@ -79,6 +79,7 @@ import hashlib
 import inspect
 import re
 import types
+from typing import Any, Callable, Iterable, NoReturn
 
 __all__ = ["CannotDeclare", "digest", "remember_what_built_it", "written"]
 
@@ -109,7 +110,7 @@ class CannotDeclare(Exception):
     something* is not an answer when it holds twenty."""
 
 
-def remember_what_built_it(cls):
+def remember_what_built_it(cls: type[Any]) -> None:
     """Wraps a class's `__init__` so every instance keeps what it was built with.
 
     `soma_next.Node.__init_subclass__` calls it, so a user writes nothing. The
@@ -124,7 +125,7 @@ def remember_what_built_it(cls):
         return
 
     @functools.wraps(built)
-    def remembering(self, *args, **said):
+    def remembering(self: Any, *args: Any, **said: Any) -> Any:
         try:
             if BUILT_WITH not in self.__dict__:
                 object.__setattr__(self, BUILT_WITH, _bound(built, args, said))
@@ -135,11 +136,18 @@ def remember_what_built_it(cls):
             pass
         return built(self, *args, **said)
 
-    remembering._soma_remembers = True
+    # `setattr` and not `remembering._soma_remembers = True`: a function object
+    # takes any attribute at run time and a checker knows only the ones on
+    # `Callable`, so the assignment reads as an error where the intent is a mark.
+    setattr(remembering, "_soma_remembers", True)
     cls.__init__ = remembering
 
 
-def _bound(built, args, said):
+def _bound(
+    built: Callable[..., Any],
+    args: tuple[Any, ...],
+    said: dict[str, Any],
+) -> dict[str, Any]:
     """The arguments by the name each one was declared under, defaults included.
 
     A signature that will not take them is not this module's problem to report —
@@ -168,14 +176,14 @@ def _bound(built, args, said):
     }
 
 
-def digest(obj):
+def digest(obj: object) -> str:
     """The declaration, hashed. The whole sha256 and not a prefix of it: this
     goes **into a key**, and a truncated digest is a collision waiting for a
     store big enough."""
     return hashlib.sha256(written(obj).encode()).hexdigest()
 
 
-def written(obj):
+def written(obj: object) -> str:
     """`Embed(dim=512, dropout=0.1)` — what this node was built with, as text.
 
     Public because when a key moves and nobody knows why, this is the answer.
@@ -184,7 +192,7 @@ def written(obj):
     return _written(obj, type(obj).__name__, DEEP, frozenset())
 
 
-def _written(value, where, deep, seen):
+def _written(value: object, where: str, deep: int, seen: frozenset[int]) -> str:
     """One value, at `where`, with `deep` levels left and `seen` holding what is
     already being written, so a cycle is refused rather than followed.
 
@@ -253,7 +261,9 @@ def _written(value, where, deep, seen):
         inside = ", ".join(sorted(_each(value, where, deep, seen)))
         return f"{type(value).__name__}{{{inside}}}"
     if isinstance(value, dict):
-        written = [
+        # `pairs` and not `written`: that name is this module's own function,
+        # and rebinding it here made the two impossible to tell apart.
+        pairs = [
             (
                 _written(name, f"{where}[{name!r}]", deep - 1, seen),
                 _written(one, f"{where}[{name!r}]", deep - 1, seen),
@@ -263,15 +273,18 @@ def _written(value, where, deep, seen):
         # Sorted too, and on the key alone: a mapping built in another order is
         # the same mapping, and two values are not always comparable.
         inside = ", ".join(
-            f"{name}: {one}" for name, one in sorted(written, key=_first)
+            f"{name}: {one}" for name, one in sorted(pairs, key=_first)
         )
         return f"{{{inside}}}"
 
     if type(value).__repr__ is not object.__repr__:
         return _trusted(repr(value), where)
 
-    held = getattr(value, "__dict__", None)
-    if held is None:
+    # `attributes` and not `held`: that name is the bound method's `__self__`
+    # further up, and one name for two things is what made this branch
+    # unreadable.
+    attributes = getattr(value, "__dict__", None)
+    if attributes is None:
         return _refuse(
             where,
             f"is a {type(value).__name__}, which has neither a `__repr__` of its "
@@ -279,24 +292,29 @@ def _written(value, where, deep, seen):
         )
     inside = ", ".join(
         f"{name}={_written(one, f'{where}.{name}', deep - 1, seen)}"
-        for name, one in sorted(held.items())
+        for name, one in sorted(attributes.items())
     )
     return f"{type(value).__name__}({inside})"
 
 
-def _each(values, where, deep, seen):
+def _each(
+    values: Iterable[Any],
+    where: str,
+    deep: int,
+    seen: frozenset[int],
+) -> list[str]:
     """Every item of a container, in order, each knowing where it sits."""
     return [
         _written(one, f"{where}[{at}]", deep - 1, seen) for at, one in enumerate(values)
     ]
 
 
-def _first(pair):
+def _first(pair: tuple[str, str]) -> str:
     """The key a mapping's items are sorted on."""
     return pair[0]
 
 
-def _trusted(text, where):
+def _trusted(text: str, where: str) -> str:
     """A `__repr__` somebody else wrote, checked rather than believed.
 
     An address is the run. Angle brackets are CPython saying *this has no
@@ -317,5 +335,8 @@ def _trusted(text, where):
     return text
 
 
-def _refuse(where, why):
+def _refuse(where: str, why: str) -> NoReturn:
+    """`NoReturn`, which is what makes `return _refuse(...)` legal inside a
+    function that answers `str`: it never comes back, so there is nothing to
+    return of the wrong type."""
     raise CannotDeclare(f"`{where}` {why}")

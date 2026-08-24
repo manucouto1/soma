@@ -72,14 +72,21 @@ directly would still break it; that is rare and we do not paper over it.
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING, Any, Literal, Protocol, overload, runtime_checkable
 
 from soma_next import _manifest
 from soma_next._soma_next import listen_provisioned as _listen_provisioned
 from soma_next._soma_next import serve_provisioned as _serve_provisioned
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from soma_next._soma_next import Store
+
 __all__ = [
     "Pickles",
     "Project",
+    "Provision",
     "Strategies",
     "listen",
     "runtime",
@@ -87,7 +94,26 @@ __all__ = [
 ]
 
 
-def runtime():
+@runtime_checkable
+class Provision(Protocol):
+    """How a worker turns an artifact into a catalog.
+
+    Named as a `Protocol` because there are three of these in this file and none
+    of them inherits from the others: `Pickles`, `Project` and the `Strategies`
+    that dispatches between them by `kind`. It is the seam `transport`'s
+    `Provision` trait is filled from, and a user with a fourth way of packing
+    nodes writes one of these and passes it to `listen`.
+    """
+
+    def accepts(self, client: str, kind: str) -> str | None:
+        """`None` to accept, or **how this worker identifies itself** so the
+        client can see what it disagrees with."""
+
+    def provide(self, kind: str, blob: bytes) -> dict[str, Any]:
+        """The nodes that artifact unpacks to, by id."""
+
+
+def runtime() -> str:
     """How this process identifies itself to the other side, so a mismatch is
     refused on connect instead of surfacing inside a `loads`.
 
@@ -111,12 +137,12 @@ class Pickles:
     `accepts(client, kind)` returns `None` or **how this worker identifies
     itself**, and `provide(kind, blob)` returns the nodes as a dict."""
 
-    def accepts(self, client, kind):
+    def accepts(self, client: str, kind: str) -> str | None:
         del kind  # `Pickles` only opens one, and checks it in `catalog`
         mine = runtime()
         return None if client == mine else mine
 
-    def provide(self, kind, blob):
+    def provide(self, kind: str, blob: bytes) -> dict[str, Any]:
         if kind != "pickle":
             raise ValueError(
                 f"this worker only knows how to open `pickle` artifacts, and a `{kind}` arrived"
@@ -142,16 +168,16 @@ class Project:
     No code comes over the wire, so neither `cloudpickle` nor matching
     interpreters are needed."""
 
-    def __init__(self, strict=True):
+    def __init__(self, strict: bool = True) -> None:
         self.strict = strict
 
-    def accepts(self, client, kind):
+    def accepts(self, client: str, kind: str) -> str | None:
         del client, kind
         # Nothing to refuse: no code arrives, so the interpreter does not
         # matter. The version is checked on opening, class by class.
         return None
 
-    def provide(self, kind, blob):
+    def provide(self, kind: str, blob: bytes) -> dict[str, Any]:
         if kind != _manifest.KIND:
             raise ValueError(f"this does not open `{kind}` artifacts")
         return _nodes(_manifest.unpack(blob, strict=self.strict), _manifest.KIND)
@@ -161,10 +187,10 @@ class Strategies:
     """Several ways of building the catalog, asked by `kind` and not tried in a
     chain to see which sticks."""
 
-    def __init__(self, **by_kind):
+    def __init__(self, **by_kind: Provision) -> None:
         self.by_kind = by_kind
 
-    def _who(self, kind):
+    def _who(self, kind: str) -> Provision:
         if (which := self.by_kind.get(kind)) is None:
             raise ValueError(
                 f"this worker cannot open `{kind}` artifacts; it can open: "
@@ -172,29 +198,35 @@ class Strategies:
             )
         return which
 
-    def accepts(self, client, kind):
+    def accepts(self, client: str, kind: str) -> str | None:
         return self._who(kind).accepts(client, kind)
 
-    def provide(self, kind, blob):
+    def provide(self, kind: str, blob: bytes) -> dict[str, Any]:
         return self._who(kind).provide(kind, blob)
 
 
-def _nodes(sent, kind):
+def _nodes(sent: Any, kind: str) -> dict[str, Any]:
     """What an artifact has to unpack to: a dict of id → node."""
     if not isinstance(sent, dict):
         raise TypeError(
             f"a `{kind}` artifact is a dict of id → node, and a "
             f"`{type(sent).__name__}` arrived"
         )
-    return sent
+    said: dict[str, Any] = sent
+    return said
 
 
-def default(strict=True):
+def default(strict: bool = True) -> Strategies:
     """What a worker knows how to open if you do not say otherwise."""
-    return Strategies(**{_manifest.KIND: Project(strict), "pickle": Pickles()})
+    both: dict[str, Provision] = {_manifest.KIND: Project(strict), "pickle": Pickles()}
+    return Strategies(**both)
 
 
-def serve_provisioned(provision=None, store=None, reporting=None):
+def serve_provisioned(
+    provision: Provision | None = None,
+    store: "Store | str | None" = None,
+    reporting: float | None = None,
+) -> None:
     """Serves slices with the catalog the client sends, until the client closes.
     Without an argument it opens both kinds."""
     _hush()
@@ -203,12 +235,18 @@ def serve_provisioned(provision=None, store=None, reporting=None):
     )
 
 
-def _hush():
+def _hush() -> None:
     """Leaves `stdout` free for the protocol and sends what is printed to `stderr`."""
     sys.stdout = sys.stderr
 
 
-def listen(addr, provision=None, opened=None, store=None, reporting=None):
+def listen(
+    addr: str,
+    provision: Provision | None = None,
+    opened: Callable[[str], None] | None = None,
+    store: "Store | str | None" = None,
+    reporting: float | None = None,
+) -> None:
     """Stands on `addr` and serves whoever connects. It does not return.
 
     `provision` says what the implementations are resolved with; by default,
@@ -227,7 +265,7 @@ def listen(addr, provision=None, opened=None, store=None, reporting=None):
     )
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     """`python -m soma_next.worker [--listen HOST:PORT] [--store DIR] [--lucky]`.
 
     Without `--listen` it talks over standard input, which is for testing.
@@ -259,7 +297,7 @@ def main(argv=None):
     )
 
 
-def _read_the_codecs():
+def _read_the_codecs() -> None:
     """Registers what this worker knows how to read, **before** it serves.
 
     A codec has to be there before a value arrives and not be discovered while
@@ -284,9 +322,30 @@ def _read_the_codecs():
         pass
 
 
-def _after(flag, argv, needed=False):
-    """What comes after a flag, or `None` if the flag is not there."""
+@overload
+def _after(flag: str, argv: list[str], needed: Literal[True]) -> str: ...
+
+
+@overload
+def _after(flag: str, argv: list[str], needed: bool = False) -> str | None: ...
+
+
+def _after(flag: str, argv: list[str], needed: bool = False) -> str | None:
+    """What comes after a flag, or `None` if the flag is not there.
+
+    `needed` says the flag is not optional, and the two overloads above are it
+    said in types: asking for one that has to be there answers a `str` and not a
+    `str | None`, so the caller has nothing to check.
+
+    It **was a dead parameter** — declared, passed as `needed=True` by `main`,
+    and never read — which is exactly what annotating this file turned up. It
+    changes nothing that runs today, because the one call that passes it is
+    already inside `if "--listen" in argv`; what it removes is a promise the
+    signature was making and the body was not keeping.
+    """
     if flag not in argv:
+        if needed:
+            raise SystemExit(f"`{flag}` is required: {flag} 127.0.0.1:7000")
         return None
     after = argv.index(flag) + 1
     if after >= len(argv):

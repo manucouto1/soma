@@ -114,6 +114,17 @@ what you want.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Iterator
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Store
+
+#: One side of a comparison: everything `changes` reads about a graph,
+#: already named. Plain JSON on purpose — it outlives the graph it came
+#: from, which is the point of `snapshot`.
+Snapshot = dict[str, Any]
+
 import contextlib
 import json
 import tempfile
@@ -138,7 +149,12 @@ MOVED = (("CHANGED", "shape"), ("RESETTLED", "state"), ("SALTED", "salt"))
 """The parts of a node's own recipe, each with what it is called when it moves."""
 
 
-def names(graph, input=None, *, store=None):
+def names(
+    graph: "Graph",
+    input: Any | None = None,
+    *,
+    store: "Store | str | None" = None,
+) -> dict[str, str]:
     """What each node's answer will be called — `{node: name}` — with nothing run.
 
     A node missing from it cannot be named in advance, which is what a
@@ -148,15 +164,26 @@ def names(graph, input=None, *, store=None):
         return _named(graph, input, place)
 
 
-def unneeded(graph, input=None, *, store):
+def unneeded(
+    graph: "Graph",
+    input: Any | None = None,
+    *,
+    store: "Store | str",
+) -> list[str]:
     """The nodes that would not have to run at all, because something below them
     is already kept. A `store` and not a temporary one: this is the only question
     here whose answer depends on what is in it."""
     said = json.loads(graph.foreseen_json(input, store=store))
-    return said["unneeded"]
+    unneeded_: list[str] = said["unneeded"]
+    return unneeded_
 
 
-def snapshot(graph, input=None, *, store=None):
+def snapshot(
+    graph: "Graph",
+    input: Any | None = None,
+    *,
+    store: "Store | str | None" = None,
+) -> Snapshot:
     """Everything `changes` reads about a graph, as plain JSON, so a version of it
     can be kept and compared against one that no longer exists in this process.
 
@@ -167,7 +194,13 @@ def snapshot(graph, input=None, *, store=None):
         return _snapshot(graph, input, place)
 
 
-def changes(before, after, input=None, *, store=None):
+def changes(
+    before: "Graph | Snapshot",
+    after: "Graph | Snapshot",
+    input: Any | None = None,
+    *,
+    store: "Store | str | None" = None,
+) -> dict[str, list[str]]:
     """What an edit did, as `{node: [finding, ...]}` — see the findings above.
     A node with nothing said about it is not in it.
 
@@ -176,9 +209,12 @@ def changes(before, after, input=None, *, store=None):
     already.
     """
     with _somewhere(store) as place:
-        sides = tuple(_snapshot(one, input, place) for one in (before, after))
+        # Written as a pair rather than built from a generator: `_which` reads
+        # `was, is_ = sides` and there being exactly two of them is the contract,
+        # not an accident of how many were passed in.
+        sides = (_snapshot(before, input, place), _snapshot(after, input, place))
 
-    found = {}
+    found: dict[str, list[str]] = {}
     for node in set(sides[0]["shape"]) | set(sides[1]["shape"]):
         if one := _which(node, sides):
             found[node] = one
@@ -188,7 +224,7 @@ def changes(before, after, input=None, *, store=None):
     return {node: found[node] for node in sorted(found)}
 
 
-def _which(node, sides):
+def _which(node: str, sides: tuple[Snapshot, Snapshot]) -> list[str]:
     """What became of one node, or an empty list if nothing did. The order of the
     questions is the contract: what cannot be named is asked before what its name
     says, and what its name says before what its name could not say."""
@@ -212,12 +248,13 @@ def _which(node, sides):
     return ["UNVERSIONED"] if node in set(was["kept"]) | set(is_["kept"]) else []
 
 
-def _below(side, roots):
+def _below(side: Snapshot, roots: list[str]) -> set[str]:
     """Everything these nodes feed, however far down."""
-    feeds = {}
+    feeds: dict[str, list[str]] = {}
     for source, target in side["edges"]:
         feeds.setdefault(source, []).append(target)
-    reached, asking = set(), list(roots)
+    reached: set[str] = set()
+    asking = list(roots)
     while asking:
         for node in feeds.get(asking.pop(), ()):
             if node not in reached:
@@ -226,7 +263,7 @@ def _below(side, roots):
     return reached
 
 
-def _snapshot(graph, input, place):
+def _snapshot(graph: "Graph | Snapshot", input: Any, place: "Store | str") -> Snapshot:
     """One side of the comparison, whether it arrived as a graph or already as
     this.
 
@@ -258,13 +295,13 @@ def _snapshot(graph, input, place):
     }
 
 
-def _declared(graph):
+def _declared(graph: "Graph") -> dict[str, str]:
     """What each node was built with, in words. For reading and not for
     comparing: a node whose declaration could not be written down has none, and
     that is already said by its absence from the digests."""
     from soma_next import _declaration
 
-    said = {}
+    said: dict[str, str] = {}
     for node in graph.nodes():
         try:
             said[node] = _declaration.written(graph.implementation(node))
@@ -273,7 +310,7 @@ def _declared(graph):
     return said
 
 
-def _named(graph, input, place):
+def _named(graph: "Graph", input: Any, place: "Store | str") -> dict[str, str]:
     """The one name of each node that has one.
 
     A node whose output is named item by item is left out rather than flattened:
@@ -285,7 +322,7 @@ def _named(graph, input, place):
 
 
 @contextlib.contextmanager
-def _somewhere(store):
+def _somewhere(store: "Store | str | None") -> Iterator["Store | str"]:
     """Where the hash comes from. Without one, a directory that is thrown away:
     the names do not depend on what is in it."""
     if store is not None:

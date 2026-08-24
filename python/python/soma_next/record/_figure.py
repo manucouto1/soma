@@ -42,6 +42,18 @@ of their own; they do not get to recolour these.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Sequence
+
+from soma_next._typing import Fact, Figure
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Store
+    from soma_next.record._read import Row
+
+#: One bar of a timeline: what it is called, when it began and how long it
+#: took, in milliseconds, plus whether it happened elsewhere.
+Bar = dict[str, Any]
+
 from soma_next import _theme
 from soma_next.record._read import facts, fleet, forwards, nodes
 
@@ -53,7 +65,12 @@ a run of ten thousand are smoothed by eye to the same degree rather than one of
 them being flattened into a straight line."""
 
 
-def progress(store, *, run, smooth=None):
+def progress(
+    store: "Store",
+    *,
+    run: str,
+    smooth: int | None = None,
+) -> Figure:
     """How a run went, step by step: the loss, the time, and what broke.
 
     One scan when the recorder was told to summarise the loss, and a fetch per
@@ -65,7 +82,7 @@ def progress(store, *, run, smooth=None):
     return _drawn(forwards(store, run=run), title=run, smooth=smooth)
 
 
-def gantt(store, *, run, forward=0):
+def gantt(store: "Store", *, run: str, forward: int = 0) -> Figure:
     """One `forward` on a timeline: what ran when, and what was waiting.
 
     The picture `spent` cannot draw. A total says a node cost four hundred
@@ -120,7 +137,7 @@ def gantt(store, *, run, forward=0):
     )
 
 
-def _bars(seen):
+def _bars(seen: Sequence[Fact]) -> list[Bar]:
     """The facts of one `forward` as `(name, began, took)`, in the order they
     started.
 
@@ -129,7 +146,8 @@ def _bars(seen):
     *this happened elsewhere* is the thing a timeline of a distributed graph is
     for.
     """
-    bars, waiting = [], {}
+    bars: list[Bar] = []
+    waiting: dict[str, list[tuple[Fact, float, float]]] = {}
     for fact in seen:
         began, took = _read(fact, "began_us"), _read(fact, "took_us")
         if began is None or took is None:
@@ -164,7 +182,14 @@ def _bars(seen):
     return sorted(bars, key=lambda one: one["began"])
 
 
-def _bar(name, began, took, *, remote, where):
+def _bar(
+    name: str,
+    began: float,
+    took: float,
+    *,
+    remote: bool,
+    where: str,
+) -> Bar:
     return {
         "name": name,
         "began": began / 1000.0,
@@ -174,14 +199,14 @@ def _bar(name, began, took, *, remote, where):
     }
 
 
-def _read(fact, name):
+def _read(fact: Fact, name: str) -> float | None:
     try:
         return float(fact[name])
     except (KeyError, TypeError, ValueError):
         return None
 
 
-def spent(store, *, run, last=None):
+def spent(store: "Store", *, run: str, last: int | None = None) -> Figure:
     """Where the time went, added up per node — the aggregate view.
 
     Bars are coloured by **where** the node ran, which is the same table the
@@ -210,19 +235,25 @@ class Live:
     one to look at now, one to have afterwards.
     """
 
-    def __init__(self, *, title="live", smooth=None, every=1):
+    def __init__(
+        self,
+        *,
+        title: str = "live",
+        smooth: int | None = None,
+        every: int = 1,
+    ) -> None:
         self.title = title
         self.smooth = smooth
         #: How many finished `forward`s go by between redraws. A figure redrawn
         #: a thousand times a second is a figure nobody sees and a notebook
         #: nobody can type in.
         self.every = every
-        self.rows = []
-        self._pending = {"nodes": 0}
-        self._widget = None
+        self.rows: list[dict[str, Any]] = []
+        self._pending: dict[str, Any] = {"nodes": 0}
+        self._widget: Any = None
         self._since = 0
 
-    def __call__(self, fact):
+    def __call__(self, fact: Fact) -> None:
         """One fact, from the engine or from a level above it."""
         kind = fact.get("fact")
         if kind == "ran":
@@ -244,11 +275,11 @@ class Live:
                     self.rows[-1][f"{kind}.{name}"] = what
             self._redrawn(anyway=True)
 
-    def figure(self):
+    def figure(self) -> Figure:
         """The same figure `progress` draws, from what has arrived so far."""
         return _drawn(self.rows, title=self.title, smooth=self.smooth)
 
-    def widget(self):
+    def widget(self) -> Any:
         """A `FigureWidget` that redraws in place, or `None` without ipywidgets.
 
         Asked for by hand rather than made on construction: building one imports
@@ -262,7 +293,7 @@ class Live:
                 return None
         return self._widget
 
-    def _redrawn(self, anyway=False):
+    def _redrawn(self, anyway: bool = False) -> None:
         """Push what has arrived into the widget, if there is one and it is due."""
         self._since += 1
         if not anyway and self._since < self.every:
@@ -275,7 +306,12 @@ class Live:
             for there, here in zip(self._widget.data, fresh.data):
                 there.x, there.y = here.x, here.y
 
-    def _repr_mimebundle_(self, include=None, exclude=None, **rest):
+    def _repr_mimebundle_(
+        self,
+        include: object = None,
+        exclude: object = None,
+        **rest: Any,
+    ) -> dict[str, Any] | None:
         """In a notebook cell: the figure, and nothing about this object.
 
         The same wall CU19 walked into — a figure reaches a cell through the
@@ -289,7 +325,12 @@ class Live:
         return bundle or None
 
 
-def _drawn(rows, *, title, smooth=None):
+def _drawn(
+    rows: Sequence[dict[str, Any]],
+    *,
+    title: str,
+    smooth: int | None = None,
+) -> Figure:
     """The two-row figure: what it cost, over what it learnt.
 
     Both callers land here, which is what keeps a live view and a report from
@@ -380,7 +421,7 @@ def _drawn(rows, *, title, smooth=None):
     return figure
 
 
-def machines(store, *, run, last=None):
+def machines(store: "Store", *, run: str, last: int | None = None) -> Figure:
     """The run, per machine: what each one worked and what it was waited on.
 
     The inverse of `spent`, and the split is the whole of it. A bar is the round
@@ -398,7 +439,7 @@ def machines(store, *, run, last=None):
     return _machines(fleet(store, run=run, last=last), title=run)
 
 
-def _machines(tally, *, title):
+def _machines(tally: Sequence["Row"], *, title: str) -> Figure:
     """Working against waited-on, per machine, the longest trip at the top."""
     go = _theme.plotly()
     tally = list(reversed(tally))
@@ -466,7 +507,7 @@ def _machines(tally, *, title):
     return figure
 
 
-def _itself(one):
+def _itself(one: "Row") -> str:
     """What the machine said about itself, for the hover.
 
     On the hover and not on the bar, because the bar is time and this is not:
@@ -485,7 +526,7 @@ def _itself(one):
     return " · ".join(said) or "said nothing about itself"
 
 
-def _spent(tally, *, title):
+def _spent(tally: Sequence["Row"], *, title: str) -> Figure:
     """Time per node, longest at the top, coloured by where it ran."""
     go = _theme.plotly()
     tally = list(reversed(tally))
@@ -531,7 +572,7 @@ def _spent(tally, *, title):
     return figure
 
 
-def _family(one):
+def _family(one: "Row") -> str:
     """Which row of the one table this node is drawn with.
 
     Where it ran, and nothing else — the same rule the graph's fill obeys. A
@@ -547,20 +588,20 @@ def _family(one):
     return "cpu"
 
 
-def _where(one):
+def _where(one: "Row") -> str:
     """Where a node ran, for the hover: the hosts and devices it was seen on."""
     said = ", ".join(one["hosts"] + one["devices"])
     return said or "here"
 
 
-def _said(title, rows):
+def _said(title: str, rows: Sequence[dict[str, Any]]) -> str:
     """The title, with what the figure is actually showing beside it."""
     broke = sum(row.get("state") == "broke" for row in rows)
     said = f"{title} — {len(rows)} forward{'s' if len(rows) != 1 else ''}"
     return said + (f", {broke} broke" if broke else "")
 
 
-def _number(what):
+def _number(what: Any) -> float | None:
     """A field as a number, or `None` where there was none.
 
     `None` and not zero: a `forward` with no loss said about it is a gap in the
@@ -572,7 +613,10 @@ def _number(what):
         return None
 
 
-def _smoothed(values, window=None):
+def _smoothed(
+    values: list[float | None],
+    window: int | None = None,
+) -> list[float | None]:
     """A **centred** rolling mean, ignoring the gaps.
 
     Centred and not trailing: a trailing mean is the same curve shifted to the

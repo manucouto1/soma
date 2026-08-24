@@ -23,6 +23,27 @@ contract, and the bill shows in its own tests: four crates implement an empty
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Sequence
+
+from soma_next._typing import Fact
+
+if TYPE_CHECKING:
+    import torch as _torch
+
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Store, Worker
+    from soma_next._stage import Stage
+    from soma_next.torch._learning import Learning
+
+#: One example: what goes in, and what should come out.
+Batch = tuple[Any, Any]
+
+#: What a training run exported: the state of each node, by node id.
+Weights = dict[str, dict[str, "_torch.Tensor"]]
+
+#: What turns an output and a target into a number to minimise.
+Objective = Callable[[Any, Any], "_torch.Tensor"]
+
 import torch
 
 from soma_next import Opaque
@@ -45,15 +66,15 @@ class NoGradient(Exception):
 class Result:
     """What a training run leaves behind: the loss, step by step."""
 
-    def __init__(self, history):
+    def __init__(self, history: list[float]) -> None:
         self.history = history
 
     @property
-    def loss(self):
+    def loss(self) -> float | None:
         """The last loss, or `None` if not a single step was taken."""
         return self.history[-1] if self.history else None
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if not self.history:
             return "Result(no steps)"
         return (
@@ -151,18 +172,18 @@ class Trainer:
 
     def __init__(
         self,
-        graph,
+        graph: "Graph",
         *,
-        objective,
-        optimizer=None,
-        trains=None,
-        every=1,
-        micro=1,
-        store=None,
-        workers=None,
-        watching=None,
-        auditing=None,
-    ):
+        objective: Objective,
+        optimizer: Any = None,
+        trains: dict[str, "Learning"] | None = None,
+        every: int = 1,
+        micro: int = 1,
+        store: "Store | str | None" = None,
+        workers: "dict[str, Worker] | None" = None,
+        watching: Any = None,
+        auditing: Any = None,
+    ) -> None:
         trains = dict(trains or {})
         _check_the_group(every, micro)
         _check_who_is_trained(graph, trains)
@@ -213,6 +234,10 @@ class Trainer:
         # that one the step below is the one it always was, line for line, which
         # is what keeps the blast radius of all this to whoever asked for it.
         self.by_stages = bool(trains)
+        # Empty for a graph that is not cut, which is what the `else` below used
+        # to say — said here instead, so there is one place they are declared.
+        self.stages: list["Stage"] = []
+        self.backs: list["Stage"] = []
         if self.by_stages:
             self.running, beside = around(
                 graph,
@@ -227,13 +252,13 @@ class Trainer:
             self.backs = [stage.transposed() for stage in self.stages]
             _check_what_is_kept_is_at_the_front(self.stages)
         else:
-            self.running, self.stages, self.backs = graph, [], []
+            self.running = graph
         # Whatever the expression declared settled has to **be** settled before
         # the first step, not after somebody notices the loss going flat where
         # it should not. Declaring is the graph's, obeying is torch's.
         freeze(graph)
 
-    def step(self, batch):
+    def step(self, batch: Batch) -> float:
         """One step: forward, loss, backward, and update when the group closes.
         Returns the loss, **whole** — divided for the backward pass and not for
         whoever is reading, or a history would change shape with `every`. With
@@ -255,7 +280,7 @@ class Trainer:
         pieces = _in_pieces(batch, self.micro)
         return sum(self._once(piece) for piece in pieces) / len(pieces)
 
-    def _once(self, batch):
+    def _once(self, batch: Batch) -> float:
         """One pass: a whole batch, or one piece of one."""
         input_, target = batch
         if self.by_stages:
@@ -278,13 +303,14 @@ class Trainer:
         self._counted()
         return self._said_the_loss(loss)
 
-    def _over_the_stages(self, input_, target):
+    def _over_the_stages(self, input_: Any, target: Any) -> float:
         """One step of a graph that is cut, which is the same step with the
         stages in between: each one is handed what the ones before it produced,
         and the gradients go back the way the values came."""
         if self.optimizer is not None and self._opens():
             self.optimizer.zero_grad()
-        produced, seams = {}, {}
+        produced: dict[str, Any] = {}
+        seams: dict[str, Any] = {}
         for stage in self.stages:
             stage.fill(
                 {
@@ -317,7 +343,7 @@ class Trainer:
         self._counted()
         return self._said_the_loss(loss)
 
-    def _said(self, kind, **fields):
+    def _said(self, kind: str, **fields: Any) -> None:
         """One fact of **this** level, out through the same door as the engine's.
 
         A loss is not something the engine can see: the graph produced an output
@@ -331,7 +357,7 @@ class Trainer:
         if self._telling is not None:
             self._telling({"fact": kind, **{k: str(v) for k, v in fields.items()}})
 
-    def _audited(self):
+    def _audited(self) -> None:
         """What the audit saw this step, out through the same door as the loss.
 
         **After the optimizer moved**, which is the only moment when this
@@ -344,28 +370,28 @@ class Trainer:
         for one in self.audit.observed(self.graph):
             self._said(one.pop("fact"), **one)
 
-    def _said_the_loss(self, loss):
+    def _said_the_loss(self, loss: Any) -> float:
         """The loss, said and then returned. Whole, as `step` promises: divided
         for the backward pass and not for whoever is reading."""
-        whole = loss.item()
+        whole: float = loss.item()
         self._said("loss", value=whole)
         return whole
 
-    def _opens(self):
+    def _opens(self) -> bool:
         """Whether this step starts a group, which is where gradients are cleared
         rather than added to."""
         return self.seen == 0
 
-    def _closes(self):
+    def _closes(self) -> bool:
         """Whether this step ends one, which is where the optimizer moves."""
         return self.seen + 1 >= self.pieces
 
-    def _counted(self):
+    def _counted(self) -> None:
         """This step, gone by. The far side counts the same steps from the same
         start, which is what keeps the two groups the same group."""
         self.seen = 0 if self._closes() else self.seen + 1
 
-    def _shared(self, loss):
+    def _shared(self, loss: Any) -> Any:
         """The loss each step of a group is answerable for.
 
         The usual idiom written down: `N` steps accumulated are meant to be the
@@ -379,7 +405,7 @@ class Trainer:
         """
         return loss if self.pieces == 1 else loss / self.pieces
 
-    def update(self):
+    def update(self) -> bool:
         """Applies what has been accumulated so far and starts a new group.
 
         For the group that a run ends in the middle of: `fit` calls it at the end
@@ -399,7 +425,7 @@ class Trainer:
         self.seen = 0
         return True
 
-    def _close_the_group(self):
+    def _close_the_group(self) -> None:
         """Tells whoever trains itself elsewhere that the group is over.
 
         Every hold of a transposed stage feeds a trainer directly — only what
@@ -413,7 +439,7 @@ class Trainer:
             back.fill({node_id: envelope(None, closing=True) for node_id in back.holds})
             back.graph.forward(None, workers=self.workers)
 
-    def _the_input(self, input_, stage):
+    def _the_input(self, input_: Any, stage: "Stage") -> Any:
         """The batch in whatever shape the first stage can read it. The same
         question `_handed` asks, asked of the roots: with the first node of the
         net on another machine, a tensor wrapped to cross an edge here would not
@@ -422,7 +448,13 @@ class Trainer:
             return _data(input_)
         return _crossable(input_)
 
-    def _handed(self, stage, producer, value, seams):
+    def _handed(
+        self,
+        stage: "Stage",
+        producer: str,
+        value: Any,
+        seams: dict[str, Any],
+    ) -> Any:
         """What to hand a stage for something an earlier one produced.
 
         Three shapes, one rule: a value crosses in whatever way the end that
@@ -444,7 +476,7 @@ class Trainer:
         seams[producer] = seam = leaf(value)
         return Opaque(seam)
 
-    def _as_the_output(self, produced, seams):
+    def _as_the_output(self, produced: dict[str, Any], seams: dict[str, Any]) -> Any:
         """What the whole graph produced, shaped as `forward` would have given it
         and differentiable, which after a cut it is not: what came across one
         enters the loss as a leaf too."""
@@ -457,7 +489,12 @@ class Trainer:
                 seams[node_id] = out[node_id] = leaf(value)
         return out[self.graph.leaves()[0]] if len(out) == 1 else out
 
-    def _hand_the_gradients_back(self, produced, seams, closing=True):
+    def _hand_the_gradients_back(
+        self,
+        produced: dict[str, Any],
+        seams: dict[str, Any],
+        closing: bool = True,
+    ) -> None:
         """The stages in reverse, each handed what it is owed.
 
         Two ways of owing it, and which applies is the **node's** and not the
@@ -473,7 +510,7 @@ class Trainer:
         `retain_graph` because two nodes of one stage can share what is above
         them, and the second `backward` would find it freed.
         """
-        owed = {}
+        owed: dict[str, Any] = {}
         for stage in reversed(self.stages):
             here = {}
             for node_id in stage.taps:
@@ -508,7 +545,7 @@ class Trainer:
             for producer, value in given.items():
                 owed[producer] = _both(owed.get(producer), gradient(value))
 
-    def _check_the_gradient_arrived(self):
+    def _check_the_gradient_arrived(self) -> None:
         """That nothing about to be updated was left out of the backward pass.
 
         Once, on the first step: what is structural is the same on every one
@@ -549,7 +586,7 @@ class Trainer:
             f"out of the optimizer"
         )
 
-    def export(self):
+    def export(self) -> Weights:
         """What this training run learnt: its weights, node by node.
 
         `{node_id: {key: tensor}}`, and the keys are whatever the node answers
@@ -576,7 +613,7 @@ class Trainer:
             for node_id, state in _the_weights(self.graph)
         }
 
-    def load(self, weights):
+    def load(self, weights: Weights) -> None:
         """The mirror: takes what an `export` gave back and puts it in.
 
         Every node it names has to be here and have the weights it says, with the
@@ -606,7 +643,7 @@ class Trainer:
             for mine_, theirs in putting:
                 mine_.copy_(theirs.to(mine_.device, mine_.dtype))
 
-    def _check_they_are_here(self, what):
+    def _check_they_are_here(self, what: str) -> None:
         """That nothing this is about to speak for is being trained on another
         machine."""
         hosts = self.graph.hosts()
@@ -618,7 +655,7 @@ class Trainer:
                 f"is here is the copy that was sent, and it never learnt anything"
             )
 
-    def fit(self, data, epochs=1):
+    def fit(self, data: Iterable[Batch], epochs: int = 1) -> Result:
         """Takes one step per batch, for as many epochs as you say.
 
         `data` is walked once per epoch, so with more than one it has to be
@@ -633,12 +670,14 @@ class Trainer:
             self.update()
         return Result(history)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         kept = f", keeping in {self.store}" if self.store else ""
         return f"Trainer({len(parameters(self.graph))} parameters{kept})"
 
 
-def _the_weights(graph):
+def _the_weights(
+    graph: "Graph",
+) -> Iterator[tuple[str, list[tuple[str, "_torch.Tensor"]]]]:
     """Every node that has any, and what its weights are called.
 
     The same two ducks as `state_digest` and `Graph._check_it_was_obeyed`, and
@@ -655,18 +694,16 @@ def _the_weights(graph):
         implementation = graph.implementation(node_id)
         named = getattr(implementation, "state_dict", None)
         if named is not None:
-            state = sorted(named().items())
+            found: list[tuple[Any, Any]] = sorted(named().items())
         else:
             in_order = getattr(implementation, "parameters", None)
-            state = list(enumerate(in_order())) if in_order is not None else []
-        state = [
-            (str(key), value) for key, value in state if torch.is_tensor(value)
-        ]
+            found = list(enumerate(in_order())) if in_order is not None else []
+        state = [(str(key), value) for key, value in found if torch.is_tensor(value)]
         if state:
             yield node_id, state
 
 
-def _check_the_group(every, micro):
+def _check_the_group(every: int, micro: int) -> None:
     """That a group is a whole number of pieces, and at least one of them."""
     for what, how_many in (("every", every), ("micro", micro)):
         if isinstance(how_many, bool) or not isinstance(how_many, int) or how_many < 1:
@@ -676,7 +713,7 @@ def _check_the_group(every, micro):
             )
 
 
-def _telling(watching):
+def _telling(watching: Any) -> Callable[[Fact], None] | None:
     """Whatever `watching=` was given, as one callable — or `None`.
 
     `Graph.forward` hands its `watching=` to the engine, which knows how to
@@ -688,15 +725,20 @@ def _telling(watching):
     if watching is None or callable(watching):
         return watching
     if isinstance(watching, (list, tuple)):
-        several = [_telling(one) for one in watching]
-        return lambda fact: [one(fact) for one in several] and None
+        several = [one for one in (_telling(each) for each in watching) if one is not None]
+
+        def all_of_them(fact: Fact) -> None:
+            for one in several:
+                one(fact)
+
+        return all_of_them
     raise ValueError(
         "`watching` takes a Recorder, anything callable, or a list of them; "
         f"what arrived is a {type(watching).__name__}"
     )
 
 
-def _auditing(auditing):
+def _auditing(auditing: Any) -> Any:
     """Whatever `auditing=` was given, as an `Audit` or `None`."""
     from soma_next.torch._audit import Audit
 
@@ -712,7 +754,7 @@ def _auditing(auditing):
     )
 
 
-def _in_pieces(batch, micro):
+def _in_pieces(batch: Batch, micro: int) -> list[Batch]:
     """One batch cut into `micro`, both halves of it the same way.
 
     **Who knows how to cut a batch is this module and nobody else**, and that is
@@ -741,7 +783,7 @@ def _in_pieces(batch, micro):
     return list(zip(*(_cut(half, micro, which) for which, half in enumerate(batch))))
 
 
-def _cut(half, micro, which):
+def _cut(half: Any, micro: int, which: int) -> Any:
     """One half of a batch — the input or the target — in `micro` equal pieces."""
     where = "input" if which == 0 else "target"
     if not torch.is_tensor(half):
@@ -761,7 +803,7 @@ def _cut(half, micro, which):
     return list(torch.chunk(half, micro))
 
 
-def _whose(graph, parameters):
+def _whose(graph: "Graph", parameters: Iterable[Any]) -> str:
     """Which nodes those parameters belong to, named the way the graph names
     them. One that belongs to no node at all came from somewhere else, and
     saying so is more use than a number."""
@@ -775,7 +817,7 @@ def _whose(graph, parameters):
     return ", ".join(theirs) if theirs else "no node of this graph"
 
 
-def _crossable(input_):
+def _crossable(input_: Any) -> Any:
     """A tensor is wrapped to cross an edge; everything else passes as it is.
 
     The one place `Opaque` is not asked for by hand, because here a tensor is
@@ -784,7 +826,7 @@ def _crossable(input_):
     return Opaque(input_) if isinstance(input_, torch.Tensor) else input_
 
 
-def _where_the_output_is(target, output):
+def _where_the_output_is(target: Any, output: Any) -> Any:
     """The target goes to meet the output wherever it ended up.
 
     The input crosses the graph and each node moves it to its device; the target
@@ -797,7 +839,7 @@ def _where_the_output_is(target, output):
     return target
 
 
-def _they_take_data(stage, who):
+def _they_take_data(stage: "Stage", who: Iterable[str]) -> bool:
     """Whether what these nodes read has to be plain data: one that runs
     elsewhere cannot be handed a live object.
 
@@ -809,7 +851,7 @@ def _they_take_data(stage, who):
     return any(hosts.get(node_id) for node_id in who)
 
 
-def _both(one, other):
+def _both(one: Any, other: Any) -> Any:
     """Two gradients for the same value add up, and either of them may not be
     there at all."""
     if one is None:
@@ -819,7 +861,7 @@ def _both(one, other):
     return one + other.to(one.device)
 
 
-def _data(value):
+def _data(value: Any) -> Any:
     """A tensor with the chain behind it let go of, which is what crosses to a
     node that runs elsewhere.
 
@@ -835,7 +877,7 @@ def _data(value):
     return Opaque(value.detach()) if torch.is_tensor(value) else value
 
 
-def _check_who_is_trained(graph, trains):
+def _check_who_is_trained(graph: "Graph", trains: dict[str, "Learning"]) -> None:
     """That every node `trains` names is in the graph and says what its
     parameters are, since that is what its trainer will build an optimizer
     over."""
@@ -852,7 +894,11 @@ def _check_who_is_trained(graph, trains):
             )
 
 
-def _check_nobody_moves_them_twice(theirs, trains, optimizer):
+def _check_nobody_moves_them_twice(
+    theirs: set[int],
+    trains: dict[str, "Learning"],
+    optimizer: Any,
+) -> None:
     """That this optimizer does not hold weights somebody else is training.
 
     Where they run may well be here, and then both would move them every step —
@@ -877,7 +923,11 @@ def _check_nobody_moves_them_twice(theirs, trains, optimizer):
         )
 
 
-def _check_somebody_moves_them(mine, trains, optimizer):
+def _check_somebody_moves_them(
+    mine: Sequence[Any],
+    trains: dict[str, "Learning"],
+    optimizer: Any,
+) -> None:
     """That every weight in this graph has somebody who will update it.
 
     Said before the first step, because the symptom otherwise is the one this
@@ -907,7 +957,10 @@ def _check_somebody_moves_them(mine, trains, optimizer):
     _check_they_talk(mine, optimizer)
 
 
-def _check_nobody_is_settled_and_trained(graph, trains):
+def _check_nobody_is_settled_and_trained(
+    graph: "Graph",
+    trains: dict[str, "Learning"],
+) -> None:
     """That nobody was declared settled **and** handed to a trainer.
 
     `.frozen()` says this node's state does not change while the graph runs, and
@@ -923,7 +976,7 @@ def _check_nobody_is_settled_and_trained(graph, trains):
         )
 
 
-def _check_what_is_kept_is_at_the_front(stages_of_it):
+def _check_what_is_kept_is_at_the_front(stages_of_it: Sequence["Stage"]) -> None:
     """That nothing beyond the first stage says `.cached()`.
 
     A root's key comes from the input it was handed, and after a cut the roots of
@@ -945,7 +998,7 @@ def _check_what_is_kept_is_at_the_front(stages_of_it):
         )
 
 
-def _check_they_talk(params, optimizer):
+def _check_they_talk(params: Sequence[Any], optimizer: Any) -> None:
     """That the optimizer and the graph are talking about the same weights.
 
     Only sharing **none at all** is rejected; covering a part is legitimate —

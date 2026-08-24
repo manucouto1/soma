@@ -24,6 +24,8 @@ CU21 decides is *unhealthy* will need its own channel and it is not this one.
 
 from __future__ import annotations
 
+from typing import Any
+
 INK = "#e7e9ef"
 """Text. Off-white: full white on a dark ground buzzes at small sizes."""
 
@@ -123,7 +125,7 @@ is used for one thing: a `forward` that broke."""
 FONT = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
 
 
-def titled(what):
+def titled(what: str) -> dict[str, Any]:
     """A title where a title goes: left, and against the **plot** and not the
     window — `xref="container"`, which is plotly's default, puts `x=0` hard
     against the edge and the first letter is clipped off."""
@@ -138,7 +140,7 @@ def titled(what):
     }
 
 
-def layout(**over):
+def layout(**over: Any) -> dict[str, Any]:
     """The layout every figure here starts from, with `over` on top.
 
     Kept in one place for the same reason the colours are: a figure that gets
@@ -170,7 +172,7 @@ def layout(**over):
     }
 
 
-def axis(**over):
+def axis(**over: Any) -> dict[str, Any]:
     """An axis that is there to be read and not to be looked at."""
     return {
         "gridcolor": EDGE,
@@ -182,8 +184,14 @@ def axis(**over):
     }
 
 
-def plotly():
-    """`plotly.graph_objects`, or an error that says how to get it."""
+def plotly() -> Any:
+    """`plotly.graph_objects`, or an error that says how to get it.
+
+    `Any` and not `ModuleType`: every caller reaches for `go.Figure` or
+    `go.Scatter`, and a checker rejects an attribute on a `ModuleType` it cannot
+    resolve. Since plotly ships no types there is nothing to resolve it against,
+    so the honest answer is the one that admits it.
+    """
     try:
         import plotly.graph_objects as go
     except ImportError as e:

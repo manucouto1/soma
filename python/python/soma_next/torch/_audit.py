@@ -35,12 +35,25 @@ Nothing here changes what the network computes. Hooks read; they do not write.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
+
+from soma_next._typing import Fact
+
+if TYPE_CHECKING:
+    import torch as _torch
+
+    from soma_next._graph import Graph
+
+#: What names a measurement: the node, and the path inside it — or `None`
+#: for the node itself.
+Key = tuple[str, str | None]
+
 import math
 
 try:
     import torch
 except ImportError:  # pragma: no cover - the trainer module already needs torch
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 
 SATURATED_AT = 50.0
@@ -71,14 +84,14 @@ class Audit:
     def __init__(
         self,
         *,
-        every=1,
-        snapshot=50,
-        channels=False,
-        groups=None,
-        window=20,
-        inside=None,
-        most=32,
-    ):
+        every: int = 1,
+        snapshot: int = 50,
+        channels: bool = False,
+        groups: Mapping[str, Mapping[str, Iterable[int]]] | None = None,
+        window: int = 20,
+        inside: Any = None,
+        most: int = 32,
+    ) -> None:
         #: How often a step is measured at all. Every step is affordable for the
         #: cheap half and is the default; a long run can afford less.
         self.every = every
@@ -101,15 +114,19 @@ class Audit:
         #: How many submodules of one node to hook. A cap and not a policy:
         #: what is dropped is said out loud.
         self.most = most
-        self._hooks = []
-        self._seen = {}
-        self._history = {}
-        self._weights = {}
+        self._hooks: list[Any] = []
+        self._seen: dict[Key, dict[str, Any]] = {}
+        self._history: dict[Key, list[dict[str, Any]]] = {}
+        self._weights: dict[Key, Any] = {}
         self._step = 0
+        #: Set by `watch`, and read by `observed` through a `getattr` default,
+        #: so an audit that was never attached measures nothing rather than
+        #: raising.
+        self.watching: dict[Key, Any] = {}
 
     # ── Attaching ──
 
-    def watch(self, graph):
+    def watch(self, graph: "Graph") -> "Audit":
         """Hooks every node of this graph, and — with `inside=` — what is in it.
 
         What comes back is keyed by node, and by `node.path.to.submodule` for
@@ -134,7 +151,7 @@ class Audit:
             )
         return self
 
-    def release(self):
+    def release(self) -> None:
         """Takes the hooks off. A hook nobody removed is a graph nobody can
         garbage-collect, and a second `watch` would double every count."""
         for hook in self._hooks:
@@ -143,7 +160,7 @@ class Audit:
 
     # ── Measuring ──
 
-    def observed(self, graph):
+    def observed(self, graph: "Graph") -> list[Fact]:
         """One `health` fact per node, for the step that just finished.
 
         Called by the `Trainer` after `backward`, which is the only moment when
@@ -155,7 +172,7 @@ class Audit:
             self._seen.clear()
             return []
         snapping = (self._step - 1) % self.snapshot == 0
-        said = []
+        said: list[Fact] = []
         for key, module in getattr(self, "watching", {}).items():
             node, inside = key
             held = module if inside else graph.implementation(node)
@@ -172,7 +189,7 @@ class Audit:
         self._seen.clear()
         return said
 
-    def _windowed(self, key, one):
+    def _windowed(self, key: Key, one: dict[str, Any]) -> Fact:
         """This step's numbers, reduced over the window a verdict is taken on.
 
         The maxima are maxima over the window and the rest are the latest,
@@ -201,10 +218,10 @@ class Audit:
 # ── What one hook sees ──
 
 
-def _forward_of(audit, key):
+def _forward_of(audit: "Audit", key: Key) -> Callable[[Any, Any, Any], None]:
     """A forward hook that writes this step's activation statistics down."""
 
-    def saw(_module, _args, output):
+    def saw(_module: Any, _args: Any, output: Any) -> None:
         tensor = _tensor(output)
         if tensor is None:
             return
@@ -216,11 +233,17 @@ def _forward_of(audit, key):
     return saw
 
 
-def _of_activation(t):
+def _of_activation(t: "_torch.Tensor") -> dict[str, Any]:
     """What a tensor says about itself. Cheap: three reductions."""
     with torch.no_grad():
         f = t.detach().float()
-        said = {"nan": bool(torch.isnan(f).any()), "inf": bool(torch.isinf(f).any())}
+        # A health fact is a bag of numbers and two flags, so it is annotated
+        # as such: without it the two `bool`s below fix the value type and the
+        # three floats after them read as the wrong kind of thing.
+        said: dict[str, Any] = {
+            "nan": bool(torch.isnan(f).any()),
+            "inf": bool(torch.isinf(f).any()),
+        }
         finite = f[torch.isfinite(f)]
         if finite.numel() == 0:
             return said
@@ -231,7 +254,7 @@ def _of_activation(t):
         return said
 
 
-def _of_channels(audit, key, t):
+def _of_channels(audit: "Audit", key: Key, t: "_torch.Tensor") -> dict[str, Any]:
     """Per-channel means, accumulated across the window.
 
     The channel axis is the last one, which is what a `Linear` produces and what
@@ -251,7 +274,7 @@ def _of_channels(audit, key, t):
         held["zero_per_channel"] = zero.cpu()
         held["act_matrix"] = flat.cpu()
         layer = float(per_channel.mean())
-        said = {"dead_channels": int((zero > 0.95).sum())}
+        said: dict[str, Any] = {"dead_channels": int((zero > 0.95).sum())}
         if layer > 0:
             # Sokar et al. (ICML 2023): dormancy is a **normalised** score, so a
             # channel attenuated a thousandfold is dormant while being perfectly
@@ -261,7 +284,7 @@ def _of_channels(audit, key, t):
         return said
 
 
-def _of_parameters(audit, key, held):
+def _of_parameters(audit: "Audit", key: Key, held: Any) -> dict[str, Any]:
     """What the gradients say, and how big a step they are about to take."""
     params = list(held.parameters()) if hasattr(held, "parameters") else []
     grads = [p.grad for p in params if p.grad is not None]
@@ -287,7 +310,7 @@ def _of_parameters(audit, key, held):
         return said
 
 
-def _of_snapshot(audit, key, held):
+def _of_snapshot(audit: "Audit", key: Key, held: Any) -> dict[str, Any]:
     """The expensive pass: what the representation and the update look like.
 
     Every `snapshot` steps, because both of these are an SVD and the rest of the
@@ -307,7 +330,7 @@ def _of_snapshot(audit, key, held):
     return said
 
 
-def _eff_rank(matrix):
+def _eff_rank(matrix: "_torch.Tensor") -> float | None:
     """Effective rank (Roy & Vetterli, 2007): the exponential of the entropy of
     the normalised singular values. How many directions the representation is
     really using, which a plain rank cannot say."""
@@ -321,7 +344,10 @@ def _eff_rank(matrix):
         return float(torch.exp(-(share * share.log()).sum()))
 
 
-def _leakage(matrix, groups):
+def _leakage(
+    matrix: "_torch.Tensor",
+    groups: Mapping[str, Iterable[int]],
+) -> float | None:
     """The largest linear CKA between two declared groups of channels.
 
     Kornblith et al. (2019). The centring is not decoration: CKA is defined on
@@ -341,7 +367,7 @@ def _leakage(matrix, groups):
     return worst
 
 
-def _cka(x, y):
+def _cka(x: "_torch.Tensor", y: "_torch.Tensor") -> float:
     with torch.no_grad():
         x = x - x.mean(dim=0, keepdim=True)
         y = y - y.mean(dim=0, keepdim=True)
@@ -350,7 +376,7 @@ def _cka(x, y):
         return float(top / below) if below > 0 else math.nan
 
 
-def _ignored(kept):
+def _ignored(kept: dict[str, Any]) -> dict[str, Any]:
     """Channels alive in the forward pass that no gradient ever comes back for.
 
     Gradient starvation: the network computes something and never asks for it.
@@ -368,7 +394,7 @@ def _ignored(kept):
     return {"ignored_channels": int((alive & (grads < 1e-9)).sum())}
 
 
-def _update_rank(kept, held):
+def _update_rank(kept: Any, held: Any) -> dict[str, Any]:
     """The stable rank of `W_t - W_{t-d}`: how many directions this node moved
     in between two snapshots.
 
@@ -392,7 +418,7 @@ def _update_rank(kept, held):
         return {"update_rank": float(moved.norm() ** 2 / top)}
 
 
-def _biggest(held):
+def _biggest(held: Any) -> "_torch.nn.Parameter | None":
     """The widest 2-D parameter a node holds, which is the one worth watching.
 
     One and not all of them: this is an SVD, and a bias vector has nothing to
@@ -404,7 +430,7 @@ def _biggest(held):
     return max(two, key=lambda p: p.numel(), default=None)
 
 
-def _modules(held):
+def _modules(held: Any) -> list[tuple[str, Any]]:
     """The torch modules a node holds, as `[(attribute, module)]`.
 
     A node is the user's class and there is no protocol for *give me your
@@ -417,7 +443,7 @@ def _modules(held):
     return [(name, one) for name, one in vars(held).items() if isinstance(one, torch.nn.Module)]
 
 
-def _tensor(output):
+def _tensor(output: Any) -> "_torch.Tensor | None":
     """The tensor a node produced, out of whatever it returned."""
     from soma_next import Opaque
 
@@ -430,7 +456,7 @@ def _tensor(output):
     return None
 
 
-def _slope(name, kept):
+def _slope(name: str, kept: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """How a metric is moving over the window, relative to its own size.
 
     Relative, so that a rank of 40 falling by one and a norm of 0.4 falling by
@@ -443,7 +469,13 @@ def _slope(name, kept):
     return {f"{name}_slope": (over[-1] - over[0]) / (abs(over[0]) * len(over))}
 
 
-def _scoped(root, inside, node, most, depth=0):
+def _scoped(
+    root: Any,
+    inside: Any,
+    node: str,
+    most: int,
+    depth: int = 0,
+) -> list[tuple[str, Any]]:
     """Which submodules of a node to look at, as `[(path, module)]`.
 
     Three ways of saying it, because three questions get asked. `True` is *look

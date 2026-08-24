@@ -23,6 +23,37 @@ viz = ["plotly>=5"]
 module-name = "soma_next._soma_next"
 python-source = "python"
 features = ["pyo3/extension-module"]
+# The package says it is typed, so the marker and the extension's stub are part
+# of what gets installed. Without them a checker downstream reads the whole
+# library as `Any`, and the annotations buy whoever imports this nothing.
+include = ["python/soma_next/py.typed", "python/soma_next/_soma_next.pyi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# ── Typing ───────────────────────────────────────────────────────────────────
+#
+# The package ships `py.typed`, which means what it says about itself is public
+# API: a wrong annotation is a confident wrong answer, and it reaches whoever
+# imports this. So the bar is that every function is annotated —
+# `disallow_untyped_defs` is the one setting that actually holds that line, and
+# the rest only stop the ways around it.
+#
+# No `python_version` pinned: `requires-python` already says >= 3.10, and mypy
+# checks against the interpreter it runs on, which is the one this was built for.
+[tool.mypy]
+files = ["python/soma_next"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# An unannotated body is not checked at all by default. With the two settings
+# above there are none left, so this only makes that explicit rather than lucky.
+check_untyped_defs = true
+
+# The optional halves. `torch` and `plotly` are extras, the dataframe libraries
+# are the caller's, and none of them is a dependency this package can assume.
+[[tool.mypy.overrides]]
+module = ["torch.*", "plotly.*", "polars.*", "pyarrow.*", "cloudpickle.*"]
+ignore_missing_imports = true

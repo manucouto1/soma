@@ -60,8 +60,13 @@ of who trains what, and neither of those is a loss.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
+
 from soma_next._dsl import Node
-from soma_next._soma_next import Opaque
+from soma_next._soma_next import Ctx, Opaque
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
 
 __all__ = ["Held", "Stage", "Tap", "around", "stages", "takes_a_gradient"]
 
@@ -89,11 +94,11 @@ _NOTHING = _Nothing()
 class Held(Node):
     """A value an earlier stage produced, waiting to be handed on."""
 
-    def __init__(self, node_id):
+    def __init__(self, node_id: str) -> None:
         self.node_id = node_id
-        self.value = _NOTHING
+        self.value: Any = _NOTHING
 
-    def forward(self, x, ctx):
+    def forward(self, x: Any, ctx: Ctx) -> Any:
         """What it was handed, verbatim. Fails if nobody handed it anything."""
         if self.value is _NOTHING:
             raise ValueError(
@@ -107,7 +112,7 @@ class Tap(Node):
     """A terminal, so what a stage produces comes back even when somebody inside
     reads it too."""
 
-    def forward(self, x, ctx):
+    def forward(self, x: Any, ctx: Ctx) -> Any:
         """The same value, wrapped: a tap is always the last one and always here,
         so nothing it wraps has a cable or a store ahead of it."""
         return Opaque(x)
@@ -117,14 +122,21 @@ class Stage:
     """One `forward` of a cut graph: its own graph, what it waits for and what it
     gives back."""
 
-    def __init__(self, level, graph, nodes, holds, taps):
+    def __init__(
+        self,
+        level: int,
+        graph: "Graph",
+        nodes: Iterable[str],
+        holds: dict[str, Held],
+        taps: dict[str, str],
+    ) -> None:
         self.level = level
         self.graph = graph
         self.nodes = tuple(nodes)
         self.holds = holds
         self.taps = taps
 
-    def fill(self, produced):
+    def fill(self, produced: dict[str, Any]) -> None:
         """Hands in what earlier stages produced: it takes what it holds and
         ignores the rest, because a stage reads from any stage before it.
 
@@ -135,7 +147,7 @@ class Stage:
         for node_id, held in self.holds.items():
             held.value = produced.get(node_id, _NOTHING)
 
-    def read(self, out):
+    def read(self, out: Any) -> dict[str, Any]:
         """What `forward` gave back, keyed by the node that produced it instead
         of by the tap that carried it.
 
@@ -150,7 +162,7 @@ class Stage:
             return {node_id: out}
         return {node_id: out[tap] for node_id, tap in self.taps.items()}
 
-    def transposed(self):
+    def transposed(self) -> "Stage":
         """The same stage with its edges the other way round, which is what a
         backward pass is: another forward, of the transpose.
 
@@ -176,7 +188,9 @@ class Stage:
         ]
         owes = {node_id: self._fed_by(node_id, mine) for node_id in mine}
         hosts, devices = self.graph.hosts(), self.graph.devices()
-        back, holds, taps = type(self.graph)(), {}, {}
+        back = type(self.graph)()
+        holds: dict[str, Held] = {}
+        taps: dict[str, str] = {}
         back._slice_of = self.graph._slice_of or self.graph
 
         for node_id in mine:
@@ -201,11 +215,13 @@ class Stage:
                 back.edge(node_id, owed)
         return Stage(self.level, back, mine, holds, taps)
 
-    def _fed_by(self, node_id, mine):
+    def _fed_by(self, node_id: str, mine: list[str]) -> list[str]:
         """Who fed this one, walking **up through** whatever is not transposed
         until it reaches something that is — or a hold, which is where this stage
         was fed by the one before it."""
-        found, seen, pending = [], set(), list(self.graph.predecessors(node_id))
+        found: list[str] = []
+        seen: set[str] = set()
+        pending = list(self.graph.predecessors(node_id))
         while pending:
             other = pending.pop(0)
             if other in seen:
@@ -218,7 +234,7 @@ class Stage:
         return found
 
 
-def stages(graph, learns=()):
+def stages(graph: "Graph", learns: Iterable[str] = ()) -> list[Stage]:
     """The graph cut into stages, in the order they run. One stage means there is
     no cut and the graph is its own single pass.
 
@@ -236,10 +252,11 @@ def stages(graph, learns=()):
     ]
 
 
-def _levels(graph, learns):
+def _levels(graph: "Graph", learns: set[str]) -> dict[str, int]:
     """How many cuts each node is behind, which is the stage it falls in."""
     hosts = graph.hosts()
-    side, level = {}, {}
+    side: dict[str, tuple[str | None, bool]] = {}
+    level: dict[str, int] = {}
     for node_id in graph.topological_sort():
         side[node_id] = (hosts.get(node_id), node_id in learns)
         level[node_id] = max(
@@ -252,7 +269,7 @@ def _levels(graph, learns):
     return level
 
 
-def takes_a_gradient(implementation):
+def takes_a_gradient(implementation: object) -> bool:
     """Whether this is something that takes a gradient rather than an input.
 
     A duck, and one that only ever meets **the framework's own** objects: a
@@ -262,13 +279,15 @@ def takes_a_gradient(implementation):
     return getattr(implementation, "learn", None) is not None
 
 
-def _stage(graph, level, mine):
+def _stage(graph: "Graph", level: int, mine: Sequence[str]) -> Stage:
     """One stage remade as a graph: the holds it waits for, the same node objects
     with everything that was said about them, and a tap per output."""
     inside = set(mine)
     hosts, devices = graph.hosts(), graph.devices()
     frozen, cached, fingerprints = graph.frozen(), graph.cached(), graph.fingerprints()
-    stage, holds, taps = type(graph)(), {}, {}
+    stage = type(graph)()
+    holds: dict[str, Held] = {}
+    taps: dict[str, str] = {}
     # Whose catalog a worker of this stage is holding: its own half is another
     # catalog, and one host's worker keeps only one.
     stage._slice_of = graph._slice_of or graph
@@ -300,14 +319,17 @@ def _stage(graph, level, mine):
     return Stage(level, stage, mine, holds, taps)
 
 
-def _is_read_outside(graph, node_id, inside):
+def _is_read_outside(graph: "Graph", node_id: str, inside: set[str]) -> bool:
     """Whether anybody outside this stage reads it: a leaf of the whole graph is
     read by whoever ran it."""
     after = graph.successors(node_id)
     return not after or any(other not in inside for other in after)
 
 
-def around(graph, put):
+def around(
+    graph: "Graph",
+    put: dict[str, tuple[Any, Any]],
+) -> tuple["Graph", set[str]]:
     """The same graph with somebody standing on each side of the nodes named.
 
     `put` is `{node_id: (before, after)}`, and what comes back is the graph and
@@ -325,9 +347,10 @@ def around(graph, put):
     """
     hosts, devices = graph.hosts(), graph.devices()
     frozen, cached, fingerprints = graph.frozen(), graph.cached(), graph.fingerprints()
-    out, occupied = type(graph)(), set()
+    out = type(graph)()
+    occupied: set[str] = set()
 
-    def as_told(node_id, like):
+    def as_told(node_id: str, like: str) -> None:
         """Everything the source graph says about `like`, said about `node_id`."""
         if like in hosts:
             out.place_at(node_id, hosts[like])

@@ -17,6 +17,8 @@ than letting a net stop training in silence.
 
 from __future__ import annotations
 
+from typing import Any
+
 import io
 
 import torch
@@ -29,13 +31,13 @@ after the type and not after the run, because it has to still mean something the
 day somebody reads that record by hand."""
 
 
-def register():
+def register() -> None:
     """Says how a tensor is written down. Called on importing `soma_next.torch`,
     once: registering it again with the same name replaces it with itself."""
     codec(KIND, torch.Tensor, dump=dump, load=load)
 
 
-def dump(tensor):
+def dump(tensor: "torch.Tensor") -> bytes:
     """A tensor in bytes, `torch.save`'s own, and **detached**.
 
     What `load` gives back is a leaf whatever is done here, so carrying
@@ -49,7 +51,7 @@ def dump(tensor):
     return buffer.getvalue()
 
 
-def load(raw):
+def load(raw: bytes) -> Any:
     """And back, **on the cpu**.
 
     Not where it was saved: a store is shared between machines, and one that

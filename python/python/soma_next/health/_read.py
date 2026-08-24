@@ -32,13 +32,26 @@ node** is what gets judged: a run that recovered is not still ill.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Iterator
+
+from soma_next._typing import Fact
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Store
+
 from soma_next._soma_next import Thresholds, about, verdict
 from soma_next.record._read import facts, forwards
 
 __all__ = ["Thresholds", "about", "diagnose", "history", "named", "seen", "within"]
 
 
-def diagnose(store, *, run, thresholds=None, last=None):
+def diagnose(
+    store: "Store",
+    *,
+    run: str,
+    thresholds: Thresholds | None = None,
+    last: int | None = None,
+) -> dict[str, list[str]]:
     """What is wrong, as `{where: [flag, ...]}`.
 
     `where` is a node, or `node.path.to.submodule` when `inside=` was asked to
@@ -51,7 +64,7 @@ def diagnose(store, *, run, thresholds=None, last=None):
     It costs a fetch per `forward` looked at, because the numbers are in the
     blobs. `last=N` is how a run of ten thousand steps is asked about now.
     """
-    said = {}
+    said: dict[str, list[str]] = {}
     for node, one in seen(store, run=run, last=last).items():
         flags = verdict(one, thresholds)
         if flags:
@@ -59,7 +72,12 @@ def diagnose(store, *, run, thresholds=None, last=None):
     return said
 
 
-def seen(store, *, run, last=None):
+def seen(
+    store: "Store",
+    *,
+    run: str,
+    last: int | None = None,
+) -> dict[str, dict[str, float | bool]]:
     """The numbers a verdict would be taken over — the latest of each.
 
     Keyed by node, and by `node.path.to.submodule` for anything `inside=` was
@@ -71,7 +89,7 @@ def seen(store, *, run, last=None):
     For looking at what was measured rather than at what somebody thinks of it,
     and for taking the verdict yourself with `verdict(seen[where], bounds)`.
     """
-    latest = {}
+    latest: dict[str, dict[str, float | bool]] = {}
     for row in _rows(store, run=run, last=last):
         for fact in row:
             if fact.get("fact") == "health" and "node" in fact:
@@ -79,18 +97,26 @@ def seen(store, *, run, last=None):
     return latest
 
 
-def named(fact):
+def named(fact: Fact) -> str:
     """Where a health fact was measured: a node, or a submodule of one."""
     inside = fact.get("inside")
-    return f"{fact['node']}.{inside}" if inside else fact["node"]
+    node: str = fact["node"]
+    return f"{node}.{inside}" if inside else node
 
 
-def within(where):
+def within(where: str) -> str:
     """The node a key belongs to, whether or not it names a submodule of it."""
     return where.split(".", 1)[0]
 
 
-def history(store, *, run, node, of="grad_norm", last=None):
+def history(
+    store: "Store",
+    *,
+    run: str,
+    node: str,
+    of: str = "grad_norm",
+    last: int | None = None,
+) -> list[tuple[int, float]]:
     # `node` is a `where`: a node, or `node.submodule`.
     """One measurement of one node over the run, as `(forward, value)` pairs.
 
@@ -98,9 +124,9 @@ def history(store, *, run, node, of="grad_norm", last=None):
     drifting, the stable rank of an update collapsing. A fetch per `forward`,
     so `last=` is worth using.
     """
-    drawn = []
-    for which, row in enumerate(_rows(store, run=run, last=last, numbered=True)):
-        at, row = row
+    drawn: list[tuple[int, float]] = []
+    for which, numbered in enumerate(_rows(store, run=run, last=last, numbered=True)):
+        at, row = numbered
         for fact in row:
             if fact.get("fact") == "health" and named(fact) == node and of in fact:
                 value = _number(fact[of])
@@ -109,7 +135,13 @@ def history(store, *, run, node, of="grad_norm", last=None):
     return drawn
 
 
-def _rows(store, *, run, last=None, numbered=False):
+def _rows(
+    store: "Store",
+    *,
+    run: str,
+    last: int | None = None,
+    numbered: bool = False,
+) -> Iterator[Any]:
     """The facts of each `forward`, in order."""
     steps = forwards(store, run=run)
     if last is not None:
@@ -119,13 +151,13 @@ def _rows(store, *, run, last=None, numbered=False):
         yield (step["forward"], row) if numbered else row
 
 
-def _numbers(fact):
+def _numbers(fact: Fact) -> dict[str, float | bool]:
     """A health fact as the numbers a verdict takes.
 
     `fact` and `node` are dropped: they say **which** measurement this is, and a
     verdict is about the measurement and not about where it came from.
     """
-    said = {}
+    said: dict[str, float | bool] = {}
     for name, what in fact.items():
         if name in ("fact", "node", "inside"):
             continue
@@ -138,7 +170,7 @@ def _numbers(fact):
     return said
 
 
-def _number(what):
+def _number(what: Any) -> float | None:
     """Text back to a number, or `None` where it was not one.
 
     A record is text — that is what makes it readable with `cat` — so this is

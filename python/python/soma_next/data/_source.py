@@ -36,6 +36,12 @@ moves is not its state but which spans exist.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Ctx, Frame, Store
+
 from soma_next import Node
 from soma_next._soma_next import Source as _Source
 
@@ -50,30 +56,30 @@ class Parquet(Node):
     not opened it.
     """
 
-    def __init__(self, store, name):
+    def __init__(self, store: "Store", name: str) -> None:
         self._inner = _Source(store, name)
 
     @property
-    def version(self):
+    def version(self) -> str:
         """What this dataset is: the digest of its content, which the store had
         already worked out. It is the duck `settle` and `soma_next.torch.freeze`
         both look for."""
         return self._inner.version
 
     @property
-    def name(self):
+    def name(self) -> str:
         """The name it was declared under, which is the graph's word."""
         return self._inner.name
 
-    def forward(self, input, ctx):
+    def forward(self, input: Any, ctx: "Ctx") -> "Frame":
         """The rows that span names, as a `Frame`."""
         return self._inner.forward(input)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return repr(self._inner)
 
 
-def settle(graph, *node_ids):
+def settle(graph: "Graph", *node_ids: str) -> None:
     """Says what each declared-frozen source is settled at.
 
     The same shape as `soma_next.torch.freeze`, and for the same reason: the

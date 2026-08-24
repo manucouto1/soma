@@ -11,8 +11,30 @@ invisible to `help()`, to an IDE, and to a type checker.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+
 from soma_next import _dsl
 from soma_next._soma_next import Graph as _RustGraph
+from soma_next._soma_next import Store, Worker
+from soma_next._typing import Fact, Figure, Inside, Overlay
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+@runtime_checkable
+class Carrier(Protocol):
+    """A worker this side can hand an artifact to.
+
+    A `Protocol` and not `soma_next.Worker`, because what `provision` needs is
+    the one method — and the Rust `Worker` the engine downcasts to does not have
+    it. `soma_next._remote.Worker` adds it, and anything else that packs nodes
+    the same way is as good; `_share_out` asks for it by name and says so when it
+    is missing, which is the check this only describes.
+    """
+
+    def carry(self, nodes: dict[str, Any]) -> None: ...
+
 
 
 class Graph(_RustGraph):
@@ -22,10 +44,10 @@ class Graph(_RustGraph):
     inherited from the Rust class.
     """
 
-    _slice_of = None
+    _slice_of: Graph | None = None
     """The graph this one is a piece of, for a graph run in pieces."""
 
-    def node(self, *args):
+    def node(self, *args: Any) -> str:
         """Adds a node and returns its id, noting **what it was built with**.
 
         Here and not in `_dsl`, because a graph built by hand in a loop reaches
@@ -47,7 +69,7 @@ class Graph(_RustGraph):
             pass
         return node_id
 
-    def figure(self, overlay=None, inside=None):
+    def figure(self, overlay: Overlay | None = None, inside: Inside | None = None) -> Figure:
         """The graph drawn, as a `plotly.graph_objects.Figure`.
 
         Nothing is executed to draw it: everything on the figure was declared.
@@ -65,7 +87,11 @@ class Graph(_RustGraph):
 
         return _figure.figure(self, overlay, inside)
 
-    def _repr_mimebundle_(self, include=None, exclude=None):
+    def _repr_mimebundle_(
+        self,
+        include: object = None,
+        exclude: object = None,
+    ) -> dict[str, Any] | None:
         """What a notebook shows for `g` on its own: the figure.
 
         The *mimebundle* and not `_repr_html_`, because that is how a plotly
@@ -89,7 +115,14 @@ class Graph(_RustGraph):
             return None
         return drawn._repr_mimebundle_(include=include, exclude=exclude) or None
 
-    def forward(self, input=None, *, workers=None, store=None, watching=None):
+    def forward(
+        self,
+        input: Any | None = None,
+        *,
+        workers: dict[str, Worker] | None = None,
+        store: Store | str | None = None,
+        watching: Callable[[Fact], None] | list[Callable[[Fact], None]] | None = None,
+    ) -> Any:
         """Executes the whole graph and returns what it produced.
 
         With `workers={"w1": Worker.at(...)}` you say what each host resolves
@@ -117,7 +150,7 @@ class Graph(_RustGraph):
         self.provision(workers)
         return super().forward(input, workers=workers, store=store, watching=watching)
 
-    def provision(self, workers):
+    def provision(self, workers: dict[str, Worker] | None) -> None:
         """Tells each worker what it is going to need, before the first node runs.
 
         `forward` calls it, so whoever runs a graph in one go never says it out
@@ -140,7 +173,7 @@ class Graph(_RustGraph):
             if nodes:
                 worker.carry(nodes)
 
-    def _check_it_was_obeyed(self):
+    def _check_it_was_obeyed(self) -> None:
         """That whoever was declared settled really was settled.
 
         The core cannot ask this. It says `.frozen()` means "this node's state
@@ -202,7 +235,7 @@ class Graph(_RustGraph):
                 f"whoever knows how to hash what is inside"
             )
 
-    def _share_out(self, workers):
+    def _share_out(self, workers: dict[str, Worker]) -> dict[Carrier, dict[str, Any]]:
         """Which nodes fall to each worker, grouped by worker and not by host.
 
         Two hosts can point at the same one, and provisioning it twice with half
@@ -210,21 +243,23 @@ class Graph(_RustGraph):
         the first artifact that reaches it.
         """
         hosts = self.hosts()
-        share = {}
+        share: dict[Carrier, dict[str, Any]] = {}
         for host, worker in workers.items():
             if not hasattr(worker, "carry"):
                 raise ValueError(
                     f"`workers` takes a dict from host to Worker; for `{host}` a "
                     f"`{type(worker).__name__}` arrived"
                 )
-            theirs = share.setdefault(worker, {})
+            # The `cast` is what the line above just proved: the engine's
+            # `Worker` has no `carry`, and whoever reached here does.
+            theirs = share.setdefault(cast(Carrier, worker), {})
             for node_id, where in hosts.items():
                 if where == host:
                     theirs[node_id] = self.implementation(node_id)
         return share
 
     @classmethod
-    def somatize(cls, topology):
+    def somatize(cls, topology: _dsl.Topology) -> Graph:
         """Materializes an expression into an executable graph.
 
         You think it, Soma somatizes it::
@@ -234,7 +269,7 @@ class Graph(_RustGraph):
         return _dsl.somatize(cls, topology)
 
 
-def _has_state(implementation):
+def _has_state(implementation: object) -> bool:
     """Whether this node has anything worth hashing, asked as a duck: whoever
     answers none of them has no state, and does not stop being a node for it.
 

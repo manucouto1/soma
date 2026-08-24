@@ -25,7 +25,7 @@ SHIPPED = {"torch.Tensor": "soma_next.torch"}
 """`kind` written beside the bytes → the module whose import registers it."""
 
 
-def summon(kind):
+def summon(kind: str) -> None:
     """Imports whoever registers `kind`, if it is one of ours.
 
     Says nothing and raises nothing. Whatever made this necessary is about to

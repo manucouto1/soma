@@ -51,13 +51,32 @@ Nothing here changes what the network computes, and no weight is moved.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable
+
+from soma_next._typing import Fact
+
+if TYPE_CHECKING:
+    import torch as _torch
+
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Worker
+
+#: What names a measurement: the node, and the path inside it — or `""`
+#: for the node itself. A pair and not the joined string, because these are
+#: written down apart and only a reader joins them.
+Key = tuple[str, str]
+
+#: What one hook kept: what went in, what came out, and the module, so that
+#: *is this the normalisation* is asked of the thing rather than looked up.
+Caught = tuple["_torch.Tensor | None", "_torch.Tensor", Any]
+
 import math
 import warnings
 
 try:
     import torch
 except ImportError:  # pragma: no cover - the trainer module already needs torch
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 from soma_next.torch._audit import _of_activation
 from soma_next.torch._inside import _held, architecture, kind_of
@@ -70,7 +89,16 @@ from soma_next.torch._inside import _held, architecture, kind_of
 PROBES = 24
 
 
-def probe(graph, example, *, depth=0, most=48, probes=PROBES, watching=None, workers=None):
+def probe(
+    graph: "Graph",
+    example: Any,
+    *,
+    depth: int = 0,
+    most: int = 48,
+    probes: int = PROBES,
+    watching: Any = None,
+    workers: "dict[str, Worker] | None" = None,
+) -> dict[str, dict[str, Any]]:
     """What this graph looks like at initialisation, as `{where: numbers}`.
 
     `where` is a node, or `node.path.to.submodule` — the same keys the audit
@@ -91,7 +119,9 @@ def probe(graph, example, *, depth=0, most=48, probes=PROBES, watching=None, wor
         raise RuntimeError("`probe` needs torch")
     watched = _watching(graph, example, depth, most, workers)
 
-    seen, order, hooks = {}, [], []
+    seen: dict[Key, Caught] = {}
+    order: list[Key] = []
+    hooks: list[Any] = []
     for key, module in watched.items():
         hooks.append(module.register_forward_hook(_caught(seen, order, key)))
     try:
@@ -105,7 +135,7 @@ def probe(graph, example, *, depth=0, most=48, probes=PROBES, watching=None, wor
     _isometry(numbers, seen, order, _unwrapped(output), probes)
 
     told = _telling(watching)
-    said = {}
+    said: dict[str, dict[str, Any]] = {}
     for key, one in numbers.items():
         if not one:
             continue
@@ -117,7 +147,13 @@ def probe(graph, example, *, depth=0, most=48, probes=PROBES, watching=None, wor
     return said
 
 
-def _watching(graph, example, depth, most, workers):
+def _watching(
+    graph: "Graph",
+    example: Any,
+    depth: int,
+    most: int,
+    workers: "dict[str, Worker] | None",
+) -> dict[Key, Any]:
     """Which module each key names, taken from what the figure will draw.
 
     Not from `_worth_drawing` directly, which is what the audit does and what
@@ -153,7 +189,7 @@ def _watching(graph, example, depth, most, workers):
     return said
 
 
-def _module_at(held, path):
+def _module_at(held: dict[str, Any], path: str) -> Any:
     """The module a drawn path names, or nothing.
 
     A path is the attribute the module hangs off a node by, then its own path
@@ -173,7 +209,11 @@ def _module_at(held, path):
 # ── One forward, and what each layer said while it ran ──
 
 
-def _caught(seen, order, key):
+def _caught(
+    seen: dict[Key, Caught],
+    order: list[Key],
+    key: Key,
+) -> Callable[[Any, Any, Any], None]:
     """A forward hook that keeps what went in and what came out.
 
     The tensors themselves and not statistics of them: the Jacobian half needs
@@ -181,7 +221,7 @@ def _caught(seen, order, key):
     differentiated.
     """
 
-    def saw(module, args, out):
+    def saw(module: Any, args: Any, out: Any) -> None:
         into, made = _tensor(args[0] if args else None), _tensor(out)
         if made is None:
             return
@@ -194,7 +234,7 @@ def _caught(seen, order, key):
     return saw
 
 
-def _of_one(one):
+def _of_one(one: Caught) -> dict[str, Any]:
     """What a layer's output says about itself, on the one step there is."""
     _, made, _module = one
     said = _of_activation(made)
@@ -208,7 +248,12 @@ def _of_one(one):
     return said
 
 
-def _signal(numbers, seen, order, example):
+def _signal(
+    numbers: dict[Key, dict[str, Any]],
+    seen: dict[Key, Caught],
+    order: list[Key],
+    example: Any,
+) -> None:
     """The scale of the signal, against where the last normalisation left it.
 
     A norm layer resets the scale, so drift measured from the input would blame
@@ -241,7 +286,13 @@ def _signal(numbers, seen, order, example):
             numbers.setdefault(key, {})["signal_gain"] = scale / reference
 
 
-def _isometry(numbers, seen, order, output, probes):
+def _isometry(
+    numbers: dict[Key, dict[str, Any]],
+    seen: dict[Key, Caught],
+    order: list[Key],
+    output: Any,
+    probes: int,
+) -> None:
     """The Jacobian from each layer to the output, sketched with random probes.
 
     `k` unit probes pushed into the output and one backward each; every layer
@@ -292,7 +343,12 @@ def _isometry(numbers, seen, order, output, probes):
             one["jacobian_spread"] = float(s[0]) / rms
 
 
-def _sketched(output, made, v, probes):
+def _sketched(
+    output: "_torch.Tensor",
+    made: list["_torch.Tensor"],
+    v: "_torch.Tensor",
+    probes: int,
+) -> Any:
     """`k` vector-Jacobian products, batched where `vmap` can follow the model.
 
     The fallback is a plain loop and it is `k` times slower, which is worth
@@ -325,7 +381,7 @@ def _sketched(output, made, v, probes):
 # ── Odds and ends ──
 
 
-def _scale(what):
+def _scale(what: Any) -> float | None:
     """How big the signal is, as a standard deviation.
 
     The deviation and not the mean magnitude: what a normalisation sets is the
@@ -338,7 +394,7 @@ def _scale(what):
     return said if math.isfinite(said) else None
 
 
-def _tensor(what):
+def _tensor(what: Any) -> "_torch.Tensor | None":
     """The tensor in whatever arrived, or nothing."""
     if torch.is_tensor(what):
         return what
@@ -347,21 +403,21 @@ def _tensor(what):
     return None
 
 
-def _unwrapped(what):
+def _unwrapped(what: Any) -> Any:
     """An `Opaque` holds the tensor; everything else is already itself."""
     from soma_next import Opaque
 
     return what.value if isinstance(what, Opaque) else what
 
 
-def _crossable(what):
+def _crossable(what: Any) -> Any:
     """A tensor is wrapped to cross an edge; everything else passes as it is."""
     from soma_next import Opaque
 
     return Opaque(what) if torch.is_tensor(what) else what
 
 
-def _telling(watching):
+def _telling(watching: Any) -> Callable[[Fact], None] | None:
     """Whatever `watching=` was given, as one callable — or `None`."""
     from soma_next.torch._trainer import _telling as the_same_one
 

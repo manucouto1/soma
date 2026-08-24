@@ -11,12 +11,13 @@ import hashlib
 import importlib
 import sys
 from contextlib import contextmanager
+from typing import Any, Iterable, Iterator, Sequence
 
 from soma_next._soma_next import Worker as _RustWorker
 
 
 @contextmanager
-def _by_value(modules):
+def _by_value(modules: Iterable[str]) -> Iterator[None]:
     """Makes these modules travel **inside** the artifact.
 
     cloudpickle serializes by reference whatever comes from an importable
@@ -60,25 +61,38 @@ class Worker(_RustWorker):
     own modules travel inside it.
     """
 
+    _mode: str
+    """How this worker is packed for: `"project"` or `"network"`. Declared here
+    and set by `_remember`, because an attribute hung on an instance from outside
+    the class is one a reader — and a checker — has no way to find."""
+
+    _send: tuple[str, ...]
+    """Which of your modules travel inside the artifact rather than by name."""
+
     @classmethod
-    def at(cls, addr, mode="project", send=()):
+    def at(cls, addr: str, mode: str = "project", send: Sequence[str] = ()) -> Worker:
         """Connects to a worker that **was already standing**."""
         return _remember(cls(addr), mode, send)
 
     @classmethod
-    def spawn(cls, argv, mode="project", send=()):
+    def spawn(cls, argv: list[str], mode: str = "project", send: Sequence[str] = ()) -> Worker:
         """Starts a worker as a child process. For testing: while the client
         starts the process, there is no independent worker worth the name."""
         return _remember(cls(argv), mode, send)
 
     @classmethod
-    def generic(cls, mode="project", send=(), python=None):
+    def generic(
+        cls,
+        mode: str = "project",
+        send: Sequence[str] = (),
+        python: str | None = None,
+    ) -> Worker:
         """A child running `python -m soma_next.worker`."""
         return cls.spawn(
             [python or sys.executable, "-m", "soma_next.worker"], mode=mode, send=send
         )
 
-    def carry(self, nodes):
+    def carry(self, nodes: dict[str, Any]) -> None:
         """Packs these nodes and tells the worker it is going to need them.
         `Graph.forward` calls it — an artifact is how anything gets there."""
         kind, blob = _pack(nodes, self._mode, self._send)
@@ -87,7 +101,7 @@ class Worker(_RustWorker):
         )
 
 
-def _remember(worker, mode, send):
+def _remember(worker: Worker, mode: str, send: Sequence[str]) -> Worker:
     """Hangs on the worker how it packs, which is all it is missing."""
     if mode not in ("project", "network"):
         raise ValueError(f"`mode` is 'project' or 'network', not {mode!r}")
@@ -95,7 +109,7 @@ def _remember(worker, mode, send):
     return worker
 
 
-def _pack(nodes, mode, send):
+def _pack(nodes: dict[str, Any], mode: str, send: Sequence[str]) -> tuple[str, bytes]:
     """The nodes as an artifact, whichever way applies.
 
     **By id, always.** The artifact's id is the digest of these bytes, and a dict
@@ -122,7 +136,7 @@ def _pack(nodes, mode, send):
         return "pickle", cloudpickle.dumps(nodes)
 
 
-def _runtime():
+def _runtime() -> str:
     from soma_next.worker import runtime
 
     return runtime()

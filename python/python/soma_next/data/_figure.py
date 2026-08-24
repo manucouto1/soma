@@ -17,6 +17,13 @@ would be the figure being tidier than the data.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+from soma_next._typing import Figure
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Thresholds
+
 from soma_next import _theme
 from soma_next._soma_next import about
 from soma_next.data._ablation import leaning, shares
@@ -24,7 +31,12 @@ from soma_next.data._ablation import leaning, shares
 __all__ = ["leaned"]
 
 
-def leaned(drops, *, thresholds=None, title="what it leaned on"):
+def leaned(
+    drops: dict[str, float],
+    *,
+    thresholds: "Thresholds | None" = None,
+    title: str = "what it leaned on",
+) -> Figure:
     """The share each input was worth, biggest first."""
     go = _theme.plotly()
     said = shares(drops, thresholds)
@@ -74,7 +86,7 @@ def leaned(drops, *, thresholds=None, title="what it leaned on"):
     ).update_yaxes(**_theme.axis(showgrid=False, automargin=True))
 
 
-def _nothing(go, what):
+def _nothing(go: Any, what: str) -> Figure:
     """Nothing to draw is a statement and not an exception."""
     return go.Figure().update_layout(
         annotations=[
@@ -88,6 +100,6 @@ def _nothing(go, what):
     )
 
 
-def _about(flag):
+def _about(flag: str) -> str:
     """What a flag means, for whoever composes something else out of this."""
     return about(flag)

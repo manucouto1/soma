@@ -27,6 +27,14 @@ they are.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+from soma_next._typing import Figure, Inside, Overlay
+
+if TYPE_CHECKING:
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Store, Thresholds
+
 from soma_next import _theme
 from soma_next.health._read import about, diagnose, seen
 
@@ -36,7 +44,14 @@ __all__ = ["Alerts", "alerts", "flags", "overlaid", "profile", "where"]
 HEALTHY_RATIO = 1e-3
 
 
-def profile(store, *, run, of="grad_norm", thresholds=None, last=None):
+def profile(
+    store: "Store",
+    *,
+    run: str,
+    of: str = "grad_norm",
+    thresholds: "Thresholds | None" = None,
+    last: int | None = None,
+) -> Figure:
     """One measurement per node, across the graph — the shape over depth.
 
     `of` is any number the audit wrote down: `grad_norm`, `update_ratio`,
@@ -95,7 +110,13 @@ def profile(store, *, run, of="grad_norm", thresholds=None, last=None):
     )
 
 
-def flags(store, *, run, thresholds=None, last=None):
+def flags(
+    store: "Store",
+    *,
+    run: str,
+    thresholds: "Thresholds | None" = None,
+    last: int | None = None,
+) -> Figure:
     """What is wrong with each node, and what to do about it.
 
     A table and not a list, because a diagnosis without its advice is a word
@@ -145,7 +166,7 @@ def flags(store, *, run, thresholds=None, last=None):
     )
 
 
-def _nothing(go, what):
+def _nothing(go: Any, what: str) -> Figure:
     """Nothing to draw is a statement and not an exception."""
     return go.Figure().update_layout(
         annotations=[
@@ -163,7 +184,15 @@ def _nothing(go, what):
     )
 
 
-def overlaid(graph, store, *, run, thresholds=None, last=None, inside=None):
+def overlaid(
+    graph: "Graph",
+    store: "Store",
+    *,
+    run: str,
+    thresholds: "Thresholds | None" = None,
+    last: int | None = None,
+    inside: Inside | None = None,
+) -> Figure:
     """The graph, with what is wrong marked on the nodes it is wrong in.
 
     The answer to *where* — which is the question a diagnosis of a distributed
@@ -191,7 +220,14 @@ def overlaid(graph, store, *, run, thresholds=None, last=None, inside=None):
     )
 
 
-def where(store, *, run, thresholds=None, last=None, inside=None):
+def where(
+    store: "Store",
+    *,
+    run: str,
+    thresholds: "Thresholds | None" = None,
+    last: int | None = None,
+    inside: Inside | None = None,
+) -> Overlay:
     """A diagnosis folded onto the nodes of a graph: `{node: [flag, ...]}`.
 
     What `overlaid` hands to the figure, and what to hand to `graph.figure()`
@@ -210,7 +246,7 @@ def where(store, *, run, thresholds=None, last=None, inside=None):
         for node, made in (inside or {}).items()
         for was, now in made.folded.items()
     }
-    folded = {}
+    folded: dict[str, list[str]] = {}
     for at, raised in diagnose(store, run=run, thresholds=thresholds, last=last).items():
         one = stands_for.get(at, at)
         if one in drawn:
@@ -243,18 +279,23 @@ class Alerts:
     needing a browser.
     """
 
-    def __init__(self, found, run, measured):
+    def __init__(
+        self,
+        found: Overlay,
+        run: str,
+        measured: dict[str, dict[str, float | bool]],
+    ) -> None:
         self.found = found
         self.run = run
         self.measured = measured
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.found)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return sum(len(raised) for raised in self.found.values())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if not self.found:
             return self._quiet()
         lines = [f"{self.run} — {len(self)} finding(s)"]
@@ -263,13 +304,13 @@ class Alerts:
                 lines.append(f"  ⚠ {where}: {flag}\n      {about(flag)}")
         return "\n".join(lines)
 
-    def _quiet(self):
+    def _quiet(self) -> str:
         """What to say when nothing tripped — which is not *healthy*."""
         if not self.measured:
             return f"{self.run} — nothing was measured, so nothing can be said"
         return f"{self.run} — nothing tripped in {len(self.measured)} place(s) measured"
 
-    def _repr_html_(self):
+    def _repr_html_(self) -> str:
         if not self.found:
             return (
                 f'<div style="{_CARD};border-left:3px solid {_theme.SERIES["took"]};'
@@ -304,7 +345,13 @@ _CARD = (
 )
 
 
-def alerts(store, *, run, thresholds=None, last=None):
+def alerts(
+    store: "Store",
+    *,
+    run: str,
+    thresholds: "Thresholds | None" = None,
+    last: int | None = None,
+) -> Alerts:
     """What is wrong, loudly. See [`Alerts`]."""
     return Alerts(
         diagnose(store, run=run, thresholds=thresholds, last=last),
@@ -313,7 +360,7 @@ def alerts(store, *, run, thresholds=None, last=None):
     )
 
 
-def _escaped(text):
+def _escaped(text: object) -> str:
     """What came from a node's name is not markup.
 
     The same guard the graph figure has, for the same reason: an id is the

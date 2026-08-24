@@ -45,6 +45,17 @@ before somebody concludes that neither matters.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Sequence
+
+if TYPE_CHECKING:
+    import random as _random
+
+    from soma_next._graph import Graph
+    from soma_next._soma_next import Thresholds, Worker
+
+#: One example: what goes in, keyed by input, and what should come out.
+Batch = tuple[dict[str, Any], Any]
+
 import random
 
 from soma_next._soma_next import leaning as _leaning
@@ -52,7 +63,16 @@ from soma_next._soma_next import leaning as _leaning
 __all__ = ["contribution", "leaning", "shares", "shuffled"]
 
 
-def contribution(graph, batches, *, objective, over=None, repeats=3, seed=0, workers=None):
+def contribution(
+    graph: "Graph",
+    batches: Iterable[Batch],
+    *,
+    objective: Callable[[Any, Any], float],
+    over: Iterable[str] | None = None,
+    repeats: int = 3,
+    seed: int = 0,
+    workers: "dict[str, Worker] | None" = None,
+) -> dict[str, float]:
     """How much worse the score gets without each input, as `{name: drop}`.
 
     `batches` is an iterable of `(input, target)` — the same shape a `Trainer`
@@ -69,22 +89,25 @@ def contribution(graph, batches, *, objective, over=None, repeats=3, seed=0, wor
     Nothing is trained and nothing is changed: the model is asked the same
     question with one of its inputs scrambled.
     """
-    batches = [(dict(one), target) for one, target in batches]
-    if not batches:
+    each: list[Batch] = [(dict(one), target) for one, target in batches]
+    if not each:
         return {}
-    names = list(over) if over is not None else list(batches[0][0])
-    intact = _scored(graph, batches, objective, workers)
-    said = {}
+    names = list(over) if over is not None else list(each[0][0])
+    intact = _scored(graph, each, objective, workers)
+    said: dict[str, float] = {}
     for name in names:
         worse = [
-            _scored(graph, _shuffling(batches, name, random.Random(seed + which)), objective, workers)
+            _scored(graph, _shuffling(each, name, random.Random(seed + which)), objective, workers)
             for which in range(repeats)
         ]
         said[name] = sum(worse) / len(worse) - intact
     return said
 
 
-def leaning(drops, thresholds=None):
+def leaning(
+    drops: dict[str, float],
+    thresholds: "Thresholds | None" = None,
+) -> dict[str, list[str]]:
     """What is wrong with what the model is leaning on.
 
     `{name: [flag, ...]}`, and a name with nothing wrong is not in it — for the
@@ -92,7 +115,7 @@ def leaning(drops, thresholds=None):
     bill, it is *nothing tripped*.
     """
     shares, flags = _leaning(dict(drops), thresholds)
-    said = {}
+    said: dict[str, list[str]] = {}
     for flag in flags:
         name = flag[flag.index("(") + 1 : -1]
         said.setdefault(name, []).append(flag)
@@ -100,14 +123,17 @@ def leaning(drops, thresholds=None):
     return said
 
 
-def shares(drops, thresholds=None):
+def shares(
+    drops: dict[str, float],
+    thresholds: "Thresholds | None" = None,
+) -> dict[str, float]:
     """What each input is worth, as `{name: share}` — the drops divided by what
     they add up to, so they read as *how much of what matters is this*."""
     said, _ = _leaning(dict(drops), thresholds)
     return {name: share for name, share, _ in said}
 
 
-def shuffled(what, order):
+def shuffled(what: Any, order: Sequence[int]) -> Any:
     """One input, with its rows put in that order.
 
     An `Opaque` is unwrapped and wrapped again, because that is how a tensor
@@ -124,7 +150,10 @@ def shuffled(what, order):
     try:
         import torch
     except ImportError:
-        torch = None
+        # The idiom for an optional import, and the `ignore` is the price: a
+        # module name rebound to `None` is exactly what a checker is there to
+        # object to, and it is what "torch may not be here" looks like.
+        torch = None  # type: ignore[assignment]
     if isinstance(what, Opaque):
         return Opaque(shuffled(what.value, order))
     if torch is not None and isinstance(what, torch.Tensor):
@@ -134,9 +163,13 @@ def shuffled(what, order):
     return what
 
 
-def _shuffling(batches, name, rolling):
+def _shuffling(
+    batches: list[Batch],
+    name: str,
+    rolling: "_random.Random",
+) -> list[Batch]:
     """The same batches with one input's rows permuted."""
-    out = []
+    out: list[Batch] = []
     for one, target in batches:
         if name not in one:
             out.append((one, target))
@@ -147,7 +180,7 @@ def _shuffling(batches, name, rolling):
     return out
 
 
-def _rows(what):
+def _rows(what: Any) -> int:
     """How many rows an input has, which is what gets permuted."""
     from soma_next import Opaque
 
@@ -156,7 +189,12 @@ def _rows(what):
     return int(what.shape[0]) if hasattr(what, "shape") else len(what)
 
 
-def _scored(graph, batches, objective, workers):
+def _scored(
+    graph: "Graph",
+    batches: list[Batch],
+    objective: Callable[[Any, Any], float],
+    workers: "dict[str, Worker] | None",
+) -> float:
     """The mean objective over these batches. Nothing is trained.
 
     Under `no_grad` where torch is here: nothing is going to be differentiated
@@ -166,7 +204,9 @@ def _scored(graph, batches, objective, workers):
     try:
         import torch
 
-        held = torch.no_grad()
+        # Annotated as the shape both arms share, so the fallback is not read as
+        # the wrong type for a variable the first arm already fixed.
+        held: ContextManager[Any] = torch.no_grad()
     except ImportError:
         import contextlib
 

@@ -36,6 +36,7 @@ import pickle
 import pkgutil
 import struct
 import sys
+from typing import Any, Callable
 
 from soma_next._fingerprint import CannotVersion, fingerprint
 
@@ -57,11 +58,11 @@ class _Notes(pickle.Pickler):
     substitute.
     """
 
-    def __init__(self, output):
+    def __init__(self, output: io.BytesIO) -> None:
         super().__init__(output)
-        self.classes = {}
+        self.classes: dict[str, str] = {}
 
-    def reducer_override(self, obj):
+    def reducer_override(self, obj: Any) -> Any:
         if isinstance(obj, type):
             from soma_next._fingerprint import _is_yours
 
@@ -70,7 +71,7 @@ class _Notes(pickle.Pickler):
         return NotImplemented
 
 
-def pack(nodes):
+def pack(nodes: dict[str, Any]) -> bytes:
     """The nodes as a `project` artifact.
 
     Raises `CannotVersion` if some class has no source to read — a notebook, an
@@ -87,13 +88,19 @@ def pack(nodes):
 class _Resolves(pickle.Unpickler):
     """An `Unpickler` that looks each class up here and checks its version."""
 
-    def __init__(self, input_, classes, strict, warn):
+    def __init__(
+        self,
+        input_: io.BytesIO,
+        classes: dict[str, str],
+        strict: bool,
+        warn: Callable[[str], None],
+    ) -> None:
         super().__init__(input_)
         self.classes = classes
         self.strict = strict
         self.warn = warn
 
-    def find_class(self, module, name):
+    def find_class(self, module: str, name: str) -> Any:
         expected = self.classes.get(f"{module}:{name}")
         if expected is None:
             # Not yours: nothing to version, imported as always.
@@ -117,7 +124,7 @@ class _Resolves(pickle.Unpickler):
         return cls
 
 
-def _find(module, name):
+def _find(module: str, name: str) -> Any:
     """The class, by the module hint the client left and failing that by
     sweeping its package — one package, because importing has effects.
 
@@ -151,15 +158,19 @@ def _find(module, name):
     )
 
 
-def _inside(module, name):
+def _inside(module: Any, name: str) -> Any:
     """`getattr` that understands a dotted `qualname`."""
-    obj = module
+    obj: Any = module
     for piece in name.split("."):
         obj = getattr(obj, piece)
     return obj
 
 
-def unpack(blob, strict=True, warn=None):
+def unpack(
+    blob: bytes,
+    strict: bool = True,
+    warn: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """The nodes of a `project` artifact, resolved against this clone.
 
     Raises `DifferentVersion` if `strict` and some class here is not the one the
@@ -167,11 +178,12 @@ def unpack(blob, strict=True, warn=None):
     """
     (length,) = struct.unpack("<I", blob[:4])
     manifest = json.loads(blob[4 : 4 + length])
-    warn = warn or (lambda line: print(line, file=sys.stderr, flush=True))
+    said = warn or (lambda line: print(line, file=sys.stderr, flush=True))
 
-    return _Resolves(
+    loaded: dict[str, Any] = _Resolves(
         io.BytesIO(blob[4 + length :]),
         manifest.get("classes", {}),
         strict,
-        warn,
+        said,
     ).load()
+    return loaded

@@ -49,6 +49,11 @@ wants a round of three out of four says so themselves.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Bound, Store
+
 import time
 
 from soma_next.torch._federated import fedavg
@@ -59,17 +64,17 @@ the averaging can weigh by it without anybody being asked."""
 
 
 def gather(
-    store,
-    what,
+    store: "Store",
+    what: Any,
     *,
-    run,
-    round,
-    clients,
-    mine,
-    size=None,
-    within=600.0,
-    asking=1.0,
-):
+    run: str,
+    round: int,
+    clients: int,
+    mine: int,
+    size: float | None = None,
+    within: float = 600.0,
+    asking: float = 1.0,
+) -> Any:
     """Puts this client's round in, waits for everybody else's, and gives back
     the average of all of them.
 
@@ -98,7 +103,7 @@ def gather(
         time.sleep(asking)
 
 
-def _the_mean(store, run, round, clients):
+def _the_mean(store: "Store", run: str, round: int, clients: int) -> Any:
     """The average of what everybody put in, published for them to find.
 
     Written **before** it is returned, and not after: the client that does this
@@ -106,14 +111,29 @@ def _the_mean(store, run, round, clients):
     else could see, the round would have happened for one of them.
     """
     puts = [store.resolve(_client(run, round, which)) for which in range(clients)]
-    exports = [store.recall(_client(run, round, which)) for which in range(clients)]
-    sizes = [_size_in(put) for put in puts]
-    average = fedavg(exports, sizes=sizes if all(sizes) else None)
+    exports = []
+    for which in range(clients):
+        one = store.recall(_client(run, round, which))
+        if one is None:
+            # `_who_is_missing` asked whether the **record** was there, and the
+            # record and the bytes are two things — the same split `_blob` says
+            # out loud everywhere else. Named, rather than an `AttributeError`
+            # from inside the arithmetic.
+            raise RuntimeError(
+                f"client {which} of round {round} of `{run}` has a record and no "
+                f"bytes behind it, so there is nothing of its to average"
+            )
+        exports.append(one)
+    said = [_size_in(put) for put in puts]
+    # Every client has to have said, or none of them weighs: a round where one
+    # size is missing is a round weighted by a number nobody wrote down.
+    sizes = [one for one in said if one is not None]
+    average = fedavg(exports, sizes=sizes if len(sizes) == clients else None)
     store.keep(_average(run, round), average)
     return average
 
 
-def _who_is_missing(store, run, round, clients):
+def _who_is_missing(store: "Store", run: str, round: int, clients: int) -> list[int]:
     """Which clients have not put their round in yet, in order."""
     names = [_client(run, round, which) for which in range(clients)]
     return [
@@ -123,7 +143,7 @@ def _who_is_missing(store, run, round, clients):
     ]
 
 
-def _size_in(put):
+def _size_in(put: "Bound | None") -> float | None:
     """How much data that client saw, if its record says."""
     said = dict(put.meta).get(SIZE) if put is not None else None
     try:
@@ -132,7 +152,12 @@ def _size_in(put):
         return None
 
 
-def _never_turned_up(run, round, missing, within):
+def _never_turned_up(
+    run: str,
+    round: int,
+    missing: list[int],
+    within: float,
+) -> str:
     """Why it gave up, and the two reasons are not the same reason.
 
     Somebody missing is a client that never started. **Nobody** missing is worse
@@ -154,13 +179,13 @@ def _never_turned_up(run, round, missing, within):
     )
 
 
-def _client(run, round, which):
+def _client(run: str, round: int, which: int) -> str:
     return f"{run}/round/{round}/client/{which}"
 
 
-def _averaging(run, round):
+def _averaging(run: str, round: int) -> str:
     return f"{run}/round/{round}/averaging"
 
 
-def _average(run, round):
+def _average(run: str, round: int) -> str:
     return f"{run}/round/{round}/average"

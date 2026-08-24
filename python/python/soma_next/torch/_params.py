@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Container
 
-def parameters(graph, without=()):
+if TYPE_CHECKING:
+    import torch
+
+    from soma_next._graph import Graph
+
+
+def parameters(
+    graph: "Graph",
+    without: Container[str] = (),
+) -> list["torch.nn.Parameter"]:
     """The parameters of every node in the graph that has any.
 
     It asks for `.parameters()` and skips whoever lacks it, so a tokenizer does
@@ -20,7 +30,8 @@ def parameters(graph, without=()):
     trained where it runs and also held by this optimizer is **updated twice**
     when where it runs is here.
     """
-    seen, all_of_them = set(), []
+    seen: set[int] = set()
+    all_of_them: list["torch.nn.Parameter"] = []
     for node_id in graph.nodes():
         if node_id in without:
             continue

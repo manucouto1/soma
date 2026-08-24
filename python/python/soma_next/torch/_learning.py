@@ -63,6 +63,15 @@ alone does not route.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Sequence
+
+if TYPE_CHECKING:
+    from soma_next._soma_next import Ctx
+
+#: A gradient on its way back across an edge: the signal, and whether it
+#: closes a group of accumulated ones. A dict because that is what crosses.
+Envelope = dict[str, Any]
+
 from functools import partial
 
 import torch
@@ -88,7 +97,7 @@ class OutOfStep(Exception):
     """
 
 
-def envelope(gradient, closing=False):
+def envelope(gradient: Any, closing: bool = False) -> Envelope:
     """A gradient in its envelope, which is how one crosses an edge. What a
     transposed stage is fed with, by a `Trainer` or by hand.
 
@@ -98,7 +107,7 @@ def envelope(gradient, closing=False):
     from the other end: *how many steps make an update* is the training run's,
     and the training run is here.
     """
-    sent = {SIGNAL: _data(gradient)}
+    sent: Envelope = {SIGNAL: _data(gradient)}
     if closing:
         # The key being there **is** the fact, so it carries nothing — which is
         # also the only shape that crosses: there is no `bool` on an edge, and a
@@ -107,7 +116,7 @@ def envelope(gradient, closing=False):
     return sent
 
 
-def gradient(value, device=None):
+def gradient(value: Any, device: str | None = None) -> "torch.Tensor | None":
     """What an envelope carries, as a tensor — or the sum of what a map of them
     carries. `None` for something that is not a backward message at all, and
     `None` too for an envelope carrying nothing."""
@@ -115,7 +124,7 @@ def gradient(value, device=None):
     return None if inside is None else _added(inside, device)
 
 
-def leaf(value, device=None):
+def leaf(value: Any, device: str | None = None) -> "torch.Tensor":
     """A value as something that can be differentiated back to.
 
     Detached on purpose, and it is the whole premise: what trains a node lets go
@@ -143,24 +152,32 @@ class Learning(Node):
     and `given` — the leaf its input became. Both are dropped after each `learn`.
     """
 
-    given = held = built = None
+    given: Any = None
+    held: Any = None
+    built: Any = None
     """Nothing of what one step leaves is set in `__init__`: `pickle` does not
     call it, and being rebuilt on another machine is this object's normal life."""
 
-    every = None
-    seen = 0
-    told = False
+    every: int | None = None
+    seen: int = 0
+    told: bool = False
     """How many steps make an update, how many have gone by, and whether this one
     was told to be the last. `None` is *whatever the trainer says*, and the same
     class-attribute rule as above applies: an object rebuilt over there reads
     them before anything sets them."""
 
-    def __init__(self, optimizer, *, every=None, **how):
+    def __init__(
+        self,
+        optimizer: Callable[..., Any],
+        *,
+        every: int | None = None,
+        **how: Any,
+    ) -> None:
         self.making = partial(optimizer, **how)
-        self.node = None
+        self.node: Any = None
         self.every = every
 
-    def accumulating(self, every):
+    def accumulating(self, every: int | None) -> "Learning":
         """How many steps go into one update, unless this one already said.
 
         The trainer's number is the default and a technique that named its own
@@ -171,27 +188,27 @@ class Learning(Node):
             self.every = every
         return self
 
-    def opens(self):
+    def opens(self) -> bool:
         """Whether this step starts a group, which is where gradients are cleared
         rather than added to."""
         return self.seen == 0
 
-    def closes(self):
+    def closes(self) -> bool:
         """Whether this step ends one, which is where the optimizer moves."""
         return self.told or self.seen + 1 >= (self.every or 1)
 
-    def of(self, node):
+    def of(self, node: Any) -> "Learning":
         """The node it trains. Said when the graph is put together, because that
         is the only moment somebody has both."""
         self.node = node
         return self
 
-    def beside(self):
+    def beside(self) -> tuple["Enters", "Learning"]:
         """Its two positions in a graph: the one that leafs the input, and
         itself, which keeps what the node produced."""
         return Enters(self), self
 
-    def forward(self, value, ctx):
+    def forward(self, value: Any, ctx: "Ctx") -> Any:
         """As a node, in the position after the one it trains: an ordinary value
         is the activation to keep, and an envelope is the gradient to learn
         from."""
@@ -208,13 +225,13 @@ class Learning(Node):
         self.told = False
         return envelope(back)
 
-    def entering(self, value, ctx):
+    def entering(self, value: Any, ctx: "Ctx") -> Any:
         """The input as a leaf, remembered, which is what makes `dL/d(input)` a
         thing that exists. Called from the other position."""
         self.given = leaf(value, ctx.device)
         return self.given
 
-    def learn(self, signal, ctx):
+    def learn(self, signal: "torch.Tensor | None", ctx: "Ctx") -> Any:
         """What to do with `dL/d(what the node produced)`, and what to give back.
 
         The hole. Whatever a technique is, it is this method — and `signal` being
@@ -222,13 +239,13 @@ class Learning(Node):
         """
         raise NotImplementedError
 
-    def done(self):
+    def done(self) -> Any:
         """Lets go of this step's activation, and gives back what the node was
         given so a gradient can be read off it. Every `learn` ends here."""
         given, self.held, self.given = self.given, None, None
         return given
 
-    def waiting(self):
+    def waiting(self) -> Any:
         """The activation this step left, or `OutOfStep` if there is none.
 
         Not a `None` walking into an optimizer: a gradient for an activation that
@@ -243,14 +260,14 @@ class Learning(Node):
             )
         return self.held
 
-    def training(self):
+    def training(self) -> list["torch.nn.Parameter"]:
         """Which parameters it updates: the node's, and whatever else a technique
         brought with it — a decoder, a guesser — which is why it is a method and
         not a line."""
         return list(self.node.parameters())
 
     @property
-    def optimizer(self):
+    def optimizer(self) -> Any:
         """Its optimizer, built the first time it is asked for — over the
         parameters of wherever it ended up, which is the whole reason it is built
         here and not by whoever declared it."""
@@ -258,8 +275,8 @@ class Learning(Node):
             self.built = self.making(self.training())
         return self.built
 
-    def __repr__(self):
-        return f"{type(self).__name__}({getattr(self.node, '__class__', '?').__name__})"
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({type(self.node).__name__})"
 
 
 class Split(Learning):
@@ -272,7 +289,7 @@ class Split(Learning):
     which is the default — the three fall back together into the line they were.
     """
 
-    def learn(self, signal, ctx):
+    def learn(self, signal: "torch.Tensor | None", ctx: "Ctx") -> Any:
         if signal is None:
             # Nothing owed this step. If it is also the one that closes the
             # group, what was added before it still has to be applied — and if
@@ -294,14 +311,14 @@ class Enters(Node):
     """The trainer's other position: before the node, where the input becomes a
     leaf. It holds no state of its own — what it makes it hands to the trainer."""
 
-    def __init__(self, learning):
+    def __init__(self, learning: Learning) -> None:
         self.learning = learning
 
-    def forward(self, value, ctx):
+    def forward(self, value: Any, ctx: "Ctx") -> Any:
         return Opaque(self.learning.entering(value, ctx))
 
 
-def _envelopes_in(value):
+def _envelopes_in(value: Any) -> list[Any] | None:
     """The gradients this value carries, or `None` if it is an ordinary input."""
     if not isinstance(value, dict) or not value:
         return None
@@ -312,13 +329,13 @@ def _envelopes_in(value):
     return None
 
 
-def _is_an_envelope(value):
+def _is_an_envelope(value: Any) -> bool:
     """The cheap check, before anything is built: the key is there, and nothing
     that is not one of ours is."""
     return isinstance(value, dict) and SIGNAL in value and not set(value) - _OURS
 
 
-def _closes(value):
+def _closes(value: Any) -> bool:
     """Whether what arrived says the group of accumulated gradients ends here.
 
     Asked of the whole thing and not of one envelope: a fan-in is one step, so
@@ -332,15 +349,27 @@ def _closes(value):
     return False
 
 
-def _added(gradients, device):
+def _added(
+    gradients: Iterable[Any],
+    device: str | None,
+) -> "torch.Tensor | None":
     """The gradients of every consumer, summed — which is what the chain rule
     says a value that was read twice is owed. `None` if not one of them carried
     anything: an envelope is also how "nothing for you" is said."""
     carried = [each for each in gradients if each is not None]
-    return sum(_tensor(each, device) for each in carried) if carried else None
+    if not carried:
+        return None
+    total = _tensor(carried[0], device)
+    for each in carried[1:]:
+        total = total + _tensor(each, device)
+    return total
 
 
-def _tensor(value, device=None, dtype=torch.float32):
+def _tensor(
+    value: Any,
+    device: str | None = None,
+    dtype: Any = torch.float32,
+) -> "torch.Tensor":
     """A value as a tensor, on the device whoever asks was placed on.
 
     It takes a wrapped one as well as a bare one: an envelope built here and read
@@ -354,7 +383,7 @@ def _tensor(value, device=None, dtype=torch.float32):
     return torch.tensor(value, dtype=dtype, device=device or None)
 
 
-def _data(value):
+def _data(value: Any) -> Any:
     """A tensor wrapped so that it crosses an edge whole.
 
     It used to be `tolist()`, and the docstring here used to say that this slice
