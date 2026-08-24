@@ -104,10 +104,11 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
-`examples/` holds nine notebooks — declaring a graph, watching a run, training,
+`examples/` holds ten notebooks — declaring a graph, watching a run, training,
 a study, the health of a network, one problem end to end, a real architecture
 diagnosed in **problem → symptoms → solution → healthy** cycles, what can be
-said before a step is taken, and a fleet of machines — **with their outputs stored**, so opening one shows what it does. Every
+said before a step is taken, a fleet of machines, and where the data comes from
+— **with their outputs stored**, so opening one shows what it does. Every
 figure is kept twice: the plotly JSON for a live viewer and a PNG for a static
 one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
 time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not
@@ -116,12 +117,13 @@ two real bugs were found.
 
 ## Status
 
-Twenty-three use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty-five use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
 itself, the record of what happened, the health of a network, what can be
-said before a step is taken, and the machines it ran on. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+said before a step is taken, the machines it ran on, where the data comes from,
+and not running what nobody needs. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
 another machine, where a **trainer travels to stand beside the node** and the
@@ -456,5 +458,47 @@ rewritten**, which is CU18's shape and makes `quiet_s` a scan with no fetches,
 measured writer against writer. It files under what the machine calls *itself*,
 because `w1` is the graph's word and a worker does not know it; the two names
 meet only on a reading that came down a wire, and `fleet` joins them there.
+
+**CU24 is where the data comes from, and it built no layer.** A source is a
+**node** — there is no `Source` trait, because a second one with a method that
+does what `forward` does is a hole with one tenant and the `E0034` the rules
+warn about — so `.at()`, `.cached()`, the record and the figure reach a dataset
+with nothing written for them. What changed is what the graph is **handed**: not
+a batch but a **coordinate**. Measured, release build: naming a 19 MB batch
+costs 121 ms on every step, hit or miss, because a cache has to look at all of a
+value to name it — and a span costs 0,027 ms. There is no faster hash to reach
+for; the answer is not to weigh the batch.
+
+The other half of the name was free: a name in a `Store` resolves to a digest
+and the digest **is** the hash of the content, so a source states its version
+with one lookup and no bytes, through `Memory::freeze` — the call made twice on
+purpose. That closed a silent bug: a source declared `.frozen()` looked exactly
+like a tokenizer, so its version stayed out of the key and two datasets shared a
+name.
+
+**Arrow is the type and polars is the tool**: `arrow` + `parquet` in `data/`,
+and whoever wants expressions brings their own engine rather than charging 370
+crates to the worker that only tokenizes. **No runtime came in** — zero `tokio`
+— which is exactly why SQL is not in it: every driver worth using carries one,
+and `Store` is synchronous on purpose. `Ipc` is the **second implementor of
+`Codec`**, from another crate, so a frame is kept and a frame crosses a wire.
+Which leaves the sentence the slice is about: **the difference between training
+and deploying is how many rows the frame brings** — 4096 from a folder of
+parquet, one from a topic, the same graph and no second code path. A span is a
+position and a position can be asked for twice, so a stream source is *settled*
+and what moves is which spans exist, not its state.
+
+**CU25 came out of a question about the notebook**: if the head is cached,
+should what feeds it be skipped? It should. `key_for` already promised *the name
+this node's output will have, before it has one*, so the engine names the whole
+plan with nothing executed, asks `Keeper::present` — a scan, no fetches — and
+works **backwards** from the leaves: a node whose answer is kept does not need
+its inputs. It gives up towards keeping a node in the two places it cannot
+foresee, a `.mapped()` node and one with no key; a slice nobody needs is **not
+sent**; and `Fact::Spared` says it out loud, because a node missing from a
+record cannot be told from one that was never in the graph. The notebook caught
+the regression no test could: the pre-pass named the root and the walk named it
+again, so the batch was hashed twice and asking early cost exactly what it
+saves.
 
 See the distribution report for the full order.

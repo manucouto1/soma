@@ -4621,3 +4621,296 @@ with `top`, and inventing a row nobody had to send is not worth the line.
 - [x] what nobody measured is absent and not zero
 - [x] a reading of this machine says how long it has been up wherever it runs
 - [x] **nothing in it is a judgement**
+
+## CU24 — Where the data comes from
+
+```python
+from soma_next import Graph, Store
+from soma_next.data import Parquet, settle, to_polars
+
+sms = Parquet(Store("/data"), "sms/train")
+g = Graph.somatize(sms.named("sms").frozen() >> Clean().named("clean").cached())
+settle(g)
+
+g.forward({"at": 0, "take": 64}, store="/data")
+```
+
+The third of the four layers, and the first thing it decided was that there is
+no `Source` trait.
+
+### A source is a node, and being one is the whole design
+
+A source takes something and answers with something, which is `Node`. A second
+trait with a method that does what `forward` does is two things this project
+exists not to build: a hole with one tenant, and the `error[E0034]` the rules
+warn about — two traits with a same-named method in scope make that name
+unusable.
+
+Being a node is not a saving, it is the point. The DSL, `.on()`, `.at()`,
+`.cached()`, `.mapped()`, the record and the figure all reach a dataset without
+one line written here for any of them.
+
+### What the graph is handed, and what that saves
+
+Not a batch — a **coordinate**. A cache has to name what it is being asked, and
+everything but the input is already a name: the node's class, its settled state,
+its salt. The input is the one thing it has to look at, all of it, because two
+batches differing in one number have to end up with different names. It is a
+library reading the whole book to check whether it already has it.
+
+Measured on 24 August 2026, release build, a graph of one node that returns a
+constant so that only the input grows:
+
+| what is handed to `forward` | with a store behind it |
+|---|---|
+| 1 MB of tensor | 4,9 ms |
+| 19 MB of tensor (32×3×224×224) | **121 ms**, on every step, hit or miss |
+| a `Span` | **0,027 ms** |
+
+Linear in the batch, and paid on the hits as well — you pay to ask whether you
+can avoid the work. And there is nothing to optimize there: `torch.save` is
+1 ms/MB and sha256 is 2 ms/MB, so a faster hash saves nothing. **The answer is
+not to weigh the batch**, and it is available because the rows can be named by
+the span they are and by the version they came from.
+
+### And the version was free
+
+The other half of that name, and a source has to state it **without reading
+itself** or it does the very work the cache exists to avoid. Against a `Store`
+it costs nothing: a name resolves to a digest and the digest **is** the hash of
+the content. One `resolve`, no bytes.
+
+It goes where the digest of settled weights goes — `Memory::freeze(id, digest)`,
+the call that is *made twice on purpose*: the declaration says a node is
+settled, and whoever knows what is inside says what it is settled at. For
+weights that means hashing them; here it means repeating what the store already
+knew. `soma_next.data.settle(g)` is the second call, and it is the same shape as
+`soma_next.torch.freeze(g)`.
+
+`_has_state` grew a third duck for it, and that was a silent bug rather than a
+nicety: a source declared `.frozen()` looked exactly like a tokenizer — nothing
+to settle — so its version stayed out of the key and two datasets shared a name.
+That is the one failure a cache must not have, and it is now refused before the
+first node runs.
+
+A source also **reads the version it stated**, not the name it was given: it
+keeps the digest, so a dataset rebound under the same name mid-run does not
+change what that run is reading. Resolving once is not an optimization, it is
+what makes the version true.
+
+### Arrow is the type, polars is the tool
+
+`data/` takes `arrow` and `parquet` and stops there. Whoever wants expressions
+over the rows brings their own engine: putting polars in the contract would
+charge 370 crates to the worker that only tokenizes, and it earns nothing this
+crate needs. What crosses an edge is a `Frame` — a `RecordBatch` inside an
+`Opaque`, so the core still has no dependencies and never learns what a column
+is — and `to_polars` / `to_arrow` turn it into whichever dataframe is installed,
+neither of them a dependency of anything.
+
+For a node that only wants the values, `frame.column("sms")` hands over plain
+Python ones. That exists so the 193 MB worker with no torch in it does not have
+to install a dataframe library to read a column of text.
+
+**No runtime came in with any of it** — zero `tokio`, zero `futures` — and that
+is the reason **SQL is not in this slice**. Every Rust driver worth using
+carries a runtime inside, `Store` is synchronous on purpose, and
+`store/Cargo.toml` already says what that costs: *«an SDK with a runtime inside
+would have made the trait async, and that is the objection that has kept a bus
+out of this repo twice»*. When SQL arrives it arrives synchronous, and DuckDB is
+the candidate: sync, Arrow-native, and it attaches Postgres, MySQL and SQLite
+rather than being N drivers.
+
+### A frame crosses a wire
+
+`Ipc` is the **second implementor of `Codec`**, from another crate, which is the
+bar that keeps a hole a hole — the first was `python/`'s registry of
+`dump`/`load` pairs. Arrow IPC is the buffers as they already are, with no
+encoding pass, which is the reason Arrow is the type rather than something
+converted to at the edges.
+
+Two duplicates went before they could exist: the shape of a written-down opaque
+(`{"__soma_opaque__": kind, "bytes": …}`) and `Packing` — a `Keeper` with a
+codec in front of it — both moved to `transport/`, beside the trait they are
+about. It is the same rule that keeps a store's record in the store and not in
+the directory: two copies of a convention are two chances to disagree, and the
+day they did nothing would fail.
+
+The `kind` is `arrow.RecordBatch`, named after the **format** and not the
+language: what is on disk is an Arrow IPC stream and whoever reads it back may
+be a polars on the other side of the wall.
+
+### Batch and stream are the same graph
+
+Nothing above says the dataset is finite and nothing has to. A span is a
+**position**, and a position can be asked for twice: rows 400..500 are the same
+rows tomorrow, however much has arrived since. So a source read by span is
+settled, and what moves is not its state — it is **which spans exist**. A source
+that answers *whatever is newest* is the other thing, and the engine already
+refuses to cache under it, because its answer cannot be asked for twice.
+
+Nobody wrote a rule for streams. It falls out of `.frozen()` meaning what it
+always meant, which is why the sentence this slice is about is not a slogan:
+
+> **The difference between training and deploying is how many rows the frame
+> brings.**
+
+4096 from a folder of parquet while training, one from a topic in production.
+The same graph, the same nodes, the same codec, the same figure, and no second
+code path anywhere.
+
+Push and pull both have a home already, and only one of them was missing. Pull
+with a position — Kafka by offset, CDC by LSN, a file that grows — is this
+slice. Push with no history — a websocket, a sensor — is whoever pushes calling
+`forward`, which is request/response and has always worked; and whoever receives
+writes into something with retention, which is CU20's rule and what keeps a
+diagnosis reproducible.
+
+### Where it is read is where it runs
+
+`.at()` decides, exactly as it decides for any other node: the data is read on
+the client, or on the machine that has it. What is missing to make that true is
+small and named:
+
+- a source has to **travel with its name** and not with a `Store`: `sms/train`
+  means something over there and a path from here does not;
+- and the worker has to be able to hand it its own store, which is `Ctx` — the
+  channel that exists so that *whoever executes hands a node what it knows*, the
+  same way a device is handed today. Adding to it is additive and no node
+  signature changes.
+
+The piece that is design and not plumbing is the **version**, because the client
+computes the keys and cannot resolve a name that only exists over there. The
+answer is one this project has already given twice: *whoever knows how to hash
+is whoever has the thing in front of them*. `soma_next.torch.freeze` settles
+weights on the machine that holds them; a remote source is settled by the
+**worker**, against its own store, when the slice arrives. The machinery is
+already there — `Memory` travels in the cargo, the worker answers with
+`outcome.keys`, and `elsewhere` merges them — so the client learns the name
+afterwards and can go on naming its own nodes from it.
+
+What is lost is the pre-pass: nothing can be foreseen above a remote source, so
+nothing is skipped there. Conservative, and the same side it already gives up on
+for a mapped node.
+
+It is **not built**, and the reason is the rule: there is no worker anywhere
+today that can see a store with data in it — not even in the containers, where
+the volume is shared between them and not with whoever runs the tests.
+
+### What is not in it
+
+- **SQL**, decided rather than delayed. See above.
+- **Ranged reads.** `Store::get` answers with every byte of a blob, so a file is
+  read once and held. A dataset that does not fit in memory needs the store to
+  learn to read a range first.
+- **A source on a worker**, for the reason above.
+
+### Questionnaire
+
+**The rows** (`data/tests/unit/`, `python/tests/test_source.py`)
+- [x] a span is the rows it names
+- [x] the last span of a dataset is short, and one past the end is empty
+- [x] a span that crosses a row group still comes back as one frame
+- [x] the columns come back with their names and their types
+- [x] **declaring a dataset does not open it**
+- [x] and the bytes arrive once however many spans are asked for
+- [x] a column comes over as plain Python values, with no dataframe library
+- [x] a name nobody bound says so before anything runs
+
+**The version** (`data/tests/unit/parquet.rs`, `python/tests/test_source.py`)
+- [x] it is what the store already knew, and costs one lookup and no bytes
+- [x] the same data under two names is the same version
+- [x] and different data under one name is a different version
+- [x] **other data under the same name is not the same answer**
+- [x] a source nobody settled is refused before anything runs
+
+**The frame** (`data/tests/unit/frame.rs`, `data/tests/unit/ipc.rs`)
+- [x] it crosses an edge and is the same frame on the other side
+- [x] what the columns are called is there without reading a value
+- [x] it does not travel on its own — an opaque is an opaque
+- [x] written down and read back it is the same frame
+- [x] and what it became can leave the process
+- [x] a frame is found however deep it is
+- [x] an opaque that is not a frame says so
+- [x] somebody else's kind is left exactly as it arrived
+- [x] **rows read here are tokenized over there**
+- [x] a kept frame means the dataset is not opened again
+
+**The whole thing** (`python/tests/cluster/test_searching.py`)
+- [x] the dataset goes into the shared store once and every machine reads spans
+- [x] the graph is still cut across three machines and the study across two
+
+## CU25 — What only fed an answer that was kept is not run
+
+Opened by a question about the notebook above: *if `widest` is cached, should
+`sms` and `clean` not be skipped?* They should, and they were not.
+
+The cache skipped the node whose own output was there and ran everything else
+anyway. On a graph fed by a dataset that is the expensive half — the file is
+read, the rows are tokenized, and none of it is looked at.
+
+### A name is knowable before anything runs
+
+`key_for` had already said so: *the name this node's output will have, **before**
+it has one*. Only the graph's input is hashed by content; from there down a key
+is made of keys. So the engine can name the whole plan with nothing executed,
+ask which of those answers it already has, and then work **backwards** from the
+leaves: a node whose answer is kept does not need its inputs.
+
+`Keeper::present` is the question and it is new in the hole. The default is
+honest and expensive — it reads them — and a store overrides it with
+`resolve_many`: one scan, no fetches. Asking early has to be free or it is not
+worth asking, which is the same price list CU20 wrote down.
+
+Two places it gives up, both towards keeping a node rather than skipping one: a
+`.mapped()` node is named out of the **content of its items**, so its names are
+not knowable until it has them; and a node with no key at all is a miss for the
+same reason it was never cached.
+
+A slice nobody needs is **not sent**. The saving there is the round trip and not
+the work at the far end.
+
+### And it says so
+
+`Fact::Spared` is a fact rather than an absence, because a node missing from a
+record cannot be told from one that was never in the graph, and *why is there no
+time for `clean`* is a question whoever reads a run will have. In the notebook
+it reads:
+
+```text
+{'fact': 'spared', 'node': 'sms'}
+{'fact': 'spared', 'node': 'clean'}
+{'fact': 'recalled', 'node': 'widest', 'key': 'sha256:c521a0…'}
+{'fact': 'finished', 'took_us': '155'}
+```
+
+`RunError::Vanished` is the rare other end: something that was there when the
+store was asked and gone when it was read, after what feeds it had already been
+skipped because of that answer. It says what happened instead of leaving a
+puzzle.
+
+### What the notebook caught
+
+Re-running `examples/10-a-dataset.ipynb` after writing this, the 19 MB toll had
+gone from 121 ms to **245 ms**. The pre-pass named the root and the walk named
+it again, so the batch was hashed **twice**: asking early cost exactly what it
+saves. The walk reuses the name that was already worked out, and it is back at
+121 ms.
+
+No test would have caught it — they all pass either way. It is the third real
+thing a notebook has found in this project, and the reason they are executed
+rather than written.
+
+### Questionnaire
+
+**The pruning** (`core/tests/unit/execution.rs`)
+- [x] what only fed an answer that was kept is not run
+- [x] and the answer is still the answer
+- [x] and it says so rather than leaving a hole in the record
+- [x] **but what somebody else still reads is run**
+- [x] a node that maps keeps everything above it
+- [x] and a slice nobody needs is not sent at all
+
+**End to end** (`data/tests/unit/parquet.rs`)
+- [x] the second run finds the answer under a name it could work out, and never
+      opens the dataset
