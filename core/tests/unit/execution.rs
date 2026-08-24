@@ -2,7 +2,7 @@
 
 use crate::doubles::{
     Add, Anything, Cable, EachOne, Fail, Immediate, Journal, Ledger, Mean, MeetingPoint, Mirror,
-    Miscounts, Notebook, Opaquely, Panics, Rendezvous, Ubiquitous, Witness,
+    Miscounts, Notebook, Opaquely, Panics, Rendezvous, Told, Ubiquitous, Witness,
 };
 use soma_next_core::{
     Catalog, Ctx, Device, Executor, Graph, Host, Key, Keys, Memory, Node, NodeError, NodeId,
@@ -1188,9 +1188,9 @@ fn a_node_that_keeps_nothing_still_passes_its_name_on() {
     );
     assert_eq!(
         journal.order(),
-        ["encoder", "head", "encoder"],
-        "the encoder ran twice, keeping nothing; the head ran once and then hit, \
-         so it was named out of a name nobody kept"
+        ["encoder", "head"],
+        "the head was named out of a name nobody kept — and the second time round \
+         nothing needed the encoder, because the head's answer was already there"
     );
 }
 
@@ -1532,4 +1532,201 @@ fn what_reads_a_mapped_node_is_named_after_the_whole_list() {
     assert_eq!(heads, 1);
     assert_eq!(same, 1, "the same list: the head had its answer already");
     assert_eq!(changed, 2, "one item changed and the head has to run again");
+}
+
+// ── What only fed an answer that was already kept ──
+//
+// A name is knowable before anything runs — that is what `key_for` is for — so
+// the engine can ask what it already has and then not compute what only fed one
+// of those answers. The whole section is about the difference between *not
+// keeping* something and *not needing* it.
+
+/// An encoder under a head, both settled and only the head kept.
+fn under_a_kept_head() -> (Arc<Journal>, Graph, Catalog, Memory) {
+    let journal = Journal::new();
+    let (g, c, _, memory) = (node("encoder", Witness("encoder", journal.clone())).frozen()
+        >> node("head", Witness("head", journal.clone()))
+            .frozen()
+            .cached())
+    .somatize()
+    .unwrap();
+    (journal, g, c, memory)
+}
+
+#[test]
+fn what_only_fed_an_answer_that_was_kept_is_not_run() {
+    // The expensive half of a graph is usually the half at the top: a settled
+    // encoder, a dataset. Running it to throw its result away a microsecond
+    // later is the cost this removes.
+    let (journal, g, c, memory) = under_a_kept_head();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    for _ in 0..2 {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, Value::number(7.0))
+            .unwrap();
+    }
+
+    assert_eq!(journal.order(), ["encoder", "head"]);
+}
+
+#[test]
+fn and_the_answer_is_still_the_answer() {
+    let (_, g, c, memory) = under_a_kept_head();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let asked = || {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, Value::number(7.0))
+            .unwrap()
+    };
+
+    assert_eq!(asked(), asked(), "the second run said something else");
+}
+
+#[test]
+fn and_it_says_so_rather_than_leaving_a_hole_in_the_record() {
+    // A node that is simply absent cannot be told from one that was never in
+    // the graph, and *why is there no time for `encoder`* is a question whoever
+    // reads a run will have.
+    let (_, g, c, memory) = under_a_kept_head();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let told = Told::new();
+    for _ in 0..2 {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .watching(&told)
+            .run(&plan, Value::number(7.0))
+            .unwrap();
+    }
+
+    assert!(told.kinds().contains(&"spared".to_string()));
+    assert!(
+        told.all().iter().any(|fact| matches!(
+            fact,
+            soma_next_core::Fact::Spared { node } if node.as_str() == "encoder"
+        )),
+        "it has to say which one",
+    );
+}
+
+#[test]
+fn but_what_somebody_else_still_reads_is_run() {
+    // The rule is about **every** reader. One of them having its answer already
+    // says nothing about the others, and skipping here would be wrong output
+    // rather than a slow run.
+    let journal = Journal::new();
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    let mut memory = Memory::new();
+    for id in ["encoder", "head", "other"] {
+        g.add_node(id).unwrap();
+        c.insert(id, Arc::new(Witness(id, journal.clone())));
+        memory.identify(id, "Witness");
+        memory.freeze(id, Some("settled".into()));
+    }
+    g.add_edge("encoder", "head").unwrap();
+    g.add_edge("encoder", "other").unwrap();
+    memory.cache("head", None);
+
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    for _ in 0..2 {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, Value::number(7.0))
+            .unwrap();
+    }
+
+    assert_eq!(
+        journal
+            .order()
+            .iter()
+            .filter(|who| *who == "encoder")
+            .count(),
+        2,
+        "`other` reads it and `other` was never kept",
+    );
+}
+
+#[test]
+fn a_node_that_maps_keeps_everything_above_it() {
+    // The one place this has to give up, and it gives up in the safe
+    // direction: the names of a mapped node's answers are made out of the
+    // **items**, so they are not knowable until it has them. It counts as a
+    // miss and what feeds it stays.
+    let journal = Journal::new();
+    let mut g = Graph::new();
+    let mut c = Catalog::new();
+    let mut memory = Memory::new();
+    g.add_node("encoder").unwrap();
+    c.insert("encoder", Arc::new(Witness("encoder", journal.clone())));
+    g.add_node("each").unwrap();
+    c.insert("each", Arc::new(EachOne(journal.clone())));
+    g.add_edge("encoder", "each").unwrap();
+    for id in ["encoder", "each"] {
+        memory.identify(id, "Witness");
+        memory.freeze(id, Some("settled".into()));
+    }
+    memory.map("each");
+    memory.cache("each", None);
+
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let items = Value::list(vec![Value::number(1.0), Value::number(2.0)]);
+    for _ in 0..2 {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, items.clone())
+            .unwrap();
+    }
+
+    assert_eq!(
+        journal
+            .order()
+            .iter()
+            .filter(|who| *who == "encoder")
+            .count(),
+        2,
+        "a mapped node cannot be foreseen, so what feeds it has to run",
+    );
+}
+
+#[test]
+fn and_a_slice_nobody_needs_is_not_sent_at_all() {
+    // The saving is not the work over there, it is the **round trip**: the
+    // client works out that nothing reads what comes back, so no message is
+    // written at all.
+    let (g, here, there) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
+    let placement = away(&["a"]);
+    let mirror = Mirror::new(there);
+    let plan = distribute(&compile(&g, &here).unwrap(), &placement);
+    let mut memory = Memory::new();
+    for id in ["a", "b"] {
+        memory.identify(id, "Add");
+        memory.freeze(id, Some("settled".into()));
+    }
+    memory.cache("b", None);
+    let notebook = Notebook::new();
+
+    for _ in 0..2 {
+        Executor::new(&here)
+            .placed(&placement)
+            .reaching("there", &mirror)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, Value::number(0.0))
+            .unwrap();
+    }
+
+    assert_eq!(mirror.trips().len(), 1, "the second run went nowhere");
 }

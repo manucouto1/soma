@@ -36,7 +36,7 @@ use crate::{
     Cargo, Catalog, Ctx, Device, Fact, Host, Keeper, Kept, Key, Keys, Memory, NodeError, NodeId,
     Outcome, Placement, Plan, Transport, TransportError, Value, Watcher,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::Instant;
 
@@ -203,8 +203,9 @@ impl<'a> Executor<'a> {
     /// every `return` in it.
     fn running(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let mut produced: HashMap<NodeId, Value> = HashMap::new();
-        let mut keys: HashMap<NodeId, Keys> = HashMap::new();
-        let last = self.walk(plan, &input, &mut produced, &mut keys)?;
+        // The names first, and then what will not be needed because of them.
+        let (mut keys, unneeded) = self.foreseen(plan, &input);
+        let last = self.walk(plan, &input, &mut produced, &mut keys, &unneeded)?;
 
         // A graph's output is that of its leaves: one leaf gives that value,
         // several a map keyed by each — the same shape as an input with several
@@ -252,7 +253,10 @@ impl<'a> Executor<'a> {
         let brought: Vec<NodeId> = produced.keys().cloned().collect();
         let named: Vec<NodeId> = keys.keys().cloned().collect();
 
-        let last = walking.walk(plan, &input, &mut produced, &mut keys)?;
+        // A slice is not pruned: what it produces goes back to whoever sent it,
+        // and only that side knows which of it is read. The client already did
+        // the working out, and a node it did not want is not in the plan.
+        let last = walking.walk(plan, &input, &mut produced, &mut keys, &HashSet::new())?;
 
         produced.retain(|id, _| !brought.contains(id));
         keys.retain(|id, _| !named.contains(id));
@@ -271,14 +275,28 @@ impl<'a> Executor<'a> {
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
         keys: &mut HashMap<NodeId, Keys>,
+        unneeded: &HashSet<NodeId>,
     ) -> Result<Value, RunError> {
         match plan {
             Plan::Empty => Ok(graph_input.clone()),
+            // Nothing reads what this one makes that is not already kept, so
+            // there is nothing for it to be for. Its name is already in `keys`
+            // — worked out without it — so whoever hit downstream still hits.
+            Plan::Execute { node, .. } if unneeded.contains(node) => {
+                self.saw(|| Fact::Spared { node: node.clone() });
+                Ok(Value::Null)
+            }
             Plan::Execute { node, from } if self.maps(node) => {
                 self.over_items(node, from, graph_input, produced, keys)
             }
             Plan::Execute { node, from } => {
-                let key = self.key_for(node, from, graph_input, keys);
+                // Worked out already, if anybody worked it out: naming the root
+                // is the one place a value is hashed by content, and doing it
+                // twice would make asking early cost exactly what it saves.
+                let key = match keys.get(node) {
+                    Some(Keys::One(named)) => Some(named.clone()),
+                    _ => self.key_for(node, from, graph_input, keys),
+                };
                 if let Some(key) = &key {
                     keys.insert(node.clone(), Keys::One(key.clone()));
                 }
@@ -286,6 +304,13 @@ impl<'a> Executor<'a> {
                 // input is not even assembled.
                 let output = match self.recalled(node, key.as_ref()) {
                     Some(kept) => kept,
+                    // What was kept when the store was asked, and gone when it
+                    // was read. Rare, and it has to be said rather than turned
+                    // into a puzzle: what feeds this was skipped **because** the
+                    // answer was there, so there is nothing left to run.
+                    None if from.iter().any(|id| unneeded.contains(id)) => {
+                        return Err(RunError::Vanished { node: node.clone() });
+                    }
                     None => {
                         let input = gather(node, from, graph_input, produced)?;
                         let output = self.advance(node, input)?;
@@ -299,11 +324,23 @@ impl<'a> Executor<'a> {
             Plan::Sequence(plans) => {
                 let mut last = graph_input.clone();
                 for plan in plans {
-                    last = self.walk(plan, graph_input, produced, keys)?;
+                    last = self.walk(plan, graph_input, produced, keys, unneeded)?;
                 }
                 Ok(last)
             }
-            Plan::Wave(branches) => self.at_once(branches, graph_input, produced, keys),
+            Plan::Wave(branches) => self.at_once(branches, graph_input, produced, keys, unneeded),
+            // A slice nobody needs is a message that is not sent: the whole
+            // round trip goes, not just the work at the far end.
+            Plan::Remote { inner, .. }
+                if inner.steps().all(|step| unneeded.contains(step.node)) =>
+            {
+                for step in inner.steps() {
+                    self.saw(|| Fact::Spared {
+                        node: step.node.clone(),
+                    });
+                }
+                Ok(Value::Null)
+            }
             Plan::Remote { host, inner } => {
                 self.elsewhere(host, inner, graph_input, produced, keys)
             }
@@ -485,6 +522,7 @@ impl<'a> Executor<'a> {
         graph_input: &Value,
         produced: &mut HashMap<NodeId, Value>,
         keys: &mut HashMap<NodeId, Keys>,
+        unneeded: &HashSet<NodeId>,
     ) -> Result<Value, RunError> {
         let earlier: &HashMap<NodeId, Value> = produced;
         let named: &HashMap<NodeId, Keys> = keys;
@@ -495,7 +533,8 @@ impl<'a> Executor<'a> {
                     scope.spawn(move || {
                         let mut mine = earlier.clone();
                         let mut mine_keys = named.clone();
-                        let last = self.walk(branch, graph_input, &mut mine, &mut mine_keys)?;
+                        let last =
+                            self.walk(branch, graph_input, &mut mine, &mut mine_keys, unneeded)?;
                         mine.retain(|id, _| !earlier.contains_key(id));
                         mine_keys.retain(|id, _| !named.contains_key(id));
                         Ok::<_, RunError>((last, mine, mine_keys))
@@ -684,6 +723,101 @@ impl<'a> Executor<'a> {
         Some(keeper.combine(&parts))
     }
 
+    /// The names the whole plan will produce, and the nodes that will not have
+    /// to produce them.
+    ///
+    /// # Why this can be worked out at all
+    ///
+    /// Because [`key_for`](Self::key_for) says so: *the name this node's output
+    /// will have, **before** it has one*. Only the graph's input is hashed by
+    /// content; from there down a key is made of keys, so every name in the plan
+    /// is knowable with nothing executed. One question to the keeper —
+    /// [`present`](Keeper::present), which a store answers by name and without
+    /// reading anything — says which of those answers are already there.
+    ///
+    /// # And then backwards
+    ///
+    /// From the leaves up: a node is needed if something that will really run
+    /// reads it. A node whose answer is already kept **does not need its
+    /// inputs** — which is the whole point, and what makes a settled encoder
+    /// under a head that hit cost nothing rather than cost a forward whose
+    /// result is dropped a microsecond later.
+    ///
+    /// Two places it deliberately gives up, and both are conservative — they
+    /// keep a node rather than skip one:
+    ///
+    /// - a **mapped** node is named by the content of its items, so its names
+    ///   are not knowable before it has its input. It counts as a miss, and
+    ///   everything above it stays.
+    /// - a node with **no key at all** — nothing said about what implements it,
+    ///   or something unnameable upstream — is a miss for the same reason it
+    ///   was never cached.
+    fn foreseen(
+        &self,
+        plan: &Plan,
+        graph_input: &Value,
+    ) -> (HashMap<NodeId, Keys>, HashSet<NodeId>) {
+        let nothing = (HashMap::new(), HashSet::new());
+        let (Some(keeper), Some(memory)) = (self.keeper, self.memory) else {
+            return nothing;
+        };
+
+        // Plan order is topological, so a predecessor's name is always in hand.
+        let mut named: HashMap<NodeId, Keys> = HashMap::new();
+        let mut asked: Vec<(NodeId, Key)> = Vec::new();
+        for step in plan.steps() {
+            if self.maps(step.node) {
+                continue;
+            }
+            let Some(key) = self.key_for(step.node, step.from, graph_input, &named) else {
+                continue;
+            };
+            if memory.is_cached(step.node) {
+                asked.push((step.node.clone(), key.clone()));
+            }
+            named.insert(step.node.clone(), Keys::One(key));
+        }
+        if asked.is_empty() {
+            return (named, HashSet::new());
+        }
+
+        let keys: Vec<&Key> = asked.iter().map(|(_, key)| key).collect();
+        let there = match keeper.present(&keys) {
+            Ok(there) => there,
+            // A keeper that cannot answer is not the end of the run, here as
+            // everywhere else: nothing is skipped and everything is computed,
+            // which is what happened before any of this existed.
+            Err(why) => {
+                eprintln!("what is already kept could not be looked up: {why}");
+                return (named, HashSet::new());
+            }
+        };
+        let kept: HashSet<&NodeId> = asked
+            .iter()
+            .zip(&there)
+            .filter(|(_, there)| **there)
+            .map(|((node, _), _)| node)
+            .collect();
+
+        let mut needed: HashSet<NodeId> = HashSet::new();
+        let mut asking: Vec<NodeId> = terminals(plan);
+        while let Some(node) = asking.pop() {
+            if !needed.insert(node.clone()) || kept.contains(&node) {
+                continue;
+            }
+            for step in plan.steps().filter(|step| *step.node == node) {
+                asking.extend(step.from.iter().cloned());
+            }
+        }
+        let unneeded = plan
+            .steps()
+            .map(|step| step.node)
+            .filter(|node| !needed.contains(*node))
+            .cloned()
+            .collect();
+        (named, unneeded)
+    }
+
     /// What is kept under this node's name, if it is kept at all.
     ///
     /// A keeper that cannot answer is **not** the end of the run: the value is
@@ -828,6 +962,12 @@ pub enum RunError {
         /// And how many came back.
         answered: usize,
     },
+    /// What was kept when the store was asked and gone when it was read, after
+    /// what feeds this node had already been skipped because of the answer.
+    Vanished {
+        /// The one with nothing left to run.
+        node: NodeId,
+    },
     /// A step reads what another produced, and what it produced never came back
     /// from wherever it ran.
     Lost {
@@ -867,6 +1007,12 @@ impl fmt::Display for RunError {
                 "there is a slice placed on `{host}` and this executor cannot reach it"
             ),
             Self::Transport { host, source } => write!(f, "carrying a slice to `{host}`: {source}"),
+            Self::Vanished { node } => write!(
+                f,
+                "what was kept for `{node}` was there when the store was asked and gone when \
+                 it was read, and what feeds it was not run because of that answer. Nothing \
+                 was lost — run it again"
+            ),
             Self::Lost { node, from } => write!(
                 f,
                 "`{node}` reads what `{from}` produced, and that stayed where it ran: \

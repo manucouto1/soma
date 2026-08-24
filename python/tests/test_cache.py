@@ -107,8 +107,11 @@ def test_a_node_that_keeps_nothing_does_not_break_the_chain(store):
     g.forward(7.0, store=store)
     g.forward(7.0, store=store)
 
-    assert encoder.calls == 2, "nothing was kept of it"
-    assert head.calls == 1, "and it was still named out of a name nobody kept"
+    assert head.calls == 1, "it was named out of a name nobody kept"
+    # And **not** twice, which is the other half: the head's answer was there
+    # the second time, so nothing read what the encoder makes and it was not
+    # run. Keeping nothing of it does not mean computing it for nothing.
+    assert encoder.calls == 1
 
 
 # ── The salt, which is the knob for what the key cannot see ──

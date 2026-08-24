@@ -45,6 +45,26 @@ pub trait Keeper: Send + Sync {
     /// one round trip per item.
     fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Kept>>, KeeperError>;
 
+    /// Whether each of these is kept, **without reading any of it**.
+    ///
+    /// It exists because a key is knowable before anything runs: from the
+    /// graph's input down, keys come from keys. So the engine can ask which
+    /// answers it already has before executing a step, and then not execute
+    /// what only fed one of them — the node under a cache that hit has nothing
+    /// left to be for.
+    ///
+    /// The default is honest and expensive: it reads them. Whoever can answer
+    /// by name alone should say so, because that is the difference between a
+    /// scan and a fetch per node, and the whole point of asking early is not
+    /// paying for what will not be used.
+    fn present(&self, keys: &[&Key]) -> Result<Vec<bool>, KeeperError> {
+        Ok(self
+            .recall(keys)?
+            .into_iter()
+            .map(|kept| kept.is_some())
+            .collect())
+    }
+
     /// Keeps this, with what should be remembered beside it — the fingerprint
     /// of the code that produced it, above all, which is **not** in the key and
     /// is what a hit gets compared against.

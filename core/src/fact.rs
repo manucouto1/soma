@@ -75,6 +75,17 @@ pub enum Fact {
         /// What it said.
         why: String,
     },
+    /// A node was not run because nobody needed what it makes: everything that
+    /// reads it had its answer kept already.
+    ///
+    /// It is a fact and not an absence on purpose. A node that is simply not in
+    /// the record cannot be told from one that was never in the graph, and
+    /// *why is there no time for `clean`* is a question somebody reading a run
+    /// will have.
+    Spared {
+        /// Which one.
+        node: NodeId,
+    },
     /// A node was not advanced at all: what it would have produced was already
     /// kept under that name.
     Recalled {
@@ -213,6 +224,7 @@ impl Fact {
                     ("why".into(), why.clone()),
                 ],
             ),
+            Self::Spared { node } => ("spared", vec![("node".into(), node.to_string())]),
             Self::Recalled { node, key } => (
                 "recalled",
                 vec![

@@ -71,6 +71,22 @@ impl Keeper for Cache<'_> {
         key(Digest::of(&recipe))
     }
 
+    /// One scan and **no fetches**, which is the whole reason the engine asks
+    /// this instead of reading: what it wants to know is whether it can skip
+    /// the node underneath, and the bytes of the answer are somebody else's
+    /// business — often nobody's.
+    fn present(&self, keys: &[&Key]) -> Result<Vec<bool>, KeeperError> {
+        let names: Vec<String> = keys.iter().map(|key| name_of(key)).collect();
+        let asked: Vec<&str> = names.iter().map(String::as_str).collect();
+        Ok(self
+            .store
+            .resolve_many(&asked)
+            .map_err(failed)?
+            .into_iter()
+            .map(|bound| bound.is_some())
+            .collect())
+    }
+
     fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Kept>>, KeeperError> {
         let names: Vec<String> = keys.iter().map(|key| name_of(key)).collect();
         let asked: Vec<&str> = names.iter().map(String::as_str).collect();
