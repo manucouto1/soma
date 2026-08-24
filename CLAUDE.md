@@ -117,13 +117,14 @@ two real bugs were found.
 
 ## Status
 
-Twenty-five use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty-six use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
 itself, the record of what happened, the health of a network, what can be
 said before a step is taken, the machines it ran on, where the data comes from,
-and not running what nobody needs. A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
+not running what nobody needs, and what an edit did before paying to find out.
+A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
 another machine, where a **trainer travels to stand beside the node** and the
@@ -500,5 +501,33 @@ record cannot be told from one that was never in the graph. The notebook caught
 the regression no test could: the pre-pass named the root and the walk named it
 again, so the batch was hashed twice and asking early cost exactly what it
 saves.
+
+**CU26 keeps the names CU25 threw away.** The pre-pass already names the whole
+plan with nothing executed, and that answer is worth having **without** the run:
+two versions of one graph name a node differently exactly when its recipe
+changed, so `soma_next.foreseen.changes(before, after)` says what an edit did
+— *did I invalidate the encoder, or only the head?* — for the price of two
+hashes.
+The first shape was a partition of the nodes and one run killed it: edit the
+encoder's code **and** salt the head, and the head both recomputes and
+recomputes **from a stale answer**. A partition carries one of those two, and it
+carries the reassuring one. So it answers `{node: [finding, ...]}`, which is
+what `health` already answers with and for the same reason.
+
+The finding this exists for is `STALE`, and it is CU13's decision paid for
+rather than undone: the fingerprint of the code is deliberately not in the key —
+a cosmetic refactor must not invalidate half the store — which means editing a
+`forward` renames nothing, and a diff that only compared names would answer
+*nothing changed* to the very edit being asked about. So the fingerprint is
+looked at here, where it is an **opinion and not an invalidation**: `STALE` says
+*you should have bumped the salt*, and `SUSPECT` is everything under it, which
+goes on being fed the old code's answer whatever became of its own name. And
+`UNVERSIONED` is what the notebook found: a class defined in a **cell** has no
+source to read and so no version, so the first draft answered `{}` — *nothing to
+report* — to an afternoon of edits, in the one place the question gets asked
+most. Its scope is the scope a version is recorded at, which is what is kept.
+Neither `names` nor `changes` reads or writes anything — a store is only where
+the hash comes from — and the input cancels out of every comparison, so asking
+costs nothing and skips the 121 ms of weighing a batch.
 
 See the distribution report for the full order.

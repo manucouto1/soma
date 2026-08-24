@@ -4914,3 +4914,170 @@ rather than written.
 **End to end** (`data/tests/unit/parquet.rs`)
 - [x] the second run finds the answer under a name it could work out, and never
       opens the dataset
+
+## CU26 — What an edit did, before paying to find out
+
+CU25 built the pre-pass and then used it for one thing. The engine names the
+whole plan with nothing executed, asks which of those answers are already there,
+and skips what only fed one — and then throws the names away.
+
+They are worth keeping. Two versions of one graph name a node differently
+**exactly when** its recipe changed, so comparing two sets of names says what an
+edit did. The question is the one everybody with a cache asks out loud on a
+Tuesday afternoon — *did I just invalidate the encoder, or only the head?* — and
+today it is answered by running and watching which nodes take time.
+
+`Executor::foreseen` is `pub` for that, `foreseen_json` is the bridge, and
+`soma_next.foreseen` is where it is asked:
+
+```python
+from soma_next import foreseen
+
+foreseen.names(g)                       # {node: name}, nothing executed
+foreseen.unneeded(g, x, store=store)    # what would not have to run at all
+foreseen.changes(before, after)         # what the edit did
+```
+
+### Findings and not buckets, and the case that decided it
+
+The first shape was a partition: every node into exactly one of `changed`,
+`downstream`, `stale`, `added`, `gone`, `unknown`, `same`. It reads well and it
+is wrong, and the counterexample took one run to appear — edit the encoder's
+code **and** bump the head's salt:
+
+```text
+{'embed': ['STALE'], 'head': ['CHANGED', 'SUSPECT']}
+```
+
+The head's name moved, so it runs again: `CHANGED` is true. And it runs on what
+the encoder handed back, which is the old code's answer: `SUSPECT` is true too.
+A partition can carry one of the two, and the one it carries is *this node will
+be recomputed* — the reassuring half of a node about to compute the wrong
+thing.
+
+So the shape is `{node: [finding, ...]}`, which is what `soma_next.health`
+already answers with, and for the same reason: what happens to a node is more
+than one fact. A node with nothing said about it is fine, and absence being the
+good answer is what keeps the ones that matter readable.
+
+| finding | what it says |
+|---|---|
+| `CHANGED` | its own recipe moved: class, weights, salt, or **who feeds it** |
+| `DOWNSTREAM` | its recipe is untouched and its name moved anyway |
+| `STALE` | its name did not move and its code did |
+| `SUSPECT` | something above it is `STALE` |
+| `ADDED` / `GONE` | it is in one graph and not the other |
+| `UNVERSIONED` | its answer is kept and nobody can say whether its code moved |
+| `UNKNOWN` | it cannot be named on one side or the other |
+
+`CHANGED` against `DOWNSTREAM` is what makes a list of forty nodes readable: one
+of them is where the edit is and the rest is what inherited it. Who feeds a node
+is in its own recipe because rewiring it moves its key without touching anything
+the node is made of — and that is an edit, not something somebody else did.
+
+`UNKNOWN` is the absence CU25 already gives up on, said out loud: a `.mapped()`
+node is named out of the content of its items and nothing under it can be named
+either. It is the one place where *cannot tell* has to survive all the way
+to the reader, because the alternative reads as *checked, and fine*.
+
+### `STALE`, which is the finding the key cannot give
+
+The fingerprint of the code is **deliberately not in the key** — CU13 decided
+it, and the reason still holds: a cosmetic refactor would invalidate half the
+store in silence. It is kept beside the value and compared on a hit, which
+turns that into a line on `stderr`.
+
+The cost of that decision is that editing the body of a `forward` renames
+nothing. A diff that only compared names would answer *nothing changed* to the
+very edit being asked about — which is why the fingerprint is looked at here,
+where it is an **opinion and not an invalidation**. `STALE` is the finding that
+says *you should have bumped the salt*, and the two are the same edit answered
+and not answered:
+
+```text
+edited, salt bumped   {'embed': ['CHANGED'], 'head': ['DOWNSTREAM']}
+edited, salt not      {'embed': ['STALE'],   'head': ['SUSPECT']}
+```
+
+And it **reaches down**, which is what `SUSPECT` is. A stale node hits, so
+everything under it goes on being fed the old code's answer, whatever became of
+its own name.
+
+### `UNVERSIONED`, which the notebook found
+
+It needs both fingerprints, and a class with no source to read has none — a
+notebook cell, an `exec`. The first draft treated that as no opinion and said
+nothing, and writing `examples/11-what-an-edit-did.ipynb` is what showed what
+that means: **in a
+notebook every node is defined in a cell**, so a graph compared with an edited
+copy of itself came back `{}` — *nothing to report* about an afternoon of edits,
+in the one place where the question is asked most.
+
+So the absence is a finding. Its scope is the scope a version is recorded at —
+`_note_the_code` computes one **only for what is kept**, because parsing an AST
+for a node nobody remembers anything about would be paid by everyone who
+declares a graph. A graph with no cache in it gets no opinion about its code and
+is not told so once per node.
+
+### What it does not need
+
+**A store's contents.** Naming is the `Keeper`'s and the keeper is the store's —
+the core computes no hash — so a store is where the hash function comes from and
+nothing else is asked of it. `store=None` opens a temporary directory and gives
+the same names. `unneeded` is the only one of the three whose answer is about
+what is in there, and it is the only one that demands one.
+
+**The input.** Every key on both sides carries the same hash of it, so which
+input it is cancels out of every comparison. `changes(before, after)` with
+nothing at all gives the same findings as with the real batch, and does not pay
+the 121 ms of weighing it that CU24 measured.
+
+### What is not in it
+
+- **The figure.** `overlaid` puts findings on a graph, and its channel is
+  health: the outline turns red and red means ill. A node that changed is not
+  ill, so it would need a channel or a colour of its own, and that is a drawing
+  decision and not this slice's.
+- **A silent edit above a cached node.** A version is recorded only for what
+  is kept, so a code change in an **uncached** node moves nothing: its key does
+  not carry its code, and the cached node below it goes on hitting. The runtime
+  has the same blind spot for the same reason — it compares a fingerprint on a
+  hit, and there is no hit to compare on. Closing it means versioning every
+  node at `somatize`, which is CU13's trade to reopen and not this slice's.
+- **A fan-in whose order does not matter.** `(a | b) >> c` and `(b | a) >> c`
+  name `c` differently, though what reaches it is a dict keyed by node id and
+  the order is nothing to the node. A conservative miss, nobody's answer is
+  wrong, and it is CU13's to decide — not something a diff should hide.
+  `_recipe` carries the order for exactly that reason: it says the truth about
+  what the key does today.
+
+### Questionnaire
+
+**A name, without a run** (`core/tests/unit/execution.rs`,
+`python/tests/test_foreseen.py`)
+- [x] the names foreseen are the names things are kept under
+- [x] nothing ran to find out — a node that cannot run at all still has one
+- [x] and it does not depend on having a store
+- [x] what cannot be foreseen is missing rather than wrong
+- [x] without a keeper nothing is named, which is the silence a run gets
+- [x] what is already kept says what would not have to run
+- [x] and asking that needs somewhere to look
+
+**What an edit did** (`python/tests/test_foreseen.py`)
+- [x] a graph compared with itself has nothing said about it
+- [x] a changed recipe renames what is under it and nothing above it
+- [x] and `CHANGED` against `DOWNSTREAM` says which is which
+- [x] another class under the same name is a change
+- [x] **rewiring a node is a change of its own and not an inherited one**
+- [x] a node that is only in one of them is not a change to a name
+- [x] a mapped node cannot be told about either way
+- [x] the input cancels out of the comparison
+
+**The code that changed and the name that did not say so**
+(`python/tests/test_foreseen.py`)
+- [x] an edit the key cannot see is said out loud
+- [x] what is under a stale node is not told it is fine
+- [x] **and a node that recomputes still recomputes from a stale answer**
+- [x] **a class nobody can version says so rather than nothing**
+- [x] and a node nothing is kept of is not told off for having none
+- [x] a bumped salt is what `STALE` is asking for

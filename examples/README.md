@@ -1,6 +1,6 @@
 # Examples
 
-Ten notebooks, in order. Each one runs on its own and needs nothing
+Eleven notebooks, in order. Each one runs on its own and needs nothing
 downloaded — the data is made up in the cell that uses it, on purpose: an
 example that fetches a dataset is an example that stops working.
 
@@ -16,6 +16,7 @@ example that fetches a dataset is an example that stops working.
 | [8 — Before a step is taken](08-before-a-step-is-taken.ipynb) | `probe`, one recorded forward that never trained, and the rule: what separates is a runaway, what ranks is a proxy |
 | [9 — A fleet](09-a-fleet.ipynb) | `fleet` and `machines`, working against waited on, what only a machine can say about itself, and the idle one that writes on a clock |
 | [10 — Where the data comes from](10-a-dataset.ipynb) | a source is a node, a graph handed a **coordinate** instead of a batch, what that saves the cache, the version the store already knew, and a frame crossing a wire |
+| [11 — What an edit did](11-what-an-edit-did.ipynb) | `foreseen.names` / `unneeded` / `changes`, an afternoon of edits answered without running any of it, and the half a notebook cannot answer about its own cells |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.
@@ -43,7 +44,10 @@ that is green about code that is not the code.
 
 Notebooks 3 to 7 need `torch`. Notebook 2 starts a real worker process, which
 needs nothing but the same interpreter. Notebooks 3 and 4 seed torch, so
-re-executing them gives back the numbers that are stored here.
+re-executing them gives back the numbers that are stored here. Notebook 11
+writes a module to a temporary directory and imports it, because a class defined
+in a **cell** has no source to read and so no version — which is the thing that
+notebook is partly about.
 
 To re-execute them all after a change to the Python API:
 
@@ -62,14 +66,14 @@ EOF
 
 ## What is not here, and why
 
-**The static half of health.** Notebooks 5 and 6 diagnose what *happened*, which
-needs a training run. What a graph can be told about itself **before a GPU is spent** —
-signal propagation at init, where a normalisation layer is missing, the zero-cost
-proxies that rank architectures without training them — is the next slice. It is
-a different question with different literature behind it, and pretending the two
-are one is how a framework ends up scoring an architecture with a number that
-mostly measures its parameter count.
+**A graph marked with what an edit did.** Notebook 11 answers with findings per
+node and stops there. `overlaid` already puts findings on a figure, but its
+channel is health: the outline turns red, and red means ill. A node whose recipe
+changed is not ill, so saying **where** an edit landed needs a channel of its
+own rather than borrowing one that means something else.
 
-**The overlay**: the graph figure from notebook 1 coloured by what notebook 5's
-flags say. It needs a channel of its own, because in every other figure here hue
-says *where a node runs* and never good-or-bad.
+**A run spread over real machines.** Notebook 2 starts one worker on this
+machine and notebook 9 reads a fleet back out of a record. Containers on
+separate hosts, a GPU among them, and a study handed out of a shared folder live
+in `python/tests/cluster/`, which needs docker and is opt-in — an example that
+needs a cluster is an example nobody can open.
