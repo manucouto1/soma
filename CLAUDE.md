@@ -514,6 +514,16 @@ recomputes **from a stale answer**. A partition carries one of those two, and it
 carries the reassuring one. So it answers `{node: [finding, ...]}`, which is
 what `health` already answers with and for the same reason.
 
+**And a name that moved says which part of it moved**: `CHANGED` is the shape —
+the class, and who feeds it —, `RESETTLED` is another checkpoint and `SALTED` is
+a bumped salt. The split came from the other end of the wire: a sibling slice
+asking *what did the code do* reads a re-freeze as a false positive, while *does
+my cache still hold* reads it as the cache being right. Both are true, so the
+finding says which and each reader takes the part it came for — **weights belong
+to a version, they are not a version**. And `changes` takes a `Graph` or a
+`snapshot` of one, because two versions of a module do not coexist in an
+interpreter: comparing two commits is comparing what was written down.
+
 The finding this exists for is `STALE`, and it is CU13's decision paid for
 rather than undone: the fingerprint of the code is deliberately not in the key —
 a cosmetic refactor must not invalidate half the store — which means editing a

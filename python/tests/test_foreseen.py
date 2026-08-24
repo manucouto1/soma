@@ -137,15 +137,36 @@ def test_a_salt_changes_the_node_it_is_on_and_nothing_above_it():
     # The asymmetry the whole thing rests on. A salt is the smallest edit to a
     # recipe there is: it has to reach the node it is on and no name above it,
     # which is what tells an edit that invalidated an encoder from one that only
-    # touched the head. And `CHANGED` against `DOWNSTREAM` says which is which.
+    # touched the head. And the node it is on says which part of it moved.
     assert foreseen.changes(three(), three(salt="a100-fp16")) == {
-        "b": ["CHANGED"],
+        "b": ["SALTED"],
         "c": ["DOWNSTREAM"],
     }
 
 
-def test_another_class_under_the_same_name_is_a_change():
+def test_another_class_under_the_same_name_is_a_change_of_shape():
     assert foreseen.changes(chain(), chain(head=Encoder)) == {"b": ["CHANGED"]}
+
+
+def test_other_weights_under_the_same_code_are_not_a_change_of_shape():
+    # The split the two questions need. Freezing at another checkpoint really
+    # does move the answer, so the cache is right to miss — and nothing about
+    # the network was edited, so whoever is asking *what did the code do* has to
+    # be able to tell this from a rewrite. Weights belong to a version; they are
+    # not one.
+    before, after = chain(), chain()
+    before.freeze("b", "sha256:monday")
+    after.freeze("b", "sha256:tuesday")
+
+    assert foreseen.changes(before, after) == {"b": ["RESETTLED"]}
+
+
+def test_two_parts_of_one_recipe_moving_says_both():
+    # They are not a partition of the node: a rework that also bumps the salt is
+    # two true things, and picking one of them would be picking which.
+    before, after = chain(), chain(head=Encoder, salt="v2")
+
+    assert foreseen.changes(before, after) == {"b": ["CHANGED", "SALTED"]}
 
 
 def test_rewiring_a_node_is_a_change_of_its_own_and_not_an_inherited_one():
@@ -240,7 +261,7 @@ def test_a_node_that_recomputes_still_recomputes_from_a_stale_answer():
 
     assert foreseen.changes(before, after) == {
         "a": ["STALE"],
-        "b": ["CHANGED", "SUSPECT"],
+        "b": ["SALTED", "SUSPECT"],
         "c": ["DOWNSTREAM", "SUSPECT"],
     }
 
@@ -287,7 +308,50 @@ def test_a_bumped_salt_is_what_stale_is_asking_for():
     before.written_as("b", "aaaaaaaa")
     after.written_as("b", "bbbbbbbb")
 
-    assert foreseen.changes(before, after) == {"b": ["CHANGED"]}
+    assert foreseen.changes(before, after) == {"b": ["SALTED"]}
+
+
+# ── Two graphs, or two snapshots ──
+
+
+def test_a_snapshot_answers_exactly_as_the_graph_it_was_taken_of():
+    # The whole contract of the second door: whichever side arrives as which,
+    # the findings are the same ones. A snapshot that drifted from a graph would
+    # be a diff whose answer depended on when you asked it.
+    before, after = three(), three(salt="v2")
+    kept = (foreseen.snapshot(before), foreseen.snapshot(after))
+    live = foreseen.changes(before, after)
+
+    assert foreseen.changes(*kept) == live
+    assert foreseen.changes(kept[0], after) == live
+    assert foreseen.changes(before, kept[1]) == live
+
+
+def test_a_snapshot_survives_the_graph_it_came_from():
+    # Which is the point: two versions of one module do not coexist in an
+    # interpreter, so comparing two commits means comparing what was written
+    # down. A round trip through JSON is what "written down" means.
+    before = three()
+    kept = json.loads(json.dumps(foreseen.snapshot(before)))
+    del before
+
+    assert foreseen.changes(kept, three(salt="v2")) == {
+        "b": ["SALTED"],
+        "c": ["DOWNSTREAM"],
+    }
+
+
+def test_what_is_under_a_stale_node_is_found_through_a_snapshot_too():
+    # `SUSPECT` is the one finding that needs the topology and not just the
+    # names, so a snapshot has to carry the edges or it would quietly stop
+    # reaching down.
+    monday, tuesday = three(), three()
+    monday.written_as("a", "aaaaaaaa")
+    tuesday.written_as("a", "bbbbbbbb")
+
+    assert foreseen.changes(
+        foreseen.snapshot(monday), foreseen.snapshot(tuesday)
+    ) == {"a": ["STALE"], "b": ["SUSPECT"], "c": ["SUSPECT"]}
 
 
 # ── The bridge underneath it ──

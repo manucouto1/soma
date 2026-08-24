@@ -4936,6 +4936,7 @@ from soma_next import foreseen
 foreseen.names(g)                       # {node: name}, nothing executed
 foreseen.unneeded(g, x, store=store)    # what would not have to run at all
 foreseen.changes(before, after)         # what the edit did
+foreseen.snapshot(g)                    # the same, kept for a later comparison
 ```
 
 ### Findings and not buckets, and the case that decided it
@@ -4946,10 +4947,10 @@ is wrong, and the counterexample took one run to appear — edit the encoder's
 code **and** bump the head's salt:
 
 ```text
-{'embed': ['STALE'], 'head': ['CHANGED', 'SUSPECT']}
+{'embed': ['STALE'], 'head': ['SALTED', 'SUSPECT']}
 ```
 
-The head's name moved, so it runs again: `CHANGED` is true. And it runs on what
+The head's name moved, so it runs again: `SALTED` is true. And it runs on what
 the encoder handed back, which is the old code's answer: `SUSPECT` is true too.
 A partition can carry one of the two, and the one it carries is *this node will
 be recomputed* — the reassuring half of a node about to compute the wrong
@@ -4962,8 +4963,10 @@ good answer is what keeps the ones that matter readable.
 
 | finding | what it says |
 |---|---|
-| `CHANGED` | its own recipe moved: class, weights, salt, or **who feeds it** |
-| `DOWNSTREAM` | its recipe is untouched and its name moved anyway |
+| `CHANGED` | its **shape** moved: another class, or who feeds it |
+| `RESETTLED` | it is frozen at another state — other weights, another version |
+| `SALTED` | its salt moved |
+| `DOWNSTREAM` | none of those moved and its name moved anyway |
 | `STALE` | its name did not move and its code did |
 | `SUSPECT` | something above it is `STALE` |
 | `ADDED` / `GONE` | it is in one graph and not the other |
@@ -4972,8 +4975,23 @@ good answer is what keeps the ones that matter readable.
 
 `CHANGED` against `DOWNSTREAM` is what makes a list of forty nodes readable: one
 of them is where the edit is and the rest is what inherited it. Who feeds a node
-is in its own recipe because rewiring it moves its key without touching anything
+is part of its shape because rewiring it moves its key without touching anything
 the node is made of — and that is an edit, not something somebody else did.
+
+### One question, or two
+
+The first three are the same finding split three ways, and the split came from
+the other end of the wire. A sibling slice — a tree of experiments, one snapshot
+per commit — asked *what did the code do*, and to that question a node re-frozen
+at Tuesday's checkpoint is a false positive: the architecture is the same one,
+trained again. To the question this module opened with — *does my cache still
+hold* — it is not a false positive at all: the answer under that name really is
+a different answer, and the name moving is the cache being right.
+
+Both are true, and neither is a reason to give the other the wrong answer. So a
+name that moved says **which part of the recipe moved it**, and the two readers
+take the part they came for: all three, or `CHANGED` alone. Weights belong to a
+version; they are not a version.
 
 `UNKNOWN` is the absence CU25 already gives up on, said out loud: a `.mapped()`
 node is named out of the content of its items and nothing under it can be named
@@ -5018,6 +5036,19 @@ So the absence is a finding. Its scope is the scope a version is recorded at —
 for a node nobody remembers anything about would be paid by everyone who
 declares a graph. A graph with no cache in it gets no opinion about its code and
 is not told so once per node.
+
+### Two graphs, or two snapshots
+
+`changes` takes either. A `Graph` is a live object and two versions of one
+module do not coexist in an interpreter, so comparing **two commits** means
+comparing what was written down: `snapshot(g)` is plain JSON with the names
+already worked out — the shape of each node, its state, its salt, what is kept,
+the fingerprints, and the edges, which `SUSPECT` needs to reach down.
+
+The cut is the one this project keeps making between **the fact and whoever
+draws it**, and it is what lets the sibling slice delete its own comparison and
+consume this one. Two snapshots are comparable when they were taken with the
+same input, which the default — none at all — always is.
 
 ### What it does not need
 
@@ -5067,7 +5098,9 @@ the 121 ms of weighing it that CU24 measured.
 - [x] a graph compared with itself has nothing said about it
 - [x] a changed recipe renames what is under it and nothing above it
 - [x] and `CHANGED` against `DOWNSTREAM` says which is which
-- [x] another class under the same name is a change
+- [x] another class under the same name is a change of shape
+- [x] **other weights under the same code are not**
+- [x] and two parts of one recipe moving says both
 - [x] **rewiring a node is a change of its own and not an inherited one**
 - [x] a node that is only in one of them is not a change to a name
 - [x] a mapped node cannot be told about either way
@@ -5081,3 +5114,8 @@ the 121 ms of weighing it that CU24 measured.
 - [x] **a class nobody can version says so rather than nothing**
 - [x] and a node nothing is kept of is not told off for having none
 - [x] a bumped salt is what `STALE` is asking for
+
+**Two graphs, or two snapshots** (`python/tests/test_foreseen.py`)
+- [x] a snapshot answers exactly as the graph it was taken of
+- [x] **and it survives the graph it came from**, through JSON
+- [x] what is under a stale node is found through a snapshot too
