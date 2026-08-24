@@ -29,8 +29,9 @@
 //! look at, and whoever interprets them can be anyone.
 
 use soma_next_core::{Catalog, Ctx, Node, NodeError, Value};
+use soma_next_core::{Codec, CodecError};
 use soma_next_store::{Cache, Local};
-use soma_next_transport::{Codec, CodecError, Provision, ProvisionError, Provisioned, Serving};
+use soma_next_transport::{Provision, ProvisionError, Provisioned, Serving};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

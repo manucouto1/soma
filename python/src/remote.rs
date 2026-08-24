@@ -16,7 +16,7 @@
 
 use crate::codec::Codecs;
 use crate::node::PyNode;
-use soma_next_transport::Packing;
+use soma_next_core::Packing;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};

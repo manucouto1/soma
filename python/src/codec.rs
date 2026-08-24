@@ -47,8 +47,8 @@ use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 use soma_next_core::Value;
+use soma_next_core::{Codec, CodecError, anything_written, as_written, written_down};
 use soma_next_data::{Frame, Ipc};
-use soma_next_transport::{Codec, CodecError, anything_written, as_written, written_down};
 
 /// What is registered, by the name it was registered under: `kind → (type,
 /// dump, load)`.

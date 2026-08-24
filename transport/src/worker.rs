@@ -34,10 +34,10 @@
 //! this library does not know what your binary is called, nor what environment
 //! it needs, nor whether it goes inside an `srun`.
 
-use crate::codec::{self, Codec};
 use crate::frame;
 use crate::{Answer, Artifact, Request};
 use soma_next_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
+use soma_next_core::{Codec, packed_all, unpacked_all};
 use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -313,7 +313,7 @@ impl Transport for Worker {
             None => (cargo.input.clone(), cargo.known.to_vec()),
             Some(codec) => (
                 codec.packed(cargo.input).map_err(as_transport_error)?,
-                codec::packing(codec, cargo.known).map_err(as_transport_error)?,
+                packed_all(codec, cargo.known).map_err(as_transport_error)?,
             ),
         };
         let work = Request::Work {
@@ -344,12 +344,12 @@ impl Transport for Worker {
 fn live(codec: &dyn Codec, outcome: Outcome) -> Result<Outcome, TransportError> {
     Ok(Outcome {
         last: codec.unpacked(&outcome.last).map_err(as_transport_error)?,
-        produced: codec::unpacking(codec, &outcome.produced).map_err(as_transport_error)?,
+        produced: unpacked_all(codec, &outcome.produced).map_err(as_transport_error)?,
         keys: outcome.keys,
     })
 }
 
-fn as_transport_error(e: crate::CodecError) -> TransportError {
+fn as_transport_error(e: soma_next_core::CodecError) -> TransportError {
     TransportError::new(e.to_string())
 }
 

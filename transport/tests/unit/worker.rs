@@ -9,8 +9,9 @@ use soma_next_core::{
     Catalog, Device, Executor, Fact, Graph, Host, Memory, Placement, Plan, RunError, Value,
     Watcher, compile, distribute, node,
 };
+use soma_next_core::{Codec, CodecError};
 use soma_next_store::{Cache, Local};
-use soma_next_transport::{Codec, CodecError, Worker};
+use soma_next_transport::Worker;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

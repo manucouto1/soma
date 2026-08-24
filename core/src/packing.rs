@@ -1,7 +1,6 @@
 //! A keeper with a codec in front of it.
 
-use crate::Codec;
-use soma_next_core::{Keeper, KeeperError, Kept, Key, Value};
+use crate::{Codec, Keeper, KeeperError, Kept, Key, Value};
 
 /// Whatever a [`Codec`] can write down, kept — by a [`Keeper`] that never finds
 /// out any of it was ever anything but bytes.

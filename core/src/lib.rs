@@ -34,6 +34,7 @@
 
 mod build;
 mod catalog;
+mod codec;
 mod device;
 mod execution;
 mod fact;
@@ -43,6 +44,7 @@ mod keeper;
 mod key;
 mod memory;
 mod node;
+mod packing;
 mod placement;
 mod plan;
 mod transport;
@@ -51,6 +53,9 @@ mod watcher;
 
 pub use build::{Wire, node};
 pub use catalog::Catalog;
+pub use codec::{
+    Codec, CodecError, anything_written, as_written, packed_all, unpacked_all, written_down,
+};
 pub use device::{Device, DeviceError};
 pub use execution::{Executor, RunError};
 pub use fact::Fact;
@@ -60,6 +65,7 @@ pub use keeper::{Keeper, KeeperError, Kept};
 pub use key::{Key, Keys};
 pub use memory::{Memory, MemoryError, cacheable};
 pub use node::{Ctx, Node, NodeError};
+pub use packing::Packing;
 pub use placement::Placement;
 pub use plan::{CompileError, Destination, Plan, Step, compile, distribute};
 pub use transport::{Cargo, Outcome, Transport, TransportError};

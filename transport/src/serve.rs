@@ -44,11 +44,11 @@
 //! for exactly that. In Python this is more dangerous, because a stray `print`
 //! in a user's node — or in a library on import — does the same thing.
 
-use crate::codec::{self, Codec};
 use crate::frame;
 use crate::machine::{self, Machine};
 use crate::{Answer, Label, Provision, Provisioned, Request};
 use soma_next_core::{Catalog, Executor, Fact, Keeper, Outcome, Watcher};
+use soma_next_core::{Codec, unpacked_all};
 use soma_next_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
@@ -544,7 +544,7 @@ fn reply<W: Write + Send>(
             // be the same one or this is impossible to explain.
             let (input, known) = match shared.codec {
                 None => (input, known),
-                Some(codec) => match (codec.unpacked(&input), codec::unpacking(codec, &known)) {
+                Some(codec) => match (codec.unpacked(&input), unpacked_all(codec, &known)) {
                     (Ok(input), Ok(known)) => (input, known),
                     (Err(e), _) | (_, Err(e)) => return Answer::Failed(e.to_string()),
                 },

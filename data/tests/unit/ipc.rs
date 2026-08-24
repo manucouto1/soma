@@ -4,10 +4,10 @@ use crate::counting::Counting;
 use crate::frame::batch;
 use crate::parquet::{holding, numbers, reading};
 use crate::tempdir;
+use soma_next_core::{Codec, Packing};
 use soma_next_core::{Executor, Value, compile};
 use soma_next_data::{Frame, Ipc, Parquet, Span};
 use soma_next_store::{Cache, Local};
-use soma_next_transport::{Codec, Packing};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -67,7 +67,7 @@ fn an_opaque_that_is_not_a_frame_says_so() {
 fn and_somebody_elses_kind_is_left_exactly_as_it_arrived() {
     // A tensor written down by the Python side, passing through a process that
     // only knows frames. Not ours to read, and not ours to lose.
-    let theirs = soma_next_transport::written_down("torch.Tensor", vec![1, 2, 3]);
+    let theirs = soma_next_core::written_down("torch.Tensor", vec![1, 2, 3]);
 
     assert_eq!(Ipc.unpacked(&theirs).unwrap(), theirs);
 }

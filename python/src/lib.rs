@@ -24,10 +24,9 @@ use pyo3::types::{PyDict, PyTuple};
 use remote::PyWorker;
 use soma_next_core::{
     Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Keys, Memory,
-    MemoryError, NodeId, Placement, RunError, cacheable, compile, distribute,
+    MemoryError, NodeId, Packing, Placement, RunError, cacheable, compile, distribute,
 };
 use soma_next_store::Cache;
-use soma_next_transport::Packing;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 

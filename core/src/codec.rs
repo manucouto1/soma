@@ -6,9 +6,12 @@
 //! holds a live Python object; another will hold something else. Neither is
 //! something this crate can learn without learning an interpreter.
 //!
-//! It is **not** a fifth hole in the core. The core's four —`Node`, `Driver`,
-//! `Transport`, `Keeper`— are what the core provides and does not fill; this one
-//! is about the wire's alphabet, and the wire is this crate's.
+//! It **is** a hole of the core, and it took a third tenant to see it. It was
+//! written here when the wire was its only consumer, and filed under the wire —
+//! but a `Store` asks an opaque value the same question a socket does, and
+//! `data/` asks it a third time for Arrow IPC. What decides where a hole lives
+//! is what it serves, not who reached for it first: `Packing` next door is the
+//! proof, since it is a `Keeper` and `Keeper` was always the core's.
 //!
 //! # It does not move the frontier, it moves what falls on which side
 //!
@@ -41,7 +44,7 @@
 //! a cache that cannot answer recomputes, and a wire that cannot carry has
 //! nothing to fall back on.
 
-use soma_next_core::{NodeId, Value};
+use crate::{NodeId, Value};
 use std::fmt;
 use std::sync::Arc;
 
@@ -110,7 +113,7 @@ pub trait Codec: Send + Sync {
 }
 
 /// Every one of these packed, or the first that cannot be.
-pub(crate) fn packing(
+pub fn packed_all(
     codec: &dyn Codec,
     values: &[(NodeId, Value)],
 ) -> Result<Vec<(NodeId, Value)>, CodecError> {
@@ -121,7 +124,7 @@ pub(crate) fn packing(
 }
 
 /// And every one of these unpacked.
-pub(crate) fn unpacking(
+pub fn unpacked_all(
     codec: &dyn Codec,
     values: &[(NodeId, Value)],
 ) -> Result<Vec<(NodeId, Value)>, CodecError> {

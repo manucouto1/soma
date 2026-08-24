@@ -25,9 +25,6 @@ arrow-ipc = "59"
 # the day a source is `async` so is `forward`, and so is every caller of it.
 parquet = "59"
 bytes = "1"
-# For the wire's alphabet: `Codec` and the shape a written-down value has, so
-# that what this crate writes and what `python/` writes are the same thing.
-soma-next-transport = { path = "../transport" }
 
 [dev-dependencies]
 # The tests are another crate and see only the public API — so the formats and
@@ -37,7 +34,6 @@ arrow-schema = "59"
 parquet = "59"
 soma-next-core = { workspace = true }
 soma-next-store = { workspace = true }
-soma-next-transport = { path = "../transport" }
 
 [[test]]
 name = "unit"
