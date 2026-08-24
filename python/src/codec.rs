@@ -20,10 +20,10 @@
 //! A **store** wants the same two passes, and it is the same answer: what a
 //! tensor weighs written down is one question whether the bytes are going to a
 //! directory or down a socket. So there is no second type here for it —
-//! `Packing::over(keeper, &Codecs)` is `transport`'s, written once for whoever
+//! `Packing::over(keeper, &Codecs)` is the core's, written once for whoever
 //! has a codec, and `soma_next_store` still never learns Python exists.
 //!
-//! What a packed opaque looks like — the shape itself lives in `transport`,
+//! What a packed opaque looks like — the shape itself lives in the core,
 //! beside the trait, so that what this side writes and what `data/` writes are
 //! the same thing — and what the risk of it is:
 //!

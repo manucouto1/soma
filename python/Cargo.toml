@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soma-next-core = { workspace = true, features = ["serde"] }
-soma-next-transport = { path = "../transport" }
+soma-next-transport = { path = "../transport", optional = true }
 # With `s3`, because a study spread over machines with no shared mount is
 # exactly the case `soma_next.Store.on_bucket` exists for.
 soma-next-store = { workspace = true, features = ["s3"] }
@@ -29,3 +29,11 @@ soma-next-health = { workspace = true }
 # which is stdlib, and nobody has to install anything to look at a shape.
 serde_json = "1"
 pyo3 = { version = "0.24", features = ["extension-module"] }
+
+# The wire, and it is optional so that the seam is a fact the compiler checks
+# rather than a claim in a document. `--no-default-features` builds the whole
+# library with no transport at all: if that compiles, moving `transport/` to a
+# repository of its own is a `git mv` and not a redesign.
+[features]
+default = ["remote"]
+remote = ["dep:soma-next-transport"]

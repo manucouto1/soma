@@ -9,6 +9,7 @@ mod codec;
 mod frame;
 mod health;
 mod node;
+#[cfg(feature = "remote")]
 mod remote;
 mod source;
 mod store;
@@ -21,6 +22,7 @@ use node::{PyCtx, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+#[cfg(feature = "remote")]
 use remote::PyWorker;
 use soma_next_core::{
     Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Keys, Memory,
@@ -434,6 +436,7 @@ impl PyGraph {
         let plan = distribute(&plan, &self.placement);
 
         // Before releasing the GIL: a `PyRef` cannot survive `allow_threads`.
+        #[cfg(feature = "remote")]
         let reachable: Vec<(Host, std::sync::Arc<soma_next_transport::Worker>)> = match workers {
             None => Vec::new(),
             Some(dict) => dict
@@ -449,6 +452,16 @@ impl PyGraph {
                 })
                 .collect::<PyResult<Vec<_>>>()?,
         };
+
+        // Without the wire there is nowhere for a slice to go, and saying so is
+        // better than running the graph here and quietly ignoring `.at()`.
+        #[cfg(not(feature = "remote"))]
+        if workers.is_some_and(|dict| !dict.is_empty()) {
+            return Err(PyValueError::new_err(
+                "this build has no transport in it, so `workers` cannot be honoured: \
+                 install the remote half, or run the graph without placing anything",
+            ));
+        }
 
         // Before anything else, and **whether or not there is a store**: a
         // `.cached()` over something that can still change is wrong today, not
@@ -469,6 +482,7 @@ impl PyGraph {
         let mut executor = Executor::new(&self.catalog)
             .placed(&self.placement)
             .remembering(&self.memory);
+        #[cfg(feature = "remote")]
         for (host, worker) in &reachable {
             executor = executor.reaching(host.clone(), worker.as_ref());
         }
@@ -593,6 +607,7 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
     m.add_class::<PyCtx>()?;
     m.add_class::<value::PyOpaque>()?;
+    #[cfg(feature = "remote")]
     m.add_class::<PyWorker>()?;
     m.add_class::<store::PyStore>()?;
     m.add_class::<frame::PyFrame>()?;
@@ -611,10 +626,13 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(health::family, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;
-    m.add_function(wrap_pyfunction!(remote::serve, m)?)?;
-    m.add_function(wrap_pyfunction!(remote::serve_provisioned, m)?)?;
-    m.add_function(wrap_pyfunction!(remote::listen, m)?)?;
-    m.add_function(wrap_pyfunction!(remote::listen_provisioned, m)?)?;
+    #[cfg(feature = "remote")]
+    {
+        m.add_function(wrap_pyfunction!(remote::serve, m)?)?;
+        m.add_function(wrap_pyfunction!(remote::serve_provisioned, m)?)?;
+        m.add_function(wrap_pyfunction!(remote::listen, m)?)?;
+        m.add_function(wrap_pyfunction!(remote::listen_provisioned, m)?)?;
+    }
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
