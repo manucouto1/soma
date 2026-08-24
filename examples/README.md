@@ -16,7 +16,7 @@ example that fetches a dataset is an example that stops working.
 | [8 — Before a step is taken](08-before-a-step-is-taken.ipynb) | `probe`, one recorded forward that never trained, and the rule: what separates is a runaway, what ranks is a proxy |
 | [9 — A fleet](09-a-fleet.ipynb) | `fleet` and `machines`, working against waited on, what only a machine can say about itself, and the idle one that writes on a clock |
 | [10 — Where the data comes from](10-a-dataset.ipynb) | a source is a node, a graph handed a **coordinate** instead of a batch, what that saves the cache, the version the store already knew, and a frame crossing a wire |
-| [11 — What an edit did](11-what-an-edit-did.ipynb) | `foreseen.names` / `unneeded` / `changes`, an afternoon of edits answered without running any of it, and the half a notebook cannot answer about its own cells |
+| [11 — What an edit did](11-what-an-edit-did.ipynb) | `foreseen.names` / `unneeded` / `changes` / `snapshot`, an afternoon of edits answered without running any of it, the three ways a name moves, and the half a notebook cannot answer about its own cells |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.

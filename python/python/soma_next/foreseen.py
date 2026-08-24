@@ -23,7 +23,7 @@ is **more than one fact** and a node with nothing said about it is fine.
 
 | finding | what it says |
 |---|---|
-| `CHANGED` | its **shape** moved: another class, or somebody else feeding it |
+| `CHANGED` | its **shape** moved: another class, other arguments, or who feeds it |
 | `RESETTLED` | it is frozen at another state — other weights, another version |
 | `SALTED` | its salt moved |
 | `DOWNSTREAM` | none of those moved and its name moved anyway |
@@ -230,26 +230,47 @@ def _snapshot(graph, input, place):
     """One side of the comparison, whether it arrived as a graph or already as
     this.
 
-    `shape` is what implements a node and who feeds it, together, because both
-    are the same question — *what is this node* — and both move its key without
-    anything it is made of having moved. `state` and `salt` are apart from it
-    since they move a name without the code moving at all.
+    `shape` is what implements a node, what it was built with, and who feeds
+    it, all three together, because they are one question — *what is this node* —
+    and none of them is something that happened to it. `state` and `salt` are
+    apart since they move a name without the code moving at all.
     """
     if isinstance(graph, dict):
         return graph
     identities, frozen, cached = graph.identities(), graph.frozen(), graph.cached()
+    declarations = graph.declarations()
     return {
         "names": _named(graph, input, place),
         "shape": {
-            node: [identities.get(node), graph.predecessors(node)]
+            node: [
+                identities.get(node),
+                declarations.get(node),
+                graph.predecessors(node),
+            ]
             for node in graph.nodes()
         },
         "state": dict(frozen),
         "salt": dict(cached),
         "kept": sorted(cached),
+        "declared": _declared(graph),
         "fingerprints": graph.fingerprints(),
         "edges": [list(edge) for edge in graph.edges()],
     }
+
+
+def _declared(graph):
+    """What each node was built with, in words. For reading and not for
+    comparing: a node whose declaration could not be written down has none, and
+    that is already said by its absence from the digests."""
+    from soma_next import _declaration
+
+    said = {}
+    for node in graph.nodes():
+        try:
+            said[node] = _declaration.written(graph.implementation(node))
+        except _declaration.CannotDeclare:
+            pass
+    return said
 
 
 def _named(graph, input, place):

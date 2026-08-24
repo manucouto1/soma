@@ -18,16 +18,25 @@
 //! # What goes in a key and what does not
 //!
 //! ```text
-//! key(root) = H(content)                          ← the only place data is hashed
-//! key(node) = H(identity, state, keys of its predecessors)
+//! key(root) = H(content)                              ← the only place data is hashed
+//! key(node) = H(identity, declaration, state, keys of its predecessors)
 //! ```
 //!
 //! The **identity** is the name of what implements the node — the class, in
 //! Python — and it is in the key because without it two different nodes called
-//! `embed` collide in a shared store. The **fingerprint of the code** is *not*:
-//! a cosmetic refactor would invalidate half the store in silence. It is kept
-//! beside the value and compared on a hit, which turns the same event into a
-//! line on `stderr` instead of a cache that quietly went cold.
+//! `embed` collide in a shared store. The **declaration** is what that class was
+//! built with, and it is in for the same reason one step down: `Embed(512)` and
+//! `Embed(64)` are one class, one name and two different answers, and without it
+//! the second one is handed the first one's.
+//!
+//! The **fingerprint of the code** is *not*: a cosmetic refactor would
+//! invalidate half the store in silence. It is kept beside the value and
+//! compared on a hit, which turns the same event into a line on `stderr` instead
+//! of a cache that quietly went cold. The line between the two is what the
+//! caller **said** against how it is **written**: saying `Embed(512)` is a
+//! decision, and editing the body of `forward` is not — and only the first can
+//! be pinned down cheaply and identically in every process, which a key computed
+//! on a client and again on a worker has to be.
 //!
 //! # Frozen, which the core defines without knowing what a gradient is
 //!
@@ -63,6 +72,9 @@ pub struct Memory {
     mapped: HashSet<NodeId>,
     /// What implements each one, by name.
     identities: HashMap<NodeId, String>,
+    /// What each one was built with, digested — the arguments that made this
+    /// instance and not another of the same class.
+    declarations: HashMap<NodeId, String>,
     /// Which version of that code the graph was written against. Metadata.
     fingerprints: HashMap<NodeId, String>,
 }
@@ -81,6 +93,21 @@ impl Memory {
     /// What implements it, if it was said.
     pub fn identity_of(&self, id: &NodeId) -> Option<&str> {
         self.identities.get(id).map(String::as_str)
+    }
+
+    /// Says what this node was built with, as a digest of the arguments that
+    /// made it. In the key, beside the identity: the class is half of *what this
+    /// node is* and what it was constructed with is the other half.
+    pub fn declared_as(&mut self, id: impl Into<NodeId>, declaration: impl Into<String>) {
+        self.declarations.insert(id.into(), declaration.into());
+    }
+
+    /// What it was built with, if anybody could say. Absent is **not** a reason
+    /// to refuse a key — a node built by hand, or one holding something that
+    /// cannot be written down the same way twice, still has one. Refusing is
+    /// [`cacheable`]'s side of it, and only where an answer is kept.
+    pub fn declaration_of(&self, id: &NodeId) -> Option<&str> {
+        self.declarations.get(id).map(String::as_str)
     }
 
     /// Says this node's state does not change from here on, and the digest of
@@ -171,6 +198,7 @@ impl Memory {
         self.frozen.is_empty()
             && self.cached.is_empty()
             && self.identities.is_empty()
+            && self.declarations.is_empty()
             && self.fingerprints.is_empty()
     }
 }

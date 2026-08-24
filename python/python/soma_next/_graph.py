@@ -25,6 +25,28 @@ class Graph(_RustGraph):
     _slice_of = None
     """The graph this one is a piece of, for a graph run in pieces."""
 
+    def node(self, *args):
+        """Adds a node and returns its id, noting **what it was built with**.
+
+        Here and not in `_dsl`, because a graph built by hand in a loop reaches
+        the same door and has the same collision without it: `Embed(512)` and
+        `Embed(64)` are one class and two answers, and what tells them apart is
+        the only half of a key that lives in the object.
+
+        Something that cannot be written down the same way in two processes is
+        passed over in silence here, and refused in `_check_it_was_obeyed` if a
+        cache turns out to depend on it. Declaring a graph is not the moment to
+        fail: running one with a cache it cannot honour is.
+        """
+        from soma_next import _declaration
+
+        node_id = super().node(*args)
+        try:
+            self.declared_as(node_id, _declaration.digest(self.implementation(node_id)))
+        except _declaration.CannotDeclare:
+            pass
+        return node_id
+
     def figure(self, overlay=None, inside=None):
         """The graph drawn, as a `plotly.graph_objects.Figure`.
 
@@ -134,8 +156,33 @@ class Graph(_RustGraph):
         warning. It is the one failure a cache must not have, and it is checked
         wherever a cache is declared, store or no store.
         """
+        from soma_next import _declaration
+
         if not self.cached():
             return
+        declared = self.declarations()
+        for node_id in self.frozen():
+            # Everything upstream of a cache is frozen — `cacheable` refuses the
+            # graph otherwise — so this is exactly the set whose keys have to
+            # mean something. Read and not recomputed: this runs on **every**
+            # forward, and writing an architecture down again every step of a
+            # training run is a toll for an answer that cannot have changed.
+            if node_id in declared:
+                continue
+            try:
+                _declaration.written(self.implementation(node_id))
+                continue
+            except _declaration.CannotDeclare as why:
+                raise ValueError(
+                    f"`{node_id}` is kept, or feeds something that is, and what "
+                    f"it was built with cannot be written down: {why}. That "
+                    f"half of a key is what tells one "
+                    f"`{type(self.implementation(node_id)).__name__}` from "
+                    f"another, so without it two of them would be kept under "
+                    f"one name and you would get the other one back. Fix what "
+                    f"it holds, or say `.cached(salt=...)` and take the naming "
+                    f"on yourself"
+                ) from why
         for node_id, state in self.frozen().items():
             if state is not None:
                 continue

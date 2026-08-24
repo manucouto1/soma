@@ -145,6 +145,26 @@ class Node(Topology, ABC):
     """What a graph node executes. `forward` has to be written or the class
     cannot be instantiated."""
 
+    def __init_subclass__(cls, **said):
+        """Remembers what each instance is **built with**, which is half of its
+        key — `Embed(512)` and `Embed(64)` are one class and two answers.
+
+        Captured here and not read off the object afterwards, and that is the
+        whole point: what a node holds is not what it was built with. A node
+        that counts its calls, caches a client or moves a tensor onto a device
+        has attributes that **move while it runs**, and a key built from those
+        would change under a graph that never changed. What was passed to
+        `__init__` cannot move.
+
+        Bound against the signature, so `Layer(64, 32)`, `Layer(64, out=32)` and
+        `Layer(in_=64, out=32)` are one declaration and not three: a key that
+        depended on how the call was typed would miss for a rename.
+        """
+        super().__init_subclass__(**said)
+        from soma_next import _declaration
+
+        _declaration.remember_what_built_it(cls)
+
     @abstractmethod
     def forward(self, input, ctx):
         """Runs it: takes what arrived along the edges, returns what it made.

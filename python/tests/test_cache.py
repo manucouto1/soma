@@ -360,14 +360,32 @@ def test_settling_it_by_hand_is_enough(store):
 
 
 def test_two_checkpoints_settled_the_same_are_one_name(store):
-    # The other half: what the digest says is what the key believes.
-    first, second = Stateful(2.0), Stateful(5.0)
-    for graph, node in ((Graph.somatize(first.named("e").frozen().cached()), first),
-                        (Graph.somatize(second.named("e").frozen().cached()), second)):
+    # The other half: what the digest says is what the key believes. Both are
+    # built the same way and one is then moved — which is what a checkpoint
+    # loaded into a node looks like — so the only thing that could tell them
+    # apart is the digest, and the digest says they are one.
+    first, second = Stateful(2.0), Stateful(2.0)
+    second.weights = 5.0
+    for node in (first, second):
+        graph = Graph.somatize(node.named("e").frozen().cached())
         graph.freeze("e", "sha256:the-same-weights")
         graph.forward(3.0, store=store)
 
     assert second.calls == 0, "they were said to be the same state, so they are"
+
+
+def test_but_two_nodes_built_differently_are_two_names_whatever_was_said(store):
+    # And the half that used to be missing. Saying two states are one does not
+    # make two *declarations* one: `Stateful(2.0)` and `Stateful(5.0)` answer
+    # 6.0 and 15.0, and before what a node was built with was in its key the
+    # second one was handed the first one's answer in silence.
+    first, second = Stateful(2.0), Stateful(5.0)
+    for node in (first, second):
+        graph = Graph.somatize(node.named("e").frozen().cached())
+        graph.freeze("e", "sha256:the-same-weights")
+        assert graph.forward(3.0, store=store) == 3.0 * node.weights
+
+    assert second.calls == 1
 
 
 def test_a_node_with_no_state_needs_nobody_to_settle_it(store):

@@ -5119,3 +5119,124 @@ the 121 ms of weighing it that CU24 measured.
 - [x] a snapshot answers exactly as the graph it was taken of
 - [x] **and it survives the graph it came from**, through JSON
 - [x] what is under a stale node is found through a snapshot too
+
+## CU27 — What a node was built with
+
+Escalated out of CU26 by the slice consuming its findings, and it is not a
+missing axis in a diff. It is a **wrong value served in silence**.
+
+```python
+Embed(512).named("embed").frozen().cached()
+Embed(64).named("embed").frozen().cached()
+```
+
+One class, one identity, one name in the store — and two different answers. The
+second run is handed the first one's, with no error and no warning. It is the
+same failure CU13 already refuses for a checkpoint nobody hashed, arriving
+through the one door that check does not cover: `_check_it_was_obeyed` asks for
+a digest only from something with `state_dict`, `parameters` or `version`, and
+a node whose behaviour is a **number in its constructor** answers none of them.
+
+So `key(node) = H(identity, declaration, state, keys above)`. The class is half
+of *what this node is* and what it was built with is the other half.
+
+### What was passed in, not what is lying around
+
+The first attempt read the declaration off `vars(obj)`, and four tests fell
+over in a way worth writing down: **what a node holds is not what it was built
+with.** A node that counts its calls, caches a client on first use or moves a
+tensor onto a device has attributes that move **while the graph runs**, and a
+key made of those renames a node nobody touched. In `test_freeze.py` the
+encoder ran three times instead of once, because `calls` was in its own name.
+
+So it is captured at `__init__`, by `Node.__init_subclass__`, and never read
+off the object afterwards. Bound against the signature with the defaults filled
+in, so `Layer(64, 32)`, `Layer(64, out=32)` and `Layer(in_=64, out=32)` are one
+declaration — a key that depended on how the call was typed would miss for a
+rename.
+
+### Two ways to be wrong, and they are not symmetric
+
+A key is computed on the client and computed **again** on a worker, so the text
+has to mean the same thing in another process:
+
+- **Unstable** — one declaration, two texts. `<mine.Helper object at 0x7f43…>`
+  is the usual one. The cost is a cache that misses forever and never says why.
+- **Lossy** — two declarations, one text. A truncated tensor, or an address
+  scrubbed down to `<Helper>`. The cost is the wrong value served in silence,
+  which is the bug being closed.
+
+Neither is accepted, and the second is why **scrubbing the address away is not
+the answer**: `<Helper>` is stable and says nothing, so two configurations go
+on colliding. Anything that cannot be written faithfully *and* identically
+twice raises `CannotDeclare`, and the graph is refused before the first node
+with the attribute named — `` `Given.held` is a lambda, and every lambda is
+written down under the same name ``.
+
+### A test on the type does not catch an address
+
+The rule that looks right and is not: `type(obj).__repr__ is object.__repr__`.
+It is correct about the object in front of it and blind to what it holds — a
+**list** of those objects has `list.__repr__`, which is defined, and the
+addresses come through from inside. Containers are walked rather than repr'd
+for exactly that, and the one place a `__repr__` nobody here wrote is trusted,
+the text it produced is checked afterwards.
+
+A `set` is the same trap in other clothes: string hashing is seeded per
+process, so its repr's order is stable in one interpreter and different in the
+next. It is sorted before anything sees it, and the test that says so runs a
+**subprocess** — a fixture pretending to be another process proves nothing
+about hash seeds.
+
+### What the digest is believed about, and what it is not
+
+`freeze(id, digest)` stays authoritative about the **state**: whoever knows how
+to hash weights says what a node is settled at, and the core believes them. It
+is not authoritative about the declaration, and one test changed to say so. Two
+nodes built the same way and settled at one digest are one name — that is the
+digest being believed. Two nodes built *differently* and settled at one digest
+are two names, because they answer `6.0` and `15.0` and no assertion about
+their weights makes that untrue.
+
+### What is not in it
+
+- **A node that is not a `Node`.** Anything held as an argument has nothing
+  captured at construction, so it is read off its attributes instead. That errs
+  the safe way — an over-sensitive miss costs time, being blind costs the
+  answer.
+- **A `__repr__` that hides a set inside itself.** The angle-bracket rule
+  catches most of what cannot be written — CPython's own convention for *this
+  has no faithful repr* — and enums, classes and functions are taken out before
+  it since they wear the brackets and are perfectly stable. Past that, the
+  answer is `salt=`.
+- **A hard-coded constant.** `self.dim = 512` in a body is code, and code is
+  the fingerprint's question: `STALE`, not `CHANGED`.
+
+### Questionnaire
+
+**Faithful: two declarations, two texts** (`python/tests/test_declaration.py`)
+- [x] two arguments are two declarations, and the same arguments are one
+- [x] **what a node holds is followed and not believed**
+- [x] a mapping built in another order is the same mapping, and another is not
+- [x] a name and not a source is what a class or a function writes
+
+**Steady: one declaration, one text, in any process**
+- [x] **a set is written down in an order of its own**
+- [x] and what a node holds is the same text in another process
+
+**And what can be neither is refused, saying which**
+- [x] a repr that writes its own address
+- [x] something that writes itself in angle brackets
+- [x] a lambda, because every lambda has the same name
+- [x] data held as an attribute, rather than truncated
+- [x] something that holds itself
+
+**What the graph does with it** (`python/tests/test_declaration.py`,
+`core/tests/unit/execution.rs`)
+- [x] what a node was built with is in its name, and reaches everything under it
+- [x] **and the answer is the one that was asked for**
+- [x] a graph built by hand is told apart too
+- [x] **what a node keeps for itself is not what it was built with**
+- [x] a cache that cannot be named is refused before the first node
+- [x] and a graph that keeps nothing is not asked
+- [x] nobody saying what built it is not a reason to refuse a name

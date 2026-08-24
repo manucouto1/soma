@@ -716,6 +716,7 @@ impl<'a> Executor<'a> {
         // matter: nothing unfrozen is kept, nor is anything under it.
         let mut parts = vec![
             identity,
+            memory.declaration_of(node).unwrap_or(""),
             memory.state_of(node).unwrap_or(""),
             memory.salt_of(node).unwrap_or(""),
         ];

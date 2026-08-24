@@ -354,6 +354,15 @@ def test_what_is_under_a_stale_node_is_found_through_a_snapshot_too():
     ) == {"a": ["STALE"], "b": ["SUSPECT"], "c": ["SUSPECT"]}
 
 
+def test_a_snapshot_carries_the_words_and_not_only_the_digest():
+    # What went into the key is sixty-four hex characters, which is no answer at
+    # all to *why did this name move*. The words ride along for whoever has to
+    # say it out loud, and nothing compares them.
+    kept = foreseen.snapshot(chain())
+
+    assert kept["declared"] == {"a": "Counts()", "b": "Counts()"}
+
+
 # ── The bridge underneath it ──
 
 

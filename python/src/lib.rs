@@ -163,6 +163,14 @@ impl PyGraph {
         Ok(())
     }
 
+    /// Notes what this node was built with, digested. **In the key**, beside
+    /// the identity: `Embed(512)` and `Embed(64)` are one class and two answers.
+    fn declared_as(&mut self, node_id: &str, declaration: &str) -> PyResult<()> {
+        let id = self.known(node_id)?;
+        self.memory.declared_as(id, declaration);
+        Ok(())
+    }
+
     /// Notes which version of the code this graph was written against.
     /// **Metadata**: never in a key, compared on a hit and said on `stderr` if
     /// it differs.
@@ -194,6 +202,14 @@ impl PyGraph {
     fn identities<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         self.about(py, |memory, id| {
             memory.identity_of(id).map(|what| Some(what.to_string()))
+        })
+    }
+
+    /// What each node was built with, digested, for those where it could be
+    /// said.
+    fn declarations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.about(py, |memory, id| {
+            memory.declaration_of(id).map(|what| Some(what.to_string()))
         })
     }
 

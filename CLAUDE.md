@@ -117,13 +117,14 @@ two real bugs were found.
 
 ## Status
 
-Twenty-six use cases closed: the graph, the engine, the plan, the fans, the DSL, a
+Twenty-seven use cases closed: the graph, the engine, the plan, the fans, the DSL, a
 single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
 itself, the record of what happened, the health of a network, what can be
 said before a step is taken, the machines it ran on, where the data comes from,
-not running what nobody needs, and what an edit did before paying to find out.
+not running what nobody needs, what an edit did before paying to find out, and
+what a node was built with.
 A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
 executed in Rust, spread across processes with `.at("worker1")`, trained from
 outside with `soma_next.torch.Trainer` — including the part of it that runs on
@@ -539,5 +540,32 @@ most. Its scope is the scope a version is recorded at, which is what is kept.
 Neither `names` nor `changes` reads or writes anything — a store is only where
 the hash comes from — and the input cancels out of every comparison, so asking
 costs nothing and skips the 121 ms of weighing a batch.
+
+**CU27 came out of CU26 and is not a diff at all**: `Embed(512)` and
+`Embed(64)` are one class, one identity and **one name in the store**, so the
+second run was handed the first one's answer with no error and no warning. The
+same failure CU13 refuses for an unhashed checkpoint, through the door that
+check does not cover — `_check_it_was_obeyed` asks for a digest only from
+something with `state_dict`, `parameters` or `version`, and a node whose
+behaviour is a number in its constructor answers none of them. So the key
+gained a part: `H(identity, declaration, state, keys above)`.
+
+The lesson the first attempt paid for: **what a node holds is not what it was
+built with**. Reading `vars(obj)` put `calls` in a key and the encoder ran
+three times instead of once — a node that counts, caches a client or moves a
+tensor has attributes that move *while the graph runs*. So it is captured at
+`__init__` by `Node.__init_subclass__`, bound against the signature with
+defaults filled in, so `Layer(64, 32)` and `Layer(in_=64, out=32)` are one
+declaration.
+
+And two ways to be wrong that are **not symmetric**, because a key is computed
+on the client and again on a worker: *unstable* (one declaration, two texts —
+an address) costs a cache that misses forever; *lossy* (two declarations, one
+text — a truncated tensor, or an address scrubbed to `<Helper>`) costs the
+wrong value in silence. Neither is accepted, which is why scrubbing is not the
+answer. What can be neither raises `CannotDeclare` and the graph is refused
+before the first node with the attribute named. The rule that looks right and
+is not: a test on the **type** — a `list` of address-bearing objects has
+`list.__repr__`, which is defined, and the addresses come through from inside.
 
 See the distribution report for the full order.

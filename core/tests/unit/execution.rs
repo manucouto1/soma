@@ -1861,3 +1861,50 @@ fn without_a_keeper_nothing_is_named() {
 
     assert!(named.is_empty() && unneeded.is_empty());
 }
+
+#[test]
+fn what_a_node_was_built_with_is_in_its_name() {
+    // The other half of *what implements this node*. The class is one answer for
+    // `Embed(512)` and `Embed(64)`, and they are two different answers — so
+    // without this the second one is handed the first one's, with no error and
+    // no warning.
+    let (g, c, memory) = a_chain_kept_in_the_middle(None);
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let names = |memory: &Memory| {
+        Executor::new(&c)
+            .remembering(memory)
+            .keeping(&notebook)
+            .foreseen(&plan, &Value::number(0.0))
+            .0
+    };
+    let mut built = memory.clone();
+    built.declared_as("b", "Embed(dim=64)");
+
+    let (plain, other) = (names(&memory), names(&built));
+
+    assert_eq!(only_name(&plain, "a"), only_name(&other, "a"));
+    assert_ne!(only_name(&plain, "b"), only_name(&other, "b"));
+    assert_ne!(
+        only_name(&plain, "c"),
+        only_name(&other, "c"),
+        "a name is made of names, so it reaches everything under it",
+    );
+}
+
+#[test]
+fn and_nobody_saying_what_built_it_is_not_a_reason_to_refuse_a_name() {
+    // A graph built by hand, or one holding something that cannot be written
+    // down twice the same way. Refusing is `cacheable`'s side of it and only
+    // where an answer is kept; here there is still a name.
+    let (g, c, memory) = a_chain_kept_in_the_middle(None);
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    let (named, _) = Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .foreseen(&plan, &Value::number(0.0));
+
+    assert_eq!(named.len(), 3);
+}
