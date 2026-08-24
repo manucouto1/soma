@@ -1730,3 +1730,134 @@ fn and_a_slice_nobody_needs_is_not_sent_at_all() {
 
     assert_eq!(mirror.trips().len(), 1, "the second run went nowhere");
 }
+
+// ── The names, asked for without a run ──
+//
+// `foreseen` is public because the answer is worth having on its own. Two
+// versions of one graph name a node differently exactly when its recipe
+// changed, so comparing two sets of names says what an edit did — before
+// anybody pays to find out. What a run does with the answer is unchanged; this
+// section is about asking for it alone.
+
+/// A chain of three, all named by `somatize`, the middle one kept.
+fn a_chain_kept_in_the_middle(salt: Option<&str>) -> (Graph, Catalog, Memory) {
+    let (g, c, _, mut memory) =
+        (node("a", Add(1.0)) >> node("b", Add(10.0)) >> node("c", Add(100.0)))
+            .somatize()
+            .unwrap();
+    memory.cache("b", salt.map(str::to_string));
+    (g, c, memory)
+}
+
+/// The one name of a node that maps nothing.
+fn only_name(named: &std::collections::HashMap<NodeId, Keys>, id: &str) -> Key {
+    match named.get(&NodeId::from(id)) {
+        Some(Keys::One(key)) => key.clone(),
+        other => panic!("`{id}` should have had one name, and had {other:?}"),
+    }
+}
+
+#[test]
+fn the_names_foreseen_are_the_names_things_are_kept_under() {
+    // The whole contract in one assertion: what the cold pass says a node's
+    // output will be called is what the run then calls it. A `foreseen` that
+    // drifted from `key_for` would be a diff that quietly lies.
+    let (g, c, memory) = a_chain_kept_in_the_middle(None);
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let executor = Executor::new(&c).remembering(&memory).keeping(&notebook);
+
+    let (named, _) = executor.foreseen(&plan, &Value::number(0.0));
+    executor.run(&plan, Value::number(0.0)).unwrap();
+
+    assert_eq!(notebook.names(), vec![only_name(&named, "b")]);
+}
+
+#[test]
+fn nothing_ran_to_find_out() {
+    // A node that cannot run at all still has a name: the recipe is enough, and
+    // that is what makes the question askable about a graph nobody can execute
+    // here — no GPU, no dataset, no weights.
+    let (g, c, _, mut memory) = (node("a", Add(1.0)) >> node("b", Panics))
+        .somatize()
+        .unwrap();
+    memory.cache("b", None);
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    let (named, _) = Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .foreseen(&plan, &Value::number(0.0));
+
+    assert_eq!(named.len(), 2, "both were named and neither was asked");
+}
+
+#[test]
+fn a_changed_recipe_renames_what_is_under_it_and_nothing_above() {
+    // The property the whole thing rests on. A salt is the smallest change to a
+    // recipe there is, and it has to reach every name below it and no name
+    // above it: that asymmetry is what tells an edit that invalidated an
+    // encoder from one that only touched the head.
+    let (g, c, plain) = a_chain_kept_in_the_middle(None);
+    let (_, _, salted) = a_chain_kept_in_the_middle(Some("a100-fp16"));
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+    let names = |memory: &Memory| {
+        Executor::new(&c)
+            .remembering(memory)
+            .keeping(&notebook)
+            .foreseen(&plan, &Value::number(0.0))
+            .0
+    };
+
+    let (before, after) = (names(&plain), names(&salted));
+
+    assert_eq!(
+        only_name(&before, "a"),
+        only_name(&after, "a"),
+        "what is above the change keeps its name, and so its kept answer",
+    );
+    assert_ne!(only_name(&before, "b"), only_name(&after, "b"));
+    assert_ne!(
+        only_name(&before, "c"),
+        only_name(&after, "c"),
+        "a name is made of names, so the change reaches everything under it",
+    );
+}
+
+#[test]
+fn what_cannot_be_foreseen_is_missing_rather_than_wrong() {
+    // A mapped node is named by the content of its items, which nobody has
+    // yet. It is left out, and so is everything under it: whoever compares two
+    // of these has to read the absence as "cannot tell". Saying "unchanged"
+    // here would be the one answer that costs somebody a week.
+    let (g, c, _, memory) = (node("a", Add(1.0)).mapped() >> node("b", Mean))
+        .somatize()
+        .unwrap();
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    let (named, _) = Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .foreseen(&plan, &Value::list(vec![Value::number(1.0)]));
+
+    assert!(!named.contains_key(&NodeId::from("a")));
+    assert!(!named.contains_key(&NodeId::from("b")));
+}
+
+#[test]
+fn without_a_keeper_nothing_is_named() {
+    // The same silence a run gets, and for the same reason: the core has no
+    // algorithm to hash with. A caller that forgot the store gets an empty
+    // answer, not a wrong one.
+    let (g, c, memory) = a_chain_kept_in_the_middle(None);
+    let plan = compile(&g, &c).unwrap();
+
+    let (named, unneeded) = Executor::new(&c)
+        .remembering(&memory)
+        .foreseen(&plan, &Value::number(0.0));
+
+    assert!(named.is_empty() && unneeded.is_empty());
+}

@@ -23,12 +23,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use remote::PyWorker;
 use soma_next_core::{
-    Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Memory,
+    Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Keys, Memory,
     MemoryError, NodeId, Placement, RunError, cacheable, compile, distribute,
 };
 use soma_next_store::Cache;
 use soma_next_transport::Packing;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// Translates the core's error into the exception a Python user expects.
@@ -330,6 +330,61 @@ impl PyGraph {
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
         serde_json::to_string(&distribute(&plan, &self.placement))
             .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// What each node's output will be called, with **nothing executed**.
+    ///
+    /// The pass `forward` makes before its first node, asked for on its own:
+    /// only the input is hashed by content, so every name below it is knowable
+    /// in advance. `{"keys": {node: name}, "unneeded": [node, ...]}`, where
+    /// `unneeded` is what would not have to run at all because something below
+    /// it is already kept.
+    ///
+    /// `store=` for the same reason `forward` takes one: without somewhere to
+    /// keep things there is no keeper, and without a keeper nothing is named —
+    /// the core does not compute a key it has nobody to hash with. A directory
+    /// nothing was ever written to answers fine; `unneeded` is empty and the
+    /// names are the same ones a real store would have given.
+    ///
+    /// Two nodes are missing from `keys` and it is not an omission: a
+    /// `.mapped()` node is named by the content of its items, and so is
+    /// anything under an input that cannot be written down. Whoever compares
+    /// two of these has to read the absence as "cannot tell", never as "did not
+    /// change".
+    ///
+    /// Both parts are **ordered by id**, like `resume`'s and for the same
+    /// reason: this crosses a process boundary.
+    #[pyo3(signature = (input = None, *, store = None))]
+    fn foreseen_json(
+        &self,
+        input: Option<&Bound<'_, PyAny>>,
+        store: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<String> {
+        let start = match input {
+            Some(obj) => value::from_py(obj)?,
+            None => soma_next_core::Value::Null,
+        };
+        let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
+        let plan = distribute(&plan, &self.placement);
+
+        let kept = store::opened(store)?;
+        let cache = kept.as_ref().map(|kept| Cache::over(&**kept));
+        let packing = cache.as_ref().map(|cache| Packing::over(cache, &Codecs));
+        let mut executor = Executor::new(&self.catalog)
+            .placed(&self.placement)
+            .remembering(&self.memory);
+        if let Some(packing) = &packing {
+            executor = executor.keeping(packing);
+        }
+
+        let (named, unneeded) = executor.foreseen(&plan, &start);
+        let named: BTreeMap<&NodeId, &Keys> = named.iter().collect();
+        let unneeded: BTreeSet<&NodeId> = unneeded.iter().collect();
+        serde_json::to_string(&serde_json::json!({
+            "keys": named,
+            "unneeded": unneeded,
+        }))
+        .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Executes the whole graph and returns what it produced.

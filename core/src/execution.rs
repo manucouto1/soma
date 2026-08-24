@@ -752,7 +752,20 @@ impl<'a> Executor<'a> {
     /// - a node with **no key at all** — nothing said about what implements it,
     ///   or something unnameable upstream — is a miss for the same reason it
     ///   was never cached.
-    fn foreseen(
+    ///
+    /// # Asked for on its own
+    ///
+    /// [`run`](Self::run) makes this pass before its first node, and it is
+    /// public because the answer is worth having **without** the run: two
+    /// versions of the same graph name the same node differently exactly when
+    /// the recipe changed, and comparing the two sets says what a change did
+    /// before anybody pays to find out. What is not in a key is not in the
+    /// answer either — the fingerprint of the code is metadata, and what a node
+    /// was constructed with never was in one.
+    ///
+    /// Without a [`keeper`](Self::keeping) and a [`memory`](Self::remembering)
+    /// it names nothing, which is the same silence a run gets.
+    pub fn foreseen(
         &self,
         plan: &Plan,
         graph_input: &Value,
