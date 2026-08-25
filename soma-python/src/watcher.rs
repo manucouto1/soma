@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// g.forward(x, watching=r)
 /// store.resolve(f"run/{r.run}/0")     # what that forward did
 /// ```
-#[pyclass(name = "Recorder", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Recorder", module = "somatize._somatize", frozen)]
 pub struct PyRecorder {
     inner: Arc<Recorder>,
 }

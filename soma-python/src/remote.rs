@@ -10,7 +10,7 @@
 //!
 //! `cloudpickle` appears nowhere because it is not Rust's business: the artifact
 //! is a pile of bytes neither the core nor the transport looks at, and the one
-//! that decides they are a pickle is `soma_next.worker`, in Python. The same
+//! that decides they are a pickle is `somatize.worker`, in Python. The same
 //! boundary as three other places — the core does not know what a node asks for,
 //! what an `Opaque` carries, or what a serialized catalog is.
 

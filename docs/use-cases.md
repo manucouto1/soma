@@ -4,12 +4,68 @@ The project moves in vertical slices. Every use case reaches all the way to
 Python, and is considered closed when it answers every guarantee on its
 questionnaire.
 
+**How to read it.** Each section records a decision at the moment it was taken.
+The argument is the point — code moved on, the reasoning did not — so what a
+section says is what was true when it closed, with three exceptions written down
+once here rather than patched into every section that predates them:
+
+- `workers={"gpu-box": Worker.at(…)}` in `Graph.forward` and in `Trainer` became
+  `broker=Broker.embedded({…})` in CU28. The shape of what is handed over is the
+  same; what it resolves to is no longer a connection.
+- the crate called `transport` moved out to `soma-fabric/wire`, unchanged, after
+  CU27. Paths in the questionnaires point at where the tests are today.
+- `Transition`, `Await` and `Driver` — a node that suspends and something that
+  serves what it asked for — were removed after CU18. A node is a function.
+  Sections written before that still show them; *After CU18* says why they went.
+
+---
+
+## What each slice settled
+
+| | | what it settled |
+|---|---|---|
+| CU1 | creating a graph | topology only, and errors at insertion rather than in a `validate()` |
+| CU2 | executing one | the engine is Rust, `Value` has a closed set of variants |
+| CU3 | the shape of it | `Plan` is an enum, and `compile` is the step between structure and engine |
+| CU4 | fans both ways | aggregation is a node reading a map; there is no `Aggregator` trait |
+| CU5 | the DSL | `>>` and `\|` in both languages, and `somatize` is the verb |
+| CU6 & CU7 | one contract | one `Node` with one `forward`, in both languages |
+| CU8 | `Opaque` | a value that only exists in this process, asked for by hand |
+| CU9 | waves | one thread per branch, decomposed as a tree and not flattened |
+| CU10 | the device | `Placement` is a fact of its own; the plan says *when*, not *where* |
+| CU11 | training | outside the graph, and the **three levels** the rest rests on |
+| CU12 | a worker | `Plan::Remote`, the `Transport` hole, and what does not travel |
+| CU13 | the cache | a Merkle key over the recipe, and the `Keeper` hole |
+| CU14 | training the far half | a trainer travels and stands beside the node |
+| *after* | `Opaque` on the wire | a codec in front of it, measured at 9–15× |
+| *after* | `every=N` | a group of steps is one update |
+| CU15 | federated | export is weights node by node, `fedavg` is a function, a round is a `for` |
+| CU16 | the grain of an item | an item's name is its content; micro-batches are level 2 |
+| CU17 | level 3 | `Partition`, `Pruner`, `Sampler` — pure, and no callback crosses |
+| CU18 | a study in a folder | a trial is a number, `claim` settles it, the state *is* the queue |
+| *after* | a node is a function | `Transition` and `Driver` had no tenant and went |
+| CU19 | a graph drawn | observability is **three** things, and this is the first |
+| *after* | a bucket | the second `Store`, and `claim` is a conditional PUT |
+| CU20 | the record | the `Watcher` hole; facts meet in the record, not in Rust |
+| *after* | a run drawn | one drawing function, live and read back |
+| CU21 | the diagnosis | an opinion about the record, reproducible without training again |
+| CU22 | before a step | a probe is one recorded `forward`; what separates is a runaway |
+| *after* | a block is a box | repeats, lanes, and an arrow that left the drawing |
+| CU23 | the fleet | no registry; the record turned the other way up |
+| CU24 | the data | a source is a **node**, and it is handed a coordinate |
+| CU25 | not running what nobody needs | names are knowable before anything runs |
+| CU26 | what an edit did | two sets of names, and findings rather than buckets |
+| CU27 | what a node was built with | the declaration goes in the key |
+| *after* | the wire leaves | `transport` → `soma-fabric/wire`, and why |
+| CU28 | a broker | which broker is a URL; ask eagerly, connect lazily |
+| CU29 | provenance | what cannot be recovered is written down when it is known |
+
 ---
 
 ## CU1 — Creating a graph
 
 ```python
-g = soma_next.Graph()
+g = somatize.Graph()
 g.node("clean", Clean())
 g.edge("clean", "vectorize")
 ```
@@ -25,11 +81,11 @@ rather than an `if is_step`) and a `NodeCatalog` that is the single registry. It
 is a reasonable answer; it is not the only one, and it is not inherited.
 
 What is worth looking at in the original before deciding, because they are scars
-from real mistakes: `soma-soma-core/src/graph/node.rs` (172 lines) and its tests
+from real mistakes: `soma-legacy/soma-core/src/graph/node.rs` (172 lines) and its tests
 `graph_node.rs` — `a_filter_keeps_its_caching_contract`,
 `a_step_is_not_output_cacheable`, `schemas_survive_both_directions`.
 
-### Questionnaire (from `soma-soma-core/tests/unit/graph*.rs`)
+### Questionnaire (from `soma-legacy/soma-core/tests/unit/graph*.rs`)
 
 **Construction**
 - [x] an empty graph is valid
@@ -135,16 +191,10 @@ The four roles, which are easy to confuse:
 6. **A bool does not cross the boundary.** `True` as the tensor `1.0` is the kind
    of silent conversion nobody understands later.
 
-### The two decisions the engine was NOT taking
-
-Both were settled in CU4. `Fanin` and `ManyLeaves` no longer exist as errors.
-
-## CU3 — The shape of the execution, and steps
+## CU3 — The shape of the execution
 
 ```python
-g.step("agent", Agent())            # an object with poll(ctx)
-g.forward(x, driver=MyDriver())     # whoever serves what it asks for
-g.plan()                            # how it is going to be walked
+g.plan()      # how it is going to be walked
 ```
 
 Status: **closed**. 39 tests in Rust, 38 in Python.
@@ -159,9 +209,8 @@ sub-plan.
 
 It is the same principle we had already found — variation as data, not as a
 subtype — and it has a concrete advantage over a bare function or a trait: when
-`Parallel` was added halfway through this use case, the compiler pointed at the
-single place that had to decide what to do with it. A wildcard arm would have
-said nothing.
+a variant is added, the compiler points at the single place that has to decide
+what to do with it. A wildcard arm would say nothing.
 
 ### The missing piece: compiling
 
@@ -170,28 +219,13 @@ Between the structure and the engine there is now a step:
 **everything structural is detected before anything executes**. The engine no
 longer works out where each node's input comes from: the plan says so.
 
-It needs the catalog because the shape depends on what each node is — a filter is
-called once, a step is driven by turns.
-
 ### Decisions taken
 
 1. **`Plan` is an enum**, not a trait. Closed, exhaustive, no wildcards.
-2. **`Parallel` means "the branches do not depend on each other"**, not "it runs
-   on threads". Spreading them out is a decision that does not change the result
-   and nobody has asked for it.
-3. **A fan produces a `Value::List`** with each branch's output, in order.
-4. **`Executor` is a type**, not a bare function: executing needs context (today
-   the store and the driver; tomorrow a cache and events). That "tomorrow" is
-   what the original calls `GraphSession`.
-5. **What a step asks for is opaque to the core**: a `Value` the `Driver`
-   interprets. That is why there are no LLMs, no tools, no effect log — that is
-   library and persistence, not the contract.
-6. **`Transition` has two variants**: `Done` and `Await`. `Spawn`, `Goto` and
-   `Suspend` will arrive with their own use case. No `#[non_exhaustive]`, on
-   purpose.
-7. **A cap of 64 turns.** A step that does not finish is a bug in the step; the
-   cap makes it show up as a named error and not as a stalled process.
-8. **`Value` loses `Tensor` and gains `Number` and `List`.** Nobody was producing
+2. **`Executor` is a type**, not a bare function: executing needs context (today
+   the store; tomorrow a cache and events). That "tomorrow" is what the original
+   calls `GraphSession`.
+3. **`Value` loses `Tensor` and gains `Number` and `List`.** Nobody was producing
    a shaped tensor, and the round trip to Python has to be symmetric: what goes
    in as a list comes out as a list.
 
@@ -200,10 +234,7 @@ called once, a step is driven by turns.
 **`Plan::Remote`.** There is no transport, so it would be a variant nobody can
 execute. What the enum buys is precisely that adding it the day there is a worker
 is one more variant, and that the compiler points at every place that has to
-decide.
-
-> **CU4 note**: the `Plan::Parallel` and the `Fanin`/`ManyLeaves` errors
-> described above no longer exist. See below for why.
+decide. *(It arrived in CU12.)*
 
 ## CU4 — Fans in both directions
 
@@ -249,22 +280,24 @@ it.
    branch produces something like `{"update": …, "n": 128}` — another independent
    reason to have `Value::Map`.
 
-### What was removed
+### What was removed, and the lesson in it
 
-**`Plan::Parallel`**, added in CU3. It broke on fan-in: on a diamond both
-branches claimed the join node and it executed twice. The right shape is for
-**every step to carry where its input comes from** (`Execute { node, from }`).
-With that the plan stays self-contained — the engine does not look at the graph
-again — and the fans fall out without any special variant. `Parallel` will come
-back when it means something it does not mean today: spreading across threads.
+A `Plan::Parallel` variant that meant *these branches do not depend on each
+other* broke on the diamond: both branches claimed the join node and it executed
+twice. The right shape is for **every step to carry where its input comes from**
+(`Execute { node, from }`). With that the plan stays self-contained — the engine
+does not look at the graph again — and the fans fall out with no special variant
+at all.
 
-The `CompileError::Fanin` and `ManyLeaves` errors went with it. `CompileError` is
-left with a single variant.
+So the variant went, and with it the `CompileError::Fanin` and `ManyLeaves`
+errors, leaving `CompileError` with one. **A variant that only describes
+structure buys nothing**; parallelism comes back in CU9 meaning something it did
+not mean here — running at the same time.
 
 ## CU5 — The DSL
 
 ```python
-from soma_next import Filter, Graph
+from somatize import Filter, Graph
 
 g = Graph.somatize(Source() >> (Left().named("left") | Right().named("right")) >> Mean())
 g.forward(0)
@@ -299,22 +332,15 @@ above *is* the diamond.
    declared in a subclass body, which is also the only thing `help()`, an IDE and
    mypy can see. It is the same structure as the original Soma (`soma/_graph.py`),
    and for the same reasons.
-4. **`Filter` and `Step` are abstract, and inheritance is what decides.** Each
-   requires its method with `@abstractmethod`, so a `class X(Filter)` without
-   `forward` cannot even be instantiated, and `isinstance` is the only question
-   the DSL asks.
-
-   It was a correction: they were born as empty mixins that asked by duck typing
-   whether the object *had* `poll`. That let two ugly things through — a
-   `class X(Step)` with only `forward` ended up registered as a filter without a
-   warning, and an object with both methods gave three different answers
-   depending on whether it came in through `node()`, through `step()` or through
-   the DSL. The names promised a contract nobody enforced.
-
-   `node()` and `step()` are still the lower door and accept an outside object
-   that inherits from nothing, because there the type is chosen by the caller.
-   What they do not accept is the contradiction: `node()` with something that
-   inherits from `Step` is an error that says which call is the right one.
+4. **The base class is abstract, and inheritance is what decides.** It requires
+   its method with `@abstractmethod`, so a subclass without `forward` cannot even
+   be instantiated, and `isinstance` is the only question the DSL asks. It was a
+   correction: the bases were born as empty mixins that asked by duck typing
+   whether the object *had* a method, and an object could get three different
+   answers depending on which door it came in through. **The names promised a
+   contract nobody enforced.** `node()` stays the lower door and accepts an
+   outside object that inherits from nothing, because there the type is the
+   caller's to choose.
 5. **`Wire` does not materialize until `somatize`.** It records where you enter
    and where you leave, plus the lists of nodes and edges. That way joining two
    pieces is concatenating lists rather than merging two graphs, and a repeated
@@ -322,7 +348,7 @@ above *is* the diamond.
 6. **The DSL is nothing but `node` and `edge`.** There is a test that builds the
    same graph both ways and compares nodes, edges and plan.
 
-## CU6 — A single contract
+## CU6 & CU7 — A single contract, and the same one in both languages
 
 ```rust
 pub trait Node: Send + Sync {
@@ -330,22 +356,21 @@ pub trait Node: Send + Sync {
 }
 ```
 
-Status: **closed** — and see *After CU18* below, where the conclusion survived
-its own mechanism. What is written here is what was true in August 2026, with
-`Transition` still in the signature; the reasoning is what matters and none of
-it changed.
+Status: **closed**. 47 tests in Rust, 56 in Python. Two use cases and one
+argument: the core stopped having a `Filter` and a `Step` in CU6, and Python
+stopped having them in CU7.
 
 ### The question: why two types?
 
 The difference between a filter and a step was a single thing: whether it can
-finish on its own. But **that was already said in `Transition`** — a filter is a
-node that always answers `Done`. Having two traits duplicated in the type system
-a distinction that lived in the return value, and with it propagated upwards the
-obligation to know which one each node was: catalog, plan, engine, errors,
+finish on its own. But that was already said in the **return value** — a filter
+is a node that always answers `Done`. Having two traits duplicated in the type
+system a distinction that lived somewhere else, and with it propagated upwards
+the obligation to know which one each node was: catalog, plan, engine, errors,
 adapters, DSL. **35 places.**
 
-Two more alternatives were tried before deciding, and both were rejected for
-concrete reasons:
+Two alternatives were tried before deciding, and both were rejected for concrete
+reasons worth keeping:
 
 - **A sugar trait with a blanket impl** (`impl<T: Filter> Node for T`). Compiled:
   `error[E0034]` — with two traits in scope the name `forward` is ambiguous *even
@@ -354,97 +379,40 @@ concrete reasons:
   `Node` by hand, so a node could not evolve from always finishing to asking for
   a turn without being rewritten entirely.
 - **State as a continuation** (`Pending { requests, resume }`). Simpler on the
-  surface — it carries the whole `Ctx` — but it breaks deterministic replay: the
-  log relies on `forward` being deterministic given `(turn, results)`, and
-  resuming a continuation would require serializing a `Box<dyn Node>`. The
-  typestate variant dies sooner: the `Catalog` is a heterogeneous map that erases
-  the type parameter, and it does not cross into Python at all.
+  surface, but it breaks deterministic replay, and resuming would require
+  serializing a `Box<dyn Node>`. The typestate variant dies sooner: the `Catalog`
+  is a heterogeneous map that erases the type parameter, and it does not cross
+  into Python at all.
 
 ### Decisions taken
 
 1. **One trait, one method, `forward` in both languages.** Without the second
    trait there is no name ambiguity, so there is no need to call it `advance` in
-   Rust.
-2. **`Pure` is a struct, not a trait.** Sugar for wrapping a function. It obeys
-   our own rule: if you cannot name two implementors, it is a struct. And it
-   reintroduces neither of the two errors above.
-3. **`input` travels apart from the context.** A node that finishes on the first
-   turn never looks at `ctx`; it should not have to cross a struct to reach the
-   only thing it cares about.
-4. **In Python `Filter` and `Step` stay, as a façade.** They are the two
-   convenient calling conventions — `forward(x)` returns a value,
-   `forward(x, ctx)` returns a transition — and inheritance still decides which is
-   used. Underneath there is a single contract. The separation stopped being the
-   system's and became the door's.
+   Rust — and no reason for Python to keep two doors either. `Filter`, `Step`,
+   `g.step()`, `kind_of` and `Graph`'s two overrides all go.
+2. **`input` travels apart from the context.** A node that never looks at `ctx`
+   should not have to cross a struct to reach the only thing it cares about.
+3. **`Ctx` is a `#[pyclass]`**, not a dictionary. It is a core concept crossing
+   the seam, so the adapter recognizes it by type instead of guessing from a
+   dict's keys, and `ctx.device` reads as it does in Rust.
+4. **One adapter, not two.** `PyFilterNode` and `PyStepNode` merge into `PyNode`.
 
 ### What disappeared
 
 `trait Step`, `FilterError`, `StepError`, `StepCtx`, `NodeImpl`, `Plan::Step`,
 `RunError::{Filter, Step, WrongKind}`, `insert_filter`/`insert_step`,
-`run_filter`/`drive_step`, and `PyStep` as a separate adapter.
+`run_filter`/`drive_step`, `PyStep`, `Pure`. `RunError` goes from 7 variants to
+5, `Plan` from 4 to 3, and `compile` no longer needs the catalog to know what
+kind each node is — only to check that there is one.
 
-`RunError` goes from 7 variants to 5. `Plan` from 4 to 3. `compile` no longer
-needs the catalog to know what kind each node is — only to check that there is
-one.
+### The conclusion outlived its own mechanism
 
-### What was gained, and was not in the plan
+CU6's argument was that the distinction lived in the return value and not in the
+type. *After CU18* removed the return value's variants too — and the conclusion
+did not need them: with one shape there is nothing left for the distinction to
+live in. The diagnosis was right and the mechanism it rested on was incidental,
+which is the most a design argument can hope for.
 
-**A node can evolve.** It starts always returning `Done`, and the day it needs to
-consult something an `Await` branch is added to the same body, without changing
-type or registration. With two traits that was `error[E0119]`. There is a test.
-
-> **Read this again after *After CU18*.** The variant that made a filter and a
-> step one type was itself removed, and the conclusion did not need it: with one
-> shape there is nothing left for the distinction to live in. What CU6 got right
-> was the diagnosis — the distinction was in the return value and not in the type
-> — and it turned out the return value did not have to carry it either.
-
-## CU7 — The same mechanism in both languages
-
-```python
-from soma_next import Await, Done, Graph, Node
-
-class Clean(Node):
-    def forward(self, x, ctx):
-        return Done(x.strip())
-
-class Ask(Node):
-    def forward(self, x, ctx):
-        if ctx.turn == 0:
-            return Await([f"and {x}?"])
-        return Done(ctx.results[0])
-
-Graph.somatize(Clean() >> Ask()).forward("  hello  ", driver=MyDriver())
-```
-
-Status: **closed**. 47 tests in Rust, 56 in Python.
-
-### What CU6 left undone
-
-CU6 unified the core but left Python with two classes (`Filter` and `Step`) and
-two calling conventions. It was an asymmetry with no reason: if underneath there
-is one contract, up top there is no reason to pick a door.
-
-### Decisions taken
-
-1. **A single `Node` class in Python**, with `forward(input, ctx)` returning a
-   transition. `Filter` and `Step` disappear, and with them `g.step()`,
-   `kind_of`, `ensure_kind` and `Graph`'s two overrides.
-2. **`Ctx`, `Done` and `Await` are `#[pyclass]`es**, not dictionaries. They are
-   the core's own concepts crossing the seam, so the adapter recognizes them by
-   type instead of guessing from a dict's keys, and `ctx.turn` reads as it does
-   in Rust rather than `ctx["turn"]`.
-3. **One adapter, not two.** `PyFilterNode` and `PyStepNode` merge into `PyNode`.
-4. **`Pure` is gone.** It was sugar in the core for wrapping a function, and each
-   implementation decides how it transitions without needing a shortcut.
-
-### The price, said plainly
-
-A node that only transforms now writes `return Done(x.strip())` and accepts a
-`ctx` it does not look at. It is more ceremony than `return x.strip()`, and it is
-deliberate: it buys that **there are not two ways of writing a node**, that the
-DSL has a single door, and that a node can gain a turn by adding a branch rather
-than by changing class.
 
 ## CU8 — A value that crosses without being converted
 
@@ -502,7 +470,7 @@ everything fits through becomes the default path — leaving the graph without
 cache, without schemas and without distribution all at once, with nobody
 noticing.
 
-A **registry of opaque types** that `soma_next.torch` would fill on import was
+A **registry of opaque types** that `somatize.torch` would fill on import was
 also rejected: it adds mutable global state and a dependency on import order, to
 save one word.
 
@@ -538,105 +506,66 @@ Three things it teaches, and they are not obvious:
   a module: our `forward` carries `ctx` and torch calls it without one
   (`TypeError`). Verified.
 - **The training loop goes outside**, and the line that collects the parameters
-  by walking `g.nodes()` is exactly the pain a `soma_next.torch.parameters(g)`
+  by walking `g.nodes()` is exactly the pain a `somatize.torch.parameters(g)`
   would erase. It is in plain sight so the decision is made with the example in
   front of you.
 
 ### What did NOT go in
 
-`soma_next.torch` — `module()`, `parameters()`, the training loop — is left for
+`somatize.torch` — `module()`, `parameters()`, the training loop — is left for
 when it is clear how it should work. **The core provides the hole; whoever knows
 what goes in it is a library**, and that separation is what let this be closed
-without deciding that.
+without deciding that. *(It opens in CU11.)*
 
-## What comes next, undecided (16 August 2026)
+## An aside: micro-batches, and what became of the open questions
 
-The discussion was left open here, with **CU12 in doubt**. "Micro-batches" covers
-three different problems that have neither the same owner nor the same value:
+The plan was left open here on 16 August 2026, with what was then called CU12 in
+doubt. It is worth keeping because the doubt was right: **"micro-batches" covers
+three problems that have neither the same owner nor the same value.**
 
-| problem | what solves it | whose it is | consumer today? |
+| problem | what solves it | whose it is | consumer? |
 |---|---|---|---|
 | the batch does not fit in memory | splitting it and accumulating gradients | the **Trainer**'s, five lines | yes, and it is 80% of cases |
 | the bubble: `cuda:1` idle while `cuda:0` computes | chaining micro-batches | the **graph**'s | doubtful |
 | bounding the live activations | a real 1F1B scheduler | **nobody's**, and that is the problem | no |
 
-The two reasons for the doubt:
+**The bubble may already not exist.** CUDA launches asynchronously, so a
+micro-batch loop on the host already overlaps the devices without a scheduler —
+nothing synchronizes along the way, since `Opaque` wraps the tensor and there is
+no `.item()` in the seam. What a scheduler would add has to be measured before it
+is written.
 
-**The bubble may already not exist.** CUDA launches asynchronously: a
-micro-batch loop on the host already overlaps the devices without a scheduler,
-because nothing synchronizes along the way — `Opaque` wraps the tensor and there
-is no `.item()` in the seam. What a scheduler would add **has to be measured
-before it is written**, and with a single GPU here it cannot be measured.
+**Real 1F1B is not ours.** Its value is bounding how many micro-batches have
+their activations live, and for that the backward passes have to be interleaved
+with the forwards. The backward pass is fired by the Trainer, not by the engine,
+so a 1F1B scheduler would require the plan to know about the backward pass — i.e.
+putting training inside the graph, which is exactly what CU11 decided against.
 
-**Real 1F1B is not ours.** Its value is not the bubble but bounding how many
-micro-batches have their activations live, and for that the backward passes have
-to be interleaved with the forwards. The backward pass is fired by the Trainer,
-not by the engine. A 1F1B scheduler would require the plan to know about the
-backward pass — i.e. putting training inside the graph, which is exactly what
-CU11 decided against. The version that does fit the levels — micro-batches
-forward only — is the one with the least value.
+What happened next: the first row is the Trainer's `every=` (*After CU14*), the
+second and third never opened, and the local worker that was the third candidate
+became **CU12**, whose benefit was measurable with one machine — two Python nodes
+in a wave serialize against the GIL; in two processes they do not.
 
-### The three candidates
+### Training from Rust, researched and never opened
 
-- **A. Gradient accumulation in the Trainer.** The real problem of the 80%,
-  level 2, zero Rust. Honest and small; it teaches nothing new about the design.
-- **B. A local worker: `Plan::Remote` targeting a process on this same machine.**
-  ← *recommended.* It is the only one with a benefit **measurable here and now**:
-  two Python nodes in a wave serialize against the GIL, and `test_waves.py`
-  already documents that as a known limitation; in two processes, they do not.
-  All Rust — the `Transport` trait, the serialization, `Opaque` as a
-  `CompileError` — the first new trait since CU2, and it prepares CU13 without
-  needing a second machine.
-- **C. What does not fit on the GPU**: being able to ask that two structurally
-  parallel branches do not overlap, and to release what nobody reads any more.
-  All Rust, and it touches the most delicate parts: the compiler and the engine.
+It waits on a consumer with a name: a federated client that trains **without a
+CPython loaded**. Four results from 16 August 2026, kept so the work is not done
+twice:
 
-## Following use cases (not opened)
+- `tch::Tensor` is `Send` but **not `Sync`**, so it does not fit in
+  `Value::Opaque`, whose bound is `Arc<dyn Any + Send + Sync>`. `tch` is ruled
+  out short of wrapping every tensor in a `Mutex`.
+- `candle_core::Tensor` **is** `Send + Sync` — an `Arc<RwLock<Storage>>` inside,
+  and its own code says the `RwLock` was chosen for exactly that — so it would
+  fit today without touching the core. Verified by compiling.
+- the limit that does not move: **a graph is all-Python or all-Rust for the
+  tensors**. An `Opaque` put there by Python carries a `PyObject`, and a Rust
+  node doing `downcast_ref::<candle::Tensor>()` gets `None`. Converting for real
+  would mean copying the raw data and losing the autograd graph, which is what
+  `Opaque` exists to prevent.
+- the order, if the day comes: **first a Rust node with parameters**, then the
+  collection, and the Trainer last. Never starting with the Trainer.
 
-The order comes from the August 2026 literature review, and the content of the
-last two changed when CU11 closed: the separation into three levels — graph,
-training run, study — reorders which mechanism solves what.
-
-What actually happened with the two next ones, since this list was written:
-**CU12 was candidate B** — the worker and `Plan::Remote` — and **CU13 was the
-cache**, which was not on the list at all: it came out of the store the worker's
-`have`/`want` had been waiting for. Micro-batches did not open, and they are
-still where the grain per item joins them.
-
-- ~~CU12 — micro-batches~~: overlapping inside a branch (GPipe, 1F1B). **Graph
-  level**: it is one forward from the inside. Still open, now with `.mapped()`
-  waiting on it
-- ~~CU13 — `Plan::Remote`~~: **done as CU12**. Transport (the only new trait,
-  `Transport`), and `Opaque` crossing the wire. Only for spreading **one graph**
-  across hosts — a network that does not fit on one machine — which is model
-  parallel and **split learning** at once. Spreading *whole training runs* is
-  another thing and does not need it
-- CU14 — federated: `map` over the clients and `reduce` with FedAvg, at the study
-  level. FedAvg, FedProx and company are library — **functions**, not nodes. This
-  is where the question of what a training run exports as state has to be
-  answered
-- *(candidate)* releasing what nobody reads any more, and being able to ask that
-  two structurally parallel branches do not overlap. Both are born of "it does
-  not fit on the GPU" and both are at the graph level
-- *(candidate, with an entry condition)* **training from Rust**. It is not opened
-  until there is a consumer, and the consumer has a name: a federated client that
-  trains **without a CPython loaded**. Researched on 16 August 2026, and these
-  four results save having to work it out again:
-  - `tch::Tensor` is `Send` but **not `Sync`** (`unsafe impl Send for Tensor` in
-    `wrappers/tensor.rs`, and no `Sync` anywhere in the crate), so it **does not
-    fit in `Value::Opaque`**, whose bound is `Arc<dyn Any + Send + Sync>`. `tch`
-    is ruled out short of wrapping every tensor in a `Mutex`
-  - `candle_core::Tensor` **is** `Send + Sync` — it carries an
-    `Arc<RwLock<Storage>>` inside, and its own code explains they chose the
-    `RwLock` for exactly that — so it would fit today **without touching the
-    core**. Verified by compiling
-  - the limit that does not move: **a graph is all-Python or all-Rust for the
-    tensors**. An `Opaque` put there by Python carries a `PyObject` inside, and a
-    Rust node doing `downcast_ref::<candle::Tensor>()` would get `None`. There is
-    no cheap bridge: converting for real would mean copying the raw data and
-    losing the autograd graph, which is what `Opaque` prevents
-  - the order, if the day comes: **first a Rust node with parameters**, then the
-    collection, and the Trainer last. Never starting with the Trainer
 
 ## CU9 — Branches run at the same time
 
@@ -1031,12 +960,12 @@ memory is left: that is a policy, and there is nobody asking for it yet.
 
 **Splitting a node across devices**, and `g.to("cuda")` for the whole graph.
 
-**`soma_next.torch`.** The pattern for obeying a placement is written by hand in
-the test, which is where it is documented until it repeats.
+**`somatize.torch`.** The pattern for obeying a placement is written by hand in
+the test, which is where it is documented until it repeats. *(It opens in CU11.)*
 
-**Generalizing `Placement` to "a place, local or remote"** to get ahead of CU13.
-When `Remote` arrives, `Placement` will be there to grow — or not; that gets
-decided then.
+**Generalizing `Placement` to "a place, local or remote"** to get ahead of a
+worker. *(CU12 decided against it: a `Host` is a name and a `Device` is a place
+inside a machine, and they are independent.)*
 
 ### Measured, not asserted
 
@@ -1051,7 +980,7 @@ when executed in sequence; what the waves buy is **host** time.
 ## CU11 — Training, outside the graph
 
 ```python
-from soma_next.torch import Trainer, parameters
+from somatize.torch import Trainer, parameters
 
 g = Graph.somatize(Encoder().on("cuda:0") >> Head().on("cuda:0"))
 t = Trainer(g, objective=cross_entropy,
@@ -1123,7 +1052,7 @@ a test.
 graph is trained three ways without touching it, and it remains the artifact that
 travels.
 
-**2. It lives in `soma_next.torch`.** Loss, `backward()` and optimizer are torch;
+**2. It lives in `somatize.torch`.** Loss, `backward()` and optimizer are torch;
 writing it neutrally would ask for a `Backend` with a single implementor. The core
 does not learn what training is, and that is the sign the separation holds.
 
@@ -1193,23 +1122,21 @@ wire at every step.
 
 Checkpoints and resumption · callbacks and early stopping, which are a `while`
 over `step` · metrics beyond the loss · schedulers · gradient accumulation · the
-study as a type · and **exporting or loading a model's state**, which is CU14's
+study as a type · and **exporting or loading a model's state**, which is CU15's
 question and was not needed here: training locally extracts no state.
 
-### What this did to the plan
+### The question it reshaped
 
-- **The state question stops blocking.** It is no longer "is a node's state a
-  `Value`?" in the core, but "what does a training run export?" at level 2, and it
-  gets answered in CU14 with the case in front of us.
-- **CU13 splits in two.** Spreading *one graph* across hosts is `Plan::Remote`,
-  with dependencies halfway through the forward. Spreading *training runs* — HPO,
-  federated, data parallel — is "execute this whole thing over there", level 3,
-  and does not need it. The original had them in the same enum: `ModelParallel`
-  next to `DataParallel`, `Federated` and `PopulationBased`.
-- **CU14 changes shape.** "A federated round is a graph" is withdrawn: it is `map`
-  and `reduce`. A graph would only be justified by non-flat topologies —
-  hierarchical federation, gossip — and that day has not come.
-- **`soma_next.torch` stops being pending** and opens here.
+**The state question stops blocking**, and it stops being the core's. It is no
+longer *is a node's state a `Value`?* but *what does a training run export?* at
+level 2 — answered in CU15, with the case in front of us.
+
+The three levels also split what the original had joined. Spreading *one graph*
+across hosts has dependencies halfway through the forward and needs
+`Plan::Remote`; spreading *whole training runs* — HPO, federated, data parallel
+— is "execute this thing over there", level 3, and needs none of it. The
+original had them in one enum, `ModelParallel` beside `DataParallel`,
+`Federated` and `PopulationBased`.
 
 ---
 
@@ -1220,22 +1147,16 @@ question and was not needed here: training locally extracts no state.
 g = Graph.somatize(Encode() >> Classify().at("gpu-box"))
 g.forward(x, workers={"gpu-box": Worker.at("gpu-box:7000")})
 
-# B. the worker is a bare node: `pip install soma-next` and nothing else
-#    python -m soma_next.worker --listen 0.0.0.0:7000
+# B. the worker is a bare node: `pip install somatize` and nothing else
+#    python -m somatize.worker --listen 0.0.0.0:7000
 g.forward(x, workers={"gpu-box": Worker.at("gpu-box:7000",
                                            mode="network", send=["my_package"])})
 ```
 
-> **Read the two `workers=` lines as `broker=`.** Since CU28 a client says *who
-> knows where each host is* — `broker=Broker.embedded({"gpu-box": Worker.at(…)})`
-> — and since *After CU27* the crate this section calls `soma-next-transport` is
-> soma-fabric's `wire/`, moved unchanged. Both are recorded at the end of this
-> file rather than rewritten here: what a section says is what was true when it
-> closed.
-
-Status: **closed**. A crate of its own, `soma-next-transport`, and the generic
-worker in `soma_next.worker`. 74 tests in the transport crate today — 49 of the
-worker, 22 of the protocol, 3 of the artifact — plus `test_remote.py` (37),
+Status: **closed**. A crate of its own — `transport`, which left for
+`soma-fabric/wire` after CU27 — and the generic worker in `somatize.worker`. 74
+tests in it — 49 of the worker, 22 of the protocol, 3 of the artifact — plus
+`test_remote.py` (37),
 `test_integration.py` (17), `test_manifest.py` (13) and `test_fingerprint.py`
 (13) in Python.
 
@@ -1309,7 +1230,7 @@ at all, and pays for it by demanding that both interpreters look very much alike
 fingerprint is the hash of its **AST**, plus transitively whatever of yours that
 code names — a helper in the same module, a base class, a module constant. Not
 comments and not docstrings: comparing text would make versioning noise. It stops
-at what is installed, at what has no source, and at `soma_next` itself, which
+at what is installed, at what has no source, and at `somatize` itself, which
 goes into the client's identity instead so that upgrading the library does not
 invalidate every class at once.
 
@@ -1367,7 +1288,7 @@ no message.
 port runs code on that machine as that user — `pickle` artifacts are opened with
 `cloudpickle.loads` and `project` ones resolve classes out of that clone. That is
 `ssh`'s job and `srun`'s, not a framework's, and it is said plainly in
-`soma_next.worker`'s own docstring rather than left to be discovered.
+`somatize.worker`'s own docstring rather than left to be discovered.
 
 ### What the tests found
 
@@ -1397,7 +1318,7 @@ leaves its seat)
 - [x] a host nobody resolves is **not executed here just in case**
 - [x] what comes back is merged as if it had been produced here
 
-**The transport** (`transport/tests/unit/`)
+**The transport** (`soma-fabric/wire/tests/unit/`)
 - [x] a node placed away really runs in another process, and the same graph
       undistributed runs here
 - [x] a whole wave on one worker goes in a single trip, and two workers really do
@@ -1462,8 +1383,7 @@ What crosses a wire is the **value**, not the graph that made it. So a node with
 parameters that runs on another machine gets no gradient here, and — this is the
 part worth writing down — **nothing failed** when that happened: the loss came
 down, because whatever was downstream of it was learning, and half the net never
-moved. Silently wrong numbers of the same family as the cached prefix, and with
-nobody asking the question.
+moved. Silently wrong numbers, with nobody asking the question.
 
 The question is asked now, and at the level that can ask it. After the first
 `backward()`, if the optimizer is about to update a parameter that received no
@@ -1472,43 +1392,21 @@ general than the case that prompted it: a slice on another host, an output read
 back from a store, a branch the loss never reads — one symptom, one check.
 
 And **`.at()` is not a refusal to train**, which is why the check is about
-gradients and not about hosts. The far half can perfectly well train itself:
-that is [**split learning**](https://arxiv.org/abs/1812.00564), and it works
-today without a line of framework:
+gradients and not about hosts. The far half can perfectly well train itself —
+that is [**split learning**](https://arxiv.org/abs/1812.00564) — and it worked
+here with no framework at all: a node told which half of the pass it was in,
+branching on it, keeping its activation between the two calls.
 
-```python
-class ByHand(Node):                        # ← and CU14 made this the framework's job
-    def forward(self, msg, ctx):
-        if msg["kind"] == "forward":
-            self.held = self.lin(tensor(msg["value"])).relu()   # the graph stays HERE
-            return Done({"value": self.held.detach().tolist()})
-        self.opt.zero_grad()
-        self.held.backward(tensor(msg["value"]))                # dL/da, off the wire
-        self.opt.step()
-```
-
-**Nobody writes this any more, and nobody should.** A node being told which half
-of the pass it is in and branching on it is the framework handing the user its
-own work — in torch nobody does that, and there is no reason to here. CU14 took
-it over: what a user writes is a plain layer, `Slab`, and `Split(SGD, lr=0.1)`
-says it trains where it runs. `ByHand` survives in the tests as the **control**,
-because the strongest thing a framework can show is the loop it replaced,
-running beside it, producing the same losses step for step.
-
-Three things that were already there make it fall out: a worker **keeps its
+Three things that were already there made it fall out: a worker **keeps its
 catalog**, so the node object survives between calls and its activation stays
 alive on the far side; a node is **one contract**, so it dispatches on its input
 instead of needing a kind of its own; and a gradient is a tensor like any other,
 so it crosses as data. Those three are why CU14 could take it over without a new
 variant anywhere — the mechanism was already right, it was the **user** who was
-being asked to drive it.
+being asked to drive it. Nobody writes that node any more; it survives in the
+tests as the **control**, because the strongest thing a framework can show is the
+loop it replaced, running beside it, producing the same losses step for step.
 
-What it is not, yet: it takes two round trips the caller drives, `self.held` is
-hidden state nobody checks the alternation of, activations cross as lists of
-floats rather than tensor bytes — the codec exists, the wire still refuses an
-`Opaque` — and the two halves never overlap. Making it a concept of the framework
-is a use case of its own, and it turns on one question: whether a worker stops
-being dumb and starts holding an optimizer.
 
 ### What did NOT go in
 
@@ -1519,15 +1417,15 @@ placement policy and no load balancing · **retrying a failed slice**, because a
 node that already ran half of itself is not idempotent and nobody has said what
 it means to run it again · **a protocol version**, since both sides are the same
 binary from the same `cargo build`; the day they stop being so, the place for one
-is the `Hello`, which already negotiates the runtime · and **a store**, which was
-the next slice and is where the `have`/`want` finally got its `have`.
+is the `Hello`, which already negotiates the runtime · and **a store**, which is
+CU13 and where the `have`/`want` finally got its `have`.
 
 ---
 
 ## CU13 — What is remembered, and what is not computed twice
 
 ```python
-from soma_next.torch import Trainer, freeze, parameters
+from somatize.torch import Trainer, freeze, parameters
 
 g = Graph.somatize(Encoder().frozen().cached() >> Head())
 
@@ -1622,7 +1520,7 @@ node runs** — the engine never sees a graph, so it cannot be the one to ask.
 
 The core defines *frozen* as "this node's state does not change while the graph
 runs" — a statement about **cache validity**, not about gradients, which it still
-knows nothing about. `soma_next.torch.freeze` is what makes it true, with
+knows nothing about. `somatize.torch.freeze` is what makes it true, with
 `requires_grad_(False)`, exactly as a node and not the core is what moves a
 tensor to a GPU. And the digest of the weights is paid for **there**, once,
 because settling is the moment that makes both halves true at the same time.
@@ -1635,7 +1533,7 @@ whoever knows what goes in it is a library. Here it is doubly true — hashing i
 
 **Driver serves, Transport carries, Keeper keeps.**
 
-What fills it is `soma_next_store::Cache`, and in Python there is a second one in
+What fills it is `somatize_store::Cache`, and in Python there is a second one in
 front: `Packing` turns every `Opaque` into bytes on the way in and back on the
 way out, so the store sees maps and bytes and never learns Python exists.
 
@@ -1657,10 +1555,10 @@ cannot reach.
 **4. The frontier of `Opaque` moves rather than disappearing.** From "an opaque
 does not travel" to "an opaque nobody registered a codec for does not travel",
 which is the more precise of the two. `codec(kind, type, dump=, load=)` is the
-register; `soma_next.torch` fills in the tensor's **on being imported**, so a
+register; `somatize.torch` fills in the tensor's **on being imported**, so a
 graph that keeps tensors and never imports it keeps nothing and says why on
 `stderr`. Importing `torch` is not enough and is not meant to be: registering it
-from `soma_next` would mean importing torch for everyone who does not have it.
+from `somatize` would mean importing torch for everyone who does not have it.
 What comes back is a **leaf**, and there is a test that says so, because it will
 look like a bug the first time somebody sees it.
 
@@ -1690,7 +1588,7 @@ alone, that is the one failure a cache must not have — two checkpoints of the
 same class under one name, the wrong tensor back, no error and no warning. So
 Python asks it, by the same duck it asks for `parameters()`, wherever a cache is
 declared: something with state, settled, and no digest, refuses to run and says
-to call `soma_next.torch.freeze(g)`. There is a test that reproduces the bad hit
+to call `somatize.torch.freeze(g)`. There is a test that reproduces the bad hit
 and one that shows two checkpoints settled at the same digest **are** one name,
 because that is what says the digest is what the key believes.
 
@@ -1720,7 +1618,7 @@ because that is what says the digest is what the key believes.
 - [x] a kept value is findable by looking at what is in the store
 - [x] the same bytes under two names are stored once
 
-**The worker** (`transport/tests/unit/worker.rs`)
+**The worker** (`soma-fabric/wire/tests/unit/worker.rs`)
 - [x] what a worker already kept is not run again **over there** — and the same
       worker without a keeper runs it every time
 - [x] the name of what ran over there comes back
@@ -1750,9 +1648,8 @@ because that is what says the digest is what the key believes.
 **The grain per item** (`.mapped()`): a node that maps over items, with a key per
 item instead of per node. It is designed and unwritten — `Key` is public and
 there is no `Keys` yet, on purpose: a variant nobody can construct is worse than
-a variant that arrives late, and the day it arrives every `match` stops compiling
-and somebody decides. It opens together with micro-batches, because it is the
-same question.
+a variant that arrives late. *(CU16 wrote it, and found that it and micro-batches
+are **not** the same question.)*
 
 Also out: **`.overwrite(times=1)`**, which is a policy of the *run* and lives in
 the executor, not in what is kept · **the queryable index** — what do I have,
@@ -1760,7 +1657,8 @@ from which run, from when — which is a SQLite derived from the records and
 throwaway, and making it the truth would mean a single writer over NFS · a
 **strict mode** for the fingerprint (`.cached(strict=True)`) · and **S3**, which
 arrives the day there is a MinIO to point at, through OpenDAL and as another
-configuration rather than another implementation.
+configuration rather than another implementation. *(It arrived after CU19, and
+that last prediction was wrong on both halves — see there.)*
 
 ### What reviewing this slice found
 
@@ -1795,7 +1693,7 @@ And two more, found writing the worked example that is now `test_pretraining.py`
 ## CU14 — Training the half that is not here
 
 ```python
-from soma_next.torch import Split, Trainer, parameters
+from somatize.torch import Split, Trainer, parameters
 
 class Body(Node):                        # a node. It knows nothing about any of this
     def __init__(self):
@@ -1815,10 +1713,6 @@ Trainer(g, objective=cross_entropy,
         trains=trains,                                          # the half that is not
         workers={"gpu": Worker.at("node3:7000")}).fit(data, epochs=10)
 ```
-
-> `workers=` became `broker=` in CU28, here as in `Graph.forward`. The shape of
-> what it is given is the same, and what it resolves to is no longer a
-> connection.
 
 Status: **closed**.
 
@@ -2139,7 +2033,7 @@ had a codec is already bytes.
   it stays where it ran and is named by `RunError::Lost`, which is CU14's rule
   unchanged. And unlike a `Keeper`, a codec that fails **does** stop the run: a
   cache that cannot answer recomputes, a wire has nothing to fall back on.
-- **A worker never imports `soma_next.torch`.** It starts empty, and the nodes
+- **A worker never imports `somatize.torch`.** It starts empty, and the nodes
   that arrive may never mention `torch` while a tensor goes past them all the
   same. Importing it on standing up works and costs two seconds per worker —
   most of a suite that stands up twenty. So it is summoned at the moment it is
@@ -2171,7 +2065,7 @@ was handed a list of floats the day somebody placed its producer elsewhere.
 
 ### Questionnaire
 
-**The seam** (`transport/tests/unit/worker.rs`, no Python in it)
+**The seam** (`soma-fabric/wire/tests/unit/worker.rs`, no Python in it)
 - [x] with a codec, an opaque produced over there comes back what it was
 - [x] and one bound for over there arrives as what it was
 - [x] one the codec cannot write and the slice answers with is refused **in the
@@ -2200,8 +2094,8 @@ was handed a list of floats the day somebody placed its producer elsewhere.
 
 ## After CU14 — A group of steps, and one update
 
-CU12's candidate A, written down as *gradient accumulation* and left for last
-because it is small. The other pending closed before CU15.
+The last of the three micro-batch problems — *gradient accumulation* — left for
+last because it is small. The other pending closed before CU15.
 
 Status: **closed**. 353 in Python; nothing else moved.
 
@@ -2649,17 +2543,20 @@ map reaches the node, which names it but names it late.
 ## CU17 — Level 3: where to look, how to cut, and when to give up
 
 ```python
-from soma_next.study import Partition
+from somatize.study import Partition
 
 for train, test in Partition.stratified(5).folds(len(y), classes=y.tolist()):
     trainer.fit(data[train], epochs=10)
     scores.append(evaluate(g, data[test]))
 ```
 
-The first piece of the level the vision calls **Study**: hyper-parameter search,
-cross-validation, and whatever else is N training runs rather than one. Opened on
-21 August 2026, and **not closed**: what is in is the cut. The sampler, the
-pruner and how a run is asked to stop are still open.
+Status: **closed**, in three passes over the same shape — the cut first, then the
+pruner, then the sampler. Opened 21 August 2026.
+
+The level the vision calls **Study**: hyper-parameter search, cross-validation,
+and whatever else is N training runs rather than one. Three families, each an
+enum of structs: `Partition` says where to cut, `Pruner` when to give up, and
+`Sampler` where to look. What joins them is CU18.
 
 ### The question that came first, and it was not about folds
 
@@ -2737,7 +2634,7 @@ name you have to remember for nothing.
     consumer instead of once here.
   - **A new scheme stops compiling in three places and the compiler lists
     them.** With a trait it compiles, and what you forgot is the registration.
-- **It is called `Partition`, not `Split`.** `soma_next.torch.Split` is already
+- **It is called `Partition`, not `Split`.** `somatize.torch.Split` is already
   split learning. Two alike names for two unrelated things is how a framework
   stops being readable, and this one was caught before it was written.
 - **Indices and keys in, indices out. Never a tensor.** Stratifying does not want
@@ -2939,8 +2836,9 @@ would otherwise need a `Study` type to hold.
 ### What is NOT in it yet
 
 **Naming a dataset by its content**, which is what a fold's cache key needs —
-`(dataset, partition, i)` — and which CV is now the consumer for · **recording**
-what was tried and what was pruned, which wants the store and not this crate ·
+`(dataset, partition, i)` — and which CV is now the consumer for *(CU24)* ·
+**recording** what was tried and what was pruned, which wants the store and not
+this crate *(CU18)* ·
 **conditional dimensions**, a knob that only exists when another took a
 particular value, which needs a consumer before it needs a design · and **the
 loop itself**, which is a `for` and will stay one.
@@ -3134,7 +3032,7 @@ in observability and not in coordination, and would turn every crate it touches
 async for no subscriber · **a held-out score for a cut graph**, which is scoring
 that travels · and **retries**, which have a name on disk and no reader.
 
-## After CU18 — What a node is, once the agentic seam is taken out
+## After CU18 — A node is a function
 
 ```rust
 pub trait Node: Send + Sync {
@@ -3142,18 +3040,16 @@ pub trait Node: Send + Sync {
 }
 ```
 
-`Transition` and `Driver` are gone. A node is a function. Decided and done on
-22 August 2026, and the argument is short enough to fit here.
+`Transition` and `Driver` are gone. Decided and done on 22 August 2026, and the
+argument is short enough to fit here.
 
-### What they were
+### What they were, and what they cost
 
 `Transition::Await(requests)` let a node **suspend**: it said what it needed, an
 injected `Driver` served it, and the node was asked again with the answers in
 `ctx.results`. It was the seam of an agentic layer — `driver.rs` said so in its
 own docstring, *"that ignorance is what keeps the agentic layer out of the
 core"*.
-
-### What it cost, measured
 
 | | |
 |---|---|
@@ -3188,19 +3084,12 @@ day an agentic layer wants something injected it goes there and **no node
 signature changes**. That was the one strong argument for keeping `Await` — cheap
 now, breaking to add back — and keeping the channel dissolves it.
 
-### Where the agentic layer goes instead
-
-Not into the core, and not as a variant either: `Transition` was closed on
-purpose (*"adding one should break everyone"*), so an extending crate could never
-have added to it anyway. It goes as **concrete nodes** — one that wraps a model
-call and its retries, one that routes, one that orchestrates several agents —
-each holding whatever client it takes.
-
-Retries in particular belong there and the repo had already said so: CU12's *what
-did not go in* refused them at the engine because *"a node that already ran half
-of itself is not idempotent and nobody has said what it means to run it again"*.
-That reasoning did not change; what changed is that now there is nowhere else to
-put them.
+The agentic layer goes as **concrete nodes** instead: one that wraps a model call
+and its retries, one that routes, one that orchestrates several agents, each
+holding whatever client it takes. Retries in particular belong there and the repo
+had already said so — CU12 refused them at the engine because *"a node that
+already ran half of itself is not idempotent and nobody has said what it means to
+run it again"*.
 
 ### What is lost, said as a decision and not a side effect
 
@@ -3215,7 +3104,11 @@ copy per run, so state outlives a `forward`: that is what lets an activation sta
 alive across a cut and what `Split` rests on, and it is a trap from the other
 side. There is a test in both languages saying so.
 
-### Closing the other half: what is in flight
+`RunError` goes from 11 variants to 8. `advance()` goes from 38 lines to 5. An
+artifact carries **the nodes** and not `(nodes, driver)`, so `provide()` returns
+a dict.
+
+### And the other half of CU18: a guided sampler that knows what is in flight
 
 A guided sampler spread over machines is worse than random until it knows what
 the others are holding, and the record was shaped so that knowing costs one scan
@@ -3241,19 +3134,8 @@ paying for that heartbeat. It is measured against the newest write in the study
 and **not against this machine's clock**, because two machines sharing a folder
 are two clocks that disagree by minutes.
 
-### What disappeared
-
-`Driver`, `DriverError`, `Transition`, `Ctx::turn`, `Ctx::results`, `MAX_TURNS`,
-`RunError::{NoDriver, Driver, TurnLimit}`, `Executor::with_driver`,
-`Serving::driver`, `Provisioned::served_by`, `PyDone`, `PyAwait`, `PyDriver`, and
-`driver=` from `Graph.forward`, `serve`, `listen` and their provisioned twins.
-
-An artifact carries **the nodes** and not `(nodes, driver)`, so `provide()`
-returns a dict.
-
-`RunError` goes from 11 variants to 8. `advance()` goes from 38 lines to 5.
-
 ---
+
 
 ## CU19 — A graph draws itself
 
@@ -3419,10 +3301,10 @@ The core still does not learn to draw. It is asked for the fact.
 
 ### What is NOT in it yet
 
-**An overlay** — what happened while it ran — which is CU20, and which costs this
-nothing: the original left it written that an empty overlay has to give a
-byte-identical drawing · **the plan drawn while it runs**, which is the same
-thing said live · **a text fallback** for a graph past the limit, where the
+**An overlay** — what happened while it ran — which costs this nothing: the
+original left it written that an empty overlay has to give a byte-identical
+drawing. *(CU20 records the facts; CU21 puts them on the figure.)* · **the plan
+drawn while it runs**, which is the same thing said live · **a text fallback** for a graph past the limit, where the
 original had one and here the notebook just shows the `repr` · and **anything at
 all about a worker's health**, which needs something to report it first.
 
@@ -3502,7 +3384,7 @@ is exactly the operation that had to be honest here.
 
 The note in `local.rs` that said HTTP belonged in another crate is rewritten. What
 it was protecting is given instead by a **feature `s3`, off by default** — the
-same shape as the core's optional `serde`, and `cargo build -p soma-next-store`
+same shape as the core's optional `serde`, and `cargo build -p soma-store`
 still compiles with neither.
 
 ### The dependency, which was measured before it was chosen
@@ -3630,7 +3512,7 @@ So each level keeps its own, in its own language:
 | level | vocabulary | where |
 |---|---|---|
 | the engine | `ran`, `failed`, `recalled`, `kept`, `items`, `left`, `finished`, `broke` | `soma-core/src/fact.rs` |
-| a training run | `loss`, `updated` | `soma_next.torch`, where the loss is |
+| a training run | `loss`, `updated` | `somatize.torch`, where the loss is |
 | a study | a trial's record | on disk, since CU18 |
 
 > **They do not meet in Rust. They meet in the record.**
@@ -3721,7 +3603,7 @@ what a trial's record has done since CU18.
 
 ### Reading it back, which is a price list
 
-A record written and never read is not a record. `soma_next.record` is the other
+A record written and never read is not a record. `somatize.record` is the other
 half, and — like `gather` and `take` — it is **functions over a `Store`**: what
 is being read is a folder, and a class around one would be the store with a
 longer name.
@@ -3803,7 +3685,7 @@ any of these numbers mean, which is the whole of CU21.
 - [x] the round trip is its own fact
 - [x] a slice that went away says nothing about finishing
 
-**Over a real process** (`transport/tests/unit/worker.rs`)
+**Over a real process** (`soma-fabric/wire/tests/unit/worker.rs`)
 - [x] what a real worker saw comes back saying it was that worker
 - [x] a fact arrives **while the work is still going** and not with the answer —
       checked against a node that takes 300 ms, because batched or live the
@@ -3877,7 +3759,7 @@ CU19 wrote the rule about the graph — one table, looked up with `[]` and never
 with `.get(…, default)`, because the original kept the same strings in four
 tables and a typo came out as the alarm colour. The moment there was a second
 figure the same rule applied one level up, so the table moved to
-`soma_next._theme` and **the graph moved with it**: a library whose graph is
+`somatize._theme` and **the graph moved with it**: a library whose graph is
 light and whose curves are dark is two libraries.
 
 The discipline survives the move intact: **one fact per channel**. Hue says
@@ -3926,7 +3808,7 @@ in the first version, so the figure stopped saying there were three.
 
 ### The study, drawn — and the figures belong in the library
 
-`table`, `influence` and `coordinates` in `soma_next.study`, with `importance`
+`table`, `influence` and `coordinates` in `somatize.study`, with `importance`
 beside the other readers. They were written in a notebook first and that was
 wrong: a figure hand-rolled in an example is a figure with no tests, no shared
 palette, and a second copy the day somebody wants it elsewhere.
@@ -4025,8 +3907,8 @@ reason `finished` leaves pruned trials out.
 ## CU21 — The diagnosis, which says it is an opinion
 
 ```python
-from soma_next.health import diagnose, overlaid, alerts
-from soma_next.torch import Trainer, Audit
+from somatize.health import diagnose, overlaid, alerts
+from somatize.torch import Trainer, Audit
 
 t = Trainer(g, objective=..., optimizer=..., auditing=Audit(every=10, inside=True),
             watching=[Recorder(store, summarising=["loss"])])
@@ -4124,7 +4006,7 @@ wall clocks would not have composed.
 
 ### And a third question, which is not about the network at all
 
-`soma_next.data.contribution` shuffles one input and scores again; the drop is
+`somatize.data.contribution` shuffles one input and scores again; the drop is
 what that input was worth. `health` asks whether a network is **learning**; this
 asks whether it is learning **what you meant**, which no amount of looking at a
 gradient will ever say.
@@ -4145,7 +4027,8 @@ isometry at initialisation, where a normalisation layer is missing, and the
 zero-cost proxies. Deferred rather than refused, and with a caveat already
 written down — synflow correlates 0.76 with parameter count, which is close to
 saying it measures size. If it does not separate when measured, it ships off with
-its measurement beside it, the way `NARROWING` did.
+its measurement beside it, the way `NARROWING` did. *(CU22, and that is exactly
+what happened to it.)*
 
 ### Questionnaire
 
@@ -4241,8 +4124,8 @@ its measurement beside it, the way `NARROWING` did.
 ## CU22 — What can be said before a step is taken
 
 ```python
-from soma_next.torch import probe, proxies
-from soma_next.health import diagnose, overlaid, profile
+from somatize.torch import probe, proxies
+from somatize.health import diagnose, overlaid, profile
 
 probe(g, x, watching=Recorder(store, run="before"))   # one forward, nothing trained
 diagnose(store, run="before")                         # {"trunk.4": ["MISSING_NORMALISATION"]}
@@ -4357,7 +4240,7 @@ only ever means something next to another candidate's.
 `synflow` of one network is a number with no meaning. It only means something
 next to another network's, which is level 3 — where a study is a `for` loop and
 there is no type at all — and not the vocabulary of a diagnosis, which is about
-*this* network. So `soma_next.torch.proxies` is a **cheap objective** the loop
+*this* network. So `somatize.torch.proxies` is a **cheap objective** the loop
 scores with instead of training, it takes a `Graph` the way `probe` and
 `architecture` do, and no `Flag` ever comes out of it.
 
@@ -4532,7 +4415,7 @@ to be written.
 ## CU23 — Workers and jobs, live
 
 ```python
-from soma_next.record import fleet, machines
+from somatize.record import fleet, machines
 
 fleet(store, run="tuesday")        # what each machine did, and what it says it is
 machines(store, run="tuesday")     # drawn: working against waited on
@@ -4604,7 +4487,7 @@ what it was like while it was asked.
 
 A worker only speaks down a wire when somebody gives it work, so the machine
 sitting there doing nothing would not be in the picture at all — and that is the
-one a fleet view exists for. `python -m soma_next.worker --store DIR --reporting
+one a fleet view exists for. `python -m somatize.worker --store DIR --reporting
 SECONDS` is the clock.
 
 It goes to the **store** and not down the connection, and the pipe was already
@@ -4655,7 +4538,7 @@ with `top`, and inventing a row nobody had to send is not worth the line.
 - [x] a machine that wrote and was never asked is there under its own name
 - [x] how quiet a machine is is measured against the other writers
 
-**The reading** (`transport/tests/unit/machine.rs`)
+**The reading** (`soma-fabric/wire/tests/unit/machine.rs`)
 - [x] a reading crosses as a flat fact and not as a variant of its own
 - [x] what nobody measured is absent and not zero
 - [x] a reading of this machine says how long it has been up wherever it runs
@@ -4664,8 +4547,8 @@ with `top`, and inventing a row nobody had to send is not worth the line.
 ## CU24 — Where the data comes from
 
 ```python
-from soma_next import Graph, Store
-from soma_next.data import Parquet, settle, to_polars
+from somatize import Graph, Store
+from somatize.data import Parquet, settle, to_polars
 
 sms = Parquet(Store("/data"), "sms/train")
 g = Graph.somatize(sms.named("sms").frozen() >> Clean().named("clean").cached())
@@ -4723,8 +4606,8 @@ It goes where the digest of settled weights goes — `Memory::freeze(id, digest)
 the call that is *made twice on purpose*: the declaration says a node is
 settled, and whoever knows what is inside says what it is settled at. For
 weights that means hashing them; here it means repeating what the store already
-knew. `soma_next.data.settle(g)` is the second call, and it is the same shape as
-`soma_next.torch.freeze(g)`.
+knew. `somatize.data.settle(g)` is the second call, and it is the same shape as
+`somatize.torch.freeze(g)`.
 
 `_has_state` grew a third duck for it, and that was a silent bug rather than a
 nicety: a source declared `.frozen()` looked exactly like a tokenizer — nothing
@@ -4821,7 +4704,7 @@ small and named:
 The piece that is design and not plumbing is the **version**, because the client
 computes the keys and cannot resolve a name that only exists over there. The
 answer is one this project has already given twice: *whoever knows how to hash
-is whoever has the thing in front of them*. `soma_next.torch.freeze` settles
+is whoever has the thing in front of them*. `somatize.torch.freeze` settles
 weights on the machine that holds them; a remote source is settled by the
 **worker**, against its own store, when the slice arrives. The machinery is
 already there — `Memory` travels in the cargo, the worker answers with
@@ -4967,10 +4850,10 @@ Tuesday afternoon — *did I just invalidate the encoder, or only the head?* —
 today it is answered by running and watching which nodes take time.
 
 `Executor::foreseen` is `pub` for that, `foreseen_json` is the bridge, and
-`soma_next.foreseen` is where it is asked:
+`somatize.foreseen` is where it is asked:
 
 ```python
-from soma_next import foreseen
+from somatize import foreseen
 
 foreseen.names(g)                       # {node: name}, nothing executed
 foreseen.unneeded(g, x, store=store)    # what would not have to run at all
@@ -4995,7 +4878,7 @@ A partition can carry one of the two, and the one it carries is *this node will
 be recomputed* — the reassuring half of a node about to compute the wrong
 thing.
 
-So the shape is `{node: [finding, ...]}`, which is what `soma_next.health`
+So the shape is `{node: [finding, ...]}`, which is what `somatize.health`
 already answers with, and for the same reason: what happens to a node is more
 than one fact. A node with nothing said about it is fine, and absence being the
 good answer is what keeps the ones that matter readable.
@@ -5289,7 +5172,7 @@ their weights makes that untrue.
 ## After CU27 — The wire leaves, and soma-fabric opens
 
 ```
-soma-next/transport/   →   soma-fabric/wire/     (sixteen commits, and their history)
+soma/transport/   →   soma-fabric/wire/     (sixteen commits, and their history)
 ```
 
 Not a use case: nothing can be written the day after that could not be written
@@ -5305,29 +5188,21 @@ the day before. It is a **cut**, made when four things that shared the name
 
 There is no single thing that is both *a hot connection* and *durability with
 retries*, which is why one name over the four of them read as a tangle rather
-than a design. Placement is a declaration and belongs beside the graph that
-makes it; the other three are mechanism.
+than a design. Placement is a declaration and belongs beside the graph that makes
+it; the other three are mechanism. What soma keeps is `Transport`, **a hole with
+one method**, and the `.at()` that fills it with a name.
 
-What soma-next keeps is `Transport`, **a hole with one method**, and the
-`.at()` that fills it with a name. What it loses is a crate: `remote` now pulls
-two path dependencies instead of one, and a build without them still compiles —
-the seam is a fact the compiler checks rather than a convention.
-
-### The boundary is not a layer, and the bill says so
-
-The two repositories point at each other: `soma-fabric/wire` depends on
-`soma-next-core` and `soma-next-store`, and `soma-next-python` depends on
-`soma-fabric-wire`. No cycle — they are different crates — but no layering
-either, and pretending otherwise would have put the codec, the store or the
-`Value` on the wrong side of the cut. What the arrangement really assumes is
-that **the two repositories sit side by side and move together**, which is what
-the path dependencies say out loud. The day either is published on its own they
-become versions.
+The boundary is **not a layer**, and pretending it were would have put the codec,
+the store or the `Value` on the wrong side of the cut: `soma-fabric/wire` depends
+on `soma-core` and `soma-store`, and `soma-python` depends on
+`soma-fabric-wire`. No cycle — they are different crates — but what the
+arrangement assumes is that **the two repositories sit side by side and move
+together**, which is what the path dependencies say out loud. The day either is
+published on its own they become versions.
 
 It is not free, and the place it shows is the one nobody predicts: the cluster
-images build from **two contexts** now, the repository and `fabric`, because a
-single root over both is a directory of unrelated projects and every byte of it
-would go to the daemon.
+images build from **two contexts** now, because a single root over both is a
+directory of unrelated projects and every byte of it would go to the daemon.
 
 The move is verified the only way a move can be: **87 tests green on the other
 side of it**, having changed nothing.
@@ -5337,7 +5212,7 @@ side of it**, having changed nothing.
 ## CU28 — A client talks to a broker
 
 ```python
-from soma_next import Broker, Graph, Worker
+from somatize import Broker, Graph, Worker
 
 g = Graph.somatize(Encode() >> Classify().at("gpu-box"))
 g.forward(x, broker=Broker.embedded({"gpu-box": Worker.at("gpu-box:7000")}))
@@ -5569,7 +5444,7 @@ $ cat where/names/*/* | jq -r .meta
 ```
 
 Status: **closed**. `Executor::stamping` and the `INPUT` constant in
-`soma-core/src/execution.rs` with 4 tests, `soma_next/_environment.py`, and
+`soma-core/src/execution.rs` with 4 tests, `somatize/_environment.py`, and
 `test_provenance.py` (11).
 
 ### The question: what is a hash six months later?
@@ -5586,7 +5461,7 @@ So what cannot be recovered is written down at the moment it is known.
 |---|---|---|
 | the engine | the node, the fingerprint of its code | it already was |
 | the engine | the input, by the name its content has | **never** — only a keeper can hash a value |
-| `soma_next` | the environment | **never** — it is in no key |
+| `somatize` | the environment | **never** — it is in no key |
 | the caller | a run, a commit, an investigation | not by anybody else |
 
 ### Why the environment, when there is already a fingerprint
@@ -5608,7 +5483,7 @@ graph. A core with a field for one of them is a core that has learnt a word
 belonging to whoever stands above it — so `stamping` is opaque text it passes
 through untouched, the same division of labour as `Meta` itself and as the name
 a study is filed under. The Python layer fills in the environment because that
-is where soma-next meets an interpreter; everything else arrives from outside.
+is where soma meets an interpreter; everything else arrives from outside.
 
 **Nobody has to remember.** Four of the five are written with no argument
 passed, and that is the point: provenance that has to be asked for is missing

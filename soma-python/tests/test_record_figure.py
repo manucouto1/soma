@@ -9,10 +9,10 @@ import math
 
 import pytest
 
-from soma_next import Graph, Node, Recorder, Store, _theme
-from soma_next import _figure as graph_figure
-from soma_next.record import Live, progress, spent
-from soma_next.record import _figure as drawn
+from somatize import Graph, Node, Recorder, Store, _theme
+from somatize import _figure as graph_figure
+from somatize.record import Live, progress, spent
+from somatize.record import _figure as drawn
 
 pytest.importorskip("plotly")
 

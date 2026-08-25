@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "_soma_next"
+name = "_somatize"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -19,7 +19,7 @@ somatize-fabric-wire = { workspace = true, optional = true }
 # to a broker instead of holding a dictionary of workers.
 somatize-fabric-broker = { workspace = true, optional = true }
 # With `s3`, because a study spread over machines with no shared mount is
-# exactly the case `soma_next.Store.on_bucket` exists for.
+# exactly the case `somatize.Store.on_bucket` exists for.
 somatize-store = { workspace = true, features = ["s3"] }
 # A source is a Rust node, and a frame is what it answers with: this side
 # translates both, which is what `python/` is for.

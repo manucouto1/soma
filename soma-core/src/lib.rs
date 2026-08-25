@@ -1,4 +1,4 @@
-//! The soma-next core: the graph structure, the contracts for what gets
+//! The soma core: the graph structure, the contracts for what gets
 //! executed, the shape of an execution, and the engine that walks it.
 //!
 //! No `#[pyclass]` here. The moment a core type carries one, it can no longer

@@ -1,11 +1,11 @@
 """Writes down what a graph is, at one commit, without running any of it.
 
-This runs *inside* a worktree, against whatever soma-next that checkout imports.
+This runs *inside* a worktree, against whatever soma that checkout imports.
 It holds a graph; nothing else in `soma-tree` ever does. What it writes is the
 contract — the part meant to outlive this file being rewritten in another
 language — so a field is added here before it is read anywhere else.
 
-What is decided here: nothing. `soma_next.foreseen` owns the model, and the
+What is decided here: nothing. `somatize.foreseen` owns the model, and the
 declaration went into the key with CU13, so this walks a checkout, builds the
 graph, and writes down what the model asks for. One thing is added that the
 model does not carry: the **environment**, which no commit pins — a checkout
@@ -26,11 +26,11 @@ import tempfile
 def fingerprint(implementation):
     """The digest of the code that implements it, or `None`.
 
-    soma-next computes this only for what is `.cached()`, because parsing an
+    soma computes this only for what is `.cached()`, because parsing an
     AST is paid where it is used. Here every node is worth one: a node nobody
     caches is still a node somebody edited.
     """
-    from soma_next import _fingerprint
+    from somatize import _fingerprint
 
     try:
         return _fingerprint.digest(type(implementation))
@@ -49,7 +49,7 @@ def reaches(implementation):
     `inspect.getsourcefile` sólo sabe uno. Los otros tres no estaban en ninguna
     parte de la respuesta.
 
-    Estaban calculados, eso sí. La huella de soma-next recorre el cierre
+    Estaban calculados, eso sí. La huella de soma recorre el cierre
     transitivo —las bases, los globales que el código nombra, las clases que
     compone— y hasta ahora lo tiraba y devolvía ocho caracteres de sha256.
     `_fingerprint.bill` es ese mismo recorrido dicho en voz alta, así que esto
@@ -67,7 +67,7 @@ def reaches(implementation):
     el contenido dentro es casi toda la respuesta y nada de ella leída. Se pide
     por su ruta cuando alguien abre uno.
     """
-    from soma_next import _fingerprint
+    from somatize import _fingerprint
 
     try:
         billed = _fingerprint.bill(type(implementation))
@@ -146,7 +146,7 @@ def written_where(implementation):
 #: Cuánto se baja dentro de un nodo. Dos niveles llegan a `router.gru` y paran
 #: ahí, que es donde deja de decir algo: por debajo son las piezas de torch, y
 #: leerlas como catorce cosas convierte el dibujo en uno que nadie mira dos
-#: veces. Es la misma razón por la que la figura de soma-next no abre un bloque
+#: veces. Es la misma razón por la que la figura de soma no abre un bloque
 #: que todo el mundo reconoce.
 DEEP = 2
 
@@ -154,7 +154,7 @@ DEEP = 2
 def parts_of(implementation, deep=DEEP):
     """De qué está hecho un nodo, leído sin correr nada.
 
-    `soma_next.torch.architecture` responde mejor a esto —ve hasta las
+    `somatize.torch.architecture` responde mejor a esto —ve hasta las
     operaciones que no son módulos, una conexión residual entre ellas— y para
     conseguirlo **corre el grafo** con una entrada de ejemplo. Aquí no se corre
     nada nunca, así que lo que se puede leer es lo que `__init__` construyó: la
@@ -236,7 +236,7 @@ def environment():
                 pass
     # The engine itself, which an editable install leaves out of that map.
     try:
-        said["soma-next"] = about.version("soma-next")
+        said["somatize"] = about.version("somatize")
     except about.PackageNotFoundError:
         pass
     return dict(sorted(said.items()))
@@ -287,7 +287,7 @@ def declaring(where):
 def architecture(graph):
     """Los cinco hechos ortogonales de un grafo, aparte de qué calcula cada nodo.
 
-    El cuaderno de soma-next lo dice en una tabla: `Graph` dice **qué** existe,
+    El cuaderno de soma lo dice en una tabla: `Graph` dice **qué** existe,
     el catálogo **quién** lo ejecuta, la colocación **dónde**, el plan
     **cuándo** y la memoria **qué se recuerda** de cada nodo. Confundirlos es el
     error fácil, y un dibujo que sólo enseña el primero deja fuera cuatro.
@@ -312,18 +312,18 @@ def architecture(graph):
 
 
 def seen(graph, store, given):
-    """This graph, as data: soma-next's own snapshot plus what only we look at.
+    """This graph, as data: soma's own snapshot plus what only we look at.
 
     The names, shape, state, salt, fingerprints and the readable declarations
     all come from `foreseen.snapshot`, which is the model's and not ours — if
     what a name is made of changes again, it changes there and this keeps
     working. What is added is `environment`, the axis git does not have.
 
-    A fingerprint is written for **every** node first. soma-next computes them
+    A fingerprint is written for **every** node first. soma computes them
     only for what is `.cached()`, because parsing an AST is paid where it is
     used; here a node nobody caches is still a node somebody edited.
     """
-    from soma_next import foreseen
+    from somatize import foreseen
 
     code = {}
     inside = {}
@@ -364,7 +364,7 @@ def compared(before, after):
     What is still added is only the reading: the before and after of a
     declaration, in the words somebody typed.
     """
-    from soma_next import foreseen
+    from somatize import foreseen
 
     found = foreseen.changes(before["snapshot"], after["snapshot"])
     # Both sides or nothing. A node whose declaration cannot be written down is
@@ -462,7 +462,7 @@ def checked(build, node, given, store):
 def inside(why, only):
     """The line the traceback last passed through in the file being checked.
 
-    A traceback runs through soma-next, through the engine and through Python's
+    A traceback runs through soma, through the engine and through Python's
     own machinery, and none of that is anybody's edit. Only a frame in the file
     under the cursor can be underlined; with none, the message is still said in
     the summary and simply has nowhere to point.
@@ -585,7 +585,7 @@ def ran(graph, node, given, store):
     not there this says so rather than making something up: a green light from a
     fabricated tensor is worse than no light.
     """
-    from soma_next import Store, foreseen
+    from somatize import Store, foreseen
 
     what = {"what": "corre con datos reales", "ok": True}
     if store is None:
@@ -624,7 +624,7 @@ def ran(graph, node, given, store):
     # the frame somebody actually wrote is gone by the time it comes back — and
     # a check that cannot point at the line is half a check. `Ctx()` is the
     # honest stand-in: no device, which is exactly "wherever it lands".
-    from soma_next import Ctx
+    from somatize import Ctx
 
     try:
         out = graph.implementation(node).forward(arriving, Ctx())

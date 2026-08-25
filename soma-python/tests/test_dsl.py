@@ -3,7 +3,7 @@
 import pytest
 
 from conftest import Add, Mean
-from soma_next import Graph, Node
+from somatize import Graph, Node
 
 
 # ── Chaining ──
@@ -79,12 +79,12 @@ def test_in_the_dsl_you_have_to_inherit_from_node():
         def forward(self, x, ctx):
             return x
 
-    with pytest.raises(TypeError, match="has to inherit from soma_next.Node"):
+    with pytest.raises(TypeError, match="has to inherit from somatize.Node"):
         Graph.somatize(Loose() >> Add(1))
 
 
 def test_what_cannot_be_a_node_says_so():
-    with pytest.raises(TypeError, match="has to inherit from soma_next.Node"):
+    with pytest.raises(TypeError, match="has to inherit from somatize.Node"):
         Graph.somatize(Add(1) >> "this is not a node")
 
 

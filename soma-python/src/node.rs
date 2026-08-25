@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use somatize_core::{Ctx, Device, Node, NodeError, Value};
 
 /// What a node knows beyond its input.
-#[pyclass(name = "Ctx", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Ctx", module = "somatize._somatize", frozen)]
 pub struct PyCtx {
     /// Where this node was said to run — `"cuda:0"` — or `None`. Written the
     /// way torch writes it, so it can be handed straight to `.to()`.

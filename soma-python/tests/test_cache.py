@@ -15,7 +15,7 @@ a net that quietly stopped training.
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
+from somatize import Graph, Node, Opaque
 
 from conftest import Add
 
@@ -346,7 +346,7 @@ def test_it_is_asked_wherever_a_cache_is_declared(store):
 
 
 def test_settling_it_by_hand_is_enough(store):
-    # There is no torch in this file: what `soma_next.torch.freeze` does is call
+    # There is no torch in this file: what `somatize.torch.freeze` does is call
     # this, and hashing weights is the only part of it that needs torch.
     first, second = Stateful(2.0), Stateful(5.0)
     a = Graph.somatize(first.named("encoder").frozen().cached())

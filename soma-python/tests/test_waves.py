@@ -14,7 +14,7 @@ import threading
 
 import pytest
 
-from soma_next import Graph, Node
+from somatize import Graph, Node
 from conftest import Add, Mean
 
 DEADLINE = 10
@@ -281,7 +281,7 @@ def test_the_engine_releases_the_gil_while_it_runs():
     """
     done = in_another_process("""
         import threading
-        from soma_next import Graph, Node
+        from somatize import Graph, Node
 
         barrier = threading.Barrier(2, timeout=5)
 

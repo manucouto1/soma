@@ -12,8 +12,8 @@ is the one that does not know what a training run is. So the tests say it, with
 
 import pytest
 
-from soma_next import Graph, Node
-from soma_next._stage import Held, Tap, around, stages
+from somatize import Graph, Node
+from somatize._stage import Held, Tap, around, stages
 
 from conftest import Add, Identity, Mean
 

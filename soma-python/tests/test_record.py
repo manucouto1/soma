@@ -10,8 +10,8 @@ import sys
 
 import pytest
 
-from soma_next import Broker, Graph, Node, Recorder, Store
-from soma_next.record import curve, curve_costs, facts, forwards, nodes, runs
+from somatize import Broker, Graph, Node, Recorder, Store
+from somatize.record import curve, curve_costs, facts, forwards, nodes, runs
 
 
 class Add(Node):
@@ -185,8 +185,8 @@ def test_a_run_says_what_each_machine_did(tmp_path):
     # The record is written run -> forward -> node and *where* is an attribute
     # of a fact. `fleet` inverts it, because *what is this machine doing* is a
     # question nobody could ask of it.
-    from soma_next import Broker, Worker
-    from soma_next.record import fleet
+    from somatize import Broker, Worker
+    from somatize.record import fleet
 
     g = Graph.somatize(
         Add(1).named("a") >> Add(10).named("b").at("w1") >> Add(100).named("c").at("w2")
@@ -194,7 +194,7 @@ def test_a_run_says_what_each_machine_did(tmp_path):
     workers = Broker.embedded(
         {
             name: Worker.spawn(
-                [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+                [sys.executable, "-m", "somatize.worker"], mode="network", send=["test_record"]
             )
             for name in ("w1", "w2")
         }
@@ -218,14 +218,14 @@ def test_and_what_it_was_waited_on_for(tmp_path):
     # The column that only exists up here: the round trip minus what actually
     # ran over there — the wire, the queue and the codec. Neither half of the
     # subtraction belongs to a node, which is why no per-node view can say it.
-    from soma_next import Broker, Worker
-    from soma_next.record import fleet
+    from somatize import Broker, Worker
+    from somatize.record import fleet
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
     worker = Broker.embedded(
         {
             "w1": Worker.spawn(
-            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            [sys.executable, "-m", "somatize.worker"], mode="network", send=["test_record"]
             ),
         }
     )
@@ -243,7 +243,7 @@ def test_a_machine_nobody_sent_anything_to_is_not_in_it(tmp_path):
     # There is no registry: a machine is in a fleet because it **did**
     # something. Standing one up and never using it leaves nothing to say, and
     # inventing a row for it would be inventing the coordinator CU15 removed.
-    from soma_next.record import fleet
+    from somatize.record import fleet
 
     g = Graph.somatize(Add(1).named("a"))
     store = Store(str(tmp_path))
@@ -256,14 +256,14 @@ def test_a_machine_nobody_sent_anything_to_is_not_in_it(tmp_path):
 
 def test_the_fleet_is_drawn_working_against_waited_on(tmp_path):
     pytest.importorskip("plotly")
-    from soma_next import Broker, Worker
-    from soma_next.record import machines
+    from somatize import Broker, Worker
+    from somatize.record import machines
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
     worker = Broker.embedded(
         {
             "w1": Worker.spawn(
-            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            [sys.executable, "-m", "somatize.worker"], mode="network", send=["test_record"]
             ),
         }
     )
@@ -280,14 +280,14 @@ def test_a_machine_says_what_only_it_can_say(tmp_path):
     # Everything else about a worker can be worked out from what the client
     # wrote down. How loaded it is cannot: nobody on this end can see it, and it
     # is the half of *the health of the workers* that no scan answers.
-    from soma_next import Broker, Worker
-    from soma_next.record import fleet
+    from somatize import Broker, Worker
+    from somatize.record import fleet
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
     worker = Broker.embedded(
         {
             "w1": Worker.spawn(
-            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            [sys.executable, "-m", "somatize.worker"], mode="network", send=["test_record"]
             ),
         }
     )
@@ -307,13 +307,13 @@ def test_and_it_arrives_saying_which_host_without_anybody_attributing_it(tmp_pat
     # The reason it cost no message: `Answer::Saw` already carries a `Fact`, the
     # client already relays one to its watcher, and the engine already wraps
     # whatever comes back in `Elsewhere`. A flat carrier rides all of that.
-    from soma_next import Broker, Worker
+    from somatize import Broker, Worker
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
     worker = Broker.embedded(
         {
             "w1": Worker.spawn(
-            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            [sys.executable, "-m", "somatize.worker"], mode="network", send=["test_record"]
             ),
         }
     )
@@ -330,7 +330,7 @@ def test_a_run_with_nobody_else_in_it_says_nothing_about_machines(tmp_path):
     # This machine does not measure itself. It is the one you can look at with
     # `top`, and inventing a reading for it would be the only row in the table
     # nobody had to send.
-    from soma_next.record import fleet
+    from somatize.record import fleet
 
     g = Graph.somatize(Add(1).named("a"))
     store = Store(str(tmp_path))
@@ -352,7 +352,7 @@ def _standing(store, port, seconds="0.3"):
 
     said = subprocess.Popen(
         [
-            sys.executable, "-m", "soma_next.worker",
+            sys.executable, "-m", "somatize.worker",
             "--listen", f"127.0.0.1:{port}", "--store", str(store), "--reporting", seconds,
         ],
         stdout=subprocess.PIPE,
@@ -367,7 +367,7 @@ def test_a_worker_nobody_is_using_still_says_it_is_there(tmp_path):
     # The reason the clock exists. A worker only speaks down a wire when
     # somebody gives it work, so the machine sitting idle — the one you most
     # want to see in a fleet — would otherwise not be in the picture at all.
-    from soma_next.record import standing
+    from somatize.record import standing
 
     store = Store(str(tmp_path))
     worker = _standing(tmp_path, 7741)
@@ -386,8 +386,8 @@ def test_and_the_name_the_graph_gave_it_is_joined_on(tmp_path):
     # A worker does not know it is `w1`, so it files under what it calls itself.
     # The two names are only ever in the same row on a reading that came down a
     # wire — where the client attributed it — and that is the join.
-    from soma_next import Broker, Worker
-    from soma_next.record import fleet
+    from somatize import Broker, Worker
+    from somatize.record import fleet
 
     store = Store(str(tmp_path))
     worker = _standing(tmp_path, 7742)
@@ -410,7 +410,7 @@ def test_and_the_name_the_graph_gave_it_is_joined_on(tmp_path):
 def test_a_machine_that_wrote_and_was_never_asked_is_there_under_its_own_name(tmp_path):
     # Which is the honest answer: there is a machine here writing, and the graph
     # never gave it a name because it never placed anything on it.
-    from soma_next.record import fleet
+    from somatize.record import fleet
 
     store = Store(str(tmp_path))
     worker = _standing(tmp_path, 7743)
@@ -430,7 +430,7 @@ def test_how_quiet_a_machine_is_is_measured_against_the_other_writers(tmp_path):
     # CU18's rule, and it is not a preference: those are two clocks on two
     # machines sharing a folder, and on a cluster they disagree by minutes as a
     # matter of course. Comparing writers with writers makes the drift cancel.
-    from soma_next.record import standing
+    from somatize.record import standing
 
     store = Store(str(tmp_path))
     digest = store.put(b"")

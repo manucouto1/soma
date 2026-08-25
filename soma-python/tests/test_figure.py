@@ -10,8 +10,8 @@ import json
 import pytest
 
 from conftest import Add, Identity
-from soma_next import Graph, Node
-from soma_next import _figure, _theme
+from somatize import Graph, Node
+from somatize import _figure, _theme
 
 
 def placed(g):
@@ -331,7 +331,7 @@ def test_the_flags_are_written_on_the_box_and_not_counted():
 
 def _inside(layers, edges=()):
     """What `architecture` answers with, built by hand: this file has no torch."""
-    from soma_next.torch._inside import Inside, Layer
+    from somatize.torch._inside import Inside, Layer
 
     return Inside([Layer(*one) for one in layers], edges, "symbolic")
 
@@ -468,7 +468,7 @@ def test_a_layer_that_narrows_is_drawn_wide_at_the_top():
 def _blocked(layers, edges, groups=None):
     """The same, with each layer saying which repeated block it belongs to and
     how many identical lanes it is."""
-    from soma_next.torch._inside import Inside, Layer
+    from somatize.torch._inside import Inside, Layer
 
     made = []
     for path, kind, label, block, parallel in layers:

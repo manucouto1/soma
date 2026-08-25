@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from net import graph, nodes  # noqa: E402
 
-from soma_next import Broker, Graph, Worker  # noqa: E402
+from somatize import Broker, Graph, Worker  # noqa: E402
 
 addr = sys.argv[1]
 n = nodes()

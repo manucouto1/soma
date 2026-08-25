@@ -48,7 +48,7 @@ pub struct Stop {
     ///
     /// Un commit es la versión y no cambia; los ensayos crecen sin parar y van
     /// **asociados** a ella, no versionados. Vienen del mismo recorrido que
-    /// todo lo demás, porque soma-next puso el estado y la puntuación en el
+    /// todo lo demás, porque soma puso el estado y la puntuación en el
     /// registro: contar cuarenta versiones cuesta un recorrido, y sólo la
     /// curva se paga aparte.
     pub trials: Tally,

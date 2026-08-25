@@ -3,7 +3,7 @@
 import pytest
 
 from conftest import Add, Identity, Mean
-from soma_next import Node
+from somatize import Node
 
 
 class Upper(Node):

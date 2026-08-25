@@ -3,7 +3,7 @@ requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "soma-next"
+name = "somatize"
 requires-python = ">=3.10"
 license = { text = "Elastic-2.0" }
 dynamic = ["version"]
@@ -20,13 +20,13 @@ remote = ["cloudpickle>=3"]
 viz = ["plotly>=5"]
 
 [tool.maturin]
-module-name = "soma_next._soma_next"
+module-name = "somatize._somatize"
 python-source = "python"
 features = ["pyo3/extension-module"]
 # The package says it is typed, so the marker and the extension's stub are part
 # of what gets installed. Without them a checker downstream reads the whole
 # library as `Any`, and the annotations buy whoever imports this nothing.
-include = ["python/soma_next/py.typed", "python/soma_next/_soma_next.pyi"]
+include = ["python/somatize/py.typed", "python/somatize/_somatize.pyi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -42,7 +42,7 @@ testpaths = ["tests"]
 # No `python_version` pinned: `requires-python` already says >= 3.10, and mypy
 # checks against the interpreter it runs on, which is the one this was built for.
 [tool.mypy]
-files = ["python/soma_next"]
+files = ["python/somatize"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 no_implicit_optional = true

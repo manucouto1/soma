@@ -70,7 +70,7 @@
 //! `KFold { k: n }`, a holdout of one part in `k` is fold 0 of a k-fold, and
 //! purged and embargoed cross-validation are `TimeSeries { gap }`.
 //!
-//! It is not called `Split`: `soma_next.torch.Split` is already split learning,
+//! It is not called `Split`: `somatize.torch.Split` is already split learning,
 //! and two alike names for two unrelated things is how a framework stops being
 //! readable.
 

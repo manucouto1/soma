@@ -1,6 +1,6 @@
-//! Los ensayos de una versión, leídos como los escribe soma-next.
+//! Los ensayos de una versión, leídos como los escribe soma.
 //!
-//! Los registros se escriben **a mano y con los nombres de soma-next** en vez
+//! Los registros se escriben **a mano y con los nombres de soma** en vez
 //! de llamar a su `take`/`report`: lo que hay que defender es que este lector
 //! entiende ese formato, y llamar al escritor de la otra biblioteca haría que
 //! los dos se pusieran de acuerdo en cualquier formato, incluido uno que no sea
@@ -16,7 +16,7 @@ fn somewhere() -> (tempfile::TempDir, Local) {
     (at, kept)
 }
 
-/// Un ensayo como lo ata soma-next: `<study>/trial/<n>/<attempt>`, con el
+/// Un ensayo como lo ata soma: `<study>/trial/<n>/<attempt>`, con el
 /// estado y la puntuación en el **registro** y la curva en el blob.
 fn ran(
     kept: &Local,
@@ -54,7 +54,7 @@ fn ran(
 
 #[test]
 fn el_estudio_de_un_commit_es_el_prefijo_bajo_el_que_ya_vive_su_diario() {
-    // Todo el acoplamiento con soma-next es este nombre, y es la única parte de
+    // Todo el acoplamiento con soma es este nombre, y es la única parte de
     // esto que no se puede cambiar después sin mover directorios de alguien.
     let (_at, kept) = somewhere();
 

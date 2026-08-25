@@ -7,14 +7,14 @@
 //! tocar el hash de un commit. Así que van **asociados** a la versión, no
 //! versionados: son dos mecanismos distintos, y éste es el segundo.
 //!
-//! Quien los escribe es soma-next, desde la máquina que corre el estudio.
+//! Quien los escribe es soma, desde la máquina que corre el estudio.
 //! Aquí sólo se leen. Eso no es una simplificación: quien reclama un ensayo es
 //! el único que escribe en él, y meter un segundo escritor sería inventar una
 //! carrera que hoy no existe.
 //!
 //! # El nombre, que es todo el acoplamiento
 //!
-//! soma-next ata cada ensayo a `<study>/trial/<n>/<attempt>`, y el nombre de un
+//! soma ata cada ensayo a `<study>/trial/<n>/<attempt>`, y el nombre de un
 //! estudio es una cadena cualquiera. Así que:
 //!
 //! ```text
@@ -24,14 +24,14 @@
 //! ```
 //!
 //! El estudio de un commit **es** el prefijo bajo el que ya vive su diario, así
-//! que los ensayos caen debajo sin que soma-next cambie una línea. No hay
+//! que los ensayos caen debajo sin que soma cambie una línea. No hay
 //! registro de correspondencia, ni tabla, ni índice que mantener: el commit es
 //! la versión y el nombre es el vínculo.
 //!
 //! # Un scan y no una lectura
 //!
 //! La regla de coste del store, que aquí manda: un registro vuelve gratis en un
-//! recorrido y un blob es una lectura. soma-next puso el estado, el punto y la
+//! recorrido y un blob es una lectura. soma puso el estado, el punto y la
 //! puntuación en el **registro** por eso mismo. De modo que contar los ensayos
 //! de cuarenta commits cuesta un recorrido, y la curva —que crece— se paga sólo
 //! cuando alguien pide verla.
@@ -84,7 +84,7 @@ impl Goal {
 
 /// Un ensayo, tal como vuelve de un recorrido.
 ///
-/// Los estados son de soma-next y no de aquí —`running`, `done`, `pruned`,
+/// Los estados son de soma y no de aquí —`running`, `done`, `pruned`,
 /// `failed`—, y por eso viajan como texto: el vocabulario es de quien lo
 /// escribe, y aprendérselo sería tener que migrar dos sitios el día que crezca.
 #[derive(Debug, Clone, Serialize)]
@@ -293,7 +293,7 @@ struct Highest {
 
 /// El `(ensayo, intento)` que ese nombre es, o `None` si no es uno.
 ///
-/// Una pregunta y no una suposición, como en soma-next y por lo mismo: un store
+/// Una pregunta y no una suposición, como en soma y por lo mismo: un store
 /// guarda lo que le echen —una caché, otra investigación, un artefacto—.
 fn numbered(name: &str, under: &str) -> Option<(u32, u32)> {
     let rest = name.strip_prefix(under)?;

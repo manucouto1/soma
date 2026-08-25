@@ -136,7 +136,7 @@ what a node was built with, how a client finds out where a host is, and what a k
 where it came from.
 A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`, executed in
 Rust, spread across processes with `.at("worker1")` and a `broker=` that says
-who knows where that is, trained from outside with `soma_next.torch.Trainer` —
+who knows where that is, trained from outside with `somatize.torch.Trainer` —
 including the part of it that runs on another machine, where a **trainer travels
 to stand beside the node** and the node is never asked to know it — and
 **printed in a notebook**, where the figure shows what runs at once and what
@@ -284,7 +284,7 @@ One record per `forward`, at `run/<id>/<n>`. A loss is computed after the forwar
 that made it, so it goes into the record that closed last, rewritten — and there
 is no guessing, because the two vocabularies come through different doors.
 
-**And `soma_next.record` reads it back**, functions over a `Store` like `gather`
+**And `somatize.record` reads it back**, functions over a `Store` like `gather`
 and `take`. It is a **price list**: `runs`, `forwards` and `curve` are one scan,
 `facts` is one fetch and `nodes` a fetch per forward — so everything a progress
 view asks for is free and the per-node breakdown is asked once, not once a step.
@@ -299,7 +299,7 @@ the two fill **one drawing function** — they can, because a fact read back is 
 very dict a watcher was given. A live view and a report written twice are two
 things that slowly stop agreeing.
 
-The colours are **one table** in `soma_next._theme` and the graph of CU19 moved
+The colours are **one table** in `somatize._theme` and the graph of CU19 moved
 onto it: a library whose graph is light and whose curves are dark is two
 libraries. One fact per channel still holds — hue says *where*, never
 good-or-bad, and the only red marks a `forward` that broke, which is a fact.
@@ -310,7 +310,7 @@ box it does not belong to is **routed around it**, one lane each — an arrow dr
 over a node reads as an arrow into it.
 
 A study is drawn from the library and not from a notebook: `table`, `influence`
-and `coordinates` in `soma_next.study`, with `importance` — **Spearman's ρ**,
+and `coordinates` in `somatize.study`, with `importance` — **Spearman's ρ**,
 which the original names as fANOVA-deferred and never wrote — beside the other
 readers. `coordinates` is hand-drawn out of splines because plotly's `Parcoords`
 only draws straight segments; it trades brushing for a trial reading as one
@@ -338,7 +338,7 @@ the deviation from a healthy baseline and one run has none. See
 `soma-health/tests/narrowing.py`. The metric is recorded and drawn; the alarm was not
 invented.
 
-Measuring is `soma_next.torch`'s: `Trainer(..., auditing=True)` hooks the nodes
+Measuring is `somatize.torch`'s: `Trainer(..., auditing=True)` hooks the nodes
 and emits `health` facts through the same `watching=`. Thresholds never go near
 it — baked into the measurement, they would make an argument cost an afternoon
 of GPU. `Audit(inside=True)` looks **inside** a node, because a node is often a
@@ -393,7 +393,7 @@ remote slice sits inside the round trip it arrived under — an offset into a
 slice is a fact about the slice, and two wall clocks would not have composed.
 
 **And a third question, which is not about the network at all**:
-`soma_next.data.contribution` shuffles one input and scores again, and the drop
+`somatize.data.contribution` shuffles one input and scores again, and the drop
 is what that input was worth. `health` asks whether a network is **learning**;
 this asks whether it is learning **what you meant**, which no amount of looking
 at a gradient will ever say. It exists because of a real project — symptom
@@ -405,7 +405,7 @@ about is the correspondence with the answer.
 
 **CU22 is the static half, and it costs seconds rather than an afternoon.** CU21
 asked whether a network **is** learning, which needs it to have been learning;
-this asks whether it **can**. `soma_next.torch.probe(g, x)` is **one `forward`
+this asks whether it **can**. `somatize.torch.probe(g, x)` is **one `forward`
 that was recorded and never trained** — literally `run/<id>/0`, through the same
 `Watcher`, under the same keys — so `diagnose`, `seen`, `profile`, `flags`,
 `where`, `overlaid` and `alerts` all read it with **no new code at all**. That is
@@ -438,7 +438,7 @@ The forward scale is geometric — it stays put or leaves by decades, with nothi
 in between to be wrong about. Everything continuous is a ranking, and a ranking
 belongs at level 3 where a number only means something next to another
 candidate's. Which is exactly where the five zero-cost proxies went:
-`soma_next.torch.proxies` is a **cheap objective** a study's loop scores with,
+`somatize.torch.proxies` is a **cheap objective** a study's loop scores with,
 never a `Flag`, and `soma-health/tests/proxies.py` asks the only question worth asking
 of one — *does it beat counting parameters?*
 
@@ -517,7 +517,7 @@ saves.
 **CU26 keeps the names CU25 threw away.** The pre-pass already names the whole
 plan with nothing executed, and that answer is worth having **without** the run:
 two versions of one graph name a node differently exactly when its recipe
-changed, so `soma_next.foreseen.changes(before, after)` says what an edit did
+changed, so `somatize.foreseen.changes(before, after)` says what an edit did
 — *did I invalidate the encoder, or only the head?* — for the price of two
 hashes.
 The first shape was a partition of the nodes and one run killed it: edit the

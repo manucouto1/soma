@@ -16,7 +16,7 @@ use somatize_data::Frame;
 ///
 /// Because which dataframe is not ours to decide. What comes out of a source is
 /// Arrow, and `polars`, `pandas` and `pyarrow` all read Arrow — so this hands
-/// over [`ipc`](PyFrame::ipc) and `soma_next.data` turns it into whichever of
+/// over [`ipc`](PyFrame::ipc) and `somatize.data` turns it into whichever of
 /// them is installed. A crate that imported one of the three would make it a
 /// dependency of a worker that only counts rows.
 ///
@@ -26,7 +26,7 @@ use somatize_data::Frame;
 /// and nothing is converted. Asking for [`ipc`](PyFrame::ipc) is where bytes get
 /// written, and that is the caller's decision to make once, not the frontier's
 /// to make on every edge.
-#[pyclass(name = "Frame", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Frame", module = "somatize._somatize", frozen)]
 pub struct PyFrame {
     pub(crate) inner: Frame,
 }
@@ -96,7 +96,7 @@ impl PyFrame {
             other => {
                 return Err(PyValueError::new_err(format!(
                     "`{name}` is a {other}, and there is no way to hand one of those \
-                     to Python one value at a time yet. `soma_next.data.to_polars` or \
+                     to Python one value at a time yet. `somatize.data.to_polars` or \
                      `to_arrow` read the whole frame, whatever is in it"
                 )));
             }

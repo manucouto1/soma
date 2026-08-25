@@ -12,7 +12,7 @@ is identical.
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
+from somatize import Graph, Node, Opaque
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
@@ -103,7 +103,7 @@ def pipeline():
 
 
 def _parameters(g):
-    """What a `soma_next.torch.parameters(g)` would do, if it did not exist."""
+    """What a `somatize.torch.parameters(g)` would do, if it did not exist."""
     return [p for nid in g.nodes() for p in getattr(g.implementation(nid), "parameters", list)()]
 
 

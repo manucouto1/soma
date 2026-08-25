@@ -2,7 +2,7 @@
 //!
 //! Everything else in `tests/` checks a piece with the rest held still. This
 //! checks the one thing none of those can: that `git`, a worktree, a Python
-//! subprocess, `soma_next.foreseen` and the store all still agree once they are
+//! subprocess, `somatize.foreseen` and the store all still agree once they are
 //! in the same room.
 //!
 //! The repository comes from `examples/an-investigation.sh --only-build`, which
@@ -11,7 +11,7 @@
 //!
 //! # It skips rather than fails without an interpreter
 //!
-//! Building a graph needs a Python that can import `soma_next`, which is a
+//! Building a graph needs a Python that can import `somatize`, which is a
 //! `maturin develop` away and not something a checkout has. `SOMA_TREE_PYTHON`
 //! names one; without it the workspace's own `.venv` is tried. A test that
 //! failed here would be reporting on somebody's environment and calling it a
@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// An interpreter that can import `soma_next`, if there is one.
+/// An interpreter that can import `somatize`, if there is one.
 fn an_interpreter() -> Option<PathBuf> {
     let named = std::env::var_os("SOMA_TREE_PYTHON").map(PathBuf::from);
     let beside = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -29,12 +29,12 @@ fn an_interpreter() -> Option<PathBuf> {
     named
         .into_iter()
         .chain(beside)
-        .find(|python| imports_soma_next(python))
+        .find(|python| imports_somatize(python))
 }
 
-fn imports_soma_next(python: &Path) -> bool {
+fn imports_somatize(python: &Path) -> bool {
     Command::new(python)
-        .args(["-c", "import soma_next"])
+        .args(["-c", "import somatize"])
         .output()
         .map(|said| said.status.success())
         .unwrap_or(false)
@@ -145,7 +145,7 @@ fn soma_tree_refusing(at: &Path, args: &[&str]) -> String {
 macro_rules! given {
     ($at:ident) => {
         let Some(python) = an_interpreter() else {
-            eprintln!("no interpreter that imports soma_next: skipped");
+            eprintln!("no interpreter that imports somatize: skipped");
             return;
         };
         let $at = an_investigation(&python);
@@ -154,7 +154,7 @@ macro_rules! given {
     // For the tests that lay down a shape of their own.
     ($python:ident, $unused:ident) => {
         let Some($python) = an_interpreter() else {
-            eprintln!("no interpreter that imports soma_next: skipped");
+            eprintln!("no interpreter that imports somatize: skipped");
             return;
         };
     };
@@ -182,7 +182,7 @@ fn a_constructor_argument_moves_the_name_so_the_cache_misses() {
 
 #[test]
 fn the_body_of_a_forward_moves_no_name_and_the_cache_will_hit() {
-    // The finding the whole tool exists for. soma-next answers this edit with a
+    // The finding the whole tool exists for. soma answers this edit with a
     // line on stderr during a run; here it is said before paying for one.
     given!(at);
 
@@ -615,20 +615,20 @@ fn running_on_real_data_says_so_rather_than_inventing_some() {
 #[test]
 fn una_version_sin_ensayos_dice_donde_se_escriben() {
     // El mensaje que se lleva quien mira esto por primera vez. «0 ensayos» le
-    // dejaría creyendo que se escriben desde aquí, y no: los escribe soma-next
+    // dejaría creyendo que se escriben desde aquí, y no: los escribe soma
     // desde la máquina que corre el estudio, con este nombre.
     given!(at);
 
     let said = somatize_tree(at, &["trials", "HEAD"]);
 
     assert!(said.contains("0 ensayos"), "{said}");
-    assert!(said.contains("soma-next"), "{said}");
+    assert!(said.contains("somatize"), "{said}");
     assert!(said.contains("study="), "{said}");
 }
 
 #[test]
 fn el_nombre_del_estudio_de_una_version_sale_del_commit() {
-    // Todo el acoplamiento con soma-next es este nombre, y quien vaya a correr
+    // Todo el acoplamiento con soma es este nombre, y quien vaya a correr
     // el estudio tiene que poder copiarlo de aquí.
     given!(at);
     let commit = String::from_utf8_lossy(
@@ -866,7 +866,7 @@ fn spread_across_files() -> tempfile::TempDir {
     .expect("a file");
     std::fs::write(
         net.join("encoder.py"),
-        "from soma_next import Graph, Node\n\nfrom experiments.head import Head\n\n\n\
+        "from somatize import Graph, Node\n\nfrom experiments.head import Head\n\n\n\
          class Encoder(Node):\n    def __init__(self):\n        self.net = Head()\n\n    \
          def forward(self, x, ctx):\n        return self.net.run(x)\n\n\n\
          def build():\n    return Graph.somatize(Encoder().named(\"encoder\"))\n",

@@ -1,12 +1,12 @@
-//! `soma_next.study.Pruner` — whether a trial going badly is worth another epoch.
+//! `somatize.study.Pruner` — whether a trial going badly is worth another epoch.
 
 use super::{hashed, read};
 use pyo3::prelude::*;
 use somatize_study::{Patience, Percentile, Pruner, Threshold};
 
-/// `soma_next.study.Pruner` — whether a trial that is going badly is worth
+/// `somatize.study.Pruner` — whether a trial that is going badly is worth
 /// another epoch.
-#[pyclass(name = "Pruner", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Pruner", module = "somatize._somatize", frozen)]
 pub struct PyPruner {
     rule: Pruner,
 }

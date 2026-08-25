@@ -22,8 +22,8 @@ import json
 
 import pytest
 
-from soma_next import Graph, Node, Store
-from soma_next import _environment
+from somatize import Graph, Node, Store
+from somatize import _environment
 
 
 class Embed(Node):

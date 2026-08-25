@@ -15,8 +15,8 @@ look good and are not.
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
-from soma_next.torch import Split, Trainer, parameters
+from somatize import Graph, Node, Opaque
+from somatize.torch import Split, Trainer, parameters
 
 torch = pytest.importorskip("torch")
 nn = torch.nn

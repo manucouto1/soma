@@ -64,7 +64,7 @@ fn two_probes_from_one_sitting_have_nothing_to_say_about_it() {
 
 #[test]
 fn what_the_model_answered_is_carried_and_never_reshaped() {
-    // The opaque half. What a name is made of is soma-next's business, and a
+    // The opaque half. What a name is made of is soma's business, and a
     // reader here that understood its insides would be a second model with a
     // delay on it.
     let mut snapshot = built_against(&[]);

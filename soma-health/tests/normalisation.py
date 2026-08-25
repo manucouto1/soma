@@ -142,7 +142,7 @@ def gains(net, x):
     reference, up, down = float(x.std()), 0.0, math.inf
     for module, out in seen:
         scale = float(out.float().std())
-        # The same rule `soma_next.torch.kind_of` uses, written out rather than
+        # The same rule `somatize.torch.kind_of` uses, written out rather than
         # imported: this crate has no dependencies and its measurements keep it.
         # A normalisation sets the reference and reports no gain of its own —
         # changing the scale is its job, and reading that as drift would put the

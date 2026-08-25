@@ -10,8 +10,8 @@ import math
 
 import pytest
 
-from soma_next import Store
-from soma_next.study import (
+from somatize import Store
+from somatize.study import (
     DONE,
     MAX,
     MIN,

@@ -13,10 +13,10 @@ import textwrap
 
 import pytest
 
-from soma_next._manifest import KIND, DifferentVersion, _find, pack, unpack
+from somatize._manifest import KIND, DifferentVersion, _find, pack, unpack
 
 BASE = """
-    from soma_next import Node
+    from somatize import Node
 
     class Filter(Node):
         def __init__(self, threshold):

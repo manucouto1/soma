@@ -59,7 +59,7 @@ def result(text):
     y qué midió son dos preguntas, y meterlas en un blob las hace ilegibles
     justo cuando alguien quiere comparar dos intentos.
 
-    Esta investigación no pasó por los ensayos de soma-next —es anterior—, así
+    Esta investigación no pasó por los ensayos de soma —es anterior—, así
     que sus números no son un `trial` que se pueda recorrer, y decir que lo son
     sería inventar una cita que no apunta a nada. Son lo que se midió, guardado
     igual que la configuración y citado aparte."""

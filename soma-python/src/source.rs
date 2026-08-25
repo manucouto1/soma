@@ -12,13 +12,13 @@ use somatize_data::Parquet;
 ///
 /// It is a node like any other and it is deliberately not special: the DSL, the
 /// device, `.at()`, `.cached()` and the record all reach it because
-/// `soma_next.data.Parquet` puts a `forward` on it and nothing else.
+/// `somatize.data.Parquet` puts a `forward` on it and nothing else.
 ///
 /// What it does have that a node does not is [`version`](PySource::version) —
 /// what this dataset **is**, so that what is computed from it is keyed by it.
 /// It costs one lookup and no bytes, because a store already hashed the content
 /// when the bytes went in.
-#[pyclass(name = "Source", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Source", module = "somatize._somatize", frozen)]
 pub struct PySource {
     inner: Parquet,
 }

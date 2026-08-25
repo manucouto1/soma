@@ -7,7 +7,7 @@ that what cannot be honoured is a `ValueError` before a single index comes out.
 
 import pytest
 
-from soma_next.study import Partition
+from somatize.study import Partition
 
 
 def held_out(folds):

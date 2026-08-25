@@ -22,8 +22,8 @@ torch = pytest.importorskip("torch")
 cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
-from soma_next import Broker, Graph, Node, Opaque, Worker  # noqa: E402
-from soma_next.torch import (  # noqa: E402
+from somatize import Broker, Graph, Node, Opaque, Worker  # noqa: E402
+from somatize.torch import (  # noqa: E402
     Learning,
     NoGradient,
     OutOfStep,
@@ -32,8 +32,8 @@ from soma_next.torch import (  # noqa: E402
     envelope,
     parameters,
 )
-from soma_next.torch._learning import SIGNAL, Enters  # noqa: E402
-from soma_next.torch._learning import gradient  # noqa: E402
+from somatize.torch._learning import SIGNAL, Enters  # noqa: E402
+from somatize.torch._learning import gradient  # noqa: E402
 
 
 def carried(sent):

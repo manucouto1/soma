@@ -101,7 +101,7 @@ def sends_the_code(cluster):
     """A worker that has to be sent everything, by address."""
 
     def at(which, **kw):
-        from soma_next import Worker
+        from somatize import Worker
 
         # By its full name, because this directory is a package: `cluster.nodes`
         # is what `sys.modules` has, and what cloudpickle is asked to put **in**
@@ -118,7 +118,7 @@ def has_the_code(cluster):
     """A worker that already has the project, and is sent names and state."""
 
     def at(which, **kw):
-        from soma_next import Worker
+        from somatize import Worker
 
         return Worker.at(f"127.0.0.1:{cluster[which]}", mode="project", **kw)
 

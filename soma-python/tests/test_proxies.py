@@ -16,10 +16,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-import soma_next.torch  # noqa: E402, F401
-from soma_next import Graph, Node, Opaque  # noqa: E402
-from soma_next.torch import parameters, proxies, proxy  # noqa: E402
-from soma_next.torch._proxies import EVERY, FREE  # noqa: E402
+import somatize.torch  # noqa: E402, F401
+from somatize import Graph, Node, Opaque  # noqa: E402
+from somatize.torch import parameters, proxies, proxy  # noqa: E402
+from somatize.torch._proxies import EVERY, FREE  # noqa: E402
 
 
 class Block(Node):

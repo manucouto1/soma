@@ -1,4 +1,4 @@
-//! `soma_next.study.Partition` — how the samples are cut into folds.
+//! `somatize.study.Partition` — how the samples are cut into folds.
 
 use super::{hashed, to_py_err};
 use pyo3::prelude::*;
@@ -6,8 +6,8 @@ use somatize_study::{
     Grouped, KFold, Partition, Samples, Stratified, StratifiedGrouped, TimeSeries,
 };
 
-/// `soma_next.study.Partition` — how the samples are cut into folds.
-#[pyclass(name = "Partition", module = "soma_next._soma_next", frozen)]
+/// `somatize.study.Partition` — how the samples are cut into folds.
+#[pyclass(name = "Partition", module = "somatize._somatize", frozen)]
 pub struct PyPartition {
     cut: Partition,
 }

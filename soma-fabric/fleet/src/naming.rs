@@ -28,7 +28,7 @@
 //!
 //! Reading which machines are there is a scan and no fetches, because the whole
 //! of a reading is in its record. This is **a scan and a fetch per `forward`**,
-//! which is what the same join costs in `soma_next.record.fleet` and for the
+//! which is what the same join costs in `somatize.record.fleet` and for the
 //! same reason: the host lives in the blob. `last` is the bound on it, and the
 //! question worth asking of a fleet that is working now is the last few
 //! anyway.

@@ -14,8 +14,8 @@ import sys
 
 import pytest
 
-from soma_next import Store
-from soma_next.study import (
+from somatize import Store
+from somatize.study import (
     DONE,
     MAX,
     MIN,
@@ -376,8 +376,8 @@ def test_and_a_study_where_everything_stopped_does_not_look_abandoned(store):
 
 MACHINE = """
 import sys, time
-from soma_next import Store
-from soma_next.study import DONE, Sampler, Space, report, take
+from somatize import Store
+from somatize.study import DONE, Sampler, Space, report, take
 
 where, me, how_many = sys.argv[1], sys.argv[2], int(sys.argv[3])
 store = Store(where)

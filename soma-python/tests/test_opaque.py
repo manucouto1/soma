@@ -2,7 +2,7 @@
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
+from somatize import Graph, Node, Opaque
 
 
 class Wraps(Node):

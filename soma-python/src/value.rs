@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 /// Marks a value so it crosses the graph untouched. The node that receives it
 /// sees it **unwrapped**, so it is only written on returning.
-#[pyclass(name = "Opaque", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Opaque", module = "somatize._somatize", frozen)]
 pub struct PyOpaque {
     /// The object as it is.
     #[pyo3(get)]

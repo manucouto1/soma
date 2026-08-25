@@ -23,7 +23,7 @@ use somatize_health::{Seen, Thresholds, verdict as taken};
 /// The bounds a verdict is taken at. **The whole of the opinion, and it is
 /// data**: change one and the same record answers differently, without
 /// training again.
-#[pyclass(name = "Thresholds", module = "soma_next._soma_next")]
+#[pyclass(name = "Thresholds", module = "somatize._somatize")]
 #[derive(Clone)]
 pub struct PyThresholds {
     inner: Thresholds,
@@ -118,7 +118,7 @@ impl PyThresholds {
 
 /// What is wrong with these numbers, as a list of names.
 ///
-/// Named `verdict` like the Rust it wraps, so that `soma_next.health.diagnose`
+/// Named `verdict` like the Rust it wraps, so that `somatize.health.diagnose`
 /// — which reads a store and calls this once per node — is the only `diagnose`
 /// there is.
 ///

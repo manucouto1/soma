@@ -35,34 +35,38 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
 ENV UV_LINK_MODE=copy UV_SYSTEM_PYTHON=1
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install maturin
 
-# Two repositories side by side, which is what the path dependencies in
-# `python/Cargo.toml` already assume: `../../soma-fabric/wire` only resolves if
-# the wire's repository is this one's neighbour. It is copied from a second
-# build context rather than from a root over both, because the root over both
-# is a directory of unrelated projects.
-COPY --from=fabric . /src/soma-fabric
+# One repository now. The wire and the broker came back from `soma-fabric`,
+# so there is no second build context and no pair of directories to stand
+# side by side: a path dependency that never leaves the workspace resolves
+# wherever the workspace is copied.
 
-WORKDIR /src/soma-next
+WORKDIR /src/soma
 # The manifests first, so that changing a line of Rust does not re-download the
 # whole index.
 COPY Cargo.toml Cargo.lock ./
-COPY core/Cargo.toml core/
-COPY data/Cargo.toml data/
-COPY health/Cargo.toml health/
-COPY store/Cargo.toml store/
-COPY study/Cargo.toml study/
-COPY python/Cargo.toml python/pyproject.toml python/
+COPY soma-core/Cargo.toml soma-core/
+COPY soma-data/Cargo.toml soma-data/
+COPY soma-health/Cargo.toml soma-health/
+COPY soma-store/Cargo.toml soma-store/
+COPY soma-study/Cargo.toml soma-study/
+COPY soma-tree/Cargo.toml soma-tree/
+COPY soma-fabric/wire/Cargo.toml soma-fabric/wire/
+COPY soma-fabric/broker/Cargo.toml soma-fabric/broker/
+COPY soma-fabric/fleet/Cargo.toml soma-fabric/fleet/
+COPY soma-python/Cargo.toml soma-python/pyproject.toml soma-python/
 # Every member of the workspace, and not only what `python` names: cargo will
 # not load a workspace one of whose members is not there.
-COPY core core
-COPY data data
-COPY health health
-COPY store store
-COPY study study
-COPY python python
+COPY soma-core soma-core
+COPY soma-data soma-data
+COPY soma-health soma-health
+COPY soma-store soma-store
+COPY soma-study soma-study
+COPY soma-tree soma-tree
+COPY soma-fabric soma-fabric
+COPY soma-python soma-python
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
-    maturin build --release --manifest-path python/Cargo.toml --out /wheels
+    maturin build --release --manifest-path soma-python/Cargo.toml --out /wheels
 
 # ── A worker with no gradients in it ─────────────────────────────────────────
 FROM python:3.13-slim AS worker
@@ -83,7 +87,7 @@ RUN mkdir -p /clone /store
 # reaches this port runs code here: it belongs on a network you trust, and a
 # compose network is one.
 EXPOSE 7000
-CMD ["python", "-m", "soma_next.worker", "--listen", "0.0.0.0:7000"]
+CMD ["python", "-m", "somatize.worker", "--listen", "0.0.0.0:7000"]
 
 # ── And one that has a GPU ───────────────────────────────────────────────────
 FROM worker AS worker-gpu

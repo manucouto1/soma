@@ -40,11 +40,7 @@ fn a_pipe_and_a_socket_are_the_same_path() {
     // whole reason `Direct` carries an endpoint and not an address.
     for endpoint in [
         Endpoint::Address("node3:7000".into()),
-        Endpoint::Command(vec![
-            "python".into(),
-            "-m".into(),
-            "soma_next.worker".into(),
-        ]),
+        Endpoint::Command(vec!["python".into(), "-m".into(), "somatize.worker".into()]),
     ] {
         round_trip(Path::Direct { endpoint });
     }
@@ -103,10 +99,10 @@ fn a_path_says_itself_the_way_a_reader_would() {
             endpoint: Endpoint::Command(vec![
                 "python".into(),
                 "-m".into(),
-                "soma_next.worker".into()
+                "somatize.worker".into()
             ])
         }
         .to_string(),
-        "straight to python -m soma_next.worker"
+        "straight to python -m somatize.worker"
     );
 }

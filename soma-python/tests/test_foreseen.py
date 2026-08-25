@@ -25,7 +25,7 @@ import json
 
 import pytest
 
-from soma_next import Graph, Node, foreseen
+from somatize import Graph, Node, foreseen
 
 from conftest import Add
 

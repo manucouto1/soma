@@ -17,8 +17,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from soma_next import Store  # noqa: E402
-from soma_next.torch import gather  # noqa: E402
+from somatize import Store  # noqa: E402
+from somatize.torch import gather  # noqa: E402
 
 
 def weights(value, n=4):
@@ -143,8 +143,8 @@ def test_one_client_saying_its_size_and_another_not_is_not_half_a_weighting(stor
 
 CLIENT = """
 import sys, torch
-from soma_next import Store
-from soma_next.torch import gather
+from somatize import Store
+from somatize.torch import gather
 
 where, mine, clients, rounds, within = (
     sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])

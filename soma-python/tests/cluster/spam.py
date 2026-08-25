@@ -22,7 +22,7 @@ worker as the input of a graph, like everything else.
 
 from __future__ import annotations
 
-from soma_next import Node
+from somatize import Node
 
 NAME = "ucirvine/sms_spam"
 
@@ -80,7 +80,7 @@ class Embed(Node):
     def forward(self, x, ctx):
         import torch
 
-        from soma_next import Opaque
+        from somatize import Opaque
 
         landed = x if torch.is_tensor(x) else torch.tensor(x)
         ids = landed.long()
@@ -106,7 +106,7 @@ class Classify(Node):
     def forward(self, x, ctx):
         import torch
 
-        from soma_next import Opaque
+        from somatize import Opaque
 
         landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
         return Opaque(self.lin(landed))
@@ -187,7 +187,7 @@ def batches(store, size=64, name=IN_STORE):
     """
     import torch
 
-    from soma_next.data import Parquet
+    from somatize.data import Parquet
 
     source, at, out = Parquet(store, name), 0, []
     while True:

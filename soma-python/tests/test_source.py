@@ -12,8 +12,8 @@ import pyarrow
 import pyarrow.parquet
 import pytest
 
-from soma_next import Broker, Graph, Node, Store, Worker
-from soma_next.data import Parquet, settle, to_arrow
+from somatize import Broker, Graph, Node, Store, Worker
+from somatize.data import Parquet, settle, to_arrow
 
 
 def parquet(rows):

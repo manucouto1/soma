@@ -48,7 +48,7 @@ use std::sync::Arc;
 /// `report` and `gather` take a store and never ask what kind it is, and that is
 /// what lets a study run over a shared folder here and over S3 there without a
 /// line of it changing.
-#[pyclass(name = "Store", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Store", module = "somatize._somatize", frozen)]
 pub struct PyStore {
     /// An `Arc` and not a `Box` because a store outlives the call it was passed
     /// to: a `Recorder` holds on to one across every `forward` of a training
@@ -233,7 +233,7 @@ impl PyStore {
 }
 
 /// A name, and what it points at.
-#[pyclass(name = "Bound", module = "soma_next._soma_next", frozen, get_all)]
+#[pyclass(name = "Bound", module = "somatize._somatize", frozen, get_all)]
 pub struct PyBound {
     /// The name somebody chose.
     name: String,

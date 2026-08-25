@@ -17,7 +17,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 license = "Elastic-2.0"
-repository = "https://github.com/manucouto1/soma-next"
+repository = "https://github.com/manucouto1/soma"
 
 [workspace.dependencies]
 somatize-core = { path = "soma-core" }

@@ -188,7 +188,7 @@ pub fn under(
 
 /// Cómo se llama, en el `meta`, el entorno contra el que se produjo un valor.
 ///
-/// La palabra es de `soma_next._environment` y no del motor, así que no está en
+/// La palabra es de `somatize._environment` y no del motor, así que no está en
 /// las constantes del core. Escrita aquí una vez y no en cada sitio que la
 /// mira, que es la mitad de la deriva que este acuerdo evita.
 pub const ENVIRONMENT: &str = "env";
@@ -203,7 +203,7 @@ pub const ENVIRONMENT: &str = "env";
 ///   de laboratorio como si fuera un intermedio que a lo mejor sobra.
 /// - `snapshot:…` es la caché de sondeos de esta herramienta. Se recalcula
 ///   desde un commit y no es de nadie.
-/// - `env/…` es la lectura de un entorno, que escribe soma-next para que el
+/// - `env/…` es la lectura de un entorno, que escribe soma para que el
 ///   nombre corto que llevan los valores se pueda entender. Es lo que explica
 ///   la atribución, no algo que atribuir.
 ///

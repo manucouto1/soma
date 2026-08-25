@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import time
 
-from soma_next import Node
+from somatize import Node
 
 
 def whereabouts():
@@ -182,7 +182,7 @@ class Head(Node):
 
     def forward(self, x, ctx):
         import torch
-        from soma_next import Opaque
+        from somatize import Opaque
 
         # A tensor as it is: what a `Trainer` hands the near half of a cut is the
         # **seam**, and building a tensor out of a tensor detaches it — the
@@ -213,7 +213,7 @@ class Slab(Node):
 
     def forward(self, x, ctx):
         import torch
-        from soma_next import Opaque
+        from somatize import Opaque
 
         landed = x if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float32)
         return Opaque(self.lin(landed).relu())

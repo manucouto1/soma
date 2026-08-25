@@ -132,7 +132,7 @@ async fn graph(State(serving): State<Arc<Serving>>, At(commit): At<String>) -> R
             "shape": taken.snapshot.get("shape"),
             // Las aristas van aparte de `shape` aunque `shape` lleve los padres
             // de cada nodo: son lo que dice qué alimenta a qué, y el cuaderno de
-            // soma-next es tajante con eso — una figura sin ellas es mentira en
+            // soma es tajante con eso — una figura sin ellas es mentira en
             // cuanto el grafo deja de ser una cadena.
             "edges": taken.snapshot.get("edges"),
             "declared": taken.snapshot.get("declared"),
@@ -769,7 +769,7 @@ where
         Ok(Ok(said)) => Json(said).into_response(),
         // Said out loud rather than as a bare 500: what goes wrong here is
         // usually a revspec nobody has or an interpreter that cannot import
-        // soma-next, and both are worth reading.
+        // soma, and both are worth reading.
         Ok(Err(why)) => (StatusCode::BAD_REQUEST, Json(json!({"trouble": why}))).into_response(),
         Err(why) => (
             StatusCode::INTERNAL_SERVER_ERROR,

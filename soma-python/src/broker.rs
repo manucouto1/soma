@@ -26,13 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 /// Where the hosts of a graph are, and how to reach them.
-#[pyclass(
-    name = "Broker",
-    module = "soma_next._soma_next",
-    frozen,
-    subclass,
-    dict
-)]
+#[pyclass(name = "Broker", module = "somatize._somatize", frozen, subclass, dict)]
 pub struct PyBroker {
     session: Arc<Session>,
     /// One handle per host, made the first time it is asked for and kept.

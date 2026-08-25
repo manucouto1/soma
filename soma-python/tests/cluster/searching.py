@@ -40,9 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch  # noqa: E402
 
 from cluster import spam  # noqa: E402
-from soma_next import Broker, Graph, Store, Worker  # noqa: E402
-from soma_next.data import Parquet  # noqa: E402
-from soma_next.study import (  # noqa: E402
+from somatize import Broker, Graph, Store, Worker  # noqa: E402
+from somatize.data import Parquet  # noqa: E402
+from somatize.study import (  # noqa: E402
     DONE,
     PRUNED,
     Pruner,
@@ -54,7 +54,7 @@ from soma_next.study import (  # noqa: E402
     report,
     take,
 )
-from soma_next.torch import Split, Trainer, parameters  # noqa: E402
+from somatize.torch import Split, Trainer, parameters  # noqa: E402
 
 STUDY = "spam"
 TRIALS = 8

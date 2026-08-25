@@ -6,7 +6,7 @@ the engine decided to keep, and it stops being enough the moment a training run
 has something of its own to write down and another machine has to read it.
 
 Two ways of asking and one directory: `put`/`get`/`bind`/`resolve` deal in bytes
-and are `soma_next_store::Store` one for one; `keep`/`recall` deal in values,
+and are `somatize_store::Store` one for one; `keep`/`recall` deal in values,
 tensors included, and are what an export needs.
 """
 
@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from soma_next import Store
+from somatize import Store
 
 
 @pytest.fixture
@@ -90,7 +90,7 @@ def test_what_is_remembered_beside_a_name_is_text_to_text(store):
 
 def test_a_map_of_tensors_goes_in_and_comes_out_a_map_of_tensors(tmp_path):
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
+    import somatize.torch  # noqa: F401
 
     store = Store(str(tmp_path))
     store.keep("round/0", {"body": {"0": torch.ones(2, 3), "1": torch.zeros(3)}})
@@ -106,7 +106,7 @@ def test_a_bare_tensor_is_kept_although_it_would_not_cross_an_edge(tmp_path):
     # edge a bare tensor is a mistake with two right answers, so refusing it makes
     # the cost of converting visible. In a store it is bytes either way.
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
+    import somatize.torch  # noqa: F401
 
     store = Store(str(tmp_path))
     store.keep("just/one", torch.ones(4))
@@ -173,7 +173,7 @@ def test_a_claim_carries_what_was_said_beside_it_like_any_other_record(store):
 
 RACER = """
 import sys
-from soma_next import Store
+from somatize import Store
 store = Store(sys.argv[1])
 mine = store.put(sys.argv[2].encode())
 print("won" if store.claim("one/piece/of/work", mine) else "lost")
@@ -232,9 +232,9 @@ def test_and_whoever_was_told_they_won_is_the_one_written_down(tmp_path):
 
 
 WRITER = """
-import sys, torch, soma_next.torch
-from soma_next import Graph, Node, Opaque, Store
-from soma_next.torch import Trainer, parameters
+import sys, torch, somatize.torch
+from somatize import Graph, Node, Opaque, Store
+from somatize.torch import Trainer, parameters
 
 class Layer(Node):
     def __init__(self):
@@ -274,7 +274,7 @@ def test_a_training_run_written_down_over_there_is_read_back_here(tmp_path):
     # reads it. That is a federated round's client half, and the only thing
     # between the two is a folder both can see.
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
+    import somatize.torch  # noqa: F401
 
     where = str(tmp_path / "shared")
     theirs, _ = written_by_another_process(where, "round/0")

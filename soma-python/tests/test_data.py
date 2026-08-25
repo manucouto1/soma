@@ -10,10 +10,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-import soma_next.torch  # noqa: E402, F401
-from soma_next import Graph, Node, Opaque  # noqa: E402
-from soma_next.data import contribution, leaning, shares, shuffled  # noqa: E402
-from soma_next.torch import Trainer, parameters  # noqa: E402
+import somatize.torch  # noqa: E402, F401
+from somatize import Graph, Node, Opaque  # noqa: E402
+from somatize.data import contribution, leaning, shares, shuffled  # noqa: E402
+from somatize.torch import Trainer, parameters  # noqa: E402
 
 MSE = torch.nn.functional.mse_loss
 

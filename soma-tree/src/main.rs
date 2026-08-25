@@ -123,7 +123,7 @@ enum Doing {
     ///
     /// The version is the commit and does not change; the trials grow without
     /// end and are **associated** to it rather than versioned. They are written
-    /// by whoever runs the study, from soma-next, and only read here.
+    /// by whoever runs the study, from soma, and only read here.
     Trials {
         #[arg(default_value = "HEAD")]
         rev: String,
@@ -641,7 +641,7 @@ fn trialling(
     if seen.is_empty() {
         println!(
             "\nNadie ha corrido nada con esta versión todavía. Se escriben desde \
-             soma-next,\ncon `study=\"{}\"`.",
+             somatize,\ncon `study=\"{}\"`.",
             trials.study(&commit)
         );
         return Ok(true);

@@ -1,6 +1,6 @@
 //! Reading what the model answered.
 //!
-//! The model itself lives in `soma_next.foreseen` and is tested there. What is
+//! The model itself lives in `somatize.foreseen` and is tested there. What is
 //! checked here is the reading: which findings mean somebody typed something,
 //! and which mean a name moved without anybody having.
 

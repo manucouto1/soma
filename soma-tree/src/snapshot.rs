@@ -55,7 +55,7 @@ pub struct Snapshot {
     /// envoltorio.
     ///
     /// Leído sin correr nada, así que es la composición **declarada**: lo que
-    /// `__init__` construyó. `soma_next.torch.architecture` responde mejor
+    /// `__init__` construyó. `somatize.torch.architecture` responde mejor
     /// —ve hasta lo que no es un módulo— y para eso ejecuta el grafo, que es
     /// justo lo que este lado no hace nunca.
     ///
@@ -71,7 +71,7 @@ pub struct Snapshot {
     /// ninguna parte de la respuesta.
     ///
     /// No es un segundo modelo de qué depende de qué: es el cierre transitivo
-    /// que la huella de soma-next ya recorría para hashearlo, dicho en voz
+    /// que la huella de soma ya recorría para hashearlo, dicho en voz
     /// alta. Si cambia lo que entra en una huella, cambia esto con ella.
     ///
     /// **Sin fuente dentro**, a propósito: cuarenta commits de ficheros
@@ -87,7 +87,7 @@ pub struct Snapshot {
     /// guarda, qué está congelado, y en qué orden correría.
     ///
     /// Opaco igual que `snapshot`, y por lo mismo: el vocabulario es de
-    /// soma-next, y un lector de este lado que lo entendiera sería un segundo
+    /// soma, y un lector de este lado que lo entendiera sería un segundo
     /// modelo con retraso. Lo único que hace falta aquí es que llegue entero a
     /// quien dibuja.
     #[serde(default)]
@@ -282,7 +282,7 @@ impl Probing<'_> {
     /// graph, only the model and the snapshots, so nine comparisons paying for
     /// nine interpreters would be the slowest part of a walk of ten commits.
     ///
-    /// The model is `soma_next.foreseen`'s. Nothing here decides what a finding
+    /// The model is `somatize.foreseen`'s. Nothing here decides what a finding
     /// means — one implementation of something still being designed beats two
     /// that drift.
     pub fn compared(
@@ -404,7 +404,7 @@ impl Probing<'_> {
     ///
     /// A subprocess and not a library call, and it is the whole reason this
     /// tool has two languages in it: the graph only exists once the checkout's
-    /// own code has been imported and run, against the soma-next *that*
+    /// own code has been imported and run, against the soma *that*
     /// checkout pins. Reaching into it from here would be running one version
     /// of the engine over another version's declarations.
     pub fn taken(&self, working: &Path, commit: &str) -> Result<(Snapshot, Vec<u8>), Trouble> {
@@ -487,7 +487,7 @@ impl fmt::Display for Trouble {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // The commonest failure by far, and worth naming precisely: the
-            // interpreter that can import soma-next is rarely the one on PATH.
+            // interpreter that can import soma is rarely the one on PATH.
             Self::Unreachable { python, why } => {
                 write!(f, "`{python}` could not be run: {why}")
             }

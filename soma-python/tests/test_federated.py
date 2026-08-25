@@ -20,8 +20,8 @@ cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
 from torch import nn  # noqa: E402
 
-from soma_next import Broker, Graph, Node, Opaque, Worker  # noqa: E402
-from soma_next.torch import Split, Trainer, fedavg, parameters  # noqa: E402
+from somatize import Broker, Graph, Node, Opaque, Worker  # noqa: E402
+from somatize.torch import Split, Trainer, fedavg, parameters  # noqa: E402
 
 IN, MID, CLASSES = 6, 5, 3
 

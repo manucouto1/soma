@@ -82,7 +82,7 @@ pub enum Endpoint {
     /// A worker that was already standing: `"node3:7000"`.
     Address(String),
     /// A worker to be started here, as a child, and spoken to over its pipes:
-    /// `["python", "-m", "soma_next.worker"]`.
+    /// `["python", "-m", "somatize.worker"]`.
     ///
     /// It is a whole `argv` and not a path because whoever stands a worker up
     /// decides what it is called, what environment it needs, and whether it goes

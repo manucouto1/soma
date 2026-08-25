@@ -2,7 +2,7 @@
 # one. It lives beside the tests it exists for, and nowhere else uses it.
 #
 #   docker compose -f store/tests/docker/compose.yaml up -d
-#   SOMA_S3=http://127.0.0.1:9000 cargo test -p soma-next-store --features s3
+#   SOMA_S3=http://127.0.0.1:9000 cargo test -p somatize-store --features s3
 #
 # MinIO and not a fake, on purpose: what is being checked is that a conditional
 # write is really conditional, and a fake would answer whatever it was written

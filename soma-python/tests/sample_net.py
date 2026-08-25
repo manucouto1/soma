@@ -10,7 +10,7 @@ process inherits the working directory, which is `python/`, and `tests/` is not
 on its `sys.path`.
 """
 
-from soma_next import Node
+from somatize import Node
 
 
 class Greet(Node):

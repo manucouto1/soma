@@ -1,14 +1,14 @@
 """The example's nodes. **Both sides** import this file.
 
 That the catalog is built by a function — rather than travelling — is the
-decision that separates soma-next from the original soma: an `Arc<dyn Node>`
+decision that separates soma from the original soma: an `Arc<dyn Node>`
 does not cross a wire, so either it is there, or it arrives inside an artifact
 someone knows how to open.
 """
 
 import os
 
-from soma_next import Node
+from somatize import Node
 
 
 class Clean(Node):

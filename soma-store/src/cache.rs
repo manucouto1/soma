@@ -35,7 +35,7 @@
 //!
 //! What does **not** travel is the same, though, and for the same reason: a
 //! [`Value::Opaque`] points into the process that made it. Here it fails with
-//! the type in front of you, and `soma_next.torch` is what turns a tensor into
+//! the type in front of you, and `somatize.torch` is what turns a tensor into
 //! bytes before it ever gets this far.
 
 use crate::{Digest, Meta, Store, StoreError};

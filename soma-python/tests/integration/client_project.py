@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from net import graph, nodes  # noqa: E402
 
-from soma_next import Broker, Graph, Worker  # noqa: E402
+from somatize import Broker, Graph, Worker  # noqa: E402
 
 addr = sys.argv[1]
 n = nodes()
@@ -29,6 +29,6 @@ output = g.forward(
 )
 print("OUTPUT", output)
 print("HERE", float(os.getpid()))
-from soma_next._remote import _pack  # noqa: E402
+from somatize._remote import _pack  # noqa: E402
 
 print("SIZE", len(_pack(n, "project", ())[1]))

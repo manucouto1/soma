@@ -1,12 +1,12 @@
-//! `soma_next.study.Sampler` — where to look next.
+//! `somatize.study.Sampler` — where to look next.
 
 use super::space::{PyPoint, PySpace};
 use super::{hashed, read};
 use pyo3::prelude::*;
 use somatize_study::{Grid, Halton, Point, Random, Sampler, Sobol, Tpe};
 
-/// `soma_next.study.Sampler` — where to look for the next configuration.
-#[pyclass(name = "Sampler", module = "soma_next._soma_next", frozen)]
+/// `somatize.study.Sampler` — where to look for the next configuration.
+#[pyclass(name = "Sampler", module = "somatize._somatize", frozen)]
 pub struct PySampler {
     how: Sampler,
 }

@@ -43,7 +43,7 @@
 //! **A frozen node's state does not change while the graph runs.** That is a
 //! statement about cache validity, and the core can hold it the same way it
 //! holds a [`Device`](crate::Device): as inert information it reasons over —
-//! here, [`cacheable`] — and somebody else obeys. `soma_next.torch` is what
+//! here, [`cacheable`] — and somebody else obeys. `somatize.torch` is what
 //! turns it true, with `requires_grad_(False)`, exactly as the node and not the
 //! core is what moves a tensor to a GPU.
 //!

@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from soma_next import Graph, Node, Recorder, Store
+from somatize import Graph, Node, Recorder, Store
 
 
 class Add(Node):
@@ -147,7 +147,7 @@ def test_what_is_printed_is_what_is_written(g, tmp_path):
 
 
 def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
-    from soma_next import Broker, Worker
+    from somatize import Broker, Worker
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
     # The nodes above live in this file and no worker has it, so it travels
@@ -155,7 +155,7 @@ def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
     broker = Broker.embedded(
         {
             "w1": Worker.spawn(
-                [sys.executable, "-m", "soma_next.worker"],
+                [sys.executable, "-m", "somatize.worker"],
                 mode="network",
                 send=["test_watching"],
             )
@@ -182,15 +182,15 @@ def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
 
 def test_a_training_step_says_the_loss_and_when_it_moved(tmp_path):
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
-    from soma_next.torch import Trainer, parameters
+    import somatize.torch  # noqa: F401
+    from somatize.torch import Trainer, parameters
 
     class Layer(Node):
         def __init__(self):
             self.lin = torch.nn.Linear(4, 2)
 
         def forward(self, x, ctx):
-            from soma_next import Opaque
+            from somatize import Opaque
 
             return Opaque(self.lin(x))
 
@@ -220,15 +220,15 @@ def test_a_loss_lands_in_the_forward_it_belongs_to(tmp_path):
     import json
 
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
-    from soma_next.torch import Trainer, parameters
+    import somatize.torch  # noqa: F401
+    from somatize.torch import Trainer, parameters
 
     class Layer(Node):
         def __init__(self):
             self.lin = torch.nn.Linear(4, 2)
 
         def forward(self, x, ctx):
-            from soma_next import Opaque
+            from somatize import Opaque
 
             return Opaque(self.lin(x))
 
@@ -264,15 +264,15 @@ def test_a_trainer_takes_the_same_watching_a_forward_does(tmp_path):
     # `watching=` meaning two things depending on the door is the kind of trap
     # this project exists not to build.
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
-    from soma_next.torch import Trainer, parameters
+    import somatize.torch  # noqa: F401
+    from somatize.torch import Trainer, parameters
 
     class Layer(Node):
         def __init__(self):
             self.lin = torch.nn.Linear(4, 2)
 
         def forward(self, x, ctx):
-            from soma_next import Opaque
+            from somatize import Opaque
 
             return Opaque(self.lin(x))
 
@@ -295,15 +295,15 @@ def test_a_trainer_takes_the_same_watching_a_forward_does(tmp_path):
 
 def test_a_trainer_refuses_a_watching_it_cannot_call(tmp_path):
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
-    from soma_next.torch import Trainer, parameters
+    import somatize.torch  # noqa: F401
+    from somatize.torch import Trainer, parameters
 
     class Layer(Node):
         def __init__(self):
             self.lin = torch.nn.Linear(4, 2)
 
         def forward(self, x, ctx):
-            from soma_next import Opaque
+            from somatize import Opaque
 
             return Opaque(self.lin(x))
 
@@ -324,15 +324,15 @@ def test_a_group_of_steps_moves_once_and_says_so_once(tmp_path):
     # `Trainer(every=N)` makes a group of steps into one update. What is said
     # has to be the same fact: one `updated`, at the end of the group.
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
-    from soma_next.torch import Trainer, parameters
+    import somatize.torch  # noqa: F401
+    from somatize.torch import Trainer, parameters
 
     class Layer(Node):
         def __init__(self):
             self.lin = torch.nn.Linear(4, 2)
 
         def forward(self, x, ctx):
-            from soma_next import Opaque
+            from somatize import Opaque
 
             return Opaque(self.lin(x))
 

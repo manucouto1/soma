@@ -17,11 +17,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-import soma_next.torch  # noqa: E402, F401
-from soma_next import Graph, Node, Opaque, Recorder, Store  # noqa: E402
-from soma_next.health import Thresholds, about, diagnose, history, seen  # noqa: E402
-from soma_next.record import forwards  # noqa: E402
-from soma_next.torch import Audit, Trainer, architecture, parameters, probe  # noqa: E402
+import somatize.torch  # noqa: E402, F401
+from somatize import Graph, Node, Opaque, Recorder, Store  # noqa: E402
+from somatize.health import Thresholds, about, diagnose, history, seen  # noqa: E402
+from somatize.record import forwards  # noqa: E402
+from somatize.torch import Audit, Trainer, architecture, parameters, probe  # noqa: E402
 
 MACRO = ("VANISHING", "EXPLODING", "DEAD", "SATURATED", "NAN", "INF", "LEAKAGE")
 
@@ -274,7 +274,7 @@ def test_something_that_is_not_a_flag_says_so():
 
 def test_a_node_says_what_it_is_made_of():
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     torch.manual_seed(0)
     g, _ = chain([Block(activation="sigmoid") for _ in range(2)])
@@ -291,7 +291,7 @@ def test_a_skip_connection_is_an_edge_and_not_an_order():
     # The thing a list of children cannot show, and the reason the inside is
     # traced rather than listed.
     pytest.importorskip("plotly")
-    from soma_next.torch._inside import traced
+    from somatize.torch._inside import traced
 
     class Residual(torch.nn.Module):
         def __init__(self, width=16):
@@ -309,7 +309,7 @@ def test_a_skip_connection_is_an_edge_and_not_an_order():
 
 def test_a_bottleneck_is_visible_in_the_shapes():
     pytest.importorskip("plotly")
-    from soma_next.torch._inside import traced
+    from somatize.torch._inside import traced
 
     class Squeeze(torch.nn.Module):
         def __init__(self):
@@ -331,7 +331,7 @@ def test_a_module_fx_cannot_trace_is_still_drawn_and_says_how():
     # A residual that is missing looks exactly like a residual that is not
     # there, so which path answered has to be on the figure.
     pytest.importorskip("plotly")
-    from soma_next.torch._inside import traced
+    from somatize.torch._inside import traced
 
     class Loopy(torch.nn.Module):
         """Control flow that depends on the values, which `fx` cannot follow."""
@@ -355,7 +355,7 @@ def test_what_is_drawn_is_a_superset_of_what_is_measured(store):
     # Every layer that can carry a flag has a box. The other way round is fine —
     # a `Sigmoid` has no gradient of its own to report.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     torch.manual_seed(0)
     g, _ = chain([Block(activation="sigmoid") for _ in range(3)])
@@ -372,7 +372,7 @@ def test_what_is_drawn_is_a_superset_of_what_is_measured(store):
 
 def test_the_overlay_marks_the_layer_inside_the_node(store):
     pytest.importorskip("plotly")
-    from soma_next.health import overlaid
+    from somatize.health import overlaid
 
     torch.manual_seed(0)
     g, _ = chain([Block(activation="sigmoid") for _ in range(8)])
@@ -388,7 +388,7 @@ def test_a_composite_everybody_recognises_is_one_box():
     # A `TransformerEncoderLayer` read as its fourteen leaves is fourteen things
     # and a diagram nobody looks at twice.
     pytest.importorskip("plotly")
-    from soma_next.torch._inside import _worth_drawing
+    from somatize.torch._inside import _worth_drawing
 
     block = torch.nn.TransformerEncoderLayer(16, 4, 32, batch_first=True)
 
@@ -401,7 +401,7 @@ def test_a_composite_everybody_recognises_is_one_box():
 def test_blocks_that_are_the_same_block_collapse_to_one_and_a_count():
     # Twelve identical layers drawn twelve times is a figure nobody reads.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Deep(Node):
         def __init__(self, width=16, how_many=5):
@@ -433,7 +433,7 @@ def test_what_comes_after_a_stack_is_not_adopted_by_its_last_block():
     # being pulled into the fourth, so four identical blocks came out as three
     # and an odd one.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Stack(Node):
         def __init__(self, width=16):
@@ -462,7 +462,7 @@ def test_a_tensor_nobody_holds_cannot_invent_an_edge():
     # dead one's id draws an edge that never existed — worse than a missing one,
     # because a missing edge looks like a missing edge.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Apart(Node):
         """Two halves with something functional between them, so the second's
@@ -489,7 +489,7 @@ def test_a_shape_says_what_each_of_its_numbers_is():
     # Three numbers and no way to tell which is the batch, which is time and
     # which is the width is what makes a shape useless at a glance.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Conv(Node):
         def __init__(self):
@@ -515,7 +515,7 @@ def test_something_that_did_not_change_the_shape_keeps_the_names():
     # length)` because that is what it was handed; naming it by its own kind
     # gets the right words for the wrong tensor.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Trunk(Node):
         def __init__(self):
@@ -546,7 +546,7 @@ def test_a_recurrent_cell_says_its_output_and_not_its_hidden_state():
     # `(output, h_n)` reversed shows the hidden state where the output belongs,
     # which is a wrong number written confidently on a figure.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Cell(Node):
         def __init__(self):
@@ -571,7 +571,7 @@ def test_depth_counts_composites_opened_and_not_names():
     # `TransformerEncoder`, and asking for one level of detail should not have
     # to know that.
     pytest.importorskip("plotly")
-    from soma_next.torch import architecture
+    from somatize.torch import architecture
 
     class Stack(Node):
         def __init__(self):

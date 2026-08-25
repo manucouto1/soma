@@ -13,10 +13,10 @@ import textwrap
 
 import pytest
 
-from soma_next._fingerprint import CannotVersion, bill, digest, fingerprint
+from somatize._fingerprint import CannotVersion, bill, digest, fingerprint
 
 BASE = """
-    from soma_next import Node
+    from somatize import Node
 
     THRESHOLD = 5
 
@@ -96,7 +96,7 @@ def test_the_fingerprint_does_not_depend_on_the_process(tmp_path):
     program = (
         "import sys; sys.path.insert(0, %r)\n"
         "from net import Filter\n"
-        "from soma_next._fingerprint import digest\n"
+        "from somatize._fingerprint import digest\n"
         "print(digest(Filter))" % str(tmp_path)
     )
 
@@ -211,7 +211,7 @@ def test_a_global_named_like_an_attribute_does_not_get_in(write):
     # the code had changed, and a `--strict` worker refused to run over a
     # mismatch that did not exist.
     holds_one = """
-    from soma_next import Node
+    from somatize import Node
 
     class Filter(Node):
         def forward(self, words, ctx):
@@ -235,7 +235,7 @@ def test_a_class_composed_in_init_changes_it(write):
     # enrutador en su `__init__` y delega en él calcula otra cosa cuando el
     # enrutador cambia, y la caché acertaba y devolvía lo de antes.
     composes = """
-    from soma_next import Node
+    from somatize import Node
 
     class Router:
         def route(self, x):
@@ -268,7 +268,7 @@ def test_a_decorator_of_your_own_still_gets_in(write):
     que un límite conocido no se quede escrito cuando deja de serlo.
     """
     decorated = """
-    from soma_next import Node
+    from somatize import Node
 
     def twice(fn):
         def again(self, words, ctx):
@@ -338,7 +338,7 @@ ACROSS = {
                 return self.router.route(x)
     """,
     "node": """
-        from soma_next import Node
+        from somatize import Node
         from head import Head
 
         class Encoder(Node):
@@ -380,7 +380,7 @@ def test_what_is_installed_is_listed_with_its_version_and_no_file(spread):
         "node": """
             import re
             from re import findall
-            from soma_next import Node
+            from somatize import Node
 
             class Filter(Node):
                 def forward(self, words, ctx):

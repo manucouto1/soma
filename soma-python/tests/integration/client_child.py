@@ -12,7 +12,7 @@ import os
 
 from net import graph, nodes
 
-from soma_next import Broker, Graph, Worker
+from somatize import Broker, Graph, Worker
 
 n = nodes()
 g = graph(Graph, n)

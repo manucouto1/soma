@@ -28,12 +28,12 @@ import json
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
+from somatize import Graph, Node, Opaque
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
 
-from soma_next.torch import NoGradient, Trainer, freeze, parameters  # noqa: E402
+from somatize.torch import NoGradient, Trainer, freeze, parameters  # noqa: E402
 
 VOCAB, DIM, HID, CLASSES, LENGTH = 32, 8, 6, 3, 4
 TEXTS = ["the dog runs", "a cat sleeps", "birds fly high", "the fish swims"]
@@ -270,7 +270,7 @@ def test_a_tokenizer_is_kept_without_anybody_registering_a_codec(body, batches, 
 
 
 def test_it_needs_no_freeze_call_because_it_has_no_state(body, tmp_path):
-    # `soma_next.torch.freeze` is for turning gradients off and hashing weights.
+    # `somatize.torch.freeze` is for turning gradients off and hashing weights.
     # Something with neither is settled by saying so and nothing else — and the
     # check before a run knows the difference.
     expression, (tokenize, _, _) = body

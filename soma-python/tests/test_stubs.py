@@ -1,6 +1,6 @@
 """The stub describes the module that was actually built.
 
-`_soma_next.pyi` is a promise about a binary it cannot see. The promise rots the
+`_somatize.pyi` is a promise about a binary it cannot see. The promise rots the
 first time somebody adds a `#[pymethods]` and does not think about typing, and
 nothing complains: the stub goes on type-checking, it just stops describing
 reality. **A stub that lies is worse than no stub**, because what it produces is
@@ -32,9 +32,9 @@ from pathlib import Path
 
 import pytest
 
-import soma_next._soma_next as ext
+import somatize._somatize as ext
 
-STUB = Path(ext.__file__).with_name("_soma_next.pyi")
+STUB = Path(ext.__file__).with_name("_somatize.pyi")
 
 # Every class has these by construction; the stub is not expected to redeclare
 # them.

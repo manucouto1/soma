@@ -98,8 +98,8 @@ fn stamped(said: &Bound<'_, PyAny>) -> PyResult<Vec<(String, String)>> {
         .collect()
 }
 
-/// `soma_next.Graph` — the core's topology plus the implementations.
-#[pyclass(name = "Graph", module = "soma_next._soma_next", subclass)]
+/// `somatize.Graph` — the core's topology plus the implementations.
+#[pyclass(name = "Graph", module = "somatize._somatize", subclass)]
 struct PyGraph {
     graph: Graph,
     /// What the engine executes.
@@ -175,7 +175,7 @@ impl PyGraph {
     /// the state it is settled at if whoever calls knows how to hash weights.
     ///
     /// The primitive `.frozen()` ends at, and it **declares**: making it true is
-    /// `soma_next.torch.freeze`, exactly as moving a tensor to a GPU is the
+    /// `somatize.torch.freeze`, exactly as moving a tensor to a GPU is the
     /// node's job and not the core's.
     #[pyo3(signature = (node_id, state = None))]
     fn freeze(&mut self, node_id: &str, state: Option<String>) -> PyResult<()> {
@@ -669,7 +669,7 @@ fn snake_case(name: &str) -> String {
 }
 
 #[pymodule]
-fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _somatize(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraph>()?;
     m.add_class::<PyCtx>()?;
     m.add_class::<value::PyOpaque>()?;

@@ -6,7 +6,7 @@ they return.
 
 import pytest
 
-from soma_next import Graph, Node
+from somatize import Graph, Node
 
 
 class Add(Node):

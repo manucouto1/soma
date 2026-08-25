@@ -30,7 +30,7 @@ pub struct Config {
     /// Sin él, lo que necesita sondear dice que falta y lo demás funciona.
     #[serde(default)]
     pub build: Option<String>,
-    /// The interpreter that can import soma-next. Rarely the one on `PATH`.
+    /// The interpreter that can import soma. Rarely the one on `PATH`.
     #[serde(default = "python_on_path")]
     pub python: PathBuf,
     /// What this investigation is called, so several can share one store

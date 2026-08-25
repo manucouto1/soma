@@ -16,7 +16,7 @@ The files are in `tests/integration/` and read as an example:
     client_whole.py       the same graph undistributed, for comparison
 
 What is no longer there, and it is the change that counts most: a worker file. A
-worker is not written — it is stood up with `python -m soma_next.worker` and
+worker is not written — it is stood up with `python -m somatize.worker` and
 receives the plan. That it can execute `tokenize` is a matter of how it
 resolves, not of someone having handed it a dictionary.
 """
@@ -172,14 +172,14 @@ def test_the_worker_does_not_write_to_its_stdout():
 
 @contextmanager
 def standing_worker(tmp_path, clone=None, lucky=False):
-    """Stands up `python -m soma_next.worker --listen` and says where it landed.
+    """Stands up `python -m somatize.worker --listen` and says where it landed.
 
     Port `0` and it says which one it got: picking a fixed number is asking for
     two concurrent runs to collide. And it stands up from `tmp_path`, where there
     is neither `net.py` nor anything of ours — whatever it uses, it got over the
     wire.
     """
-    command = [sys.executable, "-m", "soma_next.worker", "--listen", "127.0.0.1:0"]
+    command = [sys.executable, "-m", "somatize.worker", "--listen", "127.0.0.1:0"]
     if lucky:
         command.append("--lucky")
     # `clone` is what this worker has of the project. Without it, it has nothing,

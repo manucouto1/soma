@@ -10,13 +10,13 @@ same class share a name, which is the one kind of cache hit that is a bug.
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
+from somatize import Graph, Node, Opaque
 
 torch = pytest.importorskip("torch")
 nn = torch.nn
 
-from soma_next.torch import Trainer, freeze, parameters  # noqa: E402
-from soma_next.torch._codec import KIND, dump, load  # noqa: E402
+from somatize.torch import Trainer, freeze, parameters  # noqa: E402
+from somatize.torch._codec import KIND, dump, load  # noqa: E402
 
 IN, MID, CLASSES = 4, 3, 2
 
@@ -158,7 +158,7 @@ def test_it_comes_back_on_the_cpu():
 
 
 def test_the_codec_is_registered_by_importing():
-    from soma_next._soma_next import codecs_registered
+    from somatize._somatize import codecs_registered
 
     assert KIND in codecs_registered()
 

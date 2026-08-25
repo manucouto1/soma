@@ -15,7 +15,7 @@ fn a_listing_goes_to_a_file_and_comes_back_the_same_listing() {
     let mut paper = Listing::default();
     paper.add(Listed::at("w1", "node3:7000")).expect("listed");
     paper
-        .add(Listed::run("tok", ["python", "-m", "soma_next.worker"]))
+        .add(Listed::run("tok", ["python", "-m", "somatize.worker"]))
         .expect("listed");
 
     paper.write(&at).expect("written");

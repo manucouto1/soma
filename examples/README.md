@@ -35,7 +35,7 @@ PLOTLY_RENDERER="plotly_mimetype+png" jupyter lab      # or when re-executing th
 
 ```bash
 cd python && maturin develop          # the tests and the notebooks both run
-pip install 'soma-next[viz]'          # plotly, for every figure here
+pip install 'somatize[viz]'          # plotly, for every figure here
 pip install ipywidgets                # optional: `Live` redraws in place with it
 ```
 
@@ -51,9 +51,9 @@ what gave it away was the coordinate, which hashes nothing and slowed down just
 as much. Build the package once and point at it:
 
 ```bash
-cargo build --release -p soma-next-python
-cp -r python/python/soma_next /tmp/relpkg/ && rm /tmp/relpkg/soma_next/_soma_next.*.so
-cp target/release/lib_soma_next.so /tmp/relpkg/soma_next/_soma_next.cpython-313-x86_64-linux-gnu.so
+cargo build --release -p soma-python
+cp -r soma-python/python/somatize /tmp/relpkg/ && rm /tmp/relpkg/somatize/_somatize.*.so
+cp target/release/lib_somatize.so /tmp/relpkg/somatize/_somatize.cpython-313-x86_64-linux-gnu.so
 PYTHONPATH=/tmp/relpkg python -  # the loop below
 ```
 

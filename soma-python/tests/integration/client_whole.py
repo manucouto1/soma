@@ -4,7 +4,7 @@ import os
 
 from net import graph, nodes
 
-from soma_next import Graph
+from somatize import Graph
 
 print("OUTPUT", graph(Graph, nodes(), distributed=False).forward("  The Dog Runs Quickly  "))
 print("HERE", float(os.getpid()))

@@ -1,6 +1,6 @@
 //! What an edit did, read rather than decided.
 //!
-//! The model lives in `soma_next.foreseen` and not here. Its vocabulary, its
+//! The model lives in `somatize.foreseen` and not here. Its vocabulary, its
 //! propagation, its 24 tests — one implementation of a thing that is still
 //! being designed, rather than two that drift. What this module is, is a typed
 //! reader of what it answers.

@@ -13,7 +13,7 @@
 //!
 //! # One pair of passes, and two places it is asked for
 //!
-//! What this crate fills is [`Codecs`] — `soma_next_transport::Codec` — and
+//! What this crate fills is [`Codecs`] — `somatize_transport::Codec` — and
 //! that is all: opaques out on the way in, opaques back on the way out, so the
 //! transport never learns what an opaque carries.
 //!
@@ -187,7 +187,7 @@ fn codec_for<'py>(
     Err(PyValueError::new_err(format!(
         "a `{}` cannot leave this process: nothing says how to write one down. \
          Register it with `codec(\"a name\", {0}, dump=..., load=...)`, which is \
-         what `soma_next.torch` does for a tensor on being imported",
+         what `somatize.torch` does for a tensor on being imported",
         obj.get_type().name()?
     )))
 }
@@ -297,6 +297,6 @@ fn type_names(obj: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 /// what is missing, and that message is the better one.
 fn summon(py: Python<'_>, kind: &str) {
     let _ = py
-        .import("soma_next._codecs")
+        .import("somatize._codecs")
         .and_then(|module| module.call_method1("summon", (kind,)));
 }

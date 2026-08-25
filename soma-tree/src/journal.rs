@@ -151,7 +151,7 @@ impl<'a> Journal<'a> {
     /// The same shape a study's trials have — `<study>/trial/<n>/<attempt>` —
     /// one noun along, which is not a coincidence: `exp/<tree>/<commit>` **is**
     /// the study name, so trials for this version land underneath without a
-    /// line of soma-next changing.
+    /// line of soma changing.
     fn named(&self, commit: &str, nth: u32) -> String {
         format!("exp/{}/{commit}/said/{nth}", self.tree)
     }

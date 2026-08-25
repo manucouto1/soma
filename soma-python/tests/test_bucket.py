@@ -24,8 +24,8 @@ import os
 
 import pytest
 
-from soma_next import Graph, Node, Store
-from soma_next.study import DONE, RUNNING, Sampler, Space, finished, report, take, trials
+from somatize import Graph, Node, Store
+from somatize.study import DONE, RUNNING, Sampler, Space, finished, report, take, trials
 
 ENDPOINT = os.environ.get("SOMA_S3")
 
@@ -124,7 +124,7 @@ def test_a_map_of_tensors_goes_in_and_comes_out_a_map_of_tensors(bucket, mine):
     # A codec is a fact about the value and not about where it is going, so this
     # asks nothing new of one — which is the whole reason it is worth checking.
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
+    import somatize.torch  # noqa: F401
 
     bucket.keep(mine("round/0"), {"body": {"0": torch.ones(2, 3)}})
 

@@ -15,7 +15,7 @@ set -euo pipefail
 ONLY_BUILD=""
 if [ "${1:-}" = "--only-build" ]; then ONLY_BUILD="$2"; fi
 WHERE="${ONLY_BUILD:-$(mktemp -d)}"
-PYTHON="${SOMA_TREE_PYTHON:-$(cd "$(dirname "$0")/../../soma-next" 2>/dev/null && pwd)/.venv/bin/python}"
+PYTHON="${SOMA_TREE_PYTHON:-$(cd "$(dirname "$0")/../../soma" 2>/dev/null && pwd)/.venv/bin/python}"
 
 mkdir -p "$WHERE/experiments"
 cd "$WHERE"
@@ -29,7 +29,7 @@ TOML
 
 # ── The graph. Four nodes, and every knob through a constructor. ──
 cat > experiments/encoder.py <<'PY'
-from soma_next import Graph, Node
+from somatize import Graph, Node
 
 
 class Tokenize(Node):

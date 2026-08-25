@@ -25,8 +25,8 @@ import textwrap
 
 import pytest
 
-from soma_next import Graph, Node
-from soma_next._declaration import CannotDeclare, digest, written
+from somatize import Graph, Node
+from somatize._declaration import CannotDeclare, digest, written
 
 
 class Embed(Node):
@@ -112,7 +112,7 @@ def test_a_set_is_written_down_in_an_order_of_its_own():
     here = digest(Holds(tags={"zebra", "apple", "mango"}))
     there = in_another_process(
         """
-        from soma_next._declaration import digest
+        from somatize._declaration import digest
         class Holds:
             def __init__(self, **held): self.__dict__.update(held)
         print(digest(Holds(tags={"zebra", "apple", "mango"})))
@@ -126,7 +126,7 @@ def test_what_a_node_holds_is_the_same_text_in_another_process():
     here = digest(Holds(h=[Helper(1), Helper(2)], conf={"b": 2, "a": 1}, dim=512))
     there = in_another_process(
         """
-        from soma_next._declaration import digest
+        from somatize._declaration import digest
         class Helper:
             def __init__(self, k=1): self.k = k
         class Holds:
@@ -243,7 +243,7 @@ def test_a_name_and_not_a_source_is_what_a_class_or_a_function_writes():
 
 
 def test_two_nodes_built_differently_are_not_kept_under_one_name(tmp_path):
-    from soma_next import foreseen
+    from somatize import foreseen
 
     def built(dim):
         return Graph.somatize(Embed(dim).named("embed").frozen().cached())

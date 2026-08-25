@@ -6,7 +6,7 @@ client sends says which version it was written against; this worker compares and
 decides — stopping with `--strict`, and running its own with `--lucky`.
 """
 
-from soma_next import Node
+from somatize import Node
 
 FACTOR = 3
 

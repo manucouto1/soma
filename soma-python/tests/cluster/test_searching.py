@@ -30,8 +30,8 @@ from pathlib import Path
 
 import pytest
 
-from soma_next import Store
-from soma_next.study import DONE, PRUNED, finished, trials
+from somatize import Store
+from somatize.study import DONE, PRUNED, finished, trials
 
 from . import spam
 from .searching import EPOCHS, STUDY, TRIALS, sampler, space

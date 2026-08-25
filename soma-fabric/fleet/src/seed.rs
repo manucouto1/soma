@@ -247,7 +247,7 @@ fn a_listing() -> Listing {
             Listed::at("w2", "node4:7000"),
             // A command is not an identity: running it twice gives two of them,
             // so this is never grouped with anything.
-            Listed::run("tok", ["python", "-m", "soma_next.worker"]),
+            Listed::run("tok", ["python", "-m", "somatize.worker"]),
         ],
     }
 }

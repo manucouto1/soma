@@ -27,7 +27,7 @@ import time
 
 import pytest
 
-from soma_next import Broker, Graph
+from somatize import Broker, Graph
 
 from . import nodes  # the module the containers cannot see  # noqa: E402
 
@@ -212,7 +212,7 @@ def test_training_a_node_on_another_machine_stops_instead_of_half_learning(gpu, 
     # gradient here. Left alone, the loss comes down — because whatever is
     # downstream is learning — and half the net never moves.
     torch = pytest.importorskip("torch")
-    from soma_next.torch import NoGradient, Trainer, parameters
+    from somatize.torch import NoGradient, Trainer, parameters
 
     # On `gpu` and not on `a`, for a reason worth knowing: the CPU images carry
     # no torch, and a worker says so instead of guessing.
@@ -275,7 +275,7 @@ def test_the_trainer_writes_that_same_loop(gpu, sends_the_code):
     # changed is who writes the loop, and `Slab` does not know any of it happened.
     torch = pytest.importorskip("torch")
 
-    from soma_next.torch import Split, Trainer, parameters
+    from somatize.torch import Split, Trainer, parameters
 
     def by_hand():
         torch.manual_seed(0)

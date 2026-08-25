@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-from soma_next import Broker, Graph, Node, Opaque, Worker
+from somatize import Broker, Graph, Node, Opaque, Worker
 
 cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
@@ -392,7 +392,7 @@ def test_an_opaque_produced_over_there_that_nobody_can_write_down_stays_there():
 
 def test_a_tensor_crosses_whole_and_is_the_same_tensor_over_there():
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401  — registers the codec for a tensor
+    import somatize.torch  # noqa: F401  — registers the codec for a tensor
 
     doubles, shape = Doubles(), Shape()
     g = Graph.somatize(doubles.named("doubles") >> shape.named("shape").at("w1"))
@@ -407,7 +407,7 @@ def test_a_tensor_crosses_whole_and_is_the_same_tensor_over_there():
 
 def test_a_tensor_produced_over_there_comes_back_a_tensor():
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
+    import somatize.torch  # noqa: F401
 
     makes = MakesATensor()
     g = Graph.somatize(makes.named("makes").at("w1"))
@@ -424,7 +424,7 @@ def test_what_crosses_are_the_bytes_of_the_tensor_and_not_its_floats():
     the other side is a tensor and not a list, so it is the same node here and
     there — which is the entire argument of `.at()`."""
     torch = pytest.importorskip("torch")
-    import soma_next.torch  # noqa: F401
+    import somatize.torch  # noqa: F401
 
     what, w = WhatAmIGiven(), generic()
     g = Graph.somatize(what.named("what").at("w1"))
@@ -465,7 +465,7 @@ def test_a_kind_of_artifact_it_does_not_know_is_rejected_by_name():
         "package",
         "whatever",
         b"does not matter",
-        __import__("soma_next.worker", fromlist=["runtime"]).runtime(),
+        __import__("somatize.worker", fromlist=["runtime"]).runtime(),
     )
 
     with pytest.raises(ValueError, match="package"):
@@ -542,7 +542,7 @@ def test_the_artifact_does_not_depend_on_the_order_the_nodes_came_in():
     # so the same nodes handed over in another order **were another artifact**.
     # Reaching for a private here on purpose: what is being pinned is the bytes,
     # and from outside the only symptom is a worker that quietly starts over.
-    from soma_next._remote import _pack
+    from somatize._remote import _pack
 
     one, other = Add(1), Add(2)
     for mode in ("network", "project"):
@@ -553,7 +553,7 @@ def test_two_graphs_over_the_same_nodes_are_one_artifact():
     # Which is what lets a **second** graph — the transpose of the first, which
     # is how a backward pass crosses a wire — reach a worker without provisioning
     # it again and swapping the catalog it has live.
-    from soma_next._remote import _pack
+    from somatize._remote import _pack
 
     # The same two objects in both, which is what the real case does: the
     # transpose is the forward graph with its edges the other way round.
@@ -598,7 +598,7 @@ def test_a_graph_run_in_pieces_keeps_the_worker_it_had():
     # provisions the **whole** graph, so the artifact is one: the objects over
     # there survive from stage to stage and from pass to pass, which is what a
     # backward pass against a live optimizer is going to need.
-    from soma_next._stage import stages
+    from somatize._stage import stages
 
     how_many = HowManyTimes()
     g = Graph.somatize(
@@ -627,17 +627,17 @@ def test_a_cached_tensor_is_kept_by_the_worker_too(tmp_path):
     else — so the same `.cached()` node hit here and missed there for no reason
     anybody could see."""
     torch = pytest.importorskip("torch")
-    import soma_next.torch
+    import somatize.torch
 
     counts = CountsATensor()
     g = Graph.somatize(counts.named("counts").frozen().cached().at("w1"))
     # Declaring it is the graph's half; making it true is torch's, and without
     # the digest of its weights two checkpoints would share one name.
-    soma_next.torch.freeze(g)
+    somatize.torch.freeze(g)
     w = Broker.embedded(
         {
             "w1": Worker.spawn(
-                [sys.executable, "-m", "soma_next.worker", "--store", str(tmp_path)],
+                [sys.executable, "-m", "somatize.worker", "--store", str(tmp_path)],
                 mode="network",
             )
         }

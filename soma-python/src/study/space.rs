@@ -1,16 +1,16 @@
-//! `soma_next.study.Space` — the knobs, and `Point` — one setting of them all.
+//! `somatize.study.Space` — the knobs, and `Point` — one setting of them all.
 
 use super::{hashed, to_py_err};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 use somatize_study::{Dimension, Point, Setting, Space};
 
-/// `soma_next.study.Space` — what is being searched over.
+/// `somatize.study.Space` — what is being searched over.
 ///
 /// Built up, and every call gives back a **new** space: the one you had is still
 /// the one you had, which is what makes handing the same base to two studies
 /// safe.
-#[pyclass(name = "Space", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Space", module = "somatize._somatize", frozen)]
 #[derive(Clone)]
 pub struct PySpace {
     pub(super) space: Space,
@@ -98,12 +98,12 @@ impl PySpace {
     }
 }
 
-/// `soma_next.study.Point` — one configuration.
+/// `somatize.study.Point` — one configuration.
 ///
 /// It behaves as a mapping, so `build(**point)` and `point["lr"]` both work, and
 /// `str(point)` is the trial's **name** — derived from the values in the space's
 /// order, so two machines that never spoke file it identically.
-#[pyclass(name = "Point", module = "soma_next._soma_next", frozen)]
+#[pyclass(name = "Point", module = "somatize._somatize", frozen)]
 pub struct PyPoint {
     pub(super) point: Point,
 }

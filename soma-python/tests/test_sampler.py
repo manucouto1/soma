@@ -7,7 +7,7 @@ which is what lets a study spread over a shared folder without a coordinator.
 
 import pytest
 
-from soma_next.study import Sampler, Space
+from somatize.study import Sampler, Space
 
 
 def space():

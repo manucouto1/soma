@@ -15,7 +15,7 @@ runs, not where.
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
+from somatize import Graph, Node, Opaque
 
 from conftest import Add, Identity
 

@@ -7,9 +7,9 @@ this slice added zero lines to level 2.
 
 import pytest
 
-from soma_next import Graph, Node, Opaque
-from soma_next.study import Pruner
-from soma_next.torch import Trainer, parameters
+from somatize import Graph, Node, Opaque
+from somatize.study import Pruner
+from somatize.torch import Trainer, parameters
 
 torch = pytest.importorskip("torch")
 nn = torch.nn

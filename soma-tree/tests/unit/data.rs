@@ -1,6 +1,6 @@
 //! De quién es cada dato del store, y qué se dice de lo que no es de nadie.
 //!
-//! Los registros se escriben **a mano y con los nombres de soma-next**, por lo
+//! Los registros se escriben **a mano y con los nombres de soma**, por lo
 //! mismo que en `trials`: lo que hay que defender es que este lector entiende
 //! lo que hay en el disco de alguien, y llamar al escritor de la otra
 //! biblioteca haría que los dos se pusieran de acuerdo en cualquier formato,

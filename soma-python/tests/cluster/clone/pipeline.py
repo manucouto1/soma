@@ -9,7 +9,7 @@ is staged: it is another file, in another image's mount, and the fingerprints
 come out different because the code is different.
 """
 
-from soma_next import Node
+from somatize import Node
 
 FACTOR = 2
 
