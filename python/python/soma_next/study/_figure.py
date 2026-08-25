@@ -4,7 +4,7 @@
 
     table(store, space, study="widths")
     influence(store, space, study="widths")
-    coordinates(store, space, study="widths", goal="min")
+    coordinates(store, space, study="widths")
 
 All three read a `Store` and nothing else, so a machine that ran none of these
 trials draws them — which is the point of a study handed out of a folder.
@@ -24,11 +24,18 @@ out: a pruned score is real and was measured after fewer epochs, so ranking the
 two together says a trial that was stopped early did badly, when all that is
 known is that it was stopped.
 
-## `goal` decides which end of the colour scale is good
+## The direction comes from the study, and is never guessed
 
-It is a parameter and not a guess. Getting it backwards is the quietest kind of
-lie a figure can tell: everything is drawn, nothing raises, and the region you
-read as promising is the one to stay away from.
+Getting it backwards is the quietest kind of lie a figure can tell: everything
+is drawn, nothing raises, and the region you read as promising is the one to
+stay away from. `table` sorting the wrong way round is the same lie with a
+different label — it says *best first* either way.
+
+So neither of them defaults. The direction is read out of the record, where
+`report` wrote it, and `goal=` overrides it for a study that predates its being
+written down. When nobody says at all: `table` gives up on the claim and falls
+back to the order the trials ran in, and `coordinates` raises, because a colour
+scale has two ends and drawing one is saying which is good.
 """
 
 from __future__ import annotations
@@ -44,7 +51,17 @@ if TYPE_CHECKING:
 import math
 
 from soma_next import _theme
-from soma_next.study._run import DONE, POINT, SCORE, STATE, importance, trials
+from soma_next.study._run import (
+    DONE,
+    MAX,
+    MIN,
+    POINT,
+    SCORE,
+    STATE,
+    direction,
+    importance,
+    trials,
+)
 
 __all__ = ["coordinates", "influence", "table"]
 
@@ -54,15 +71,24 @@ drawn in log. The original's rule, and it is measured rather than declared
 because a `Space` does not say how a knob was searched."""
 
 
-def table(store: "Store", space: "Space", *, study: str) -> Figure:
+def table(
+    store: "Store", space: "Space", *, study: str, goal: str | None = None
+) -> Figure:
     """Every scored trial, best first, with the configuration that got it.
 
     One scan and no fetches. Pruned trials are here too and say so: they are
     what the study spent its time on, and hiding them would make a run of
     thirty look like a run of fourteen.
+
+    *Best* needs a direction, and it comes from the record — `goal` overrides
+    it, for a study that was run before the direction was written down. When
+    neither says, the trials come back **in the order they were run** and the
+    title says so, because a table headed *best first* that is sorted the wrong
+    way round is worse than a table that is not sorted.
     """
     go = _theme.plotly()
-    scored = _scored(store, space, study=study)
+    goal = _goal(store, study=study, goal=goal)
+    scored = _scored(store, space, study=study, goal=goal)
     knobs = list(space.names())
     columns = ["trial", "state", *knobs, "score"]
     rows = [
@@ -72,6 +98,7 @@ def table(store: "Store", space: "Space", *, study: str) -> Figure:
         [f"{one[SCORE]:.4g}" for one in scored],
     ]
     done = sum(one[STATE] == DONE for one in scored)
+    order = "best first" if goal else "in the order they ran — no direction recorded"
     return go.Figure(
         go.Table(
             columnwidth=[0.6, 0.8] + [1.0] * len(knobs) + [0.9],
@@ -94,7 +121,9 @@ def table(store: "Store", space: "Space", *, study: str) -> Figure:
         )
     ).update_layout(
         **_theme.layout(
-            title=_theme.titled(f"{study} — {len(scored)} scored, {done} finished"),
+            title=_theme.titled(
+                f"{study} — {len(scored)} scored, {done} finished, {order}"
+            ),
             height=90 + 26 * (len(scored) + 1),
             margin={"l": 24, "r": 24, "t": 52, "b": 16},
         )
@@ -142,7 +171,7 @@ def coordinates(
     space: "Space",
     *,
     study: str,
-    goal: str = "min",
+    goal: str | None = None,
 ) -> Figure:
     """Every finished trial as a **curve** across the knobs, coloured by score.
 
@@ -165,11 +194,22 @@ def coordinates(
     There is no colour scale beside it: the score is the last axis, so the
     colour is the same fact read twice. What it is for is making a bundle
     visible as a bundle.
+
+    `goal` comes from the record and this parameter overrides it. Unlike
+    `table`, which can fall back to the order the trials ran in, there is no
+    such fallback here — a colour scale has two ends and drawing one means
+    saying which is good — so a study that recorded no direction and a caller
+    that names none is an error rather than a guess.
     """
     go = _theme.plotly()
     from plotly.colors import sample_colorscale
 
-    scored = [one for one in _scored(store, space, study=study) if one[STATE] == DONE]
+    goal = _goal(store, study=study, goal=goal, needed=True)
+    scored = [
+        one
+        for one in _scored(store, space, study=study, goal=goal)
+        if one[STATE] == DONE
+    ]
     knobs = list(space.names())
     if not scored:
         return _nothing(go, study)
@@ -183,7 +223,7 @@ def coordinates(
     # Reversed for a goal of `min`, because the eye reads bright as good.
     shades = sample_colorscale(
         "Viridis",
-        [1 - (s - low) / spread if goal == "min" else (s - low) / spread for s in scores],
+        [1 - (s - low) / spread if goal == MIN else (s - low) / spread for s in scores],
     )
 
     figure = go.Figure()
@@ -304,16 +344,47 @@ def _label(
     }
 
 
-def _scored(store: "Store", space: "Space", *, study: str) -> list["Trial"]:
-    """Every trial with a score, best first. Pruned ones included."""
-    return sorted(
-        (
-            one
-            for one in trials(store, space, study=study)
-            if one[SCORE] is not None and one[POINT] is not None
-        ),
-        key=lambda one: one[SCORE],
-    )
+def _goal(
+    store: "Store", *, study: str, goal: str | None, needed: bool = False
+) -> str | None:
+    """Which way is better here: what the caller said, else what the record says.
+
+    The caller wins because the record is history and an override is the only
+    way to draw a study that was run before the direction was written down.
+    """
+    said = goal if goal is not None else direction(store, study=study)
+    if said is None and needed:
+        raise ValueError(
+            f"`{study}` does not say which way is better, so this figure cannot "
+            f"know which end of its colour scale is good. Pass `goal=\"{MIN}\"` "
+            f"or `goal=\"{MAX}\"`, and pass the same to `report` so the study "
+            f"says it itself"
+        )
+    if said is not None and said not in (MIN, MAX):
+        raise ValueError(
+            f"`{said}` does not say which way is better: write `{MIN}` for a loss "
+            f"or `{MAX}` for an accuracy"
+        )
+    return said
+
+
+def _scored(
+    store: "Store", space: "Space", *, study: str, goal: str | None
+) -> list["Trial"]:
+    """Every trial with a score, best first. Pruned ones included.
+
+    `goal` decides which end *best* is. `None` means nobody said, and then this
+    does not pretend to know: the order is the one the trials were run in, which
+    is a fact, rather than an ascending sort called *best first*.
+    """
+    scored = [
+        one
+        for one in trials(store, space, study=study)
+        if one[SCORE] is not None and one[POINT] is not None
+    ]
+    if goal is None:
+        return scored
+    return sorted(scored, key=lambda one: one[SCORE], reverse=goal == MAX)
 
 
 def _nothing(go: Any, study: str) -> Figure:

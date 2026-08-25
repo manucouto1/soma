@@ -3113,6 +3113,13 @@ copied `study/`, so the cluster images had not been rebuildable since CU17.
 - [x] the curve is watchable while it is still being drawn
 - [x] a retry is the next attempt and whoever reads keeps the higher
 
+**Which way is better, which the number does not say** (`test_study.py`)
+- [x] a score carries the direction it was searched in
+- [x] a trial claimed and never reported still says which way it looked
+- [x] a study nobody told answers `None` rather than guessing `min`
+- [x] changing your mind halfway is the newest record and not a vote
+- [x] a typo is caught where it was typed, before anything is written
+
 **The real case** (`tests/cluster/test_searching.py`)
 - [x] something it tried actually learnt to tell spam from ham
 - [x] the configurations are not all the same one
@@ -3940,10 +3947,26 @@ claims nothing — a point exists only where it crosses an axis, and it crosses 
 the value it has — but it is still drawn gently, because a spline bulging past
 the top of an axis reads as a value beyond its range even when it means nothing.
 
-`goal` decides which end of the colour scale is good and it is a **parameter,
-not a guess**: getting it backwards is the quietest lie a figure can tell —
-everything is drawn, nothing raises, and the region you read as promising is the
-one to stay away from.
+`goal` decides which end of the colour scale is good and it is **read from the
+study, never guessed**: getting it backwards is the quietest lie a figure can
+tell — everything is drawn, nothing raises, and the region you read as promising
+is the one to stay away from. `table` sorting the wrong way round is the same
+lie with a different label, since it says *best first* either way.
+
+It was a parameter with a default of `min`, which is the guess in another
+place. So `report` writes the direction into the record beside the score — the
+number does not say which way is better and neither did anything else a reader
+could reach — and both figures read it, with `goal=` left as an override for a
+study run before it was written down. When nobody says at all, they part
+company: `table` gives up the claim and falls back to the order the trials ran
+in, saying so in its title, and `coordinates` raises, because a colour scale has
+two ends and drawing one is saying which of them is good.
+
+The cost is one word per record and it is **denormalised on purpose** — the
+direction belongs to the study, not the trial. A name of its own would cost a
+fetch and a missing case, against a normalisation nobody was going to query;
+and writing it per trial records what was meant **at the time**, so a study
+whose direction changed halfway does not retell the old trials.
 
 And in all three, pruned and finished are not ranked together. `table` shows
 both with their state; the other two use only what ran to the end, for the same
@@ -3973,6 +3996,11 @@ reason `finished` leaves pruned trials out.
 - [x] a knob searched over orders of magnitude gets a log axis
 - [x] the goal decides which end of the scale is good
 - [x] a study nobody has finished is a statement and not an exception
+- [x] the table reads the direction the study recorded, both ways round
+- [x] a caller overrides the record for a study that predates it
+- [x] a table that does not know gives up the claim instead of guessing
+- [x] a study that never said raises rather than drawing it backwards
+- [x] a direction nobody recognises is refused by the figure as well
 
 **One figure, two sources** (`python/tests/test_record_figure.py`)
 - [x] live and read back draw the same series, point for point

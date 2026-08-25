@@ -11,10 +11,11 @@ sampler = Sampler.sobol(seed=0)
 
 for trial in range(100):
     point = sampler.ask(space, trial, finished(store, space, study="spam"))
-    if not take(store, point, study="spam", trial=trial, me=me):
+    if not take(store, point, study="spam", trial=trial, me=me, goal="min"):
         continue                                   # somebody else has that one
     ...
-    report(store, point, reports, study="spam", trial=trial, me=me, state="done")
+    report(store, point, reports, study="spam", trial=trial, me=me,
+           state="done", goal="min")
 ```
 
 # Why there is no queue, and nothing is sent anywhere
@@ -45,6 +46,7 @@ state = running | done | pruned | failed
 point = lr=0.001,batch=32,opt=adam
 score = 0.0837                         (absent while it is still running)
 who   = whoever claimed it
+goal  = min | max                      (absent when nobody said)
 ```
 
 In the **blob**, for whoever wants the detail: the whole curve, and why it
@@ -53,6 +55,30 @@ stopped.
 The split is the reason it scales: rebuilding the history a sampler asks for
 costs **one scan and not one fetch per trial**, because the configuration and
 the score are both in the record. Only a pruner comparing curves pays for blobs.
+
+# Why the direction is written down, when nothing here reads it
+
+`0.0837` is a good score or a bad one and the number does not say which. Inside
+a loop that never matters: the `Goal` was handed to the sampler and the pruner
+at the top of the script, and they are the only things comparing anything.
+
+It matters to **whoever reads the study without the script**, which is the case
+a study handed out of a folder exists for — a notebook opened over somebody
+else's run, another tool reading the same directory. Without it they have the
+score and no way to know which end is good, and the ways of getting that wrong
+are all silent: a table that says *best first* listing the worst, a colour scale
+with the good region drawn as the one to avoid.
+
+So it goes where `score` goes. That is the same call CU18 already made and for
+the same reason: what a scan carries is what a reader can use, and a number
+whose meaning lives in somebody else's script is not readable.
+
+It is per trial and not per study, which **is** denormalised — the direction
+belongs to the study and it is written N times. The alternative is a name of its
+own, which costs a fetch and a missing case, and buys a normalisation nobody was
+going to query. What the denormalised shape gets right for free: it records what
+was meant **at the time**, so a study whose direction was changed halfway does
+not retell the old trials.
 
 One record per trial, rewritten as it goes — and not five events. The
 `TrialStarted`/`TrialPruned`/`TrialCompleted` of a bus are the *diff* of this
@@ -76,9 +102,9 @@ if TYPE_CHECKING:
     from soma_next._soma_next import Bound, Point, Space, Store
 
 #: One trial as `trials` reports it: its number, its state, the point it
-#: ran and the score it reached. `Any` for the same reason the record's
-#: rows are: the columns are named in the docstring and the store never
-#: learned what any of them mean.
+#: ran, the score it reached and which way better was. `Any` for the same
+#: reason the record's rows are: the columns are named in the docstring and
+#: the store never learned what any of them mean.
 Trial = dict[str, Any]
 
 import json
@@ -97,7 +123,14 @@ it was measured after a different number of epochs."""
 FAILED = "failed"
 """Blew up. It says so rather than looking like a trial that scored badly."""
 
-STATE, POINT, SCORE, WHO = "state", "point", "score", "who"
+STATE, POINT, SCORE, WHO, GOAL = "state", "point", "score", "who", "goal"
+
+MIN = "min"
+"""Smaller is better: a loss, an error, a runtime. The word `Goal` reads, so the
+record and the enum spell it the same and neither has to translate."""
+
+MAX = "max"
+"""Larger is better: an accuracy, an F1, a reward."""
 
 
 def take(
@@ -108,18 +141,20 @@ def take(
     trial: int,
     me: object,
     attempt: int = 0,
+    goal: str | None = None,
 ) -> bool:
     """Claims the `trial`-th trial of `study`. `True` when it is this machine's.
 
     `False` means somebody else got there first, and the loop simply goes on to
     the next number — that is the whole of how the work is handed out.
+
+    `goal` is `"min"` or `"max"` and is what the sampler and the pruner were
+    given. It is written here as well as on every `report` so that a trial which
+    was claimed and never reported still says which way it was looking.
     """
+    said = _said(RUNNING, point, me, goal)
     digest = store.put(_blob(point, [], RUNNING, None, None))
-    return store.claim(
-        _trial(study, trial, attempt),
-        digest,
-        {STATE: RUNNING, POINT: str(point), WHO: str(me)},
-    )
+    return store.claim(_trial(study, trial, attempt), digest, said)
 
 
 def report(
@@ -135,6 +170,7 @@ def report(
     score: float | None = None,
     because: str | None = None,
     took: float | None = None,
+    goal: str | None = None,
 ) -> None:
     """Writes down where this trial has got to.
 
@@ -145,14 +181,47 @@ def report(
     Only the machine that claimed the trial writes to it. Nothing enforces that
     and nothing needs to: nobody else has a reason to, because nobody else could
     have got the claim.
+
+    `goal` is `"min"` or `"max"` — the direction the sampler and the pruner were
+    given — and it is written beside the score because a score without it is not
+    readable by anybody who does not have this script. Leaving it out is allowed
+    and costs exactly that: `direction` answers `None` and a figure has to be
+    told.
     """
     if score is None and reports and state != RUNNING:
         score = reports[-1]
-    said = {STATE: state, POINT: str(point), WHO: str(me)}
+    said = _said(state, point, me, goal)
     if score is not None:
         said[SCORE] = repr(float(score))
     digest = store.put(_blob(point, reports, state, because, took))
     store.bind(_trial(study, trial, attempt), digest, said)
+
+
+def _said(state: str, point: "Point", me: object, goal: str | None) -> dict[str, str]:
+    """What both writers put in the record, so neither can forget half of it.
+
+    `goal` is left out rather than guessed when nobody said: a default written
+    into the store is a guess that reads exactly like a fact.
+    """
+    said = {STATE: state, POINT: str(point), WHO: str(me)}
+    if goal is not None:
+        said[GOAL] = _direction(goal)
+    return said
+
+
+def _direction(goal: str) -> str:
+    """`min` or `max`, or the error where the typo was typed.
+
+    The same two words `Goal` parses, checked here rather than at the far end:
+    a study that wrote `minimize` into two thousand records is not a figure that
+    draws badly, it is a directory to migrate.
+    """
+    if goal not in (MIN, MAX):
+        raise ValueError(
+            f"`{goal}` does not say which way is better: write `{MIN}` for a loss "
+            f"or `{MAX}` for an accuracy"
+        )
+    return goal
 
 
 def finished(
@@ -179,6 +248,39 @@ def finished(
             continue
         history.append((space.read(said[POINT]), float(said[SCORE])))
     return history
+
+
+def direction(store: "Store", *, study: str) -> str | None:
+    """Which way is better in this study — `"min"`, `"max"`, or `None`.
+
+    **One scan and no fetches**, like everything else the record carries. It is
+    what makes a score readable by somebody who does not have the script that
+    produced it, which is the whole case for a study handed out of a folder.
+
+    `None` means no trial said, and it is the honest answer rather than `"min"`:
+    a study written before this was recorded, or a loop that never passed
+    `goal`. Whoever is drawing has to be told, and that is better than being
+    told wrong.
+
+    # When the records disagree
+
+    The newest one wins, because the direction is not a fact about a trial — it
+    is what the person running the study currently means, and the only reason
+    two records differ is that they changed their mind halfway. The old trials
+    keep saying what they were run for, which is worth having and is not what a
+    figure needs: drawing needs one answer.
+
+    Ties are broken by the **higher trial number**, and that is not a detail: a
+    study writes its first records inside the same second, so on a stamp alone
+    two directions would be settled by whichever the scan happened to reach
+    first. A trial number is a total order and it is the order they were run in.
+    """
+    said: tuple[tuple[int, int], str] | None = None
+    for trial, _, record in _latest(store, study):
+        goal = dict(record.meta).get(GOAL)
+        if goal is not None and (said is None or said[0] < (record.when, trial)):
+            said = ((record.when, trial), goal)
+    return said[1] if said else None
 
 
 def curves(store: "Store", *, study: str) -> list[list[float]]:
@@ -213,6 +315,7 @@ def trials(store: "Store", space: "Space", *, study: str) -> list[Trial]:
                 POINT: space.read(said[POINT]) if POINT in said else None,
                 SCORE: float(said[SCORE]) if SCORE in said else None,
                 WHO: said.get(WHO),
+                GOAL: said.get(GOAL),
             }
         )
     return seen

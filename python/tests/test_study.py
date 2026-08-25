@@ -17,12 +17,15 @@ import pytest
 from soma_next import Store
 from soma_next.study import (
     DONE,
+    MAX,
+    MIN,
     PRUNED,
     RUNNING,
     Sampler,
     Space,
     abandoned,
     curves,
+    direction,
     finished,
     in_flight,
     report,
@@ -47,10 +50,11 @@ def store(tmp_path):
     return Store(str(tmp_path / "shared"))
 
 
-def ran(store, how, space, trial, me="m", state=DONE, score=None, reports=None):
+def ran(store, how, space, trial, me="m", state=DONE, score=None, reports=None,
+        goal=None):
     """One whole trial, start to finish, for a machine called `me`."""
     point = how.ask(space, trial, [])
-    if not take(store, point, study="s", trial=trial, me=me):
+    if not take(store, point, study="s", trial=trial, me=me, goal=goal):
         return None
     report(
         store,
@@ -60,6 +64,7 @@ def ran(store, how, space, trial, me="m", state=DONE, score=None, reports=None):
         trial=trial,
         me=me,
         state=state,
+        goal=goal,
     )
     return point
 
@@ -441,3 +446,60 @@ def test_and_what_they_searched_is_what_one_machine_alone_would_have(tmp_path):
     assert [str(point) for point, _ in finished(store, knobs, study="s")] == [
         str(alone.ask(knobs, trial, [])) for trial in range(HOW_MANY)
     ]
+
+
+# ── Which way is better, which the number does not say ──
+
+
+def test_a_score_carries_the_direction_it_was_searched_in(store):
+    # The reason this is in the record and not only in the script: `0.0837` is
+    # a good score or a bad one and nothing in the number says which. Whoever
+    # reads the study without the loop that wrote it has only the record.
+    how, knobs = Sampler.sobol(seed=0), space()
+    ran(store, how, knobs, 0, goal=MAX)
+
+    assert direction(store, study="s") == MAX
+    assert trials(store, knobs, study="s")[0]["goal"] == MAX
+
+
+def test_a_trial_claimed_and_never_reported_still_says_which_way_it_looked(store):
+    # `take` writes it too. A machine that claimed a trial and died leaves a
+    # record, and that record is as readable as any other.
+    how, knobs = Sampler.sobol(seed=0), space()
+
+    take(store, how.ask(knobs, 0, []), study="s", trial=0, me="m", goal=MIN)
+
+    assert direction(store, study="s") == MIN
+
+
+def test_a_study_nobody_told_answers_none_rather_than_guessing_min(store):
+    # The whole point. A default here would be a guess written into the store
+    # that reads exactly like something somebody said.
+    how, knobs = Sampler.sobol(seed=0), space()
+    ran(store, how, knobs, 0)
+
+    assert direction(store, study="s") is None
+    assert "goal" not in dict(next(iter(store.bound())).meta)
+
+
+def test_changing_your_mind_halfway_is_the_newest_record_and_not_a_vote(store):
+    # The direction is not a fact about a trial: it is what the person running
+    # the study currently means. So the newest one wins — and the old trials go
+    # on saying what they were actually run for, which is worth having.
+    how, knobs = Sampler.sobol(seed=0), space()
+    ran(store, how, knobs, 0, goal=MIN)
+    ran(store, how, knobs, 1, goal=MAX)
+
+    assert direction(store, study="s") == MAX
+    assert [one["goal"] for one in trials(store, knobs, study="s")] == [MIN, MAX]
+
+
+def test_a_typo_is_caught_where_it_was_typed(store):
+    # A study that wrote `minimize` into two thousand records is not a figure
+    # that draws badly, it is a directory to migrate.
+    how, knobs = Sampler.sobol(seed=0), space()
+    point = how.ask(knobs, 0, [])
+
+    with pytest.raises(ValueError, match="which way is better"):
+        take(store, point, study="s", trial=0, me="m", goal="minimize")
+    assert direction(store, study="s") is None, "and no record was written"

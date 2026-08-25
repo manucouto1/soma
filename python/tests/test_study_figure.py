@@ -13,9 +13,12 @@ import pytest
 from soma_next import Store
 from soma_next.study import (
     DONE,
+    MAX,
+    MIN,
     PRUNED,
     Space,
     coordinates,
+    direction,
     importance,
     influence,
     report,
@@ -38,13 +41,19 @@ def store(tmp_path):
     return Store(str(tmp_path))
 
 
-def scored(store, space, points, states=None):
-    """Writes trials with the scores given, so a figure has something to draw."""
+def scored(store, space, points, states=None, goal=MIN):
+    """Writes trials with the scores given, so a figure has something to draw.
+
+    `goal=None` writes a study that never said which way is better — which is
+    every study written before the direction was recorded, and the case both
+    figures have to handle without lying.
+    """
     for trial, (point, score) in enumerate(points):
         p = space.read(point)
-        take(store, p, study=STUDY, trial=trial, me="one")
+        take(store, p, study=STUDY, trial=trial, me="one", goal=goal)
         state = (states or {}).get(trial, DONE)
-        report(store, p, [score * 2, score], study=STUDY, trial=trial, me="one", state=state)
+        report(store, p, [score * 2, score], study=STUDY, trial=trial, me="one",
+               state=state, goal=goal)
 
 
 def a_study(store, space, how_many=12, **rest):
@@ -170,16 +179,26 @@ def test_a_knob_searched_over_orders_of_magnitude_gets_a_log_axis(store, space):
     assert "width" in named, "eight to twenty is not orders of magnitude"
 
 
+def smallest(figure):
+    """The colour of the lowest-scoring trial, found by **where it crosses the
+    score axis** and not by where it was drawn.
+
+    The curves come out best first, so the trial at `data[0]` is a different
+    trial under each goal — which is the point of ordering them, and would make
+    an index compare two different things.
+    """
+    return min(figure.data, key=lambda one: one.y[-1]).line.color
+
+
 def test_the_goal_decides_which_end_of_the_scale_is_good(store, space):
     # Getting it backwards is the quietest lie a figure can tell: everything is
     # drawn, nothing raises, and the region read as promising is the wrong one.
     a_study(store, space, how_many=4)
 
-    best = min(range(4), key=lambda i: i)
-    lower = coordinates(store, space, study=STUDY, goal="min").data[0].line.color
-    higher = coordinates(store, space, study=STUDY, goal="max").data[0].line.color
+    lower = smallest(coordinates(store, space, study=STUDY, goal=MIN))
+    higher = smallest(coordinates(store, space, study=STUDY, goal=MAX))
 
-    assert lower != higher, f"trial {best} is drawn the same either way"
+    assert lower != higher, "the same trial is drawn the same either way"
 
 
 def test_a_study_nobody_has_finished_is_a_statement_and_not_an_exception(store, space):
@@ -189,3 +208,74 @@ def test_a_study_nobody_has_finished_is_a_statement_and_not_an_exception(store, 
 
     assert figure.data == ()
     assert "nothing has finished yet" in figure.layout.annotations[0].text
+
+
+# ── Which way is better comes from the study, and is never guessed ──
+
+
+def test_the_table_reads_the_direction_the_study_recorded(store, space):
+    # The quiet lie this closes: `table` says *best first* whatever it does, so
+    # a maximising study used to be listed worst first with that heading on it.
+    # Nobody passes a `goal` here — the study says it.
+    scored(store, space, [("lr=0.001,width=8,opt=adam", 0.9),
+                          ("lr=0.01,width=16,opt=sgd", 0.1)], goal=MAX)
+
+    first = table(store, space, study=STUDY).data[0].cells.values[-1][0]
+
+    assert first == "0.9", "the best of a maximising study is the biggest"
+
+
+def test_and_the_same_trials_the_other_way_round_when_smaller_is_better(store, space):
+    scored(store, space, [("lr=0.001,width=8,opt=adam", 0.9),
+                          ("lr=0.01,width=16,opt=sgd", 0.1)], goal=MIN)
+
+    first = table(store, space, study=STUDY).data[0].cells.values[-1][0]
+
+    assert first == "0.1"
+
+
+def test_a_caller_overrides_the_record_for_a_study_that_predates_it(store, space):
+    # The override is what makes a study written before any of this drawable.
+    scored(store, space, [("lr=0.001,width=8,opt=adam", 0.9),
+                          ("lr=0.01,width=16,opt=sgd", 0.1)], goal=None)
+
+    assert direction(store, study=STUDY) is None
+    first = table(store, space, study=STUDY, goal=MAX).data[0].cells.values[-1][0]
+    assert first == "0.9"
+
+
+def test_a_table_that_does_not_know_gives_up_the_claim_instead_of_guessing(store, space):
+    # It falls back to a fact — the order they ran in — and says so in the
+    # title. A sort it cannot justify would be the same lie with more work.
+    scored(store, space, [("lr=0.001,width=8,opt=adam", 0.9),
+                          ("lr=0.01,width=16,opt=sgd", 0.1)], goal=None)
+
+    figure = table(store, space, study=STUDY)
+
+    assert [one for one in figure.data[0].cells.values[-1]] == ["0.9", "0.1"]
+    assert "no direction recorded" in figure.layout.title.text
+
+
+def test_the_colour_scale_takes_the_direction_off_the_study_too(store, space):
+    # `coordinates` used to default to `min`, so a maximising study was drawn
+    # with its good region in the colour that reads as bad.
+    a_study(store, space, goal=MAX)
+    told = coordinates(store, space, study=STUDY, goal=MAX).data[0].line.color
+
+    assert coordinates(store, space, study=STUDY).data[0].line.color == told
+
+
+def test_a_study_that_never_said_raises_rather_than_drawing_it_backwards(store, space):
+    # The one place there is no honest fallback: a colour scale has two ends,
+    # and drawing one is saying which of them is good.
+    a_study(store, space, goal=None)
+
+    with pytest.raises(ValueError, match="which way is better"):
+        coordinates(store, space, study=STUDY)
+
+
+def test_a_direction_nobody_recognises_is_refused_by_the_figure_as_well(store, space):
+    a_study(store, space, goal=MIN)
+
+    with pytest.raises(ValueError, match="which way is better"):
+        table(store, space, study=STUDY, goal="lower")

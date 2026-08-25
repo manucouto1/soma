@@ -60,6 +60,11 @@ STUDY = "spam"
 TRIALS = 8
 EPOCHS = 3
 
+#: Which way is better. It goes to the pruner, which is the only thing here that
+#: compares two trials, **and** into every record — so the machine that reads
+#: this study back has the score and knows which end of it is good.
+GOAL = "min"
+
 #: What is being searched over: three knobs, one of each kind there is. `lr` is
 #: logarithmic because drawn linearly four fifths of this range sits above 0.06,
 #: and the study would never see a small learning rate at all.
@@ -78,7 +83,7 @@ sampler = Sampler.sobol(seed=0)
 
 #: Judged against the trials that finished — which other machines ran. It stops
 #: nothing: it answers, and the loop below stops calling `step`.
-pruner = Pruner.median(goal="min", warmup=1, startup=2)
+pruner = Pruner.median(goal=GOAL, warmup=1, startup=2)
 
 OPTIMIZERS = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD}
 
@@ -104,7 +109,7 @@ def search(store, me, at):
             trial,
             finished(store, space, study=STUDY) + in_flight(store, space, study=STUDY),
         )
-        if not take(store, point, study=STUDY, trial=trial, me=me):
+        if not take(store, point, study=STUDY, trial=trial, me=me, goal=GOAL):
             continue  # somebody else got that number; on to the next
 
         # A `Point` is a mapping, so a configuration goes straight into whatever
@@ -115,7 +120,7 @@ def search(store, me, at):
         for left in reversed(range(EPOCHS)):
             epoch = trainer.fit(batches)
             drawn.append(sum(epoch.history) / len(epoch.history))
-            report(store, point, drawn, study=STUDY, trial=trial, me=me)
+            report(store, point, drawn, study=STUDY, trial=trial, me=me, goal=GOAL)
             # Only while there is another epoch to give up on. Asked after the
             # last one, a pruner would label a trial that ran the whole course as
             # pruned — and its score would stop counting as comparable for no
@@ -126,7 +131,7 @@ def search(store, me, at):
         state = PRUNED if why else DONE
         report(
             store, point, drawn, study=STUDY, trial=trial, me=me,
-            state=state, because=why,
+            state=state, because=why, goal=GOAL,
         )
         mine.append(
             {"trial": trial, "point": str(point), "state": state, "reports": drawn}
