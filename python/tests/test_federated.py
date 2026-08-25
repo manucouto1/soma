@@ -20,7 +20,7 @@ cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
 from torch import nn  # noqa: E402
 
-from soma_next import Graph, Node, Opaque, Worker  # noqa: E402
+from soma_next import Broker, Graph, Node, Opaque, Worker  # noqa: E402
 from soma_next.torch import Split, Trainer, fedavg, parameters  # noqa: E402
 
 IN, MID, CLASSES = 6, 5, 3
@@ -186,7 +186,7 @@ def test_what_is_trained_where_it_runs_cannot_be_exported_from_here():
         body.named("body").at("w1") >> Layer(MID, CLASSES).named("head")
     )
     trains = {"body": Split(torch.optim.SGD, lr=0.1)}
-    t = trainer(g, trains=trains, workers={"w1": Worker.generic(mode="network")})
+    t = trainer(g, trains=trains, broker=Broker.embedded({"w1": Worker.generic(mode="network")}))
 
     with pytest.raises(ValueError, match="`body` is trained where it runs"):
         t.export()

@@ -51,7 +51,8 @@ if TYPE_CHECKING:
     import random as _random
 
     from soma_next._graph import Graph
-    from soma_next._soma_next import Thresholds, Worker
+    from soma_next._remote import Broker
+    from soma_next._soma_next import Thresholds
 
 #: One example: what goes in, keyed by input, and what should come out.
 Batch = tuple[dict[str, Any], Any]
@@ -71,7 +72,7 @@ def contribution(
     over: Iterable[str] | None = None,
     repeats: int = 3,
     seed: int = 0,
-    workers: "dict[str, Worker] | None" = None,
+    broker: "Broker | None" = None,
 ) -> dict[str, float]:
     """How much worse the score gets without each input, as `{name: drop}`.
 
@@ -93,11 +94,11 @@ def contribution(
     if not each:
         return {}
     names = list(over) if over is not None else list(each[0][0])
-    intact = _scored(graph, each, objective, workers)
+    intact = _scored(graph, each, objective, broker)
     said: dict[str, float] = {}
     for name in names:
         worse = [
-            _scored(graph, _shuffling(each, name, random.Random(seed + which)), objective, workers)
+            _scored(graph, _shuffling(each, name, random.Random(seed + which)), objective, broker)
             for which in range(repeats)
         ]
         said[name] = sum(worse) / len(worse) - intact
@@ -193,7 +194,7 @@ def _scored(
     graph: "Graph",
     batches: list[Batch],
     objective: Callable[[Any, Any], float],
-    workers: "dict[str, Worker] | None",
+    broker: "Broker | None",
 ) -> float:
     """The mean objective over these batches. Nothing is trained.
 
@@ -214,5 +215,5 @@ def _scored(
     total = 0.0
     with held:
         for one, target in batches:
-            total += float(objective(graph.forward(one, workers=workers), target))
+            total += float(objective(graph.forward(one, broker=broker), target))
     return total / len(batches)

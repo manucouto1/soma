@@ -12,7 +12,7 @@ import pyarrow
 import pyarrow.parquet
 import pytest
 
-from soma_next import Graph, Node, Store, Worker
+from soma_next import Broker, Graph, Node, Store, Worker
 from soma_next.data import Parquet, settle, to_arrow
 
 
@@ -185,13 +185,13 @@ def test_rows_read_here_are_tokenized_over_there(store, where):
     cloudpickle.register_pickle_by_value(sys.modules[__name__])
     holding(store, "data/numbers", parquet(100))
 
-    worker = Worker.generic(mode="network")
+    worker = Broker.embedded({"w1": Worker.generic(mode="network")})
     g = Graph.somatize(
         Parquet(store, "data/numbers").named("sms")
         >> Counts().named("counts").at("w1")
     )
 
-    assert g.forward({"at": 0, "take": 32}, workers={"w1": worker}) == 32.0
+    assert g.forward({"at": 0, "take": 32}, broker=worker) == 32.0
 
 
 # ── A column, without a dataframe library ──

@@ -37,7 +37,7 @@ training run written down on one is read back on another::
 
 from soma_next._dsl import Node
 from soma_next._graph import Graph
-from soma_next._remote import Worker
+from soma_next._remote import Broker, Worker
 from soma_next._soma_next import (
     Bound,
     Ctx,
@@ -56,6 +56,7 @@ __all__ = [
     "Opaque",
     "Recorder",
     "Store",
+    "Broker",
     "Worker",
     "codec",
     "__version__",

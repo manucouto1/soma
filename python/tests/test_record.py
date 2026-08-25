@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from soma_next import Graph, Node, Recorder, Store
+from soma_next import Broker, Graph, Node, Recorder, Store
 from soma_next.record import curve, curve_costs, facts, forwards, nodes, runs
 
 
@@ -185,22 +185,24 @@ def test_a_run_says_what_each_machine_did(tmp_path):
     # The record is written run -> forward -> node and *where* is an attribute
     # of a fact. `fleet` inverts it, because *what is this machine doing* is a
     # question nobody could ask of it.
-    from soma_next import Worker
+    from soma_next import Broker, Worker
     from soma_next.record import fleet
 
     g = Graph.somatize(
         Add(1).named("a") >> Add(10).named("b").at("w1") >> Add(100).named("c").at("w2")
     )
-    workers = {
-        name: Worker.spawn(
-            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
-        )
-        for name in ("w1", "w2")
-    }
+    workers = Broker.embedded(
+        {
+            name: Worker.spawn(
+                [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            )
+            for name in ("w1", "w2")
+        }
+    )
     store = Store(str(tmp_path))
     recorder = Recorder(store, run="fleet")
     for _ in range(3):
-        g.forward(0.0, workers=workers, watching=recorder)
+        g.forward(0.0, broker=workers, watching=recorder)
 
     said = {one["host"]: one for one in fleet(store, run="fleet")}
 
@@ -216,16 +218,20 @@ def test_and_what_it_was_waited_on_for(tmp_path):
     # The column that only exists up here: the round trip minus what actually
     # ran over there — the wire, the queue and the codec. Neither half of the
     # subtraction belongs to a node, which is why no per-node view can say it.
-    from soma_next import Worker
+    from soma_next import Broker, Worker
     from soma_next.record import fleet
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
-    worker = Worker.spawn(
-        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    worker = Broker.embedded(
+        {
+            "w1": Worker.spawn(
+            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            ),
+        }
     )
     store = Store(str(tmp_path))
     for _ in range(2):
-        g.forward(0.0, workers={"w1": worker}, watching=Recorder(store, run="fleet"))
+        g.forward(0.0, broker=worker, watching=Recorder(store, run="fleet"))
 
     away = next(one for one in fleet(store, run="fleet") if one["host"] == "w1")
 
@@ -250,15 +256,19 @@ def test_a_machine_nobody_sent_anything_to_is_not_in_it(tmp_path):
 
 def test_the_fleet_is_drawn_working_against_waited_on(tmp_path):
     pytest.importorskip("plotly")
-    from soma_next import Worker
+    from soma_next import Broker, Worker
     from soma_next.record import machines
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
-    worker = Worker.spawn(
-        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    worker = Broker.embedded(
+        {
+            "w1": Worker.spawn(
+            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            ),
+        }
     )
     store = Store(str(tmp_path))
-    g.forward(0.0, workers={"w1": worker}, watching=Recorder(store, run="fleet"))
+    g.forward(0.0, broker=worker, watching=Recorder(store, run="fleet"))
 
     figure = machines(store, run="fleet")
 
@@ -270,17 +280,21 @@ def test_a_machine_says_what_only_it_can_say(tmp_path):
     # Everything else about a worker can be worked out from what the client
     # wrote down. How loaded it is cannot: nobody on this end can see it, and it
     # is the half of *the health of the workers* that no scan answers.
-    from soma_next import Worker
+    from soma_next import Broker, Worker
     from soma_next.record import fleet
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
-    worker = Worker.spawn(
-        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    worker = Broker.embedded(
+        {
+            "w1": Worker.spawn(
+            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            ),
+        }
     )
     store = Store(str(tmp_path))
     recorder = Recorder(store, run="m")
     for _ in range(2):
-        g.forward(0.0, workers={"w1": worker}, watching=recorder)
+        g.forward(0.0, broker=worker, watching=recorder)
 
     away = next(one for one in fleet(store, run="m") if one["host"] == "w1")
 
@@ -293,15 +307,19 @@ def test_and_it_arrives_saying_which_host_without_anybody_attributing_it(tmp_pat
     # The reason it cost no message: `Answer::Saw` already carries a `Fact`, the
     # client already relays one to its watcher, and the engine already wraps
     # whatever comes back in `Elsewhere`. A flat carrier rides all of that.
-    from soma_next import Worker
+    from soma_next import Broker, Worker
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
-    worker = Worker.spawn(
-        [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+    worker = Broker.embedded(
+        {
+            "w1": Worker.spawn(
+            [sys.executable, "-m", "soma_next.worker"], mode="network", send=["test_record"]
+            ),
+        }
     )
     seen = []
 
-    g.forward(0.0, workers={"w1": worker}, watching=seen.append)
+    g.forward(0.0, broker=worker, watching=seen.append)
 
     said = next(one for one in seen if one["fact"] == "machine")
     assert said["host"] == "w1", "a worker does not know its own name; we do"
@@ -368,15 +386,17 @@ def test_and_the_name_the_graph_gave_it_is_joined_on(tmp_path):
     # A worker does not know it is `w1`, so it files under what it calls itself.
     # The two names are only ever in the same row on a reading that came down a
     # wire — where the client attributed it — and that is the join.
-    from soma_next import Worker
+    from soma_next import Broker, Worker
     from soma_next.record import fleet
 
     store = Store(str(tmp_path))
     worker = _standing(tmp_path, 7742)
     try:
         g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
-        away = Worker.at("127.0.0.1:7742", mode="network", send=["test_record"])
-        g.forward(0.0, workers={"w1": away}, watching=Recorder(store, run="m"))
+        away = Broker.embedded(
+            {"w1": Worker.at("127.0.0.1:7742", mode="network", send=["test_record"])}
+        )
+        g.forward(0.0, broker=away, watching=Recorder(store, run="m"))
 
         said = {one["host"]: one for one in fleet(store, run="m")}
     finally:

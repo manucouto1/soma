@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from net import graph, nodes  # noqa: E402
 
-from soma_next import Graph, Worker  # noqa: E402
+from soma_next import Broker, Graph, Worker  # noqa: E402
 
 n = nodes()
 g = graph(Graph, n)
@@ -26,6 +26,8 @@ send = [] if "--no-send" in sys.argv else ["net"]
 w1 = Worker.generic(mode="network", send=send)
 w2 = Worker.generic(mode="network", send=send)
 
-output = g.forward("  The Dog Runs Quickly  ", workers={"w1": w1, "w2": w2})
+output = g.forward(
+    "  The Dog Runs Quickly  ", broker=Broker.embedded({"w1": w1, "w2": w2})
+)
 print("OUTPUT", output)
 print("HERE", float(os.getpid()))

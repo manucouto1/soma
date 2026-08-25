@@ -75,6 +75,32 @@ impl Placement {
         self.hosts.get(id)
     }
 
+    /// Every host this placement names, once each, in a fixed order.
+    ///
+    /// The half of [`host_of`](Self::host_of) that reads the other way, and it
+    /// exists because of who asks. A client that was handed a dictionary of
+    /// workers already knew the names — they were its keys. A client that talks
+    /// to a broker does not: it has to ask *which hosts does this graph name*,
+    /// and then ask the broker for each. The names live here and nowhere else.
+    ///
+    /// **Once each**, because a host named by ten nodes is one rendezvous, not
+    /// ten. And **sorted**, which is not tidiness: these come out of a `HashMap`,
+    /// and iterating one gives a different order every run. That would make the
+    /// order rendezvous are asked for — and so the order failures happen in —
+    /// irreproducible, and this project has already paid for a nondeterministic
+    /// order once, when an artifact's id changed because the caller reordered a
+    /// dictionary.
+    ///
+    /// A `Vec` and not an `impl Iterator`: deduplicating means collecting, so
+    /// the work is already done and pretending it is lazy would only be a
+    /// costume.
+    pub fn hosts(&self) -> Vec<&Host> {
+        let mut named: Vec<&Host> = self.hosts.values().collect();
+        named.sort();
+        named.dedup();
+        named
+    }
+
     /// How many nodes have something said about them: device, host or both.
     pub fn len(&self) -> usize {
         self.devices

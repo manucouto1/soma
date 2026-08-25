@@ -22,7 +22,7 @@ torch = pytest.importorskip("torch")
 cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
-from soma_next import Graph, Node, Opaque, Worker  # noqa: E402
+from soma_next import Broker, Graph, Node, Opaque, Worker  # noqa: E402
 from soma_next.torch import (  # noqa: E402
     Learning,
     NoGradient,
@@ -257,7 +257,7 @@ def driving(node, technique=None, lr=0.1, at=None, seed=0, every=1, **how):
         optimizer=torch.optim.SGD(parameters(g, without=trains), lr=0.1),
         trains=trains,
         every=every,
-        workers={at: Worker.generic(mode="network")} if at else None,
+        broker=Broker.embedded({at: Worker.generic(mode="network")}) if at else None,
     )
     seeded(7)
     return g, driven, (torch.randn(16, 4), torch.randint(0, 2, (16,)))

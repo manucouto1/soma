@@ -27,7 +27,7 @@ import time
 
 import pytest
 
-from soma_next import Graph
+from soma_next import Broker, Graph
 
 from . import nodes  # the module the containers cannot see  # noqa: E402
 
@@ -47,7 +47,7 @@ def test_a_worker_with_none_of_your_code_runs_your_nodes(sends_the_code):
     # there, it travelled.
     g = Graph.somatize(nodes.Shout().at("a"))
 
-    out = g.forward("hello", workers={"a": sends_the_code("a")})
+    out = g.forward("hello", broker=Broker.embedded({"a": sends_the_code("a")}))
 
     assert out["text"] == "HELLO"
     assert out["host"] != os.uname().nodename, "it ran here"
@@ -60,7 +60,7 @@ def test_a_worker_that_has_not_got_your_code_says_so(has_the_code):
     g = Graph.somatize(nodes.Shout().at("a"))
 
     with pytest.raises(ValueError) as raised:
-        g.forward("hello", workers={"a": has_the_code("a")})
+        g.forward("hello", broker=Broker.embedded({"a": has_the_code("a")}))
 
     assert "nodes" in str(raised.value), raised.value
 
@@ -68,7 +68,7 @@ def test_a_worker_that_has_not_got_your_code_says_so(has_the_code):
 def test_two_hosts_are_two_machines(sends_the_code):
     g = Graph.somatize(nodes.Shout().at("a") >> nodes.Wrap().at("b"))
 
-    out = g.forward("hello", workers={"a": sends_the_code("a"), "b": sends_the_code("b")})
+    out = g.forward("hello", broker=Broker.embedded({"a": sends_the_code("a"), "b": sends_the_code("b")}))
 
     assert out["text"] == "[HELLO]"
     assert out["before"] != out["host"], "both slices ran in the same container"
@@ -79,7 +79,7 @@ def test_what_one_produces_reaches_the_other(sends_the_code):
     # because only what a slice reads and does not produce travels with it.
     g = Graph.somatize(nodes.Shout().at("a") >> nodes.Wrap().at("b"))
 
-    out = g.forward("crossing", workers={"a": sends_the_code("a"), "b": sends_the_code("b")})
+    out = g.forward("crossing", broker=Broker.embedded({"a": sends_the_code("a"), "b": sends_the_code("b")}))
 
     assert out["text"] == "[CROSSING]"
 
@@ -91,7 +91,7 @@ def test_two_branches_on_two_machines_really_overlap(sends_the_code):
     g = Graph.somatize(nodes.Slow().named("left").at("a") | nodes.Slow().named("right").at("b"))
 
     started = time.monotonic()
-    out = g.forward(None, workers={"a": sends_the_code("a"), "b": sends_the_code("b")})
+    out = g.forward(None, broker=Broker.embedded({"a": sends_the_code("a"), "b": sends_the_code("b")}))
     took = time.monotonic() - started
 
     assert len(hostnames(out["left"], out["right"])) == 2
@@ -103,7 +103,7 @@ def test_names_and_state_are_enough_when_the_worker_has_the_code(has_the_code):
     # `pipeline` is mounted in that container, so only its **name** travels.
     g = Graph.somatize(pipeline.Scale().at("a"))
 
-    assert g.forward(21.0, workers={"a": has_the_code("a")}) == 42.0
+    assert g.forward(21.0, broker=Broker.embedded({"a": has_the_code("a")})) == 42.0
 
 
 def test_another_version_of_the_code_stops_the_run(has_the_code):
@@ -112,7 +112,7 @@ def test_another_version_of_the_code_stops_the_run(has_the_code):
     g = Graph.somatize(pipeline.Scale().at("old"))
 
     with pytest.raises(ValueError) as raised:
-        g.forward(21.0, workers={"old": has_the_code("old")})
+        g.forward(21.0, broker=Broker.embedded({"old": has_the_code("old")}))
 
     said = str(raised.value)
     assert "Scale" in said, said
@@ -124,7 +124,7 @@ def test_with_lucky_it_runs_its_own_version_and_says_so(has_the_code, worker_log
     # back is that worker's answer, not the one the graph was written against.
     g = Graph.somatize(pipeline.Scale().at("lucky"))
 
-    assert g.forward(21.0, workers={"lucky": has_the_code("lucky")}) == 63.0
+    assert g.forward(21.0, broker=Broker.embedded({"lucky": has_the_code("lucky")})) == 63.0
     assert "Scale" in worker_logs("worker-lucky")
 
 
@@ -141,7 +141,7 @@ def test_what_one_worker_kept_another_one_reads(sends_the_code):
     # nothing at all. It has no store; what travels is **what is remembered**.
     def stamped(where):
         graph = Graph.somatize(nodes.Stamp().frozen().cached().at(where))
-        return graph.forward("one input", workers={where: sends_the_code(where)})
+        return graph.forward("one input", broker=Broker.embedded({where: sends_the_code(where)}))
 
     first = stamped("a")
     second = stamped("b")
@@ -154,7 +154,7 @@ def test_a_different_input_is_not_the_same_answer(sends_the_code):
     # answers the same for everything.
     def stamped(text):
         graph = Graph.somatize(nodes.Stamp().frozen().cached().at("a"))
-        return graph.forward(text, workers={"a": sends_the_code("a")})
+        return graph.forward(text, broker=Broker.embedded({"a": sends_the_code("a")}))
 
     assert stamped("one thing") != stamped("another thing")
 
@@ -165,7 +165,7 @@ def test_the_artifact_is_kept_where_both_of_them_can_see_it(sends_the_code, in_c
     # it** is what `transport`'s own tests pin down, with bytes that are not a
     # spec; from here what is worth checking is that the shelf is really shared.
     Graph.somatize(nodes.Shout().at("a")).forward(
-        "provisioning", workers={"a": sends_the_code("a")}
+        "provisioning", broker=Broker.embedded({"a": sends_the_code("a")})
     )
 
     seen_from_b = in_container(
@@ -185,7 +185,7 @@ def test_a_node_sent_to_the_gpu_lands_on_the_gpu(gpu, sends_the_code):
     # notion that leaked into the plan.
     g = Graph.somatize(nodes.OnTheDevice().at("gpu").on("cuda:0"))
 
-    out = g.forward(None, workers={"gpu": sends_the_code("gpu")})
+    out = g.forward(None, broker=Broker.embedded({"gpu": sends_the_code("gpu")}))
 
     assert out["cuda"] == 1.0, "that container has no GPU"
     assert out["said"] == "cuda:0"
@@ -197,7 +197,7 @@ def test_the_same_node_on_a_machine_without_one_is_told_nothing(gpu, sends_the_c
     # a different thing and is what `ctx.device is None` says.
     g = Graph.somatize(nodes.OnTheDevice().at("gpu"))
 
-    out = g.forward(None, workers={"gpu": sends_the_code("gpu")})
+    out = g.forward(None, broker=Broker.embedded({"gpu": sends_the_code("gpu")}))
 
     assert out["said"] == ""
     assert out["landed"] == "cpu"
@@ -221,7 +221,7 @@ def test_training_a_node_on_another_machine_stops_instead_of_half_learning(gpu, 
         graph,
         objective=torch.nn.functional.cross_entropy,
         optimizer=torch.optim.SGD(parameters(graph), lr=0.1),
-        workers={"gpu": sends_the_code("gpu")},
+        broker=Broker.embedded({"gpu": sends_the_code("gpu")}),
     )
 
     with pytest.raises(NoGradient) as raised:
@@ -242,7 +242,7 @@ def test_split_learning_trains_the_far_half_over_the_wire(gpu, sends_the_code):
     torch = pytest.importorskip("torch")
 
     graph = Graph.somatize(nodes.ByHand().at("gpu"))
-    workers = {"gpu": sends_the_code("gpu")}
+    broker = Broker.embedded({"gpu": sends_the_code("gpu")})
     torch.manual_seed(0)
     head = torch.nn.Linear(6, 3)
     head_opt = torch.optim.SGD(head.parameters(), lr=0.1)
@@ -250,14 +250,14 @@ def test_split_learning_trains_the_far_half_over_the_wire(gpu, sends_the_code):
 
     losses, weights = [], []
     for _ in range(20):
-        sent = graph.forward({"kind": "forward", "value": x.tolist()}, workers=workers)
+        sent = graph.forward({"kind": "forward", "value": x.tolist()}, broker=broker)
         seam = torch.tensor(sent["value"], dtype=torch.float32, requires_grad=True)
         loss = torch.nn.functional.cross_entropy(head(seam), y)
         head_opt.zero_grad()
         loss.backward()
         head_opt.step()
         back = graph.forward(
-            {"kind": "backward", "value": seam.grad.tolist()}, workers=workers
+            {"kind": "backward", "value": seam.grad.tolist()}, broker=broker
         )
         losses.append(loss.item())
         weights.append(back["weights"])
@@ -283,12 +283,12 @@ def test_the_trainer_writes_that_same_loop(gpu, sends_the_code):
         torch.manual_seed(1)
         head = torch.nn.Linear(6, 3)
         graph = Graph.somatize(far.named("far").at("gpu"))
-        workers = {"gpu": sends_the_code("gpu")}
+        broker = Broker.embedded({"gpu": sends_the_code("gpu")})
         optimizer = torch.optim.SGD(head.parameters(), lr=0.1)
         losses = []
         for x, y in batches():
             sent = graph.forward(
-                {"kind": "forward", "value": x.tolist()}, workers=workers
+                {"kind": "forward", "value": x.tolist()}, broker=broker
             )
             seam = torch.tensor(sent["value"], requires_grad=True)
             loss = torch.nn.functional.cross_entropy(head(seam), y)
@@ -296,7 +296,7 @@ def test_the_trainer_writes_that_same_loop(gpu, sends_the_code):
             loss.backward()
             optimizer.step()
             graph.forward(
-                {"kind": "backward", "value": seam.grad.tolist()}, workers=workers
+                {"kind": "backward", "value": seam.grad.tolist()}, broker=broker
             )
             losses.append(loss.item())
         return losses
@@ -312,7 +312,7 @@ def test_the_trainer_writes_that_same_loop(gpu, sends_the_code):
             objective=torch.nn.functional.cross_entropy,
             optimizer=torch.optim.SGD(parameters(graph, without=trains), lr=0.1),
             trains=trains,
-            workers={"gpu": sends_the_code("gpu")},
+            broker=Broker.embedded({"gpu": sends_the_code("gpu")}),
         )
         return [trainer.step(batch) for batch in batches()]
 
@@ -344,10 +344,10 @@ def test_the_transpose_reaches_the_catalog_the_worker_has_live(sends_the_code):
     one, other = nodes.Counts("first"), nodes.Counts("second")
 
     forward = Graph.somatize((one.named("a1") >> other.named("a2")).at("a"))
-    assert forward.forward(None, workers={"a": sends_the_code("a")})["times"] == 1.0
+    assert forward.forward(None, broker=Broker.embedded({"a": sends_the_code("a")}))["times"] == 1.0
 
     transpose = Graph.somatize((other.named("a2") >> one.named("a1")).at("a"))
-    landed = transpose.forward(None, workers={"a": sends_the_code("a")})
+    landed = transpose.forward(None, broker=Broker.embedded({"a": sends_the_code("a")}))
     assert landed["called"] == "first", "the ids moved: another object answered"
     assert landed["times"] == 2.0, (
         "the worker started over: the transpose provisioned it again"

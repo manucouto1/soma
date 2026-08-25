@@ -21,7 +21,7 @@ of it. Split learning, greedy, forward-forward and synthetic gradients are the
 same hole answered four ways::
 
     Trainer(g, objective=cross_entropy, optimizer=Adam(parameters(g), lr=1e-3),
-            trains={"body": Split(SGD, lr=0.1)}, workers={"gpu": worker})
+            trains={"body": Split(SGD, lr=0.1)}, broker=broker)
 
 Importing this also says how a tensor is written down, which is what lets a
 graph keep what it produces: see `soma_next.torch._codec`.

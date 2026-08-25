@@ -17,7 +17,7 @@ import sys
 
 import pytest
 
-from soma_next import Graph, Node, Opaque, Worker
+from soma_next import Broker, Graph, Node, Opaque, Worker
 
 cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
@@ -139,8 +139,12 @@ class WhichDevice(Node):
         return ctx.device
 
 
-def generic(**how):
-    """An empty worker that gets sent **the code**.
+def generic(host="w1", **how):
+    """A broker that knows where an empty worker is, one that gets sent **the
+    code**.
+
+    A broker and not a worker, because that is where the wire now lives: two
+    runs that have to reach the same process share **this**, not a `Worker`.
 
     `mode="network"` explicitly: the classes in this file exist in no worker's
     clone, so the `project` strategy — the default — could not resolve them. It
@@ -149,7 +153,7 @@ def generic(**how):
     And with no nodes: the graph sends them at run time, since it is the one
     that knows which go to each host.
     """
-    return Worker.generic(mode="network", **how)
+    return Broker.embedded({host: Worker.generic(mode="network", **how)})
 
 
 # ── Declaring, which starts nothing ──
@@ -233,7 +237,7 @@ def test_a_node_sent_away_runs_in_another_process():
     g = Graph.somatize(where.named("where").at("w1"))
     w = generic()
 
-    output = g.forward(None, workers={"w1": w})
+    output = g.forward(None, broker=w)
 
     assert output != float(os.getpid()), "it ran here: the distribution gets nowhere"
 
@@ -251,7 +255,7 @@ def test_what_is_produced_here_reaches_the_worker_and_what_is_there_comes_back()
     g = Graph.somatize(a.named("a") >> b.named("b").at("w1") >> c.named("c"))
     w = generic()
 
-    assert g.forward(0, workers={"w1": w}) == 111
+    assert g.forward(0, broker=w) == 111
 
 
 def test_a_fan_in_with_one_branch_away_gives_the_same_as_all_of_it_here():
@@ -266,15 +270,20 @@ def test_a_fan_in_with_one_branch_away_gives_the_same_as_all_of_it_here():
     away = Graph.somatize(s.named("s") >> (l.named("l").at("w1") | r.named("r")) >> j.named("j"))
     w = generic()
 
-    assert away.forward(0, workers={"w1": w}) == expected
+    assert away.forward(0, broker=w) == expected
 
 
 def test_two_workers_are_two_processes():
     one, other = WhereIRan(), WhereIRan()
     g = Graph.somatize(one.named("one").at("w1") | other.named("other").at("w2"))
-    a, b = generic(), generic()
+    both = Broker.embedded(
+        {
+            "w1": Worker.generic(mode="network"),
+            "w2": Worker.generic(mode="network"),
+        }
+    )
 
-    output = g.forward(None, workers={"w1": a, "w2": b})
+    output = g.forward(None, broker=both)
 
     assert output["one"] != output["other"]
     assert float(os.getpid()) not in output.values()
@@ -288,7 +297,7 @@ def test_the_artifact_is_sent_only_once():
     g = Graph.somatize(how_many.named("how_many").at("w1"))
     w = generic()
 
-    assert [g.forward(None, workers={"w1": w}) for _ in range(3)] == [1.0, 2.0, 3.0]
+    assert [g.forward(None, broker=w) for _ in range(3)] == [1.0, 2.0, 3.0]
 
 
 def test_the_placement_travels_with_the_slice():
@@ -298,7 +307,7 @@ def test_the_placement_travels_with_the_slice():
     g = Graph.somatize(q.named("q").at("w1").on("meta"))
     w = generic()
 
-    assert g.forward(None, workers={"w1": w}) == "meta"
+    assert g.forward(None, broker=w) == "meta"
 
 
 def test_a_print_in_a_node_does_not_break_the_wire():
@@ -308,7 +317,7 @@ def test_a_print_in_a_node_does_not_break_the_wire():
     g = Graph.somatize(chatterbox.named("chatterbox").at("w1"))
     w = generic()
 
-    assert g.forward("intact", workers={"w1": w}) == "intact"
+    assert g.forward("intact", broker=w) == "intact"
 
 
 # ── What goes wrong ──
@@ -333,7 +342,7 @@ def test_a_failure_over_there_comes_back_with_the_host_and_the_reason():
     w = generic()
 
     with pytest.raises(ValueError) as e:
-        g.forward(None, workers={"w1": w})
+        g.forward(None, broker=w)
 
     said = str(e.value)
     assert "w1" in said, said
@@ -350,7 +359,7 @@ def test_an_opaque_nobody_can_write_down_does_not_leave_this_process():
     w = generic()
 
     with pytest.raises(ValueError, match="nothing says how to write one down"):
-        g.forward(None, workers={"w1": w})
+        g.forward(None, broker=w)
 
 
 def test_and_it_says_which_type_it_was_and_how_to_say_so():
@@ -359,7 +368,7 @@ def test_and_it_says_which_type_it_was_and_how_to_say_so():
     w = generic()
 
     with pytest.raises(ValueError) as e:
-        g.forward(None, workers={"w1": w})
+        g.forward(None, broker=w)
 
     said = str(e.value)
     assert "`object`" in said, said
@@ -375,7 +384,7 @@ def test_an_opaque_produced_over_there_that_nobody_can_write_down_stays_there():
     w = generic()
 
     with pytest.raises(ValueError, match="nothing says how to write one down"):
-        g.forward(None, workers={"w1": w})
+        g.forward(None, broker=w)
 
 
 # ── And the half that is new: with a codec, it crosses ──
@@ -391,7 +400,7 @@ def test_a_tensor_crosses_whole_and_is_the_same_tensor_over_there():
 
     # `shape` runs over there and answers about the object it was handed: a
     # list of floats has no `shape`, so this only passes if a tensor arrived.
-    out = g.forward(Opaque(torch.ones(3, 4)), workers={"w1": w})
+    out = g.forward(Opaque(torch.ones(3, 4)), broker=w)
 
     assert out == [3.0, 4.0], out
 
@@ -404,7 +413,7 @@ def test_a_tensor_produced_over_there_comes_back_a_tensor():
     g = Graph.somatize(makes.named("makes").at("w1"))
     w = generic()
 
-    out = g.forward(None, workers={"w1": w})
+    out = g.forward(None, broker=w)
 
     assert torch.is_tensor(out), type(out)
     assert torch.equal(out, torch.tensor([1.0, 2.0, 3.0])), out
@@ -420,7 +429,7 @@ def test_what_crosses_are_the_bytes_of_the_tensor_and_not_its_floats():
     what, w = WhatAmIGiven(), generic()
     g = Graph.somatize(what.named("what").at("w1"))
 
-    assert g.forward(Opaque(torch.ones(2)), workers={"w1": w}) == "Tensor"
+    assert g.forward(Opaque(torch.ones(2)), broker=w) == "Tensor"
 
 
 def test_a_runtime_the_worker_does_not_accept_is_rejected_on_connect():
@@ -428,18 +437,19 @@ def test_a_runtime_the_worker_does_not_accept_is_rejected_on_connect():
     # front of you. A client from another interpreter is faked.
     a = Add(1)
     g = Graph.somatize(a.named("a").at("w1"))
-    w = Worker(
-        [sys.executable, "-m", "soma_next.worker"],
-        kind="pickle",
-        id="sha256:whatever",
-        blob=cloudpickle.dumps({"a": a}),
-        runtime="cpython-2.7/cloudpickle-0.1",
+    w = generic()
+    # Staged by hand and not through `Graph.forward`, which would put the right
+    # artifact on it.
+    w.provision(
+        "w1",
+        "pickle",
+        "sha256:whatever",
+        cloudpickle.dumps({"a": a}),
+        "cpython-2.7/cloudpickle-0.1",
     )
 
     with pytest.raises(ValueError) as e:
-        # Without going through `Graph.forward`, which would set the right
-        # artifact on it.
-        super(Graph, g).forward(0, workers={"w1": w})
+        super(Graph, g).forward(0, broker=w)
 
     said = str(e.value)
     assert "cpython-2.7" in said, said
@@ -449,29 +459,35 @@ def test_a_runtime_the_worker_does_not_accept_is_rejected_on_connect():
 def test_a_kind_of_artifact_it_does_not_know_is_rejected_by_name():
     a = Add(1)
     g = Graph.somatize(a.named("a").at("w1"))
-    w = Worker(
-        [sys.executable, "-m", "soma_next.worker"],
-        kind="package",
-        id="whatever",
-        blob=b"does not matter",
-        runtime=__import__("soma_next.worker", fromlist=["runtime"]).runtime(),
+    w = generic()
+    w.provision(
+        "w1",
+        "package",
+        "whatever",
+        b"does not matter",
+        __import__("soma_next.worker", fromlist=["runtime"]).runtime(),
     )
 
     with pytest.raises(ValueError, match="package"):
-        super(Graph, g).forward(0, workers={"w1": w})
+        super(Graph, g).forward(0, broker=w)
 
 
-def test_provisioning_asks_for_all_three_things_or_none():
-    with pytest.raises(ValueError, match="all three or none"):
-        Worker([sys.executable, "-c", "pass"], kind="pickle")
+def test_a_worker_is_declared_with_an_address_or_a_command():
+    # What is left of the old constructor's checking now that a `Worker` carries
+    # no artifact: the artifact is packed by the graph and handed over by the
+    # broker, where all three parts are required by the signature itself.
+    with pytest.raises(ValueError, match="argv"):
+        Worker(7)
+    with pytest.raises(ValueError, match="at least a program"):
+        Worker([])
 
 
-def test_workers_takes_a_dict_from_host_to_worker():
+def test_a_broker_takes_a_dict_from_host_to_worker():
     a = Add(1)
     g = Graph.somatize(a.named("a").at("w1"))
 
     with pytest.raises(ValueError, match="w1"):
-        g.forward(0, workers={"w1": "I am not a worker"})
+        g.forward(0, broker=Broker.embedded({"w1": "I am not a worker"}))
 
 
 # ── That the code really arrives ──
@@ -490,7 +506,7 @@ def test_a_node_from_a_module_the_worker_does_not_have_says_what_to_do():
     w = generic()
 
     with pytest.raises(ValueError) as e:
-        g.forward("world", workers={"w1": w})
+        g.forward("world", broker=w)
 
     said = str(e.value)
     assert "sample_net" in said, said
@@ -504,7 +520,7 @@ def test_with_send_the_module_travels_inside_the_artifact():
     g = Graph.somatize(greet.named("greet").at("w1"))
     w = generic(send=["sample_net"])
 
-    assert g.forward("world", workers={"w1": w}) == "hello, world"
+    assert g.forward("world", broker=w) == "hello, world"
 
 
 def test_send_does_not_leave_cloudpickles_global_registry_touched():
@@ -562,8 +578,8 @@ def test_provision_says_out_loud_what_forward_says_on_its_own():
     g = Graph.somatize(how_many.named("how_many").at("w1"))
     w = generic()
 
-    g.provision({"w1": w})
-    assert [g.forward(None, workers={"w1": w}) for _ in range(2)] == [1.0, 2.0]
+    g.provision(w)
+    assert [g.forward(None, broker=w) for _ in range(2)] == [1.0, 2.0]
 
 
 def test_a_worker_that_gets_nothing_is_told_nothing():
@@ -571,10 +587,10 @@ def test_a_worker_that_gets_nothing_is_told_nothing():
     # worker already serving one is refused. It is the case of a stage with
     # nothing on that host, in the middle of a graph run in pieces.
     w = generic()
-    Graph.somatize(Add(1).named("there").at("w1")).forward(0, workers={"w1": w})
+    Graph.somatize(Add(1).named("there").at("w1")).forward(0, broker=w)
 
     nothing_of_its_own = Graph.somatize(Add(2).named("here"))
-    assert nothing_of_its_own.forward(0, workers={"w1": w}) == 2.0
+    assert nothing_of_its_own.forward(0, broker=w) == 2.0
 
 
 def test_a_graph_run_in_pieces_keeps_the_worker_it_had():
@@ -597,7 +613,7 @@ def test_a_graph_run_in_pieces_keeps_the_worker_it_had():
         for stage in stages(g):
             stage.fill(produced)
             out = stage.graph.forward(
-                None if stage.level else 0.0, workers={"w1": w}
+                None if stage.level else 0.0, broker=w
             )
             produced.update(stage.read(out))
         return produced["back_there"]
@@ -618,13 +634,17 @@ def test_a_cached_tensor_is_kept_by_the_worker_too(tmp_path):
     # Declaring it is the graph's half; making it true is torch's, and without
     # the digest of its weights two checkpoints would share one name.
     soma_next.torch.freeze(g)
-    w = Worker.spawn(
-        [sys.executable, "-m", "soma_next.worker", "--store", str(tmp_path)],
-        mode="network",
+    w = Broker.embedded(
+        {
+            "w1": Worker.spawn(
+                [sys.executable, "-m", "soma_next.worker", "--store", str(tmp_path)],
+                mode="network",
+            )
+        }
     )
 
-    first = g.forward(None, workers={"w1": w})
-    second = g.forward(None, workers={"w1": w})
+    first = g.forward(None, broker=w)
+    second = g.forward(None, broker=w)
 
     assert torch.equal(first, torch.tensor([1.0])), first
     assert torch.equal(second, torch.tensor([1.0])), "the worker ran it again"

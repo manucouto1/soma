@@ -1269,6 +1269,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
+name = "soma-fabric-broker"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "soma-fabric-wire",
+ "soma-next-core",
+]
+
+[[package]]
 name = "soma-fabric-wire"
 version = "0.1.0"
 dependencies = [
@@ -1311,6 +1321,7 @@ dependencies = [
  "arrow-schema",
  "pyo3",
  "serde_json",
+ "soma-fabric-broker",
  "soma-fabric-wire",
  "soma-next-core",
  "soma-next-data",

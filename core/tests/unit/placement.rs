@@ -146,6 +146,60 @@ fn the_two_halves_do_not_shadow_each_other() {
     assert_eq!(placement.len(), 1, "it is one node, not two");
 }
 
+// ── Reading the hosts back, which is what a broker is asked for ──
+
+#[test]
+fn the_hosts_it_names_come_back_once_each() {
+    // A host named by three nodes is one rendezvous, not three.
+    let mut placement = Placement::new();
+    placement.place_at("a", Host::new("w1"));
+    placement.place_at("b", Host::new("w1"));
+    placement.place_at("c", Host::new("w2"));
+
+    assert_eq!(placement.hosts(), vec![&Host::new("w1"), &Host::new("w2")]);
+}
+
+#[test]
+fn a_placement_that_sends_nothing_away_names_no_hosts() {
+    let mut placement = Placement::new();
+    placement.place("a", Device::Cuda(0));
+
+    assert!(placement.hosts().is_empty(), "a device is not a machine");
+    assert!(placement.is_local());
+}
+
+#[test]
+fn the_order_does_not_depend_on_the_order_they_were_placed_in() {
+    // The point of sorting, and not tidiness: these come out of a `HashMap`.
+    // Without this, the order rendezvous are asked for — and so the order
+    // failures happen in — changes between two runs of the same graph.
+    let mut one = Placement::new();
+    for (id, host) in [("a", "w3"), ("b", "w1"), ("c", "w2")] {
+        one.place_at(id, Host::new(host));
+    }
+    let mut other = Placement::new();
+    for (id, host) in [("c", "w2"), ("a", "w3"), ("b", "w1")] {
+        other.place_at(id, Host::new(host));
+    }
+
+    assert_eq!(one.hosts(), other.hosts());
+    assert_eq!(
+        one.hosts(),
+        vec![&Host::new("w1"), &Host::new("w2"), &Host::new("w3")]
+    );
+}
+
+#[test]
+fn moving_a_node_elsewhere_leaves_no_ghost_behind() {
+    // `place_at` replaces, so the host it left has to stop being named — a
+    // client would otherwise ask a broker for a rendezvous nothing needs.
+    let mut placement = Placement::new();
+    placement.place_at("a", Host::new("w1"));
+    placement.place_at("a", Host::new("w2"));
+
+    assert_eq!(placement.hosts(), vec![&Host::new("w2")]);
+}
+
 #[test]
 fn having_a_host_does_not_require_a_device_or_the_other_way_round() {
     let mut placement = Placement::new();

@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     import torch as _torch
 
     from soma_next._graph import Graph
-    from soma_next._soma_next import Worker
+    from soma_next._remote import Broker
 
 #: What names a measurement: the node, and the path inside it — or `""`
 #: for the node itself. A pair and not the joined string, because these are
@@ -97,7 +97,7 @@ def probe(
     most: int = 48,
     probes: int = PROBES,
     watching: Any = None,
-    workers: "dict[str, Worker] | None" = None,
+    broker: "Broker | None" = None,
 ) -> dict[str, dict[str, Any]]:
     """What this graph looks like at initialisation, as `{where: numbers}`.
 
@@ -117,7 +117,7 @@ def probe(
     """
     if torch is None:
         raise RuntimeError("`probe` needs torch")
-    watched = _watching(graph, example, depth, most, workers)
+    watched = _watching(graph, example, depth, most, broker)
 
     seen: dict[Key, Caught] = {}
     order: list[Key] = []
@@ -125,7 +125,7 @@ def probe(
     for key, module in watched.items():
         hooks.append(module.register_forward_hook(_caught(seen, order, key)))
     try:
-        output = graph.forward(_crossable(example), watching=watching, workers=workers)
+        output = graph.forward(_crossable(example), watching=watching, broker=broker)
     finally:
         for hook in hooks:
             hook.remove()
@@ -152,7 +152,7 @@ def _watching(
     example: Any,
     depth: int,
     most: int,
-    workers: "dict[str, Worker] | None",
+    broker: "Broker | None",
 ) -> dict[Key, Any]:
     """Which module each key names, taken from what the figure will draw.
 
@@ -177,7 +177,7 @@ def _watching(
     # Wrapped here as well: `architecture` obeys the rule every input obeys and
     # a probe is friendlier than that, taking a bare tensor or an `Opaque`.
     for node, inside in architecture(graph, _crossable(example), depth=depth, most=most,
-                                     workers=workers).items():
+                                     broker=broker).items():
         held = dict(_held(graph.implementation(node)))
         for path in {one.path for one in inside.layers} | set(inside.folded):
             module = _module_at(held, path)

@@ -31,7 +31,8 @@ if TYPE_CHECKING:
     import torch as _torch
 
     from soma_next._graph import Graph
-    from soma_next._soma_next import Store, Worker
+    from soma_next._remote import Broker
+    from soma_next._soma_next import Store
     from soma_next._stage import Stage
     from soma_next.torch._learning import Learning
 
@@ -97,7 +98,7 @@ class Trainer:
     work: a settled prefix declared `.cached()` runs **once per batch** and is
     read from there on every epoch after the first.
 
-    `workers` says what each host resolves to, exactly as in `Graph.forward`.
+    `broker` says who knows where each host is, exactly as in `Graph.forward`.
     Training a graph with a slice on another machine is **not** training that
     slice: what crosses a wire is the value and not the graph that made it, so
     its parameters get no gradient here, and the first step stops with
@@ -109,7 +110,7 @@ class Trainer:
         Trainer(g, objective=cross_entropy,
                 optimizer=Adam(parameters(g), lr=1e-3),   # the half that is here
                 trains={"body": Split(SGD, lr=0.1)},      # the half that is not
-                workers={"gpu": Worker.at("node3:7000")})
+                broker=Broker.embedded({"gpu": Worker.at("node3:7000")}))
 
     What that puts on the far side is a trainer of its own, beside the node and
     not inside it: the node is not asked to know it is being trained, and the
@@ -180,7 +181,7 @@ class Trainer:
         every: int = 1,
         micro: int = 1,
         store: "Store | str | None" = None,
-        workers: "dict[str, Worker] | None" = None,
+        broker: "Broker | None" = None,
         watching: Any = None,
         auditing: Any = None,
     ) -> None:
@@ -201,7 +202,7 @@ class Trainer:
         self.objective = objective
         self.optimizer = optimizer
         self.store = store
-        self.workers = workers
+        self.broker = broker
         # Kept twice on purpose: `watching` goes on to `forward`, which resolves
         # a list of watchers itself, and `_telling` is what **this** side calls.
         # They have to accept the same shapes or `watching=` means two things.
@@ -290,7 +291,7 @@ class Trainer:
         output = self.graph.forward(
             _crossable(input_),
             store=self.store,
-            workers=self.workers,
+            broker=self.broker,
             watching=self.watching,
         )
         loss = self.objective(output, _where_the_output_is(target, output))
@@ -323,7 +324,7 @@ class Trainer:
                     stage.graph.forward(
                         self._the_input(input_, stage) if stage.level == 0 else None,
                         store=self.store if stage.level == 0 else None,
-                        workers=self.workers,
+                        broker=self.broker,
                         watching=self.watching,
                     )
                 )
@@ -437,7 +438,7 @@ class Trainer:
             if not back.nodes:
                 continue
             back.fill({node_id: envelope(None, closing=True) for node_id in back.holds})
-            back.graph.forward(None, workers=self.workers)
+            back.graph.forward(None, broker=self.broker)
 
     def _the_input(self, input_: Any, stage: "Stage") -> Any:
         """The batch in whatever shape the first stage can read it. The same
@@ -541,7 +542,7 @@ class Trainer:
                     for node_id in back.holds
                 }
             )
-            given = back.read(back.graph.forward(None, workers=self.workers))
+            given = back.read(back.graph.forward(None, broker=self.broker))
             for producer, value in given.items():
                 owed[producer] = _both(owed.get(producer), gradient(value))
 

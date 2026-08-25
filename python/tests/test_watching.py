@@ -147,19 +147,23 @@ def test_what_is_printed_is_what_is_written(g, tmp_path):
 
 
 def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
-    from soma_next import Worker
+    from soma_next import Broker, Worker
 
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b").at("w1"))
     # The nodes above live in this file and no worker has it, so it travels
     # inside the artifact — which is what `network` is for.
-    worker = Worker.spawn(
-        [sys.executable, "-m", "soma_next.worker"],
-        mode="network",
-        send=["test_watching"],
+    broker = Broker.embedded(
+        {
+            "w1": Worker.spawn(
+                [sys.executable, "-m", "soma_next.worker"],
+                mode="network",
+                send=["test_watching"],
+            )
+        }
     )
     seen = []
 
-    out = g.forward(0.0, workers={"w1": worker}, watching=seen.append)
+    out = g.forward(0.0, broker=broker, watching=seen.append)
 
     assert out == 11.0
     # `machine` sits between them: the worker says what it looks like before it

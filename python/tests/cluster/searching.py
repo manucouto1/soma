@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch  # noqa: E402
 
 from cluster import spam  # noqa: E402
-from soma_next import Graph, Store, Worker  # noqa: E402
+from soma_next import Broker, Graph, Store, Worker  # noqa: E402
 from soma_next.data import Parquet  # noqa: E402
 from soma_next.study import (  # noqa: E402
     DONE,
@@ -163,12 +163,14 @@ def training(lr, dim, opt, *, at, store):
         # Fresh ones, per configuration and not per machine: a worker handle
         # carries the catalog it provisioned, so it belongs to **one graph**.
         # Holding one across two configurations is being told to reconnect.
-        workers={
-            name: Worker.at(
-                f"127.0.0.1:{port}", mode="network", send=["cluster.spam"]
-            )
-            for name, port in at.items()
-        },
+        broker=Broker.embedded(
+            {
+                name: Worker.at(
+                    f"127.0.0.1:{port}", mode="network", send=["cluster.spam"]
+                )
+                for name, port in at.items()
+            }
+        ),
     )
 
 

@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     import torch as _torch
 
     from soma_next._graph import Graph
-    from soma_next._soma_next import Worker
+    from soma_next._remote import Broker
 
 #: An edge between two layers, by path.
 Edge = tuple[str, str]
@@ -576,7 +576,7 @@ def architecture(
     *,
     most: int = 48,
     depth: int = 0,
-    workers: "dict[str, Worker] | None" = None,
+    broker: "Broker | None" = None,
 ) -> dict[str, "Inside"]:
     """What each node is made of, as `{node: Inside}` — ready for a figure.
 
@@ -636,7 +636,7 @@ def architecture(
         )
     try:
         with torch.no_grad():
-            graph.forward(example, workers=workers)
+            graph.forward(example, broker=broker)
     finally:
         for hook in hooks:
             hook.remove()

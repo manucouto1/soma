@@ -7,6 +7,12 @@
 # context is still the repository, because the image is built from the source:
 # what is far away here is the root, not the fixtures.
 #
+# And a **second** context, `fabric`, since the wire and the broker left for
+# `soma-fabric`. Two contexts and not one root over both, because the root over
+# both is a directory of unrelated projects and every byte of it would be sent
+# to the daemon. The two repositories move together, which is the same thing
+# the path dependencies in `python/Cargo.toml` already assume.
+#
 # The client is pytest, **outside**: that is the real shape — whoever declares
 # the graph is not one of the workers.
 
@@ -18,6 +24,8 @@ services:
     build: &worker
       context: ../../../..
       dockerfile: python/tests/cluster/docker/worker.Dockerfile
+      additional_contexts:
+        fabric: ../../../../../soma-fabric
       target: worker
     command: &keeping ["python", "-m", "soma_next.worker", "--listen", "0.0.0.0:7000", "--store", "/store"]
     ports: ["127.0.0.1:7001:7000"]
@@ -52,6 +60,8 @@ services:
     build: &torch
       context: ../../../..
       dockerfile: python/tests/cluster/docker/worker.Dockerfile
+      additional_contexts:
+        fabric: ../../../../../soma-fabric
       target: worker-gpu
     command: *keeping
     ports: ["127.0.0.1:7004:7000"]

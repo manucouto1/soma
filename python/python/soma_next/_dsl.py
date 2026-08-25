@@ -55,7 +55,7 @@ class Topology:
         **independently** of `.on()`, so the two can be written in any order.
 
         A host is a **name**: what it resolves to is said by whoever executes,
-        with `forward(..., workers={...})`.
+        with `forward(..., broker=Broker.embedded({...}))`.
         """
         return _fill(self, "host", host)
 

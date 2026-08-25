@@ -12,7 +12,7 @@ import os
 
 from net import graph, nodes
 
-from soma_next import Graph, Worker
+from soma_next import Broker, Graph, Worker
 
 n = nodes()
 g = graph(Graph, n)
@@ -23,6 +23,8 @@ print("PLAN", g.plan())
 w1 = Worker.generic()
 w2 = Worker.generic()
 
-output = g.forward("  The Dog Runs Quickly  ", workers={"w1": w1, "w2": w2})
+output = g.forward(
+    "  The Dog Runs Quickly  ", broker=Broker.embedded({"w1": w1, "w2": w2})
+)
 print("OUTPUT", output)
 print("HERE", float(os.getpid()))

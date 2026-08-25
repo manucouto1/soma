@@ -35,7 +35,14 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
 ENV UV_LINK_MODE=copy UV_SYSTEM_PYTHON=1
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install maturin
 
-WORKDIR /src
+# Two repositories side by side, which is what the path dependencies in
+# `python/Cargo.toml` already assume: `../../soma-fabric/wire` only resolves if
+# the wire's repository is this one's neighbour. It is copied from a second
+# build context rather than from a root over both, because the root over both
+# is a directory of unrelated projects.
+COPY --from=fabric . /src/soma-fabric
+
+WORKDIR /src/soma-next
 # The manifests first, so that changing a line of Rust does not re-download the
 # whole index.
 COPY Cargo.toml Cargo.lock ./
@@ -44,7 +51,6 @@ COPY data/Cargo.toml data/
 COPY health/Cargo.toml health/
 COPY store/Cargo.toml store/
 COPY study/Cargo.toml study/
-COPY transport/Cargo.toml transport/
 COPY python/Cargo.toml python/pyproject.toml python/
 # Every member of the workspace, and not only what `python` names: cargo will
 # not load a workspace one of whose members is not there.
@@ -53,7 +59,6 @@ COPY data data
 COPY health health
 COPY store store
 COPY study study
-COPY transport transport
 COPY python python
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target \
