@@ -6,7 +6,7 @@
 //! a binary that disagrees with this one.
 
 use serde::Serialize;
-use soma_fabric_broker::{Ask, Endpoint, Host, Identity, Needs, PROTOCOL, Path, Reply, SlotId};
+use somatize_fabric_broker::{Ask, Endpoint, Host, Identity, Needs, PROTOCOL, Path, Reply, SlotId};
 use std::time::Duration;
 
 fn round_trip(ask: Ask) {

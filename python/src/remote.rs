@@ -16,15 +16,15 @@
 
 use crate::codec::Codecs;
 use crate::node::PyNode;
-use soma_next_core::Packing;
+use somatize_core::Packing;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use soma_fabric_wire::{Provision, ProvisionError, Provisioned, Serving};
-use soma_next_core::Catalog;
-use soma_next_store::{Cache, Store};
+use somatize_core::Catalog;
+use somatize_fabric_wire::{Provision, ProvisionError, Provisioned, Serving};
+use somatize_store::{Cache, Store};
 use std::sync::Arc;
 
 /// A Python object with `accepts` and `provide`, from the Rust side.

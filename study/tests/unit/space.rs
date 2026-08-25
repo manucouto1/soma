@@ -1,6 +1,6 @@
 //! The knobs and what each one may be.
 
-use soma_next_study::{Dimension, Goal, Grid, ReadError, Sampler, Space, SpaceError, Tpe};
+use somatize_study::{Dimension, Goal, Grid, ReadError, Sampler, Space, SpaceError, Tpe};
 
 fn real(low: f64, high: f64) -> Dimension {
     Dimension::Real {
@@ -153,11 +153,11 @@ fn the_space_is_what_says_whether_sixty_four_is_a_number_or_a_word() {
 
     assert_eq!(
         counted.read("batch=64").unwrap().get("batch"),
-        Some(&soma_next_study::Setting::Int(64))
+        Some(&somatize_study::Setting::Int(64))
     );
     assert_eq!(
         named.read("batch=64").unwrap().get("batch"),
-        Some(&soma_next_study::Setting::Choice("64".into()))
+        Some(&somatize_study::Setting::Choice("64".into()))
     );
 }
 

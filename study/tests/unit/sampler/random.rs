@@ -1,6 +1,6 @@
 //! Uniform, looking at nothing — and reproducible from the index alone.
 
-use soma_next_study::{Dimension, Point, Random, Setting, Space};
+use somatize_study::{Dimension, Point, Random, Setting, Space};
 
 fn space() -> Space {
     Space::new()

@@ -3,7 +3,7 @@
 //! # A source is a node, and that is the whole design
 //!
 //! There is no `Source` trait here, and there was nearly one. A source takes
-//! something and answers with something, which is [`Node`](soma_next_core::Node)
+//! something and answers with something, which is [`Node`](somatize_core::Node)
 //! — and a second trait with a method that does what `forward` does is both a
 //! hole with one tenant and the `E0034` this project's rules warn about.
 //!
@@ -36,7 +36,7 @@
 //! data must not share a key. A source has to state its identity **without
 //! reading itself**, or it does the very work the cache exists to avoid.
 //!
-//! Against a [`Store`](soma_next_store::Store) that is free: a name resolves to
+//! Against a [`Store`](somatize_store::Store) that is free: a name resolves to
 //! a digest, and the digest **is** the content hash. So
 //! [`Parquet::version`] costs one `resolve` and no bytes, and it goes where the
 //! digest of settled weights goes — `Memory::freeze(id, Some(version))`, the
@@ -49,7 +49,7 @@
 //!   costs — *«an SDK with a runtime inside would have made the trait async, and
 //!   that is the objection that has kept a bus out of this repo twice»*. When
 //!   SQL arrives it arrives synchronous.
-//! - **Ranged reads.** [`Store::get`](soma_next_store::Store::get) answers with
+//! - **Ranged reads.** [`Store::get`](somatize_store::Store::get) answers with
 //!   every byte of a blob, so a file is read once and held. A dataset that does
 //!   not fit in memory needs the store to learn to read a range first.
 

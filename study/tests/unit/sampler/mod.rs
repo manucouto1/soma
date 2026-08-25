@@ -6,7 +6,7 @@ mod random;
 mod sobol;
 mod tpe;
 
-use soma_next_study::{
+use somatize_study::{
     Dimension, Goal, Grid, Halton, Point, Random, Sampler, Setting, Sobol, Space, Tpe,
 };
 

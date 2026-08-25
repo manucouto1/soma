@@ -13,8 +13,8 @@ use crate::frame::PyFrame;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
-use soma_next_core::Value;
-use soma_next_data::Frame;
+use somatize_core::Value;
+use somatize_data::Frame;
 use std::sync::Arc;
 
 /// Marks a value so it crosses the graph untouched. The node that receives it

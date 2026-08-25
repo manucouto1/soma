@@ -5,24 +5,24 @@
 //! from the recipe, which is what makes the question cheap enough to ask about
 //! ten commits at once.
 //!
-//! It holds no graph itself — see `soma_tree::snapshot`.
+//! It holds no graph itself — see `somatize_tree::snapshot`.
 
 use clap::{Parser, Subcommand};
-use soma_tree::bench::{Bench, probed, walking};
-use soma_tree::data;
-use soma_tree::findings::{DOWNSTREAM, Findings, RESETTLED, SALTED, STALE, SUSPECT};
-use soma_tree::journal::Verdict;
-use soma_tree::revision;
-use soma_tree::serving::{Serving, routes};
-use soma_tree::snapshot::Snapshot;
-use soma_tree::trials::{Goal, Trials};
-use soma_tree::walk::Walk;
+use somatize_tree::bench::{Bench, probed, walking};
+use somatize_tree::data;
+use somatize_tree::findings::{DOWNSTREAM, Findings, RESETTLED, SALTED, STALE, SUSPECT};
+use somatize_tree::journal::Verdict;
+use somatize_tree::revision;
+use somatize_tree::serving::{Serving, routes};
+use somatize_tree::snapshot::Snapshot;
+use somatize_tree::trials::{Goal, Trials};
+use somatize_tree::walk::Walk;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "soma-tree", about, version)]
+#[command(name = "somatize-tree", about, version)]
 struct Cli {
     #[command(subcommand)]
     doing: Doing,
@@ -35,7 +35,7 @@ struct Where {
     #[arg(long, default_value = ".")]
     repo: PathBuf,
     /// Where probes are remembered, and where values are looked up. Defaults
-    /// to `$XDG_CACHE_HOME/soma-tree`. Point it at the store your runs use and
+    /// to `$XDG_CACHE_HOME/somatize-tree`. Point it at the store your runs use and
     /// a diff also says what is already computed — that half needs `--input`,
     /// the remembering does not.
     #[arg(long)]
@@ -63,7 +63,7 @@ enum Doing {
         at: Where,
     },
     /// A whole line of exploration: every commit in a range and what its step
-    /// did. `soma-tree log main~10..main`.
+    /// did. `somatize-tree log main~10..main`.
     Log {
         /// Dibujar también las líneas podadas. Se pliegan por defecto.
         #[arg(long)]
@@ -72,7 +72,7 @@ enum Doing {
         /// the history back from there. Defaults to every branch, because
         /// three variants of one idea are three branches and a walk from one
         /// tip cannot see its own siblings.
-        #[arg(default_value = soma_tree::revision::ALL)]
+        #[arg(default_value = somatize_tree::revision::ALL)]
         range: String,
         /// How far back, when what was asked is not a range.
         #[arg(long, default_value_t = 10)]
@@ -534,7 +534,7 @@ fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::er
         println!("valores que una corrida dejó guardados, y el store es donde están.");
         return Ok(true);
     };
-    let kept = soma_next_store::Local::at(store)?;
+    let kept = somatize_store::Local::at(store)?;
     let commits = revision::commits_in(&bench.repo, range, most)?;
     let probing = bench.probing(at.store.as_deref(), at.given.as_deref());
     let known = probed(&bench, &probing, &commits)?;
@@ -769,7 +769,7 @@ fn serving(at: &str, where_: &Where) -> Result<bool, Box<dyn std::error::Error>>
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let listening = tokio::net::TcpListener::bind(at).await?;
-        println!("soma-tree en http://{at}");
+        println!("somatize-tree en http://{at}");
         println!("  GET  /api/walk?range=HEAD~10..HEAD");
         println!("  GET  /api/said/<rev>");
         println!("  POST /api/said/<rev>   {{\"verdict\": \"invalid\", \"prose\": \"...\"}}");

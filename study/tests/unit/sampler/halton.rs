@@ -1,7 +1,7 @@
 //! Spread on purpose: what it promises that a uniform draw only promises on
 //! average.
 
-use soma_next_study::{Dimension, Halton, Point, Random, Setting, Space};
+use somatize_study::{Dimension, Halton, Point, Random, Setting, Space};
 use std::collections::HashSet;
 
 /// Three knobs on the unit interval, so that a value *is* its place in the

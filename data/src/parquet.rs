@@ -4,8 +4,8 @@ use crate::{Frame, Span};
 use arrow_schema::ArrowError;
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
-use soma_next_core::{Ctx, Node, NodeError, Value};
-use soma_next_store::{Digest, Store};
+use somatize_core::{Ctx, Node, NodeError, Value};
+use somatize_store::{Digest, Store};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 // The crate and this module have the same name, which is right — one file per

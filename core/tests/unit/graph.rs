@@ -1,6 +1,6 @@
 //! The CU1 questionnaire, answered.
 
-use soma_next_core::{Graph, GraphError, NodeId};
+use somatize_core::{Graph, GraphError, NodeId};
 
 /// `a → b → c`, the linear pipeline almost everything else grows from.
 fn linear() -> Graph {

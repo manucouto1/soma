@@ -6,7 +6,7 @@
 //! from `Device`, and the temptation to give it a grammar will come along by
 //! itself.
 
-use soma_next_core::{Device, Host};
+use somatize_core::{Device, Host};
 use std::str::FromStr;
 
 #[test]

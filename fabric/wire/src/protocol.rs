@@ -78,7 +78,7 @@
 
 use crate::{Label, Outcome};
 use serde::{Deserialize, Serialize};
-use soma_next_core::{Device, Fact, Keys, Memory, NodeId, Placement, Plan, Value};
+use somatize_core::{Device, Fact, Keys, Memory, NodeId, Placement, Plan, Value};
 use std::fmt;
 
 /// What the client says.

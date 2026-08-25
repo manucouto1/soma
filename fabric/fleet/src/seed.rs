@@ -27,8 +27,8 @@
 
 use crate::listing::{Listed, Listing};
 use serde_json::json;
-use soma_fabric_wire::{Machine, filed};
-use soma_next_store::{Bound, Digest, Meta, Store, StoreError};
+use somatize_fabric_wire::{Machine, filed};
+use somatize_store::{Bound, Digest, Meta, Store, StoreError};
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -60,7 +60,7 @@ pub struct Sown {
 /// `laptop-91` is there too, with nothing but an uptime: a kernel that keeps no
 /// load average is not a machine that is idle, and the screens have to say so.
 pub fn sow(root: &Path, listing: Option<&Path>) -> Result<Sown, StoreError> {
-    let store = soma_next_store::Local::at(root)?;
+    let store = somatize_store::Local::at(root)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs())

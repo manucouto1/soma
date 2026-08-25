@@ -2,7 +2,7 @@
 
 use super::{hashed, read};
 use pyo3::prelude::*;
-use soma_next_study::{Patience, Percentile, Pruner, Threshold};
+use somatize_study::{Patience, Percentile, Pruner, Threshold};
 
 /// `soma_next.study.Pruner` — whether a trial that is going badly is worth
 /// another epoch.

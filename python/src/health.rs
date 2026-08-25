@@ -18,7 +18,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 // Aliased, because the function this crate exposes to Python has the same
 // name — it is the same question asked from the other side of the wall.
-use soma_next_health::{Seen, Thresholds, verdict as taken};
+use somatize_health::{Seen, Thresholds, verdict as taken};
 
 /// The bounds a verdict is taken at. **The whole of the opinion, and it is
 /// data**: change one and the same record answers differently, without
@@ -199,8 +199,8 @@ pub fn leaning(
     for (name, drop) in drops.iter() {
         said.push((name.extract::<String>()?, drop.extract::<f64>()?));
     }
-    let shares = soma_next_health::shares(&said);
-    let flags = soma_next_health::leaning(&shares, &bounds)
+    let shares = somatize_health::shares(&said);
+    let flags = somatize_health::leaning(&shares, &bounds)
         .iter()
         .map(ToString::to_string)
         .collect();
@@ -242,8 +242,8 @@ pub fn about(flag: &str) -> PyResult<String> {
 /// has happened. The tests that catch it are the two that ask every flag a run
 /// raises, and every flag a **probe** raises, what to do about itself — two,
 /// because a flag only one of them can produce is exactly the one that slips.
-fn known(flag: &str) -> PyResult<soma_next_health::Flag> {
-    use soma_next_health::Flag;
+fn known(flag: &str) -> PyResult<somatize_health::Flag> {
+    use somatize_health::Flag;
     let bare = flag.split('(').next().unwrap_or(flag);
     [
         Flag::Nan,

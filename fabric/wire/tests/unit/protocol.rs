@@ -4,8 +4,8 @@
 //! you do not need a worker to find out. What does need testing here and nowhere
 //! else is what **does not** cross.
 
-use soma_fabric_wire::{Answer, Label, MessageError, Request};
-use soma_next_core::{Device, Host, Key, Keys, Memory, NodeId, Outcome, Placement, Plan, Value};
+use somatize_core::{Device, Host, Key, Keys, Memory, NodeId, Outcome, Placement, Plan, Value};
+use somatize_fabric_wire::{Answer, Label, MessageError, Request};
 
 fn work(input: Value) -> Request {
     Request::Work {

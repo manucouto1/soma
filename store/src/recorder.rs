@@ -58,7 +58,7 @@
 //! reachable from what is written here without running anything again.
 
 use crate::{Meta, Store, StoreError};
-use soma_next_core::{Fact, Watcher};
+use somatize_core::{Fact, Watcher};
 use std::sync::{Arc, Mutex};
 
 /// One fact as it is written: a name and text-to-text fields.
@@ -147,7 +147,7 @@ impl Recorder {
     /// The fields are text to text because that is what a record is; the
     /// vocabulary is the caller's, exactly as an [`Artifact`]'s `kind` is.
     ///
-    /// [`Artifact`]: https://docs.rs/soma-next-transport
+    /// [`Artifact`]: https://docs.rs/somatize-fabric-wire
     pub fn said(&self, kind: &str, fields: Vec<(String, String)>) {
         let mut pending = self.pending.lock().expect("nobody poisons this mutex");
         pending.facts.push((kind.to_string(), fields));

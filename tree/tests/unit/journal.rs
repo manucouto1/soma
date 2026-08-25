@@ -5,8 +5,8 @@
 //! how a store behaves under two writers. A double would agree with the belief
 //! rather than with the store.
 
-use soma_next_store::Local;
-use soma_tree::journal::{Journal, Verdict};
+use somatize_store::Local;
+use somatize_tree::journal::{Journal, Verdict};
 
 fn somewhere() -> (tempfile::TempDir, Local) {
     let at = tempfile::tempdir().expect("a temporary directory");

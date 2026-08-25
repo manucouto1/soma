@@ -8,8 +8,8 @@
 use crate::naming;
 use crate::seen::Seen;
 use serde::Serialize;
-use soma_fabric_wire::Machine;
-use soma_next_store::{Bound, Store, StoreError};
+use somatize_fabric_wire::Machine;
+use somatize_store::{Bound, Store, StoreError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// What is out there, and the rules that were applied to say so.

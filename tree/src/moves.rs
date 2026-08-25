@@ -27,7 +27,7 @@
 //! cuando dos aristas de signo contrario tienen alcances que **se tocan**.
 
 use serde::{Deserialize, Serialize};
-use soma_next_store::{Bound as Record, Digest, Meta, Store};
+use somatize_store::{Bound as Record, Digest, Meta, Store};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
@@ -877,7 +877,7 @@ fn beside<'a>(meta: &'a Meta, what: &str) -> Option<&'a str> {
 
 #[derive(Debug)]
 pub enum Trouble {
-    Store(soma_next_store::StoreError),
+    Store(somatize_store::StoreError),
     Garbled(String),
     NoSuchMove { id: MoveId },
     Circular { child: MoveId, parent: MoveId },

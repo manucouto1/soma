@@ -3,7 +3,7 @@
 use super::space::{PyPoint, PySpace};
 use super::{hashed, read};
 use pyo3::prelude::*;
-use soma_next_study::{Grid, Halton, Point, Random, Sampler, Sobol, Tpe};
+use somatize_study::{Grid, Halton, Point, Random, Sampler, Sobol, Tpe};
 
 /// `soma_next.study.Sampler` — where to look for the next configuration.
 #[pyclass(name = "Sampler", module = "soma_next._soma_next", frozen)]

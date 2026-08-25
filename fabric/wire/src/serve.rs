@@ -47,9 +47,9 @@
 use crate::frame;
 use crate::machine::{self, Machine};
 use crate::{Answer, Label, Provision, Provisioned, Request};
-use soma_next_core::{Catalog, Executor, Fact, Keeper, Outcome, Watcher};
-use soma_next_core::{Codec, unpacked_all};
-use soma_next_store::{Store, StoreError};
+use somatize_core::{Catalog, Executor, Fact, Keeper, Outcome, Watcher};
+use somatize_core::{Codec, unpacked_all};
+use somatize_store::{Store, StoreError};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -325,7 +325,7 @@ impl Loaded<'_> {
 /// emitted it, and the client is the one that says it came from this host —
 /// because the name of this host is the graph's, and a worker does not know it.
 ///
-/// Behind a `Mutex` because a [`Wave`](soma_next_core::Plan::Wave) emits from
+/// Behind a `Mutex` because a [`Wave`](somatize_core::Plan::Wave) emits from
 /// several threads at once, and half a frame interleaved with half of another is
 /// a connection that cannot be resynchronised.
 struct Relaying<'a, W: Write + Send> {

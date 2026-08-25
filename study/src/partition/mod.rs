@@ -5,10 +5,10 @@
 //! you know which one you want, say it and the enum is not in the way:
 //!
 //! ```
-//! use soma_next_study::{KFold, Samples};
+//! use somatize_study::{KFold, Samples};
 //!
 //! let folds = KFold { k: 5, shuffle: None }.folds(&Samples::of(100))?;
-//! # Ok::<(), soma_next_study::PartitionError>(())
+//! # Ok::<(), somatize_study::PartitionError>(())
 //! ```
 //!
 //! [`Partition`] is for the other case, which is the common one at this level:
@@ -67,11 +67,11 @@ pub struct Fold {
 /// Whichever of the schemes a cut is.
 ///
 /// ```
-/// use soma_next_study::{Partition, Samples, Stratified};
+/// use somatize_study::{Partition, Samples, Stratified};
 ///
 /// let cut: Partition = Stratified { k: 5, shuffle: None }.into();
 /// assert_eq!(cut.to_string(), "stratified:5");
-/// # Ok::<(), soma_next_study::PartitionError>(())
+/// # Ok::<(), somatize_study::PartitionError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Partition {

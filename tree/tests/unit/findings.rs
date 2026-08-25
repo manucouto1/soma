@@ -4,7 +4,7 @@
 //! checked here is the reading: which findings mean somebody typed something,
 //! and which mean a name moved without anybody having.
 
-use soma_tree::findings::Findings;
+use somatize_tree::findings::Findings;
 
 /// One step, as the probe hands it over.
 fn found(said: &str) -> Findings {

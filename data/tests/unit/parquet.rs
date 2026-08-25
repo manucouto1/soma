@@ -7,9 +7,9 @@ use arrow_array::{Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use soma_next_core::{Catalog, Executor, Graph, Memory, Node, Value, compile};
-use soma_next_data::{Frame, Parquet, Span};
-use soma_next_store::{Cache, Digest, Local, Meta, Store};
+use somatize_core::{Catalog, Executor, Graph, Memory, Node, Value, compile};
+use somatize_data::{Frame, Parquet, Span};
+use somatize_store::{Cache, Digest, Local, Meta, Store};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -229,8 +229,8 @@ impl Node for Rows {
     fn forward(
         &self,
         input: &Value,
-        _ctx: &soma_next_core::Ctx<'_>,
-    ) -> Result<Value, soma_next_core::NodeError> {
+        _ctx: &somatize_core::Ctx<'_>,
+    ) -> Result<Value, somatize_core::NodeError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         let frame = Frame::of(input).expect("a frame arrived");
         Ok(Value::number(frame.rows() as f64))

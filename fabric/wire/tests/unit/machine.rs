@@ -1,7 +1,7 @@
 //! What a machine says about itself, and what it says when it cannot measure.
 
-use soma_fabric_wire::Machine;
-use soma_next_core::Fact;
+use somatize_core::Fact;
+use somatize_fabric_wire::Machine;
 use std::time::Duration;
 
 fn said(machine: &Machine) -> (String, std::collections::HashMap<String, String>) {
@@ -44,7 +44,7 @@ fn a_machine_is_filed_under_what_it_calls_itself() {
     // path — so a reading written to a store has to be filed under something
     // the worker can know on its own. Whoever reads joins the two by seeing
     // the same `id` on a reading that did come down a wire.
-    use soma_fabric_wire::filed;
+    use somatize_fabric_wire::filed;
 
     assert_eq!(filed("box-7"), "machine/box-7");
     assert_ne!(

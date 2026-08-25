@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! docker compose -f store/tests/docker/compose.yaml up -d
-//! SOMA_S3=http://127.0.0.1:9000 cargo test -p soma-next-store --features s3
+//! SOMA_S3=http://127.0.0.1:9000 cargo test -p somatize-store --features s3
 //! ```
 //!
 //! Without the feature, or without `SOMA_S3`, that half says so on `stderr` and
@@ -23,13 +23,13 @@
 //! checks.
 
 use crate::tempdir::Dir;
-use soma_next_store::{Digest, Local, Store, StoreError};
+use somatize_store::{Digest, Local, Store, StoreError};
 use std::env;
 
 /// The bucket under test, or `None` when there is none to reach.
 #[cfg(feature = "s3")]
-fn bucket() -> Option<soma_next_store::Bucket> {
-    use soma_next_store::{Bucket, Credentials, UrlStyle};
+fn bucket() -> Option<somatize_store::Bucket> {
+    use somatize_store::{Bucket, Credentials, UrlStyle};
 
     let endpoint = env::var("SOMA_S3").ok()?;
     let key = env::var("SOMA_S3_KEY").unwrap_or_else(|_| "somanext".into());
@@ -217,7 +217,7 @@ fn a_scan_finds_what_was_bound_in_a_settled_order() {
         // shared with everything else running, so between two scans somebody
         // legitimately binds something. What has to be settled is the order of
         // what *this* test wrote, not that the store stood still.
-        let ours = |scan: &[soma_next_store::Bound]| -> Vec<String> {
+        let ours = |scan: &[somatize_store::Bound]| -> Vec<String> {
             scan.iter()
                 .filter(|bound| names.contains(&bound.name))
                 .map(|bound| bound.name.clone())
@@ -282,7 +282,7 @@ fn always_yes() -> String {
 #[test]
 #[cfg(feature = "s3")]
 fn an_endpoint_that_ignores_the_condition_is_refused_and_not_used() {
-    use soma_next_store::{Bucket, Credentials, UrlStyle};
+    use somatize_store::{Bucket, Credentials, UrlStyle};
 
     let refused = Bucket::at(
         &always_yes(),

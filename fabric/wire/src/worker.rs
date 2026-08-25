@@ -36,8 +36,8 @@
 
 use crate::frame;
 use crate::{Answer, Artifact, Request};
-use soma_next_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
-use soma_next_core::{Codec, packed_all, unpacked_all};
+use somatize_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
+use somatize_core::{Codec, packed_all, unpacked_all};
 use std::io::{self, BufReader};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -349,7 +349,7 @@ fn live(codec: &dyn Codec, outcome: Outcome) -> Result<Outcome, TransportError> 
     })
 }
 
-fn as_transport_error(e: soma_next_core::CodecError) -> TransportError {
+fn as_transport_error(e: somatize_core::CodecError) -> TransportError {
     TransportError::new(e.to_string())
 }
 

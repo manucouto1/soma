@@ -11,7 +11,7 @@ use crate::revision::{self, Worktree};
 use crate::snapshot::{Probing, Snapshot};
 use crate::walk::{self, Walk};
 use serde::Deserialize;
-use soma_next_store::{Digest, Local};
+use somatize_store::{Digest, Local};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -307,7 +307,7 @@ pub fn where_probes_are_remembered() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .unwrap_or_else(std::env::temp_dir)
-        .join("soma-tree")
+        .join("somatize-tree")
 }
 
 /// What a remembered answer depends on, other than the commit.

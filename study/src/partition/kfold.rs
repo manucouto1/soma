@@ -13,11 +13,11 @@ use std::fmt;
 /// a name you have to remember for nothing.
 ///
 /// ```
-/// use soma_next_study::{KFold, Samples};
+/// use somatize_study::{KFold, Samples};
 ///
 /// let folds = KFold { k: 5, shuffle: Some(0) }.folds(&Samples::of(100))?;
 /// assert_eq!(folds.len(), 5);
-/// # Ok::<(), soma_next_study::PartitionError>(())
+/// # Ok::<(), somatize_study::PartitionError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KFold {

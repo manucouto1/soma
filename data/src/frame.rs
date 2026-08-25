@@ -5,7 +5,7 @@ use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::SchemaRef;
 use arrow_select::concat::concat_batches;
-use soma_next_core::Value;
+use somatize_core::Value;
 use std::fmt;
 
 /// Rows and columns, together with what each column is called and holds.

@@ -1,5 +1,5 @@
 [package]
-name = "soma-next-data"
+name = "somatize-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,8 +7,8 @@ license.workspace = true
 [dependencies]
 # The direction is core <- store <- data, and never the other way: the core
 # stays with no dependencies at all and never learns what a column is.
-soma-next-core = { workspace = true }
-soma-next-store = { workspace = true }
+somatize-core = { workspace = true }
+somatize-store = { workspace = true }
 # Arrow is the **type** and polars would be the tool: what crosses an edge is a
 # batch of columns, and whoever wants expressions over it brings their own
 # engine. Putting polars here would charge 370 crates to the worker that only
@@ -32,8 +32,8 @@ bytes = "1"
 arrow-array = "59"
 arrow-schema = "59"
 parquet = "59"
-soma-next-core = { workspace = true }
-soma-next-store = { workspace = true }
+somatize-core = { workspace = true }
+somatize-store = { workspace = true }
 
 [[test]]
 name = "unit"

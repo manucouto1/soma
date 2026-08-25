@@ -7,7 +7,7 @@
 
 use crate::findings::Findings;
 use serde::Deserialize;
-use soma_next_store::{Digest, Meta, Store};
+use somatize_store::{Digest, Meta, Store};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::Path;

@@ -83,14 +83,14 @@ impl fmt::Display for Dimension {
 /// The knobs, in the order they were declared.
 ///
 /// ```
-/// use soma_next_study::{Dimension, Space};
+/// use somatize_study::{Dimension, Space};
 ///
 /// let space = Space::new()
 ///     .with("lr", Dimension::Real { low: 1e-5, high: 1e-1, log: true })?
 ///     .with("batch", Dimension::Int { low: 16, high: 128 })?
 ///     .with("optimizer", Dimension::Choice(vec!["adam".into(), "sgd".into()]))?;
 /// assert_eq!(space.len(), 3);
-/// # Ok::<(), soma_next_study::SpaceError>(())
+/// # Ok::<(), somatize_study::SpaceError>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Space {
@@ -146,7 +146,7 @@ impl Space {
     /// beats quietly reading half of it.
     ///
     /// ```
-    /// use soma_next_study::{Dimension, Space};
+    /// use somatize_study::{Dimension, Space};
     ///
     /// let space = Space::new()
     ///     .with("lr", Dimension::Real { low: 1e-5, high: 1e-1, log: true })?

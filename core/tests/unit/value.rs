@@ -1,4 +1,4 @@
-use soma_next_core::Value;
+use somatize_core::Value;
 
 #[test]
 fn a_list_holds_what_you_put_in_it() {

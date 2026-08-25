@@ -1,5 +1,5 @@
 [package]
-name = "soma-fabric-broker"
+name = "somatize-fabric-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,13 +8,13 @@ license.workspace = true
 autotests = false
 
 [lib]
-name = "soma_fabric_broker"
+name = "somatize_fabric_broker"
 
 [dependencies]
-soma-next-core = { workspace = true, features = ["serde"] }
+somatize-core = { workspace = true, features = ["serde"] }
 # The wire, because a `Path::Direct` has to become something that carries a
 # slice. The protocol and the paths know nothing about it; only the handle does.
-soma-fabric-wire = { path = "../wire" }
+somatize-fabric-wire = { path = "../wire" }
 serde = { workspace = true }
 # The same MessagePack as the wire next door, and for the same measured reasons.
 # One format across both conversations means one set of tools when something
@@ -27,7 +27,7 @@ rmp-serde = "1"
 rmp-serde = "1"
 # The far side of the wire, so the end-to-end test can stand a real worker on a
 # thread of this process instead of proving the seam against a double.
-soma-fabric-wire = { path = "../wire" }
+somatize-fabric-wire = { path = "../wire" }
 
 [[test]]
 name = "unit"

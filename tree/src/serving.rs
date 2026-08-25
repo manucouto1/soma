@@ -34,7 +34,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use soma_next_store::{Digest, Store};
+use somatize_store::{Digest, Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 

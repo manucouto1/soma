@@ -3,7 +3,7 @@
 //! Not one domain decision here, as in the rest of this crate — one adapter and
 //! a calling convention. What a host resolves to, which hosts turn out to be
 //! the same place, and when a wire is opened are all decided in
-//! `soma-fabric-broker`; this hands Python a door to them.
+//! `somatize-fabric-broker`; this hands Python a door to them.
 //!
 //! # Why Python is given a token and not a path
 //!
@@ -20,8 +20,8 @@ use crate::codec::Codecs;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
-use soma_fabric_broker::{Embedded, Endpoint, Host, Path, Reaching, Session};
-use soma_fabric_wire::Artifact;
+use somatize_fabric_broker::{Embedded, Endpoint, Host, Path, Reaching, Session};
+use somatize_fabric_wire::Artifact;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 

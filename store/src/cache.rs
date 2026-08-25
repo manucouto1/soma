@@ -39,7 +39,7 @@
 //! bytes before it ever gets this far.
 
 use crate::{Digest, Meta, Store, StoreError};
-use soma_next_core::{Keeper, KeeperError, Kept, Key, Value};
+use somatize_core::{Keeper, KeeperError, Kept, Key, Value};
 
 /// Names what a graph produces, and keeps it in a store.
 pub struct Cache<'a> {

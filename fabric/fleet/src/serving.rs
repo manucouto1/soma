@@ -1,6 +1,6 @@
 //! The fleet over HTTP, for whoever draws it.
 //!
-//! axum 0.8 on tokio, which is not a taste: it is what soma-tree runs and what
+//! axum 0.8 on tokio, which is not a taste: it is what somatize-tree runs and what
 //! chatty-the-lab's backend runs, so landing there is moving routes rather than
 //! rewriting a server. Mounted at the root here; under a prefix wherever this
 //! goes.
@@ -33,7 +33,7 @@ use axum::routing::{delete, get};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use soma_next_store::Store;
+use somatize_store::Store;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ pub struct Serving {
     /// **The server's rule and not the view's.** Written in two places it would
     /// live in two languages, and the day it changed a terminal and a browser
     /// would both look right and quietly disagree about which machines are
-    /// there — which is the mistake soma-tree wrote down about pruning.
+    /// there — which is the mistake somatize-tree wrote down about pruning.
     pub quiet_after: u64,
     /// How many records to read to learn what the graphs call these machines.
     pub read_records: usize,

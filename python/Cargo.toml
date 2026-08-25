@@ -1,5 +1,5 @@
 [package]
-name = "soma-next-python"
+name = "somatize-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,28 +9,28 @@ name = "_soma_next"
 crate-type = ["cdylib"]
 
 [dependencies]
-soma-next-core = { workspace = true, features = ["serde"] }
+somatize-core = { workspace = true, features = ["serde"] }
 # The wire, from `fabric/`. It spent a day in a repository of its own and came
 # back: everything that versions together lives together, and a path dependency
 # across two repositories makes releasing one wait on the other's uncommitted
 # state.
-soma-fabric-wire = { workspace = true, optional = true }
+somatize-fabric-wire = { workspace = true, optional = true }
 # The rendezvous. It is what fills the `Transport` hole now that a client talks
 # to a broker instead of holding a dictionary of workers.
-soma-fabric-broker = { workspace = true, optional = true }
+somatize-fabric-broker = { workspace = true, optional = true }
 # With `s3`, because a study spread over machines with no shared mount is
 # exactly the case `soma_next.Store.on_bucket` exists for.
-soma-next-store = { workspace = true, features = ["s3"] }
+somatize-store = { workspace = true, features = ["s3"] }
 # A source is a Rust node, and a frame is what it answers with: this side
 # translates both, which is what `python/` is for.
-soma-next-data = { path = "../data" }
+somatize-data = { path = "../data" }
 # To hand one column over as plain Python values, so that a worker with no
 # dataframe library in it can still read a column of text.
 arrow-array = "59"
 arrow-schema = "59"
-soma-next-study = { path = "../study" }
+somatize-study = { path = "../study" }
 # The verdict: numbers in, flags out, and no dependencies of its own.
-soma-next-health = { workspace = true }
+somatize-health = { workspace = true }
 # The plan travels to Python as data so that whoever draws it does not have
 # to parse a `Debug`. JSON and not MessagePack: the reader is `json.loads`,
 # which is stdlib, and nobody has to install anything to look at a shape.
@@ -43,4 +43,4 @@ pyo3 = { version = "0.24", features = ["extension-module"] }
 # repository of its own is a `git mv` and not a redesign.
 [features]
 default = ["remote"]
-remote = ["dep:soma-fabric-wire", "dep:soma-fabric-broker"]
+remote = ["dep:somatize-fabric-wire", "dep:somatize-fabric-broker"]

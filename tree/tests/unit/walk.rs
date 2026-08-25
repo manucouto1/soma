@@ -1,9 +1,9 @@
 //! Qué se pliega al dibujar, que es lo único de un recorrido que es una regla y
 //! no un recorrido.
 
-use soma_tree::journal::Verdict;
-use soma_tree::moves::Course;
-use soma_tree::walk::folds;
+use somatize_tree::journal::Verdict;
+use somatize_tree::moves::Course;
+use somatize_tree::walk::folds;
 
 #[test]
 fn se_pliega_lo_que_alguien_decidio_no_seguir() {

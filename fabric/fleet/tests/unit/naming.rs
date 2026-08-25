@@ -6,8 +6,8 @@
 //! that agreed with the reader instead of with the writer would pass for ever
 //! and mean nothing.
 
-use soma_fabric_fleet::{Fleet, Machine};
-use soma_next_store::{Local, Store};
+use somatize_fabric_fleet::{Fleet, Machine};
+use somatize_store::{Local, Store};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -34,7 +34,7 @@ fn reports(store: &dyn Store, id: &str) {
     meta.insert(0, ("fact".into(), kind.to_string()));
     let digest = store.put(&[]).expect("an empty blob");
     store
-        .bind(&soma_fabric_wire::filed(id), &digest, meta)
+        .bind(&somatize_fabric_wire::filed(id), &digest, meta)
         .expect("a reading filed");
 }
 

@@ -5,8 +5,8 @@
 //! comes out the same, and that the failures are the ones with a name.
 
 use crate::tempdir;
-use soma_next_core::{Keeper, Key, Value};
-use soma_next_store::{Cache, Local, Store};
+use somatize_core::{Keeper, Key, Value};
+use somatize_store::{Cache, Local, Store};
 
 /// A cache over a store nobody else is using.
 fn cache() -> (Local, tempdir::Dir) {

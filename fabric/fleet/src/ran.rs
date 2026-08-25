@@ -29,7 +29,7 @@
 //! blob.
 
 use serde::Serialize;
-use soma_next_store::{Bound, Store, StoreError};
+use somatize_store::{Bound, Store, StoreError};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Where a `Recorder` writes.

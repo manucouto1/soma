@@ -1,10 +1,10 @@
 //! The names a graph writes, and what each of them resolves to.
 
-use soma_fabric_fleet::{Listed, Listing, Trouble};
+use somatize_fabric_fleet::{Listed, Listing, Trouble};
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 
-fn nobody() -> BTreeMap<String, soma_fabric_fleet::Host> {
+fn nobody() -> BTreeMap<String, somatize_fabric_fleet::Host> {
     BTreeMap::new()
 }
 
@@ -133,7 +133,10 @@ fn a_name_nobody_has_met_is_listed_with_no_machine_behind_it() {
 fn a_name_somebody_has_met_carries_what_that_machine_calls_itself() {
     let mut paper = Listing::default();
     paper.add(Listed::at("w1", "node3:7000")).expect("listed");
-    let met = BTreeMap::from([("node3-4127".to_string(), soma_fabric_fleet::Host::new("w1"))]);
+    let met = BTreeMap::from([(
+        "node3-4127".to_string(),
+        somatize_fabric_fleet::Host::new("w1"),
+    )]);
 
     let wires = paper.wires(&met).expect("grouped");
 

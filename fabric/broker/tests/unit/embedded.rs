@@ -4,7 +4,7 @@
 //! and that is the right proportion: what it answers is four lines of `match`,
 //! while a thread that dies quietly is a client that waits forever.
 
-use soma_fabric_broker::{
+use somatize_fabric_broker::{
     Ask, Embedded, Endpoint, Host, Identity, Needs, PROTOCOL, Path, Reply, SlotId, Unanswered,
 };
 use std::sync::atomic::AtomicUsize;

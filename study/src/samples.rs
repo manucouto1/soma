@@ -16,14 +16,14 @@ use std::fmt;
 /// Built up, because most cuts need only the count:
 ///
 /// ```
-/// use soma_next_study::Samples;
+/// use somatize_study::Samples;
 ///
 /// let plain = Samples::of(100);
 /// let labelled = Samples::of(6).by_class(vec![0, 0, 1, 1, 0, 1])?;
 /// let both = Samples::of(6)
 ///     .by_class(vec![0, 0, 1, 1, 0, 1])?
 ///     .in_groups(vec![7, 7, 8, 8, 9, 9])?;
-/// # Ok::<(), soma_next_study::SamplesError>(())
+/// # Ok::<(), somatize_study::SamplesError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Samples {

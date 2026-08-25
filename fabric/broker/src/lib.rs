@@ -49,4 +49,4 @@ pub use session::Session;
 
 // Re-exported because it is this conversation's subject: a `Reach` names one,
 // and whoever answers has to hold the same type the engine placed.
-pub use soma_next_core::Host;
+pub use somatize_core::Host;

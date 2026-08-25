@@ -1,6 +1,6 @@
 //! Judged against itself: it is not going anywhere.
 
-use soma_next_study::{Goal, Patience, Reason, Verdict};
+use somatize_study::{Goal, Patience, Reason, Verdict};
 
 fn patience(steps: usize, min_delta: f64, goal: Goal) -> Patience {
     Patience {

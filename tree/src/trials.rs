@@ -47,7 +47,7 @@
 //! el rango, que sí es cierto sin saber la dirección.
 
 use serde::{Deserialize, Serialize};
-use soma_next_store::{Digest, Store};
+use somatize_store::{Digest, Store};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -301,7 +301,7 @@ fn numbered(name: &str, under: &str) -> Option<(u32, u32)> {
     Some((trial.parse().ok()?, attempt.parse().ok()?))
 }
 
-fn beside<'a>(meta: &'a soma_next_store::Meta, what: &str) -> Option<&'a str> {
+fn beside<'a>(meta: &'a somatize_store::Meta, what: &str) -> Option<&'a str> {
     meta.iter()
         .find(|(said, _)| said == what)
         .map(|(_, value)| value.as_str())
@@ -309,7 +309,7 @@ fn beside<'a>(meta: &'a soma_next_store::Meta, what: &str) -> Option<&'a str> {
 
 #[derive(Debug)]
 pub enum Trouble {
-    Store(soma_next_store::StoreError),
+    Store(somatize_store::StoreError),
     Garbled(String),
 }
 

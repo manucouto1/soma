@@ -1,7 +1,7 @@
 //! What is remembered about each node, and what may honestly be kept.
 
 use crate::doubles::Add;
-use soma_next_core::{Graph, Memory, MemoryError, cacheable, node};
+use somatize_core::{Graph, Memory, MemoryError, cacheable, node};
 
 /// `a >> b >> c`, which is the shape the prefix rule is about.
 fn chain() -> Graph {

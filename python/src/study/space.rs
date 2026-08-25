@@ -3,7 +3,7 @@
 use super::{hashed, to_py_err};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
-use soma_next_study::{Dimension, Point, Setting, Space};
+use somatize_study::{Dimension, Point, Setting, Space};
 
 /// `soma_next.study.Space` — what is being searched over.
 ///

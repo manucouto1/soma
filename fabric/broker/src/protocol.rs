@@ -57,7 +57,7 @@
 
 use crate::Path;
 use serde::{Deserialize, Serialize};
-use soma_next_core::Host;
+use somatize_core::Host;
 use std::fmt;
 use std::time::Duration;
 

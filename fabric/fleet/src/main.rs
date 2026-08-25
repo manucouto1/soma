@@ -1,19 +1,19 @@
-//! `soma-fabric-fleet` — serve the fleet, or print it.
+//! `somatize-fabric-fleet` — serve the fleet, or print it.
 //!
 //! Two ways in for the same answer, which is the point: the terminal and the
 //! browser read the same function, so they cannot come to disagree about which
 //! machines are there.
 
 use clap::{Parser, Subcommand};
-use soma_fabric_fleet::{Fleet, Serving, routes, seed};
-use soma_next_store::{Local, Store};
+use somatize_fabric_fleet::{Fleet, Serving, routes, seed};
+use somatize_store::{Local, Store};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
-    name = "soma-fabric-fleet",
+    name = "somatize-fabric-fleet",
     about = "Where the workers are, and what they are doing."
 )]
 struct Cli {
@@ -114,7 +114,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 listing.display()
             );
             println!(
-                "Mirarlo: soma-fabric-fleet serve --store {store} --listing {}",
+                "Mirarlo: somatize-fabric-fleet serve --store {store} --listing {}",
                 listing.display()
             );
             Ok(())

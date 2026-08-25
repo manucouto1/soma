@@ -1,7 +1,7 @@
 //! The plain cut, and everything the shuffle is and is not.
 
 use crate::invariants::{is_a_partition, is_ordered};
-use soma_next_study::{KFold, PartitionError, Samples};
+use somatize_study::{KFold, PartitionError, Samples};
 
 #[test]
 fn k_folds_are_a_partition_of_the_samples() {

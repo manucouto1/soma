@@ -1,5 +1,5 @@
 [package]
-name = "soma-next-core"
+name = "somatize-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

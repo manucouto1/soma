@@ -21,7 +21,7 @@
 //! tensor weighs written down is one question whether the bytes are going to a
 //! directory or down a socket. So there is no second type here for it —
 //! `Packing::over(keeper, &Codecs)` is the core's, written once for whoever
-//! has a codec, and `soma_next_store` still never learns Python exists.
+//! has a codec, and `somatize_store` still never learns Python exists.
 //!
 //! What a packed opaque looks like — the shape itself lives in the core,
 //! beside the trait, so that what this side writes and what `data/` writes are
@@ -46,9 +46,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
-use soma_next_core::Value;
-use soma_next_core::{Codec, CodecError, anything_written, as_written, written_down};
-use soma_next_data::{Frame, Ipc};
+use somatize_core::Value;
+use somatize_core::{Codec, CodecError, anything_written, as_written, written_down};
+use somatize_data::{Frame, Ipc};
 
 /// What is registered, by the name it was registered under: `kind → (type,
 /// dump, load)`.

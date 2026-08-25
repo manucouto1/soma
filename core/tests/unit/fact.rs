@@ -1,6 +1,6 @@
 //! The vocabulary of level 1: what a fact says, and how it is written down.
 
-use soma_next_core::{Device, Fact, Host, Key, NodeId};
+use somatize_core::{Device, Fact, Host, Key, NodeId};
 use std::time::Duration;
 
 /// The fields of a flattened fact, as a map, for asserting on one at a time.

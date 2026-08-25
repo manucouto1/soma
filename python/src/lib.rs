@@ -1,6 +1,6 @@
 //! The seam with Python. It translates, it does not decide.
 //!
-//! The topology and the contract live in `soma_next_core`, which does not know
+//! The topology and the contract live in `somatize_core`, which does not know
 //! there is Python behind it. What this crate adds is the one thing the core
 //! cannot have: the id → Python object map, and the two calling conventions. If
 //! a domain rule ends up written here, it is in the wrong place.
@@ -25,11 +25,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 #[cfg(feature = "remote")]
-use soma_next_core::{
+use somatize_core::{
     Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Keys, Memory,
     MemoryError, NodeId, Packing, Placement, RunError, cacheable, compile, distribute,
 };
-use soma_next_store::Cache;
+use somatize_store::Cache;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -78,7 +78,7 @@ fn stamped(said: &Bound<'_, PyAny>) -> PyResult<Vec<(String, String)>> {
     map.iter()
         .map(
             |(what, told)| match (what.extract::<String>(), told.extract::<String>()) {
-                (Ok(what), Ok(told)) => match soma_next_core::OURS.contains(&what.as_str()) {
+                (Ok(what), Ok(told)) => match somatize_core::OURS.contains(&what.as_str()) {
                     // Refused and not quietly dropped. Somebody stamping `node`
                     // believes they are saying something, and a value that came
                     // back saying another node produced it would be the one kind of
@@ -86,7 +86,7 @@ fn stamped(said: &Bound<'_, PyAny>) -> PyResult<Vec<(String, String)>> {
                     true => Err(PyValueError::new_err(format!(
                         "`{what}` is written by the engine itself, so `stamping` cannot set it: \
                      {} are its own. Anything else is yours",
-                        soma_next_core::OURS.join(", "),
+                        somatize_core::OURS.join(", "),
                     ))),
                     false => Ok((what, told)),
                 },
@@ -420,7 +420,7 @@ impl PyGraph {
     ) -> PyResult<String> {
         let start = match input {
             Some(obj) => value::from_py(obj)?,
-            None => soma_next_core::Value::Null,
+            None => somatize_core::Value::Null,
         };
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
         let plan = distribute(&plan, &self.placement);
@@ -483,7 +483,7 @@ impl PyGraph {
     ) -> PyResult<PyObject> {
         let start = match input {
             Some(obj) => value::from_py(obj)?,
-            None => soma_next_core::Value::Null,
+            None => somatize_core::Value::Null,
         };
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
         let plan = distribute(&plan, &self.placement);
@@ -492,7 +492,7 @@ impl PyGraph {
         // same one that was provisioned a moment ago, because a second handle
         // for a host would carry the catalog nobody dispatches through.
         #[cfg(feature = "remote")]
-        let met: Vec<(Host, std::sync::Arc<soma_fabric_broker::Reaching>)> = match broker {
+        let met: Vec<(Host, std::sync::Arc<somatize_fabric_broker::Reaching>)> = match broker {
             None => Vec::new(),
             Some(obj) => {
                 let broker = obj.downcast::<broker::PyBroker>().map_err(|_| {

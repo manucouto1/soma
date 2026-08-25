@@ -5,8 +5,8 @@
 //! one of them back through the trait. If a layout moves, these fail loudly
 //! rather than seeding a store nobody can read.
 
-use soma_fabric_fleet::{Fleet, Listing, Standing, ran, runs, seed};
-use soma_next_store::{Local, Store};
+use somatize_fabric_fleet::{Fleet, Listing, Standing, ran, runs, seed};
+use somatize_store::{Local, Store};
 use tempfile::TempDir;
 
 fn sown() -> (TempDir, Local) {

@@ -1,6 +1,6 @@
 //! Every combination, and then nothing.
 
-use soma_next_study::{Dimension, Grid, Setting, Space};
+use somatize_study::{Dimension, Grid, Setting, Space};
 
 fn space() -> Space {
     Space::new()

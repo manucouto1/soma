@@ -4,7 +4,7 @@
 //! validated by the core, the **existence** only torch knows. `cuda:7` compiles
 //! on a machine with a single GPU; that it does not exist shows at run time.
 
-use soma_next_core::{Device, DeviceError};
+use somatize_core::{Device, DeviceError};
 
 fn read(s: &str) -> Result<Device, DeviceError> {
     s.parse()

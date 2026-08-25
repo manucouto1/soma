@@ -27,7 +27,7 @@
 //! stays typed where the compiler can help, and what crosses to another
 //! vocabulary crosses as the flattest thing there is.
 //!
-//! [`Meta`]: https://docs.rs/soma-next-store
+//! [`Meta`]: https://docs.rs/somatize-store
 //!
 //! # Durations and not instants
 //!

@@ -2,7 +2,7 @@
 //!
 //! The second hole of this crate, next to [`Provision`](crate::Provision), and
 //! for the same reason: a wire format is ours, and what a
-//! [`Value::Opaque`](soma_next_core::Value::Opaque) *carries* never is. One
+//! [`Value::Opaque`](somatize_core::Value::Opaque) *carries* never is. One
 //! holds a live Python object; another will hold something else. Neither is
 //! something this crate can learn without learning an interpreter.
 //!
@@ -15,7 +15,7 @@
 //!
 //! # It does not move the frontier, it moves what falls on which side
 //!
-//! [`Value::travels`](soma_next_core::Value::travels) does not change and stays
+//! [`Value::travels`](somatize_core::Value::travels) does not change and stays
 //! true: what comes out of `packed` **does** travel, being maps and bytes. A
 //! codec does not relax the limit — it turns a value that could not cross into
 //! one that can, before anybody asks. The frontier goes from "the variant" to
@@ -38,9 +38,9 @@
 //! Going **out from here**, a value nobody can write down is an error: somebody
 //! over there is waiting for it and there is no second answer. Coming **back**,
 //! it is left behind exactly as before —
-//! [`Outcome::travelling`](soma_next_core::Outcome::travelling) — and named by
+//! [`Outcome::travelling`](somatize_core::Outcome::travelling) — and named by
 //! `RunError::Lost` if anybody reads it. And unlike a
-//! [`Keeper`](soma_next_core::Keeper), a codec that fails **does** stop the run:
+//! [`Keeper`](somatize_core::Keeper), a codec that fails **does** stop the run:
 //! a cache that cannot answer recomputes, and a wire that cannot carry has
 //! nothing to fall back on.
 

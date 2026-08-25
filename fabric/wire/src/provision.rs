@@ -20,7 +20,7 @@
 //! Hence the client **identifies itself** in the greeting: refusing on connect,
 //! with both versions in front of you, is cheaper than anything afterwards.
 
-use soma_next_core::Catalog;
+use somatize_core::Catalog;
 use std::fmt;
 
 /// Knows how to turn an artifact into a catalog.

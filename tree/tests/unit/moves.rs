@@ -4,8 +4,8 @@
 //! personas escribiendo a la vez obtienen dos movimientos, y eso es una
 //! afirmación sobre cómo se comporta un store bajo dos escritores.
 
-use soma_next_store::Local;
-use soma_tree::moves::{Cited, Course, Kind, Move, Moves, Said, Says, Scope, Standing};
+use somatize_store::Local;
+use somatize_tree::moves::{Cited, Course, Kind, Move, Moves, Said, Says, Scope, Standing};
 
 fn somewhere() -> (tempfile::TempDir, Local) {
     let at = tempfile::tempdir().expect("un directorio temporal");

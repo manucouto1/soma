@@ -1,7 +1,7 @@
 //! Both constraints at once, which is where they stop composing cleanly.
 
 use crate::invariants::is_a_partition;
-use soma_next_study::{PartitionError, Samples, StratifiedGrouped};
+use somatize_study::{PartitionError, Samples, StratifiedGrouped};
 
 #[test]
 fn the_groups_stay_whole_and_the_classes_come_out_as_even_as_that_allows() {

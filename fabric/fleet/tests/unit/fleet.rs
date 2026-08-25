@@ -1,7 +1,7 @@
 //! Everything that is out there, once — and the rules the answer carries.
 
-use soma_fabric_fleet::{Fleet, Machine, Standing};
-use soma_next_store::{Local, Store};
+use somatize_fabric_fleet::{Fleet, Machine, Standing};
+use somatize_store::{Local, Store};
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -18,7 +18,7 @@ fn reports(store: &dyn Store, machine: Machine) {
     meta.insert(0, ("fact".into(), kind.to_string()));
     let digest = store.put(&[]).expect("an empty blob");
     store
-        .bind(&soma_fabric_wire::filed(&machine.id), &digest, meta)
+        .bind(&somatize_fabric_wire::filed(&machine.id), &digest, meta)
         .expect("a reading filed");
 }
 
@@ -43,7 +43,10 @@ fn the_prefix_a_scan_filters_on_is_the_one_the_wire_files_under() {
 
     let fleet = Fleet::read(&store, 90, 0).expect("the fleet reads");
 
-    assert_eq!(soma_fabric_wire::filed("node3-4127"), "machine/node3-4127");
+    assert_eq!(
+        somatize_fabric_wire::filed("node3-4127"),
+        "machine/node3-4127"
+    );
     assert_eq!(fleet.seen.len(), 1, "the scan found nothing it filed");
     assert_eq!(fleet.seen[0].id, "node3-4127");
 }
@@ -199,8 +202,8 @@ fn a_store_with_nothing_in_it_is_an_empty_fleet_and_not_a_failure() {
 
 #[test]
 fn a_worker_reporting_for_real_turns_up_in_the_fleet() {
-    use soma_fabric_wire::Serving;
-    use soma_next_core::Catalog;
+    use somatize_core::Catalog;
+    use somatize_fabric_wire::Serving;
     use std::sync::mpsc::channel;
 
     let dir = TempDir::new().expect("a temporary directory");

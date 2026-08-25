@@ -28,8 +28,8 @@
 //! replaces the first and takes every activation with it.
 
 use crate::{Ask, Embedded, Endpoint, Host, Needs, Path, Reply, Unanswered};
-use soma_fabric_wire::{Artifact, Worker};
-use soma_next_core::{Codec, TransportError};
+use somatize_core::{Codec, TransportError};
+use somatize_fabric_wire::{Artifact, Worker};
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard};

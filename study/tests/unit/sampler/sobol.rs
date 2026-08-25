@@ -1,6 +1,6 @@
 //! Spread on purpose without a seam — and a table that has to be right.
 
-use soma_next_study::{Dimension, KNOBS, Point, Random, Setting, Sobol, Space};
+use somatize_study::{Dimension, KNOBS, Point, Random, Setting, Sobol, Space};
 use std::collections::HashSet;
 
 /// `knobs` knobs on the unit interval, so a value *is* its place in the space.

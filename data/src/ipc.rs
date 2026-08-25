@@ -1,8 +1,8 @@
 //! The codec for frames: Arrow IPC, in both directions.
 
 use crate::Frame;
-use soma_next_core::Value;
-use soma_next_core::{Codec, CodecError, as_written, written_down};
+use somatize_core::Value;
+use somatize_core::{Codec, CodecError, as_written, written_down};
 
 /// Writes frames down so they can be kept or sent, and reads them back.
 ///

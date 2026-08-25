@@ -1,7 +1,7 @@
 //! A k-fold over the groups, and why it takes no seed.
 
 use crate::invariants::{is_a_partition, is_ordered};
-use soma_next_study::{Grouped, PartitionError, Samples};
+use somatize_study::{Grouped, PartitionError, Samples};
 
 #[test]
 fn a_group_never_ends_up_on_both_sides() {

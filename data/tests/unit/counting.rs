@@ -4,7 +4,7 @@
 //! about **what was not read**: a version that costs no bytes, a dataset that
 //! is not opened twice. Neither can be asserted without counting.
 
-use soma_next_store::{Bound, Digest, Local, Meta, Store, StoreError};
+use somatize_store::{Bound, Digest, Local, Meta, Store, StoreError};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

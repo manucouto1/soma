@@ -2,7 +2,7 @@
 # A small investigation, from nothing to a judged line of exploration.
 #
 # Four commits, each a real kind of edit, and one of them wrong on purpose.
-# Run it and read what `soma-tree` says at each step; it takes about a minute
+# Run it and read what `somatize-tree` says at each step; it takes about a minute
 # and it is the fastest way to see what the tool is for.
 #
 #     examples/an-investigation.sh
@@ -84,7 +84,7 @@ git commit -qam "reentrenado el encoder, mismo codigo"
 
 if [ -n "$ONLY_BUILD" ]; then echo "$WHERE"; exit 0; fi
 
-SOMA_TREE="${SOMA_TREE_BIN:-soma-tree}"
+SOMA_TREE="${SOMA_TREE_BIN:-somatize-tree}"
 say() { printf '\n\033[1m── %s\033[0m\n\n' "$1"; }
 
 say "El paso 1: un argumento del constructor"

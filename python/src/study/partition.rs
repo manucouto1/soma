@@ -2,7 +2,7 @@
 
 use super::{hashed, to_py_err};
 use pyo3::prelude::*;
-use soma_next_study::{
+use somatize_study::{
     Grouped, KFold, Partition, Samples, Stratified, StratifiedGrouped, TimeSeries,
 };
 

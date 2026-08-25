@@ -1,6 +1,6 @@
 //! What a snapshot says about itself, and about another one.
 
-use soma_tree::snapshot::Snapshot;
+use somatize_tree::snapshot::Snapshot;
 
 fn built_against(said: &[(&str, &str)]) -> Snapshot {
     Snapshot {

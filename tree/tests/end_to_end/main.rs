@@ -109,8 +109,8 @@ fn an_investigation(python: &Path) -> tempfile::TempDir {
 }
 
 /// Runs the binary in that repository, and returns what it said.
-fn soma_tree(at: &Path, args: &[&str]) -> String {
-    let said = Command::new(env!("CARGO_BIN_EXE_soma-tree"))
+fn somatize_tree(at: &Path, args: &[&str]) -> String {
+    let said = Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
         .args(args)
         .arg("--repo")
         .arg(at)
@@ -121,7 +121,7 @@ fn soma_tree(at: &Path, args: &[&str]) -> String {
         .expect("the binary runs");
     assert!(
         said.status.code() != Some(2),
-        "soma-tree {args:?} could not run: {}",
+        "somatize-tree {args:?} could not run: {}",
         String::from_utf8_lossy(&said.stderr),
     );
     String::from_utf8_lossy(&said.stdout).into_owned()
@@ -129,7 +129,7 @@ fn soma_tree(at: &Path, args: &[&str]) -> String {
 
 /// What it said when it refused, which is stderr and not stdout.
 fn soma_tree_refusing(at: &Path, args: &[&str]) -> String {
-    let said = Command::new(env!("CARGO_BIN_EXE_soma-tree"))
+    let said = Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
         .args(args)
         .arg("--repo")
         .arg(at)
@@ -166,7 +166,7 @@ macro_rules! given {
 fn a_constructor_argument_moves_the_name_so_the_cache_misses() {
     given!(at);
 
-    let said = soma_tree(at, &["diff", "HEAD~3", "HEAD~2"]);
+    let said = somatize_tree(at, &["diff", "HEAD~3", "HEAD~2"]);
 
     assert!(said.contains("strict"), "{said}");
     assert!(said.contains("CHANGED"), "{said}");
@@ -186,7 +186,7 @@ fn the_body_of_a_forward_moves_no_name_and_the_cache_will_hit() {
     // line on stderr during a run; here it is said before paying for one.
     given!(at);
 
-    let said = soma_tree(at, &["diff", "HEAD~2", "HEAD~1"]);
+    let said = somatize_tree(at, &["diff", "HEAD~2", "HEAD~1"]);
 
     assert!(said.contains("embed"), "{said}");
     assert!(said.contains("STALE"), "{said}");
@@ -200,7 +200,7 @@ fn the_body_of_a_forward_moves_no_name_and_the_cache_will_hit() {
 fn what_reads_a_stale_answer_is_suspect_even_though_nobody_edited_it() {
     given!(at);
 
-    let said = soma_tree(at, &["diff", "HEAD~2", "HEAD~1"]);
+    let said = somatize_tree(at, &["diff", "HEAD~2", "HEAD~1"]);
 
     assert!(said.contains("SUSPECT"), "{said}");
     for under in ["strict", "loose", "vote"] {
@@ -214,7 +214,7 @@ fn retraining_is_another_trial_and_not_another_variant() {
     // rather than being one.
     given!(at);
 
-    let said = soma_tree(at, &["diff", "HEAD~1", "HEAD"]);
+    let said = somatize_tree(at, &["diff", "HEAD~1", "HEAD"]);
 
     assert!(said.contains("RESETTLED"), "{said}");
     assert!(
@@ -233,7 +233,7 @@ fn retraining_is_another_trial_and_not_another_variant() {
 fn a_walk_says_where_each_step_edited() {
     given!(at);
 
-    let said = soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     assert!(said.contains("edición: strict"), "{said}");
     assert!(said.contains("edición: embed"), "{said}");
@@ -250,7 +250,7 @@ fn a_walk_reaches_one_commit_past_its_range() {
     // steps, exactly as `git log -p` reaches past a range too.
     given!(at);
 
-    let said = soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     assert_eq!(said.matches('│').count(), 3, "{said}");
 }
@@ -260,12 +260,12 @@ fn a_walk_reaches_one_commit_past_its_range() {
 #[test]
 fn a_verdict_is_written_down_and_shows_up_in_the_walk() {
     given!(at);
-    soma_tree(
+    somatize_tree(
         at,
         &["verdict", "invalid", "HEAD~2", "-m", "the loader lied"],
     );
 
-    let said = soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     assert!(said.contains("[invalid]"), "{said}");
 }
@@ -277,11 +277,11 @@ fn changing_your_mind_does_not_erase_what_you_thought_before() {
     // being able to take it back is the reason `sound` exists at all: without
     // it a mistaken `invalid` would leave a whole subtree suspect for good.
     given!(at);
-    soma_tree(
+    somatize_tree(
         at,
         &["verdict", "invalid", "HEAD~2", "-m", "recall impossible"],
     );
-    soma_tree(
+    somatize_tree(
         at,
         &[
             "verdict",
@@ -292,12 +292,12 @@ fn changing_your_mind_does_not_erase_what_you_thought_before() {
         ],
     );
 
-    let said = soma_tree(at, &["show", "HEAD~2"]);
+    let said = somatize_tree(at, &["show", "HEAD~2"]);
 
     assert!(said.contains("recall impossible"), "{said}");
     assert!(said.contains("it was the split I read"), "{said}");
     assert!(
-        soma_tree(at, &["log", "HEAD~3..HEAD"]).contains("[sound]"),
+        somatize_tree(at, &["log", "HEAD~3..HEAD"]).contains("[sound]"),
         "and the last word is the one that counts",
     );
 }
@@ -305,11 +305,11 @@ fn changing_your_mind_does_not_erase_what_you_thought_before() {
 #[test]
 fn a_note_does_not_count_as_changing_your_mind() {
     given!(at);
-    soma_tree(at, &["verdict", "invalid", "HEAD~2", "-m", "no"]);
-    soma_tree(at, &["note", "HEAD~2", "-m", "recall was 0.61"]);
+    somatize_tree(at, &["verdict", "invalid", "HEAD~2", "-m", "no"]);
+    somatize_tree(at, &["note", "HEAD~2", "-m", "recall was 0.61"]);
 
     assert!(
-        soma_tree(at, &["log", "HEAD~3..HEAD"]).contains("[invalid]"),
+        somatize_tree(at, &["log", "HEAD~3..HEAD"]).contains("[invalid]"),
         "writing down what you saw is not a verdict",
     );
 }
@@ -321,12 +321,12 @@ fn doubt_reaches_a_commit_that_did_not_exist_when_it_was_cast() {
     // worked out from git when somebody asks, so a commit made afterwards is
     // marked the moment it exists and nobody goes back to write anything.
     given!(at);
-    soma_tree(
+    somatize_tree(
         at,
         &["verdict", "invalid", "HEAD~2", "-m", "the dataloader lied"],
     );
 
-    let said = soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     assert!(said.contains("[invalid]"), "{said}");
     assert_eq!(
@@ -339,9 +339,9 @@ fn doubt_reaches_a_commit_that_did_not_exist_when_it_was_cast() {
 #[test]
 fn having_looked_and_found_nothing_does_not_put_numbers_in_doubt() {
     given!(at);
-    soma_tree(at, &["verdict", "sound", "HEAD~2", "-m", "checked it"]);
+    somatize_tree(at, &["verdict", "sound", "HEAD~2", "-m", "checked it"]);
 
-    let said = soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     assert!(!said.contains("bajo algo inválido"), "{said}");
 }
@@ -366,8 +366,8 @@ fn asking_twice_gives_the_same_answer_and_touches_no_worktree() {
     // little — which is exactly the mistake this tool reports about caches.
     given!(at);
 
-    let once = soma_tree(at, &["log", "HEAD~3..HEAD"]);
-    let twice = soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    let once = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
+    let twice = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     assert_eq!(once, twice);
 }
@@ -377,7 +377,7 @@ fn no_worktree_is_left_behind() {
     // Not tidiness: git keeps a record of a worktree in the repository, and the
     // next `worktree add` on the same commit refuses.
     given!(at);
-    soma_tree(at, &["log", "HEAD~3..HEAD"]);
+    somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
     let listed = Command::new("git")
         .arg("-C")
@@ -397,7 +397,7 @@ fn no_worktree_is_left_behind() {
 fn a_revspec_that_names_nothing_is_said_out_loud() {
     given!(at);
 
-    let said = Command::new(env!("CARGO_BIN_EXE_soma-tree"))
+    let said = Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
         .args(["diff", "no-such-thing", "HEAD", "--repo"])
         .arg(at)
         .env("XDG_CACHE_HOME", at.join("cache"))
@@ -419,7 +419,7 @@ fn a_walk_with_nothing_typed_works_on_a_repository_of_any_length() {
     // have.
     given!(at);
 
-    let said = soma_tree(at, &["log"]);
+    let said = somatize_tree(at, &["log"]);
 
     assert!(said.contains("4 commits"), "{said}");
     assert!(!said.contains("revisión desconocida"), "{said}");
@@ -431,7 +431,7 @@ fn a_range_somebody_did_type_is_still_taken_at_their_word() {
     // commits they did not ask for.
     given!(at);
 
-    let said = Command::new(env!("CARGO_BIN_EXE_soma-tree"))
+    let said = Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
         .args(["log", "HEAD~40..HEAD", "--repo"])
         .arg(at)
         .env("XDG_CACHE_HOME", at.join("cache"))
@@ -451,7 +451,7 @@ fn every_branch_is_walked_and_not_only_the_one_checked_out() {
     let at = a_fan_of(3, &python);
     let at = at.path();
 
-    let said = soma_tree(at, &["log"]);
+    let said = somatize_tree(at, &["log"]);
 
     for which in 1..=3 {
         assert!(said.contains(&format!("variant {which}, step 2")), "{said}");
@@ -468,7 +468,7 @@ fn a_step_comes_from_a_parent_and_not_from_the_line_above_it() {
     let at = at.path();
 
     let walk: serde_json::Value =
-        serde_json::from_str(&soma_tree(at, &["log", "--json"])).expect("json");
+        serde_json::from_str(&somatize_tree(at, &["log", "--json"])).expect("json");
     let steps = walk["steps"].as_array().expect("steps");
 
     // Somebody has three steps going out of them, and that somebody is where
@@ -496,13 +496,13 @@ fn doubt_goes_down_a_branch_and_not_across_to_its_siblings() {
     given!(python, at);
     let at = a_fan_of(3, &python);
     let at = at.path();
-    soma_tree(
+    somatize_tree(
         at,
         &["verdict", "invalid", "variant-2~1", "-m", "the split lied"],
     );
 
     let walk: serde_json::Value =
-        serde_json::from_str(&soma_tree(at, &["log", "--json"])).expect("json");
+        serde_json::from_str(&somatize_tree(at, &["log", "--json"])).expect("json");
     let doubted: Vec<&str> = walk["stops"]
         .as_array()
         .expect("stops")
@@ -619,7 +619,7 @@ fn una_version_sin_ensayos_dice_donde_se_escriben() {
     // desde la máquina que corre el estudio, con este nombre.
     given!(at);
 
-    let said = soma_tree(at, &["trials", "HEAD"]);
+    let said = somatize_tree(at, &["trials", "HEAD"]);
 
     assert!(said.contains("0 ensayos"), "{said}");
     assert!(said.contains("soma-next"), "{said}");
@@ -642,7 +642,7 @@ fn el_nombre_del_estudio_de_una_version_sale_del_commit() {
     .trim()
     .to_string();
 
-    let said = soma_tree(at, &["trials", "HEAD"]);
+    let said = somatize_tree(at, &["trials", "HEAD"]);
 
     assert!(said.contains(&format!("/{commit}")), "{said}");
 }
@@ -669,21 +669,21 @@ fn un_goal_que_no_dice_hacia_donde_se_rechaza_en_vez_de_ignorarse() {
 /// Abandona la línea de un commit, escribiendo la decisión como lo haría la
 /// vista: un intento que lo cita, y una decisión con ese intento por alcance.
 fn abandoned(at: &Path, commit: &str) {
-    let kept = soma_next_store::Local::at(at.join("store")).expect("un store");
+    let kept = somatize_store::Local::at(at.join("store")).expect("un store");
     // Leído del config y no del nombre del directorio: es lo que separa dos
     // investigaciones que comparten un store, y escribir bajo otro nombre deja
     // los movimientos donde nadie los lee — sin error, que es lo peor.
-    let tree = soma_tree::bench::Config::read(at)
+    let tree = somatize_tree::bench::Config::read(at)
         .expect("el config")
         .tree(at);
-    let moves = soma_tree::moves::Moves::of(tree, &kept);
+    let moves = somatize_tree::moves::Moves::of(tree, &kept);
     let a = moves
         .add(
-            soma_tree::moves::Kind::Attempt,
+            somatize_tree::moves::Kind::Attempt,
             "por aquí",
             "yo",
-            soma_tree::moves::Scope::everything(),
-            vec![soma_tree::moves::Cited {
+            somatize_tree::moves::Scope::everything(),
+            vec![somatize_tree::moves::Cited {
                 what: "commit".into(),
                 id: commit.into(),
             }],
@@ -692,12 +692,12 @@ fn abandoned(at: &Path, commit: &str) {
         .expect("el intento");
     moves
         .add(
-            soma_tree::moves::Kind::Decision,
+            somatize_tree::moves::Kind::Decision,
             "no lleva a ninguna parte",
             "yo",
-            soma_tree::moves::Scope::of(vec![a]),
+            somatize_tree::moves::Scope::of(vec![a]),
             Vec::new(),
-            Some(soma_tree::moves::Course::Abandon),
+            Some(somatize_tree::moves::Course::Abandon),
         )
         .expect("la decisión");
 }
@@ -708,7 +708,7 @@ fn una_linea_abandonada_se_pliega_y_dice_cuantos_esconde() {
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
 
-    let said = soma_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
 
     // No como fila propia. Nombrado en el paso que salió de él sí, y diciendo
     // que está podado: un hash que apunta a una fila que no se dibuja sería un
@@ -733,7 +733,7 @@ fn nada_se_borra_al_podar() {
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
 
-    let said = soma_tree(
+    let said = somatize_tree(
         at,
         &["log", "--all-lines", "--store", &store(at), "HEAD~3..HEAD"],
     );
@@ -754,7 +754,7 @@ fn quien_procesa_la_respuesta_la_recibe_entera() {
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
 
-    let said = soma_tree(
+    let said = somatize_tree(
         at,
         &["log", "--json", "--store", &store(at), "HEAD~3..HEAD"],
     );
@@ -774,7 +774,7 @@ fn un_commit_marcado_mal_no_se_pliega_aunque_su_linea_este_abandonada() {
     given!(at);
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
-    soma_tree(
+    somatize_tree(
         at,
         &[
             "verdict",
@@ -787,7 +787,7 @@ fn un_commit_marcado_mal_no_se_pliega_aunque_su_linea_este_abandonada() {
         ],
     );
 
-    let said = soma_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
 
     assert!(said.contains(&commit[..12]), "{said}");
 }
@@ -821,7 +821,7 @@ fn un_repositorio_sin_nada_que_construir_se_lee_igual() {
     given!(at);
     std::fs::write(at.join("soma-tree.toml"), "tree = \"terminada\"\n").expect("el config");
 
-    let said = soma_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
+    let said = somatize_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
 
     assert!(said.contains("sin sondeo"), "y dicho, no en blanco: {said}");
     assert!(

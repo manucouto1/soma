@@ -1,7 +1,7 @@
 //! Where each node runs, and what placing **does not** touch.
 
 use crate::doubles::Add;
-use soma_next_core::{Device, Host, Placement, compile, node};
+use somatize_core::{Device, Host, Placement, compile, node};
 
 #[test]
 fn a_map_from_node_to_place() {

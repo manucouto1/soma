@@ -1,6 +1,6 @@
 //! What a flag is called, and what it says to do about itself.
 
-use soma_next_health::Flag;
+use somatize_health::Flag;
 
 #[test]
 fn a_flag_that_counts_something_says_how_many() {

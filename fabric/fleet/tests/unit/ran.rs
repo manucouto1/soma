@@ -1,8 +1,8 @@
 //! One run, with the record turned the other way up.
 
 use serde_json::json;
-use soma_fabric_fleet::{ran, runs};
-use soma_next_store::{Local, Store};
+use somatize_fabric_fleet::{ran, runs};
+use somatize_store::{Local, Store};
 use tempfile::TempDir;
 
 fn store() -> (TempDir, Local) {

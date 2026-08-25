@@ -8,7 +8,7 @@
 //! run over a battery of topologies and not over one.
 
 use crate::doubles::Add;
-use soma_next_core::{
+use somatize_core::{
     Catalog, CompileError, Destination, Device, Graph, Host, NodeId, Placement, Plan, compile,
     distribute, node,
 };

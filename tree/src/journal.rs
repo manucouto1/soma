@@ -5,14 +5,14 @@
 //! A verdict is mutable — a line looks promising in the morning and is a dead
 //! end by six — and the obvious shape for that is a row somebody updates. It is
 //! the wrong one here. A store lives on NFS or in a bucket, and
-//! `soma_next_store` says why in as many words: *making an index the truth
+//! `somatize_store` says why in as many words: *making an index the truth
 //! would mean a single writer, and a single writer over NFS is exactly where
 //! this breaks*.
 //!
 //! So nothing is ever updated. Saying something is **claiming the next slot**
 //! under a commit, and what a commit's verdict *is* means the last one anybody
 //! claimed. Two machines saying something at the same moment both succeed, one
-//! after the other, because [`claim`](soma_next_store::Store::claim) either
+//! after the other, because [`claim`](somatize_store::Store::claim) either
 //! takes a name or finds it taken — and neither loses what the other wrote.
 //!
 //! # What is in the record and what is in the blob
@@ -45,7 +45,7 @@
 //! without anybody having gone back to write it down.
 
 use serde::{Deserialize, Serialize};
-use soma_next_store::{Digest, Meta, Store};
+use somatize_store::{Digest, Meta, Store};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -272,7 +272,7 @@ fn beside<'a>(meta: &'a Meta, what: &str) -> Option<&'a str> {
 
 #[derive(Debug)]
 pub enum Trouble {
-    Store(soma_next_store::StoreError),
+    Store(somatize_store::StoreError),
     /// Thirty-two slots taken while trying to use one. Either a great many
     /// people are talking about one commit at once, or something is wrong.
     Crowded {

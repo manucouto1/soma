@@ -1,6 +1,6 @@
 //! Which way is better, which no number says on its own.
 
-use soma_next_study::{Goal, GoalError};
+use somatize_study::{Goal, GoalError};
 
 #[test]
 fn better_is_strict_so_a_tie_is_never_worse() {

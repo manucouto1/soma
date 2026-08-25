@@ -13,11 +13,11 @@
 //! # A level of its own, and it stays out of the core
 //!
 //! A load average is not a fact about a graph. Putting it in
-//! [`Fact`](soma_next_core::Fact) as its own variant would be the engine
+//! [`Fact`](somatize_core::Fact) as its own variant would be the engine
 //! learning what a machine is, which is the mistake that keeps `loss` out of
 //! the core too. So the vocabulary lives **here**, where a host is already a
 //! thing, and it crosses as `(kind, pairs)` inside
-//! [`Fact::Said`](soma_next_core::Fact::Said) — the shape CU20 named as the one
+//! [`Fact::Said`](somatize_core::Fact::Said) — the shape CU20 named as the one
 //! place the levels meet.
 //!
 //! Which costs nothing on the wire. `Answer::Saw` already carries a `Fact`, the
@@ -33,7 +33,7 @@
 //! and this library keeps those in `health/` where they can be argued with
 //! against a record that has already been written.
 
-use soma_next_core::Fact;
+use somatize_core::Fact;
 use std::time::Duration;
 
 /// What one machine looks like right now.

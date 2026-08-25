@@ -45,8 +45,8 @@
 //! thing that knows when the rendezvous was granted.
 
 use crate::{Host, Session};
-use soma_fabric_wire::{Artifact, Worker};
-use soma_next_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
+use somatize_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
+use somatize_fabric_wire::{Artifact, Worker};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// One host, reached through a broker.

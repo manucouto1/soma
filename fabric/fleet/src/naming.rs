@@ -33,8 +33,8 @@
 //! question worth asking of a fleet that is working now is the last few
 //! anyway.
 
-use soma_next_core::Host;
-use soma_next_store::{Bound, Store, StoreError};
+use somatize_core::Host;
+use somatize_store::{Bound, Store, StoreError};
 use std::collections::BTreeMap;
 
 /// Where a `Recorder` writes. Known here because a reader has to look

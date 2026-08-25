@@ -4,7 +4,7 @@
 //! reason they are all in the message is that the ones nobody answers yet must
 //! not change shape when somebody does.
 
-use soma_fabric_broker::{Endpoint, Path, Reply, SessionId, SlotId};
+use somatize_fabric_broker::{Endpoint, Path, Reply, SessionId, SlotId};
 use std::path::PathBuf;
 
 fn round_trip(path: Path) {

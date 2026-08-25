@@ -2,7 +2,7 @@
 //!
 //! It translates and it does not decide: where to look next, how the samples are
 //! cut, and when a trial is not worth another epoch — all of it is in
-//! `soma_next_study`, which has no dependencies and does not know Python exists.
+//! `somatize_study`, which has no dependencies and does not know Python exists.
 //!
 //! What arrives here is counts and lists of small numbers, and what leaves is
 //! pairs of indices, a configuration, or a reason. That is the shape that lets
@@ -21,7 +21,7 @@ pub use space::{PyPoint, PySpace};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use soma_next_study::Goal;
+use somatize_study::Goal;
 
 /// Which way is better, from the word Python wrote.
 fn read(goal: &str) -> PyResult<Goal> {

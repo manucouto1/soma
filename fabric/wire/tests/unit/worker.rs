@@ -5,13 +5,13 @@
 //! that the plan arrives, and that what it produces comes back.
 
 use crate::doubles::{Add, Dir, catalog};
-use soma_fabric_wire::Worker;
-use soma_next_core::{
+use somatize_core::{
     Catalog, Device, Executor, Fact, Graph, Host, Memory, Placement, Plan, RunError, Value,
     Watcher, compile, distribute, node,
 };
-use soma_next_core::{Codec, CodecError};
-use soma_next_store::{Cache, Local};
+use somatize_core::{Codec, CodecError};
+use somatize_fabric_wire::Worker;
+use somatize_store::{Cache, Local};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -643,7 +643,7 @@ fn something_printed_on_the_workers_stdout_is_reported_and_does_not_hang() {
 // pickle, on purpose: what is being tested is the mechanism, and the mechanism
 // knows nothing about Python.
 
-use soma_fabric_wire::Artifact;
+use somatize_fabric_wire::Artifact;
 
 /// A worker that starts without a catalog.
 fn empty() -> Command {

@@ -14,7 +14,7 @@
 //!
 //! # Why the fields are restated rather than a `Machine` embedded
 //!
-//! A [`Machine`](soma_fabric_wire::Machine) already has a written form and it
+//! A [`Machine`](somatize_fabric_wire::Machine) already has a written form and it
 //! is `said()` — `(kind, pairs)`, the one place the levels meet. Deriving
 //! `Serialize` on it would give it a second one, and a type with two written
 //! forms is a type whose two readers eventually disagree. So this is a view of
@@ -22,8 +22,8 @@
 //! section's** and says so.
 
 use serde::Serialize;
-use soma_fabric_wire::Machine;
-use soma_next_core::Host;
+use somatize_core::Host;
+use somatize_fabric_wire::Machine;
 
 /// One machine that is writing readings, and what is known about it.
 #[derive(Debug, Clone, Serialize)]

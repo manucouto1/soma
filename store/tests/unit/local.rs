@@ -5,7 +5,7 @@
 //! in memory.
 
 use crate::tempdir;
-use soma_next_store::{Digest, Local, Meta, Store, StoreError};
+use somatize_store::{Digest, Local, Meta, Store, StoreError};
 
 /// A store of its own, in a directory nobody else is using.
 fn store() -> (Local, tempdir::Dir) {

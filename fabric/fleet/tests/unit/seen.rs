@@ -4,7 +4,7 @@
 //! a **pair** and not about a store: what it needs is a name, a reading and a
 //! bound, and all three fit in three lines.
 
-use soma_fabric_fleet::{Host, Machine, Seen, Standing};
+use somatize_fabric_fleet::{Host, Machine, Seen, Standing};
 use std::time::Duration;
 
 fn reading(id: &str) -> Machine {

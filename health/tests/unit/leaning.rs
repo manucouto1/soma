@@ -1,8 +1,8 @@
 //! What a model is leaning on, and the two ways that goes wrong.
 
-use soma_next_health::{Thresholds, leaning, shares};
+use somatize_health::{Thresholds, leaning, shares};
 
-fn drops(said: &[(&str, f64)]) -> Vec<soma_next_health::Contribution> {
+fn drops(said: &[(&str, f64)]) -> Vec<somatize_health::Contribution> {
     shares(
         &said
             .iter()

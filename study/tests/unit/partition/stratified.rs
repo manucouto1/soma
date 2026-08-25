@@ -1,7 +1,7 @@
 //! A k-fold inside each class, and the refusal sklearn turns into a warning.
 
 use crate::invariants::{is_a_partition, is_ordered};
-use soma_next_study::{KFold, PartitionError, Samples, Stratified};
+use somatize_study::{KFold, PartitionError, Samples, Stratified};
 
 #[test]
 fn every_class_keeps_its_share_in_every_fold() {

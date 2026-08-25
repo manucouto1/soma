@@ -8,7 +8,7 @@ use arrow_schema::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
-use soma_next_data::Frame;
+use somatize_data::Frame;
 
 /// The batch of columns a source answered with, as Python sees it.
 ///

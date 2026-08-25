@@ -8,14 +8,14 @@
 //! carries a real slice to it, because everything else in this file would pass
 //! just as happily if the wire were never opened at all.
 
-use soma_fabric_broker::{
-    Ask, Embedded, Endpoint, Host, Needs, PROTOCOL, Path, Reaching, Reply, Session, SlotId,
-};
-use soma_fabric_wire::Serving;
-use soma_next_core::{
+use somatize_core::{
     Catalog, Ctx, Executor, Host as CoreHost, Node, NodeError, Plan, Transport, Value, compile,
     distribute, node,
 };
+use somatize_fabric_broker::{
+    Ask, Embedded, Endpoint, Host, Needs, PROTOCOL, Path, Reaching, Reply, Session, SlotId,
+};
+use somatize_fabric_wire::Serving;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 
@@ -182,7 +182,7 @@ fn the_paths_the_negotiation_has_not_arrived_for_are_refused_by_name() {
             dir: "/mnt/cluster/scratch".into(),
         },
         Path::Relayed {
-            session: soma_fabric_broker::SessionId("s-1".into()),
+            session: somatize_fabric_broker::SessionId("s-1".into()),
         },
     ] {
         let (session, _heard) = noting(vec![(Host::new("w1"), path.clone())]);

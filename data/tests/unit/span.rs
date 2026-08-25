@@ -1,7 +1,7 @@
 //! The coordinate: what a graph is handed instead of the rows.
 
-use soma_next_core::Value;
-use soma_next_data::Span;
+use somatize_core::Value;
+use somatize_data::Span;
 
 #[test]
 fn a_span_comes_back_from_the_value_it_went_out_as() {

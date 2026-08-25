@@ -1630,52 +1630,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "soma-fabric-broker"
-version = "0.1.0"
-dependencies = [
- "rmp-serde",
- "serde",
- "soma-fabric-wire",
- "soma-next-core",
-]
-
-[[package]]
-name = "soma-fabric-fleet"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "serde",
- "serde_json",
- "soma-fabric-broker",
- "soma-fabric-wire",
- "soma-next-core",
- "soma-next-store",
- "tempfile",
- "tokio",
- "toml",
- "tower-http",
-]
-
-[[package]]
-name = "soma-fabric-wire"
-version = "0.1.0"
-dependencies = [
- "rmp-serde",
- "serde",
- "soma-next-core",
- "soma-next-store",
-]
-
-[[package]]
-name = "soma-next-core"
+name = "somatize-core"
 version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "soma-next-data"
+name = "somatize-data"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
@@ -1684,33 +1646,71 @@ dependencies = [
  "arrow-select",
  "bytes",
  "parquet",
- "soma-next-core",
- "soma-next-store",
+ "somatize-core",
+ "somatize-store",
 ]
 
 [[package]]
-name = "soma-next-health"
+name = "somatize-fabric-broker"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "somatize-core",
+ "somatize-fabric-wire",
+]
+
+[[package]]
+name = "somatize-fabric-fleet"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "serde",
+ "serde_json",
+ "somatize-core",
+ "somatize-fabric-broker",
+ "somatize-fabric-wire",
+ "somatize-store",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower-http",
+]
+
+[[package]]
+name = "somatize-fabric-wire"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "somatize-core",
+ "somatize-store",
+]
+
+[[package]]
+name = "somatize-health"
 version = "0.1.0"
 
 [[package]]
-name = "soma-next-python"
+name = "somatize-python"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
  "pyo3",
  "serde_json",
- "soma-fabric-broker",
- "soma-fabric-wire",
- "soma-next-core",
- "soma-next-data",
- "soma-next-health",
- "soma-next-store",
- "soma-next-study",
+ "somatize-core",
+ "somatize-data",
+ "somatize-fabric-broker",
+ "somatize-fabric-wire",
+ "somatize-health",
+ "somatize-store",
+ "somatize-study",
 ]
 
 [[package]]
-name = "soma-next-store"
+name = "somatize-store"
 version = "0.1.0"
 dependencies = [
  "rmp-serde",
@@ -1718,24 +1718,24 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "soma-next-core",
+ "somatize-core",
  "ureq",
 ]
 
 [[package]]
-name = "soma-next-study"
+name = "somatize-study"
 version = "0.1.0"
 
 [[package]]
-name = "soma-tree"
+name = "somatize-tree"
 version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
  "serde",
  "serde_json",
- "soma-next-core",
- "soma-next-store",
+ "somatize-core",
+ "somatize-store",
  "tempfile",
  "tokio",
  "toml",

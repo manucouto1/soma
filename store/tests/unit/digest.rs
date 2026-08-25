@@ -1,6 +1,6 @@
 //! What identifies some bytes.
 
-use soma_next_store::Digest;
+use somatize_store::Digest;
 
 #[test]
 fn the_same_bytes_give_the_same_digest() {

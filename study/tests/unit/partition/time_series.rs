@@ -1,6 +1,6 @@
 //! Growing prefixes: the one scheme that is deliberately not a partition.
 
-use soma_next_study::{PartitionError, Samples, TimeSeries};
+use somatize_study::{PartitionError, Samples, TimeSeries};
 
 #[test]
 fn it_never_trains_on_its_own_future() {

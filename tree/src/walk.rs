@@ -12,7 +12,7 @@ use crate::revision;
 use crate::snapshot::{Probing, Snapshot};
 use crate::trials::{Goal, Tally, Trials};
 use serde::Serialize;
-use soma_next_store::Store;
+use somatize_store::Store;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 

@@ -7,8 +7,8 @@
 //! el que hay en el disco de nadie. El formato está documentado en
 //! `study/_run.py`, y esto es una copia de esa documentación que se ejecuta.
 
-use soma_next_store::{Local, Store};
-use soma_tree::trials::{Goal, Trials};
+use somatize_store::{Local, Store};
+use somatize_tree::trials::{Goal, Trials};
 
 fn somewhere() -> (tempfile::TempDir, Local) {
     let at = tempfile::tempdir().expect("un directorio temporal");

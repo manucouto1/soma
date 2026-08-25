@@ -1,5 +1,5 @@
 [package]
-name = "soma-next-store"
+name = "somatize-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 # The direction is core <- store, never the other way: the core stays with no
 # dependencies at all, and what knows how to hash and where bytes live is a
 # library.
-soma-next-core = { workspace = true, features = ["serde"] }
+somatize-core = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 # The records are JSON on purpose: what is stored has to be readable with `cat`,
 # and that was a requirement before it was a format.
@@ -28,13 +28,13 @@ ureq = { version = "3", optional = true }
 [features]
 # Off by default: a bucket drags in TLS and an XML parser, some eighty crates,
 # and a directory needs none of it. The same shape as the core's optional
-# `serde` — `cargo build -p soma-next-store` still compiles with neither.
+# `serde` — `cargo build -p somatize-store` still compiles with neither.
 s3 = ["dep:rusty-s3", "dep:ureq"]
 
 [dev-dependencies]
 # The tests are another crate and see only the public API — including the core's
 # `Keeper`, which is what this one implements.
-soma-next-core = { workspace = true }
+somatize-core = { workspace = true }
 
 [[test]]
 name = "unit"

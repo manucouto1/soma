@@ -6,7 +6,7 @@ mod patience;
 mod percentile;
 mod threshold;
 
-use soma_next_study::{Goal, Patience, Percentile, Pruner, Reason, Threshold, Verdict};
+use somatize_study::{Goal, Patience, Percentile, Pruner, Reason, Threshold, Verdict};
 
 fn one_of_each() -> Vec<Pruner> {
     vec![

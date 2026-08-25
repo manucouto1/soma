@@ -5,7 +5,7 @@
 //! text it was given, because a `Keeper` on one machine and a `Keeper` on
 //! another have to agree on it letter for letter.
 
-use soma_next_core::Key;
+use somatize_core::Key;
 use std::collections::HashMap;
 
 #[test]

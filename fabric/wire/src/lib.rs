@@ -1,7 +1,7 @@
 //! Carrying a slice of plan to another process, and bringing back what it
 //! produced.
 //!
-//! It is the first implementation of [`Transport`](soma_next_core::Transport),
+//! It is the first implementation of [`Transport`](somatize_core::Transport),
 //! and it lives **outside** the core for the same reason `python/` does: the
 //! core provides the hole and depends on nobody. Here there are pipes, child
 //! processes and a byte format, which are three things a core has no business
@@ -46,7 +46,7 @@
 //! business of whoever stands it up, and putting it in here cost the original
 //! soma 420 lines of environment manager and a hot `pip install`.
 //!
-//! And not a [`Value::Opaque`](soma_next_core::Value::Opaque), which carries
+//! And not a [`Value::Opaque`](somatize_core::Value::Opaque), which carries
 //! something that only exists in its own process: it fails at encoding time,
 //! with the host in front of you. See [`protocol`].
 
@@ -71,4 +71,4 @@ pub use worker::Worker;
 // Re-exported because it is part of the protocol's vocabulary: whoever
 // implements a `Provision` or reads an `Answer::Done` needs it, and hunting for
 // it in another crate helps nobody.
-pub use soma_next_core::Outcome;
+pub use somatize_core::Outcome;

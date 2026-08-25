@@ -28,10 +28,10 @@
 //! mechanism is not a Python one** — what travels is bytes this crate does not
 //! look at, and whoever interprets them can be anyone.
 
-use soma_fabric_wire::{Provision, ProvisionError, Provisioned, Serving};
-use soma_next_core::{Catalog, Ctx, Node, NodeError, Value};
-use soma_next_core::{Codec, CodecError};
-use soma_next_store::{Cache, Local};
+use somatize_core::{Catalog, Ctx, Node, NodeError, Value};
+use somatize_core::{Codec, CodecError};
+use somatize_fabric_wire::{Provision, ProvisionError, Provisioned, Serving};
+use somatize_store::{Cache, Local};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

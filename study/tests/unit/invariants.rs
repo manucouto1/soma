@@ -5,7 +5,7 @@
 //! held out it does not train. The only scheme this is deliberately not true of
 //! is `TimeSeries`, and its own tests say so.
 
-use soma_next_study::Fold;
+use somatize_study::Fold;
 
 /// Each index held out exactly once across the folds, and never held out and
 /// training at the same time.

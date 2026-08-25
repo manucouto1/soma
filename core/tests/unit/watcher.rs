@@ -5,7 +5,7 @@
 //! purpose: a value arrives when it is over, and a fact arrives when it happens.
 
 use crate::doubles::{Add, Cable, EachOne, Fail, Journal, Mirror, Notebook, Told, Witness};
-use soma_next_core::{
+use somatize_core::{
     Catalog, Executor, Fact, Graph, Host, NodeId, Placement, Plan, Value, compile, distribute, node,
 };
 use std::sync::Arc;

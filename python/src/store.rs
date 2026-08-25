@@ -14,7 +14,7 @@
 //! | [`put`](PyStore::put) / [`get`](PyStore::get) / [`bind`](PyStore::bind) / [`resolve`](PyStore::resolve) | **bytes** | the store exactly as Rust sees it |
 //! | [`keep`](PyStore::keep) / [`recall`](PyStore::recall) | **values**, tensors included | whoever has something to keep and not bytes |
 //!
-//! The first four are `soma_next_store::Store`, one for one, and they invent no
+//! The first four are `somatize_store::Store`, one for one, and they invent no
 //! vocabulary. The last two are `Keeper`'s, which is also not new, and they are
 //! there because the thing this was opened for — an export — is a map of tensors
 //! and not bytes. Without them everybody writes their own `torch.save`, and the
@@ -35,8 +35,8 @@ use pyo3::types::{PyBytes, PyDict};
 // The store's record and PyO3's smart pointer are both called `Bound`, and one
 // of them has to give: two same-named types in scope is the same trap the
 // project's rules warn about for traits, one level down.
-use soma_next_store::Bound as Record;
-use soma_next_store::{
+use somatize_store::Bound as Record;
+use somatize_store::{
     Bucket, Credentials, Digest, Local, Meta, Store, UrlStyle, bytes_of, value_of,
 };
 use std::sync::Arc;
@@ -284,7 +284,7 @@ fn as_meta(meta: Option<&Bound<'_, PyDict>>) -> PyResult<Meta> {
         })
 }
 
-fn failed(e: soma_next_store::StoreError) -> PyErr {
+fn failed(e: somatize_store::StoreError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 

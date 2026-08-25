@@ -28,7 +28,7 @@
 //! greying it out.
 
 use serde::{Deserialize, Serialize};
-use soma_fabric_broker::{Embedded, Endpoint, Host, Path as Reach, Session};
+use somatize_fabric_broker::{Embedded, Endpoint, Host, Path as Reach, Session};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;

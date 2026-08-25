@@ -1,6 +1,6 @@
 //! What is known about the samples, and the one thing that can be wrong about it.
 
-use soma_next_study::{Samples, SamplesError};
+use somatize_study::{Samples, SamplesError};
 
 #[test]
 fn most_cuts_only_need_the_count() {

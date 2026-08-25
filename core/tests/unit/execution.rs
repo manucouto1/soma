@@ -4,7 +4,7 @@ use crate::doubles::{
     Add, Anything, Cable, EachOne, Fail, Immediate, Journal, Ledger, Mean, MeetingPoint, Mirror,
     Miscounts, Notebook, Opaquely, Panics, Rendezvous, Told, Ubiquitous, Witness,
 };
-use soma_next_core::{
+use somatize_core::{
     Catalog, Ctx, Device, Executor, Graph, Host, Key, Keys, Memory, Node, NodeError, NodeId,
     Outcome, Placement, Plan, RunError, Value, compile, distribute, node,
 };
@@ -679,7 +679,7 @@ fn what_runs_away_still_counts_as_a_leaf() {
 
 // ── What crosses over to a transport, and what comes back ──
 //
-// No processes: that belongs to `soma-next-transport`. What is pinned down here
+// No processes: that belongs to `somatize-fabric-wire`. What is pinned down here
 // is the core's seam — what gets sent, what comes back and where it is merged.
 
 /// The same graph built twice: one for here, one for "there".
@@ -814,7 +814,7 @@ fn whatever_the_transport_says_is_attributed_to_the_host() {
         err,
         RunError::Transport {
             host: Host::new("there"),
-            source: soma_next_core::TransportError::new("the network went down"),
+            source: somatize_core::TransportError::new("the network went down"),
         }
     );
     let said = err.to_string();
@@ -1612,7 +1612,7 @@ fn and_it_says_so_rather_than_leaving_a_hole_in_the_record() {
     assert!(
         told.all().iter().any(|fact| matches!(
             fact,
-            soma_next_core::Fact::Spared { node } if node.as_str() == "encoder"
+            somatize_core::Fact::Spared { node } if node.as_str() == "encoder"
         )),
         "it has to say which one",
     );

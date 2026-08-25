@@ -1,7 +1,7 @@
 //! The DSL: declaring the graph as an expression.
 
 use crate::doubles::{Add, Immediate, Mean};
-use soma_next_core::{Executor, GraphError, NodeId, Plan, Value, cacheable, compile, node};
+use somatize_core::{Executor, GraphError, NodeId, Plan, Value, cacheable, compile, node};
 
 fn number(v: &Value) -> f64 {
     let Value::Number(x) = v else {

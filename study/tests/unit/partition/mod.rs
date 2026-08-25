@@ -11,7 +11,7 @@ mod stratified_grouped;
 mod time_series;
 
 use crate::invariants::is_a_partition;
-use soma_next_study::{
+use somatize_study::{
     Grouped, KFold, Partition, PartitionError, Samples, Stratified, StratifiedGrouped, TimeSeries,
 };
 

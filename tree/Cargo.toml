@@ -1,24 +1,24 @@
 [package]
-name = "soma-tree"
+name = "somatize-tree"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "What an edit did to a graph, said before anybody runs it."
 
 [lib]
-name = "soma_tree"
+name = "somatize_tree"
 path = "src/lib.rs"
 
 [[bin]]
-name = "soma-tree"
+name = "somatize-tree"
 path = "src/main.rs"
 
 [dependencies]
 # For `Key` and `NodeId`, which arrive as the engine's own serde form. Nothing
 # else of the core is needed here: this reads what a probe wrote down, and the
 # probe is the only thing that ever holds a graph.
-soma-next-core = { workspace = true, features = ["serde"] }
-soma-next-store = { workspace = true }
+somatize-core = { workspace = true, features = ["serde"] }
+somatize-store = { workspace = true }
 serde = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

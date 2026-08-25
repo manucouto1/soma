@@ -6,10 +6,10 @@
 //! biblioteca haría que los dos se pusieran de acuerdo en cualquier formato,
 //! incluido uno que nadie tiene guardado.
 
-use soma_next_core::Key;
-use soma_next_store::{Local, Store, name_of};
-use soma_tree::data::{How, under};
-use soma_tree::snapshot::Snapshot;
+use somatize_core::Key;
+use somatize_store::{Local, Store, name_of};
+use somatize_tree::data::{How, under};
+use somatize_tree::snapshot::Snapshot;
 use std::collections::HashMap;
 
 fn somewhere() -> (tempfile::TempDir, Local) {

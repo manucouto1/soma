@@ -3,7 +3,7 @@
 //! Note that none of them declares what "kind" it is: what tells them apart is
 //! what they answer.
 
-use soma_next_core::{
+use somatize_core::{
     Cargo, Catalog, Ctx, Device, Fact, Keeper, KeeperError, Kept, Key, Keys, Memory, Node,
     NodeError, NodeId, Outcome, Placement, Plan, Transport, TransportError, Value, Watcher,
 };
@@ -253,7 +253,7 @@ impl Node for Ubiquitous {
 /// Executes the slice **right here**, noting what it was sent.
 ///
 /// There is no process, no bytes, no pipes: that belongs to
-/// `soma-next-transport`. What this exercises is the core's seam — what gets
+/// `somatize-fabric-wire`. What this exercises is the core's seam — what gets
 /// sent, what comes back, where it is merged — and that is why a double that
 /// never leaves its seat will do.
 pub struct Mirror {
@@ -306,7 +306,7 @@ impl Transport for Mirror {
         // What a real worker does: the engine over there is told, and what it
         // says is handed straight back untouched. A double that swallowed them
         // would make the far half of the live view untestable without a process.
-        let mut over_there = soma_next_core::Executor::new(&self.catalog).placed(cargo.placement);
+        let mut over_there = somatize_core::Executor::new(&self.catalog).placed(cargo.placement);
         if let Some(seen) = seen {
             over_there = over_there.watching(seen);
         }

@@ -1,6 +1,6 @@
 //! Guided by what already worked.
 
-use soma_next_study::{Dimension, Goal, Point, Random, Setting, Space, Tpe};
+use somatize_study::{Dimension, Goal, Point, Random, Setting, Space, Tpe};
 
 fn space() -> Space {
     Space::new()

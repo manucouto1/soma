@@ -10,7 +10,7 @@ use std::fmt;
 /// division of labour as an [`Artifact`]'s `kind`. What this crate does with it
 /// is write it down and hand it back.
 ///
-/// [`Artifact`]: https://docs.rs/soma-next-transport
+/// [`Artifact`]: https://docs.rs/somatize-fabric-wire
 pub type Meta = Vec<(String, String)>;
 
 /// A name, what it points at, and what was said about it.

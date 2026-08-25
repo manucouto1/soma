@@ -1,6 +1,6 @@
 //! Judged against a constant: the only scheme that works on the first trial.
 
-use soma_next_study::{Reason, Threshold, Verdict};
+use somatize_study::{Reason, Threshold, Verdict};
 
 fn between(lower: f64, upper: f64) -> Threshold {
     Threshold {

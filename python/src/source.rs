@@ -5,8 +5,8 @@ use crate::store::PyStore;
 use crate::value;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use soma_next_core::{Ctx, Node};
-use soma_next_data::Parquet;
+use somatize_core::{Ctx, Node};
+use somatize_data::Parquet;
 
 /// A parquet file in a store, answering spans of rows.
 ///
@@ -54,7 +54,7 @@ impl PySource {
         let out = py
             .allow_threads(|| self.inner.forward(&span, &Ctx { device: None }))
             .map_err(|e| PyValueError::new_err(e.message().to_string()))?;
-        let frame = soma_next_data::Frame::of(&out)
+        let frame = somatize_data::Frame::of(&out)
             .ok_or_else(|| PyValueError::new_err("a source answers with a frame"))?;
         Ok(PyFrame::new(frame.clone()))
     }

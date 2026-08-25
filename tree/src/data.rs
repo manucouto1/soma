@@ -43,8 +43,8 @@
 //! atrás.
 
 use crate::snapshot::Snapshot;
-use soma_next_core::Key;
-use soma_next_store::{Bound, Store};
+use somatize_core::Key;
+use somatize_store::{Bound, Store};
 use std::collections::{BTreeMap, HashMap};
 
 /// Cómo se supo que un valor es de una versión.
@@ -122,7 +122,7 @@ pub fn under(
             (
                 *commit,
                 said.values()
-                    .map(|key| soma_next_store::name_of(&Key::new(key.clone())))
+                    .map(|key| somatize_store::name_of(&Key::new(key.clone())))
                     .collect(),
             )
         })
@@ -153,10 +153,7 @@ pub fn under(
                     .find(|(said, _)| said == what)
                     .map(|(_, told)| told.clone())
             };
-            let (node, fingerprint) = (
-                meta(soma_next_core::NODE),
-                meta(soma_next_core::FINGERPRINT),
-            );
+            let (node, fingerprint) = (meta(somatize_core::NODE), meta(somatize_core::FINGERPRINT));
             let mut of: BTreeMap<String, How> = BTreeMap::new();
             // La huella primero y la clave después, para que `Named` gane donde
             // valen las dos: es lo más fuerte que se puede decir, y decir lo
@@ -177,7 +174,7 @@ pub fn under(
                 name: bound.name.clone(),
                 node,
                 fingerprint,
-                input: meta(soma_next_core::INPUT),
+                input: meta(somatize_core::INPUT),
                 environment: meta(ENVIRONMENT),
                 when: bound.when,
                 of,

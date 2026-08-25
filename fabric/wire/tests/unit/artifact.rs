@@ -4,7 +4,7 @@
 //! What does get pinned down is the split between the cheap half — the name —
 //! and the heavy one, which is what makes the `have`/`want` worth having.
 
-use soma_fabric_wire::{Artifact, Label};
+use somatize_fabric_wire::{Artifact, Label};
 
 #[test]
 fn an_artifact_is_a_kind_an_identity_and_some_bytes() {

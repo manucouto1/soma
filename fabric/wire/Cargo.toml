@@ -1,5 +1,5 @@
 [package]
-name = "soma-fabric-wire"
+name = "somatize-fabric-wire"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 autotests = false
 
 [lib]
-name = "soma_fabric_wire"
+name = "somatize_fabric_wire"
 
 [dependencies]
-soma-next-core = { workspace = true, features = ["serde"] }
-soma-next-store = { workspace = true }
+somatize-core = { workspace = true, features = ["serde"] }
+somatize-store = { workspace = true }
 serde = { workspace = true }
 # MessagePack, and the choice was measured: `postcard` drops the message of a
 # custom serialization error — which here is the one saying why an opaque value

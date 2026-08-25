@@ -1,6 +1,6 @@
 //! Judged against the trials that already finished.
 
-use soma_next_study::{Goal, Percentile, Reason, Verdict};
+use somatize_study::{Goal, Percentile, Reason, Verdict};
 
 /// Four finished trials, one report each.
 fn four() -> Vec<Vec<f64>> {

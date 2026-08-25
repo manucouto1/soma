@@ -1,6 +1,6 @@
 //! One configuration, which is also a trial's name.
 
-use soma_next_study::{Point, Setting};
+use somatize_study::{Point, Setting};
 
 fn point() -> Point {
     Point::of(vec![

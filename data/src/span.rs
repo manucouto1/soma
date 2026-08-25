@@ -1,6 +1,6 @@
 //! Which rows, and where from.
 
-use soma_next_core::Value;
+use somatize_core::Value;
 use std::fmt;
 
 /// The rows a source is being asked for: `take` of them, starting at `at`.

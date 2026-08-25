@@ -67,5 +67,5 @@ pub use serving::{Serving, routes};
 
 // Re-exported because they are this crate's subject: the name a graph gave, and
 // what a machine says about itself.
-pub use soma_fabric_wire::Machine;
-pub use soma_next_core::Host;
+pub use somatize_core::Host;
+pub use somatize_fabric_wire::Machine;

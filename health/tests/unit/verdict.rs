@@ -1,9 +1,9 @@
 //! What is said about a set of numbers, and — as much — what is not.
 
-use soma_next_health::{Flag, Seen, Thresholds};
+use somatize_health::{Flag, Seen, Thresholds};
 
 fn said(seen: &Seen) -> Vec<String> {
-    soma_next_health::verdict(seen, &Thresholds::default())
+    somatize_health::verdict(seen, &Thresholds::default())
         .iter()
         .map(ToString::to_string)
         .collect()
@@ -202,7 +202,7 @@ fn and_whoever_normalises_differently_moves_the_bound() {
 
     assert!(said(&seen).is_empty());
     assert_eq!(
-        soma_next_health::verdict(&seen, &tighter)
+        somatize_health::verdict(&seen, &tighter)
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
@@ -268,7 +268,7 @@ fn and_says_so_for_whoever_has_a_baseline_to_set_it_against() {
         ..Thresholds::default()
     };
 
-    assert_eq!(soma_next_health::verdict(&seen, &theirs), [Flag::Narrowing]);
+    assert_eq!(somatize_health::verdict(&seen, &theirs), [Flag::Narrowing]);
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn an_update_that_is_merely_low_rank_all_along_is_not_narrowing() {
         ..Thresholds::default()
     };
 
-    assert!(soma_next_health::verdict(&seen, &theirs).is_empty());
+    assert!(somatize_health::verdict(&seen, &theirs).is_empty());
 }
 
 // ── Plasticity, which is a conjunction ──
@@ -368,6 +368,6 @@ fn the_same_numbers_answer_differently_under_other_thresholds() {
         ..Thresholds::default()
     };
 
-    assert_eq!(soma_next_health::verdict(&seen, &strict), [Flag::Vanishing]);
-    assert!(soma_next_health::verdict(&seen, &lenient).is_empty());
+    assert_eq!(somatize_health::verdict(&seen, &strict), [Flag::Vanishing]);
+    assert!(somatize_health::verdict(&seen, &lenient).is_empty());
 }

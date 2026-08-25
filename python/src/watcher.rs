@@ -27,8 +27,8 @@ use crate::store::PyStore;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
-use soma_next_core::{Fact, Watcher};
-use soma_next_store::Recorder;
+use somatize_core::{Fact, Watcher};
+use somatize_store::Recorder;
 use std::sync::Arc;
 
 /// Writes down what happened, one record per `forward`.

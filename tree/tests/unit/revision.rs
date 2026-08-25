@@ -4,7 +4,7 @@
 //! handed to it mean what they are believed to mean, and a double would agree
 //! with the belief rather than with git.
 
-use soma_tree::revision::{ALL, beneath, commits_in, parent_of};
+use somatize_tree::revision::{ALL, beneath, commits_in, parent_of};
 use std::path::Path;
 use std::process::Command;
 
@@ -40,7 +40,7 @@ fn a_line_of(n: usize) -> tempfile::TempDir {
 }
 
 fn subjects(repo: &Path, commits: &[String]) -> Vec<String> {
-    let told = soma_tree::revision::told(repo, commits);
+    let told = somatize_tree::revision::told(repo, commits);
     commits
         .iter()
         .map(|commit| told[commit].1.clone())
@@ -247,12 +247,12 @@ fn a_class_is_spliced_back_into_its_file_and_nothing_around_it_moves() {
     }
     let from = commits_in(at.path(), "HEAD", 1).expect("the commit")[0].clone();
 
-    soma_tree::revision::forked(
+    somatize_tree::revision::forked(
         at.path(),
         &from,
         "variant",
         "mod.py",
-        soma_tree::revision::Splice { line: 4, lines: 2 },
+        somatize_tree::revision::Splice { line: 4, lines: 2 },
         "class A:\n    x = 99\n",
         "A only",
     )
@@ -282,12 +282,12 @@ fn a_fork_leaves_the_branch_it_came_from_exactly_as_it_was() {
     let at = a_line_of(1);
     let before = commits_in(at.path(), "HEAD", 10).expect("before");
 
-    soma_tree::revision::forked(
+    somatize_tree::revision::forked(
         at.path(),
         &before[0],
         "variant",
         "a.txt",
-        soma_tree::revision::Splice { line: 1, lines: 1 },
+        somatize_tree::revision::Splice { line: 1, lines: 1 },
         "something else\n",
         "a variant",
     )
@@ -306,12 +306,12 @@ fn a_splice_that_does_not_fit_is_refused_rather_than_guessed_at() {
     // guessed offset would cut a class in half and commit it.
     let at = a_line_of(0);
 
-    let said = soma_tree::revision::forked(
+    let said = somatize_tree::revision::forked(
         at.path(),
         &commits_in(at.path(), "HEAD", 1).expect("the commit")[0].clone(),
         "variant",
         "a.txt",
-        soma_tree::revision::Splice {
+        somatize_tree::revision::Splice {
             line: 400,
             lines: 9,
         },
@@ -331,12 +331,12 @@ fn a_path_that_climbs_out_of_the_repository_is_refused() {
 
     for path in ["../escaped.txt", "/etc/passwd", "a/../../out.txt"] {
         assert!(
-            soma_tree::revision::forked(
+            somatize_tree::revision::forked(
                 at.path(),
                 &from,
                 "variant",
                 path,
-                soma_tree::revision::Splice { line: 1, lines: 1 },
+                somatize_tree::revision::Splice { line: 1, lines: 1 },
                 "x",
                 "nope",
             )
@@ -355,7 +355,7 @@ fn a_file_comes_back_from_the_commit_and_not_from_the_working_tree() {
     let old = commits_in(at.path(), "HEAD~2..HEAD", 10).expect("a range")[1].clone();
     std::fs::write(at.path().join("a.txt"), "lo que hay sin commitear").expect("a file");
 
-    let said = soma_tree::revision::read(at.path(), &old, "a.txt").expect("the file");
+    let said = somatize_tree::revision::read(at.path(), &old, "a.txt").expect("the file");
 
     assert_eq!(said, "1");
 }
@@ -381,7 +381,7 @@ fn a_file_comes_back_exactly_as_it_was_written() {
     run(&["commit", "-q", "-m", "net"]);
     let head = commits_in(at.path(), "HEAD", 1).expect("the commit")[0].clone();
 
-    let said = soma_tree::revision::read(at.path(), &head, "net.py").expect("the file");
+    let said = somatize_tree::revision::read(at.path(), &head, "net.py").expect("the file");
 
     assert_eq!(said, whole);
 }
@@ -395,7 +395,7 @@ fn a_file_that_climbs_out_of_the_repository_is_refused_the_same_as_a_fork() {
 
     for path in ["../escaped.txt", "/etc/passwd", "a/../../out.txt"] {
         assert!(
-            soma_tree::revision::read(at.path(), &from, path).is_err(),
+            somatize_tree::revision::read(at.path(), &from, path).is_err(),
             "`{path}` should have been refused",
         );
     }
@@ -426,12 +426,12 @@ fn a_whole_file_is_a_splice_over_all_of_its_lines() {
     let from = commits_in(at.path(), "HEAD", 1).expect("the commit")[0].clone();
     let rewritten = "import torch\n\n\nclass Head:\n    def forward(self, x):\n        return x\n";
 
-    let made = soma_tree::revision::forked(
+    let made = somatize_tree::revision::forked(
         at.path(),
         &from,
         "whole-file",
         "net.py",
-        soma_tree::revision::Splice {
+        somatize_tree::revision::Splice {
             line: 1,
             lines: whole.lines().count() as u32,
         },
@@ -441,7 +441,7 @@ fn a_whole_file_is_a_splice_over_all_of_its_lines() {
     .expect("the fork");
 
     assert_eq!(
-        soma_tree::revision::read(at.path(), &made, "net.py").expect("the file"),
+        somatize_tree::revision::read(at.path(), &made, "net.py").expect("the file"),
         rewritten,
         "vuelve exactamente lo que se mandó, sin nada de alrededor pegado",
     );

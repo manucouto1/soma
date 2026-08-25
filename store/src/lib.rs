@@ -35,9 +35,9 @@
 //! | [`Recorder`] | what happened while it ran, one record per `forward` | `run/<id>/<n>` |
 //!
 //! Three questions, one directory, and the namespace of the name is what keeps
-//! them apart. [`Cache`] is the [`Keeper`](soma_next_core::Keeper) the core left
+//! them apart. [`Cache`] is the [`Keeper`](somatize_core::Keeper) the core left
 //! a hole for: the core cannot hash and has nowhere to put bytes, and both of
-//! those live here. [`Recorder`] is the [`Watcher`](soma_next_core::Watcher),
+//! those live here. [`Recorder`] is the [`Watcher`](somatize_core::Watcher),
 //! which is the same division from the other end: the core knows what happened
 //! and has nowhere to write it down.
 //!

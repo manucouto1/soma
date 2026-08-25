@@ -11,7 +11,7 @@
 use crate::value::{PyOpaque, from_py, to_py};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use soma_next_core::{Ctx, Device, Node, NodeError, Value};
+use somatize_core::{Ctx, Device, Node, NodeError, Value};
 
 /// What a node knows beyond its input.
 #[pyclass(name = "Ctx", module = "soma_next._soma_next", frozen)]

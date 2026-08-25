@@ -5,7 +5,7 @@
 //! knowing who `a` is is exactly the contract. In a real system they would be
 //! two calls to the same factory function.
 
-use soma_next_core::{Catalog, Ctx, Node, NodeError, Value};
+use somatize_core::{Catalog, Ctx, Node, NodeError, Value};
 use std::sync::Arc;
 
 pub struct Add(pub f64);

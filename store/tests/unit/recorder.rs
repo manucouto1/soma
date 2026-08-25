@@ -1,8 +1,8 @@
 //! What happened, written down: one record per `forward`.
 
 use crate::tempdir;
-use soma_next_core::{Fact, Host, NodeId, Watcher};
-use soma_next_store::{Local, Recorder, Store};
+use somatize_core::{Fact, Host, NodeId, Watcher};
+use somatize_store::{Local, Recorder, Store};
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -2,8 +2,8 @@
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use soma_next_core::Value;
-use soma_next_data::Frame;
+use somatize_core::Value;
+use somatize_data::Frame;
 use std::sync::Arc;
 
 /// Two columns and three rows, which is enough to have a shape.
