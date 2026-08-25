@@ -1,7 +1,9 @@
-# soma-next
+# soma
 
-A re-derivation of [Soma](/mnt/cluster/projects/soma) written by hand, one use
-case at a time. The goal is not a better design: it is **authorship**. A system
+A re-derivation of [the original](/mnt/cluster/projects/soma-legacy), written by
+hand, one use case at a time. It has taken over the name: this is `soma` now,
+and what it re-derives is `soma-legacy`, which keeps the published `somatize`
+versions up to 0.5.1. The goal is not a better design: it is **authorship**. A system
 you designed yourself you can hold in your head even with three hundred types in
 it; one you did not, you cannot — and that is why the original, which works and
 is published, stopped being maintainable by its author.
@@ -53,7 +55,7 @@ there, it is in the wrong place.
 
 ## The original as an oracle, not a template
 
-`/mnt/cluster/projects/soma` is **frozen**: consultation and bugfixes, zero
+`/mnt/cluster/projects/soma-legacy` is **frozen**: consultation and bugfixes, zero
 features. Its 31,994 lines of tests are the executable specification of what has
 to be true.
 
@@ -101,7 +103,7 @@ docker compose -f soma-python/tests/cluster/docker/compose.yaml --profile gpu bu
 # A bucket, for the half of the store's contract that needs one. Opt-in the same
 # way and with the same handshake on both sides: `SOMA_S3` set means there is one.
 docker compose -f soma-store/tests/docker/compose.yaml up -d
-SOMA_S3=http://127.0.0.1:9000 uv run cargo test -p soma-next-store --features s3
+SOMA_S3=http://127.0.0.1:9000 uv run cargo test -p somatize-store --features s3
 SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 ```
 
