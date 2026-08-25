@@ -1,15 +1,15 @@
 [workspace]
 members = [
-    "core",
-    "data",
-    "fabric/broker",
-    "fabric/fleet",
-    "fabric/wire",
-    "health",
-    "python",
-    "store",
-    "study",
-    "tree",
+    "soma-core",
+    "soma-data",
+    "soma-fabric/broker",
+    "soma-fabric/fleet",
+    "soma-fabric/wire",
+    "soma-health",
+    "soma-python",
+    "soma-store",
+    "soma-study",
+    "soma-tree",
 ]
 resolver = "3"
 
@@ -20,13 +20,13 @@ license = "Elastic-2.0"
 repository = "https://github.com/manucouto1/soma-next"
 
 [workspace.dependencies]
-somatize-core = { path = "core" }
-somatize-store = { path = "store" }
-somatize-data = { path = "data" }
-somatize-health = { path = "health" }
+somatize-core = { path = "soma-core" }
+somatize-store = { path = "soma-store" }
+somatize-data = { path = "soma-data" }
+somatize-health = { path = "soma-health" }
 # The fabric, home from the repository it spent a day in. It is a family, so
 # it is a folder: the wire carries a slice, the broker says where a host is,
 # and the fleet is what outlives both and can be asked what is out there.
-somatize-fabric-wire = { path = "fabric/wire" }
-somatize-fabric-broker = { path = "fabric/broker" }
+somatize-fabric-wire = { path = "soma-fabric/wire" }
+somatize-fabric-broker = { path = "soma-fabric/broker" }
 serde = { version = "1", features = ["derive"] }

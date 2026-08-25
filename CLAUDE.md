@@ -90,23 +90,23 @@ uv run cargo clippy --workspace -- -D warnings && uv run cargo fmt --all -- --ch
 
 # The Python side still needs `mos`, because that is where torch is.
 conda activate mos
-cd python && maturin develop && python -m pytest tests/ -q
+cd soma-python && maturin develop && python -m pytest tests/ -q
 
 # A real cluster: containers, one per host. Opt-in; the images build themselves
 # the first time. `SOMA_CLUSTER=build` forces a rebuild, which is what you want
-# after touching `python/src` or the Dockerfile. Both live in `tests/cluster/`.
+# after touching `soma-python/src` or the Dockerfile. Both live in `tests/cluster/`.
 SOMA_CLUSTER=1 python -m pytest tests/cluster -q
-docker compose -f python/tests/cluster/docker/compose.yaml --profile gpu build worker-gpu worker-gpu-b
+docker compose -f soma-python/tests/cluster/docker/compose.yaml --profile gpu build worker-gpu worker-gpu-b
 
 # A bucket, for the half of the store's contract that needs one. Opt-in the same
 # way and with the same handshake on both sides: `SOMA_S3` set means there is one.
-docker compose -f store/tests/docker/compose.yaml up -d
+docker compose -f soma-store/tests/docker/compose.yaml up -d
 SOMA_S3=http://127.0.0.1:9000 uv run cargo test -p soma-next-store --features s3
 SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 ```
 
 `maturin develop` is not optional before `pytest`: the Python tests run against
-the **installed** extension, so a change in `python/src/` that is not rebuilt
+the **installed** extension, so a change in `soma-python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
 `examples/` holds twelve notebooks — declaring a graph, watching a run, training,
@@ -264,7 +264,7 @@ with it.
 
 An enum of facts is fine and the original's 37 variants are not the mistake — the
 mistake is that they are **three vocabularies in one**. Each level keeps its own:
-the engine's in `core/src/fact.rs`, a training run's (`loss`, `updated`) where
+the engine's in `soma-core/src/fact.rs`, a training run's (`loss`, `updated`) where
 the loss is, a trial's on disk since CU18. **They do not meet in Rust, they meet
 in the record** — a fact is emitted as an enum and written as `(kind, pairs)`,
 which is the shape `Meta` already had, so what you print is what you would find
@@ -333,7 +333,7 @@ that is training.
 `NARROWING` is in the vocabulary and **off by default, because it was measured
 and the measurement did not support it**: the published monitor's certificate is
 the deviation from a healthy baseline and one run has none. See
-`health/tests/narrowing.py`. The metric is recorded and drawn; the alarm was not
+`soma-health/tests/narrowing.py`. The metric is recorded and drawn; the alarm was not
 invented.
 
 Measuring is `soma_next.torch`'s: `Trainer(..., auditing=True)` hooks the nodes
@@ -437,7 +437,7 @@ in between to be wrong about. Everything continuous is a ranking, and a ranking
 belongs at level 3 where a number only means something next to another
 candidate's. Which is exactly where the five zero-cost proxies went:
 `soma_next.torch.proxies` is a **cheap objective** a study's loop scores with,
-never a `Flag`, and `health/tests/proxies.py` asks the only question worth asking
+never a `Flag`, and `soma-health/tests/proxies.py` asks the only question worth asking
 of one — *does it beat counting parameters?*
 
 **CU23 is workers and jobs, and the first thing it decided was what not to

@@ -25,11 +25,11 @@ rather than an `if is_step`) and a `NodeCatalog` that is the single registry. It
 is a reasonable answer; it is not the only one, and it is not inherited.
 
 What is worth looking at in the original before deciding, because they are scars
-from real mistakes: `soma-core/src/graph/node.rs` (172 lines) and its tests
+from real mistakes: `soma-soma-core/src/graph/node.rs` (172 lines) and its tests
 `graph_node.rs` — `a_filter_keeps_its_caching_contract`,
 `a_step_is_not_output_cacheable`, `schemas_survive_both_directions`.
 
-### Questionnaire (from `soma-core/tests/unit/graph*.rs`)
+### Questionnaire (from `soma-soma-core/tests/unit/graph*.rs`)
 
 **Construction**
 - [x] an empty graph is valid
@@ -110,10 +110,10 @@ The four roles, which are easy to confuse:
 
 | piece | role | where |
 |---|---|---|
-| `Graph` | the **structure** | `core/src/graph.rs` |
-| `Catalog` | the **store** of implementations | `core/src/filter.rs` |
-| `Filter` | the **contract** of an executable unit | `core/src/filter.rs` |
-| `Graph::run` | the **engine** | `core/src/execution.rs` |
+| `Graph` | the **structure** | `soma-core/src/graph.rs` |
+| `Catalog` | the **store** of implementations | `soma-core/src/filter.rs` |
+| `Filter` | the **contract** of an executable unit | `soma-core/src/filter.rs` |
+| `Graph::run` | the **engine** | `soma-core/src/execution.rs` |
 
 ### Decisions taken
 
@@ -523,7 +523,7 @@ returning (and once at the graph's input).
 
 ### The pattern, tested end to end
 
-`python/tests/test_pipeline_torch.py` assembles a four-node pipeline —
+`soma-python/tests/test_pipeline_torch.py` assembles a four-node pipeline —
 lemmatizer (no gradients) → encoder → bottleneck → LSTM classifier — and
 **trains** it: 12,571 parameters, the loss drops from 1.09 to 0.005 in 40 steps.
 It is in the tests in full because besides checking, it documents the pattern.
@@ -783,7 +783,7 @@ is lent as `&dyn Driver` to both threads and serves two requests at once.
 
 ### Questionnaire
 
-**Decomposition** (`core/tests/unit/plan.rs`)
+**Decomposition** (`soma-core/tests/unit/plan.rs`)
 - [x] empty, one node, and a linear chain identical to the previous one
 - [x] output fan, input fan and diamond, each with its wave
 - [x] `a >> (b >> b2 >> b3 | c >> c2) >> d` gives a wave of two sequences
@@ -800,10 +800,10 @@ is lent as `&dyn Driver` to both threads and serves two requests at once.
 - [x] a wave's branches share no node
 - [x] the same graph always compiles the same
 
-**The oracle** (`core/tests/unit/build.rs`)
+**The oracle** (`soma-core/tests/unit/build.rs`)
 - [x] seven DSL expressions, and their plan is the tree that was written
 
-**Execution** (`core/tests/unit/execution.rs`)
+**Execution** (`soma-core/tests/unit/execution.rs`)
 - [x] the **real** execution order respects the edges, with threads in the way
 - [x] a whole branch runs on the same thread, and two branches on different threads
 - [x] two and three branches really do run at once — without sleeping: they agree
@@ -815,7 +815,7 @@ is lent as `&dyn Driver` to both threads and serves two requests at once.
 - [x] two branches can keep the driver busy at the same time
 - [x] a wave that is the whole plan returns the map of its leaves
 
-**Python** (`python/tests/test_waves.py`)
+**Python** (`soma-python/tests/test_waves.py`)
 - [x] the engine releases the GIL — in another process, with a deadline
 - [x] two and three branches really run at once, **without a driver**: the
       rendezvous resolves, therefore both are in flight
@@ -1002,7 +1002,7 @@ training end to end.
 
 ### Questionnaire
 
-**Rust** (`core/tests/unit/device.rs`, `placement.rs`, `execution.rs`)
+**Rust** (`soma-core/tests/unit/device.rs`, `placement.rs`, `execution.rs`)
 - [x] `cpu`, `cuda:N` and `meta` parse, and the round trip gives the same thing
 - [x] `cude:0` is an unknown kind; `cuda` asks for an index; `cuda:`, `cuda:x`,
       `cuda:1:2`, `cpu:0` and `""` are not shaped like a device
@@ -1012,7 +1012,7 @@ training end to end.
 - [x] a wave's branches see different devices, each on its own thread
 - [x] placing changes neither the plan, nor the graph, nor what it produces
 
-**Python** (`python/tests/test_device.py`)
+**Python** (`soma-python/tests/test_device.py`)
 - [x] `.on()` and `place()` give the same graph, and `.named` and `.on` commute
 - [x] placing afterwards in a loop, and replacing overwrites the previous one
 - [x] placing a node that does not exist fails, and each bad name with its warning
@@ -1173,7 +1173,7 @@ wire at every step.
 
 ### Questionnaire
 
-**Python** (`python/tests/test_trainer.py`)
+**Python** (`soma-python/tests/test_trainer.py`)
 - [x] `parameters(g)` collects from every node that has any and skips those that
       do not; in declaration order; without repeating a shared module
 - [x] a graph without parameters fails **when building the Trainer**
@@ -1390,7 +1390,7 @@ library on import, and it is why the frame cap exists.
 
 ### Questionnaire
 
-**The core's seam** (`core/tests/unit/execution.rs`, with a double that never
+**The core's seam** (`soma-core/tests/unit/execution.rs`, with a double that never
 leaves its seat)
 - [x] what a slice reads and does not produce is what travels with it, and no more
 - [x] the placement travels; the host half does not, having already done its job
@@ -1436,7 +1436,7 @@ interpreter and these installed packages, so "the worker cannot import your
 module" is a trick with `sys.path` and "another version of the code" is the file
 rewritten underneath.
 
-`python/tests/cluster/` is the same thing without the tricks: four containers
+`soma-python/tests/cluster/` is the same thing without the tricks: four containers
 declared in its own `docker/compose.yaml`, each with **the wheel and nothing
 else**, and the client outside. What only becomes provable there:
 
@@ -1696,7 +1696,7 @@ because that is what says the digest is what the key believes.
 
 ### Questionnaire
 
-**The core** (`core/tests/unit/{execution,build,memory}.rs`)
+**The core** (`soma-core/tests/unit/{execution,build,memory}.rs`)
 - [x] what is kept is not computed again, and what is kept under that name is
       what was produced
 - [x] a different input is a different name, and the node runs
@@ -1710,7 +1710,7 @@ because that is what says the digest is what the key believes.
 - [x] the names a slice brings are not the names it gives, and both cross a
       `Cargo` and come back in an `Outcome`
 
-**The store** (`store/tests/unit/cache.rs`)
+**The store** (`soma-store/tests/unit/cache.rs`)
 - [x] the pieces of a recipe cannot run into each other: `["ab","c"]` and
       `["a","bc"]` are two names
 - [x] the same recipe is the same name every time; only a root is named by its
@@ -1725,7 +1725,7 @@ because that is what says the digest is what the key believes.
       worker without a keeper runs it every time
 - [x] the name of what ran over there comes back
 
-**Python** (`python/tests/{test_cache,test_freeze}.py`)
+**Python** (`soma-python/tests/{test_cache,test_freeze}.py`)
 - [x] changing the head does not recompute the embedding, with real tensors
 - [x] a cache over something that can still change is refused, naming both
 - [x] the salt is another name, and the innermost one wins
@@ -2018,7 +2018,7 @@ a reader here by definition, so refusing it is the honest answer.
 
 ### Questionnaire
 
-**Cutting the graph** (`python/tests/test_stage.py`, no torch anywhere in it)
+**Cutting the graph** (`soma-python/tests/test_stage.py`, no torch anywhere in it)
 - [x] another host cuts, a node somebody trains cuts, and nobody saying so does
       not
 - [x] two hosts side by side are **one** stage, and the wave is still inside it
@@ -2040,7 +2040,7 @@ a reader here by definition, so refusing it is the honest answer.
 - [x] a stage provisions the **whole** graph and not its half
 - [x] the stages run to what the whole graph runs to
 
-**The trainer** (`python/tests/test_learning.py`)
+**The trainer** (`soma-python/tests/test_learning.py`)
 - [x] the input becomes a leaf and the node never finds out
 - [x] an ordinary value is the activation, an envelope is a gradient, and a map
       of them is summed
@@ -2060,7 +2060,7 @@ a reader here by definition, so refusing it is the honest answer.
 - [x] the same weights in two optimizers is refused
 - [x] the four techniques, each with the control in the table above
 
-**Driving it** (`python/tests/test_trainer.py`)
+**Driving it** (`soma-python/tests/test_trainer.py`)
 - [x] a cut graph trains to the same numbers as the whole one, weights included
 - [x] it is driven in stages only when something is trained where it runs
 - [x] what is above a trained node gets its gradient through it, and nobody
@@ -2180,7 +2180,7 @@ was handed a list of floats the day somebody placed its producer elsewhere.
 - [x] a worker that does not pack hands its node what it was sent, and the
       failure is quiet — which is why nothing installs one end without the other
 
-**From Python** (`python/tests/test_remote.py`)
+**From Python** (`soma-python/tests/test_remote.py`)
 - [x] an opaque nobody can write down still does not leave, and says which type
       it was and how to say so
 - [x] one produced over there that nobody can write down stays there
@@ -2261,7 +2261,7 @@ run of groups of one.
 
 ### Questionnaire
 
-**The group** (`python/tests/test_trainer.py`)
+**The group** (`soma-python/tests/test_trainer.py`)
 - [x] a group of steps comes out where one step over all of them does
 - [x] the optimizer moves once per group and not once per step
 - [x] a group of one is what there was before it could be said, loss for loss and
@@ -2354,7 +2354,7 @@ better.
 
 ### Questionnaire
 
-**What it exports** (`python/tests/test_federated.py`)
+**What it exports** (`soma-python/tests/test_federated.py`)
 - [x] the weights node by node, and a node with none is simply not in there
 - [x] a node that says what its weights are called is asked by name, and one that
       does not is asked in order
@@ -2484,7 +2484,7 @@ function's to make: `fedavg` takes whatever list it is handed.
 
 ### Questionnaire, the distributed half
 
-**The store, opened by hand** (`python/tests/test_store.py`)
+**The store, opened by hand** (`soma-python/tests/test_store.py`)
 - [x] bytes by what they are, names that point at them, and both directions of
       each
 - [x] a value with tensors in it goes in and comes out alive, and a bare tensor
@@ -2494,7 +2494,7 @@ function's to make: `fedavg` takes whatever list it is handed.
       the same weights, and two processes that wrote the same weights wrote them
       once
 
-**Claiming** (`store/tests/unit/local.rs`, `test_store.py`)
+**Claiming** (`soma-store/tests/unit/local.rs`, `test_store.py`)
 - [x] a name nobody has can be claimed and one somebody has cannot
 - [x] what `bind` replaces, `claim` refuses
 - [x] eight threads and eight **processes** on one name: exactly one wins, and
@@ -2503,7 +2503,7 @@ function's to make: `fedavg` takes whatever list it is handed.
 - [x] against the mutant written as `resolve` then `bind`, seven of the eight
       racers were told they had it
 
-**The round** (`python/tests/test_round.py`)
+**The round** (`soma-python/tests/test_round.py`)
 - [x] the only client of a round averages it itself, and publishes it
 - [x] a client that arrives after the average finds it and does not wait
 - [x] two runs sharing a directory are two runs, and so are two rounds of one
@@ -2613,7 +2613,7 @@ core's.
 
 ### Questionnaire
 
-**Cutting a batch** (`python/tests/test_trainer.py`)
+**Cutting a batch** (`soma-python/tests/test_trainer.py`)
 - [x] a batch in pieces comes out where the whole one does
 - [x] the optimizer still moves once a step, and `every` and `micro` multiply
 - [x] the loss it gives back is still the number the whole batch would have said
@@ -2621,7 +2621,7 @@ core's.
       fixes it; so is something it cannot cut, and halves that do not line up
 - [x] across a cut, the far side counts the **pieces**
 
-**The grain of an item** (`core/tests/unit/execution.rs`, `test_cache.py`)
+**The grain of an item** (`soma-core/tests/unit/execution.rs`, `test_cache.py`)
 - [x] a node that maps answers one for each item, and does so with nobody keeping
       anything at all
 - [x] the second run of the same list looks at nothing
@@ -2767,7 +2767,7 @@ name you have to remember for nothing.
 `grep -ri 'kfold|cross.?valid|stratif'` over the original: **zero hits**. This is
 the first piece written with no old version pulling at it.
 
-**The cut** (`study/tests/unit/partition.rs`, `test_partition.py`)
+**The cut** (`soma-study/tests/unit/partition.rs`, `test_partition.py`)
 - [x] k folds are a partition: every sample held out exactly once, never held out
       and training at once
 - [x] what does not divide is spread one at a time (10 over 3 is 4-3-3)
@@ -2843,7 +2843,7 @@ That is the shape of the loop, and the loop belongs to whoever writes it.
 
 ### Questionnaire — the pruner
 
-**The schemes** (`study/tests/unit/pruner/`, `test_pruner.py`)
+**The schemes** (`soma-study/tests/unit/pruner/`, `test_pruner.py`)
 - [x] the median drops what is behind the finished trials and keeps what is not,
       and a trial that ties is not pruned for tying
 - [x] `warmup` buys a slow starter its epochs; `startup` stops the first trial to
@@ -2915,13 +2915,13 @@ would otherwise need a `Study` type to hold.
 
 ### Questionnaire — the sampler
 
-**The space** (`study/tests/unit/space.rs`, `test_sampler.py`)
+**The space** (`soma-study/tests/unit/space.rs`, `test_sampler.py`)
 - [x] the knobs keep declaration order, which is what a grid and a name depend on
 - [x] a duplicate name, an empty choice, a reversed range and a logarithmic range
       starting at zero are all refused where they were written
 - [x] a space is built up and every call gives back a new one
 
-**The schemes** (`study/tests/unit/sampler/`, `test_sampler.py`)
+**The schemes** (`soma-study/tests/unit/sampler/`, `test_sampler.py`)
 - [x] a grid walks every combination exactly once, takes **both ends** of a
       range, takes a narrow `int` whole, and then answers `None`
 - [x] the same seed and index give the same point however it is asked for —
@@ -3102,7 +3102,7 @@ copied `study/`, so the cluster images had not been rebuildable since CU17.
 - [x] the curves a pruner wants cost one fetch per trial
 - [x] a machine that ran none of them rebuilds the whole history
 
-**Reading a point back** (`study/tests/unit/space.rs`)
+**Reading a point back** (`soma-study/tests/unit/space.rs`)
 - [x] every point the space can produce survives being written down
 - [x] the space is what says whether `64` is a number or a word
 - [x] a record written against another space is refused and not half read
@@ -3494,7 +3494,7 @@ them exactly once, and a scan of the forty came back in 0.09 s.
 > *"and **S3**, which arrives the day there is a MinIO to point at, through
 > OpenDAL and as another configuration rather than another implementation."*
 
-Both halves. It is **another implementation** — `store/src/s3.rs`, brother of
+Both halves. It is **another implementation** — `soma-store/src/s3.rs`, brother of
 `local.rs` — because a configuration would have meant one type with two
 behaviours and a conditional write that is a link in one branch and a header in
 the other. And it is not OpenDAL: what an object store abstraction abstracts over
@@ -3519,7 +3519,7 @@ repo twice, and it is the reason a signing library beat the obvious choice.
 ### What writing the second one found
 
 The contract could not be seen until something other than `Local` had to keep it.
-`store/tests/unit/contract.rs` is every assertion written against `&dyn Store`
+`soma-store/tests/unit/contract.rs` is every assertion written against `&dyn Store`
 and run against each — a directory always, a bucket when `SOMA_S3` says there is
 one. It has no counterpart in `src/`, the same way `study`'s `invariants` has
 none: what it covers is the trait.
@@ -3629,7 +3629,7 @@ So each level keeps its own, in its own language:
 
 | level | vocabulary | where |
 |---|---|---|
-| the engine | `ran`, `failed`, `recalled`, `kept`, `items`, `left`, `finished`, `broke` | `core/src/fact.rs` |
+| the engine | `ran`, `failed`, `recalled`, `kept`, `items`, `left`, `finished`, `broke` | `soma-core/src/fact.rs` |
 | a training run | `loss`, `updated` | `soma_next.torch`, where the loss is |
 | a study | a trial's record | on disk, since CU18 |
 
@@ -3783,7 +3783,7 @@ any of these numbers mean, which is the whole of CU21.
 
 ### Questionnaire
 
-**The vocabulary** (`core/tests/unit/fact.rs`)
+**The vocabulary** (`soma-core/tests/unit/fact.rs`)
 - [x] a node that ran says which one, how long, and where — and nothing about a
       device nobody declared
 - [x] a duration is whole microseconds and not a float
@@ -3791,7 +3791,7 @@ any of these numbers mean, which is the whole of CU21.
 - [x] a fact that crossed two machines keeps its route in order
 - [x] the two facts that end a run say so, and a node failing is not one of them
 
-**What the engine says** (`core/tests/unit/watcher.rs`)
+**What the engine says** (`soma-core/tests/unit/watcher.rs`)
 - [x] a run nobody watches behaves exactly as it did
 - [x] every node that ran is said so, in the order it ran
 - [x] a run ends with exactly one fact that says it is over — an empty plan too
@@ -3809,7 +3809,7 @@ any of these numbers mean, which is the whole of CU21.
       checked against a node that takes 300 ms, because batched or live the
       facts are the same facts and only *when* differs
 
-**Written down** (`store/tests/unit/recorder.rs`)
+**Written down** (`soma-store/tests/unit/recorder.rs`)
 - [x] nothing is written until the `forward` is over
 - [x] a scan says how it went without reading a single blob
 - [x] the detail is in the blob, in the order it arrived
@@ -3820,7 +3820,7 @@ any of these numbers mean, which is the whole of CU21.
 - [x] and the next `forward` still starts a new record
 - [x] rewriting says the same thing about the same facts
 
-**Read back** (`python/tests/test_record.py`)
+**Read back** (`soma-python/tests/test_record.py`)
 - [x] a store says which runs it holds, and what is not a run is not read as one
 - [x] a store nobody recorded into says so rather than failing
 - [x] every `forward` comes back in order, with its numbers as numbers
@@ -3834,7 +3834,7 @@ any of these numbers mean, which is the whole of CU21.
 - [x] only the last N can be asked for, because each costs a fetch
 - [x] a node that was read back is not averaged as a fast one
 
-**From Python** (`python/tests/test_watching.py`)
+**From Python** (`soma-python/tests/test_watching.py`)
 - [x] a fact is a `dict` of text, and what is printed is what is written
 - [x] a list of watchers is told, and something that is not callable is refused
 - [x] a recorder nobody named is still findable
@@ -3974,14 +3974,14 @@ reason `finished` leaves pruned trials out.
 
 ### Questionnaire
 
-**Edges that would cross a node** (`python/tests/test_figure.py`)
+**Edges that would cross a node** (`soma-python/tests/test_figure.py`)
 - [x] an edge with something in the way is routed around it
 - [x] one with nothing in the way is still a straight arrow
 - [x] three routed edges do not share one lane
 - [x] a routed edge runs outside every box
 - [x] a segment is tested against a box exactly, not by sampling
 
-**Which knob mattered** (`python/tests/test_study_figure.py`)
+**Which knob mattered** (`soma-python/tests/test_study_figure.py`)
 - [x] a knob that decides the score comes out near one
 - [x] one that never varied is zero, because that is no evidence
 - [x] a study with nothing to compare says nothing rather than guessing
@@ -4002,7 +4002,7 @@ reason `finished` leaves pruned trials out.
 - [x] a study that never said raises rather than drawing it backwards
 - [x] a direction nobody recognises is refused by the figure as well
 
-**One figure, two sources** (`python/tests/test_record_figure.py`)
+**One figure, two sources** (`soma-python/tests/test_record_figure.py`)
 - [x] live and read back draw the same series, point for point
 - [x] a live view keeps one row per `forward` and not one per fact
 
@@ -4072,7 +4072,7 @@ is a network that is training.
 `NARROWING` is in the vocabulary and **off by default**. The published monitor's
 certificate is the deviation from a healthy baseline, and one run has none.
 Measured: healthy runs sit at 0.69–0.71 and a destabilised one at 0.43–0.86,
-which overlap. The measurement is in `health/tests/narrowing.py`, the metric is
+which overlap. The measurement is in `soma-health/tests/narrowing.py`, the metric is
 recorded and drawn, and the alarm was not invented. `Thresholds` is data, so
 whoever does have a baseline sets the bound and gets the finding.
 
@@ -4149,7 +4149,7 @@ its measurement beside it, the way `NARROWING` did.
 
 ### Questionnaire
 
-**The verdict** (`health/tests/unit/verdict.rs`)
+**The verdict** (`soma-health/tests/unit/verdict.rs`)
 - [x] a gradient too small to train on says so, and one too big to step on, and
       it cannot be both
 - [x] a layer that dies one step in four is dead, and one that is merely sparse
@@ -4170,12 +4170,12 @@ its measurement beside it, the way `NARROWING` did.
 - [x] the same numbers answer differently under other thresholds
 - [x] a node nobody measured is not called healthy and is not flagged
 
-**The vocabulary** (`health/tests/unit/flag.rs`)
+**The vocabulary** (`soma-health/tests/unit/flag.rs`)
 - [x] a flag that counts something says how many, and its name is stable
       whatever it counts
 - [x] every flag says what to do about it
 
-**The data** (`health/tests/unit/leaning.rs`)
+**The data** (`soma-health/tests/unit/leaning.rs`)
 - [x] shares add up to one, so they read as how much of what matters
 - [x] an input the model is not using says so
 - [x] two inputs that share the work say nothing
@@ -4185,7 +4185,7 @@ its measurement beside it, the way `NARROWING` did.
 - [x] one input alone says nothing, because there is nothing to compare
 - [x] the bounds are data here too
 
-**Measured and read back** (`python/tests/test_health.py`)
+**Measured and read back** (`soma-python/tests/test_health.py`)
 - [x] **a diagnosis is taken from the record and not from the run**
 - [x] the same record answers differently under other thresholds
 - [x] a threshold nobody has is refused by name
@@ -4200,7 +4200,7 @@ its measurement beside it, the way `NARROWING` did.
 - [x] a cadence measures fewer steps and says the same kind of thing
 - [x] **auditing does not change what the network computes**
 
-**What a node is made of** (`python/tests/test_health.py`)
+**What a node is made of** (`soma-python/tests/test_health.py`)
 - [x] a node says what it is made of
 - [x] a skip connection is an edge and not an order
 - [x] a bottleneck is visible in the shapes
@@ -4215,7 +4215,7 @@ its measurement beside it, the way `NARROWING` did.
       the shape keeps the names
 - [x] a recurrent cell says its output and not its hidden state
 
-**Drawn** (`python/tests/test_figure.py`)
+**Drawn** (`soma-python/tests/test_figure.py`)
 - [x] a node with an inside becomes a frame around it, and one without is drawn
       exactly as before
 - [x] a layer is drawn by what it is and not by its name
@@ -4227,7 +4227,7 @@ its measurement beside it, the way `NARROWING` did.
 - [x] the overlay marks the node without taking the fill
 - [x] a branch of a wave can be opened too
 
-**The data layer** (`python/tests/test_data.py`)
+**The data layer** (`soma-python/tests/test_data.py`)
 - [x] an input the model is not using is found in one afternoon
 - [x] and the shares say how lopsided it is
 - [x] two channels that both carry it say nothing
@@ -4307,7 +4307,7 @@ scale is its job. So the conjunction is baked in, the shape `LOSING_PLASTICITY`
 already has: drifting alone is a network that is fine, and having no
 normalisation alone is a network that is fine.
 
-Measured, and the numbers are in `health/tests/normalisation.py`. Everything
+Measured, and the numbers are in `soma-health/tests/normalisation.py`. Everything
 that trained sat at **2.81** or below and everything that did not was at **100**
 or above, so a decade sits between them with 3.6x of margin below and 10x above
 — a decade because the drift is geometric and the useful signal is an order of
@@ -4340,7 +4340,7 @@ the sampling landed rather than a bound. The spread inverts outright — 1.87
 trains and 1.76 does not, so the failing network has the *tighter* spectrum.
 
 So they are recorded and drawn and neither raises anything, which is what
-`NARROWING` established as the thing to do. See `health/tests/isometry.py`.
+`NARROWING` established as the thing to do. See `soma-health/tests/isometry.py`.
 
 And there is a rule under all three measurements, worth more than any of them:
 
@@ -4365,7 +4365,7 @@ Which leaves one question, and it is not *does it correlate with the score*:
 
 > **Does it beat counting parameters?**
 
-Size is free. `health/tests/proxies.py` asks it of all five over twenty-four
+Size is free. `soma-health/tests/proxies.py` asks it of all five over twenty-four
 candidates, and the answer is not the one the scores alone would give:
 
 | | ρ vs score | ρ vs parameters | beats counting by |
@@ -4419,7 +4419,7 @@ not write its own record.
 
 ### Questionnaire
 
-**The verdict** (`health/tests/unit/verdict.rs`)
+**The verdict** (`soma-health/tests/unit/verdict.rs`)
 - [x] a signal growing where nothing normalises it says so
 - [x] a signal that shrank says nothing at all, **because that is what was
       measured** and not because nobody looked
@@ -4427,7 +4427,7 @@ not write its own record.
 - [x] and whoever normalises differently moves the bound
 - [x] a probe that measured no signal is not called healthy
 
-**Before a step is taken** (`python/tests/test_health.py`)
+**Before a step is taken** (`soma-python/tests/test_health.py`)
 - [x] **a probe is one `forward` that was recorded and never trained**
 - [x] nothing is trained and no weight moves
 - [x] a signal growing where nothing normalises it is found before a step
@@ -4440,7 +4440,7 @@ not write its own record.
 - [x] a node holding no modules is not probed
 - [x] and a node whose modules never ran is said out loud
 
-**Scoring a candidate** (`python/tests/test_proxies.py`)
+**Scoring a candidate** (`soma-python/tests/test_proxies.py`)
 - [x] three of them never see a label
 - [x] and with a loss every one of them answers
 - [x] one that reads a loss and was given none says which
@@ -4514,7 +4514,7 @@ to be written.
 
 ### Questionnaire
 
-**Drawn** (`python/tests/test_figure.py`)
+**Drawn** (`soma-python/tests/test_figure.py`)
 - [x] **an edge routed around the drawing is still in the drawing**, and the
       arrowheads too
 - [x] a repeated block is a frame around its layers with the count on it, and
@@ -4523,7 +4523,7 @@ to be written.
 - [x] a layer that runs identical lanes is drawn with them behind it
 - [x] one lane is not several and draws nothing extra
 
-**What a node is made of** (`python/tests/test_health.py`)
+**What a node is made of** (`soma-python/tests/test_health.py`)
 - [x] a repeated block of several layers puts its count on the block
 - [x] and a block that is one layer keeps its count inline
 - [x] **how many lanes a layer runs is read and never inferred**
@@ -4642,7 +4642,7 @@ with `top`, and inventing a row nobody had to send is not worth the line.
 
 ### Questionnaire
 
-**The fleet** (`python/tests/test_record.py`)
+**The fleet** (`soma-python/tests/test_record.py`)
 - [x] a run says what each machine did
 - [x] and what it was waited on for
 - [x] a machine nobody sent anything to is not in it — there is no registry
@@ -4846,7 +4846,7 @@ the volume is shared between them and not with whoever runs the tests.
 
 ### Questionnaire
 
-**The rows** (`data/tests/unit/`, `python/tests/test_source.py`)
+**The rows** (`soma-data/tests/unit/`, `soma-python/tests/test_source.py`)
 - [x] a span is the rows it names
 - [x] the last span of a dataset is short, and one past the end is empty
 - [x] a span that crosses a row group still comes back as one frame
@@ -4856,14 +4856,14 @@ the volume is shared between them and not with whoever runs the tests.
 - [x] a column comes over as plain Python values, with no dataframe library
 - [x] a name nobody bound says so before anything runs
 
-**The version** (`data/tests/unit/parquet.rs`, `python/tests/test_source.py`)
+**The version** (`soma-data/tests/unit/parquet.rs`, `soma-python/tests/test_source.py`)
 - [x] it is what the store already knew, and costs one lookup and no bytes
 - [x] the same data under two names is the same version
 - [x] and different data under one name is a different version
 - [x] **other data under the same name is not the same answer**
 - [x] a source nobody settled is refused before anything runs
 
-**The frame** (`data/tests/unit/frame.rs`, `data/tests/unit/ipc.rs`)
+**The frame** (`soma-data/tests/unit/frame.rs`, `soma-data/tests/unit/ipc.rs`)
 - [x] it crosses an edge and is the same frame on the other side
 - [x] what the columns are called is there without reading a value
 - [x] it does not travel on its own — an opaque is an opaque
@@ -4875,7 +4875,7 @@ the volume is shared between them and not with whoever runs the tests.
 - [x] **rows read here are tokenized over there**
 - [x] a kept frame means the dataset is not opened again
 
-**The whole thing** (`python/tests/cluster/test_searching.py`)
+**The whole thing** (`soma-python/tests/cluster/test_searching.py`)
 - [x] the dataset goes into the shared store once and every machine reads spans
 - [x] the graph is still cut across three machines and the study across two
 
@@ -4942,7 +4942,7 @@ rather than written.
 
 ### Questionnaire
 
-**The pruning** (`core/tests/unit/execution.rs`)
+**The pruning** (`soma-core/tests/unit/execution.rs`)
 - [x] what only fed an answer that was kept is not run
 - [x] and the answer is still the answer
 - [x] and it says so rather than leaving a hole in the record
@@ -4950,7 +4950,7 @@ rather than written.
 - [x] a node that maps keeps everything above it
 - [x] and a slice nobody needs is not sent at all
 
-**End to end** (`data/tests/unit/parquet.rs`)
+**End to end** (`soma-data/tests/unit/parquet.rs`)
 - [x] the second run finds the answer under a name it could work out, and never
       opens the dataset
 
@@ -5123,8 +5123,8 @@ the 121 ms of weighing it that CU24 measured.
 
 ### Questionnaire
 
-**A name, without a run** (`core/tests/unit/execution.rs`,
-`python/tests/test_foreseen.py`)
+**A name, without a run** (`soma-core/tests/unit/execution.rs`,
+`soma-python/tests/test_foreseen.py`)
 - [x] the names foreseen are the names things are kept under
 - [x] nothing ran to find out — a node that cannot run at all still has one
 - [x] and it does not depend on having a store
@@ -5133,7 +5133,7 @@ the 121 ms of weighing it that CU24 measured.
 - [x] what is already kept says what would not have to run
 - [x] and asking that needs somewhere to look
 
-**What an edit did** (`python/tests/test_foreseen.py`)
+**What an edit did** (`soma-python/tests/test_foreseen.py`)
 - [x] a graph compared with itself has nothing said about it
 - [x] a changed recipe renames what is under it and nothing above it
 - [x] and `CHANGED` against `DOWNSTREAM` says which is which
@@ -5146,7 +5146,7 @@ the 121 ms of weighing it that CU24 measured.
 - [x] the input cancels out of the comparison
 
 **The code that changed and the name that did not say so**
-(`python/tests/test_foreseen.py`)
+(`soma-python/tests/test_foreseen.py`)
 - [x] an edit the key cannot see is said out loud
 - [x] what is under a stale node is not told it is fine
 - [x] **and a node that recomputes still recomputes from a stale answer**
@@ -5154,7 +5154,7 @@ the 121 ms of weighing it that CU24 measured.
 - [x] and a node nothing is kept of is not told off for having none
 - [x] a bumped salt is what `STALE` is asking for
 
-**Two graphs, or two snapshots** (`python/tests/test_foreseen.py`)
+**Two graphs, or two snapshots** (`soma-python/tests/test_foreseen.py`)
 - [x] a snapshot answers exactly as the graph it was taken of
 - [x] **and it survives the graph it came from**, through JSON
 - [x] what is under a stale node is found through a snapshot too
@@ -5257,7 +5257,7 @@ their weights makes that untrue.
 
 ### Questionnaire
 
-**Faithful: two declarations, two texts** (`python/tests/test_declaration.py`)
+**Faithful: two declarations, two texts** (`soma-python/tests/test_declaration.py`)
 - [x] two arguments are two declarations, and the same arguments are one
 - [x] **what a node holds is followed and not believed**
 - [x] a mapping built in another order is the same mapping, and another is not
@@ -5274,8 +5274,8 @@ their weights makes that untrue.
 - [x] data held as an attribute, rather than truncated
 - [x] something that holds itself
 
-**What the graph does with it** (`python/tests/test_declaration.py`,
-`core/tests/unit/execution.rs`)
+**What the graph does with it** (`soma-python/tests/test_declaration.py`,
+`soma-core/tests/unit/execution.rs`)
 - [x] what a node was built with is in its name, and reaches everything under it
 - [x] **and the answer is the one that was asked for**
 - [x] a graph built by hand is told apart too
@@ -5345,7 +5345,7 @@ g.forward(x, broker=Broker.embedded({"gpu-box": Worker.at("gpu-box:7000")}))
 
 Status: **closed**. A crate in soma-fabric, `soma-fabric-broker`, with 45 tests
 — 16 of the thread, 13 of the handle, 11 of the protocol, 5 of the paths —
-plus `test_remote.py` (41) and four in `core/tests/unit/placement.rs`.
+plus `test_remote.py` (41) and four in `soma-core/tests/unit/placement.rs`.
 
 ### The question: what changes for somebody who has no platform?
 
@@ -5521,13 +5521,13 @@ rendezvous was granted.
 - [ ] two names for one place declared with different packing are refused — the
       refusal is written and nothing calls it
 
-**Which hosts a placement names** (`core/tests/unit/placement.rs`)
+**Which hosts a placement names** (`soma-core/tests/unit/placement.rs`)
 - [x] they come back once each
 - [x] a placement that sends nothing away names no hosts
 - [x] **the order does not depend on the order they were placed in**
 - [x] moving a node elsewhere leaves no ghost behind
 
-**What a client writes** (`python/tests/test_remote.py`)
+**What a client writes** (`soma-python/tests/test_remote.py`)
 - [x] a worker is declared with an address or a command, and declaring it starts
       nothing
 - [x] a broker takes a dict from host to `Worker`, and says which host was wrong
@@ -5536,7 +5536,7 @@ rendezvous was granted.
 - [x] a graph run in pieces keeps the worker it had
 - [x] `provision` says out loud what `forward` says on its own
 
-**Two names for one place, which is one catalog** (`python/tests/test_remote.py`)
+**Two names for one place, which is one catalog** (`soma-python/tests/test_remote.py`)
 - [x] two names for one place are told once each, about **one** artifact holding
       both halves
 - [x] while two addresses are two catalogs with half each
@@ -5569,7 +5569,7 @@ $ cat where/names/*/* | jq -r .meta
 ```
 
 Status: **closed**. `Executor::stamping` and the `INPUT` constant in
-`core/src/execution.rs` with 4 tests, `soma_next/_environment.py`, and
+`soma-core/src/execution.rs` with 4 tests, `soma_next/_environment.py`, and
 `test_provenance.py` (11).
 
 ### The question: what is a hash six months later?
