@@ -57,7 +57,7 @@ pub use codec::{
     Codec, CodecError, anything_written, as_written, packed_all, unpacked_all, written_down,
 };
 pub use device::{Device, DeviceError};
-pub use execution::{Executor, RunError};
+pub use execution::{Executor, FINGERPRINT, INPUT, NODE, OURS, RunError};
 pub use fact::Fact;
 pub use graph::{Edge, Graph, GraphError, NodeId};
 pub use host::Host;

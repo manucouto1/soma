@@ -100,11 +100,12 @@ class Graph:
         self,
         input: Any | None = None,
         *,
-        workers: dict[str, Worker] | None = None,
+        broker: Broker | None = None,
         store: Store | str | None = None,
         watching: Recorder | Callable[[dict[str, Any]], None]
         | list[Recorder | Callable[[dict[str, Any]], None]]
         | None = None,
+        stamping: dict[str, str] | None = None,
     ) -> Any: ...
     def __len__(self) -> int: ...
     def __contains__(self, node_id: str) -> bool: ...
@@ -387,19 +388,14 @@ class Partition:
 
 # ── Workers ──────────────────────────────────────────────────────────────────
 
-class Worker:
-    """A process that gets sent slices of plan."""
+class Broker:
+    """Where the hosts of a graph are, and how to reach them."""
 
-    def __init__(
-        self,
-        target: str | list[str],
-        *,
-        kind: str | None = None,
-        id: str | None = None,
-        blob: bytes | None = None,
-        runtime: str = "python",
+    def __init__(self, listing: dict[str, Any]) -> None: ...
+    def wire_token(self, host: str) -> bytes: ...
+    def provision(
+        self, host: str, kind: str, id: str, blob: bytes, runtime: str
     ) -> None: ...
-    def provision(self, kind: str, id: str, blob: bytes, runtime: str) -> None: ...
     def __repr__(self) -> str: ...
 
 def serve(nodes: dict[str, Any]) -> None:

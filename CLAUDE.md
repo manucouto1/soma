@@ -83,6 +83,11 @@ something — happens **inside it**, holding whatever client that takes.
 uv run cargo test --workspace
 uv run cargo clippy --workspace -- -D warnings && uv run cargo fmt --all -- --check
 
+# The wire and the broker live next door, in `soma-fabric`, and are a workspace
+# of their own. `python/` depends on both by path, so a change there is compiled
+# by the command above — but its own tests are only run by its own workspace.
+(cd ../soma-fabric && cargo test --workspace)
+
 # The Python side still needs `mos`, because that is where torch is.
 conda activate mos
 cd python && maturin develop && python -m pytest tests/ -q
@@ -104,12 +109,13 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
-`examples/` holds ten notebooks — declaring a graph, watching a run, training,
+`examples/` holds twelve notebooks — declaring a graph, watching a run, training,
 a study, the health of a network, one problem end to end, a real architecture
 diagnosed in **problem → symptoms → solution → healthy** cycles, what can be
-said before a step is taken, a fleet of machines, and where the data comes from
-— **with their outputs stored**, so opening one shows what it does. Every
-figure is kept twice: the plotly JSON for a live viewer and a PNG for a static
+said before a step is taken, a fleet of machines, where the data comes from,
+what an edit did, and where a kept value came from — **with their outputs
+stored**, so opening one shows what it does. Every figure is kept twice: the
+plotly JSON for a live viewer and a PNG for a static
 one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
 time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not
 installed and is not needed, it is only the CLI around it. Writing them is how
@@ -117,29 +123,33 @@ two real bugs were found.
 
 ## Status
 
-Twenty-seven use cases closed: the graph, the engine, the plan, the fans, the DSL, a
-single node contract, `Opaque`, the waves, the device, training, the distributed
+Twenty-nine use cases closed: the graph, the engine, the plan, the fans, the
+DSL, a single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
 itself, the record of what happened, the health of a network, what can be
 said before a step is taken, the machines it ran on, where the data comes from,
-not running what nobody needs, what an edit did before paying to find out, and
-what a node was built with.
-A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`,
-executed in Rust, spread across processes with `.at("worker1")`, trained from
-outside with `soma_next.torch.Trainer` — including the part of it that runs on
-another machine, where a **trainer travels to stand beside the node** and the
-node is never asked to know it — and **printed in a notebook**, where the figure
-shows what runs at once and what leaves the machine. See `docs/use-cases.md`.
+not running what nobody needs, what an edit did before paying to find out,
+what a node was built with, how a client finds out where a host is, and what a kept value says about
+where it came from.
+A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`, executed in
+Rust, spread across processes with `.at("worker1")` and a `broker=` that says
+who knows where that is, trained from outside with `soma_next.torch.Trainer` —
+including the part of it that runs on another machine, where a **trainer travels
+to stand beside the node** and the node is never asked to know it — and
+**printed in a notebook**, where the figure shows what runs at once and what
+leaves the machine. See `docs/use-cases.md`.
 
 **Five orthogonal facts**, and confusing them is the easy mistake: `Graph` says
 **what** exists, `Catalog` **who** executes it, `Placement` **where**, `Plan`
 **when**, and `Memory` **what is remembered** of each node. The device
 deliberately does not live in the plan.
 
-**Four holes, and the core provides them without filling any**: `Node` is the
+**Five holes, and the core provides them without filling any**: `Node` is the
 user's, `Transport` carries a slice elsewhere, `Keeper` hashes a recipe and keeps
-what it names, and `Watcher` is told what happened.
+what it names, `Watcher` is told what happened, and `Codec` writes down what only
+exists in one process — it came into the core when a third tenant showed it was
+not the wire's.
 
 There have been four before, and the one that went is the lesson: `Driver` served
 what a suspended node asked for, and after eighteen use cases it had **no
@@ -149,10 +159,9 @@ exists not to build. `Watcher` arrived with two implementors in two crates on th
 first day, which is the bar. What `Driver` left behind is the channel: `Ctx` is
 where whoever executes hands a node what it knows, so an agentic layer that wants
 something injected puts it there and **no node signature changes**. The core
-still has no dependencies. `transport` has two of its own, filled from `python/`:
-`Provision` turns an artifact into a catalog, and `Codec` writes down what only
-exists in one process — so an `Opaque` crosses a wire, and what does not is the
-one nobody registered a codec for.
+still has no dependencies. The wire has one of its own, filled from `python/`:
+`Provision` turns an artifact into a catalog. Between them an `Opaque` crosses a
+wire, and what does not is the one nobody registered a codec for.
 
 **Where a graph gets cut is the pair `(host, trained)`**: `.at()` already said
 the first half and the graph owns it; the second is a fact of the training run,
@@ -446,7 +455,7 @@ what ran over there, which is the wire and the queue — and neither half of tha
 subtraction belongs to a node.
 
 Plus the half no record can derive: how loaded a machine is. The worker says it,
-in **a vocabulary of its own** in `transport/`, crossing as
+in **a vocabulary of its own** in the wire, crossing as
 `Fact::Said { kind, pairs }` — a carrier and not a vocabulary, so the core never
 learns what a load average is. That cost **nothing on the wire**: `Answer::Saw`
 already carries a `Fact` and the engine already wraps what comes back in

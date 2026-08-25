@@ -5,6 +5,8 @@
 //! cannot have: the id → Python object map, and the two calling conventions. If
 //! a domain rule ends up written here, it is in the wrong place.
 
+#[cfg(feature = "remote")]
+mod broker;
 mod codec;
 mod frame;
 mod health;
@@ -23,7 +25,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 #[cfg(feature = "remote")]
-use remote::PyWorker;
 use soma_next_core::{
     Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Keys, Memory,
     MemoryError, NodeId, Packing, Placement, RunError, cacheable, compile, distribute,
@@ -56,6 +57,45 @@ fn memory_err(e: MemoryError) -> PyErr {
 /// The same for a run failure.
 fn run_err(e: RunError) -> PyErr {
     PyValueError::new_err(e.to_string())
+}
+
+/// What was handed to `stamping=`, as pairs of text.
+///
+/// Text on both sides and refused otherwise, rather than `str()` over whatever
+/// arrived. A store keeps this for years and hands it back as it got it: a
+/// `Path` that stringifies into somebody's home directory, or an object whose
+/// `repr` carries an address, is provenance that means nothing on the machine
+/// that reads it. Better to be told now than to find it out from a record.
+fn stamped(said: &Bound<'_, PyAny>) -> PyResult<Vec<(String, String)>> {
+    let map = said.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err(format!(
+            "`stamping` takes a dict of text to text; a `{}` arrived",
+            said.get_type()
+                .name()
+                .map_or_else(|_| "?".to_string(), |name| name.to_string())
+        ))
+    })?;
+    map.iter()
+        .map(
+            |(what, told)| match (what.extract::<String>(), told.extract::<String>()) {
+                (Ok(what), Ok(told)) => match soma_next_core::OURS.contains(&what.as_str()) {
+                    // Refused and not quietly dropped. Somebody stamping `node`
+                    // believes they are saying something, and a value that came
+                    // back saying another node produced it would be the one kind of
+                    // mistake this whole mechanism exists to make impossible.
+                    true => Err(PyValueError::new_err(format!(
+                        "`{what}` is written by the engine itself, so `stamping` cannot set it: \
+                     {} are its own. Anything else is yours",
+                        soma_next_core::OURS.join(", "),
+                    ))),
+                    false => Ok((what, told)),
+                },
+                _ => Err(PyValueError::new_err(format!(
+                    "`stamping` takes text on both sides, and `{what}` is stamped with `{told}`"
+                ))),
+            },
+        )
+        .collect()
 }
 
 /// `soma_next.Graph` — the core's topology plus the implementations.
@@ -123,7 +163,8 @@ impl PyGraph {
     }
 
     /// Sends a node to a host, by name: the other half of `place`, independent
-    /// of it. What the name resolves to is decided in `forward(workers=…)`.
+    /// of it. What the name resolves to is decided by whoever executes, in
+    /// `forward(broker=…)`.
     fn place_at(&mut self, node_id: &str, host: &str) -> PyResult<()> {
         let id = self.known(node_id)?;
         self.placement.place_at(id, Host::from(host));
@@ -406,7 +447,7 @@ impl PyGraph {
 
     /// Executes the whole graph and returns what it produced.
     ///
-    /// `workers=` says what each host resolves to. A node sent to a host that
+    /// `broker=` says who knows where each host is. A node sent to a host that
     /// is not there is **not executed here just in case**.
     ///
     /// `store=` is a directory: with one, whatever was declared `.cached()` is
@@ -419,14 +460,26 @@ impl PyGraph {
     /// callable, or a list of them. A node on another machine is no different —
     /// what its worker saw comes back down the connection that was already open
     /// and arrives here saying which host it was.
-    #[pyo3(signature = (input = None, *, workers = None, store = None, watching = None))]
+    /// `stamping=` is a `{str: str}` written beside **everything this run
+    /// keeps**, on top of the node, the fingerprint and the input the engine
+    /// writes itself.
+    ///
+    /// It is how a cached value stops being an anonymous hash. A store outlives
+    /// every process that wrote to it, and *which environment produced this,
+    /// which run did it belong to, which commit was checked out* are questions
+    /// asked months later with another tool in hand — and none of them can be
+    /// recovered from a key, which does not run backwards. The core is not told
+    /// what any of those words mean: they are the caller's, passed through
+    /// untouched, exactly like the name a study is filed under.
+    #[pyo3(signature = (input = None, *, broker = None, store = None, watching = None, stamping = None))]
     fn forward(
         &self,
         py: Python<'_>,
         input: Option<&Bound<'_, PyAny>>,
-        workers: Option<&Bound<'_, PyDict>>,
+        broker: Option<&Bound<'_, PyAny>>,
         store: Option<&Bound<'_, PyAny>>,
         watching: Option<&Bound<'_, PyAny>>,
+        stamping: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyObject> {
         let start = match input {
             Some(obj) => value::from_py(obj)?,
@@ -435,30 +488,35 @@ impl PyGraph {
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
         let plan = distribute(&plan, &self.placement);
 
-        // Before releasing the GIL: a `PyRef` cannot survive `allow_threads`.
+        // One handle per host the graph names, and **the broker's own**: the
+        // same one that was provisioned a moment ago, because a second handle
+        // for a host would carry the catalog nobody dispatches through.
         #[cfg(feature = "remote")]
-        let reachable: Vec<(Host, std::sync::Arc<soma_fabric_wire::Worker>)> = match workers {
+        let met: Vec<(Host, std::sync::Arc<soma_fabric_broker::Reaching>)> = match broker {
             None => Vec::new(),
-            Some(dict) => dict
-                .iter()
-                .map(|(host, worker)| {
-                    let host = Host::from(host.extract::<String>()?);
-                    let worker = worker.downcast::<PyWorker>().map_err(|_| {
-                        PyValueError::new_err(format!(
-                            "`workers` takes a dict from host to Worker; for `{host}` something else arrived"
-                        ))
-                    })?;
-                    Ok((host, worker.get().transport()))
-                })
-                .collect::<PyResult<Vec<_>>>()?,
+            Some(obj) => {
+                let broker = obj.downcast::<broker::PyBroker>().map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "`broker` takes a Broker; a `{}` arrived",
+                        obj.get_type()
+                            .name()
+                            .map_or_else(|_| "?".to_string(), |name| name.to_string())
+                    ))
+                })?;
+                self.placement
+                    .hosts()
+                    .into_iter()
+                    .map(|host| (host.clone(), broker.get().reaching(host)))
+                    .collect()
+            }
         };
 
         // Without the wire there is nowhere for a slice to go, and saying so is
         // better than running the graph here and quietly ignoring `.at()`.
         #[cfg(not(feature = "remote"))]
-        if workers.is_some_and(|dict| !dict.is_empty()) {
+        if broker.is_some() {
             return Err(PyValueError::new_err(
-                "this build has no transport in it, so `workers` cannot be honoured: \
+                "this build has no transport in it, so `broker` cannot be honoured: \
                  install the remote half, or run the graph without placing anything",
             ));
         }
@@ -483,11 +541,19 @@ impl PyGraph {
             .placed(&self.placement)
             .remembering(&self.memory);
         #[cfg(feature = "remote")]
-        for (host, worker) in &reachable {
-            executor = executor.reaching(host.clone(), worker.as_ref());
+        for (host, reaching) in &met {
+            executor = executor.reaching(host.clone(), reaching.as_ref());
         }
         if let Some(packing) = &packing {
             executor = executor.keeping(packing);
+        }
+        // Sorted, so two runs of the same thing write the same record: a `dict`
+        // iterates in insertion order, and provenance that depends on the order
+        // somebody built a dictionary is provenance you cannot compare.
+        if let Some(stamping) = stamping {
+            let mut said = stamped(stamping)?;
+            said.sort();
+            executor = executor.stamping(said);
         }
         // Built before the GIL is released, like the workers: what it holds is
         // a Python object, and that cannot be reached for once the GIL is gone.
@@ -608,7 +674,7 @@ fn _soma_next(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCtx>()?;
     m.add_class::<value::PyOpaque>()?;
     #[cfg(feature = "remote")]
-    m.add_class::<PyWorker>()?;
+    m.add_class::<broker::PyBroker>()?;
     m.add_class::<store::PyStore>()?;
     m.add_class::<frame::PyFrame>()?;
     m.add_class::<source::PySource>()?;

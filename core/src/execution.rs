@@ -40,11 +40,44 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::Instant;
 
-/// What the engine writes beside a value it keeps. Private because the engine
-/// is the only one that writes it and the only one that reads it back: to a
-/// [`Keeper`] the metadata is text it hands over untouched.
-const NODE: &str = "node";
-const FINGERPRINT: &str = "fingerprint";
+/// What the engine writes beside a value it keeps.
+///
+/// **Public, and that is a decision.** They were private while the engine was
+/// the only one that wrote them and the only one that read them back. It is not
+/// any more: a store outlives every process that wrote to it, and *which code
+/// made this blob* is a question somebody asks months later with a different
+/// tool in their hand. Reading it means agreeing on these three strings, and
+/// the alternative — the reader copying the literals — is two places saying the
+/// same thing, with no way to tell which governs the day they disagree.
+pub const NODE: &str = "node";
+
+/// Which version of the code produced it.
+///
+/// Written beside the value rather than mixed into the name, which is what
+/// makes a cache that has quietly gone cold tellable from one that is working.
+pub const FINGERPRINT: &str = "fingerprint";
+
+/// What the graph was fed, by the name its content has.
+///
+/// The one piece of provenance the caller **cannot** supply: only a
+/// [`Keeper`](crate::Keeper) can hash a [`Value`], so only the engine is
+/// standing where this is knowable. And it cannot be recovered afterwards —
+/// a key does not run backwards — so a blob written without it can never be
+/// told which input it belongs to. That is the whole reason it is written now
+/// rather than worked out later.
+///
+/// Only on [`run`](Executor::run) and never on [`resume`](Executor::resume): a
+/// worker is handed a slice, and what arrives at a slice is not the graph's
+/// input. Stamping it there would be a confident lie. Whoever coordinates knows
+/// the real one and can send it along in its own stamp.
+pub const INPUT: &str = "input";
+
+/// The words the engine writes itself, so nobody else writes them.
+///
+/// Public because refusing a stamp is done where somebody is typing, and that
+/// is not here: a layer that wants to say *`node` is not yours to set* has to
+/// be able to ask which ones are.
+pub const OURS: [&str; 3] = [NODE, FINGERPRINT, INPUT];
 
 /// Executes plans.
 ///
@@ -74,6 +107,14 @@ pub struct Executor<'a> {
     /// one number for the whole walk and threading it through six signatures
     /// would say it was six.
     since: Option<Instant>,
+    /// What else to write beside everything this run keeps. **Injected**, like
+    /// the keeper, and opaque: see [`stamping`](Self::stamping).
+    stamp: Vec<(String, String)>,
+    /// The name of what the graph was fed. Worked out once per
+    /// [`run`](Self::run), for the same reason `since` is: one value for the
+    /// whole walk, and hashing the input once per kept node would be paying for
+    /// the same answer at every step.
+    input: Option<Key>,
 }
 
 impl<'a> Executor<'a> {
@@ -87,6 +128,8 @@ impl<'a> Executor<'a> {
             transports: Vec::new(),
             watcher: None,
             since: None,
+            stamp: Vec::new(),
+            input: None,
         }
     }
 
@@ -146,6 +189,30 @@ impl<'a> Executor<'a> {
         self
     }
 
+    /// The same executor, writing this beside everything it keeps.
+    ///
+    /// **The core does not know what is in it**, and that is the point. Which
+    /// environment produced a value, which run it belonged to, which commit was
+    /// checked out — every one of those is a fact about the world outside a
+    /// graph, and a core that had a field for any of them would be a core that
+    /// had learnt a word belonging to whoever is standing above it. The same
+    /// division of labour as [`Meta`](crate::Meta) itself, and as the name a
+    /// study is filed under: a string the caller chooses and this passes
+    /// through untouched.
+    ///
+    /// **Injected and does not travel**, like the keeper: what a value's
+    /// provenance is belongs to whoever ran, not to the graph. A slice sent to
+    /// another host is stamped by the engine over there, with whatever that
+    /// side was told.
+    ///
+    /// It exists because a store outlives the process that wrote to it. Without
+    /// it a cache is a pile of hashes that nobody can ever attribute again — not
+    /// wrong, just mute, which is worse the longer it is left.
+    pub fn stamping(mut self, stamp: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.stamp = stamp.into_iter().collect();
+        self
+    }
+
     /// Hands over one fact, if anybody is listening.
     ///
     /// The closure is the whole point: `node.clone()` and a formatted message
@@ -165,7 +232,11 @@ impl<'a> Executor<'a> {
     /// executed for somebody else is not a `forward`.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let began = Instant::now();
-        let walking = self.since(began);
+        // The input's name, once. `None` when there is no keeper to hash with,
+        // or when the input cannot leave this process — the same absence that
+        // stops anything under it being named at all, said the same way.
+        let named = self.keeper.and_then(|keeper| keeper.key_of(&input));
+        let walking = self.since(began).fed(named);
         let answer = walking.running(plan, input);
         match &answer {
             Ok(_) => walking.saw(|| Fact::Finished {
@@ -191,7 +262,17 @@ impl<'a> Executor<'a> {
             transports: self.transports.clone(),
             watcher: self.watcher,
             since: Some(began),
+            stamp: self.stamp.clone(),
+            // Not carried over: `run` works it out and sets it, and `resume`
+            // deliberately leaves it empty. A slice's input is not a graph's.
+            input: None,
         }
+    }
+
+    /// The same walk, knowing what the graph was fed.
+    fn fed(mut self, input: Option<Key>) -> Self {
+        self.input = input;
+        self
     }
 
     /// How long this walk has been going, or zero if nobody started a clock.
@@ -888,6 +969,26 @@ impl<'a> Executor<'a> {
         if let Some(written) = memory.fingerprint_of(node) {
             meta.push((FINGERPRINT, written));
         }
+        if let Some(fed) = &self.input {
+            meta.push((INPUT, fed.as_str()));
+        }
+        // What the engine knows is not shadowed by a caller who happened to
+        // pick one of its words. **Dropped and not merely put last**: whether
+        // last or first wins is the reader's convention, not this one's, and
+        // the most obvious way to read a list of pairs — turning it into a
+        // map — takes the last. So the pair never gets written, and the meta
+        // of a value has no key in it twice.
+        //
+        // Silently here on purpose: the layer a person types in refuses it out
+        // loud, and by the time a stamp reaches this it has already been
+        // checked. What is left for this to be is an invariant, and an
+        // invariant that can be talked out of is not one.
+        meta.extend(
+            self.stamp
+                .iter()
+                .filter(|(what, _)| !OURS.contains(&what.as_str()))
+                .map(|(what, said)| (what.as_str(), said.as_str())),
+        );
         match keeper.keep(key, output, &meta) {
             Ok(()) => self.saw(|| Fact::Kept {
                 node: node.clone(),

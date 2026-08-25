@@ -11,11 +11,13 @@ invisible to `help()`, to an IDE, and to a type checker.
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from soma_next import _dsl
 from soma_next._soma_next import Graph as _RustGraph
-from soma_next._soma_next import Store, Worker
+from soma_next._remote import Broker, Worker, _runtime
+from soma_next._soma_next import Store
 from soma_next._typing import Fact, Figure, Inside, Overlay
 
 if TYPE_CHECKING:
@@ -119,15 +121,16 @@ class Graph(_RustGraph):
         self,
         input: Any | None = None,
         *,
-        workers: dict[str, Worker] | None = None,
+        broker: Broker | None = None,
         store: Store | str | None = None,
         watching: Callable[[Fact], None] | list[Callable[[Fact], None]] | None = None,
+        stamping: dict[str, str] | None = None,
     ) -> Any:
         """Executes the whole graph and returns what it produced.
 
-        With `workers={"w1": Worker.at(...)}` you say what each host resolves
-        to. **This method sends the nodes**, not you: the graph is the one that
-        knows which goes where.
+        With `broker=Broker.embedded({"w1": Worker.at(...)})` you say who knows
+        where each host is. **This method sends the nodes**, not you: the graph
+        is the one that knows which goes where.
 
         `store` is a directory or a `Store`: with one, whatever was declared
         `.cached()` is looked up before being computed and kept afterwards. Both
@@ -147,11 +150,62 @@ class Graph(_RustGraph):
         open, and says which host it was.
         """
         self._check_it_was_obeyed()
-        self.provision(workers)
-        return super().forward(input, workers=workers, store=store, watching=watching)
+        self.provision(broker)
+        return super().forward(
+            input,
+            broker=broker,
+            store=store,
+            watching=watching,
+            stamping=self._provenance(store, stamping),
+        )
 
-    def provision(self, workers: dict[str, Worker] | None) -> None:
-        """Tells each worker what it is going to need, before the first node runs.
+    def _provenance(
+        self, store: "Store | str | None", stamping: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        """What gets written beside everything this run keeps.
+
+        The environment goes in **without anybody asking**, and that is the
+        point: provenance that has to be remembered is provenance that is
+        missing from exactly the runs nobody thought were going to matter. It is
+        also the one thing here the engine cannot work out and the key will
+        never carry — a fingerprint stops at what is installed, so the version
+        of the interpreter is not in any name a run produces.
+
+        The reading of it is bound once, under `env/<digest>`, so what travels
+        on each value is twelve characters and what explains them is one record
+        anybody can `cat`. Whoever reads this store back a year from now needs
+        both: the short name to group by, and the long one to understand.
+
+        Only with a store, because without one nothing is kept and there is
+        nothing to say it about.
+        """
+        if store is None:
+            return stamping
+
+        from soma_next import _environment
+
+        said = _environment.environment()
+        name = _environment.named(said)
+
+        # Bound and not claimed: two runs in the same environment write the same
+        # reading, so whoever gets there second is writing what is already
+        # there. A claim would be asking who won a race that has no loser.
+        #
+        # And a failure here does not stop a run. Not being able to write down
+        # what the environment was is worth a line on `stderr`; refusing to
+        # execute over it would be losing the work to save the label.
+        try:
+            kept = store if isinstance(store, Store) else Store(str(store))
+            kept.keep(f"{_environment.WHERE}/{name}", said)
+        except Exception as why:  # noqa: BLE001
+            print(f"the environment could not be written down: {why}", file=sys.stderr)
+
+        # The caller's on top: `stamping` is how soma-tree says which commit and
+        # which investigation this was, and neither is anything this can guess.
+        return {"env": name, **(stamping or {})}
+
+    def provision(self, broker: Broker | dict[str, Any] | None) -> None:
+        """Tells each host what it is going to need, before the first node runs.
 
         `forward` calls it, so whoever runs a graph in one go never says it out
         loud. Whoever runs one **in pieces** — stage by stage, or its transpose —
@@ -164,14 +218,43 @@ class Graph(_RustGraph):
         by a worker that has not greeted yet, taking with it every activation and
         every optimizer state that lived over there.
 
-        A worker that gets nothing is told nothing, for the same reason: an
+        A host that gets nothing is told nothing, for the same reason: an
         artifact with no nodes in it is a catalog too, and it would take the
         place of the one the next graph is about to send.
+
+        **Two hosts that turn out to be one place are told once**, with the union
+        of what they hold. Which of them are one place is the broker's to know,
+        and it is asked here — the rendezvous is what has to happen before
+        anything is packed, while the wire itself waits for somebody to send
+        work down it.
         """
+        if broker is None:
+            return
         whole = self._slice_of or self
-        for worker, nodes in whole._share_out(workers or {}).items():
-            if nodes:
-                worker.carry(nodes)
+        if not isinstance(broker, Broker):
+            # A dict of things that know how to `carry`. It is what a `Broker`
+            # replaces, and it survives here for whoever stands one in.
+            for carrier, nodes in whole._share_out_by_carrier(broker).items():
+                if nodes:
+                    carrier.carry(nodes)
+            return
+
+        for hosts, nodes in whole._share_out(broker):
+            if not nodes:
+                continue
+            declared = broker.packing_for(hosts[0])
+            for host in hosts[1:]:
+                other = broker.packing_for(host)
+                if (other._mode, other._send) != (declared._mode, declared._send):
+                    raise ValueError(
+                        f"`{hosts[0]}` and `{host}` are the same place, so they get one "
+                        f"catalog, and they are declared with different packing "
+                        f"({declared._mode!r} and {other._mode!r}). Say the same thing "
+                        f"for both, or give them different addresses"
+                    )
+            kind, ident, blob = declared.packed(nodes)
+            for host in hosts:
+                broker.provision(host, kind, ident, blob, _runtime())
 
     def _check_it_was_obeyed(self) -> None:
         """That whoever was declared settled really was settled.
@@ -235,23 +318,45 @@ class Graph(_RustGraph):
                 f"whoever knows how to hash what is inside"
             )
 
-    def _share_out(self, workers: dict[str, Worker]) -> dict[Carrier, dict[str, Any]]:
-        """Which nodes fall to each worker, grouped by worker and not by host.
+    def _share_out(self, broker: Broker) -> list[tuple[list[str], dict[str, Any]]]:
+        """Which nodes fall to each **wire**, and which host names share it.
 
-        Two hosts can point at the same one, and provisioning it twice with half
-        each time would leave it without the other half: the session opens with
-        the first artifact that reaches it.
+        Grouped by wire and not by host for the reason `provision` states: two
+        names for one process get one catalog, and provisioning it twice with
+        half each time leaves it without the other half.
+
+        A host the broker does not know is left out rather than raised over.
+        Naming a host nobody listed is not this step's failure to report: the
+        run either reaches that slice or it does not, and whichever happens says
+        so with the slice in front of it.
+        """
+        hosts = self.hosts()
+        share: dict[bytes, tuple[list[str], dict[str, Any]]] = {}
+        for host in sorted(set(hosts.values())):
+            token = broker.token_for(host)
+            if token is None:
+                continue
+            names, nodes = share.setdefault(token, ([], {}))
+            names.append(host)
+            for node_id, where in hosts.items():
+                if where == host:
+                    nodes[node_id] = self.implementation(node_id)
+        return list(share.values())
+
+    def _share_out_by_carrier(self, workers: dict[str, Any]) -> dict[Carrier, dict[str, Any]]:
+        """The same, for a dict of things that carry rather than a broker.
+
+        Grouped by the object, because that is what identity means when the
+        caller is the one holding it.
         """
         hosts = self.hosts()
         share: dict[Carrier, dict[str, Any]] = {}
         for host, worker in workers.items():
             if not hasattr(worker, "carry"):
                 raise ValueError(
-                    f"`workers` takes a dict from host to Worker; for `{host}` a "
-                    f"`{type(worker).__name__}` arrived"
+                    f"provisioning takes a Broker, or a dict from host to something "
+                    f"that carries; for `{host}` a `{type(worker).__name__}` arrived"
                 )
-            # The `cast` is what the line above just proved: the engine's
-            # `Worker` has no `carry`, and whoever reached here does.
             theirs = share.setdefault(cast(Carrier, worker), {})
             for node_id, where in hosts.items():
                 if where == host:

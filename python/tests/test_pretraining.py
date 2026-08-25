@@ -24,6 +24,8 @@ What this file is defending, beyond the numbers:
   twenty-four forwards of the head and four of the body.
 """
 
+import json
+
 import pytest
 
 from soma_next import Graph, Node, Opaque
@@ -238,8 +240,17 @@ def test_there_is_one_kept_value_per_node_and_batch(body, batches, tmp_path):
     _, trainer = settled(expression, Head(HID, CLASSES), str(tmp_path))
     trainer.fit(batches, epochs=3)
 
-    names = list((tmp_path / "names").rglob("sha256*"))
-    assert len(names) == 12, "three kept nodes over four batches"
+    # Los **valores**, no los registros. Un store lleva más cosas escritas que
+    # los valores de una corrida —la lectura del entorno contra el que se
+    # produjeron, sin ir más lejos— y contar ficheros contaba eso también.
+    # Subir el número a 13 habría dejado la prueba diciendo «doce» sobre algo
+    # que ya no eran doce de nada.
+    kept = [
+        json.loads(record.read_text())["name"]
+        for record in (tmp_path / "names").rglob("sha256*")
+    ]
+    values = [name for name in kept if name.startswith("value:")]
+    assert len(values) == 12, f"three kept nodes over four batches: {kept}"
 
 
 # ── The node with no gradients, which is not a special case ──

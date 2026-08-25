@@ -1226,6 +1226,13 @@ g.forward(x, workers={"gpu-box": Worker.at("gpu-box:7000",
                                            mode="network", send=["my_package"])})
 ```
 
+> **Read the two `workers=` lines as `broker=`.** Since CU28 a client says *who
+> knows where each host is* — `broker=Broker.embedded({"gpu-box": Worker.at(…)})`
+> — and since *After CU27* the crate this section calls `soma-next-transport` is
+> soma-fabric's `wire/`, moved unchanged. Both are recorded at the end of this
+> file rather than rewritten here: what a section says is what was true when it
+> closed.
+
 Status: **closed**. A crate of its own, `soma-next-transport`, and the generic
 worker in `soma_next.worker`. 74 tests in the transport crate today — 49 of the
 worker, 22 of the protocol, 3 of the artifact — plus `test_remote.py` (37),
@@ -1808,6 +1815,10 @@ Trainer(g, objective=cross_entropy,
         trains=trains,                                          # the half that is not
         workers={"gpu": Worker.at("node3:7000")}).fit(data, epochs=10)
 ```
+
+> `workers=` became `broker=` in CU28, here as in `Graph.forward`. The shape of
+> what it is given is the same, and what it resolves to is no longer a
+> connection.
 
 Status: **closed**.
 
@@ -5244,3 +5255,347 @@ their weights makes that untrue.
 - [x] a cache that cannot be named is refused before the first node
 - [x] and a graph that keeps nothing is not asked
 - [x] nobody saying what built it is not a reason to refuse a name
+
+---
+
+## After CU27 — The wire leaves, and soma-fabric opens
+
+```
+soma-next/transport/   →   soma-fabric/wire/     (sixteen commits, and their history)
+```
+
+Not a use case: nothing can be written the day after that could not be written
+the day before. It is a **cut**, made when four things that shared the name
+*remote execution* turned out to want opposite things:
+
+| | what it is | what it wants | where it lives |
+|---|---|---|---|
+| **placement** | `.at("w1")`: the graph says a node runs elsewhere | to be a *declaration*, part of the graph's meaning | **stays** |
+| **transport** | bytes over a wire, framed, with codecs | low latency, a hot connection | leaves |
+| **provisioning** | how the code reaches the other side | reproducibility | leaves |
+| **coordination** | who does which work | durability, retries, leases | leaves |
+
+There is no single thing that is both *a hot connection* and *durability with
+retries*, which is why one name over the four of them read as a tangle rather
+than a design. Placement is a declaration and belongs beside the graph that
+makes it; the other three are mechanism.
+
+What soma-next keeps is `Transport`, **a hole with one method**, and the
+`.at()` that fills it with a name. What it loses is a crate: `remote` now pulls
+two path dependencies instead of one, and a build without them still compiles —
+the seam is a fact the compiler checks rather than a convention.
+
+### The boundary is not a layer, and the bill says so
+
+The two repositories point at each other: `soma-fabric/wire` depends on
+`soma-next-core` and `soma-next-store`, and `soma-next-python` depends on
+`soma-fabric-wire`. No cycle — they are different crates — but no layering
+either, and pretending otherwise would have put the codec, the store or the
+`Value` on the wrong side of the cut. What the arrangement really assumes is
+that **the two repositories sit side by side and move together**, which is what
+the path dependencies say out loud. The day either is published on its own they
+become versions.
+
+It is not free, and the place it shows is the one nobody predicts: the cluster
+images build from **two contexts** now, the repository and `fabric`, because a
+single root over both is a directory of unrelated projects and every byte of it
+would go to the daemon.
+
+The move is verified the only way a move can be: **87 tests green on the other
+side of it**, having changed nothing.
+
+---
+
+## CU28 — A client talks to a broker
+
+```python
+from soma_next import Broker, Graph, Worker
+
+g = Graph.somatize(Encode() >> Classify().at("gpu-box"))
+g.forward(x, broker=Broker.embedded({"gpu-box": Worker.at("gpu-box:7000")}))
+```
+
+Status: **closed**. A crate in soma-fabric, `soma-fabric-broker`, with 45 tests
+— 16 of the thread, 13 of the handle, 11 of the protocol, 5 of the paths —
+plus `test_remote.py` (41) and four in `core/tests/unit/placement.rs`.
+
+### The question: what changes for somebody who has no platform?
+
+The answer this use case exists to give is **which broker, and that is a URL**.
+Not a degraded mode with its own code, not a branch on whether there is an
+account: the same call, the same protocol, the same handle.
+
+| deployment | what it is | what it adds |
+|---|---|---|
+| **embedded** | in the client's own process | nothing. It is what makes soma work alone |
+| local | a process on a head node | reachable by more than one client |
+| platform | ours | authentication, pairing, leases, metering |
+
+Only the first exists today, and there is deliberately **no `Broker` trait**: a
+trait with one implementor is the shape this project was started to stop
+writing. It arrives with the second.
+
+### A `Worker` stops being a connection and becomes a declaration
+
+That is the change a caller can see, and it has a consequence worth stating
+rather than discovering: **an unreachable host now fails when it is needed
+rather than when it is named.** `Worker.at("bad:7000")` used to fail in the
+constructor; now it fails inside the run, from the slice that wanted it. Better
+behaviour — a graph names hosts a run may never reach, and a branch not taken is
+a worker not needed — and a change, not a side effect.
+
+### Ask eagerly, connect lazily
+
+The two costs pull in opposite directions and both are real, so the split is
+between them:
+
+- **Asking** where a host is costs tens of bytes, and has to happen **before**
+  the first node runs, because what gets packed for a host depends on which
+  hosts turn out to be the same place.
+- **Connecting** costs a socket, a process, or both.
+
+So a rendezvous is asked for once and remembered by the session, and the wire it
+describes is opened the first time somebody actually sends work down it. The ask
+happens once however it was triggered: a client that resolved every host up front
+to decide what to pack finds the answers already there when the run reaches them.
+
+### Two names for one place are one wire, and it is not a nicety
+
+A worker has **one** catalog, and half of one is a different catalog.
+Provisioning the same process twice, once per host name, replaces what it had
+live and takes every activation over there with it — a run that quietly loses
+its state, not an extra socket.
+
+Only the session sees more than one host at a time, so only the session can
+know. But **what to pack is Python's**, because it is the half that knows what
+a `cloudpickle` is. The two are reconciled without either learning the other's
+business: `wire_token(host)` answers with **opaque bytes that are equal exactly
+when two hosts are one wire**. Python groups by equality and never finds out
+what a path is, nor when two of them count as one.
+
+What decides it is `Path::shared`, and the asymmetry in it is the point: an
+**address** is an identity — the same host and port is the same process — while
+a **command** is a thing to run, and running it twice gives two of them. Today's
+suite stands up two hosts from an identical `argv` and requires two processes.
+
+### The ladder of four, of which two can be answered
+
+This is the one place the crate builds ahead of its consumer, on purpose:
+
+1. **same process** — nothing is transferred
+2. **shared mount** — a path is written and read; free, and a cluster has one
+3. **direct socket** — one crossing, lowest latency. The broker steps out
+4. **relayed** — streamed through the broker, no disk and no durability
+
+Two of them can be answered today. All four are in the message, because the
+alternative is that adding a rung later changes `Reply::Met` — and a message
+that changes is a version that changes for everybody. **The ladder is the
+design; what arrives later is the probing that chooses, not the vocabulary.**
+
+An object store is not one of the rungs. It is where durable things live, and
+renting eleven nines for an activation that lives forty milliseconds is the
+wrong shape before it is a bill.
+
+The rung that transfers nothing answers with a `SlotId` and **never a handle**,
+which looks like a needless indirection and is not: every message here has to
+survive a round trip through bytes, including the ones an embedded broker
+answers without leaving the process. It costs nothing and buys a conformance
+suite that can round-trip every message there is.
+
+### The embedded broker is a thread, and it really serializes
+
+Both of those look like waste and neither is, because **control and cargo go by
+different routes**:
+
+| | what crosses | how much | how often |
+|---|---|---|---|
+| the rendezvous | a path | tens of bytes | once per host per session |
+| the wire next door | an activation | megabytes | once per forward, fifty thousand forwards |
+
+A run across four workers is nine messages — one greeting, four rendezvous, four
+goodbyes — some tens of microseconds, once, outside the loop. The broker is in
+the first row and steps out of the second, so being honest here is not
+measurable there. And being honest buys the thing that matters: **the protocol
+is exercised for real from the first day**, by a round trip that actually
+happens, before any broker exists outside a process. A protocol whose only
+implementation never serialized anything would be a protocol nobody had tested.
+
+The failure that type exists not to have is a client blocked forever on an
+answer that is never coming. Every channel operation maps to `Unanswered::Gone`
+and never to an `unwrap`, and that is pinned by a test rather than by care —
+which is why `Embedded::served_by` is public: without a way to stand up a desk
+that fails, the one failure mode worth testing is the one that cannot happen.
+
+### Which hosts does this graph name?
+
+`Placement::hosts()`, the half of `host_of` that reads the other way, and it
+exists because of **who asks**. A client handed a dictionary of workers already
+knew the names — they were its keys. A client that talks to a broker does not.
+
+Once each, because a host named by ten nodes is one rendezvous and not ten. And
+**sorted**, which is not tidiness: they come out of a `HashMap`, and iterating
+one gives a different order every run. That would make the order rendezvous are
+asked for — and so the order failures happen in — irreproducible, and this
+project has already paid for a nondeterministic order once, when an artifact's
+id changed because the caller reordered a dictionary.
+
+### What is not honoured yet, said out loud
+
+A `Reply::Met` can carry a `good_for`, and **nothing enforces it**. No broker
+issues one today — the embedded one has no policy — so enforcing it would be a
+mechanism with no tenant. The day one does, the enforcement belongs to the
+handle and not to the engine: it is the only thing that knows when the
+rendezvous was granted.
+
+### Questionnaire
+
+**The protocol survives meeting a binary that disagrees with it**
+(`broker/tests/unit/protocol.rs`)
+- [x] every question and every answer goes and comes back equal
+- [x] a greeting from a version we do not speak is **still readable**
+- [x] and is refused naming both numbers
+- [x] **a greeting that grew a field could not be read, which is why it must not grow**
+- [x] leftovers are as suspicious as missing bytes, and a truncated message is refused
+- [x] an answer is not a question
+
+**The four paths, of which two can be answered** (`broker/tests/unit/path.rs`)
+- [x] all four cross, **including the one that transfers nothing**
+- [x] a pipe and a socket are the same path
+- [x] a command keeps its arguments in order
+- [x] how long it is good for crosses as a duration
+
+**A broker on a thread, which must never become a hang**
+(`broker/tests/unit/embedded.rs`)
+- [x] the session stays open across rendezvous, and is greeted once
+- [x] **a desk that panics is reported and not waited on**
+- [x] and one that has fallen over stays fallen over instead of hanging
+- [x] one thread for the broker, and not one per ask
+- [x] dropping it ends its thread rather than leaving it behind
+- [x] two threads reach one broker at once
+- [x] bytes that are not a message are refused by the desk and are not fatal
+- [x] a host it does not know is told what it does know
+
+**One host, standing in the engine's hole** (`broker/tests/unit/reaching.rs`)
+- [x] building a handle asks the broker nothing
+- [x] **an unreachable host fails when it is needed and not when it is named**
+- [x] four hosts share one greeting, and a host is asked about once however many
+      times it is wanted
+- [x] a rendezvous nobody took is not let go of, and one that was taken is
+- [x] a slice reaches a real worker through the broker, and the second reuses
+      the wire without asking again
+- [x] the paths the negotiation has not arrived for are refused **by name**
+
+**Two names for one place** (`broker/tests/unit/reaching.rs`)
+- [x] two hosts at one address share one wire
+- [x] **two hosts with the same command are two processes**
+- [ ] and what is packed for them is packed **once** — the grouping happens in
+      Python, where nothing exercises it yet
+- [ ] two names for one place declared with different packing are refused — the
+      refusal is written and nothing calls it
+
+**Which hosts a placement names** (`core/tests/unit/placement.rs`)
+- [x] they come back once each
+- [x] a placement that sends nothing away names no hosts
+- [x] **the order does not depend on the order they were placed in**
+- [x] moving a node elsewhere leaves no ghost behind
+
+**What a client writes** (`python/tests/test_remote.py`)
+- [x] a worker is declared with an address or a command, and declaring it starts
+      nothing
+- [x] a broker takes a dict from host to `Worker`, and says which host was wrong
+- [x] two workers are two processes, and the artifact is sent only once
+- [x] a worker that gets nothing is told nothing
+- [x] a graph run in pieces keeps the worker it had
+- [x] `provision` says out loud what `forward` says on its own
+
+### What is pending
+
+- **The grouping has no test of its own.** The two rows above: which host names
+  share a catalog is decided in `_graph.py`, and the rule is proved in Rust
+  against a wire rather than in Python against an artifact. The refusal for two
+  names of one place declared with different packing is written and unexercised.
+- **`session.rs` has no test module**, though it holds the rules that matter
+  most — the ask remembered, the wire shared, the token. They are reached
+  through `reaching.rs`, which is real coverage and not a file of its own.
+- **The local and platform brokers**, the path negotiation, the agent and the
+  queue. They arrive with a consumer and not before.
+
+## CU29 — A kept value says where it came from
+
+```python
+g.forward(x, store=where, stamping={"run": "an-investigation/3847d0c1"})
+```
+
+```
+$ cat where/names/*/* | jq -r .meta
+[["node","embed"],["fingerprint","920aac16"],
+ ["input","sha256:1064…"],["env","2ffccc9569ca"],["run","an-investigation/3847d0c1"]]
+```
+
+Status: **closed**. `Executor::stamping` and the `INPUT` constant in
+`core/src/execution.rs` with 4 tests, `soma_next/_environment.py`, and
+`test_provenance.py` (11).
+
+### The question: what is a hash six months later?
+
+A store outlives every process that ever wrote to it. What survives in it is a
+pile of names that are hashes of recipes, and a recipe **does not run
+backwards**: from a key there is no path back to what made it. Inside one
+afternoon of trying five things, that becomes five sets of intermediates nobody
+can tell apart. They are not wrong. They are mute, which with time is worse.
+
+So what cannot be recovered is written down at the moment it is known.
+
+| written by | what | recoverable later? |
+|---|---|---|
+| the engine | the node, the fingerprint of its code | it already was |
+| the engine | the input, by the name its content has | **never** — only a keeper can hash a value |
+| `soma_next` | the environment | **never** — it is in no key |
+| the caller | a run, a commit, an investigation | not by anybody else |
+
+### Why the environment, when there is already a fingerprint
+
+Because a fingerprint stops at what is **installed**: a distribution goes in by
+name and version, and the standard library by its bare name, since the
+interpreter is compared at the greeting rather than hashed into every class.
+That is right for naming and wrong for provenance — two interpreters name the
+same node identically, and only one of them produced what is on disk.
+
+It is filed once as `env/<digest>` and carried on each value as twelve
+characters. Both, because whoever reads this store back in a year needs the
+short name to group by and the long one to understand.
+
+### Why the core is told nothing about any of it
+
+A commit, an investigation, an environment are facts about the world outside a
+graph. A core with a field for one of them is a core that has learnt a word
+belonging to whoever stands above it — so `stamping` is opaque text it passes
+through untouched, the same division of labour as `Meta` itself and as the name
+a study is filed under. The Python layer fills in the environment because that
+is where soma-next meets an interpreter; everything else arrives from outside.
+
+**Nobody has to remember.** Four of the five are written with no argument
+passed, and that is the point: provenance that has to be asked for is missing
+from exactly the runs nobody thought were going to matter.
+
+### What the caller may not say
+
+`node`, `fingerprint` and `input` are refused where somebody is typing, and
+dropped in the core if they arrive anyway. Not ordering — dropped: whether the
+first or the last of two pairs wins is the reader's convention, and the obvious
+way to read a list of pairs takes the last. A value that came back naming
+another node would be the one mistake the whole mechanism exists to prevent.
+
+### What is pending
+
+- **A `.mapped()` node** is named by the content of its items, so each item's
+  key is its own. They are stamped like everything else and attributable one by
+  one; what nothing can do is *foresee* them, so a reader working from a probe
+  alone will not find them.
+- **A slice on a worker says nothing about the graph's input**, deliberately:
+  what arrives at a slice is not what arrived at the graph. Whoever coordinates
+  knows the real one and can send it in a stamp; nothing does yet.
+- **Nothing deletes.** The `Store` trait has no `forget`, and a
+  content-addressed store where two versions legitimately share a blob needs
+  unbinding and a sweep over *every* name, not an `rm`. It arrives with a
+  consumer and a decision, not before.

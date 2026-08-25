@@ -57,7 +57,7 @@ mod recorder;
 mod s3;
 mod store;
 
-pub use cache::{Cache, bytes_of, value_of};
+pub use cache::{Cache, bytes_of, name_of, value_of};
 pub use digest::Digest;
 pub use local::Local;
 pub use recorder::Recorder;

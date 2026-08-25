@@ -16,6 +16,7 @@ is yours:
 | a helper in the same module that `forward` calls | **yes** |
 | a base class | **yes** |
 | a module constant it uses | **yes** |
+| a class it composes in `__init__` | **yes** |
 | a comment or a docstring | no |
 | another class in the same file it does not touch | no |
 
@@ -41,6 +42,14 @@ would turn versioning into noise. Docstrings are stripped for the same reason.
 What the code **does not name**: a data file it opens by path, an environment
 variable, a model it downloads. It is the same limit Bazel or Nix have when a
 rule declares its inputs badly, and there is no closing it by looking at code.
+
+The **body of a decorator of your own**. `@twice` shows in the class's AST, so
+renaming it changes the version; rewriting what `twice` does to the call does
+not. The wrapper it returns closes over the wrapped function rather than naming
+it, so there is no global to follow from the one to the other — reaching it
+means reading the decorator names off the class's AST, which nothing does yet.
+Unlike the row above this one is closable, and `test_a_decorator_of_your_own`
+is the test that goes green the day somebody closes it.
 """
 
 from __future__ import annotations
@@ -55,7 +64,7 @@ import textwrap
 import types
 from typing import Any, Callable
 
-__all__ = ["CannotVersion", "digest", "fingerprint"]
+__all__ = ["CannotVersion", "bill", "digest", "fingerprint"]
 
 LENGTH = 8
 """How many characters of the sha256 are shown: 32 bits, plenty to tell apart
@@ -79,13 +88,112 @@ def digest(cls: type) -> str:
     """Just the version part. Raises `CannotVersion` if the class has no source
     to read — a notebook, an `exec` — which cannot be resolved from a clone
     anyway."""
-    pieces: set[str] = set()
-    _collect(cls, pieces, set())
+    return _mixed(_reached(cls).pieces)
+
+
+def bill(cls: type) -> list[dict[str, Any]]:
+    """**What the version was computed over**, said instead of only hashed.
+
+    The same walk `digest` makes, handed back: every class and function of yours
+    the fingerprint reached, transitively, and every distribution it stopped at
+    with the version it was pinned to. Sorted, so two processes list it the same
+    way.
+
+    It exists because that walk is the answer to a second question nobody could
+    ask before: **which files is this node made of?** A network written across
+    four modules and assembled in one `__init__` is one class to
+    `inspect.getsourcefile` and four files to whoever has to read it — and the
+    closure that knows the difference was already being computed here and
+    thrown away.
+
+    Each entry says what kind of thing it is, because what you can do with it
+    differs:
+
+    | `kind` | what it is | has a file |
+    |---|---|---|
+    | `yours` | a class or function of the project | yes |
+    | `installed` | something from a distribution, by name and version | no |
+    | `module` | a module named as a whole — `np.array` reaches `numpy` | no |
+    | `value` | a module constant, by the name it was read under | no |
+
+    Only `yours` can be opened, and that is the point of the column: an entry
+    without a file is not a gap in the answer, it is where the fingerprint
+    deliberately stops.
+
+    Raises `CannotVersion` for the same class `digest` refuses, and for the same
+    reason: there is no source to read.
+    """
+    return sorted(
+        _reached(cls).noted.values(),
+        key=lambda one: (one["kind"], one["module"] or "", one["called"]),
+    )
+
+
+def _mixed(pieces: set[str]) -> str:
+    """The pieces into one version.
+
+    Deterministic across processes: everything is sorted before being mixed, and
+    nothing that depends on the run went in.
+    """
     return hashlib.sha256("\n".join(sorted(pieces)).encode()).hexdigest()[:LENGTH]
 
 
-def _collect(obj: object, pieces: set[str], seen: set[str]) -> None:
-    """Adds to `pieces` what defines `obj`, and follows what it names.
+class _Reach:
+    """What one walk found: what it hashes, and what it walked over.
+
+    Two containers rather than one derived from the other, because they answer
+    to different rules. `pieces` is a **set of strings** and its exact contents
+    are the fingerprint — anything added to it moves every version there is.
+    `noted` is what those pieces were read off, keyed the way the walk memoizes,
+    and adding a field to it costs nothing.
+    """
+
+    def __init__(self) -> None:
+        self.pieces: set[str] = set()
+        self.noted: dict[str, dict[str, Any]] = {}
+
+    def note(self, mark: str, kind: str, called: str, obj: object = None, **rest: Any) -> None:
+        """Writes down one thing the walk reached. First writing wins, which is
+        the same rule `seen` follows one line above every call to this."""
+        if mark in self.noted:
+            return
+        where = _written_where(obj) if kind == "yours" else None
+        self.noted[mark] = {
+            "kind": kind,
+            "called": called,
+            "module": getattr(obj, "__module__", None) if kind != "module" else called,
+            "file": where[0] if where else None,
+            "line": where[1] if where else 0,
+            "lines": where[2] if where else 0,
+            "version": None,
+            **rest,
+        }
+
+
+def _reached(cls: type) -> _Reach:
+    """The whole walk from one class, once."""
+    reach = _Reach()
+    _collect(cls, reach, set())
+    return reach
+
+
+def _written_where(obj: object) -> tuple[str, int, int] | None:
+    """Where it is written: file, first line, how many.
+
+    **Absolute**, as `inspect` gives it. Making it relative needs a directory to
+    be relative *to*, and the only one this could pick is the process's — which
+    is the wrong answer wherever the caller is not standing in the checkout.
+    """
+    try:
+        file = inspect.getsourcefile(obj)  # type: ignore[arg-type]
+        source, line = inspect.getsourcelines(obj)  # type: ignore[arg-type]
+    except (OSError, TypeError):
+        return None
+    return (file, line, len(source)) if file else None
+
+
+def _collect(obj: object, reach: _Reach, seen: set[str]) -> None:
+    """Adds to `reach.pieces` what defines `obj`, and follows what it names.
 
     Memoized by `module:name` but **noted** by name alone, so moving a class
     between files does not change its version.
@@ -94,33 +202,39 @@ def _collect(obj: object, pieces: set[str], seen: set[str]) -> None:
         return
     seen.add(mark)
     called = _what_it_is_called(obj)
+    pieces = reach.pieces
 
     if isinstance(obj, type):
         # The bases first: changing one changes what is inherited.
         for base in obj.__mro__[1:]:
             if _is_yours(base):
-                _collect(base, pieces, seen)
+                _collect(base, reach, seen)
         pieces.add(f"{called}={_shape(obj)}")
+        reach.note(mark, "yours", called, obj)
         for member in vars(obj).values():
-            _follow_names(member, pieces, seen)
+            _follow_names(member, reach, seen)
         return
 
     if isinstance(obj, types.FunctionType):
         pieces.add(f"{called}={_shape(obj)}")
-        _follow_names(obj, pieces, seen)
+        reach.note(mark, "yours", called, obj)
+        _follow_names(obj, reach, seen)
         return
 
     if isinstance(obj, types.ModuleType):
         pieces.add(f"module:{obj.__name__}@{_version(obj.__name__)}")
+        reach.note(mark, "module", obj.__name__, obj, version=_version(obj.__name__))
         return
 
     # Anything else: its written form. Module constants are noted by
     # `_follow_names`, which knows the name they were read under.
     pieces.add(f"{called}={obj!r}")
+    reach.note(mark, "value", called, obj)
 
 
-def _follow_names(member: object, pieces: set[str], seen: set[str]) -> None:
+def _follow_names(member: object, reach: _Reach, seen: set[str]) -> None:
     """Follows the global names `member`'s code mentions."""
+    pieces = reach.pieces
     function = _function_of(member)
     if function is None:
         return
@@ -130,15 +244,27 @@ def _follow_names(member: object, pieces: set[str], seen: set[str]) -> None:
             continue  # an attribute (`np.array` → `array`), or a builtin
         pointed = globals_[name]
         if _is_yours(pointed) or isinstance(pointed, types.ModuleType):
-            _collect(pointed, pieces, seen)
+            _collect(pointed, reach, seen)
         elif isinstance(pointed, (type, types.FunctionType)):
             # Something installed: what identifies it is where it comes from and
             # with what version.
             pieces.add(f"outside:{_who_is(pointed)}@{_version_of(pointed)}")
+            reach.note(
+                f"outside:{_who_is(pointed)}",
+                "installed",
+                _what_it_is_called(pointed),
+                pointed,
+                version=_version_of(pointed),
+            )
         else:
             # A module constant, by content: by type, `THRESHOLD = 5` and
             # `= 7` would both be `builtins.int`. It happened.
             pieces.add(f"{name}={pointed!r}")
+            # Noted under the name it was **read** under, which is all there is:
+            # a value carries no module of its own, so `from over_there import
+            # THRESHOLD` cannot be told from one written here. That is why it is
+            # a `value` and not a file somebody gets to open.
+            reach.note(f"value:{name}", "value", name)
 
 
 #: The instructions that read or write a **global**. Anything else that carries
@@ -200,14 +326,37 @@ def _strip_docstrings(node: ast.AST) -> None:
 
 
 def _function_of(member: object) -> Callable[..., Any] | None:
-    """The function behind a method, a `staticmethod` or a `property`."""
-    if isinstance(member, types.FunctionType):
-        return member
+    """The function behind a method, a `staticmethod` or a `property`.
+
+    **Unwrapped.** A decorator returns a function whose code mentions the
+    decorator's own globals and not the ones written in the body it wraps, so
+    reading it is reading the wrapper — and every name the real function
+    reaches for is invisible.
+
+    That is not a hypothetical: `Node.__init_subclass__` wraps every node's
+    `__init__` to remember what it was built with, so *every* node in every
+    graph reached this with a wrapper in hand. A node that composes a class of
+    yours in `__init__` — a router, a head, an encoder — had that class left
+    out of its fingerprint, and editing it moved nothing. Which is the one case
+    this file exists to catch: the cache hits and hands back what the old code
+    produced.
+    """
     if isinstance(member, (staticmethod, classmethod)):
-        return member.__func__
-    if isinstance(member, property):
-        return member.fget
-    return None
+        member = member.__func__
+    elif isinstance(member, property):
+        member = member.fget
+    if not isinstance(member, types.FunctionType):
+        return None
+    # `inspect.unwrap` follows `__wrapped__`, which `functools.wraps` sets. A
+    # decorator that does not use it stays opaque, and there is no reading
+    # through that from here.
+    #
+    # And what it lands on is checked rather than assumed: a node that writes no
+    # `__init__` of its own gets `object.__init__` wrapped — a C slot, with no
+    # `__code__` to read. Unwrapping into it and handing it back turned every
+    # such node into an `AttributeError`.
+    inner = inspect.unwrap(member)
+    return inner if isinstance(inner, types.FunctionType) else member
 
 
 def _who_is(obj: object) -> str:

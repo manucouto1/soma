@@ -135,7 +135,16 @@ fn key(digest: Digest) -> Key {
 }
 
 /// Where a value is bound, which is not where an artifact is.
-fn name_of(key: &Key) -> String {
+///
+/// **Public, and that is a decision**, the same one the engine's metadata
+/// constants got and for the same reason. A key is what a recipe is called; the
+/// name is where a value under that key is bound, and the two are not the same
+/// string. Anybody reading a store back — *which of these hashes is the answer
+/// this version would ask for?* — needs to get from one to the other, and the
+/// alternative is every reader carrying its own `format!` of this, which is two
+/// places saying the same thing with no way to tell which governs the day they
+/// disagree.
+pub fn name_of(key: &Key) -> String {
     format!("value:{key}")
 }
 

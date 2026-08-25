@@ -1147,7 +1147,8 @@ fn the_fingerprint_of_the_code_is_not_part_of_the_name() {
         notebook.said_of(&notebook.names()[0]),
         [
             ("node".to_string(), "encoder".to_string()),
-            ("fingerprint".to_string(), "v1".to_string())
+            ("fingerprint".to_string(), "v1".to_string()),
+            ("input".to_string(), "Number(7)".to_string())
         ],
         "what is written beside it is what produced it, not what asked for it"
     );
@@ -1907,4 +1908,115 @@ fn and_nobody_saying_what_built_it_is_not_a_reason_to_refuse_a_name() {
         .foreseen(&plan, &Value::number(0.0));
 
     assert_eq!(named.len(), 3);
+}
+
+// ── What a value says about where it came from ──
+
+#[test]
+fn what_the_graph_was_fed_is_written_beside_what_it_produced() {
+    // A store outlives every process that wrote to it, and a key does not run
+    // backwards: without this, *which input produced this blob* is a question
+    // with no answer left anywhere. It is the one piece of provenance the
+    // caller cannot supply either — only a keeper can hash a value.
+    let (g, c, memory, _journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+
+    let said = notebook.said_of(&notebook.names()[0]);
+    assert!(
+        said.contains(&("input".to_string(), "Number(7)".to_string())),
+        "{said:?}",
+    );
+}
+
+#[test]
+fn a_stamp_is_written_beside_everything_the_run_keeps() {
+    // The core does not know what an environment is, or a commit, and must not
+    // learn: they are facts about the world outside a graph. So they arrive as
+    // text the caller chose and this passes through untouched — the same
+    // division of labour as the name a study is filed under.
+    let (g, c, memory, _journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .stamping([
+            ("env".to_string(), "9f2c1a".to_string()),
+            ("run".to_string(), "una-investigacion/3847d0c1".to_string()),
+        ])
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+
+    let said = notebook.said_of(&notebook.names()[0]);
+    assert!(
+        said.contains(&("env".to_string(), "9f2c1a".to_string())),
+        "{said:?}"
+    );
+    assert!(
+        said.contains(&("run".to_string(), "una-investigacion/3847d0c1".to_string())),
+        "{said:?}",
+    );
+}
+
+#[test]
+fn a_stamp_cannot_overwrite_what_the_engine_knows() {
+    // Somebody stamping `node` is not a reason for a blob to start lying about
+    // which node made it. **Dropped and not merely put last**: whether the
+    // first or the last of two pairs wins is the reader's convention, and the
+    // most obvious way to read a list of pairs — turning it into a map — takes
+    // the last. So the pair is never written and no key appears twice.
+    let (g, c, memory, _journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .stamping([("node".to_string(), "otro".to_string())])
+        .run(&plan, Value::number(7.0))
+        .unwrap();
+
+    let said = notebook.said_of(&notebook.names()[0]);
+    let named: Vec<&String> = said
+        .iter()
+        .filter(|(what, _)| what == "node")
+        .map(|(_, told)| told)
+        .collect();
+
+    assert_eq!(
+        named,
+        ["encoder"],
+        "once, and the engine's answer: {said:?}"
+    );
+}
+
+#[test]
+fn a_slice_does_not_claim_to_know_what_the_graph_was_fed() {
+    // What arrives at a worker is a slice's input and not a graph's, so
+    // stamping it would be a confident lie about the one field that cannot be
+    // checked afterwards. Whoever coordinates knows the real one and can send
+    // it along in a stamp of its own.
+    let (g, c, memory, _journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    Executor::new(&c)
+        .remembering(&memory)
+        .keeping(&notebook)
+        .resume(&plan, Value::number(7.0), Vec::new(), Vec::new())
+        .unwrap();
+
+    let said = notebook.said_of(&notebook.names()[0]);
+    assert!(
+        !said.iter().any(|(what, _)| what == "input"),
+        "a slice says nothing about the graph's input: {said:?}",
+    );
 }

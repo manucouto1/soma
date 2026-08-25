@@ -1,6 +1,6 @@
 # Examples
 
-Eleven notebooks, in order. Each one runs on its own and needs nothing
+Twelve notebooks, in order. Each one runs on its own and needs nothing
 downloaded — the data is made up in the cell that uses it, on purpose: an
 example that fetches a dataset is an example that stops working.
 
@@ -17,6 +17,7 @@ example that fetches a dataset is an example that stops working.
 | [9 — A fleet](09-a-fleet.ipynb) | `fleet` and `machines`, working against waited on, what only a machine can say about itself, and the idle one that writes on a clock |
 | [10 — Where the data comes from](10-a-dataset.ipynb) | a source is a node, a graph handed a **coordinate** instead of a batch, what that saves the cache, the version the store already knew, and a frame crossing a wire |
 | [11 — What an edit did](11-what-an-edit-did.ipynb) | `foreseen.names` / `unneeded` / `changes` / `snapshot`, an afternoon of edits answered without running any of it, the three ways a name moves, and the half a notebook cannot answer about its own cells |
+| [12 — Where a value came from](12-where-a-value-came-from.ipynb) | why a key does not run backwards, the five things written beside a kept value and who is standing where each is knowable, the four that land with nobody asking, and what a caller may not say |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.
@@ -58,10 +59,11 @@ PYTHONPATH=/tmp/relpkg python -  # the loop below
 
 Notebooks 3 to 7 need `torch`. Notebook 2 starts a real worker process, which
 needs nothing but the same interpreter. Notebooks 3 and 4 seed torch, so
-re-executing them gives back the numbers that are stored here. Notebook 11
-writes a module to a temporary directory and imports it, because a class defined
-in a **cell** has no source to read and so no version — which is the thing that
-notebook is partly about.
+re-executing them gives back the numbers that are stored here. Notebooks 11 and 12
+write a module to a temporary directory and import it, because a class defined
+in a **cell** has no source to read and so no version — which is the thing
+notebook 11 is partly about, and what notebook 12 needs a fingerprint to exist
+at all.
 
 To re-execute them all after a change to the Python API:
 
