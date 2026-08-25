@@ -10,12 +10,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 soma-next-core = { workspace = true, features = ["serde"] }
-# The wire lives in `soma-fabric` now. Path while both repositories move
-# together; a version the day either is published on its own.
-soma-fabric-wire = { path = "../../soma-fabric/wire", optional = true }
+# The wire, from `fabric/`. It spent a day in a repository of its own and came
+# back: everything that versions together lives together, and a path dependency
+# across two repositories makes releasing one wait on the other's uncommitted
+# state.
+soma-fabric-wire = { workspace = true, optional = true }
 # The rendezvous. It is what fills the `Transport` hole now that a client talks
 # to a broker instead of holding a dictionary of workers.
-soma-fabric-broker = { path = "../../soma-fabric/broker", optional = true }
+soma-fabric-broker = { workspace = true, optional = true }
 # With `s3`, because a study spread over machines with no shared mount is
 # exactly the case `soma_next.Store.on_bucket` exists for.
 soma-next-store = { workspace = true, features = ["s3"] }

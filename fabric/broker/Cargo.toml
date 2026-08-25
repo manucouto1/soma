@@ -1,0 +1,34 @@
+[package]
+name = "soma-fabric-broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Same as `wire/`: the test binary lives under `tests/`, and every test target
+# is declared rather than auto-discovered.
+autotests = false
+
+[lib]
+name = "soma_fabric_broker"
+
+[dependencies]
+soma-next-core = { workspace = true, features = ["serde"] }
+# The wire, because a `Path::Direct` has to become something that carries a
+# slice. The protocol and the paths know nothing about it; only the handle does.
+soma-fabric-wire = { path = "../wire" }
+serde = { workspace = true }
+# The same MessagePack as the wire next door, and for the same measured reasons.
+# One format across both conversations means one set of tools when something
+# goes wrong on a machine you cannot attach a debugger to.
+rmp-serde = "1"
+
+[dev-dependencies]
+# So a test can write a message the way **another version** would have and check
+# what this one does about it. That test is the whole point of `PROTOCOL`.
+rmp-serde = "1"
+# The far side of the wire, so the end-to-end test can stand a real worker on a
+# thread of this process instead of proving the seam against a double.
+soma-fabric-wire = { path = "../wire" }
+
+[[test]]
+name = "unit"
+path = "tests/unit/main.rs"

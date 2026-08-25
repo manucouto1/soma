@@ -1,5 +1,15 @@
 [workspace]
-members = ["core", "data", "health", "python", "store", "study"]
+members = [
+    "core",
+    "data",
+    "fabric/broker",
+    "fabric/fleet",
+    "fabric/wire",
+    "health",
+    "python",
+    "store",
+    "study",
+]
 resolver = "3"
 
 [workspace.package]
@@ -13,4 +23,9 @@ soma-next-core = { path = "core" }
 soma-next-store = { path = "store" }
 soma-next-data = { path = "data" }
 soma-next-health = { path = "health" }
+# The fabric, home from the repository it spent a day in. It is a family, so
+# it is a folder: the wire carries a slice, the broker says where a host is,
+# and the fleet is what outlives both and can be asked what is out there.
+soma-fabric-wire = { path = "fabric/wire" }
+soma-fabric-broker = { path = "fabric/broker" }
 serde = { version = "1", features = ["derive"] }
