@@ -9,6 +9,7 @@ members = [
     "python",
     "store",
     "study",
+    "tree",
 ]
 resolver = "3"
 

@@ -1727,6 +1727,22 @@ name = "soma-next-study"
 version = "0.1.0"
 
 [[package]]
+name = "soma-tree"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "serde",
+ "serde_json",
+ "soma-next-core",
+ "soma-next-store",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tower-http",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

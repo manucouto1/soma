@@ -1,0 +1,39 @@
+[package]
+name = "soma-tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What an edit did to a graph, said before anybody runs it."
+
+[lib]
+name = "soma_tree"
+path = "src/lib.rs"
+
+[[bin]]
+name = "soma-tree"
+path = "src/main.rs"
+
+[dependencies]
+# For `Key` and `NodeId`, which arrive as the engine's own serde form. Nothing
+# else of the core is needed here: this reads what a probe wrote down, and the
+# probe is the only thing that ever holds a graph.
+soma-next-core = { workspace = true, features = ["serde"] }
+soma-next-store = { workspace = true }
+serde = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tempfile = "3"
+# The same versions chatty-the-lab's backend is on, so the day this becomes a
+# panel in it these are routes to move and not a server to rewrite.
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+[[test]]
+name = "unit"
+path = "tests/unit/main.rs"
+
+[[test]]
+name = "end_to_end"
+path = "tests/end_to_end/main.rs"
