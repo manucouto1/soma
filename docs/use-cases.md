@@ -5536,12 +5536,20 @@ rendezvous was granted.
 - [x] a graph run in pieces keeps the worker it had
 - [x] `provision` says out loud what `forward` says on its own
 
+**Two names for one place, which is one catalog** (`python/tests/test_remote.py`)
+- [x] two names for one place are told once each, about **one** artifact holding
+      both halves
+- [x] while two addresses are two catalogs with half each
+- [x] two names for one place packed differently is refused, naming both
+- [x] a host the broker never heard of is left out and not raised over
+
+> Proved against an **artifact** and not against a wire, which is the half this
+> side owns. The grouping was mutated — keyed by host name instead of by wire —
+> and two of the four fail; the two that survive are the contrast rows, which is
+> what they are for.
+
 ### What is pending
 
-- **The grouping has no test of its own.** The two rows above: which host names
-  share a catalog is decided in `_graph.py`, and the rule is proved in Rust
-  against a wire rather than in Python against an artifact. The refusal for two
-  names of one place declared with different packing is written and unexercised.
 - **`session.rs` has no test module**, though it holds the rules that matter
   most — the ask remembered, the wire shared, the token. They are reached
   through `reaching.rs`, which is real coverage and not a file of its own.

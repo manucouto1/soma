@@ -648,3 +648,107 @@ def test_a_cached_tensor_is_kept_by_the_worker_too(tmp_path):
 
     assert torch.equal(first, torch.tensor([1.0])), first
     assert torch.equal(second, torch.tensor([1.0])), "the worker ran it again"
+
+
+# ── Two names for one place, which is one catalog ──
+#
+# The rule is proved next door in `soma-fabric`, against a wire: two hosts at
+# one address share it, two with the same `argv` do not. What is proved here is
+# the half that lives on this side — that the grouping ends in **one artifact
+# holding both halves**. A worker has one catalog, and provisioning the same
+# process twice, once per host name, replaces what it had live and takes every
+# activation over there with it. That failure is silent, which is why it is
+# worth a test that does not need a machine.
+
+
+class Recording(Broker):
+    """A broker that writes down what it was told to hand over.
+
+    A subclass and not a fake, so the grouping and the packing under test are
+    the real ones — only the last step, the handover, is watched.
+    """
+
+    def provision(self, host, kind, ident, blob, runtime):
+        self.told.append((host, ident))
+
+
+def recording(workers):
+    broker = Recording.embedded(workers)
+    broker.told = []
+    return broker
+
+
+def two_nodes_apart():
+    """One node on `w1`, one on `w2` — whether those are one machine is what
+    each of these tests changes."""
+    return Graph.somatize(Add(1).named("a").at("w1") >> Add(2).named("b").at("w2"))
+
+
+def artifact_of(graph, *ids, mode="network"):
+    """The id the artifact of exactly these nodes would have."""
+    nodes = {one: graph.implementation(one) for one in ids}
+    _, ident, _ = Worker.at("wherever:7000", mode=mode).packed(nodes)
+    return ident
+
+
+def test_two_names_for_one_place_are_told_once_each_about_one_catalog():
+    g = two_nodes_apart()
+    one_box = recording(
+        {
+            "w1": Worker.at("box:7000", mode="network"),
+            "w2": Worker.at("box:7000", mode="network"),
+        }
+    )
+
+    g.provision(one_box)
+
+    assert [host for host, _ in one_box.told] == ["w1", "w2"], "both names are told"
+    assert {ident for _, ident in one_box.told} == {artifact_of(g, "a", "b")}, (
+        "and what they are told about is the artifact holding **both** nodes"
+    )
+
+
+def test_while_two_addresses_are_two_catalogs_with_half_each():
+    # The contrast, without which the one above would also pass if the grouping
+    # collapsed everything into one.
+    g = two_nodes_apart()
+    apart = recording(
+        {
+            "w1": Worker.at("box:7000", mode="network"),
+            "w2": Worker.at("other:7000", mode="network"),
+        }
+    )
+
+    g.provision(apart)
+
+    assert apart.told == [("w1", artifact_of(g, "a")), ("w2", artifact_of(g, "b"))]
+
+
+def test_two_names_for_one_place_packed_differently_is_refused_by_name():
+    # There is no honest answer: one catalog cannot be both `network` and
+    # `project`, and picking either quietly would send the wrong one. So it says
+    # which two hosts, and what each of them asked for.
+    g = two_nodes_apart()
+    both_ways = Broker.embedded(
+        {
+            "w1": Worker.at("box:7000", mode="network"),
+            "w2": Worker.at("box:7000", mode="project"),
+        }
+    )
+
+    with pytest.raises(ValueError, match="same place") as why:
+        g.provision(both_ways)
+
+    assert "w1" in str(why.value) and "w2" in str(why.value)
+
+
+def test_a_host_the_broker_never_heard_of_is_left_out_and_not_raised_over():
+    # Naming a host nobody listed is not this step's failure to report: the run
+    # either reaches that slice or it does not, and whichever happens says so
+    # with the slice in front of it.
+    g = two_nodes_apart()
+    half_known = recording({"w1": Worker.at("box:7000", mode="network")})
+
+    g.provision(half_known)
+
+    assert half_known.told == [("w1", artifact_of(g, "a"))]
