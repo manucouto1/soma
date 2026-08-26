@@ -111,12 +111,12 @@ SOMA_S3=http://127.0.0.1:9000 python -m pytest tests/test_bucket.py -q
 the **installed** extension, so a change in `soma-python/src/` that is not rebuilt
 means the suite is green about code that is not the code.
 
-`examples/` holds twelve notebooks — declaring a graph, watching a run, training,
+`examples/` holds thirteen notebooks — declaring a graph, watching a run, training,
 a study, the health of a network, one problem end to end, a real architecture
 diagnosed in **problem → symptoms → solution → healthy** cycles, what can be
 said before a step is taken, a fleet of machines, where the data comes from,
-what an edit did, and where a kept value came from — **with their outputs
-stored**, so opening one shows what it does. Every figure is kept twice: the
+what an edit did, where a kept value came from, and what somebody was trying to
+find out — **with their outputs stored**, so opening one shows what it does. Every figure is kept twice: the
 plotly JSON for a live viewer and a PNG for a static
 one, which is what `PLOTLY_RENDERER="plotly_mimetype+png"` decides at execution
 time. Re-run them with `nbclient` when the Python API moves — `nbconvert` is not
@@ -125,15 +125,15 @@ two real bugs were found.
 
 ## Status
 
-Twenty-nine use cases closed: the graph, the engine, the plan, the fans, the
+Thirty use cases closed: the graph, the engine, the plan, the fans, the
 DSL, a single node contract, `Opaque`, the waves, the device, training, the distributed
 worker, the cache, training the half that is not here, federated rounds, the
 grain of an item, the study, handing it out of a folder, a graph that draws
 itself, the record of what happened, the health of a network, what can be
 said before a step is taken, the machines it ran on, where the data comes from,
 not running what nobody needs, what an edit did before paying to find out,
-what a node was built with, how a client finds out where a host is, and what a kept value says about
-where it came from.
+what a node was built with, how a client finds out where a host is, what a kept value says about
+where it came from, and what somebody was trying to find out.
 A graph is declared with `>>`, `|`, `.on("cuda:0")` and `.cached()`, executed in
 Rust, spread across processes with `.at("worker1")` and a `broker=` that says
 who knows where that is, trained from outside with `somatize.torch.Trainer` —
@@ -578,5 +578,35 @@ answer. What can be neither raises `CannotDeclare` and the graph is refused
 before the first node with the attribute named. The rule that looks right and
 is not: a test on the **type** — a `list` of address-bearing objects has
 `list.__repr__`, which is defined, and the addresses come through from inside.
+
+**CU30 is the half a repository loses**: not what the code does but *what was I
+trying to find out*. Two layers, and one rule decides which: **if it can be
+recalculated it is record, if somebody thought it it is reasoning**. So a pruned
+line is derived and never stored and a verdict is written down and never guessed
+at. Five kinds and there are no more — `question`, `hypothesis`, `attempt`,
+`finding`, `decision` — in a **DAG**, because one attempt answering two live
+questions has no parent to choose and a duplicated node is two that drift apart.
+
+Everything carries a **scope**, answers included, and that is what makes the
+best outcome an investigation gives sayable at all: validated in some situations
+and refuted in others **without the scopes touching** is `depends` — not half an
+answer and not a conflict. Which is why standing is **derived and never a
+field**: the previous fact is what a hypothesis goes back to when the commit its
+refutation rested on is judged `invalid`, with nobody saying anything again.
+
+**The terminal is for what happens between runs, the library for what happens
+inside one and for looking at it.** Asking, supposing, trying, finding and
+deciding happen one at a time while somebody thinks, so they are commands;
+reading it back and drawing it are `somatize.reasoning`. The read-back answers
+in **names**, because the store's slot identifies a move for exactly as long as
+somebody holds it in a variable — and `go <move>` is what pays for having
+written any of it down: git asks for a hash and what anybody remembers is the
+idea. There is no `fork` verb: the original spliced a file and branched because
+it was driven from a browser, and in a terminal the person typing holds the
+checkout.
+
+**Deriving is the framework's and interacting is an app's**, and the layout is a
+pure function of the rows — so folding is *what you hand it*, and folding what
+you have already read writes nothing down and lives elsewhere.
 
 See the distribution report for the full order.

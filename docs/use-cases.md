@@ -5702,12 +5702,20 @@ does not fit:
   built, with nothing waiting for it. A hole with no tenant.
 - **`/api/health`**, exit codes, `--json`: a server's and a terminal's.
 
-**Editing is forking** does earn its place, and it is the one that looks like an
-editor and is not: a commit is a version that has already been measured, so
-changing one is wanting another variant from here. It never touches an existing
-branch and never rewrites anything. That is what keeps the code pinned to the
-reasoning at the moment a variant is born — but it is the last thing to build,
-not the first.
+- **Editing is forking**, which looked like the one exception and is not: it
+  dissolved into `go`. What it was defending is right — a commit is a version
+  that has already been measured, so changing one is wanting another variant
+  from here, never touching an existing branch and never rewriting anything —
+  and `go` enforces exactly that. The original spliced a file, committed and
+  branched because it was driven **from a browser**, where you cannot edit
+  files, and called the result a fork. In a terminal the person typing holds the
+  checkout: `go`, then edit, then commit. What is left over is the in-browser
+  editor, which is the first thing on this list.
+
+And a **fork** in the word's own sense — taking a state and starting a *new
+investigation* from it, a second `tree` seeded from a move — is a different
+thing that this does not have. It is worth naming and it has no tenant today,
+which is the bar.
 
 ### Going back to try another idea
 

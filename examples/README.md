@@ -1,6 +1,6 @@
 # Examples
 
-Twelve notebooks, in order. Each one runs on its own and needs nothing
+Thirteen notebooks, in order. Each one runs on its own and needs nothing
 downloaded — the data is made up in the cell that uses it, on purpose: an
 example that fetches a dataset is an example that stops working.
 
@@ -18,6 +18,7 @@ example that fetches a dataset is an example that stops working.
 | [10 — Where the data comes from](10-a-dataset.ipynb) | a source is a node, a graph handed a **coordinate** instead of a batch, what that saves the cache, the version the store already knew, and a frame crossing a wire |
 | [11 — What an edit did](11-what-an-edit-did.ipynb) | `foreseen.names` / `unneeded` / `changes` / `snapshot`, an afternoon of edits answered without running any of it, the three ways a name moves, and the half a notebook cannot answer about its own cells |
 | [12 — Where a value came from](12-where-a-value-came-from.ipynb) | why a key does not run backwards, the five things written beside a kept value and who is standing where each is knowable, the four that land with nobody asking, and what a caller may not say |
+| [13 — The reasoning of an investigation](13-the-reasoning-of-an-investigation.ipynb) | what somebody was trying to find out: the five kinds written from the terminal, `depends` and why it is not a dispute, what folds and why, going back to a move by name, and a standing that comes back on its own |
 
 They are shipped **with their outputs**, so opening one shows what it does
 without running anything.
@@ -55,6 +56,13 @@ cargo build --release -p soma-python
 cp -r soma-python/python/somatize /tmp/relpkg/ && rm /tmp/relpkg/somatize/_somatize.*.so
 cp target/release/lib_somatize.so /tmp/relpkg/somatize/_somatize.cpython-313-x86_64-linux-gnu.so
 PYTHONPATH=/tmp/relpkg python -  # the loop below
+```
+
+Notebook 13 needs the command, which the wheel does not carry — it is a binary,
+and a wheel has no use for an argument parser:
+
+```bash
+cargo build --release -p somatize-tree      # or: cargo install --path soma-tree
 ```
 
 Notebooks 3 to 7 need `torch`. Notebook 2 starts a real worker process, which
