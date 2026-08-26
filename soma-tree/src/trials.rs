@@ -1,63 +1,45 @@
-//! Lo que se corrió con una versión: los ensayos, sus estados y sus curvas.
+//! What was run with a version: the trials, their states and their curves.
 //!
-//! # Por qué esto se lee y no se escribe
+//! A commit is the version and does not change. What gets tried with it grows
+//! without end — a hundred trials, three analyses, a report — and none of that
+//! can touch a commit's hash, so it is **associated** with the version rather
+//! than versioned. soma writes it from the machine running the study; here it
+//! is only read, because whoever claimed a trial is its only writer and a
+//! second one would invent a race that does not exist today.
 //!
-//! Un commit es la versión y no cambia. Lo que se prueba con esa versión crece
-//! sin parar —cien ensayos, tres análisis, un informe— y nada de eso puede
-//! tocar el hash de un commit. Así que van **asociados** a la versión, no
-//! versionados: son dos mecanismos distintos, y éste es el segundo.
-//!
-//! Quien los escribe es soma, desde la máquina que corre el estudio.
-//! Aquí sólo se leen. Eso no es una simplificación: quien reclama un ensayo es
-//! el único que escribe en él, y meter un segundo escritor sería inventar una
-//! carrera que hoy no existe.
-//!
-//! # El nombre, que es todo el acoplamiento
-//!
-//! soma ata cada ensayo a `<study>/trial/<n>/<attempt>`, y el nombre de un
-//! estudio es una cadena cualquiera. Así que:
+//! The name is the whole of the coupling. soma binds each trial to
+//! `<study>/trial/<n>/<attempt>`, and a study's name is any string:
 //!
 //! ```text
-//! exp/<tree>/<commit>              ← el estudio de esa versión
-//! exp/<tree>/<commit>/trial/3/0    ← su cuarto ensayo, primer intento
-//! exp/<tree>/<commit>/said/2       ← lo que alguien dijo de ese commit
+//! exp/<tree>/<commit>              ← that version's study
+//! exp/<tree>/<commit>/trial/3/0    ← its fourth trial, first attempt
+//! exp/<tree>/<commit>/said/2       ← what somebody said about that commit
 //! ```
 //!
-//! El estudio de un commit **es** el prefijo bajo el que ya vive su diario, así
-//! que los ensayos caen debajo sin que soma cambie una línea. No hay
-//! registro de correspondencia, ni tabla, ni índice que mantener: el commit es
-//! la versión y el nombre es el vínculo.
+//! A commit's study **is** the prefix its journal already lives under, so the
+//! trials land beneath it with no line of soma changing: no correspondence
+//! record, no index to keep. And the store's cost rule holds — state, point and
+//! score are in the **record** — so counting forty commits' trials is one scan
+//! and only the curve is paid for when somebody asks to see it.
 //!
-//! # Un scan y no una lectura
-//!
-//! La regla de coste del store, que aquí manda: un registro vuelve gratis en un
-//! recorrido y un blob es una lectura. soma puso el estado, el punto y la
-//! puntuación en el **registro** por eso mismo. De modo que contar los ensayos
-//! de cuarenta commits cuesta un recorrido, y la curva —que crece— se paga sólo
-//! cuando alguien pide verla.
-//!
-//! # Lo que no se puede decir desde aquí
-//!
-//! **Cuál es el mejor.** Si `0.0837` es bueno o malo depende de si esa métrica
-//! se maximiza o se minimiza, y esa dirección vive en el `Goal` que se le pasa
-//! al sampler: no se escribe en ningún registro. Adivinarla sería exactamente
-//! la clase de mentira callada que esta herramienta existe para no dejar pasar
-//! —«mejor» es la palabra que más se copia a un informe sin comprobar—. Así que
-//! o está declarada en `soma-tree.toml` o no se dice, y en su lugar se enseña
-//! el rango, que sí es cierto sin saber la dirección.
+//! What cannot be said from here is **which is best**: whether `0.0837` is good
+//! depends on a direction that lives in the `Goal` handed to a sampler and is
+//! written in no record. Guessing it would be the quiet lie this tool exists
+//! not to let past, so either `soma-tree.toml` declares it or it is not said,
+//! and the range — true without knowing the direction — is shown instead.
 
 use serde::{Deserialize, Serialize};
 use somatize_store::{Digest, Store};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Hacia dónde es mejor. No está en el store: se declara.
+/// Which way is better. Not in the store: declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Goal {
-    /// Menos es mejor: una pérdida, un error, un tiempo.
+    /// Less is better: a loss, an error, a time.
     Min,
-    /// Más es mejor: una exactitud, un F1, una recompensa.
+    /// More is better: an accuracy, an F1, a reward.
     Max,
 }
 
@@ -70,7 +52,7 @@ impl Goal {
         }
     }
 
-    /// El mejor de unos cuantos, en la dirección declarada.
+    /// The best of a few, in the declared direction.
     pub fn best_of(&self, values: impl IntoIterator<Item = f64>) -> Option<f64> {
         values
             .into_iter()
@@ -82,38 +64,38 @@ impl Goal {
     }
 }
 
-/// Un ensayo, tal como vuelve de un recorrido.
+/// A trial, as it comes back from a scan.
 ///
-/// Los estados son de soma y no de aquí —`running`, `done`, `pruned`,
-/// `failed`—, y por eso viajan como texto: el vocabulario es de quien lo
-/// escribe, y aprendérselo sería tener que migrar dos sitios el día que crezca.
+/// The states are soma's and not this side's — `running`, `done`, `pruned`,
+/// `failed` — and travel as text, so a growing vocabulary is not two places to
+/// migrate.
 #[derive(Debug, Clone, Serialize)]
 pub struct Trial {
     pub trial: u32,
-    /// Cuál de los intentos. Gana el más alto: reclamar es un enlace, así que
-    /// un ensayo cuya máquina murió se rescata reclamando el siguiente.
+    /// Which attempt. The highest wins: claiming is a link, so a trial whose
+    /// machine died is rescued by claiming the next one.
     pub attempt: u32,
     pub state: Option<String>,
-    /// La configuración que corrió, tal como la escribió `str(point)`.
+    /// The configuration that ran, as `str(point)` wrote it.
     pub point: Option<String>,
-    /// Ausente mientras corre. Presente en un `pruned`, y **no comparable** con
-    /// la de un `done`: se midió tras menos épocas.
+    /// Absent while running. Present on a `pruned`, and **not comparable**
+    /// with a `done`'s: it was measured after fewer epochs.
     pub score: Option<f64>,
     pub who: Option<String>,
     pub when: u64,
-    /// Dónde está la curva. No la curva: eso es una lectura y esto no.
+    /// Where the curve is. Not the curve: that is a fetch and this is not.
     #[serde(skip)]
     pub kept: Digest,
 }
 
 impl Trial {
-    /// Si su puntuación se puede comparar con la de otro `done`.
+    /// Whether its score can be compared with another `done`'s.
     pub fn comparable(&self) -> bool {
         self.state.as_deref() == Some("done") && self.score.is_some()
     }
 }
 
-/// La curva de un ensayo, que es lo que cuesta una lectura.
+/// A trial's curve, which is what costs a fetch.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Curve {
     #[serde(default)]
@@ -122,14 +104,14 @@ pub struct Curve {
     pub reports: Vec<f64>,
     #[serde(default)]
     pub state: Option<String>,
-    /// Por qué paró. Lo que un `pruned` tiene y una lista de números no.
+    /// Why it stopped. What a `pruned` has and a list of numbers does not.
     #[serde(default)]
     pub because: Option<String>,
     #[serde(default)]
     pub took: Option<f64>,
 }
 
-/// Lo que se ve de los ensayos de un commit sin leer ni un blob.
+/// What is seen of a commit's trials without reading a single blob.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Tally {
     pub trials: u32,
@@ -137,15 +119,15 @@ pub struct Tally {
     pub done: u32,
     pub pruned: u32,
     pub failed: u32,
-    /// El rango de lo comparable, que es cierto sin saber la dirección.
+    /// The range of what is comparable, true without knowing the direction.
     pub lowest: Option<f64>,
     pub highest: Option<f64>,
-    /// El mejor **sólo si alguien declaró hacia dónde es mejor**. `None` cuando
-    /// no se declaró, y entonces se enseña el rango en su lugar.
+    /// The best **only if somebody declared which way is better**. `None`
+    /// otherwise, and then the range is shown in its place.
     pub best: Option<f64>,
 }
 
-/// Los ensayos de una investigación, guardados en un store.
+/// The trials of one investigation, kept in a store.
 pub struct Trials<'a> {
     kept: &'a dyn Store,
     tree: String,
@@ -161,20 +143,20 @@ impl<'a> Trials<'a> {
         }
     }
 
-    /// Con la dirección declarada, si la hay.
+    /// With the declared direction, if there is one.
     pub fn towards(mut self, goal: Option<Goal>) -> Self {
         self.goal = goal;
         self
     }
 
-    /// El nombre del estudio de un commit, que es el vínculo entero.
+    /// The name of a commit's study, which is the whole of the link.
     pub fn study(&self, commit: &str) -> String {
         format!("exp/{}/{commit}", self.tree)
     }
 
-    /// Los ensayos de un commit, el intento más alto de cada uno, en orden.
+    /// A commit's trials, the highest attempt of each, in order.
     ///
-    /// Un recorrido y ninguna lectura.
+    /// One scan and no fetches.
     pub fn of_commit(&self, commit: &str) -> Result<Vec<Trial>, Trouble> {
         let mut best: BTreeMap<u32, Trial> = BTreeMap::new();
         let under = format!("{}/trial/", self.study(commit));
@@ -192,10 +174,9 @@ impl<'a> Trials<'a> {
                             attempt,
                             state: beside(&bound.meta, "state").map(str::to_string),
                             point: beside(&bound.meta, "point").map(str::to_string),
-                            // `repr(float(score))` de Python, que es un número
-                            // que Rust lee igual. Si algún día no lo fuera, un
-                            // ensayo sin puntuación es preferible a uno con una
-                            // inventada.
+                            // Python's `repr(float(score))`, which Rust reads
+                            // the same. A trial with no score is preferable to
+                            // one with an invented score.
                             score: beside(&bound.meta, "score").and_then(|one| one.parse().ok()),
                             who: beside(&bound.meta, "who").map(str::to_string),
                             when: bound.when,
@@ -208,14 +189,14 @@ impl<'a> Trials<'a> {
         Ok(best.into_values().collect())
     }
 
-    /// Cuántos ensayos tiene cada commit y cómo van, en **un solo recorrido**.
+    /// How many trials each commit has and how they are going, in **one scan**.
     ///
-    /// Lo que el raíl necesita: preguntarlo commit a commit serían cuarenta
-    /// recorridos del store para dibujar una lista de cuarenta filas.
+    /// Asking commit by commit would be forty walks of the store to draw a list
+    /// of forty rows.
     pub fn counted(&self) -> Result<BTreeMap<String, Tally>, Trouble> {
         let under = format!("exp/{}/", self.tree);
-        // El intento más alto de cada `(commit, trial)` antes de contar: contar
-        // los registros sin más contaría dos veces un ensayo que se rescató.
+        // The highest attempt of each `(commit, trial)` before counting:
+        // counting the records would count a rescued trial twice.
         let mut best: BTreeMap<(String, u32), Highest> = BTreeMap::new();
         for bound in self.kept.bound().map_err(Trouble::Store)? {
             let Some(rest) = bound.name.strip_prefix(&under) else {
@@ -255,9 +236,9 @@ impl<'a> Trials<'a> {
                 Some("failed") => tally.failed += 1,
                 _ => {}
             }
-            // Sólo las de un `done` entran en el rango: la de un `pruned` es
-            // real y no es comparable —se midió tras menos épocas—, y meterla
-            // haría el rango más ancho de lo que nadie midió.
+            // Only a `done`'s enters the range: a `pruned`'s is real and not
+            // comparable — measured after fewer epochs — and it would make the
+            // range wider than anything anybody measured.
             if let (Some("done"), Some(score)) = (one.state.as_deref(), one.score) {
                 comparable.entry(commit).or_default().push(score);
             }
@@ -273,7 +254,7 @@ impl<'a> Trials<'a> {
         Ok(counted)
     }
 
-    /// La curva de un ensayo. **Esto sí es una lectura**, y por eso está aparte.
+    /// A trial's curve. **This one is a fetch**, which is why it is apart.
     pub fn curve(&self, of: &Trial) -> Result<Option<Curve>, Trouble> {
         let Some(bytes) = self.kept.get(&of.kept).map_err(Trouble::Store)? else {
             return Ok(None);
@@ -284,17 +265,17 @@ impl<'a> Trials<'a> {
     }
 }
 
-/// El intento más alto visto de un ensayo, mientras se recorre.
+/// The highest attempt seen of a trial, while scanning.
 struct Highest {
     attempt: u32,
     state: Option<String>,
     score: Option<f64>,
 }
 
-/// El `(ensayo, intento)` que ese nombre es, o `None` si no es uno.
+/// The `(trial, attempt)` that name is, or `None` if it is not one.
 ///
-/// Una pregunta y no una suposición, como en soma y por lo mismo: un store
-/// guarda lo que le echen —una caché, otra investigación, un artefacto—.
+/// A question and not an assumption, as in soma and for the same reason: a
+/// store holds whatever anybody put in it.
 fn numbered(name: &str, under: &str) -> Option<(u32, u32)> {
     let rest = name.strip_prefix(under)?;
     let (trial, attempt) = rest.split_once('/')?;
@@ -316,8 +297,8 @@ pub enum Trouble {
 impl fmt::Display for Trouble {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Store(why) => write!(f, "los ensayos no se pudieron alcanzar: {why}"),
-            Self::Garbled(why) => write!(f, "una curva no se pudo leer: {why}"),
+            Self::Store(why) => write!(f, "the trials could not be reached: {why}"),
+            Self::Garbled(why) => write!(f, "a curve could not be read: {why}"),
         }
     }
 }

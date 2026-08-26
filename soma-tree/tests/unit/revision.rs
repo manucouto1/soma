@@ -95,8 +95,8 @@ fn a_revspec_that_is_not_one_is_said_so_and_not_guessed_at() {
 #[test]
 fn asking_for_more_than_there_are_is_an_answer_and_not_an_error() {
     // The bug this is here for: `HEAD~10..HEAD` in a repository with four
-    // commits is not an empty walk, it is git saying *revisión desconocida*.
-    // A default nobody typed cannot be a range for exactly that reason.
+    // commits is not an empty walk, it is git saying *unknown revision*. A
+    // default nobody typed cannot be a range, for exactly that reason.
     let at = a_line_of(3);
 
     let commits = commits_in(at.path(), "HEAD", 10).expect("as many as there are");
@@ -226,7 +226,7 @@ fn a_class_is_spliced_back_into_its_file_and_nothing_around_it_moves() {
     let at = a_line_of(0);
     std::fs::write(
         at.path().join("mod.py"),
-        "import soma\n\n\nclass A:\n    x = 1\n\n\nclass B:\n    y = 2\n",
+        "import somatize\n\n\nclass A:\n    x = 1\n\n\nclass B:\n    y = 2\n",
     )
     .expect("a module");
     for args in [vec!["add", "-A"], vec!["commit", "-q", "-m", "two classes"]] {
@@ -264,7 +264,7 @@ fn a_class_is_spliced_back_into_its_file_and_nothing_around_it_moves() {
 
     assert!(after.contains("x = 99"), "the edit landed: {after}");
     assert!(
-        after.starts_with("import soma"),
+        after.starts_with("import somatize"),
         "the import survived: {after}"
     );
     assert!(after.contains("class B:"), "the sibling survived: {after}");
@@ -344,12 +344,12 @@ fn a_path_that_climbs_out_of_the_repository_is_refused() {
 
 #[test]
 fn a_file_comes_back_from_the_commit_and_not_from_the_working_tree() {
-    // Lo que se abre en un panel es el fichero **de ese commit**. El que hay en
-    // el disco es el de otro, y enseñarlo con el nombre de éste sería la peor
-    // clase de casi acertar.
+    // What a panel opens is the file **at that commit**. The one on disk is
+    // another's, and showing it under this one's name would be the worst kind
+    // of nearly right.
     let at = a_line_of(2);
     let old = commits_in(at.path(), "HEAD~2..HEAD", 10).expect("a range")[1].clone();
-    std::fs::write(at.path().join("a.txt"), "lo que hay sin commitear").expect("a file");
+    std::fs::write(at.path().join("a.txt"), "what is there uncommitted").expect("a file");
 
     let said = somatize_tree::revision::read(at.path(), &old, "a.txt").expect("the file");
 
@@ -358,10 +358,10 @@ fn a_file_comes_back_from_the_commit_and_not_from_the_working_tree() {
 
 #[test]
 fn a_file_comes_back_exactly_as_it_was_written() {
-    // Sin recortar. El resto de este módulo lee líneas de git y las limpia, y
-    // aplicar eso aquí se comería la línea en blanco del final —la que git
-    // quiere— y las de arriba. Un fichero que vuelve distinto de como salió es
-    // una edición que borra código sin decirlo.
+    // Untrimmed. The rest of this module reads lines from git and cleans them,
+    // and doing that here would eat the trailing blank line — the one git
+    // wants — and the ones above it. A file that comes back different from how
+    // it went out is an edit that deletes code silently.
     let at = a_line_of(0);
     let whole = "\n\nclass Head:\n    pass\n\n\n";
     std::fs::write(at.path().join("net.py"), whole).expect("a file");
@@ -384,8 +384,8 @@ fn a_file_comes_back_exactly_as_it_was_written() {
 
 #[test]
 fn a_file_that_climbs_out_of_the_repository_is_refused_the_same_as_a_fork() {
-    // La misma comprobación y no una parecida: leer donde a alguien le apetezca
-    // es la mitad del problema que escribir donde a alguien le apetezca.
+    // The same check and not a similar one: reading wherever somebody fancies
+    // is half of the problem that writing wherever somebody fancies is.
     let at = a_line_of(0);
     let from = commits_in(at.path(), "HEAD", 1).expect("the commit")[0].clone();
 
@@ -399,13 +399,13 @@ fn a_file_that_climbs_out_of_the_repository_is_refused_the_same_as_a_fork() {
 
 #[test]
 fn a_whole_file_is_a_splice_over_all_of_its_lines() {
-    // Lo que hace que editar un fichero entero no necesite un segundo camino:
-    // un fichero es su propio trozo, `line: 1` y tantas líneas como tenga. El
-    // empalme que devuelve una clase a su sitio devuelve el fichero al suyo.
+    // What stops editing a whole file needing a second path: a file is its own
+    // splice, `line: 1` and as many lines as it has. The splice that puts a
+    // class back in its place puts a file back in its own.
     //
-    // Contadas como las cuenta `str::lines`, que es quien las cuenta al otro
-    // lado: `"a\nb\n"` son dos y no tres. Quien las cuente de la otra manera
-    // pide un trozo más largo que el fichero y se le dice que no.
+    // Counted the way `str::lines` counts them, which is who counts them on
+    // the other side: `"a\nb\n"` is two and not three. Counting them the other
+    // way asks for a splice longer than the file and is told no.
     let at = a_line_of(0);
     let whole = "import torch\n\n\nclass Head:\n    pass\n";
     std::fs::write(at.path().join("net.py"), whole).expect("a file");
@@ -432,13 +432,13 @@ fn a_whole_file_is_a_splice_over_all_of_its_lines() {
             lines: whole.lines().count() as u32,
         },
         rewritten,
-        "el fichero entero",
+        "the whole file",
     )
     .expect("the fork");
 
     assert_eq!(
         somatize_tree::revision::read(at.path(), &made, "net.py").expect("the file"),
         rewritten,
-        "vuelve exactamente lo que se mandó, sin nada de alrededor pegado",
+        "exactly what was sent comes back, with nothing around it stuck on",
     );
 }

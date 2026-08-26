@@ -32,37 +32,29 @@ pub struct Stop {
     /// anything. **Derived** — from a decision's scope, down through the moves
     /// it covers, out to the commits those cite — so abandoning a question's
     /// line reaches an attempt hung under it tomorrow with nobody writing
-    /// anything down.
-    ///
-    /// Note what it deliberately does **not** reach: forking off an abandoned
-    /// attempt makes a sibling, not a child, so the new line starts clean.
-    /// Trying something else after hitting a dead end is the move you make
-    /// *because* it was a dead end, and inheriting the abandonment down git
-    /// ancestry would mark it as more of the same.
+    /// anything down. It deliberately does not reach a fork off an abandoned
+    /// attempt: that is a sibling and starts clean, because trying something
+    /// else is the move you make *because* it was a dead end.
     pub decided: Option<Course>,
     /// Whether something above it is [`Verdict::Invalid`]. Worked out from git
     /// rather than stored, so a commit made after the verdict is marked the
     /// moment it exists.
     pub doubted: bool,
-    /// Lo que se corrió con esta versión: cuántos ensayos y cómo van.
+    /// What was run with this version: how many trials and how they are going.
     ///
-    /// Un commit es la versión y no cambia; los ensayos crecen sin parar y van
-    /// **asociados** a ella, no versionados. Vienen del mismo recorrido que
-    /// todo lo demás, porque soma puso el estado y la puntuación en el
-    /// registro: contar cuarenta versiones cuesta un recorrido, y sólo la
-    /// curva se paga aparte.
+    /// A commit is the version and does not change; trials grow and are
+    /// **associated** with it, not versioned. From the same scan as everything
+    /// else, because soma put the state and the score in the record — counting
+    /// forty versions is one walk and only the curve is paid for apart.
     pub trials: Tally,
-    /// Si se pliega al dibujar: está en una línea que alguien decidió
-    /// abandonar o dar por superada, y nadie le ha encontrado nada malo.
+    /// Whether it folds when drawn: it is on a line somebody decided to
+    /// abandon or call superseded, and nobody found anything wrong with it.
     ///
-    /// **Podar es dejar de dibujar y nunca borrar.** Esta parada sigue viniendo
-    /// entera —con su diario, sus ensayos y su paso—: lo único que dice esto es
-    /// que un árbol de cuarenta variantes no se lee, y que quien dibuja puede
-    /// plegar ésta si quiere. Quien procesa la respuesta la ignora.
-    ///
-    /// Viene calculado y no lo calcula quien dibuja, porque si no la regla
-    /// viviría en dos idiomas: el día que cambiara, el terminal y la vista
-    /// plegarían cosas distintas y las dos parecerían correctas.
+    /// **Pruning is not drawing, never deleting.** The stop still comes back
+    /// whole; all this says is that a tree of forty variants does not read, and
+    /// whoever draws may fold this one. Computed here and not by whoever draws,
+    /// or the rule would live in two languages and the terminal and the view
+    /// would fold different things, both looking right.
     pub pruned: bool,
     /// Whether it is only here so the one above it has something to be
     /// compared against. A range says which commits to *show*.
@@ -99,20 +91,16 @@ impl Walk {
     }
 }
 
-/// Si una parada se pliega al dibujar una línea podada.
+/// Whether a stop folds when a pruned line is drawn.
 ///
-/// La regla entera, en un sitio, porque la usan el terminal y la vista: si cada
-/// uno la escribiera en su idioma, el día que cambiara plegarían cosas
-/// distintas y las dos parecerían correctas.
+/// The whole rule in one place, because the terminal and the view both use it.
 ///
-/// Se pliega lo que alguien decidió abandonar o dar por superado. **No se
-/// pliega lo que alguien ha juzgado mal**: un commit `invalid` es lo que pone
-/// en duda la medida en la que se apoyó la decisión de abandonar la línea, y
-/// esconderlo sería esconder justo la razón para volver a mirarla. Lo mismo
-/// para el que hereda esa duda, que es la misma razón un nivel más abajo.
-///
-/// Un `sound` sí se pliega: dice que se miró y no había nada malo, así que no
-/// hay ninguna razón nueva para volver — la decisión sigue en pie.
+/// What somebody decided to abandon or call superseded folds. **What somebody
+/// judged wrong does not**: an `invalid` commit is what casts doubt on the
+/// measurement the decision leaned on, and hiding it would hide the very
+/// reason to look again — same for whatever inherits that doubt. A `sound`
+/// does fold: it says somebody looked and found nothing, so the decision
+/// stands.
 pub fn folds(decided: Option<Course>, judged: Option<Verdict>, doubted: bool) -> bool {
     if !matches!(decided, Some(Course::Abandon) | Some(Course::Superseded)) {
         return false;
@@ -120,13 +108,13 @@ pub fn folds(decided: Option<Course>, judged: Option<Verdict>, doubted: bool) ->
     !doubted && !matches!(judged, Some(Verdict::Invalid))
 }
 
-/// Lo que hace falta para leer lo que ya se sabe de una investigación: cómo se
-/// llama, dónde está guardada y hacia dónde es mejor.
+/// What it takes to read what is already known of an investigation: its name,
+/// where it is kept, and which way is better.
 ///
-/// Las tres viajan juntas porque las tres salen del mismo `soma-tree.toml` y
-/// ninguna significa nada sin las otras: un store sin el nombre del árbol
-/// devuelve los registros de otra investigación, y una puntuación sin la
-/// dirección no dice si es buena.
+/// The three travel together because they come out of one `soma-tree.toml` and
+/// none means anything without the others: a store without the tree's name
+/// returns another investigation's records, and a score without the direction
+/// does not say whether it is good.
 pub struct Remembered<'a> {
     pub tree: &'a str,
     pub kept: &'a dyn Store,
@@ -146,11 +134,10 @@ pub fn walked(
     known: &HashMap<&str, Snapshot>,
 ) -> Result<Walk, Box<dyn std::error::Error>> {
     let Remembered { tree, kept, goal } = known_as;
-    // Sondear es opcional. Un repositorio anterior a soma —un paper terminado,
-    // un trabajo que ya nadie ejecuta— tiene una historia, un diario, unos
-    // ensayos y un razonamiento que valen la pena leer, y ningún grafo que
-    // sondear. Sin sondeo hay paradas y no hay pasos: lo que falta es **qué
-    // hizo cada edición**, y sólo eso.
+    // Probing is optional. A repository from before soma — a finished paper,
+    // work nobody runs any more — has a history, a journal, trials and a line
+    // of reasoning worth reading, and no graph to probe. Without a probe there
+    // are stops and no steps: what is missing is **what each edit did**.
     let probing = if known.is_empty() && !commits.is_empty() {
         None
     } else {
@@ -211,11 +198,10 @@ pub fn walked(
         );
     }
 
-    // Que no se pueda leer el razonamiento no es razón para no dibujar el
-    // registro: un árbol sin decisiones es exactamente lo que hay al empezar.
+    // Not being able to read the reasoning is no reason not to draw the
+    // record — a tree with no decisions is what there is on day one — and the
+    // same goes for not being able to count what was run.
     let decided = Moves::of(tree, kept).decided().unwrap_or_default();
-    // Y lo mismo: no poder contar lo que se corrió no es razón para no dibujar
-    // lo que se escribió.
     let mut counted = Trials::of(tree, kept)
         .towards(goal)
         .counted()
@@ -234,10 +220,6 @@ pub fn walked(
             parents: parents.get(commit).cloned().unwrap_or_default(),
             verdict: verdicts.get(commit).copied(),
             decided: decided.get(commit).copied(),
-            // Lo que ha juzgado alguien no se pliega nunca. Un commit `invalid`
-            // es lo que pone en duda la medida en la que se apoyó la decisión
-            // de abandonar la línea, y esconderlo sería esconder justo la razón
-            // para volver a mirarla; y uno que hereda esa duda, igual.
             pruned: folds(
                 decided.get(commit).copied(),
                 verdicts.get(commit).copied(),
@@ -267,10 +249,9 @@ pub fn walked(
 
     Ok(Walk {
         tree: tree.to_string(),
-        // Sin sondeo no hay de qué se construyó: se dice, en vez de dejar el
-        // hueco vacío pareciendo un fallo.
+        // Said out loud rather than left blank, which would look like a fault.
         built_from: if probing.is_none() {
-            "sin sondeo — este repositorio no declara qué construir".to_string()
+            "no probe — this repository does not declare what to build".to_string()
         } else {
             commits
                 .first()

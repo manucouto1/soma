@@ -20,17 +20,14 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     /// `module:function` — takes nothing, returns a `Graph`.
     ///
-    /// Opcional, y esto no es una comodidad: **leer el razonamiento de una
-    /// investigación no debería exigir saber construir su grafo**. Un trabajo
-    /// terminado —un paper, un repositorio que ya nadie ejecuta, uno anterior a
-    /// soma— tiene un razonamiento que vale la pena leer y puede no tener nada
-    /// que sondear. Exigirlo aquí ataba la capa 2 a la 1 por el sitio
-    /// equivocado: por la configuración, no por los hechos.
-    ///
-    /// Sin él, lo que necesita sondear dice que falta y lo demás funciona.
+    /// Optional, and not as a convenience: **reading an investigation's
+    /// reasoning should not require knowing how to build its graph**. Finished
+    /// work — a paper, a repository nobody runs, one from before soma — has
+    /// reasoning worth reading and may have nothing to probe. Without it, what
+    /// needs a probe says so and the rest works.
     #[serde(default)]
     pub build: Option<String>,
-    /// The interpreter that can import soma. Rarely the one on `PATH`.
+    /// The interpreter that can import somatize. Rarely the one on `PATH`.
     #[serde(default = "python_on_path")]
     pub python: PathBuf,
     /// What this investigation is called, so several can share one store
@@ -39,13 +36,11 @@ pub struct Config {
     /// **It is in the name records are bound under**, which is the one part of
     /// this that cannot be changed later without moving somebody's directories.
     pub tree: Option<String>,
-    /// Hacia dónde es mejor: `min` para una pérdida, `max` para una exactitud.
+    /// Which way is better: `min` for a loss, `max` for an accuracy.
     ///
-    /// Se declara aquí porque **no está en el store**: la dirección vive en el
-    /// `Goal` que se le pasa al sampler y no se escribe en ningún registro. Sin
-    /// ella los ensayos se enseñan por su rango, que es cierto de todos modos.
-    /// Con ella se puede decir cuál fue el mejor, que es distinto de decirlo
-    /// suponiéndolo.
+    /// Declared here because it is **not in the store**: the direction lives in
+    /// the `Goal` handed to a sampler and is written in no record. Without it
+    /// trials are shown by their range, which is true anyway.
     pub goal: Option<String>,
 }
 
@@ -54,24 +49,24 @@ fn python_on_path() -> PathBuf {
 }
 
 impl Config {
-    /// Read from the repository, not from the checkout: how an experiment is
-    /// built is a fact about the project now, and reading it out of each commit
-    /// would mean an old one that predates the file cannot be probed.
-    /// Cómo construir el grafo, o por qué no se puede.
+    /// How to build the graph, or why it cannot be.
     ///
-    /// El mensaje es del que va a sondear y no del que lee: quien mira el
-    /// razonamiento nunca llega aquí.
+    /// The message is for whoever is about to probe and not for whoever reads:
+    /// somebody looking at the reasoning never gets here.
     pub fn building(&self) -> Result<&str, String> {
         self.build.as_deref().ok_or_else(|| {
             format!(
-                "{} no dice qué construir, así que no hay grafo que sondear.\n\n    \
+                "{} does not say what to build, so there is no graph to probe.\n\n    \
                  build = \"experiments.encoder:build\"\n\n\
-                 El razonamiento y el diario se leen igual sin esto.",
+                 The reasoning and the journal read the same without it.",
                 "soma-tree.toml"
             )
         })
     }
 
+    /// Read from the repository and not from the checkout: how an experiment
+    /// is built is a fact about the project now, and reading it out of each
+    /// commit would leave one predating the file unprobeable.
     pub fn read(repo: &Path) -> Result<Self, String> {
         let at = repo.join("soma-tree.toml");
         let text = std::fs::read_to_string(&at).map_err(|why| {
@@ -84,14 +79,14 @@ impl Config {
         toml::from_str(&text).map_err(|why| format!("{} is not readable: {why}", at.display()))
     }
 
-    /// Hacia dónde es mejor, si se declaró. Se rechaza lo que no se entienda
-    /// en vez de leerlo como «no declarado»: una errata en `goal` dejaría de
-    /// decir cuál fue el mejor sin que nada avisara de por qué.
+    /// Which way is better, if it was declared. What is not understood is
+    /// refused rather than read as *not declared*: a typo in `goal` would stop
+    /// saying which was best with nothing saying why.
     pub fn towards(&self) -> Result<Option<crate::trials::Goal>, String> {
         match self.goal.as_deref() {
             None => Ok(None),
             Some(said) => crate::trials::Goal::read(said).map(Some).ok_or_else(|| {
-                format!("`goal = \"{said}\"` no dice hacia dónde: `min` para una pérdida, `max` para una exactitud")
+                format!("`goal = \"{said}\"` does not say which way: `min` for a loss, `max` for an accuracy")
             }),
         }
     }
@@ -137,9 +132,9 @@ impl Bench {
         let config = Config::read(&repo)?;
         let python = config.interpreter(&repo);
         let probe = probe_beside_the_binary()?;
-        // La receta identifica al sondeador y a lo que construye. Sin nada que
-        // construir no hay sondeo, y una receta vacía no se usa nunca: es el
-        // camino por el que se lee un razonamiento sin poder ejecutar nada.
+        // The recipe identifies the probe and what it builds. With nothing to
+        // build there is no probing, and an empty recipe is never used: it is
+        // the path by which reasoning is read with nothing runnable.
         let recipe = match config.build.as_deref() {
             Some(build) => recipe(&probe, build, given)?,
             None => Digest::of(b""),
@@ -200,9 +195,9 @@ pub fn walking(
     let mut commits = shown.clone();
     commits.extend(revision::beneath(&bench.repo, &shown));
 
-    // Sin nada que construir no se sondea nada, y no es un error: la historia,
-    // el diario, los ensayos y el razonamiento se leen igual. Lo único que
-    // falta es qué hizo cada edición.
+    // With nothing to build nothing is probed, and that is not an error: the
+    // history, the journal, the trials and the reasoning read the same. What
+    // is missing is what each edit did.
     let known = match bench.config.build {
         Some(_) => probed(&bench, &probing, &commits)?,
         None => HashMap::new(),
@@ -245,9 +240,9 @@ pub fn probed<'a>(
     probing: &Probing,
     commits: &'a [String],
 ) -> Result<HashMap<&'a str, Snapshot>, Box<dyn std::error::Error>> {
-    // Cortado aquí, que es donde se sabe por qué. Dejarlo pasar mandaba una
-    // construcción vacía a Python y volvía «one of --build or --compare», que
-    // no le dice a nadie que lo que falta es una línea en su soma-tree.toml.
+    // Cut here, which is where the reason is known. Letting it through sent an
+    // empty build to Python and came back `one of --build or --compare`, which
+    // tells nobody that what is missing is a line in their soma-tree.toml.
     bench.config.building()?;
     let mut known: HashMap<&str, Snapshot> = HashMap::new();
     for commit in commits {

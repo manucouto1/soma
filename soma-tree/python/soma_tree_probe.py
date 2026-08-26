@@ -41,39 +41,36 @@ def fingerprint(implementation):
 
 
 def reaches(implementation):
-    """Los ficheros de los que está hecho un nodo, y dónde para la cuenta.
+    """The files a node is made of, and where the count stops.
 
-    Un nodo **es** su clase, y por eso `written_where` enseña una sola: es lo
-    que quiere quien pincha un nodo. Pero una red se escribe muchas veces en
-    cuatro módulos que se juntan en un `__init__`, y de esos cuatro
-    `inspect.getsourcefile` sólo sabe uno. Los otros tres no estaban en ninguna
-    parte de la respuesta.
+    A node **is** its class, which is why `written_where` shows just one: it is
+    what somebody clicking a node wants. But a network is often written across
+    four modules joined in an `__init__`, and `inspect.getsourcefile` knows
+    only one of the four.
 
-    Estaban calculados, eso sí. La huella de soma recorre el cierre
-    transitivo —las bases, los globales que el código nombra, las clases que
-    compone— y hasta ahora lo tiraba y devolvía ocho caracteres de sha256.
-    `_fingerprint.bill` es ese mismo recorrido dicho en voz alta, así que esto
-    no es un segundo modelo de qué depende de qué: es el primero, leído.
+    They were computed already. soma's fingerprint walks the transitive
+    closure — the bases, the globals the code names, the classes it composes —
+    and until now threw it away and returned eight characters of sha256.
+    `_fingerprint.bill` is that same walk said out loud, so this is not a second
+    model of what depends on what: it is the first one, read.
 
-    Van dos listas y no una porque son dos cosas distintas:
+    Two lists and not one, because they are two things: `files`, what can be
+    opened, grouped **by file** since a file usually holds four classes and
+    what gets edited is the file; and `stops`, where the walk deliberately
+    halts — an installed distribution, a whole module — which have no file, and
+    offering one into somebody's `site-packages` would say it does not stop
+    there.
 
-    - `files`, lo que se puede abrir: agrupado **por fichero**, porque un
-      fichero suele llevar cuatro clases y lo que se edita es el fichero.
-    - `stops`, donde el recorrido se para a propósito: una distribución
-      instalada, un módulo entero. No tienen fichero, y ofrecer uno hacia el
-      `site-packages` de alguien sería decir que no para ahí.
-
-    Sin fuente ninguna de las dos: un árbol de ficheros de cuarenta commits con
-    el contenido dentro es casi toda la respuesta y nada de ella leída. Se pide
-    por su ruta cuando alguien abre uno.
+    No source in either: a file tree of forty commits with the content inside
+    is nearly all of the answer and none of it read.
     """
     from somatize import _fingerprint
 
     try:
         billed = _fingerprint.bill(type(implementation))
     except Exception:
-        # La misma ausencia que `fingerprint` dice arriba: una clase sin fuente
-        # que leer no tiene recorrido del que hablar.
+        # The same absence `fingerprint` says above: a class with no source to
+        # read has no walk to talk about.
         return None
 
     files, stops = {}, []
@@ -89,9 +86,9 @@ def reaches(implementation):
                     }
                 )
             continue
-        # Relativa al checkout, por lo mismo que `written_where`: la absoluta es
-        # el worktree temporal en el que corrió esto y no le dice nada a nadie
-        # media hora después.
+        # Relative to the checkout, for the same reason as `written_where`: the
+        # absolute one is the temporary worktree this ran in, and says nothing
+        # to anybody half an hour later.
         where = os.path.relpath(one["file"], os.getcwd())
         files.setdefault(where, []).append(
             {"called": one["called"], "line": one["line"], "lines": one["lines"]}
@@ -143,33 +140,32 @@ def written_where(implementation):
     }
 
 
-#: Cuánto se baja dentro de un nodo. Dos niveles llegan a `router.gru` y paran
-#: ahí, que es donde deja de decir algo: por debajo son las piezas de torch, y
-#: leerlas como catorce cosas convierte el dibujo en uno que nadie mira dos
-#: veces. Es la misma razón por la que la figura de soma no abre un bloque
-#: que todo el mundo reconoce.
+#: How far down inside a node to go. Two levels reach `router.gru` and stop
+#: there, which is where it stops saying anything: below that are torch's own
+#: pieces, and reading them as fourteen things makes a drawing nobody looks at
+#: twice. The same reason soma's figure does not open a block everybody knows.
 DEEP = 2
 
 
 def parts_of(implementation, deep=DEEP):
-    """De qué está hecho un nodo, leído sin correr nada.
+    """What a node is made of, read without running anything.
 
-    `somatize.torch.architecture` responde mejor a esto —ve hasta las
-    operaciones que no son módulos, una conexión residual entre ellas— y para
-    conseguirlo **corre el grafo** con una entrada de ejemplo. Aquí no se corre
-    nada nunca, así que lo que se puede leer es lo que `__init__` construyó: la
-    composición **declarada**. Es la misma categoría que todo lo demás de este
-    lado, y por eso encaja: imprimir una declaración no es observarla.
+    `somatize.torch.architecture` answers this better — it sees even the
+    operations that are not modules, a residual connection among them — and to
+    do it **runs the graph** with a sample input. Nothing is ever run here, so
+    what can be read is what `__init__` built: the **declared** composition.
+    Printing a declaration is not observing it, which is what puts it in the
+    same category as everything else on this side.
 
-    Lo que se saca de aquí es lo que un nodo esconde. `Pure` es una caja con un
-    enrutador dentro, y ese enrutador es la pieza de la que va el experimento;
-    dibujar la caja y callarse lo de dentro es dibujar el envoltorio.
+    What comes out is what a node hides. `Pure` is a box with a router inside,
+    and that router is what the experiment is about; drawing the box and
+    keeping quiet about the inside draws the wrapper.
     """
     try:
         import torch
     except ImportError:
-        # Un grafo sin torch no tiene módulos dentro que mirar, y eso no es un
-        # fallo: es un grafo de otra clase.
+        # A graph without torch has no modules inside to look at, and that is
+        # not a failure: it is another kind of graph.
         return []
 
     said = []
@@ -190,9 +186,9 @@ def parts_of(implementation, deep=DEEP):
             path = f"{prefix}{who}"
             kind = type(what)
             where = None
-            # La fuente sólo de lo que escribió alguien de este lado. `GRU` y
-            # `Linear` son de torch, su fuente son cientos de líneas que nadie
-            # va a leer aquí, y el nombre ya dice todo lo que hace falta.
+            # Source only for what somebody on this side wrote. `GRU` and
+            # `Linear` are torch's, their source is hundreds of lines nobody
+            # will read here, and the name already says what is needed.
             if not kind.__module__.startswith("torch."):
                 where = written_where(what)
             said.append(
@@ -250,10 +246,9 @@ def built_by(where):
 def declares(where):
     """The function itself, before calling it.
 
-    Aparte de `built_by` porque hace falta **la función** y no sólo el grafo: lo
-    que declara la topología —los `>>` y los `|`— está en su cuerpo, y es lo
-    único de un grafo que no se puede leer nodo a nodo. Cada nodo dice qué hace
-    y ninguno dice cómo se conectan.
+    Apart from `built_by` because **the function** is needed and not just the
+    graph: what declares the topology — the `>>` and the `|` — is in its body,
+    and it is the one part of a graph that cannot be read node by node.
     """
     module, _, name = where.partition(":")
     if not module or not name:
@@ -262,12 +257,11 @@ def declares(where):
 
 
 def declaring(where):
-    """El código que declara el grafo, con su fichero y su línea.
+    """The code that declares the graph, with its file and its line.
 
-    Un fallo aquí no es un fallo del sondeo: una función definida en una celda,
-    o compuesta en tiempo de ejecución, no tiene fuente que leer, y eso es lo
-    mismo que `UNVERSIONED` nombra un nivel más abajo. Se dice que no está en
-    vez de romper lo demás.
+    A failure here is not a failure of the probe: a function defined in a cell,
+    or composed at runtime, has no source to read, which is the same absence
+    `UNVERSIONED` names a level below. It says so rather than breaking the rest.
     """
     import inspect
 
@@ -285,16 +279,16 @@ def declaring(where):
 
 
 def architecture(graph):
-    """Los cinco hechos ortogonales de un grafo, aparte de qué calcula cada nodo.
+    """The orthogonal facts of a graph, apart from what each node computes.
 
-    El cuaderno de soma lo dice en una tabla: `Graph` dice **qué** existe,
-    el catálogo **quién** lo ejecuta, la colocación **dónde**, el plan
-    **cuándo** y la memoria **qué se recuerda** de cada nodo. Confundirlos es el
-    error fácil, y un dibujo que sólo enseña el primero deja fuera cuatro.
+    soma's notebook puts it in a table: `Graph` says **what** exists, the
+    catalog **who** executes it, the placement **where**, the plan **when** and
+    the memory **what is remembered** of each node. Confusing them is the easy
+    mistake, and a drawing that shows only the first leaves four out.
 
-    Van en claves separadas y no fundidos en un campo por nodo, por lo que el
-    mismo cuaderno dice del relleno de su figura: tres hechos no caben en un
-    color, e inventarles una precedencia esconde dos de los tres.
+    In separate keys and not merged into one field per node, for what that same
+    notebook says about the fill of its figure: three facts do not fit in one
+    colour, and inventing a precedence among them hides two of the three.
     """
     return {
         "identities": graph.identities(),
@@ -304,9 +298,9 @@ def architecture(graph):
         "frozen": sorted(graph.frozen()),
         "roots": sorted(graph.roots()),
         "leaves": sorted(graph.leaves()),
-        # El orden en que correrían, que es el «cuándo» y no el «qué alimenta a
-        # qué». Para un grafo serie-paralelo los dos coinciden; para uno que no
-        # lo es, dejan de coincidir, y ahí es donde hace falta tener los dos.
+        # The order they would run in, which is the *when* and not the *what
+        # feeds what*. For a series-parallel graph the two coincide; for one
+        # that is not, they stop coinciding, and that is where both are needed.
         "order": list(graph.topological_sort()),
     }
 
@@ -403,7 +397,7 @@ def checked(build, node, given, store):
     # 1. It parses. Free, and catches a typo without importing anything.
     try:
         compile(at.read_text(), str(at), "exec")
-        said.append({"what": "sintaxis", "ok": True, "said": "compila"})
+        said.append({"what": "syntax", "ok": True, "said": "it compiles"})
     except SyntaxError as why:
         marks.append(
             {
@@ -411,10 +405,10 @@ def checked(build, node, given, store):
                 "col": why.offset or 1,
                 "severity": "error",
                 "message": f"{type(why).__name__}: {why.msg}",
-                "from": "sintaxis",
+                "from": "syntax",
             }
         )
-        said.append({"what": "sintaxis", "ok": False, "said": f"{type(why).__name__}: {why.msg}"})
+        said.append({"what": "syntax", "ok": False, "said": f"{type(why).__name__}: {why.msg}"})
         return {"checks": said, "diagnostics": marks, "output": ""}
 
     # 2. Whatever linter is on the machine. Found, never installed.
@@ -431,7 +425,7 @@ def checked(build, node, given, store):
             graph = built_by(build)
             said.append(
                 {
-                    "what": "el grafo construye",
+                    "what": "the graph builds",
                     "ok": True,
                     "said": f"{len(graph.nodes())} nodos: {' · '.join(graph.nodes())}",
                 }
@@ -439,7 +433,7 @@ def checked(build, node, given, store):
         except Exception as why:
             said.append(
                 {
-                    "what": "el grafo construye",
+                    "what": "the graph builds",
                     "ok": False,
                     "said": f"{type(why).__name__}: {why}",
                 }
@@ -454,7 +448,7 @@ def checked(build, node, given, store):
         ran_it = ran(graph, node, given, store)
     said.append(ran_it)
     if not ran_it.get("ok", True):
-        marks.extend(marked(ran_it.get("at"), ran_it["said"], "ejecución"))
+        marks.extend(marked(ran_it.get("at"), ran_it["said"], "execution"))
 
     return {"checks": said, "diagnostics": marks, "output": printed.getvalue()}
 
@@ -536,7 +530,7 @@ def linted(at):
         return {
             "what": "ruff",
             "ok": not marks,
-            "said": f"{len(marks)} queja(s)" if marks else "sin quejas",
+            "said": f"{len(marks)} complaint(s)" if marks else "no complaints",
         }, marks
 
     found = beside_the_interpreter("pyflakes")
@@ -545,14 +539,14 @@ def linted(at):
         return {
             "what": "pyflakes",
             "ok": done.returncode == 0,
-            "said": shortened((done.stdout + done.stderr).strip() or "sin quejas", 400),
+            "said": shortened((done.stdout + done.stderr).strip() or "no complaints", 400),
         }, []
 
     return {
         "what": "lint",
         "ok": True,
         "skipped": True,
-        "said": "ni ruff ni pyflakes en esta máquina",
+        "said": "neither ruff nor pyflakes on this machine",
     }, []
 
 
@@ -567,7 +561,7 @@ def prettified(source):
 
     found = beside_the_interpreter("ruff")
     if not found:
-        return {"ok": False, "said": "no hay ruff en esta máquina", "source": source}
+        return {"ok": False, "said": "there is no ruff on this machine", "source": source}
     done = subprocess.run(
         [found, "format", "--no-cache", "-"], input=source, capture_output=True, text=True
     )
@@ -587,13 +581,13 @@ def ran(graph, node, given, store):
     """
     from somatize import Store, foreseen
 
-    what = {"what": "corre con datos reales", "ok": True}
+    what = {"what": "it runs on real data", "ok": True}
     if store is None:
-        return {**what, "skipped": True, "said": "sin --store no hay nada guardado que darle"}
+        return {**what, "skipped": True, "said": "without --store there is nothing kept to hand it"}
 
     shape = foreseen.snapshot(graph, given, store=store)["shape"]
     if node not in shape:
-        return {**what, "ok": False, "said": f"`{node}` no está en el grafo que acaba de construir"}
+        return {**what, "ok": False, "said": f"`{node}` is not in the graph it just built"}
     feeding = shape[node][2]
 
     kept = Store(store)
@@ -601,12 +595,12 @@ def ran(graph, node, given, store):
     values = {}
     for one in feeding:
         if one not in names:
-            return {**what, "skipped": True, "said": f"`{one}` no se puede nombrar por adelantado"}
+            return {**what, "skipped": True, "said": f"`{one}` cannot be named in advance"}
         if (had := kept.recall(f"value:{names[one]}")) is None:
             return {
                 **what,
                 "skipped": True,
-                "said": f"nada guardado para `{one}`: corre el grafo con --store una vez",
+                "said": f"nothing kept for `{one}`: run the graph with --store once",
             }
         values[one] = had
 
@@ -637,7 +631,7 @@ def ran(graph, node, given, store):
             "said": f"{type(why).__name__}: {why}",
             "at": inside(why, module_of(graph, node)),
         }
-    return {**what, "said": f"devolvió {type(out).__name__}: {shortened(repr(out))}"}
+    return {**what, "said": f"returned {type(out).__name__}: {shortened(repr(out))}"}
 
 
 def module_of(graph, node):

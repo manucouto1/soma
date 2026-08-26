@@ -107,28 +107,20 @@ pub const ALL: &str = "--all";
 
 /// The commits to walk, newest first — git's own order.
 ///
-/// Two ways of asking, because there are two questions:
+/// Three ways of asking: a **range**, `main~10..main`, which is exactly what
+/// somebody meant; a **revspec**, `HEAD`, meaning the history back from there
+/// capped at `most`; and [`ALL`], every branch, which is the default because
+/// that is the shape an investigation has.
 ///
-/// - a **range**, `main~10..main`, which is exactly what somebody meant;
-/// - a **revspec**, `HEAD`, meaning the history back from there, capped —
-///   which is what `git log` does, and the only form that works on a
-///   repository whose length nobody knows;
-/// - [`ALL`], every branch, which is the default because that is the shape an
-///   investigation has.
-///
-/// The second exists because the first has a trap: `HEAD~10..HEAD` in a
-/// repository with four commits is not an empty answer, it is
-/// *revisión desconocida*. A default that asks for ten commits cannot be a
-/// range, and being told off by git for it is not something to hand a person
-/// who typed nothing at all.
+/// A range cannot be the default, because `HEAD~10..HEAD` in a repository with
+/// four commits is not an empty answer but an unknown-revision error, and that
+/// is not something to hand somebody who typed nothing at all.
 pub fn commits_in(repo: &Path, asked: &str, most: usize) -> Result<Vec<String>, Trouble> {
     let capped = most.to_string();
     let how: Vec<&str> = match (asked, asked.contains("..")) {
-        // Every branch, which is what an investigation **is**. Trying three
-        // variants means three branches off one commit, and a walk from one tip
-        // cannot see its own siblings: `rev-list HEAD` follows ancestry, and a
-        // sibling is not an ancestor. A tool for exploring branches whose
-        // default cannot see them is a tool for exploring one line.
+        // Every branch, because a walk from one tip cannot see its own
+        // siblings: `rev-list HEAD` follows ancestry and three variants of one
+        // idea are three branches off one commit, not ancestors of each other.
         (ALL, _) => vec!["rev-list", "--all", "-n", &capped],
         (_, true) => vec!["rev-list", asked],
         (_, false) => vec!["rev-list", "-n", &capped, asked],
@@ -183,14 +175,13 @@ pub fn named(repo: &Path, revspec: &str) -> Result<String, Trouble> {
 
 /// One file, as that commit had it.
 ///
-/// `git show` y no una lectura del disco: lo que se quiere es el fichero **en
-/// ese commit**, y el que hay en el árbol de trabajo es el de otro. De paso se
-/// ahorra el worktree, que es la parte cara de todo lo demás de aquí.
+/// `git show` and not a read off the disk: what is wanted is the file **at
+/// that commit**, and it saves the worktree, which is the expensive part of
+/// everything else here.
 ///
-/// Sin recortar nada. El resto de este fichero lee líneas de git y las limpia;
-/// esto devuelve el contenido, y un `trim` en el camino se comería la línea en
-/// blanco del final —la que git quiere— y las de arriba. Un fichero que vuelve
-/// distinto de como salió es una edición que borra código sin decirlo.
+/// Nothing is trimmed. A `trim` on the way through would eat the trailing
+/// newline git wants and the blank lines above it, and a file that comes back
+/// different from how it went out is an edit that deletes code silently.
 pub fn read(repo: &Path, commit: &str, file: &str) -> Result<String, Trouble> {
     let of = |said: String| Trouble::NoSuchFile {
         file: file.to_string(),
@@ -209,11 +200,11 @@ pub fn read(repo: &Path, commit: &str, file: &str) -> Result<String, Trouble> {
     }
 }
 
-/// La ruta, comprobada de que está dentro del repositorio.
+/// The path, checked to be inside the repository.
 ///
-/// Una con `..` dentro sale de él, y atenderla sería un navegador leyendo y
-/// escribiendo donde le apeteciera en el disco de alguien. Es la misma
-/// comprobación que hace falta para leer y para bifurcar, así que está una vez.
+/// One with `..` in it leaves, and serving that would be a browser reading and
+/// writing wherever it liked on somebody's disk. Reading and forking need the
+/// same check, so it is written once.
 fn within(file: &str) -> Result<PathBuf, String> {
     let inside = PathBuf::from(file);
     match inside.is_absolute() || inside.components().any(|of| of.as_os_str() == "..") {

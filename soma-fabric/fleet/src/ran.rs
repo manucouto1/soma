@@ -31,7 +31,7 @@ const RUNS: &str = "run/";
 /// A row like any other, because it is one: things ran here too, and a fleet
 /// view that only showed other people's machines would be hiding the machine
 /// the graph was declared on.
-const HERE: &str = "aquí";
+const HERE: &str = "here";
 
 /// One run, as a scan already carries it.
 #[derive(Debug, Clone, Serialize)]
@@ -60,7 +60,7 @@ pub struct Ran {
 /// What one place did in one run.
 #[derive(Debug, Clone, Serialize)]
 pub struct Did {
-    /// The name the graph gave it, or `aquí`.
+    /// The name the graph gave it, or `here`.
     pub host: String,
     /// What the machine calls itself, when a reading came down the wire.
     pub id: Option<String>,
@@ -215,7 +215,7 @@ pub fn ran(store: &dyn Store, run: &str, last: usize) -> Result<Ran, StoreError>
     Ok(Ran {
         run: run.to_string(),
         forwards: mine.len(),
-        // `aquí` first, and the rest by name: the machine the graph was
+        // `here` first, and the rest by name: the machine the graph was
         // declared on is where somebody's eye starts.
         did: {
             let mut rows: Vec<Did> = did.into_values().collect();

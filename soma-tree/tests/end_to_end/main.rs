@@ -135,7 +135,7 @@ fn soma_tree_refusing(at: &Path, args: &[&str]) -> String {
         .current_dir(at)
         .output()
         .expect("the binary runs");
-    assert!(!said.status.success(), "se esperaba una negativa: {args:?}");
+    assert!(!said.status.success(), "a refusal was expected: {args:?}");
     String::from_utf8_lossy(&said.stderr).into_owned()
 }
 
@@ -187,7 +187,7 @@ fn the_body_of_a_forward_moves_no_name_and_the_cache_will_hit() {
     assert!(said.contains("embed"), "{said}");
     assert!(said.contains("STALE"), "{said}");
     assert!(
-        said.contains("la caché dará HIT"),
+        said.contains("the cache will HIT"),
         "and it says what that costs: {said}",
     );
 }
@@ -214,16 +214,14 @@ fn retraining_is_another_trial_and_not_another_variant() {
 
     assert!(said.contains("RESETTLED"), "{said}");
     assert!(
-        said.contains("Ningún nodo recibirá un valor cacheado"),
+        said.contains("No node will be handed a cached value"),
         "nothing stale is served: {said}",
     );
     assert!(
-        !said.contains("La edición está en"),
+        !said.contains("The edit is in"),
         "nobody edited anything: {said}",
     );
 }
-
-// ── A whole line at once ──
 
 #[test]
 fn a_walk_says_where_each_step_edited() {
@@ -231,10 +229,10 @@ fn a_walk_says_where_each_step_edited() {
 
     let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
-    assert!(said.contains("edición: strict"), "{said}");
-    assert!(said.contains("edición: embed"), "{said}");
+    assert!(said.contains("edit: strict"), "{said}");
+    assert!(said.contains("edit: embed"), "{said}");
     assert!(
-        said.contains("sin edición · repesado: embed"),
+        said.contains("no edit · resettled: embed"),
         "the retrain edited nothing, and it says which node was retrained: {said}",
     );
 }
@@ -324,7 +322,7 @@ fn doubt_reaches_a_commit_that_did_not_exist_when_it_was_cast() {
 
     assert!(said.contains("[invalid]"), "{said}");
     assert_eq!(
-        said.matches("[bajo algo inválido]").count(),
+        said.matches("[under something invalid]").count(),
         2,
         "the two commits under it, neither of them judged: {said}",
     );
@@ -337,21 +335,19 @@ fn having_looked_and_found_nothing_does_not_put_numbers_in_doubt() {
 
     let said = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
 
-    assert!(!said.contains("bajo algo inválido"), "{said}");
+    assert!(!said.contains("under something invalid"), "{said}");
 }
 
 #[test]
-fn una_palabra_que_se_fue_a_la_capa_2_dice_a_donde_se_fue() {
-    // Quien la escribe tiene la costumbre vieja. Lo que necesita saber no es
-    // que se equivocó, sino dónde se dice ahora lo que quería decir.
+fn a_word_that_went_to_layer_2_says_where_it_went() {
+    // Whoever writes it has the old habit. What they need to know is not that
+    // they were wrong but where what they meant to say is said now.
     given!(at);
     let said = soma_tree_refusing(at, &["verdict", "dead-end", "HEAD~2", "-m", "no way"]);
 
-    assert!(said.contains("razonamiento"), "{said}");
-    assert!(said.contains("alcance"), "{said}");
+    assert!(said.contains("reasoning"), "{said}");
+    assert!(said.contains("scope"), "{said}");
 }
-
-// ── What it remembers ──
 
 #[test]
 fn asking_twice_gives_the_same_answer_and_touches_no_worktree() {
@@ -408,7 +404,7 @@ fn a_revspec_that_names_nothing_is_said_out_loud() {
 #[test]
 fn a_walk_with_nothing_typed_works_on_a_repository_of_any_length() {
     // What somebody hit: the default was a range asking for ten commits, and a
-    // range that reaches past the root is `revisión desconocida` rather than a
+    // range reaching past the root is an unknown-revision error rather than a
     // short answer. A default nobody typed has to work on the repository they
     // have.
     given!(at);
@@ -416,7 +412,7 @@ fn a_walk_with_nothing_typed_works_on_a_repository_of_any_length() {
     let said = somatize_tree(at, &["log"]);
 
     assert!(said.contains("4 commits"), "{said}");
-    assert!(!said.contains("revisión desconocida"), "{said}");
+    assert!(!said.contains("unknown revision"), "{said}");
 }
 
 #[test]
@@ -534,7 +530,7 @@ fn an_edit_that_does_not_parse_is_caught_before_anything_else_runs() {
         serde_json::from_slice(&said.stdout).expect("the probe writes json");
     let checks = answer["checks"].as_array().expect("checks");
 
-    assert_eq!(checks[0]["what"], "sintaxis");
+    assert_eq!(checks[0]["what"], "syntax");
     assert_eq!(checks[0]["ok"], true, "the example's own code parses");
 }
 
@@ -562,13 +558,13 @@ fn the_graph_still_building_is_its_own_question() {
     assert!(
         checks
             .iter()
-            .any(|one| one["what"] == "sintaxis" && one["ok"] == true),
+            .any(|one| one["what"] == "syntax" && one["ok"] == true),
         "it parses: {checks:?}",
     );
     assert!(
         checks
             .iter()
-            .any(|one| one["what"] == "el grafo construye" && one["ok"] == false),
+            .any(|one| one["what"] == "the graph builds" && one["ok"] == false),
         "and it does not build: {checks:?}",
     );
 }
@@ -594,32 +590,31 @@ fn running_on_real_data_says_so_rather_than_inventing_some() {
         .as_array()
         .expect("checks")
         .iter()
-        .find(|one| one["what"] == "corre con datos reales")
+        .find(|one| one["what"] == "it runs on real data")
         .expect("it was asked");
 
     assert_eq!(run["skipped"], true, "skipped, not passed: {run}");
 }
 
-// ── Lo que se corrió ──
-
 #[test]
-fn una_version_sin_ensayos_dice_donde_se_escriben() {
-    // El mensaje que se lleva quien mira esto por primera vez. «0 ensayos» le
-    // dejaría creyendo que se escriben desde aquí, y no: los escribe soma
-    // desde la máquina que corre el estudio, con este nombre.
+fn a_version_with_no_trials_says_where_they_are_written() {
+    // The message whoever looks at this for the first time takes away. *0
+    // trials* would leave them believing they are written from here, and they
+    // are not: soma writes them from the machine running the study, under
+    // this name.
     given!(at);
 
     let said = somatize_tree(at, &["trials", "HEAD"]);
 
-    assert!(said.contains("0 ensayos"), "{said}");
+    assert!(said.contains("0 trials"), "{said}");
     assert!(said.contains("somatize"), "{said}");
     assert!(said.contains("study="), "{said}");
 }
 
 #[test]
-fn el_nombre_del_estudio_de_una_version_sale_del_commit() {
-    // Todo el acoplamiento con soma es este nombre, y quien vaya a correr
-    // el estudio tiene que poder copiarlo de aquí.
+fn the_name_of_a_versions_study_comes_from_the_commit() {
+    // The whole coupling with soma is this name, and whoever is going to run
+    // the study has to be able to copy it from here.
     given!(at);
     let commit = String::from_utf8_lossy(
         &Command::new("git")
@@ -638,15 +633,15 @@ fn el_nombre_del_estudio_de_una_version_sale_del_commit() {
 }
 
 #[test]
-fn un_goal_que_no_dice_hacia_donde_se_rechaza_en_vez_de_ignorarse() {
-    // Una errata en `goal` dejaría de decir cuál fue el mejor sin que nada
-    // avisara de por qué, y eso es peor que no poder arrancar.
+fn a_goal_that_says_no_direction_is_refused_rather_than_ignored() {
+    // A typo in `goal` would stop saying which was best with nothing saying
+    // why, and that is worse than not starting at all.
     given!(at);
     std::fs::write(
         at.join("soma-tree.toml"),
         "build = \"experiments.encoder:build\"\ngoal = \"mas\"\n",
     )
-    .expect("el config");
+    .expect("the config");
 
     let said = soma_tree_refusing(at, &["trials", "HEAD"]);
 
@@ -654,24 +649,23 @@ fn un_goal_que_no_dice_hacia_donde_se_rechaza_en_vez_de_ignorarse() {
     assert!(said.contains("max"), "{said}");
 }
 
-// ── La poda ──
-
-/// Abandona la línea de un commit, escribiendo la decisión como lo haría la
-/// vista: un intento que lo cita, y una decisión con ese intento por alcance.
+/// Abandons a commit's line, writing the decision the way the view would: an
+/// attempt citing it, and a decision with that attempt as its scope.
 fn abandoned(at: &Path, commit: &str) {
-    let kept = somatize_store::Local::at(at.join("store")).expect("un store");
-    // Leído del config y no del nombre del directorio: es lo que separa dos
-    // investigaciones que comparten un store, y escribir bajo otro nombre deja
-    // los movimientos donde nadie los lee — sin error, que es lo peor.
+    let kept = somatize_store::Local::at(at.join("store")).expect("a store");
+    // Read from the config and not from the directory's name: it is what
+    // separates two investigations sharing a store, and writing under another
+    // name leaves the moves where nobody reads them — with no error, which is
+    // the worst part.
     let tree = somatize_tree::bench::Config::read(at)
-        .expect("el config")
+        .expect("the config")
         .tree(at);
     let moves = somatize_tree::moves::Moves::of(tree, &kept);
     let a = moves
         .add(
             somatize_tree::moves::Kind::Attempt,
-            "por aquí",
-            "yo",
+            "this way",
+            "me",
             somatize_tree::moves::Scope::everything(),
             vec![somatize_tree::moves::Cited {
                 what: "commit".into(),
@@ -679,46 +673,49 @@ fn abandoned(at: &Path, commit: &str) {
             }],
             None,
         )
-        .expect("el intento");
+        .expect("the attempt");
     moves
         .add(
             somatize_tree::moves::Kind::Decision,
-            "no lleva a ninguna parte",
-            "yo",
+            "it leads nowhere",
+            "me",
             somatize_tree::moves::Scope::of(vec![a]),
             Vec::new(),
             Some(somatize_tree::moves::Course::Abandon),
         )
-        .expect("la decisión");
+        .expect("the decision");
 }
 
 #[test]
-fn una_linea_abandonada_se_pliega_y_dice_cuantos_esconde() {
+fn an_abandoned_line_folds_and_says_how_many_it_hides() {
     given!(at);
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
 
     let said = somatize_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
 
-    // No como fila propia. Nombrado en el paso que salió de él sí, y diciendo
-    // que está podado: un hash que apunta a una fila que no se dibuja sería un
-    // callejón para quien lee.
+    // Not as a row of its own. Named in the step that came out of it, and said
+    // to be pruned: a hash pointing at a row that is not drawn would be a dead
+    // end for whoever reads.
     assert!(
         !said.contains(&format!("{}  ", &commit[..12])),
-        "plegado: {said}"
+        "folded: {said}"
     );
-    assert!(said.contains("(podado)"), "y dicho, no colgando: {said}");
-    // Y nunca en silencio: esconder callando es el fallo que esto existe para
-    // no cometer, así que la fila que falta se cuenta en voz alta.
-    assert!(said.contains("líneas podadas"), "{said}");
+    assert!(
+        said.contains("(pruned)"),
+        "and said, not left dangling: {said}"
+    );
+    // And never in silence: hiding by keeping quiet is the mistake this exists
+    // not to make, so the missing row is counted out loud.
+    assert!(said.contains("pruned lines"), "{said}");
     assert!(said.contains("--all-lines"), "{said}");
 }
 
 #[test]
-fn nada_se_borra_al_podar() {
-    // Podar es dejar de dibujar. Una línea que no funcionó es lo más
-    // reutilizable que produce una investigación, y lo único que evita volver
-    // a descubrirla.
+fn nothing_is_deleted_by_pruning() {
+    // Pruning is not drawing. A line that did not work is the most reusable
+    // thing an investigation produces, and the only thing that stops it being
+    // discovered again.
     given!(at);
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
@@ -731,15 +728,15 @@ fn nada_se_borra_al_podar() {
     assert!(said.contains(&commit[..12]), "{said}");
     assert!(
         said.contains("abandon"),
-        "y dice por qué no se dibujaba: {said}"
+        "and it says why it was not drawn: {said}"
     );
 }
 
 #[test]
-fn quien_procesa_la_respuesta_la_recibe_entera() {
-    // Plegar es por legibilidad, y un programa no echa de menos una fila.
-    // Esconderle un commit a quien va a procesar el JSON sería esconderlo de
-    // verdad, que es lo contrario de lo que hace podar.
+fn whoever_processes_the_answer_gets_all_of_it() {
+    // Folding is for readability, and a program does not miss a row. Hiding a
+    // commit from whoever is going to process the JSON would really hide it,
+    // which is the opposite of what pruning does.
     given!(at);
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
@@ -752,15 +749,15 @@ fn quien_procesa_la_respuesta_la_recibe_entera() {
     assert!(said.contains(&commit), "{said}");
     assert!(
         said.contains("\"pruned\": true"),
-        "y dicho, no escondido: {said}"
+        "and said, not hidden: {said}"
     );
 }
 
 #[test]
-fn un_commit_marcado_mal_no_se_pliega_aunque_su_linea_este_abandonada() {
-    // El que más importa. Un `invalid` pone en duda la medida en la que se
-    // apoyó la decisión de abandonar la línea: esconderlo sería esconder justo
-    // la razón para volver a mirarla.
+fn a_commit_judged_wrong_does_not_fold_even_on_an_abandoned_line() {
+    // The one that matters most. An `invalid` casts doubt on the measurement
+    // the decision to abandon leaned on: hiding it would hide the very reason
+    // to look at it again.
     given!(at);
     let commit = revision(at, "HEAD~2");
     abandoned(at, &commit);
@@ -773,7 +770,7 @@ fn un_commit_marcado_mal_no_se_pliega_aunque_su_linea_este_abandonada() {
             &store(at),
             &commit,
             "-m",
-            "el split mentía",
+            "the split was lying",
         ],
     );
 
@@ -782,7 +779,7 @@ fn un_commit_marcado_mal_no_se_pliega_aunque_su_linea_este_abandonada() {
     assert!(said.contains(&commit[..12]), "{said}");
 }
 
-/// El sha entero de un revspec, para poder buscarlo en una salida.
+/// The whole sha of a revspec, so it can be looked for in an output.
 fn revision(at: &Path, rev: &str) -> String {
     String::from_utf8_lossy(
         &Command::new("git")
@@ -800,45 +797,44 @@ fn store(at: &Path) -> String {
     at.join("store").to_string_lossy().into_owned()
 }
 
-// ── Leer una investigación que ya nadie ejecuta ──
-
 #[test]
-fn un_repositorio_sin_nada_que_construir_se_lee_igual() {
-    // Un paper terminado, un trabajo anterior a soma: tiene una historia, un
-    // diario y un razonamiento que valen la pena leer, y ningún grafo que
-    // sondear. Exigir `build` para leerlos ataba la capa 2 a la 1 por el sitio
-    // equivocado — por la configuración, no por los hechos.
+fn a_repository_with_nothing_to_build_reads_the_same() {
+    // A finished paper, work from before soma: it has a history, a journal and
+    // reasoning worth reading, and no graph to probe. Requiring `build` to read
+    // them tied layer 2 to layer 1 in the wrong place — by the configuration
+    // and not by the facts.
     given!(at);
-    std::fs::write(at.join("soma-tree.toml"), "tree = \"terminada\"\n").expect("el config");
+    std::fs::write(at.join("soma-tree.toml"), "tree = \"terminada\"\n").expect("the config");
 
     let said = somatize_tree(at, &["log", "--store", &store(at), "HEAD~3..HEAD"]);
 
-    assert!(said.contains("sin sondeo"), "y dicho, no en blanco: {said}");
+    assert!(
+        said.contains("no probe"),
+        "and said, not left blank: {said}"
+    );
     assert!(
         said.matches("\n").count() > 3,
-        "las paradas siguen ahí: {said}"
+        "the stops are still there: {said}"
     );
 }
 
 #[test]
-fn y_lo_que_si_hace_falta_sondear_dice_que_falta() {
+fn and_what_does_need_a_probe_says_that_it_is_missing() {
     given!(at);
-    std::fs::write(at.join("soma-tree.toml"), "tree = \"terminada\"\n").expect("el config");
+    std::fs::write(at.join("soma-tree.toml"), "tree = \"terminada\"\n").expect("the config");
 
     let said = soma_tree_refusing(at, &["diff", "HEAD~1", "HEAD", "--store", &store(at)]);
 
     assert!(said.contains("build"), "{said}");
     assert!(
-        said.contains("razonamiento"),
-        "y dónde sí se puede leer: {said}"
+        said.contains("reasoning"),
+        "and where it can be read: {said}"
     );
 }
 
-// ── De qué ficheros está hecho un nodo ──
-
-/// Una red escrita en tres módulos y montada en un `__init__`, que es el caso
-/// que el fixture del ejemplo no tiene: allí todo cabe en un fichero, y ahí
-/// `code` y `reaches` dicen lo mismo.
+/// A network written across three modules and assembled in an `__init__`,
+/// which is the case the example's fixture does not have: there everything
+/// fits in one file, and `code` and `reaches` say the same thing.
 fn spread_across_files() -> tempfile::TempDir {
     let at = tempfile::tempdir().expect("a temporary directory");
     let net = at.path().join("experiments");
@@ -884,19 +880,19 @@ fn probed_reaches(python: &Path, at: &Path) -> serde_json::Value {
 
 #[test]
 fn a_node_says_every_file_its_network_is_written_across() {
-    // Lo que faltaba. Un nodo **es** su clase, así que `inspect.getsourcefile`
-    // sabe de uno de los tres ficheros y el panel enseñaba ése; los otros dos
-    // no estaban en ninguna parte de la respuesta, y sin embargo llevaban
-    // dentro de la huella desde el primer día.
+    // What was missing. A node **is** its class, so `inspect.getsourcefile`
+    // knows one of the three files and the panel showed that one; the other
+    // two were nowhere in the answer, and had been inside the fingerprint from
+    // the first day.
     given!(python, unused);
     let at = spread_across_files();
 
     let reaches = probed_reaches(&python, at.path());
     let files: Vec<&str> = reaches["encoder"]["files"]
         .as_array()
-        .expect("los ficheros")
+        .expect("the files")
         .iter()
-        .map(|one| one["file"].as_str().expect("una ruta"))
+        .map(|one| one["file"].as_str().expect("a path"))
         .collect();
 
     assert_eq!(
@@ -906,16 +902,16 @@ fn a_node_says_every_file_its_network_is_written_across() {
             "experiments/head.py",
             "experiments/parts.py"
         ],
-        "los tres, y relativos al checkout",
+        "all three, and relative to the checkout",
     );
 }
 
 #[test]
 fn each_file_says_which_definitions_of_it_the_node_reaches() {
-    // Un fichero suele llevar cuatro clases y el nodo llega a una. Se enseña el
-    // fichero entero —es lo que se edita— y se dice cuál es la que llegó,
-    // porque si no la caja dice «este nodo depende de este fichero» y calla la
-    // mitad que importa.
+    // A file usually holds four classes and the node reaches one. The whole
+    // file is shown — it is what gets edited — and which class arrived is said,
+    // because otherwise the box says *this node depends on this file* and keeps
+    // quiet about the half that matters.
     given!(python, unused);
     let at = spread_across_files();
 
@@ -923,14 +919,14 @@ fn each_file_says_which_definitions_of_it_the_node_reaches() {
     let of = |file: &str| -> Vec<String> {
         reaches["encoder"]["files"]
             .as_array()
-            .expect("los ficheros")
+            .expect("the files")
             .iter()
             .find(|one| one["file"] == file)
-            .unwrap_or_else(|| panic!("`{file}` no está"))["defs"]
+            .unwrap_or_else(|| panic!("`{file}` is not there"))["defs"]
             .as_array()
-            .expect("las definiciones")
+            .expect("the definitions")
             .iter()
-            .map(|one| one["called"].as_str().expect("un nombre").to_string())
+            .map(|one| one["called"].as_str().expect("a name").to_string())
             .collect()
     };
 
@@ -941,9 +937,9 @@ fn each_file_says_which_definitions_of_it_the_node_reaches() {
 
 #[test]
 fn a_file_that_stops_being_reached_leaves_the_answer() {
-    // No es una segunda idea de qué depende de qué: es el cierre que la huella
-    // ya recorría. Así que deja de nombrar un fichero exactamente cuando deja
-    // de estar en la versión, y no una edición después.
+    // Not a second idea of what depends on what: it is the closure the
+    // fingerprint already walked. So it stops naming a file exactly when it
+    // stops being in the version, and not one edit later.
     given!(python, unused);
     let at = spread_across_files();
     let head = at.path().join("experiments/head.py");
@@ -956,13 +952,13 @@ fn a_file_that_stops_being_reached_leaves_the_answer() {
     let reaches = probed_reaches(&python, at.path());
     let files: Vec<&str> = reaches["encoder"]["files"]
         .as_array()
-        .expect("los ficheros")
+        .expect("the files")
         .iter()
-        .map(|one| one["file"].as_str().expect("una ruta"))
+        .map(|one| one["file"].as_str().expect("a path"))
         .collect();
 
     assert!(
         !files.contains(&"experiments/parts.py"),
-        "nadie llega ya a `parts.py`: {files:?}",
+        "nobody reaches `parts.py` any more: {files:?}",
     );
 }

@@ -105,7 +105,7 @@ fn run(cli: Cli) -> Result<(), String> {
             let sown = seed::sow(std::path::Path::new(&store), Some(&listing))
                 .map_err(|why| why.to_string())?;
             println!(
-                "{} máquinas y el run `{}` en `{store}`, {} nombres en `{}`.",
+                "{} machines and the run `{}` in `{store}`, {} names in `{}`.",
                 sown.machines,
                 sown.run,
                 sown.names,

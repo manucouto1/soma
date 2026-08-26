@@ -231,11 +231,11 @@ def test_there_is_one_kept_value_per_node_and_batch(body, batches, tmp_path):
     _, trainer = settled(expression, Head(HID, CLASSES), str(tmp_path))
     trainer.fit(batches, epochs=3)
 
-    # Los **valores**, no los registros. Un store lleva más cosas escritas que
-    # los valores de una corrida —la lectura del entorno contra el que se
-    # produjeron, sin ir más lejos— y contar ficheros contaba eso también.
-    # Subir el número a 13 habría dejado la prueba diciendo «doce» sobre algo
-    # que ya no eran doce de nada.
+    # The **values**, not the records. A store holds more written down than one
+    # run's values — the reading of the environment they were produced against,
+    # to look no further — and counting files counted that too. Raising the
+    # number to 13 would have left the test saying *twelve* about something
+    # that was no longer twelve of anything.
     kept = [
         json.loads(record.read_text())["name"]
         for record in (tmp_path / "names").rglob("sha256*")

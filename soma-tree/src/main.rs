@@ -65,7 +65,7 @@ enum Doing {
     /// A whole line of exploration: every commit in a range and what its step
     /// did. `somatize-tree log main~10..main`.
     Log {
-        /// Dibujar también las líneas podadas. Se pliegan por defecto.
+        /// Draw the pruned lines too. They fold by default.
         #[arg(long)]
         all_lines: bool,
         /// A range git understands — `main~10..main` — or a revspec, meaning
@@ -133,21 +133,21 @@ enum Doing {
         #[command(flatten)]
         at: Where,
     },
-    /// Qué datos hay en el store bajo cada versión, y cuáles no son de ninguna.
+    /// What data the store holds under each version, and what is nobody's.
     ///
-    /// Dentro de un movimiento se iteran cinco versiones en una tarde, y cada
-    /// una deja intermedios. Al mes siguiente eso es un montón de hashes que
-    /// nadie puede atribuir. Esto los atribuye.
+    /// Iterating five versions of one question in an afternoon leaves five sets
+    /// of intermediates, and a month later that is a pile of hashes nobody can
+    /// attribute. This attributes them.
     ///
-    /// **No borra nada, y no va a hacerlo.** Lo que se puede decir aquí es de
-    /// quién es cada cosa y cuánto ocupa; qué sobra es una decisión, y las
-    /// decisiones se escriben, no se deducen.
+    /// **It deletes nothing, and it will not.** What can be said here is whose
+    /// each thing is and how much room it takes; what is spare is a decision,
+    /// and decisions are written down, not inferred.
     Data {
-        /// Qué versiones mirar. Todas las ramas por defecto, que es la forma
-        /// que tiene una investigación.
+        /// Which versions to look at. Every branch by default, which is the
+        /// shape an investigation has.
         #[arg(default_value = revision::ALL)]
         range: String,
-        /// Hasta dónde, cuando lo que se pide no es un rango.
+        /// How far back, when what is asked for is not a range.
         #[arg(long, default_value_t = 10)]
         most: usize,
         #[command(flatten)]
@@ -179,19 +179,19 @@ fn main() -> ExitCode {
             at,
         } => match Verdict::read(verdict) {
             Some(verdict) => saying(rev, Some(verdict), message.as_deref(), at),
-            // Dicho entero y no «no es uno»: quien lo escribe tiene la costumbre
-            // vieja, y lo que necesita saber no es que se equivocó sino a dónde
-            // se fue lo que quería decir.
+            // Said in full and not *that is not one*: whoever writes it has
+            // the old habit, and what they need is not that they were wrong
+            // but where what they meant to say went.
             None if matches!(verdict.as_str(), "promising" | "dead-end" | "superseded") => {
                 Err(format!(
-                    "`{verdict}` ya no es un veredicto. No era algo que le pasara al \
-                     código: era una decisión sobre por dónde seguir, y ahora se \
-                     escribe en el razonamiento —con su alcance, que dice de qué \
-                     línea habla, y su motivo— desde la vista. Aquí queda `invalid`."
+                    "`{verdict}` is no longer a verdict. It was never something that \
+                     happened to the code: it was a decision about where to go next, and \
+                     it is now written in the reasoning — with its scope, which says which \
+                     line it is about, and its reason — from the view. `invalid` stays here."
                 )
                 .into())
             }
-            None => Err(format!("`{verdict}` no es uno: invalid").into()),
+            None => Err(format!("`{verdict}` is not one: invalid").into()),
         },
         Doing::Trials { rev, curve, at } => trialling(rev, *curve, at),
         Doing::Serve { at, where_ } => serving(at, where_),
@@ -246,8 +246,8 @@ fn logging(
         most,
     )?;
     if at.json {
-        // Sin plegar: quien pide JSON lo va a procesar, y esconderle filas por
-        // legibilidad sería esconderlas de un programa que no las echa de menos.
+        // Unfolded: whoever asks for JSON is going to process it, and hiding
+        // rows for readability would hide them from a program.
         println!("{}", serde_json::to_string_pretty(&walk)?);
         return Ok(true);
     }
@@ -256,15 +256,14 @@ fn logging(
 
 /// The line of exploration, newest first, as git prints history.
 ///
-/// Las líneas podadas se pliegan salvo que se pidan. Podar es dejar de dibujar
-/// y nunca borrar: sigue todo en git, en el diario y en el razonamiento, y
-/// `--all-lines` lo devuelve. Un árbol de cuarenta variantes no se lee, y ése
-/// es el problema, no que sobre nada.
+/// Pruned lines fold unless asked for. Pruning is not drawing and never
+/// deleting — it is all still in git, in the journal and in the reasoning, and
+/// `--all-lines` brings it back.
 fn printed(walk: &Walk, all_lines: bool) -> bool {
     let every: Vec<_> = walk.stops.iter().filter(|stop| !stop.context).collect();
-    // Lo que ha juzgado alguien no se pliega: un commit `invalid` es lo que
-    // pone en duda la medida en la que se basó la decisión de abandonar la
-    // línea, y esconderlo sería esconder la razón para volver a mirarla.
+    // What somebody judged does not fold: an `invalid` commit is what casts
+    // doubt on the measurement the decision to abandon leaned on, and hiding it
+    // would hide the reason to look again.
     let folded = every.iter().filter(|stop| stop.pruned).count();
     let shown: Vec<_> = if all_lines {
         every
@@ -273,40 +272,42 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
     };
 
     println!("{}   ·   {} commits", walk.built_from, shown.len());
-    // Y nunca en silencio.
+    // And never in silence.
     if folded > 0 && !all_lines {
-        println!("{folded} más en líneas podadas. Nada se borra: `--all-lines` los trae.");
+        println!(
+            "{folded} more on pruned lines. Nothing is deleted: `--all-lines` brings them back."
+        );
     }
     println!();
 
     let mut restless = 0;
     for (n, stop) in shown.iter().enumerate() {
-        // Las dos capas en una línea, y en este orden: que algo estuviera mal
-        // se lee antes que dónde se decidió no seguir, porque lo primero pone
-        // en duda la medida en la que se basó lo segundo.
+        // Both layers on one line, and in this order: that something was
+        // wrong reads before where somebody decided to stop, because the first
+        // casts doubt on the measurement the second leaned on.
         let mut said = Vec::new();
         match stop.verdict {
             Some(verdict) => said.push(verdict.to_string()),
             // Said out loud rather than left blank: inheriting doubt from an
             // ancestor is not the same as nobody having looked at this.
-            None if stop.doubted => said.push("bajo algo inválido".to_string()),
+            None if stop.doubted => said.push("under something invalid".to_string()),
             None => {}
         }
         if let Some(course) = stop.decided {
             said.push(course.to_string());
         }
-        // Lo que se corrió, que es la otra mitad de qué es una versión. Con lo
-        // que va en marcha aparte de lo que terminó: un estudio a medias se lee
-        // distinto de uno que nadie tocó.
+        // What was run, which is the other half of what a version is. What is
+        // under way apart from what finished: a half-done study reads
+        // differently from one nobody touched.
         if stop.trials.trials > 0 {
-            let mut how = format!("{} ensayos", stop.trials.trials);
+            let mut how = format!("{} trials", stop.trials.trials);
             if stop.trials.running > 0 {
-                how.push_str(&format!(", {} corriendo", stop.trials.running));
+                how.push_str(&format!(", {} running", stop.trials.running));
             }
             if let Some(best) = stop.trials.best {
-                how.push_str(&format!(", mejor {best:.4}"));
+                how.push_str(&format!(", best {best:.4}"));
             } else if let (Some(low), Some(high)) = (stop.trials.lowest, stop.trials.highest) {
-                how.push_str(&format!(", entre {low:.4} y {high:.4}"));
+                how.push_str(&format!(", between {low:.4} and {high:.4}"));
             }
             said.push(how);
         }
@@ -330,18 +331,18 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
         let from = match below {
             true => String::new(),
             false => {
-                // Dicho cuando el padre está plegado. Un hash que apunta a una
-                // fila que no se dibuja es un callejón para quien lee: o se
-                // dice por qué no está, o parece que se ha perdido.
+                // Said when the parent is folded. A hash pointing at a row
+                // that is not drawn is a dead end for whoever reads: either it
+                // says why it is not there, or it looks lost.
                 let cut = walk
                     .stops
                     .iter()
                     .find(|one| one.commit == step.from)
                     .is_some_and(|one| one.pruned && !all_lines);
                 format!(
-                    "desde {}{} · ",
+                    "from {}{} · ",
                     &step.from[..12.min(step.from.len())],
-                    if cut { " (podado)" } else { "" }
+                    if cut { " (pruned)" } else { "" }
                 )
             }
         };
@@ -350,7 +351,7 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
         // block of versions would break the one column a walk has.
         if !step.drift.is_empty() {
             println!(
-                "     │    ⚠ otro entorno: {}",
+                "     │    ⚠ another environment: {}",
                 step.drift
                     .iter()
                     .map(|(what, was, is)| format!("{what} {was} → {is}"))
@@ -362,10 +363,10 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
 
     println!();
     match restless {
-        0 => println!("Ningún paso deja resultados no comparables con los del anterior."),
+        0 => println!("No step leaves results that cannot be compared with the one before."),
         // Steps and not a sum of nodes: the same node counted at three steps is
         // one node looked at three times, and adding those said nothing.
-        n => println!("{n} de los pasos dejan resultados NO comparables con los del anterior."),
+        n => println!("{n} of the steps leave results NOT comparable with the one before."),
     }
     restless == 0
 }
@@ -373,23 +374,23 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
 /// One step of a walk, as a line: where the edit is, and what it left behind.
 fn stepped(found: &Findings) -> String {
     if found.is_quiet() {
-        return "sin cambios".into();
+        return "no changes".into();
     }
     let edit = found.the_edit();
     // Said either way. A step where names moved and nobody typed anything is a
     // trial of the same variant, and leaving that to be inferred from the
     // absence of a word is how somebody reads it as an edit they forgot.
     let mut said = vec![match edit.is_empty() {
-        true => "sin edición".to_string(),
-        false => format!("edición: {}", edit.join(", ")),
+        true => "no edit".to_string(),
+        false => format!("edit: {}", edit.join(", ")),
     }];
     for (finding, called) in [
-        (STALE, "⚠ RANCIO"),
-        (SUSPECT, "⚠ sospechoso"),
-        ("UNKNOWN", "no previsible"),
-        ("UNVERSIONED", "sin versionar"),
-        (RESETTLED, "repesado"),
-        (SALTED, "otro salt"),
+        (STALE, "⚠ STALE"),
+        (SUSPECT, "⚠ suspect"),
+        ("UNKNOWN", "cannot be foreseen"),
+        ("UNVERSIONED", "unversioned"),
+        (RESETTLED, "resettled"),
+        (SALTED, "another salt"),
     ] {
         let these = found.saying(finding);
         if !these.is_empty() {
@@ -401,7 +402,10 @@ fn stepped(found: &Findings) -> String {
         // for it either: what is left is something above them. Only said here,
         // because listing what inherited an edit is the noise `the_edit`
         // exists to leave out.
-        said.push(format!("heredado: {}", found.saying(DOWNSTREAM).join(", ")));
+        said.push(format!(
+            "inherited: {}",
+            found.saying(DOWNSTREAM).join(", ")
+        ));
     }
     said.join(" · ")
 }
@@ -421,7 +425,7 @@ fn report(before: &Snapshot, after: &Snapshot, found: &Findings) {
     println!();
 
     if found.is_quiet() {
-        println!("  Nada que decir de ningún nodo.");
+        println!("  Nothing to say about any node.");
         return;
     }
     let widest = found
@@ -443,23 +447,23 @@ fn report(before: &Snapshot, after: &Snapshot, found: &Findings) {
     println!();
     let edit = found.the_edit();
     if !edit.is_empty() {
-        println!("La edición está en: {}", edit.join(", "));
+        println!("The edit is in: {}", edit.join(", "));
     }
     let stale = found.saying(STALE);
     match stale.is_empty() {
-        true => println!("Ningún nodo recibirá un valor cacheado que ya no le corresponde."),
+        true => println!("No node will be handed a cached value that is no longer its own."),
         false => println!(
-            "⚠ {} nodo(s) con la MISMA clave y otro código: la caché dará HIT.",
+            "⚠ {} node(s) with the SAME key and other code: the cache will HIT.",
             stale.len(),
         ),
     }
     let not_comparable = found.not_comparable().len();
     if not_comparable > 0 {
-        println!("{not_comparable} nodo(s) con resultados NO comparables con los de antes.");
+        println!("{not_comparable} node(s) with results NOT comparable with the ones before.");
     }
     if !after.unneeded.is_empty() {
         println!(
-            "Ya calculado, no haría falta ejecutar: {}",
+            "Already computed, would not have to run: {}",
             after.unneeded.join(", "),
         );
     }
@@ -468,16 +472,15 @@ fn report(before: &Snapshot, after: &Snapshot, found: &Findings) {
 /// Says so when the two sides were not built against the same thing.
 ///
 /// A whole-graph fact and not a finding per node: an interpreter that moved
-/// moved under all of them, and attributing it forty times would be noise
-/// rather than an answer.
+/// moved under all of them, and attributing it forty times would be noise.
 fn drifted(before: &Snapshot, after: &Snapshot) {
     let drift = before.drifted_from(after);
     if drift.is_empty() {
         return;
     }
     println!(
-        "⚠ los dos lados se sondearon en entornos distintos, y eso no está en \
-         ningún commit:"
+        "⚠ the two sides were probed against different environments, and that is in \
+         no commit:"
     );
     for (what, was, is) in drift {
         println!("    {what}: {was} → {is}");
@@ -515,23 +518,21 @@ fn saying(
 
     let short = &commit[..12.min(commit.len())];
     match verdict {
-        Some(verdict) => println!("{short} · {verdict} · dicho {nth}"),
-        None => println!("{short} · nota · dicho {nth}"),
+        Some(verdict) => println!("{short} · {verdict} · said {nth}"),
+        None => println!("{short} · note · said {nth}"),
     }
     Ok(true)
 }
 
-/// Everything said about one commit, prose and all.
-/// Los ensayos de una versión, y una curva si se pide.
-/// Qué datos hay bajo cada versión, y cuáles no son de ninguna.
+/// What data sits under each version, and what belongs to none of them.
 fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
     let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
     let Some(store) = at.store.as_deref() else {
-        // Dicho entero: sin store no hay datos que atribuir, y una tabla vacía
-        // se lee como «no hay nada guardado» en vez de como «no me has dicho
-        // dónde mirar».
-        println!("Sin `--store` no hay nada que mirar: lo que atribuye esto son los");
-        println!("valores que una corrida dejó guardados, y el store es donde están.");
+        // Said in full: with no store there is nothing to attribute, and an
+        // empty table reads as *nothing is kept* rather than as *you have not
+        // said where to look*.
+        println!("With no `--store` there is nothing to look at: what this attributes");
+        println!("are the values a run left kept, and the store is where they are.");
         return Ok(true);
     };
     let kept = somatize_store::Local::at(store)?;
@@ -541,23 +542,22 @@ fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::er
     let said = data::under(&kept, &known)?;
 
     if said.is_empty() {
-        println!("El store no tiene ningún valor de una corrida todavía.");
+        println!("The store holds no value from a run yet.");
         return Ok(true);
     }
 
-    // Dicho antes de la tabla y no después. Sin `--given`, un sondeo nombra
-    // contra un centinela, así que ninguna clave coincide con la de una corrida
-    // sobre datos de verdad y **todo** se atribuye por la huella. La tabla sale
-    // bien; lo que no sale es por qué no dice nunca «es la suya», y eso desde
-    // fuera se lee como que la mitad del mecanismo no funciona.
+    // Said before the table and not after. Without `--given` a probe names
+    // against a sentinel, so no key matches one from a run over real data and
+    // **everything** is attributed by fingerprint. The table is right; what is
+    // missing is why it never says *that one is its own*, which from outside
+    // reads as half the mechanism not working.
     if known.values().any(|taken| taken.input == "sentinel") {
-        println!("Sondeado contra un centinela, así que se atribuye por el código y no");
-        println!("por el nombre: `--given` con la entrada real es lo que hace coincidir");
-        println!("las claves.");
+        println!("Probed against a sentinel, so this attributes by code and not by name:");
+        println!("`--given` with the real input is what makes the keys match.");
     }
 
-    // Por versión, y lo huérfano al final: es lo último que se mira y lo
-    // primero que se querría esconder.
+    // By version, and what is nobody's last: it is the last thing looked at
+    // and the first anybody would want to hide.
     let mut by_commit: BTreeMap<&str, Vec<&data::Belongs>> = BTreeMap::new();
     let mut nobodys: Vec<&data::Belongs> = Vec::new();
     for one in &said {
@@ -587,12 +587,12 @@ fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::er
         );
         for one in mine {
             let how = match one.of.get(commit.as_str()) {
-                Some(data::How::Named) => "es la suya",
-                // Dicho distinto porque **es** distinto: el código es el mismo
-                // y el nombre no coincide, que casi siempre significa otra
-                // entrada o otro entorno. Fundirlos en «es suyo» escondería
-                // justo el caso que alguien está buscando.
-                _ => "mismo código",
+                Some(data::How::Named) => "its own",
+                // Said differently because it **is** different: the code is
+                // the same and the name does not match, which nearly always
+                // means another input or another environment. Folding them
+                // into *it is its own* would hide the case somebody wants.
+                _ => "same code",
             };
             println!(
                 "  {:<10} {:<10} {how:<13} {}",
@@ -606,7 +606,7 @@ fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::er
     if !nobodys.is_empty() {
         println!(
             "
-{} de ninguna versión de las miradas:",
+{} from no version looked at:",
             nobodys.len()
         );
         for one in nobodys.iter().take(most) {
@@ -618,13 +618,14 @@ fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::er
             );
         }
         println!();
-        println!("Que no es lo mismo que sobrar: puede ser de una rama que no se ha");
-        println!("mirado, de un commit que ya no está, o de un entorno que no se");
-        println!("puede reproducir.");
+        println!("Which is not the same as being spare: it may be from a branch nobody");
+        println!("looked at, from a commit that is gone, or from an environment that");
+        println!("cannot be reproduced.");
     }
     Ok(true)
 }
 
+/// A version's trials, and one curve if asked for.
 fn trialling(
     rev: &str,
     curve: Option<u32>,
@@ -637,28 +638,28 @@ fn trialling(
     let trials = Trials::of(&tree, &bench.remembering).towards(goal);
     let seen = trials.of_commit(&commit)?;
 
-    println!("{}   ·   {} ensayos", trials.study(&commit), seen.len());
+    println!("{}   ·   {} trials", trials.study(&commit), seen.len());
     if seen.is_empty() {
         println!(
-            "\nNadie ha corrido nada con esta versión todavía. Se escriben desde \
-             somatize,\ncon `study=\"{}\"`.",
+            "\nNobody has run anything with this version yet. They are written from \
+             somatize,\nwith `study=\"{}\"`.",
             trials.study(&commit)
         );
         return Ok(true);
     }
     println!();
     for one in &seen {
-        let state = one.state.as_deref().unwrap_or("¿?");
+        let state = one.state.as_deref().unwrap_or("?");
         let score = match one.score {
-            // Dicho y no callado: una puntuación podada es real y **no** es
-            // comparable con una terminada — se midió tras menos épocas — y
-            // ponerlas en la misma columna sin decirlo invita a compararlas.
+            // Said and not left quiet: a pruned score is real and **not**
+            // comparable with a finished one — measured after fewer epochs —
+            // and putting them in one column silently invites comparing them.
             Some(score) if one.comparable() => format!("{score:>10.4}"),
-            Some(score) => format!("{score:>10.4} (podado)"),
+            Some(score) => format!("{score:>10.4} (pruned)"),
             None => format!("{:>10}", "—"),
         };
         let rescued = if one.attempt > 0 {
-            format!("  ·  intento {}", one.attempt)
+            format!("  ·  attempt {}", one.attempt)
         } else {
             String::new()
         };
@@ -678,15 +679,15 @@ fn trialling(
         println!();
         match goal {
             Some(goal) => println!(
-                "  El mejor de {} comparables: {:.4}",
+                "  The best of {} comparable: {:.4}",
                 done.len(),
                 goal.best_of(done.iter().copied()).unwrap_or(f64::NAN)
             ),
-            // Y no «el mejor»: cuál lo es depende de si esa métrica se maximiza
-            // o se minimiza, y esa dirección no está en ningún registro.
+            // And not *the best*: which one that is depends on whether the
+            // metric is maximised or minimised, and that is in no record.
             None => println!(
-                "  {} comparables, entre {:.4} y {:.4}. Declara `goal = \"min\"` o \
-                 `goal = \"max\"`\n  en soma-tree.toml y te diré cuál es el mejor.",
+                "  {} comparable, between {:.4} and {:.4}. Declare `goal = \"min\"` or \
+                 `goal = \"max\"`\n  in soma-tree.toml and it will say which is best.",
                 done.len(),
                 Goal::Min.best_of(done.iter().copied()).unwrap_or(f64::NAN),
                 Goal::Max.best_of(done.iter().copied()).unwrap_or(f64::NAN),
@@ -698,23 +699,24 @@ fn trialling(
         let one = seen
             .iter()
             .find(|one| one.trial == which)
-            .ok_or_else(|| format!("no hay ensayo {which} en {}", trials.study(&commit)))?;
+            .ok_or_else(|| format!("there is no trial {which} in {}", trials.study(&commit)))?;
         match trials.curve(one)? {
             Some(drawn) => {
-                println!("\n  Ensayo {which}, {} informes:", drawn.reports.len());
+                println!("\n  Trial {which}, {} reports:", drawn.reports.len());
                 for (n, value) in drawn.reports.iter().enumerate() {
                     println!("    {n:>4}  {value:.4}");
                 }
                 if let Some(because) = drawn.because {
-                    println!("    paró porque {because}");
+                    println!("    stopped because {because}");
                 }
             }
-            None => println!("\n  El registro del ensayo {which} apunta a un blob que no está."),
+            None => println!("\n  The record of trial {which} points at a blob that is not there."),
         }
     }
     Ok(true)
 }
 
+/// Everything anybody said about one commit, prose and all.
 fn showing(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
     let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
     let commit = revision::named(&bench.repo, rev)?;
@@ -733,7 +735,7 @@ fn showing(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
         .filter(|saying| saying.commit == commit)
         .collect();
     if said.is_empty() {
-        println!("\n  Nadie ha dicho nada de este commit.");
+        println!("\n  Nobody has said anything about this commit.");
         return Ok(true);
     }
     // Here the prose is fetched, and only here: a scan is what the log pays
@@ -742,7 +744,7 @@ fn showing(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
         println!();
         match saying.verdict {
             Some(verdict) => println!("  [{}] {} · {}", saying.nth, verdict, saying.who),
-            None => println!("  [{}] nota · {}", saying.nth, saying.who),
+            None => println!("  [{}] note · {}", saying.nth, saying.who),
         }
         for line in journal.read(saying)?.lines() {
             println!("      {line}");
@@ -769,7 +771,7 @@ fn serving(at: &str, where_: &Where) -> Result<bool, Box<dyn std::error::Error>>
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let listening = tokio::net::TcpListener::bind(at).await?;
-        println!("somatize-tree en http://{at}");
+        println!("somatize-tree at http://{at}");
         println!("  GET  /api/walk?range=HEAD~10..HEAD");
         println!("  GET  /api/said/<rev>");
         println!("  POST /api/said/<rev>   {{\"verdict\": \"invalid\", \"prose\": \"...\"}}");

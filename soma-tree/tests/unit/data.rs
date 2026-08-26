@@ -1,10 +1,10 @@
-//! De quién es cada dato del store, y qué se dice de lo que no es de nadie.
+//! Whose each value in the store is, and what is said about what is nobody's.
 //!
-//! Los registros se escriben **a mano y con los nombres de soma**, por lo
-//! mismo que en `trials`: lo que hay que defender es que este lector entiende
-//! lo que hay en el disco de alguien, y llamar al escritor de la otra
-//! biblioteca haría que los dos se pusieran de acuerdo en cualquier formato,
-//! incluido uno que nadie tiene guardado.
+//! The records are written **by hand and with soma's names**, for the same
+//! reason as in `trials`: what has to be defended is that this reader
+//! understands what is on somebody's disk, and calling the other library's
+//! writer would have the two agree on any format at all, including one nobody
+//! has stored.
 
 use somatize_core::Key;
 use somatize_store::{Local, Store, name_of};
@@ -13,28 +13,28 @@ use somatize_tree::snapshot::Snapshot;
 use std::collections::HashMap;
 
 fn somewhere() -> (tempfile::TempDir, Local) {
-    let at = tempfile::tempdir().expect("un directorio temporal");
-    let kept = Local::at(at.path()).expect("un store dentro");
+    let at = tempfile::tempdir().expect("a temporary directory");
+    let kept = Local::at(at.path()).expect("a store inside");
     (at, kept)
 }
 
-/// Un valor guardado, con al lado lo que escribió quien lo produjo.
+/// A kept value, with what whoever produced it wrote beside it.
 fn kept_value(kept: &Local, key: &str, node: &str, fingerprint: &str, env: &str) {
-    let digest = kept.put(b"lo que produjo").expect("el blob");
+    let digest = kept.put(b"what it produced").expect("the blob");
     kept.bind(
         &name_of(&Key::new(key)),
         &digest,
         vec![
             ("node".into(), node.into()),
             ("fingerprint".into(), fingerprint.into()),
-            ("input".into(), "sha256:la-entrada".into()),
+            ("input".into(), "sha256:the-input".into()),
             ("env".into(), env.into()),
         ],
     )
-    .expect("se ata");
+    .expect("it binds");
 }
 
-/// Un sondeo como vuelve del probe: sólo los dos campos que se leen de dentro.
+/// A probe's answer, with only the two fields that are read from inside.
 fn taken(names: &[(&str, &str)], fingerprints: &[(&str, &str)]) -> Snapshot {
     let of = |pairs: &[(&str, &str)]| {
         pairs
@@ -62,107 +62,113 @@ fn taken(names: &[(&str, &str)], fingerprints: &[(&str, &str)]) -> Snapshot {
 }
 
 #[test]
-fn un_valor_es_de_la_version_que_lo_va_a_pedir() {
-    // Lo más fuerte que se puede decir: no es que lo hiciera un código
-    // parecido, es que es el dato que esta versión pediría.
+fn a_value_belongs_to_the_version_that_will_ask_for_it() {
+    // The strongest thing that can be said: not that something like it made
+    // this, but that it is the value this version would ask for.
     let (_at, kept) = somewhere();
-    kept_value(&kept, "sha256:uno", "embed", "a1b2c3d4", "9f2c1a");
-    let known = HashMap::from([("c1", taken(&[("embed", "sha256:uno")], &[]))]);
+    kept_value(&kept, "sha256:one", "embed", "a1b2c3d4", "9f2c1a");
+    let known = HashMap::from([("c1", taken(&[("embed", "sha256:one")], &[]))]);
 
-    let said = under(&kept, &known).expect("se lee");
+    let said = under(&kept, &known).expect("it reads");
 
     assert_eq!(said.len(), 1);
     assert_eq!(said[0].of.get("c1"), Some(&How::Named));
 }
 
 #[test]
-fn y_tambien_de_la_que_solo_comparte_el_codigo() {
-    // La que aguanta lo que la otra no. Una clave se calcula contra el entorno
-    // del que sondea, así que sondear hoy un commit de hace tres meses da otras
-    // claves; la huella la escribió quien corrió, entonces, y sigue ahí.
+fn and_also_to_the_one_that_only_shares_its_code() {
+    // The one that survives what the other does not. A key is computed against
+    // the probing environment, so probing a three-month-old commit today gives
+    // other keys; the fingerprint was written by whoever ran, and is still there.
     let (_at, kept) = somewhere();
-    kept_value(&kept, "sha256:uno", "embed", "a1b2c3d4", "9f2c1a");
+    kept_value(&kept, "sha256:one", "embed", "a1b2c3d4", "9f2c1a");
     let known = HashMap::from([(
         "c1",
-        taken(&[("embed", "sha256:otra")], &[("embed", "a1b2c3d4")]),
+        taken(&[("embed", "sha256:other")], &[("embed", "a1b2c3d4")]),
     )]);
 
-    let said = under(&kept, &known).expect("se lee");
+    let said = under(&kept, &known).expect("it reads");
 
     assert_eq!(said[0].of.get("c1"), Some(&How::Written));
 }
 
 #[test]
-fn valiendo_las_dos_gana_la_clave() {
-    // Decir lo más débil pudiendo decir lo otro es perder información.
+fn where_both_hold_the_key_wins() {
+    // Saying the weaker thing when the stronger holds loses information.
     let (_at, kept) = somewhere();
-    kept_value(&kept, "sha256:uno", "embed", "a1b2c3d4", "9f2c1a");
+    kept_value(&kept, "sha256:one", "embed", "a1b2c3d4", "9f2c1a");
     let known = HashMap::from([(
         "c1",
-        taken(&[("embed", "sha256:uno")], &[("embed", "a1b2c3d4")]),
+        taken(&[("embed", "sha256:one")], &[("embed", "a1b2c3d4")]),
     )]);
 
-    let said = under(&kept, &known).expect("se lee");
+    let said = under(&kept, &known).expect("it reads");
 
     assert_eq!(said[0].of.get("c1"), Some(&How::Named));
 }
 
 #[test]
-fn un_dato_puede_ser_de_varias_versiones_a_la_vez() {
-    // Y no es un empate que haya que resolver: cuatro commits seguidos que no
-    // tocan `embed` comparten su respuesta, que es exactamente para lo que hay
-    // una caché. Elegir uno sería inventarse una respuesta.
+fn one_value_can_belong_to_several_versions_at_once() {
+    // And not a tie to be broken: four commits in a row that do not touch
+    // `embed` share its answer, which is exactly what a cache is for. Picking
+    // one would be inventing an answer.
     let (_at, kept) = somewhere();
-    kept_value(&kept, "sha256:uno", "embed", "a1b2c3d4", "9f2c1a");
+    kept_value(&kept, "sha256:one", "embed", "a1b2c3d4", "9f2c1a");
     let known = HashMap::from([
-        ("c1", taken(&[("embed", "sha256:uno")], &[])),
-        ("c2", taken(&[("embed", "sha256:uno")], &[])),
+        ("c1", taken(&[("embed", "sha256:one")], &[])),
+        ("c2", taken(&[("embed", "sha256:one")], &[])),
     ]);
 
-    let said = under(&kept, &known).expect("se lee");
+    let said = under(&kept, &known).expect("it reads");
 
     assert_eq!(said[0].of.len(), 2, "{:?}", said[0].of);
 }
 
 #[test]
-fn lo_que_no_es_de_ninguna_version_sale_igualmente_y_dice_lo_que_sabe() {
-    // El caso que esto existe para no callar. Un hash mudo se queda en el
-    // store para siempre; uno que dice qué nodo y qué código lo hizo sigue
-    // siendo una frase verdadera aunque no case con nada de lo que se miró.
+fn what_belongs_to_no_version_comes_out_anyway_saying_what_is_known() {
+    // The case this exists not to keep quiet about. A mute hash stays in the
+    // store for ever; one saying which node and which code made it is still a
+    // true sentence even when it matches nothing that was looked at.
     let (_at, kept) = somewhere();
-    kept_value(&kept, "sha256:uno", "embed", "de-otra-rama", "9f2c1a");
+    kept_value(
+        &kept,
+        "sha256:one",
+        "embed",
+        "from-another-branch",
+        "9f2c1a",
+    );
     let known = HashMap::from([(
         "c1",
-        taken(&[("embed", "sha256:otra")], &[("embed", "a1b2c3d4")]),
+        taken(&[("embed", "sha256:other")], &[("embed", "a1b2c3d4")]),
     )]);
 
-    let said = under(&kept, &known).expect("se lee");
+    let said = under(&kept, &known).expect("it reads");
 
     assert!(said[0].is_nobodys());
     assert_eq!(said[0].node.as_deref(), Some("embed"));
-    assert_eq!(said[0].fingerprint.as_deref(), Some("de-otra-rama"));
+    assert_eq!(said[0].fingerprint.as_deref(), Some("from-another-branch"));
     assert_eq!(said[0].environment.as_deref(), Some("9f2c1a"));
 }
 
 #[test]
-fn la_contabilidad_de_quien_mira_no_es_un_dato_de_nadie() {
-    // Tres escritores comparten este store y sólo uno deja intermedios. El
-    // diario, la caché de sondeos y la lectura de un entorno son lo que
-    // **explica** la atribución, no algo que atribuir — y contarlos sería
-    // enseñarle a alguien su propio cuaderno como si fuera un intermedio que a
-    // lo mejor sobra.
+fn the_bookkeeping_of_whoever_looks_is_nobodys_data() {
+    // Three writers share this store and only one leaves intermediates. The
+    // journal, the probe cache and a reading of an environment are what
+    // **explains** the attribution, not something to attribute — counting them
+    // would show somebody their own notebook as if it were an intermediate
+    // that might be spare.
     let (_at, kept) = somewhere();
-    let digest = kept.put(b"lo que sea").expect("el blob");
+    let digest = kept.put(b"whatever").expect("the blob");
     for name in [
-        "exp/una-investigacion/aaaa/trial/1/0",
-        "snapshot:aaaa:sha256:receta",
+        "exp/an-investigation/aaaa/trial/1/0",
+        "snapshot:aaaa:sha256:recipe",
         "env/9f2c1a",
     ] {
-        kept.bind(name, &digest, Vec::new()).expect("se ata");
+        kept.bind(name, &digest, Vec::new()).expect("it binds");
     }
-    kept_value(&kept, "sha256:uno", "embed", "a1b2c3d4", "9f2c1a");
+    kept_value(&kept, "sha256:one", "embed", "a1b2c3d4", "9f2c1a");
 
-    let said = under(&kept, &HashMap::new()).expect("se lee");
+    let said = under(&kept, &HashMap::new()).expect("it reads");
 
     assert_eq!(
         said.len(),
@@ -174,18 +180,21 @@ fn la_contabilidad_de_quien_mira_no_es_un_dato_de_nadie() {
 }
 
 #[test]
-fn un_sondeo_de_antes_de_que_esto_existiera_se_lee_igual() {
-    // Un snapshot guardado antes de que el modelo publicara estos campos sigue
-    // siendo una respuesta buena a todo lo demás. Caerse por leer algo que
-    // entonces no se le pidió sería tirar el registro de una investigación por
-    // una función que se añadió después.
+fn a_probe_from_before_this_existed_reads_the_same() {
+    // A snapshot kept before the model published these fields is still a good
+    // answer to everything else. Falling over for reading something nobody
+    // asked it for back then would throw away an investigation's record for a
+    // function added afterwards.
     let (_at, kept) = somewhere();
-    kept_value(&kept, "sha256:uno", "embed", "a1b2c3d4", "9f2c1a");
-    let mut viejo = taken(&[], &[]);
-    viejo.snapshot = serde_json::json!({"shape": {}});
-    let known = HashMap::from([("c1", viejo)]);
+    kept_value(&kept, "sha256:one", "embed", "a1b2c3d4", "9f2c1a");
+    let mut old = taken(&[], &[]);
+    old.snapshot = serde_json::json!({"shape": {}});
+    let known = HashMap::from([("c1", old)]);
 
-    let said = under(&kept, &known).expect("se lee");
+    let said = under(&kept, &known).expect("it reads");
 
-    assert!(said[0].is_nobodys(), "no se sabe, y eso no es caerse");
+    assert!(
+        said[0].is_nobodys(),
+        "it is not known, and that is not falling over"
+    );
 }

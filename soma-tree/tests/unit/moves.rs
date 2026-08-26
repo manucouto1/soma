@@ -1,48 +1,46 @@
-//! El razonamiento, contra un store en un directorio temporal.
+//! The reasoning, against a store in a temporary directory.
 //!
-//! Un `Local` de verdad y no un doble: lo que se defiende aquí es que dos
-//! personas escribiendo a la vez obtienen dos movimientos, y eso es una
-//! afirmación sobre cómo se comporta un store bajo dos escritores.
+//! A real `Local` and not a double: what is defended here is that two people
+//! writing at once get two moves, and that is a claim about how a store
+//! behaves under two writers.
 
 use somatize_store::Local;
 use somatize_tree::moves::{Cited, Course, Kind, Move, Moves, Said, Says, Scope, Standing};
 
 fn somewhere() -> (tempfile::TempDir, Local) {
-    let at = tempfile::tempdir().expect("un directorio temporal");
-    let kept = Local::at(at.path()).expect("un store dentro");
+    let at = tempfile::tempdir().expect("a temporary directory");
+    let kept = Local::at(at.path()).expect("a store inside");
     (at, kept)
 }
 
-/// Añade un movimiento con alcance de todo y sin citas, que es el caso normal.
+/// Adds a move covering everything and citing nothing, the ordinary case.
 fn plain(moves: &Moves, kind: Kind, prose: &str) -> u32 {
     moves
-        .add(kind, prose, "yo", Scope::everything(), Vec::new(), None)
-        .expect("un movimiento")
+        .add(kind, prose, "me", Scope::everything(), Vec::new(), None)
+        .expect("a move")
 }
 
-// ── Las cinco clases y sus verbos ──
-
 #[test]
-fn una_pregunta_sin_intentar_es_un_movimiento_como_los_demas() {
-    // La única clase que puede existir sin nada debajo. Hoy una pregunta que
-    // nadie ha atacado no tiene dónde vivir, y eso es trabajo pendiente que se
-    // pierde.
+fn a_question_nobody_tried_is_a_move_like_any_other() {
+    // The only kind that can exist with nothing under it. A question nobody
+    // has attacked has nowhere to live otherwise, and that is outstanding work
+    // going missing.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
 
-    let q = plain(&moves, Kind::Question, "¿es el encoder el cuello?");
+    let q = plain(&moves, Kind::Question, "is the encoder the bottleneck?");
 
     assert_eq!(moves.all().unwrap()[&q].kind, Kind::Question);
     assert_eq!(moves.standing().unwrap()[&q], Standing::Open);
 }
 
 #[test]
-fn un_valida_apuntando_a_un_intento_no_significa_nada_y_se_rechaza() {
-    // Aceptarlo sería guardar una frase que nadie puede leer después.
+fn a_validates_pointing_at_an_attempt_means_nothing_and_is_refused() {
+    // Accepting it would store a sentence nobody can read afterwards.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let f = plain(&moves, Kind::Finding, "el recall no se mueve");
-    let a = plain(&moves, Kind::Attempt, "probé con escala 2.0");
+    let f = plain(&moves, Kind::Finding, "recall does not move");
+    let a = plain(&moves, Kind::Attempt, "tried it at scale 2.0");
 
     let said = moves.say(Said {
         from: f,
@@ -56,14 +54,18 @@ fn un_valida_apuntando_a_un_intento_no_significa_nada_y_se_rechaza() {
 }
 
 #[test]
-fn responder_y_validar_no_son_el_mismo_verbo() {
-    // Plegar hipótesis dentro de pregunta borraba justo esto: a una se le
-    // responde, a la otra se la valida o se la refuta.
+fn answering_and_validating_are_not_the_same_verb() {
+    // Folding hypothesis into question erased exactly this: one gets answered,
+    // the other gets validated or refuted.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿por qué cae el recall?");
-    let h = plain(&moves, Kind::Hypothesis, "el tokenizador parte mal");
-    let f = plain(&moves, Kind::Finding, "con otro tokenizador es igual");
+    let q = plain(&moves, Kind::Question, "why does recall fall?");
+    let h = plain(&moves, Kind::Hypothesis, "the tokenizer splits badly");
+    let f = plain(
+        &moves,
+        Kind::Finding,
+        "with another tokenizer it is the same",
+    );
 
     assert!(
         moves
@@ -75,7 +77,7 @@ fn responder_y_validar_no_son_el_mismo_verbo() {
                 in_part: false
             })
             .is_err(),
-        "a una hipótesis no se le responde",
+        "a hypothesis does not get answered",
     );
     assert!(
         moves
@@ -87,21 +89,23 @@ fn responder_y_validar_no_son_el_mismo_verbo() {
                 in_part: false
             })
             .is_err(),
-        "una pregunta no se refuta",
+        "a question does not get refuted",
     );
 }
 
-// ── Respuestas parciales ──
-
 #[test]
-fn tres_respuestas_en_parte_empujan_una_pregunta_sin_cerrarla() {
-    // «¿Si aumento la capacidad, mejora?» no se responde de una vez: se generan
-    // tres intentos y cada uno responde en parte. Ni abierta ni cerrada.
+fn three_partial_answers_push_a_question_without_closing_it() {
+    // *Does more capacity help?* is not settled at once: three attempts get
+    // generated and each answers part. Neither open nor closed.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿si aumento la capacidad, mejora?");
+    let q = plain(
+        &moves,
+        Kind::Question,
+        "if I add capacity, does it improve?",
+    );
 
-    for said in ["×2 sí", "×4 sí", "×8 se estanca"] {
+    for said in ["×2 yes", "×4 yes", "×8 stalls"] {
         let f = plain(&moves, Kind::Finding, said);
         moves
             .say(Said {
@@ -111,19 +115,19 @@ fn tres_respuestas_en_parte_empujan_una_pregunta_sin_cerrarla() {
                 scope: Scope::everything(),
                 in_part: true,
             })
-            .expect("una respuesta parcial");
+            .expect("a partial answer");
     }
 
     assert_eq!(moves.standing().unwrap()[&q], Standing::Partly);
 }
 
 #[test]
-fn una_que_cierra_basta_para_darla_por_respondida() {
+fn one_that_settles_it_is_enough_to_call_it_answered() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿mejora?");
-    let a = plain(&moves, Kind::Finding, "en parte");
-    let b = plain(&moves, Kind::Finding, "del todo, y por esto");
+    let q = plain(&moves, Kind::Question, "does it improve?");
+    let a = plain(&moves, Kind::Finding, "in part");
+    let b = plain(&moves, Kind::Finding, "fully, and for this reason");
 
     for (from, in_part) in [(a, true), (b, false)] {
         moves
@@ -134,30 +138,28 @@ fn una_que_cierra_basta_para_darla_por_respondida() {
                 scope: Scope::everything(),
                 in_part,
             })
-            .expect("una respuesta");
+            .expect("an answer");
     }
 
     assert_eq!(moves.standing().unwrap()[&q], Standing::Answered);
 }
 
-// ── El alcance, y por qué la disputa se mide por solape ──
-
 #[test]
-fn validar_y_refutar_sobre_situaciones_distintas_no_es_una_contradiccion() {
-    // El caso de la combinación: A sola funcionaba, A+B se anulan. Dos hechos
-    // sobre dos situaciones. Contarlos como conflicto sería llamar contradicción
-    // a lo que más se aprende de una investigación.
+fn validating_and_refuting_over_different_situations_is_no_contradiction() {
+    // The combination case: A alone worked, A+B cancel out. Two facts about
+    // two situations. Counting them as a conflict would call the most
+    // instructive thing in an investigation a contradiction.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let h = plain(&moves, Kind::Hypothesis, "más capacidad mejora");
-    let a = plain(&moves, Kind::Attempt, "variante A");
-    let ab = plain(&moves, Kind::Attempt, "variante A + B");
-    let sola = plain(&moves, Kind::Finding, "A sola: mejora");
-    let juntas = plain(&moves, Kind::Finding, "A+B: se anulan");
+    let h = plain(&moves, Kind::Hypothesis, "more capacity improves it");
+    let a = plain(&moves, Kind::Attempt, "variant A");
+    let ab = plain(&moves, Kind::Attempt, "variant A + B");
+    let alone = plain(&moves, Kind::Finding, "A only: it improves");
+    let together = plain(&moves, Kind::Finding, "A+B: they cancel out");
 
     moves
         .say(Said {
-            from: sola,
+            from: alone,
             to: h,
             says: Says::Validates,
             scope: Scope::of([a]),
@@ -166,7 +168,7 @@ fn validar_y_refutar_sobre_situaciones_distintas_no_es_una_contradiccion() {
         .unwrap();
     moves
         .say(Said {
-            from: juntas,
+            from: together,
             to: h,
             says: Says::Refutes,
             scope: Scope::of([ab]),
@@ -177,21 +179,21 @@ fn validar_y_refutar_sobre_situaciones_distintas_no_es_una_contradiccion() {
     assert_eq!(
         moves.standing().unwrap()[&h],
         Standing::Depends,
-        "no es disputa ni media validación: la respuesta depende de dónde se mire",
+        "not a dispute and not half a validation: the answer depends on where you look",
     );
 }
 
 #[test]
-fn depende_no_es_lo_mismo_que_en_parte() {
-    // Salió al correr el caso entero: los dos usaban la misma palabra y
-    // significan cosas distintas. Una pregunta a medio responder está empujada;
-    // una hipótesis que vale aquí y no allí tiene una respuesta condicional, que
-    // es el desenlace más informativo que da una investigación.
+fn depends_is_not_the_same_as_in_part() {
+    // Came out of running the whole case: both used one word for two things.
+    // A half-answered question is pushed along; a hypothesis that holds here
+    // and not there has a conditional answer, which is the most informative
+    // outcome an investigation gives.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let h = plain(&moves, Kind::Hypothesis, "mejora");
+    let h = plain(&moves, Kind::Hypothesis, "it improves");
     let a = plain(&moves, Kind::Attempt, "A");
-    let f = plain(&moves, Kind::Finding, "en A, y sólo a medias");
+    let f = plain(&moves, Kind::Finding, "in A, and only in part");
 
     moves
         .say(Said {
@@ -206,22 +208,22 @@ fn depende_no_es_lo_mismo_que_en_parte() {
     assert_eq!(
         moves.standing().unwrap()[&h],
         Standing::PartlyValidated,
-        "un solo signo a medias es media validación, no condicional",
+        "one sign in part is half a validation, not a conditional one",
     );
 }
 
 #[test]
-fn y_sobre_la_misma_situacion_si_lo_es() {
+fn and_over_the_same_situation_it_is() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let h = plain(&moves, Kind::Hypothesis, "más capacidad mejora");
-    let a = plain(&moves, Kind::Attempt, "variante A");
-    let (si, no) = (
-        plain(&moves, Kind::Finding, "mejora"),
-        plain(&moves, Kind::Finding, "no mejora"),
+    let h = plain(&moves, Kind::Hypothesis, "more capacity improves it");
+    let a = plain(&moves, Kind::Attempt, "variant A");
+    let (yes, no) = (
+        plain(&moves, Kind::Finding, "it improves"),
+        plain(&moves, Kind::Finding, "it does not improve"),
     );
 
-    for (from, says) in [(si, Says::Validates), (no, Says::Refutes)] {
+    for (from, says) in [(yes, Says::Validates), (no, Says::Refutes)] {
         moves
             .say(Said {
                 from,
@@ -237,20 +239,20 @@ fn y_sobre_la_misma_situacion_si_lo_es() {
 }
 
 #[test]
-fn un_alcance_de_todo_toca_cualquier_otro() {
-    // «Esto es falso en general» sí contradice a «esto vale para A».
+fn a_scope_of_everything_touches_any_other() {
+    // *This is false in general* does contradict *this holds for A*.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let h = plain(&moves, Kind::Hypothesis, "más capacidad mejora");
-    let a = plain(&moves, Kind::Attempt, "variante A");
-    let (si, no) = (
-        plain(&moves, Kind::Finding, "en A mejora"),
-        plain(&moves, Kind::Finding, "en ningún sitio mejora"),
+    let h = plain(&moves, Kind::Hypothesis, "more capacity improves it");
+    let a = plain(&moves, Kind::Attempt, "variant A");
+    let (yes, no) = (
+        plain(&moves, Kind::Finding, "in A it improves"),
+        plain(&moves, Kind::Finding, "it improves nowhere"),
     );
 
     moves
         .say(Said {
-            from: si,
+            from: yes,
             to: h,
             says: Says::Validates,
             scope: Scope::of([a]),
@@ -271,26 +273,26 @@ fn un_alcance_de_todo_toca_cualquier_otro() {
 }
 
 #[test]
-fn un_alcance_arrastra_lo_que_cuelga_de_su_raiz() {
-    // «Toda la rama del encoder» es una raíz, no una enumeración. Es lo que
-    // hace pagable la pregunta de si dos alcances se tocan.
+fn a_scope_drags_along_whatever_hangs_under_its_root() {
+    // *The whole encoder branch* is a root, not an enumeration. That is what
+    // makes asking whether two scopes touch affordable.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let rama = plain(&moves, Kind::Attempt, "la rama del encoder");
-    let dentro = plain(&moves, Kind::Attempt, "un paso de esa rama");
-    moves.hang(dentro, rama).unwrap();
+    let branch = plain(&moves, Kind::Attempt, "the encoder branch");
+    let inside = plain(&moves, Kind::Attempt, "a step of that branch");
+    moves.hang(inside, branch).unwrap();
 
-    let h = plain(&moves, Kind::Hypothesis, "el encoder es el problema");
-    let (si, no) = (
-        plain(&moves, Kind::Finding, "en la rama entera"),
-        plain(&moves, Kind::Finding, "en ese paso concreto"),
+    let h = plain(&moves, Kind::Hypothesis, "the encoder is the problem");
+    let (yes, no) = (
+        plain(&moves, Kind::Finding, "across the whole branch"),
+        plain(&moves, Kind::Finding, "in that particular step"),
     );
     moves
         .say(Said {
-            from: si,
+            from: yes,
             to: h,
             says: Says::Validates,
-            scope: Scope::of([rama]),
+            scope: Scope::of([branch]),
             in_part: false,
         })
         .unwrap();
@@ -299,7 +301,7 @@ fn un_alcance_arrastra_lo_que_cuelga_de_su_raiz() {
             from: no,
             to: h,
             says: Says::Refutes,
-            scope: Scope::of([dentro]),
+            scope: Scope::of([inside]),
             in_part: false,
         })
         .unwrap();
@@ -307,20 +309,18 @@ fn un_alcance_arrastra_lo_que_cuelga_de_su_raiz() {
     assert_eq!(
         moves.standing().unwrap()[&h],
         Standing::Disputed,
-        "el paso está dentro de la rama, así que los alcances se tocan",
+        "the step is inside the branch, so the scopes touch",
     );
 }
 
-// ── El DAG ──
-
 #[test]
-fn un_movimiento_cuelga_de_dos_preguntas_a_la_vez() {
-    // El caso que obliga al DAG: la combinación es sobre la interacción de dos
-    // respuestas y no cabe bajo ninguna de las dos preguntas.
+fn one_move_hangs_under_two_questions_at_once() {
+    // The case that forces the DAG: the combination is about two answers
+    // interacting and fits under neither question.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q1 = plain(&moves, Kind::Question, "¿mejora la interpretabilidad?");
-    let q2 = plain(&moves, Kind::Question, "¿mejora el rendimiento?");
+    let q1 = plain(&moves, Kind::Question, "does it improve interpretability?");
+    let q2 = plain(&moves, Kind::Question, "does it improve performance?");
     let ab = plain(&moves, Kind::Attempt, "A + B");
 
     moves.hang(ab, q1).unwrap();
@@ -332,14 +332,14 @@ fn un_movimiento_cuelga_de_dos_preguntas_a_la_vez() {
 }
 
 #[test]
-fn combina_es_una_arista_de_intento_a_intento_y_no_es_colgar() {
-    // Dice que este intento **es** la composición de aquellos, que es lo que
-    // permite leer «cada una funcionaba sola, juntas se anulan».
+fn combines_is_an_edge_from_attempt_to_attempt_and_is_not_hanging() {
+    // It says this attempt **is** the composition of those, which is what lets
+    // *each worked alone, together they cancel* be read.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
     let (a, b) = (
-        plain(&moves, Kind::Attempt, "variante A"),
-        plain(&moves, Kind::Attempt, "variante B"),
+        plain(&moves, Kind::Attempt, "variant A"),
+        plain(&moves, Kind::Attempt, "variant B"),
     );
     let ab = plain(&moves, Kind::Attempt, "A + B");
 
@@ -352,7 +352,7 @@ fn combina_es_una_arista_de_intento_a_intento_y_no_es_colgar() {
                 scope: Scope::everything(),
                 in_part: false,
             })
-            .expect("una combinación");
+            .expect("a combination");
     }
 
     let says = moves.says().unwrap();
@@ -362,14 +362,14 @@ fn combina_es_una_arista_de_intento_a_intento_y_no_es_colgar() {
     );
     assert!(
         moves.under().unwrap().parents_of(ab).is_empty(),
-        "combinar no es colgar",
+        "combining is not hanging",
     );
 }
 
 #[test]
-fn un_ciclo_se_rechaza_al_escribirlo_y_no_al_recorrerlo() {
-    // Con `under` multivaluado ya no basta con confiar en la forma, y un ciclo
-    // cuelga cualquier recorrido posterior — incluido el que lo dibujaría.
+fn a_cycle_is_refused_when_written_and_not_when_walked() {
+    // With `under` multivalued the shape can no longer be trusted, and a cycle
+    // hangs every later walk — including the one that would draw it.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
     let (a, b, c) = (
@@ -381,23 +381,21 @@ fn un_ciclo_se_rechaza_al_escribirlo_y_no_al_recorrerlo() {
     moves.hang(c, b).unwrap();
 
     assert!(moves.hang(a, c).is_err(), "a → b → c → a");
-    assert!(moves.hang(a, a).is_err(), "ni consigo mismo");
+    assert!(moves.hang(a, a).is_err(), "not even with itself");
 }
 
-// ── Escribir ──
-
 #[test]
-fn un_intento_cita_la_capa_uno() {
-    // La única clase que la toca, y lo que ata el razonamiento a algo que se
-    // puede volver a ejecutar.
+fn an_attempt_cites_layer_one() {
+    // The only kind that touches it, and what ties the reasoning to something
+    // that can be run again.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
 
     let a = moves
         .add(
             Kind::Attempt,
-            "tres escalas",
-            "yo",
+            "three scales",
+            "me",
             Scope::everything(),
             vec![
                 Cited {
@@ -419,23 +417,32 @@ fn un_intento_cita_la_capa_uno() {
 }
 
 #[test]
-fn reescribir_la_prosa_no_borra_lo_anterior() {
-    // Como el diario: gana la última, y la de antes sigue ahí.
+fn rewording_the_prose_does_not_erase_what_came_before() {
+    // As in the journal: the last wins, and the one before is still there.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let f = plain(&moves, Kind::Finding, "no mejora");
+    let f = plain(&moves, Kind::Finding, "it does not improve");
 
     moves
-        .reword(f, Some("no mejora entre 1.0 y 3.0"), None, None, "yo")
+        .reword(
+            f,
+            Some("it does not improve between 1.0 and 3.0"),
+            None,
+            None,
+            "me",
+        )
         .unwrap();
 
-    assert_eq!(moves.all().unwrap()[&f].prose, "no mejora entre 1.0 y 3.0");
+    assert_eq!(
+        moves.all().unwrap()[&f].prose,
+        "it does not improve between 1.0 and 3.0"
+    );
 }
 
 #[test]
-fn nadie_escribiendo_a_la_vez_pierde_su_movimiento() {
-    // La propiedad para la que existe `claim`, y la razón de que esto no sea
-    // una fila que alguien actualiza: dos máquinas sobre un NFS se oyen las dos.
+fn nobody_writing_at_the_same_time_loses_their_move() {
+    // The property `claim` exists for, and why this is not a row somebody
+    // updates: two machines over one NFS mount are both heard.
     let (_at, kept) = somewhere();
     let kept = &kept;
 
@@ -445,8 +452,8 @@ fn nadie_escribiendo_a_la_vez_pierde_su_movimiento() {
                 Moves::of("t", kept)
                     .add(
                         Kind::Finding,
-                        &format!("vi {which}"),
-                        "yo",
+                        &format!("I saw {which}"),
+                        "me",
                         Scope::everything(),
                         Vec::new(),
                         None,
@@ -460,23 +467,23 @@ fn nadie_escribiendo_a_la_vez_pierde_su_movimiento() {
 }
 
 #[test]
-fn dos_investigaciones_en_un_store_no_se_ven() {
+fn two_investigations_in_one_store_do_not_see_each_other() {
     let (_at, kept) = somewhere();
-    plain(&Moves::of("una", &kept), Kind::Question, "mía");
+    plain(&Moves::of("one", &kept), Kind::Question, "mine");
 
-    assert!(Moves::of("otra", &kept).all().unwrap().is_empty());
+    assert!(Moves::of("another", &kept).all().unwrap().is_empty());
 }
 
 #[test]
-fn decir_lo_mismo_otra_vez_corrige_el_alcance_en_vez_de_duplicarlo() {
-    // Cambiar de opinión sobre **dónde** vale un hallazgo es el caso corriente:
-    // se creyó general y resultó ser de una rama. Si las dos aristas
-    // sobrevivieran, ampliar un alcance se contaría como decirlo dos veces.
+fn saying_it_again_corrects_the_scope_instead_of_duplicating_it() {
+    // Changing your mind about **where** a finding holds is the ordinary case:
+    // believed general, turned out to be one branch's. If both edges survived,
+    // widening a scope would count as saying it twice.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let h = plain(&moves, Kind::Hypothesis, "más capacidad mejora");
-    let a = plain(&moves, Kind::Attempt, "variante A");
-    let f = plain(&moves, Kind::Finding, "mejora");
+    let h = plain(&moves, Kind::Hypothesis, "more capacity improves it");
+    let a = plain(&moves, Kind::Attempt, "variant A");
+    let f = plain(&moves, Kind::Finding, "it improves");
 
     let mut said = Said {
         from: f,
@@ -491,17 +498,21 @@ fn decir_lo_mismo_otra_vez_corrige_el_alcance_en_vez_de_duplicarlo() {
     moves.say(said).unwrap();
 
     let says = moves.says().unwrap();
-    assert_eq!(says.len(), 1, "la de antes sigue guardada, pero no cuenta");
+    assert_eq!(
+        says.len(),
+        1,
+        "the earlier one is still kept, but does not count"
+    );
     assert!(says[0].scope.is_everything());
     assert!(!says[0].in_part);
 }
 
 #[test]
-fn corregir_el_alcance_no_toca_lo_que_se_dijo_con_otro_verbo() {
+fn correcting_the_scope_leaves_what_was_said_with_another_verb() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let h = plain(&moves, Kind::Hypothesis, "más capacidad mejora");
-    let f = plain(&moves, Kind::Finding, "según dónde");
+    let h = plain(&moves, Kind::Hypothesis, "more capacity improves it");
+    let f = plain(&moves, Kind::Finding, "depending on where");
 
     for says in [Says::Validates, Says::Refutes, Says::Validates] {
         moves
@@ -518,19 +529,17 @@ fn corregir_el_alcance_no_toca_lo_que_se_dijo_con_otro_verbo() {
     assert_eq!(
         moves.says().unwrap().len(),
         2,
-        "valida y refuta, una de cada"
+        "validates and refutes, one of each"
     );
 }
 
-// ── Lo decidido, que se deriva y no se guarda ──
-
-/// Un intento que cita un commit, colgado de donde se le diga.
+/// An attempt citing a commit, hung wherever it is told.
 fn tried(moves: &Moves, prose: &str, commit: &str, under: &[u32]) -> u32 {
     let id = moves
         .add(
             Kind::Attempt,
             prose,
-            "yo",
+            "me",
             Scope::everything(),
             vec![Cited {
                 what: "commit".into(),
@@ -546,17 +555,17 @@ fn tried(moves: &Moves, prose: &str, commit: &str, under: &[u32]) -> u32 {
 }
 
 #[test]
-fn abandonar_una_linea_alcanza_los_commits_de_sus_intentos() {
+fn abandoning_a_line_reaches_the_commits_its_attempts_cite() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿más capacidad?");
+    let q = plain(&moves, Kind::Question, "more capacity?");
     tried(&moves, "x2", "aaa", &[q]);
 
     let d = moves
         .add(
             Kind::Decision,
-            "por aquí no",
-            "yo",
+            "not this way",
+            "me",
             Scope::of(vec![q]),
             Vec::new(),
             Some(Course::Abandon),
@@ -568,17 +577,17 @@ fn abandonar_una_linea_alcanza_los_commits_de_sus_intentos() {
 }
 
 #[test]
-fn un_intento_colgado_despues_de_la_decision_ya_nace_abandonado() {
-    // El caso que justifica derivarlo en vez de guardarlo: nadie vuelve atrás a
-    // marcar nada, y aun así la línea entera se lee muerta.
+fn an_attempt_hung_after_the_decision_is_born_abandoned() {
+    // The case that justifies deriving it rather than storing it: nobody goes
+    // back to mark anything, and the whole line still reads dead.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿más capacidad?");
+    let q = plain(&moves, Kind::Question, "more capacity?");
     let d = moves
         .add(
             Kind::Decision,
-            "por aquí no",
-            "yo",
+            "not this way",
+            "me",
             Scope::of(vec![q]),
             Vec::new(),
             Some(Course::Abandon),
@@ -586,25 +595,25 @@ fn un_intento_colgado_despues_de_la_decision_ya_nace_abandonado() {
         .unwrap();
     moves.hang(d, q).unwrap();
 
-    tried(&moves, "x4, por probar", "bbb", &[q]);
+    tried(&moves, "x4, to try it", "bbb", &[q]);
 
     assert_eq!(moves.decided().unwrap().get("bbb"), Some(&Course::Abandon));
 }
 
 #[test]
-fn bifurcar_desde_un_intento_abandonado_empieza_limpio() {
-    // Y esto es lo contrario, a propósito. Probar otra cosa **porque** aquello
-    // no funcionó es el movimiento que se hace al llegar a un callejón: heredar
-    // el abandono por la ascendencia de git lo marcaría como más de lo mismo.
+fn forking_off_an_abandoned_attempt_starts_clean() {
+    // And this is the opposite, on purpose. Trying something else **because**
+    // that did not work is the move you make at a dead end: inheriting the
+    // abandonment down git ancestry would mark it as more of the same.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿más capacidad?");
+    let q = plain(&moves, Kind::Question, "more capacity?");
     let a = tried(&moves, "x2", "aaa", &[q]);
     let d = moves
         .add(
             Kind::Decision,
-            "x2 no lleva a nada",
-            "yo",
+            "x2 leads nowhere",
+            "me",
             Scope::of(vec![a]),
             Vec::new(),
             Some(Course::Abandon),
@@ -612,32 +621,32 @@ fn bifurcar_desde_un_intento_abandonado_empieza_limpio() {
         .unwrap();
     moves.hang(d, a).unwrap();
 
-    // Como cuelga `placed` una bifurcación: de los padres del que citaba el
-    // commit de partida, no del propio intento.
-    tried(&moves, "y si en vez de capacidad, profundidad", "bbb", &[q]);
+    // How `placed` hangs a fork: off the parents of whatever cited the
+    // starting commit, not off that attempt itself.
+    tried(&moves, "and what if depth instead of capacity", "bbb", &[q]);
 
     let decided = moves.decided().unwrap();
     assert_eq!(decided.get("aaa"), Some(&Course::Abandon));
-    assert_eq!(decided.get("bbb"), None, "es una hermana, no una hija");
+    assert_eq!(decided.get("bbb"), None, "it is a sibling, not a child");
 }
 
 #[test]
-fn una_decision_sin_alcance_habla_de_donde_cuelga_y_no_del_arbol() {
-    // Sin esto, escribir «esta línea está muerta» mirando un intento marcaría
-    // toda la investigación, calladamente. Para una pregunta no tener alcance
-    // significa hablar de todo; para una decisión sería una trampa.
+fn a_decision_with_no_scope_is_about_where_it_hangs_not_the_tree() {
+    // Without this, writing *this line is dead* while looking at one attempt
+    // would mark the whole investigation, quietly. For a question, no scope
+    // means about everything; for a decision it would be a trap.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let una = plain(&moves, Kind::Question, "¿capacidad?");
-    let otra = plain(&moves, Kind::Question, "¿profundidad?");
-    let a = tried(&moves, "x2", "aaa", &[una]);
-    tried(&moves, "más capas", "bbb", &[otra]);
+    let one = plain(&moves, Kind::Question, "capacity?");
+    let another = plain(&moves, Kind::Question, "depth?");
+    let a = tried(&moves, "x2", "aaa", &[one]);
+    tried(&moves, "more layers", "bbb", &[another]);
 
     let d = moves
         .add(
             Kind::Decision,
-            "por aquí no",
-            "yo",
+            "not this way",
+            "me",
             Scope::everything(),
             Vec::new(),
             Some(Course::Abandon),
@@ -650,21 +659,21 @@ fn una_decision_sin_alcance_habla_de_donde_cuelga_y_no_del_arbol() {
     assert_eq!(
         decided.get("bbb"),
         None,
-        "la otra pregunta no era asunto suyo"
+        "the other question was none of its business"
     );
 }
 
 #[test]
-fn una_decision_colgada_de_nada_y_sin_alcance_no_tine_nada() {
+fn a_decision_hung_off_nothing_with_no_scope_colours_nothing() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
+    let q = plain(&moves, Kind::Question, "capacity?");
     tried(&moves, "x2", "aaa", &[q]);
     moves
         .add(
             Kind::Decision,
-            "hay que dejarlo",
-            "yo",
+            "it has to be dropped",
+            "me",
             Scope::everything(),
             Vec::new(),
             Some(Course::Abandon),
@@ -675,17 +684,17 @@ fn una_decision_colgada_de_nada_y_sin_alcance_no_tine_nada() {
 }
 
 #[test]
-fn cambiar_de_opinion_es_decidir_otra_vez_y_gana_la_ultima() {
+fn changing_your_mind_is_deciding_again_and_the_last_wins() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
+    let q = plain(&moves, Kind::Question, "capacity?");
     tried(&moves, "x2", "aaa", &[q]);
     for course in [Course::Abandon, Course::Pursue] {
         let d = moves
             .add(
                 Kind::Decision,
                 "…",
-                "yo",
+                "me",
                 Scope::of(vec![q]),
                 Vec::new(),
                 Some(course),
@@ -698,7 +707,7 @@ fn cambiar_de_opinion_es_decidir_otra_vez_y_gana_la_ultima() {
 }
 
 #[test]
-fn un_rumbo_en_algo_que_no_es_una_decision_se_rechaza() {
+fn a_course_on_something_that_is_not_a_decision_is_refused() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
 
@@ -706,8 +715,8 @@ fn un_rumbo_en_algo_que_no_es_una_decision_se_rechaza() {
         moves
             .add(
                 Kind::Finding,
-                "vi que no",
-                "yo",
+                "I saw that it does not",
+                "me",
                 Scope::everything(),
                 Vec::new(),
                 Some(Course::Abandon),
@@ -717,51 +726,48 @@ fn un_rumbo_en_algo_que_no_es_una_decision_se_rechaza() {
 }
 
 #[test]
-fn corregir_el_alcance_de_una_decision_la_hace_llegar_a_los_commits() {
-    // El fallo que esto cierra salió corriéndolo: una decisión escrita mirando
-    // un hallazgo se alcanzaba al hallazgo, y un hallazgo no es una línea —no
-    // cuelga nada de él ni cita ningún commit—, así que la decisión no llegaba
-    // a ninguna parte y la línea seguía leyéndose viva. Sin poder corregir el
-    // alcance no habría forma de arreglarlo salvo escribirla otra vez.
+fn correcting_a_decisions_scope_makes_it_reach_the_commits() {
+    // The bug this closes came out of running it: a decision written while
+    // looking at a finding reached the finding, and a finding is not a line —
+    // nothing hangs off it and it cites no commit — so the decision reached
+    // nowhere and the line went on reading alive. Without a correctable scope
+    // there would be no fix but writing it again.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
+    let q = plain(&moves, Kind::Question, "capacity?");
     let a = tried(&moves, "x2", "aaa", &[q]);
-    let f = plain(&moves, Kind::Finding, "sube la latencia");
+    let f = plain(&moves, Kind::Finding, "latency goes up");
     moves.hang(f, a).unwrap();
     let d = moves
         .add(
             Kind::Decision,
-            "no seguimos",
-            "yo",
+            "we are not carrying on",
+            "me",
             Scope::of(vec![f]),
             Vec::new(),
             Some(Course::Abandon),
         )
         .unwrap();
     moves.hang(d, f).unwrap();
-    assert!(
-        moves.decided().unwrap().is_empty(),
-        "no llega a ningún sitio"
-    );
+    assert!(moves.decided().unwrap().is_empty(), "it gets nowhere");
 
     moves
-        .reword(d, None, Some(Scope::of(vec![a])), None, "yo")
+        .reword(d, None, Some(Scope::of(vec![a])), None, "me")
         .unwrap();
 
     assert_eq!(moves.decided().unwrap().get("aaa"), Some(&Course::Abandon));
 }
 
 #[test]
-fn corregir_el_alcance_no_toca_la_prosa_ni_el_rumbo() {
+fn correcting_the_scope_touches_neither_the_prose_nor_the_course() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
+    let q = plain(&moves, Kind::Question, "capacity?");
     let d = moves
         .add(
             Kind::Decision,
-            "no seguimos, la latencia no la paga nadie",
-            "yo",
+            "we are not carrying on, nobody pays that latency",
+            "me",
             Scope::everything(),
             Vec::new(),
             Some(Course::Abandon),
@@ -769,26 +775,29 @@ fn corregir_el_alcance_no_toca_la_prosa_ni_el_rumbo() {
         .unwrap();
 
     moves
-        .reword(d, None, Some(Scope::of(vec![q])), None, "yo")
+        .reword(d, None, Some(Scope::of(vec![q])), None, "me")
         .unwrap();
 
     let body = moves.all().unwrap().remove(&d).unwrap();
-    assert_eq!(body.prose, "no seguimos, la latencia no la paga nadie");
+    assert_eq!(
+        body.prose,
+        "we are not carrying on, nobody pays that latency"
+    );
     assert_eq!(body.course, Some(Course::Abandon));
     assert_eq!(body.scope, Scope::of(vec![q]));
 }
 
 #[test]
-fn cambiar_de_rumbo_no_toca_la_prosa_ni_el_alcance() {
+fn changing_the_course_touches_neither_the_prose_nor_the_scope() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
+    let q = plain(&moves, Kind::Question, "capacity?");
     tried(&moves, "x2", "aaa", &[q]);
     let d = moves
         .add(
             Kind::Decision,
-            "no seguimos",
-            "yo",
+            "we are not carrying on",
+            "me",
             Scope::of(vec![q]),
             Vec::new(),
             Some(Course::Abandon),
@@ -796,7 +805,7 @@ fn cambiar_de_rumbo_no_toca_la_prosa_ni_el_alcance() {
         .unwrap();
 
     moves
-        .reword(d, None, None, Some(Course::Pursue), "yo")
+        .reword(d, None, None, Some(Course::Pursue), "me")
         .unwrap();
 
     assert_eq!(moves.decided().unwrap().get("aaa"), Some(&Course::Pursue));
@@ -804,25 +813,23 @@ fn cambiar_de_rumbo_no_toca_la_prosa_ni_el_alcance() {
 }
 
 #[test]
-fn un_rumbo_en_una_redaccion_de_algo_que_no_decide_se_rechaza() {
+fn a_course_in_a_rewording_of_something_that_decides_nothing_is_refused() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let f = plain(&moves, Kind::Finding, "vi que no");
+    let f = plain(&moves, Kind::Finding, "I saw that it does not");
 
     assert!(
         moves
-            .reword(f, None, None, Some(Course::Pursue), "yo")
+            .reword(f, None, None, Some(Course::Pursue), "me")
             .is_err()
     );
 }
 
-// ── Citar la evidencia, que llega después ──
-
 #[test]
-fn un_intento_puede_citar_un_ensayo_despues_de_escrito() {
-    // Los ensayos se corren después de anotar el intento, así que la evidencia
-    // se junta después. Si sólo pudiera viajar al crearlo, un intento nunca
-    // podría apuntar a lo que se corrió con él.
+fn an_attempt_can_cite_a_trial_after_it_was_written() {
+    // The trials run after the attempt is noted, so the evidence is added
+    // afterwards. If it could only travel at creation, an attempt could never
+    // point at what was run with it.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
     let a = tried(&moves, "x2", "aaa", &[]);
@@ -834,19 +841,23 @@ fn un_intento_puede_citar_un_ensayo_despues_de_escrito() {
                 what: "trial".into(),
                 id: "exp/t/aaa/trial/3/0".into(),
             },
-            "yo",
+            "me",
         )
         .unwrap();
 
     let body = moves.all().unwrap().remove(&a).unwrap();
-    assert_eq!(body.cites.len(), 2, "el commit que ya tenía, y el ensayo");
+    assert_eq!(
+        body.cites.len(),
+        2,
+        "the commit it already had, and the trial"
+    );
     assert_eq!(body.cites[1].id, "exp/t/aaa/trial/3/0");
 }
 
 #[test]
-fn citar_dos_veces_lo_mismo_no_lo_duplica() {
-    // Lo pedirían dos personas mirando la misma pantalla, y una lista con el
-    // mismo ensayo dos veces no dice nada más que una con él una vez.
+fn citing_the_same_thing_twice_does_not_duplicate_it() {
+    // Two people looking at one screen would ask for it, and a list with the
+    // same trial twice says nothing a list with it once does not.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
     let a = tried(&moves, "x2", "aaa", &[]);
@@ -855,19 +866,19 @@ fn citar_dos_veces_lo_mismo_no_lo_duplica() {
         id: "exp/t/aaa/trial/3/0".into(),
     };
 
-    moves.cite(a, cited.clone(), "yo").unwrap();
-    moves.cite(a, cited, "otro").unwrap();
+    moves.cite(a, cited.clone(), "me").unwrap();
+    moves.cite(a, cited, "other").unwrap();
 
     assert_eq!(moves.all().unwrap()[&a].cites.len(), 2);
 }
 
 #[test]
-fn una_pregunta_no_cita_commits_ni_ensayos() {
-    // Habla de movimientos, no de piezas de la capa 1. Dejarla citar sería
-    // dejar que apunte a un commit sin que nadie sepa qué significa eso.
+fn a_question_cites_neither_commits_nor_trials() {
+    // It is about moves, not layer-1 pieces. Letting it cite would let it
+    // point at a commit with nobody knowing what that means.
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
+    let q = plain(&moves, Kind::Question, "capacity?");
 
     assert!(
         moves
@@ -877,17 +888,17 @@ fn una_pregunta_no_cita_commits_ni_ensayos() {
                     what: "commit".into(),
                     id: "aaa".into()
                 },
-                "yo"
+                "me"
             )
             .is_err()
     );
 }
 
 #[test]
-fn un_hallazgo_si_cita_el_ensayo_donde_se_vio() {
+fn a_finding_does_cite_the_trial_it_was_seen_in() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let f = plain(&moves, Kind::Finding, "la latencia sube");
+    let f = plain(&moves, Kind::Finding, "latency goes up");
 
     moves
         .cite(
@@ -896,7 +907,7 @@ fn un_hallazgo_si_cita_el_ensayo_donde_se_vio() {
                 what: "trial".into(),
                 id: "exp/t/aaa/trial/1/0".into(),
             },
-            "yo",
+            "me",
         )
         .unwrap();
 
@@ -904,24 +915,24 @@ fn un_hallazgo_si_cita_el_ensayo_donde_se_vio() {
 }
 
 #[test]
-fn citar_no_toca_la_prosa_ni_el_alcance_ni_el_rumbo() {
+fn citing_touches_neither_the_prose_nor_the_scope_nor_the_course() {
     let (_at, kept) = somewhere();
     let moves = Moves::of("t", &kept);
-    let q = plain(&moves, Kind::Question, "¿capacidad?");
-    let a = tried(&moves, "x2, la buena", "aaa", &[q]);
+    let q = plain(&moves, Kind::Question, "capacity?");
+    let a = tried(&moves, "x2, the good one", "aaa", &[q]);
 
     moves
         .cite(
             a,
             Cited {
                 what: "artifact".into(),
-                id: "informe.pdf".into(),
+                id: "report.pdf".into(),
             },
-            "yo",
+            "me",
         )
         .unwrap();
 
     let body = moves.all().unwrap().remove(&a).unwrap();
-    assert_eq!(body.prose, "x2, la buena");
+    assert_eq!(body.prose, "x2, the good one");
     assert_eq!(moves.under().unwrap().parents_of(a), vec![q]);
 }

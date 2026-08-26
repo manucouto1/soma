@@ -1,62 +1,58 @@
-//! El razonamiento: preguntas, hipótesis, intentos, hallazgos y decisiones.
+//! The reasoning: questions, hypotheses, attempts, findings and decisions.
 //!
-//! La capa 1 —commits, snapshots, hallazgos por nodo, trials— responde a *qué
-//! se ejecutó y qué salió*. Ésta responde a *qué se estaba intentando averiguar*,
-//! y no comparte su unidad: un commit no es una decisión de nadie, una pregunta
-//! sin intentar no tiene commit, y un movimiento puede producir tres ramas.
+//! Layer 1 — commits, snapshots, findings per node, trials — answers *what was
+//! run and what came out*. This answers *what somebody was trying to find out*,
+//! and shares none of its units: a commit is nobody's decision, a question
+//! nobody tried has no commit, and one move can produce three branches. What
+//! decides which layer something belongs to: if it can be recomputed it is
+//! record, and if somebody thought it, it is reasoning.
 //!
-//! # Lo que decide a qué capa pertenece algo
+//! It is a **DAG**, and one case forces it. Two live questions — does more
+//! capacity improve interpretability? does it improve performance? — one
+//! variant validating each, and then the question neither contained: what if I
+//! put them together? That attempt hangs under **both**. One parent would mean
+//! choosing, or duplicating the node, and a duplicated node is two that go out
+//! of step. Hence [`Undernath`] being multivalued, and hence refusing cycles as
+//! they are written: a walk over one does not end.
 //!
-//! Si se puede recalcular, es registro. Si alguien lo pensó, es razonamiento.
-//!
-//! # Es un DAG, y el caso que lo obliga
-//!
-//! Dos preguntas vivas —¿más capacidad mejora la interpretabilidad? ¿mejora el
-//! rendimiento?—, una variante que valida cada una, y entonces la pregunta que
-//! ninguna contenía: ¿y si las junto? Ese intento cuelga de **las dos**. Con un
-//! solo padre habría que elegir, o duplicar el nodo, y un nodo duplicado son dos
-//! que se desincronizan. Por eso [`Under`] es multivaluado y por eso hay que
-//! rechazar ciclos al escribir: un recorrido sobre uno no termina.
-//!
-//! # Todo lleva alcance, también lo que se dice
-//!
-//! Una pregunta habla de unos movimientos y no de la investigación entera; y una
-//! respuesta vale **donde vale**. Sin eso, «validada» y «refutada» sobre la misma
-//! hipótesis parecen una contradicción cuando lo normal es que sean dos hechos
-//! sobre dos situaciones: A sola funcionaba, A+B se anulan. Sólo hay disputa
-//! cuando dos aristas de signo contrario tienen alcances que **se tocan**.
+//! Everything carries a scope, including what is said. A question is about
+//! some moves and not the whole investigation, and an answer holds **where it
+//! holds**. Without that, *validated* and *refuted* on one hypothesis look like
+//! a contradiction when normally they are two facts about two situations — A
+//! alone worked, A+B cancel out. There is a dispute only when two edges of
+//! opposite sign have scopes that **touch**.
 
 use serde::{Deserialize, Serialize};
 use somatize_store::{Bound as Record, Digest, Meta, Store};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
-/// Cuántas ranuras probar antes de rendirse. Sólo se pasa de una cuando alguien
-/// reclamó la misma en el mismo instante: acota una carrera, no una cola.
+/// How many slots to try before giving up. More than one turn only when
+/// somebody claimed the same one in the same instant: a race, not a queue.
 const PATIENCE: u32 = 32;
 
-/// Qué identifica a un movimiento. Su ranura, porque un movimiento es mutable
-/// —le editas la prosa— y no puede direccionarse por su contenido.
+/// What identifies a move. Its slot, because a move is mutable — you reword
+/// its prose — and so cannot be addressed by its content.
 pub type MoveId = u32;
 
-/// Las cinco clases, y no hay más.
+/// The five kinds, and there are no more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
-    /// Lo que no se sabe. Se le **responde**. La única clase que puede existir
-    /// sin nada debajo: una pregunta sin intentar es trabajo pendiente.
+    /// What is not known. It gets **answered**. The only kind that can exist
+    /// with nothing under it: a question nobody tried is work outstanding.
     Question,
-    /// Una respuesta propuesta y falsable. Se la **valida** o se la **refuta**
-    /// — verbos que una pregunta no tiene, y por eso no es una pregunta con
-    /// otra redacción.
+    /// A proposed, falsifiable answer. It gets **validated** or **refuted** —
+    /// verbs a question does not have, which is why it is not a question
+    /// reworded.
     Hypothesis,
-    /// Lo que se probó, citando la capa 1. La única clase que la toca.
+    /// What was tried, citing layer 1. The only kind that touches it.
     Attempt,
-    /// Lo que dice la evidencia. De aquí salen las aristas de verbo, y es lo
-    /// único exportable a un lago de conocimiento.
+    /// What the evidence says. The verb edges come from here, and it is the
+    /// only kind exportable to a knowledge lake.
     Finding,
-    /// Qué se hace al respecto. Separada del hallazgo porque dos personas
-    /// pueden coincidir en uno y discrepar en la otra.
+    /// What is done about it. Apart from the finding because two people can
+    /// agree on one and disagree on the other.
     Decision,
 }
 
@@ -89,18 +85,18 @@ impl fmt::Display for Kind {
     }
 }
 
-/// De qué habla algo: unos movimientos y lo que cuelga de ellos.
+/// What something is about: some moves and whatever hangs under them.
 ///
-/// **Raíces y no un conjunto libre**, que es lo que lo hace pagable. «Toda la
-/// rama del encoder» es una raíz; «este paso» es una raíz; la investigación
-/// entera es ninguna. Un conjunto arbitrario sería más fiel y convertiría
-/// «¿se solapan?» en algo que hay que materializar en vez de recorrer.
+/// **Roots and not a free set**, which is what makes it affordable. *The whole
+/// encoder branch* is a root, *this step* is a root, the whole investigation is
+/// none. An arbitrary set would be truer and would turn *do they overlap?* into
+/// something to materialise rather than walk.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Scope(pub BTreeSet<MoveId>);
 
 impl Scope {
-    /// De todo. Lo que hace general a una pregunta general.
+    /// About everything. What makes a general question general.
     pub fn everything() -> Self {
         Self(BTreeSet::new())
     }
@@ -113,7 +109,7 @@ impl Scope {
         self.0.is_empty()
     }
 
-    /// Los movimientos que abarca: sus raíces y todo lo que cuelga.
+    /// The moves it covers: its roots and everything hanging under them.
     pub fn covers(&self, under: &Undernath) -> HashSet<MoveId> {
         let mut reached = HashSet::new();
         let mut asking: Vec<MoveId> = self.0.iter().copied().collect();
@@ -126,10 +122,10 @@ impl Scope {
         reached
     }
 
-    /// Si dos alcances se tocan. Lo que separa una contradicción de dos hechos
-    /// sobre dos situaciones distintas.
+    /// Whether two scopes touch. What separates a contradiction from two facts
+    /// about two different situations.
     pub fn touches(&self, other: &Self, under: &Undernath) -> bool {
-        // Lo que abarca todo toca todo, incluido otro que abarque todo.
+        // What covers everything touches everything, including another such.
         if self.is_everything() || other.is_everything() {
             return true;
         }
@@ -138,19 +134,19 @@ impl Scope {
     }
 }
 
-/// Qué dice un hallazgo, y hacia dónde.
+/// What a finding says, and towards what.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Says {
-    /// Hacia una pregunta.
+    /// Towards a question.
     Answers,
-    /// Hacia una hipótesis.
+    /// Towards a hypothesis.
     Validates,
-    /// Hacia una hipótesis.
+    /// Towards a hypothesis.
     Refutes,
-    /// De un intento hacia los intentos que compone. No es `under`: dice que
-    /// este intento **es** la composición de aquellos, que es lo que permite
-    /// leer «cada una funcionaba sola, juntas se anulan» como lo que es.
+    /// From an attempt towards the attempts it composes. Not `under`: it says
+    /// this attempt **is** the composition of those, which is what lets *each
+    /// worked alone, together they cancel* read as what it is.
     Combines,
 }
 
@@ -174,8 +170,8 @@ impl Says {
         }
     }
 
-    /// Quién puede decirlo y a quién, porque un `valida` apuntando a un intento
-    /// no significa nada y aceptarlo es guardar una frase que nadie puede leer.
+    /// Who may say it and to whom: a `validates` pointing at an attempt means
+    /// nothing, and accepting it stores a sentence nobody can read.
     fn between(&self) -> (&'static [Kind], &'static [Kind]) {
         match self {
             Self::Answers => (&[Kind::Finding], &[Kind::Question]),
@@ -191,40 +187,40 @@ impl fmt::Display for Says {
     }
 }
 
-/// Una cosa dicha de un movimiento hacia otro.
+/// One thing said from a move towards another.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Said {
     pub from: MoveId,
     pub to: MoveId,
     pub says: Says,
-    /// Dónde vale. Casi nunca es todo, y ahí está la gracia.
+    /// Where it holds. Almost never everywhere, and that is the point.
     #[serde(default)]
     pub scope: Scope,
-    /// Si cierra la cuestión o sólo la empuja. «¿Si aumento la capacidad
-    /// mejora?» no se responde de una vez: tres intentos responden en parte.
+    /// Whether it settles the question or only pushes it. *Does more capacity
+    /// help?* is not settled at once: three attempts each answer part.
     #[serde(default)]
     pub in_part: bool,
 }
 
-/// Qué se decidió hacer con la línea de la que habla una decisión.
+/// What was decided about the line a decision is about.
 ///
-/// Esto era un veredicto pegado a un commit —`promising`, `dead-end`,
-/// `superseded`— y no era una propiedad del código: era lo que alguien decidió
-/// sobre por dónde seguir. Aquí sí tiene lo que le faltaba allí: un **alcance**
-/// que dice de qué línea habla, un **motivo** en la prosa, y un sitio en el DAG
-/// bajo la cuestión que estaba respondiendo. `invalid` no está y no lo estará:
-/// eso sí es del código, y se queda en el diario.
+/// This used to be a verdict stuck on a commit — `promising`, `dead-end`,
+/// `superseded` — and it was never a property of the code. Here it has what it
+/// lacked there: a **scope** saying which line it is about, a **reason** in the
+/// prose, and a place in the DAG under the question it was answering. `invalid`
+/// is not here and will not be: that one really is the code's, and it stays in
+/// the journal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Course {
-    /// Seguir por aquí. La lectura por defecto de una línea que nadie juzgó,
-    /// y por eso decirlo sólo hace falta para desdecir un abandono.
+    /// Carry on this way. The default reading of a line nobody judged, so
+    /// saying it is only needed to take an abandonment back.
     Pursue,
-    /// Explorada y no vale la pena seguir. Se guarda, nunca se borra: una línea
-    /// que no funcionó es lo más reutilizable que produce una investigación, y
-    /// lo único que evita volver a descubrirla.
+    /// Explored and not worth carrying on. Kept, never deleted: a line that
+    /// did not work is the most reusable thing an investigation produces, and
+    /// the only thing that stops it being discovered again.
     Abandon,
-    /// Alguien lo hizo mejor en otro sitio. No está mal, no es el camino.
+    /// Somebody did it better elsewhere. Not wrong, not the way.
     Superseded,
 }
 
@@ -253,75 +249,74 @@ impl fmt::Display for Course {
     }
 }
 
-/// Un movimiento, sin sus aristas.
+/// A move, without its edges.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Move {
     pub id: MoveId,
     pub kind: Kind,
-    /// De qué habla. Sólo lo llevan preguntas e hipótesis; en las demás es de
-    /// todo y no se lee.
+    /// What it is about. Only questions and hypotheses carry one; in the rest
+    /// it is everything and is not read.
     #[serde(default)]
     pub scope: Scope,
     pub prose: String,
-    /// Lo que cita de la capa 1: commits, ensayos, artefactos.
+    /// What it cites of layer 1: commits, trials, artifacts.
     ///
-    /// Lo llevan un intento —el commit que corrió, y los ensayos que corrió con
-    /// él— y un hallazgo —el ensayo donde se vio—. Una pregunta, una hipótesis
-    /// y una decisión no: hablan de movimientos, no de piezas de la capa 1, y
-    /// dejarlas citar sería dejar que una pregunta apunte a un commit sin que
-    /// nadie sepa qué significa eso.
+    /// Carried by an attempt — the commit that ran, and the trials it ran — and
+    /// by a finding — the trial it was seen in. A question, a hypothesis and a
+    /// decision are about moves and not about layer-1 pieces, and letting them
+    /// cite would let a question point at a commit with nobody knowing what
+    /// that means.
     #[serde(default)]
     pub cites: Vec<Cited>,
-    /// Qué se decidió. Sólo lo lleva una [`Kind::Decision`]; en las demás es
-    /// `None` y no se lee.
+    /// What was decided. Only a [`Kind::Decision`] carries one; in the rest it
+    /// is `None` and is not read.
     #[serde(default)]
     pub course: Option<Course>,
     pub who: String,
     pub when: u64,
 }
 
-/// Una pieza de evidencia de la capa 1.
+/// One piece of evidence from layer 1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cited {
-    /// `commit`, `trial`, `artifact`. Abierto a propósito: el vocabulario es de
-    /// quien cita, y esta capa lo guarda sin aprendérselo.
+    /// `commit`, `trial`, `artifact`. Open on purpose: the vocabulary is the
+    /// citer's, and this layer keeps it without learning it.
     pub what: String,
     pub id: String,
 }
 
-/// Cómo está una cuestión, contando lo que le han dicho.
+/// How a question stands, counting what has been said to it.
 ///
-/// **Derivado, nunca guardado.** Un campo «estado» que alguien sobrescribe
-/// pierde el hecho anterior, y aquí el hecho anterior es lo que hace que una
-/// hipótesis vuelva sola a estar abierta cuando se invalida lo que la refutaba.
+/// **Derived, never stored.** A *state* field somebody overwrites loses the
+/// previous fact, and the previous fact is what makes a hypothesis go back to
+/// open on its own when what refuted it is invalidated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Standing {
-    /// Nadie ha dicho nada todavía.
+    /// Nobody has said anything yet.
     Open,
-    /// Respondida, y del todo.
+    /// Answered, and fully.
     Answered,
-    /// Empujada: todo lo que le llegó dijo «en parte».
+    /// Pushed along: everything that reached it said *in part*.
     Partly,
     Validated,
     PartlyValidated,
     Refuted,
     PartlyRefuted,
-    /// Le llegan aristas de signo contrario **con alcances que se tocan**. El
-    /// estado interesante, y el que no se puede expresar con un campo.
+    /// Edges of opposite sign reach it **with scopes that touch**. The
+    /// interesting state, and the one a field cannot express.
     Disputed,
-    /// Validada en unas situaciones y refutada en otras, sin que se toquen.
+    /// Validated in some situations and refuted in others, without touching.
     ///
-    /// No es «en parte» y no es disputa: es que la respuesta **depende**. «A
-    /// sola mejora, A+B se anulan» no es media validación ni un conflicto, es el
-    /// desenlace más informativo que da una investigación — y llamarlo `Partly`
-    /// lo escondía debajo de la misma palabra que usa una pregunta a medio
-    /// responder.
+    /// Not *in part* and not a dispute: the answer **depends**. *A alone
+    /// improves, A+B cancel out* is the most informative outcome an
+    /// investigation gives, and calling it `Partly` hid it under the word for a
+    /// half-answered question.
     Depends,
 }
 
-/// Quién cuelga de quién. Un índice sobre las aristas `under`, construido para
-/// poder recorrer hacia arriba y hacia abajo sin volver a escanear.
+/// Who hangs under whom. An index over the `under` edges, built so it can be
+/// walked up and down without scanning again.
 #[derive(Debug, Default)]
 pub struct Undernath {
     over: BTreeMap<MoveId, BTreeSet<MoveId>>,
@@ -352,11 +347,11 @@ impl Undernath {
             .collect()
     }
 
-    /// Si `maybe` está por encima de `one`, mirando hacia arriba.
+    /// Whether `maybe` is above `one`, looking upwards.
     ///
-    /// Lo que hace falta para rechazar un ciclo antes de escribirlo: con
-    /// `under` multivaluado ya no basta con confiar en la forma, y un ciclo
-    /// cuelga cualquier recorrido posterior — incluido el que lo dibujaría.
+    /// What it takes to refuse a cycle before writing it: with `under`
+    /// multivalued the shape can no longer be trusted, and a cycle hangs every
+    /// later walk — including the one that would draw it.
     pub fn is_over(&self, maybe: MoveId, one: MoveId) -> bool {
         let mut seen = HashSet::new();
         let mut asking = vec![one];
@@ -373,7 +368,7 @@ impl Undernath {
     }
 }
 
-/// El razonamiento de una investigación, guardado en un store.
+/// The reasoning of one investigation, kept in a store.
 pub struct Moves<'a> {
     kept: &'a dyn Store,
     tree: String,
@@ -391,11 +386,11 @@ impl<'a> Moves<'a> {
         format!("exp/{}/move/{id}/{what}/{nth}", self.tree)
     }
 
-    /// Escribe un movimiento nuevo y devuelve su id.
+    /// Writes a new move and returns its id.
     ///
-    /// Reclama la ranura igual que un trial: sin coordinador, y quien la
-    /// encuentra ocupada pide la siguiente. Dos personas escribiendo a la vez
-    /// obtienen dos movimientos, no uno perdido.
+    /// Claims the slot exactly as a trial does: no coordinator, and whoever
+    /// finds it taken asks for the next. Two people writing at once get two
+    /// moves, not one lost.
     pub fn add(
         &self,
         kind: Kind,
@@ -442,18 +437,16 @@ impl<'a> Moves<'a> {
         Err(Trouble::Crowded)
     }
 
-    /// Vuelve a redactar un movimiento. Ranura nueva, gana la última: lo
-    /// anterior sigue ahí, como en el diario.
+    /// Rewords a move. A new slot, and the last wins: what came before is
+    /// still there, as in the journal.
     ///
-    /// Lo que llega como `None` se queda como estaba, que es lo que hace que
-    /// corregir la prosa no borre el alcance ni al revés. El alcance **tiene**
-    /// que poder corregirse: en una decisión es lo que dice de qué línea habla,
-    /// y equivocarse en él —alcanzar un hallazgo, que no es una línea, en vez
-    /// del intento del que salió— deja la decisión sin llegar a ningún commit,
-    /// sin que nada avise. Un alcance que no se puede corregir es una trampa.
-    ///
-    /// Un rumbo se cambia pero no se quita: una decisión que ya no decide nada
-    /// es `pursue`, y decirlo es más honesto que dejarla muda.
+    /// What arrives as `None` stays as it was, so correcting the prose does not
+    /// wipe the scope or the other way round. The scope **has** to be
+    /// correctable: in a decision it says which line is meant, and getting it
+    /// wrong — reaching a finding, which is not a line, instead of the attempt
+    /// it came from — leaves the decision reaching no commit at all with nothing
+    /// warning. A course changes but is never removed: a decision that decides
+    /// nothing any more is `pursue`.
     pub fn reword(
         &self,
         id: MoveId,
@@ -478,7 +471,7 @@ impl<'a> Moves<'a> {
         self.redrafted(id, body, who)
     }
 
-    /// Escribe una redacción de un movimiento en la ranura siguiente.
+    /// Writes one drafting of a move into the next slot.
     fn redrafted(&self, id: MoveId, mut body: Move, who: &str) -> Result<u32, Trouble> {
         body.who = who.to_string();
         let bytes = serde_json::to_vec(&body).map_err(|why| Trouble::Garbled(why.to_string()))?;
@@ -490,9 +483,8 @@ impl<'a> Moves<'a> {
                 ("kind".into(), body.kind.to_string()),
                 ("who".into(), who.to_string()),
             ];
-            // El mismo meta que escribe `add`, y no uno más pobre: un registro
-            // que dice menos que el anterior es un registro que miente sobre lo
-            // que hay debajo.
+            // The same meta `add` writes and not a poorer one: a record that
+            // says less than the one before lies about what is underneath.
             if let Some(course) = body.course {
                 meta.push(("course".into(), course.to_string()));
             }
@@ -507,13 +499,13 @@ impl<'a> Moves<'a> {
         Err(Trouble::Crowded)
     }
 
-    /// Añade una pieza de evidencia a un movimiento.
+    /// Adds one piece of evidence to a move.
     ///
-    /// Redacción nueva y gana la última, como todo aquí: la evidencia se junta
-    /// después de escribir el intento, porque los ensayos se corren después.
-    /// Citar dos veces lo mismo no la duplica —lo pedirían dos personas mirando
-    /// la misma pantalla, y una lista con el mismo ensayo dos veces no dice
-    /// nada más que una con él una vez.
+    /// A new drafting and the last wins, as with everything here: evidence
+    /// arrives after the attempt is written, because the trials run afterwards.
+    /// Citing the same thing twice does not duplicate it — two people looking
+    /// at one screen would ask for it, and a list with a trial twice says
+    /// nothing a list with it once does not.
     pub fn cite(&self, id: MoveId, cited: Cited, who: &str) -> Result<u32, Trouble> {
         let known = self.all()?;
         let body = known.get(&id).ok_or(Trouble::NoSuchMove { id })?;
@@ -528,10 +520,10 @@ impl<'a> Moves<'a> {
         self.redrafted(id, body, who)
     }
 
-    /// Cuelga un movimiento de otro.
+    /// Hangs a move under another.
     ///
-    /// Rechaza el ciclo aquí, que es el único sitio donde sale barato: leerlo
-    /// después significa descubrirlo colgando un recorrido.
+    /// The cycle is refused here, the only place it is cheap: reading it later
+    /// means discovering it by having a walk hang.
     pub fn hang(&self, child: MoveId, parent: MoveId) -> Result<(), Trouble> {
         if child == parent {
             return Err(Trouble::Circular { child, parent });
@@ -553,7 +545,7 @@ impl<'a> Moves<'a> {
         )
     }
 
-    /// Dice algo de un movimiento hacia otro.
+    /// Says something from a move towards another.
     pub fn say(&self, said: Said) -> Result<(), Trouble> {
         let known = self.all()?;
         let (from, to) = (
@@ -584,13 +576,13 @@ impl<'a> Moves<'a> {
         )
     }
 
-    /// Todos los movimientos, por id, con su última redacción.
+    /// Every move, by id, with its latest drafting.
     pub fn all(&self) -> Result<BTreeMap<MoveId, Move>, Trouble> {
         let under = format!("exp/{}/move/", self.tree);
         let mut latest: BTreeMap<MoveId, (u32, Digest, u64)> = BTreeMap::new();
         for bound in self.kept.bound().map_err(Trouble::Store)? {
-            // Un store guarda lo que le echen —una caché, otra investigación,
-            // un artefacto— así que esto es una pregunta y no una suposición.
+            // A store holds whatever anybody put in it — a cache, another
+            // investigation, an artifact — so this is a question.
             let Some(rest) = bound.name.strip_prefix(&under) else {
                 continue;
             };
@@ -621,13 +613,13 @@ impl<'a> Moves<'a> {
         Ok(said)
     }
 
-    /// El índice de quién cuelga de quién.
+    /// The index of who hangs under whom.
     pub fn under(&self) -> Result<Undernath, Trouble> {
         let mut said = Undernath::default();
         for (child, bound) in self.records("under")? {
-            // Del registro y no del nombre: el último segmento de un nombre es
-            // la **ranura**, y leerlo como si fuera el padre construye un índice
-            // que parece correcto y apunta a movimientos que no existen.
+            // From the record and not the name: a name's last segment is the
+            // **slot**, and reading it as the parent builds an index that looks
+            // right and points at moves that do not exist.
             if let Some(parent) = beside(&bound.meta, "parent").and_then(|one| one.parse().ok()) {
                 said.add(child, parent);
             }
@@ -635,17 +627,17 @@ impl<'a> Moves<'a> {
         Ok(said)
     }
 
-    /// Todo lo que alguien ha dicho de un movimiento hacia otro.
+    /// Everything anybody said from one move towards another.
     ///
-    /// Gana la última por cada terna `(de, a, verbo)`, que es la misma regla
-    /// que sigue una redacción en `all`. Sin ella no hay forma de corregir un
-    /// alcance: decirlo otra vez dejaría las dos aristas y el recuento las
-    /// contaría a las dos, así que ampliar un alcance parecería estar
-    /// diciéndolo dos veces. Volver a decirlo **es** el gesto de cambiar de
-    /// opinión sobre el alcance; retirar el verbo entero sigue sin gesto.
+    /// The last wins per `(from, to, verb)`, the same rule a drafting follows
+    /// in `all`. Without it a scope could not be corrected: saying it again
+    /// would leave both edges and the count would take both, so widening a
+    /// scope would look like saying it twice. Saying it again **is** the gesture
+    /// for changing your mind about a scope; withdrawing the verb entirely
+    /// still has no gesture.
     ///
-    /// La terna sale del meta y no del cuerpo: para quedarse con la última no
-    /// hace falta leer las anteriores.
+    /// The triple comes from the meta and not the body, so keeping the last one
+    /// needs no read of the earlier ones.
     pub fn says(&self) -> Result<Vec<Said>, Trouble> {
         let under = format!("exp/{}/move/", self.tree);
         let mut latest: BTreeMap<(MoveId, String, String), (u32, Digest)> = BTreeMap::new();
@@ -685,28 +677,28 @@ impl<'a> Moves<'a> {
         Ok(said)
     }
 
-    /// Qué se decidió sobre cada commit, derivado del razonamiento.
+    /// What was decided about each commit, derived from the reasoning.
     ///
-    /// El puente entre las dos capas, y va en este sentido: un commit no
-    /// guarda que esté abandonado. Se llega a él bajando —decisión, su alcance,
-    /// los intentos que ese alcance abarca, los commits que esos intentos
-    /// citan— y por eso un commit creado mañana bajo una línea abandonada sale
-    /// abandonado sin que nadie vuelva a escribir nada.
+    /// The bridge between the layers, and it runs this way: a commit does not
+    /// store that it is abandoned. It is reached by going down — decision, its
+    /// scope, the attempts that scope covers, the commits those attempts cite —
+    /// so a commit made tomorrow under an abandoned line comes out abandoned
+    /// with nobody writing anything again.
     ///
-    /// **Una decisión sin alcance habla de donde cuelga**, y aquí es donde se
-    /// aparta de una pregunta o una hipótesis, para las que no tener alcance
-    /// significa hablar de todo. En una decisión eso sería una trampa callada:
-    /// escribir «esta línea está muerta» mirando un intento marcaría el árbol
-    /// entero. Para abandonarlo todo hay que colgarla de la raíz o nombrarla.
+    /// **A decision with no scope is about where it hangs**, which is where it
+    /// parts company with a question or a hypothesis, for which no scope means
+    /// about everything. In a decision that would be a quiet trap: writing
+    /// *this line is dead* while looking at one attempt would mark the whole
+    /// tree. Abandoning everything means hanging it off the root or naming it.
     ///
-    /// Gana la última: cambiar de opinión es decidir otra vez, y el abandono de
-    /// ayer sigue escrito con su motivo.
+    /// The last wins: changing your mind is deciding again, and yesterday's
+    /// abandonment is still written with its reason.
     pub fn decided(&self) -> Result<BTreeMap<String, Course>, Trouble> {
         let known = self.all()?;
         let under = self.under()?;
         let mut said: BTreeMap<String, Course> = BTreeMap::new();
-        // Por antigüedad, que aquí es el orden de los ids: el último que hable
-        // de un commit es el que vale.
+        // Oldest first, which here is the order of the ids: whoever speaks
+        // last about a commit is the one that counts.
         for (id, body) in &known {
             let Some(course) = body.course else { continue };
             let scope = if body.scope.is_everything() {
@@ -714,8 +706,8 @@ impl<'a> Moves<'a> {
             } else {
                 body.scope.clone()
             };
-            // Colgada de nada y sin alcance: no habla de ninguna línea en
-            // concreto, así que no tiñe ninguna en vez de teñirlas todas.
+            // Hanging off nothing and with no scope: it is about no line in
+            // particular, so it colours none rather than colouring all.
             if scope.is_everything() {
                 continue;
             }
@@ -733,7 +725,7 @@ impl<'a> Moves<'a> {
         Ok(said)
     }
 
-    /// Cómo está cada pregunta y cada hipótesis, contando lo que le llegó.
+    /// How each question and hypothesis stands, counting what reached it.
     pub fn standing(&self) -> Result<BTreeMap<MoveId, Standing>, Trouble> {
         let known = self.all()?;
         let under = self.under()?;
@@ -748,15 +740,15 @@ impl<'a> Moves<'a> {
             .collect())
     }
 
-    /// La prosa que hay bajo una cita, o lo que sea que se guardó.
+    /// The prose behind a citation, or whatever was kept there.
     pub fn read(&self, digest: &Digest) -> Result<Option<Vec<u8>>, Trouble> {
         self.kept.get(digest).map_err(Trouble::Store)
     }
 
-    /// Los registros bajo `exp/<tree>/move/<id>/<what>/…`, con su id.
+    /// The records under `exp/<tree>/move/<id>/<what>/…`, with their id.
     ///
-    /// El registro entero y no sólo el nombre: lo que hace falta de una arista
-    /// —a quién apunta— está en su meta, que es lo que un escaneo trae gratis.
+    /// The whole record and not just the name: what is needed of an edge — who
+    /// it points at — is in its meta, which a scan brings back free.
     fn records(&self, what: &str) -> Result<Vec<(MoveId, Record)>, Trouble> {
         let under = format!("exp/{}/move/", self.tree);
         let mark = format!("/{what}/");
@@ -773,7 +765,7 @@ impl<'a> Moves<'a> {
             .collect())
     }
 
-    /// Cuántas ranuras hay ocupadas de un tipo bajo un movimiento.
+    /// How many slots of one kind are taken under a move.
     fn slots(&self, id: MoveId, what: &str) -> Result<u32, Trouble> {
         let mark = format!("/move/{id}/{what}/");
         Ok(self
@@ -785,7 +777,7 @@ impl<'a> Moves<'a> {
             .unwrap_or(0))
     }
 
-    /// Reclama una ranura para un hecho sin cuerpo propio: el nombre es el dato.
+    /// Claims a slot for a fact with no body of its own: the name is the data.
     fn bind(
         &self,
         id: MoveId,
@@ -822,11 +814,11 @@ impl<'a> Moves<'a> {
     }
 }
 
-/// Cómo queda una cuestión dado lo que le han dicho.
+/// How a question stands given what has been said to it.
 ///
-/// Los alcances hacen el trabajo: dos aristas de signo contrario sólo son una
-/// contradicción si hablan de situaciones que se tocan. «A sola funcionaba» y
-/// «A+B se anulan» son dos hechos, no un conflicto.
+/// The scopes do the work: two edges of opposite sign are a contradiction only
+/// if they are about situations that touch. *A alone worked* and *A+B cancel
+/// out* are two facts, not a conflict.
 fn stands(kind: Kind, said: &[&Said], under: &Undernath) -> Standing {
     if said.is_empty() {
         return Standing::Open;
@@ -850,8 +842,8 @@ fn stands(kind: Kind, said: &[&Said], under: &Undernath) -> Standing {
     if yes.is_empty() && no.is_empty() {
         return Standing::Open;
     }
-    // La disputa se mide por solape, no por presencia: si nadie habla de lo
-    // mismo, no hay nada que disputar.
+    // Dispute is measured by overlap and not by presence: if nobody is talking
+    // about the same thing, there is nothing to dispute.
     let disputed = yes
         .iter()
         .any(|a| no.iter().any(|b| a.scope.touches(&b.scope, under)));
@@ -863,12 +855,12 @@ fn stands(kind: Kind, said: &[&Said], under: &Undernath) -> Standing {
         (false, true) => Standing::PartlyValidated,
         (true, false) if no.iter().any(|one| !one.in_part) => Standing::Refuted,
         (true, false) => Standing::PartlyRefuted,
-        // Los dos signos sin tocarse: la respuesta depende de dónde se mire.
+        // Both signs without touching: the answer depends on where you look.
         _ => Standing::Depends,
     }
 }
 
-/// Un campo del registro, si está.
+/// One field of a record, if it is there.
 fn beside<'a>(meta: &'a Meta, what: &str) -> Option<&'a str> {
     meta.iter()
         .find(|(said, _)| said == what)
@@ -890,25 +882,25 @@ pub enum Trouble {
 impl fmt::Display for Trouble {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Store(why) => write!(f, "el razonamiento no se pudo alcanzar: {why}"),
-            Self::Garbled(why) => write!(f, "algo no se pudo escribir ni leer: {why}"),
-            Self::NoSuchMove { id } => write!(f, "no hay ningún movimiento {id}"),
+            Self::Store(why) => write!(f, "the reasoning could not be reached: {why}"),
+            Self::Garbled(why) => write!(f, "something could not be written or read: {why}"),
+            Self::NoSuchMove { id } => write!(f, "there is no move {id}"),
             Self::Circular { child, parent } => write!(
                 f,
-                "colgar {child} de {parent} haría un ciclo, y un recorrido sobre un ciclo no termina"
+                "hanging {child} under {parent} would make a cycle, and a walk over one does not end"
             ),
             Self::Nonsense { says, from, to } => {
-                write!(f, "un `{says}` de un {from} a un {to} no significa nada")
+                write!(f, "a `{says}` from a {from} to a {to} means nothing")
             }
             Self::NotADecision { kind } => {
-                write!(f, "un rumbo lo lleva una decisión, y esto es un {kind}")
+                write!(f, "a course is carried by a decision, and this is a {kind}")
             }
             Self::CannotCite { kind } => write!(
                 f,
-                "un {kind} habla de movimientos y no de commits ni de ensayos: citar es de \
-                 un intento o de un hallazgo"
+                "a {kind} is about moves and not about commits or trials: citing belongs \
+                 to an attempt or a finding"
             ),
-            Self::Crowded => write!(f, "demasiada gente escribiendo a la vez"),
+            Self::Crowded => write!(f, "too many people writing at once"),
         }
     }
 }

@@ -27,7 +27,7 @@ python = "$PYTHON"
 tree = "an-investigation"
 TOML
 
-# ── The graph. Four nodes, and every knob through a constructor. ──
+# The graph. Four nodes, and every knob through a constructor.
 cat > experiments/encoder.py <<'PY'
 from somatize import Graph, Node
 
@@ -65,52 +65,52 @@ def build():
         >> (Classify(1.0).named("strict") | Classify(0.2).named("loose"))
         >> Vote().named("vote")
     )
-    g.freeze("embed", "pesos-v1")
+    g.freeze("embed", "weights-v1")
     return g
 PY
-git add -A && git commit -qm "base: tokenize, embed, dos clasificadores, voto"
+git add -A && git commit -qm "base: tokenize, embed, two classifiers, a vote"
 
-# ── 1. A constructor argument. In the key, so the cache misses. ──
+# 1. A constructor argument. In the key, so the cache misses.
 sed -i 's/Classify(1.0).named("strict")/Classify(2.0).named("strict")/' experiments/encoder.py
-git commit -qam "el umbral estricto sube a 2.0"
+git commit -qam "the strict threshold goes up to 2.0"
 
-# ── 2. The body of a forward. NOT in the key: the cache will hit. ──
+# 2. The body of a forward. NOT in the key: the cache will hit.
 sed -i 's/return \[len(t) \* self.scale for t in x\]/return [(len(t) ** 2) * self.scale for t in x]/' experiments/encoder.py
-git commit -qam "el embedding pasa a ser cuadratico"
+git commit -qam "the embedding becomes quadratic"
 
-# ── 3. Only the weights. Another trial, not another variant. ──
-sed -i 's/g.freeze("embed", "pesos-v1")/g.freeze("embed", "pesos-v2")/' experiments/encoder.py
-git commit -qam "reentrenado el encoder, mismo codigo"
+# 3. Only the weights. Another trial, not another variant.
+sed -i 's/g.freeze("embed", "weights-v1")/g.freeze("embed", "weights-v2")/' experiments/encoder.py
+git commit -qam "encoder retrained, same code"
 
 if [ -n "$ONLY_BUILD" ]; then echo "$WHERE"; exit 0; fi
 
 SOMA_TREE="${SOMA_TREE_BIN:-somatize-tree}"
 say() { printf '\n\033[1m── %s\033[0m\n\n' "$1"; }
 
-say "El paso 1: un argumento del constructor"
+say "Step 1: a constructor argument"
 "$SOMA_TREE" diff HEAD~3 HEAD~2 || true
-echo "   La clave se mueve, así que la caché falla y recalcula. Correcto."
+echo "   The key moves, so the cache misses and recomputes. Correct."
 
-say "El paso 2: el cuerpo de un forward"
+say "Step 2: the body of a forward"
 "$SOMA_TREE" diff HEAD~2 HEAD~1 || true
-echo "   RANCIO. La clave NO se mueve, así que la caché acierta y te devuelve"
-echo "   lo que produjo el código viejo. Esto no lo dice nada más."
+echo "   STALE. The key does NOT move, so the cache hits and hands back what"
+echo "   the old code produced. Nothing else says this."
 
-say "El paso 3: sólo los pesos"
+say "Step 3: only the weights"
 "$SOMA_TREE" diff HEAD~1 HEAD || true
-echo "   Ninguna edición. Reentrenar es otro trial de la misma variante."
+echo "   No edit. Retraining is another trial of the same variant."
 
-say "La línea entera"
+say "The whole line"
 "$SOMA_TREE" log HEAD~3..HEAD || true
 
-say "Y ahora se juzga"
-"$SOMA_TREE" verdict invalid HEAD~1 -m "El dataloader duplicaba el último batch: nada medido aquí abajo vale."
-"$SOMA_TREE" note HEAD~2 -m "Recall 0.61 con umbral 2.0. Mirar si es el split."
+say "And now it is judged"
+"$SOMA_TREE" verdict invalid HEAD~1 -m "The dataloader duplicated the last batch: nothing measured below here holds."
+"$SOMA_TREE" note HEAD~2 -m "Recall 0.61 at threshold 2.0. Check whether it is the split."
 "$SOMA_TREE" log HEAD~3..HEAD || true
-echo "   El commit de arriba nadie lo ha juzgado: hereda la duda de git, y no"
-echo "   hubo que escribirla en ningún sitio."
+echo "   Nobody judged the commit above: it inherits the doubt through git, and"
+echo "   nobody had to write that down anywhere."
 
-say "Todo lo dicho sobre un commit"
+say "Everything said about one commit"
 "$SOMA_TREE" show HEAD~2
 
-printf '\nEl repositorio está en %s\n' "$WHERE"
+printf '\nThe repository is at %s\n' "$WHERE"

@@ -211,17 +211,18 @@ def test_a_global_named_like_an_attribute_does_not_get_in(write):
 
 
 def test_a_class_composed_in_init_changes_it(write):
-    # El agujero que tenía una huella leída a través del envoltorio.
+    # The hole a fingerprint read through the wrapper left behind.
     #
-    # `Node.__init_subclass__` sustituye el `__init__` de cada nodo por uno que
-    # recuerda con qué se construyó, así que **todos** los nodos llegaban aquí
-    # envueltos. Los nombres que se leían eran los del envoltorio —`_bound`,
-    # `BUILT_WITH`— y no los del cuerpo escrito, de modo que una clase compuesta
-    # ahí quedaba fuera: editarla no movía nada.
+    # `Node.__init_subclass__` replaces every node's `__init__` with one that
+    # remembers what it was built with, so **every** node arrived here wrapped.
+    # The names being read were the wrapper's — `_bound`, `BUILT_WITH` — and not
+    # the written body's, so a class composed there fell outside: editing it
+    # moved nothing.
     #
-    # Es justo el caso que este fichero existe para cazar. Un nodo que arma un
-    # enrutador en su `__init__` y delega en él calcula otra cosa cuando el
-    # enrutador cambia, y la caché acertaba y devolvía lo de antes.
+    # It is exactly the case this file exists to catch. A node that puts a
+    # router together in its `__init__` and delegates to it computes something
+    # else when the router changes, and the cache was hitting and handing back
+    # what it had before.
     composes = """
     from somatize import Node
 
@@ -243,17 +244,17 @@ def test_a_class_composed_in_init_changes_it(write):
 
 @pytest.mark.xfail(reason="a decorator's body is not reached from the wrapper", strict=True)
 def test_a_decorator_of_your_own_still_gets_in(write):
-    """El hueco que queda, escrito como test y no como nota al pie.
+    """The gap that is left, written as a test and not as a footnote.
 
-    Si el decorador es tuyo, cambiarlo cambia lo que la función hace, y la huella
-    debería moverse. No se mueve: `@twice` sale en el AST de la clase —así que
-    renombrarlo sí cuenta— pero el envoltorio que devuelve **cierra sobre** la
-    función envuelta en vez de nombrarla, y de uno a otro no hay ningún global
-    que seguir.
+    If the decorator is yours, changing it changes what the function does, and
+    the fingerprint should move. It does not: `@twice` shows up in the class's
+    AST — so renaming it does count — but the wrapper it returns **closes over**
+    the wrapped function instead of naming it, and from one to the other there
+    is no global to follow.
 
-    `strict=True` a propósito: el día que alguien lea los nombres de decorador
-    del AST de la clase, esto se pone en rojo por pasar, que es la única forma de
-    que un límite conocido no se quede escrito cuando deja de serlo.
+    `strict=True` on purpose: the day somebody reads decorator names off the
+    class's AST, this goes red by passing, which is the only way a known limit
+    does not stay written down once it has stopped being one.
     """
     decorated = """
     from somatize import Node

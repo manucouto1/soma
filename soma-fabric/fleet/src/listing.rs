@@ -246,22 +246,22 @@ impl Listed {
 const LADDER: [Rung; 4] = [
     Rung {
         rung: 1,
-        what: "en este mismo proceso",
+        what: "in this very process",
         answerable: false,
     },
     Rung {
         rung: 2,
-        what: "por un directorio que los dos ven",
+        what: "through a directory both of them see",
         answerable: false,
     },
     Rung {
         rung: 3,
-        what: "directo, sin el broker en medio",
+        what: "direct, with the broker out of it",
         answerable: true,
     },
     Rung {
         rung: 4,
-        what: "por relevo, a través del broker",
+        what: "relayed, through the broker",
         answerable: false,
     },
 ];
@@ -269,15 +269,15 @@ const LADDER: [Rung; 4] = [
 /// Which rung a path is on, said the way the form says it.
 fn rung_of(reach: &Reach) -> &'static str {
     match reach {
-        Reach::InProcess { .. } => "en este mismo proceso",
-        Reach::Mount { .. } => "por un directorio que los dos ven",
+        Reach::InProcess { .. } => "in this very process",
+        Reach::Mount { .. } => "through a directory both of them see",
         Reach::Direct {
             endpoint: Endpoint::Address(_),
-        } => "directo · una dirección",
+        } => "direct · an address",
         Reach::Direct {
             endpoint: Endpoint::Command(_),
-        } => "directo · un comando",
-        Reach::Relayed { .. } => "por relevo, a través del broker",
+        } => "direct · a command",
+        Reach::Relayed { .. } => "relayed, through the broker",
     }
 }
 

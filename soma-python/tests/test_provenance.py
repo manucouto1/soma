@@ -19,6 +19,8 @@ The last row is why none of the others may depend on a caller who remembered.
 """
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -40,8 +42,8 @@ def kept(tmp_path):
 
     def run(**how):
         g = Graph.somatize(Embed().named("embed").frozen().cached())
-        g.freeze("embed", "pesos-v1")
-        g.forward(["hola", "que", "tal"], store=str(tmp_path), **how)
+        g.freeze("embed", "weights-v1")
+        g.forward(["hello", "and", "goodbye"], store=str(tmp_path), **how)
         return Store(str(tmp_path))
 
     return run
@@ -104,9 +106,9 @@ def test_nobody_has_to_ask_for_any_of_it(kept):
 def test_what_the_caller_knows_is_written_too(kept):
     # Which commit, which investigation: words the engine does not know and
     # must not learn. They arrive as text and are passed through untouched.
-    said = said_of(kept(stamping={"run": "una-investigacion/3847d0c1"}))
+    said = said_of(kept(stamping={"run": "an-investigation/3847d0c1"}))
 
-    assert said["run"] == "una-investigacion/3847d0c1"
+    assert said["run"] == "an-investigation/3847d0c1"
 
 
 def test_a_caller_cannot_make_a_value_lie_about_its_node(kept):
@@ -115,7 +117,7 @@ def test_a_caller_cannot_make_a_value_lie_about_its_node(kept):
     # saying something. And a value that came back naming another node would be
     # the one mistake this whole mechanism exists to make impossible.
     with pytest.raises(ValueError, match="written by the engine"):
-        kept(stamping={"node": "otro"})
+        kept(stamping={"node": "other"})
 
 
 def test_a_stamp_that_is_not_text_is_refused_rather_than_stringified(kept):
@@ -149,7 +151,7 @@ def test_a_run_with_nowhere_to_keep_things_says_nothing_about_anything(tmp_path)
     # No store, nothing kept, nothing to attribute. Writing a reading of the
     # environment there would be filing a label for a value that does not exist.
     g = Graph.somatize(Embed().named("embed").frozen().cached())
-    g.freeze("embed", "pesos-v1")
+    g.freeze("embed", "weights-v1")
 
-    assert g.forward(["hola"]) == [2.0]
+    assert g.forward(["word"]) == [2.0]
     assert not list(tmp_path.iterdir())

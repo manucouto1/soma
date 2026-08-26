@@ -125,10 +125,9 @@ async fn graph(State(serving): State<Arc<Serving>>, At(commit): At<String>) -> R
         Ok(json!({
             "commit": commit,
             "shape": taken.snapshot.get("shape"),
-            // Las aristas van aparte de `shape` aunque `shape` lleve los padres
-            // de cada nodo: son lo que dice qué alimenta a qué, y el cuaderno de
-            // soma es tajante con eso — una figura sin ellas es mentira en
-            // cuanto el grafo deja de ser una cadena.
+            // The edges go apart from `shape` even though `shape` carries
+            // each node's parents: they are what says what feeds what, and a
+            // figure without them lies the moment a graph stops being a chain.
             "edges": taken.snapshot.get("edges"),
             "declared": taken.snapshot.get("declared"),
             "architecture": taken.architecture,
@@ -143,15 +142,13 @@ async fn graph(State(serving): State<Arc<Serving>>, At(commit): At<String>) -> R
 
 /// One file as that commit had it.
 ///
-/// Aparte de `graph` y no dentro, por lo mismo que `graph` está aparte de
-/// `walk`: se pide **al abrirlo** y no antes. Un nodo alcanza cuatro ficheros,
-/// un grafo cuarenta nodos y una caminata cuarenta commits, y meter el
-/// contenido en la respuesta del grafo sería mandar casi toda la respuesta para
-/// que no se lea ninguna.
+/// Apart from `graph` for the same reason `graph` is apart from `walk`: it is
+/// asked for **on opening** and not before. A node reaches four files, a graph
+/// forty nodes and a walk forty commits, so putting the content in the graph's
+/// answer would send nearly all of it for none of it to be read.
 ///
-/// `git show` y no una lectura del disco: lo que se enseña es el fichero **en
-/// ese commit**, y el que hay en el árbol de trabajo es el de otro. Ni siquiera
-/// hace falta un worktree, que es lo caro.
+/// `git show` and not a read off the disk: what is shown is the file **at that
+/// commit**, and it does not even need a worktree, which is the expensive part.
 async fn file(
     State(serving): State<Arc<Serving>>,
     At(commit): At<String>,
@@ -250,12 +247,12 @@ async fn add_move(State(serving): State<Arc<Serving>>, Json(asked): Json<Adding>
             serving.given.as_deref(),
         )?;
         let kind = Kind::read(&asked.kind)
-            .ok_or_else(|| format!("`{}` no es una clase de movimiento", asked.kind))?;
+            .ok_or_else(|| format!("`{}` is not a kind of move", asked.kind))?;
         let course =
             match asked.course.as_deref() {
                 None => None,
                 Some(said) => Some(Course::read(said).ok_or_else(|| {
-                    format!("`{said}` no es un rumbo: pursue, abandon, superseded")
+                    format!("`{said}` is not a course: pursue, abandon, superseded")
                 })?),
             };
         let who = asked
@@ -297,7 +294,7 @@ async fn reword(
             match asked.course.as_deref() {
                 None => None,
                 Some(said) => Some(Course::read(said).ok_or_else(|| {
-                    format!("`{said}` no es un rumbo: pursue, abandon, superseded")
+                    format!("`{said}` is not a course: pursue, abandon, superseded")
                 })?),
             };
         let nth = bench.moves().reword(
@@ -328,17 +325,16 @@ async fn hang(
     .await
 }
 
-/// Guarda un texto y devuelve por dónde encontrarlo.
+/// Keeps a text and says where to find it again.
 ///
-/// Lo que hace citable una **configuración**, que es la mitad de un experimento
-/// que git no tiene: `run_experiment.py --decorr-weight 0.1` corre el mismo
-/// commit que `--decorr-weight 0.5` y es otro experimento. La invocación
-/// resuelta no está en ningún árbol de git y sin ella una fila de resultados no
-/// se puede volver a producir.
+/// What makes a **configuration** citable, which is the half of an experiment
+/// git does not have: `run_experiment.py --decorr-weight 0.1` runs the same
+/// commit as `--decorr-weight 0.5` and is another experiment, and the resolved
+/// invocation is in no git tree.
 ///
-/// Genérico y no `POST /api/config`, por lo mismo que `Cited.what` está abierto:
-/// lo que alguien quiera atar a un intento —la config, las métricas que salieron,
-/// un informe— es vocabulario suyo, y esta capa lo guarda sin aprendérselo.
+/// Generic and not `POST /api/config`, for the same reason `Cited.what` is
+/// open: what somebody wants tied to an attempt is their vocabulary, and this
+/// layer keeps it without learning it.
 async fn keep(State(serving): State<Arc<Serving>>, body: String) -> Response {
     blocking(move || {
         let bench = Bench::set_up(
@@ -346,9 +342,9 @@ async fn keep(State(serving): State<Arc<Serving>>, body: String) -> Response {
             serving.store.as_deref(),
             serving.given.as_deref(),
         )?;
-        // Direccionado por contenido, así que guardar dos veces lo mismo da lo
-        // mismo: dos intentos con la misma configuración citan un solo blob y
-        // se ve que corrieron lo mismo sin comparar nada.
+        // Content-addressed, so keeping the same thing twice is the same: two
+        // attempts with one configuration cite a single blob, and that they
+        // ran the same thing shows without comparing anything.
         let digest = bench
             .remembering
             .put(body.as_bytes())
@@ -358,7 +354,7 @@ async fn keep(State(serving): State<Arc<Serving>>, body: String) -> Response {
     .await
 }
 
-/// Lo que hay bajo un digest. Una lectura, y por eso sólo cuando se pide.
+/// What is under a digest. A fetch, and so only when asked for.
 async fn read_kept(State(serving): State<Arc<Serving>>, At(digest): At<String>) -> Response {
     blocking(move || {
         let bench = Bench::set_up(
@@ -371,15 +367,14 @@ async fn read_kept(State(serving): State<Arc<Serving>>, At(digest): At<String>) 
             .remembering
             .get(&digest)
             .map_err(|why| why.to_string())?
-            .ok_or("este store no tiene eso")?;
+            .ok_or("this store does not have that")?;
         Ok(json!({"text": String::from_utf8_lossy(&bytes)}))
     })
     .await
 }
 
-/// Junta una pieza de evidencia a un movimiento: el ensayo que se corrió, el
-/// artefacto que salió. Después de escribirlo, porque los ensayos se corren
-/// después.
+/// Adds a piece of evidence to a move: the trial that ran, the artifact that
+/// came out. After it was written, because the trials run afterwards.
 async fn cite(
     State(serving): State<Arc<Serving>>,
     At(id): At<MoveId>,
@@ -406,7 +401,7 @@ async fn speak(State(serving): State<Arc<Serving>>, Json(asked): Json<Speaking>)
             serving.given.as_deref(),
         )?;
         let says = Says::read(&asked.says)
-            .ok_or_else(|| format!("`{}` no es algo que se pueda decir", asked.says))?;
+            .ok_or_else(|| format!("`{}` is not something that can be said", asked.says))?;
         bench.moves().say(Verb {
             from: asked.from,
             to: asked.to,
@@ -419,16 +414,16 @@ async fn speak(State(serving): State<Arc<Serving>>, Json(asked): Json<Speaking>)
     .await
 }
 
-/// Deja un intento por el commit recién creado, colgado donde ya se estaba
-/// mirando.
+/// Leaves an attempt for the commit just made, hung where somebody was already
+/// looking.
 ///
-/// Cuelga de lo mismo de lo que colgaba el intento que citaba el commit de
-/// partida: bifurcar es seguir explorando la misma pregunta. Si aquel commit no
-/// tenía intento, éste queda **suelto** en vez de inventarle una pregunta — un
-/// nodo colgado de algo que nadie preguntó es peor que uno que espera sitio.
+/// Under whatever the attempt citing the starting commit hung under: forking is
+/// carrying on exploring the same question. If that commit had no attempt this
+/// one is left **loose** rather than inventing a question for it — a node under
+/// something nobody asked is worse than one waiting for a place.
 ///
-/// Ninguna de sus penas interrumpe una bifurcación: la rama ya existe, y no
-/// poder anotarla no es razón para fingir que no se creó.
+/// None of its troubles interrupt a fork: the branch exists, and not being able
+/// to annotate it is no reason to pretend it was not created.
 fn placed(bench: &Bench, from: &str, made: &str, branch: &str) -> Option<MoveId> {
     let moves = bench.moves();
     let known = moves.all().ok()?;
@@ -465,23 +460,23 @@ fn placed(bench: &Bench, from: &str, made: &str, branch: &str) -> Option<MoveId>
 struct Adding {
     kind: String,
     prose: String,
-    /// Las raíces de lo que abarca. Vacío es todo, que es lo que hace general a
-    /// una pregunta general.
+    /// The roots of what it covers. Empty is everything, which is what makes a
+    /// general question general.
     #[serde(default)]
     scope: Vec<MoveId>,
     #[serde(default)]
     under: Vec<MoveId>,
     #[serde(default)]
     cites: Vec<Cited>,
-    /// Sólo una decisión lo lleva: `pursue`, `abandon`, `superseded`.
+    /// Only a decision carries one: `pursue`, `abandon`, `superseded`.
     #[serde(default)]
     course: Option<String>,
     #[serde(default)]
     who: Option<String>,
 }
 
-/// Lo que se corrige de un movimiento. Lo que no venga se queda como estaba,
-/// que es lo que hace que reescribir la prosa no borre el alcance.
+/// What is corrected of a move. What does not arrive stays as it was, which is
+/// what stops rewriting the prose from wiping the scope.
 #[derive(Deserialize)]
 struct Rewording {
     #[serde(default)]
@@ -534,7 +529,7 @@ async fn fork(State(serving): State<Arc<Serving>>, Json(asked): Json<Forking>) -
     blocking(move || {
         let from = revision::named(&serving.repo, &asked.from)?;
         let said = match asked.message.trim().is_empty() {
-            true => format!("variante desde {}", &from[..12.min(from.len())]),
+            true => format!("variant from {}", &from[..12.min(from.len())]),
             false => asked.message.trim().to_string(),
         };
         let made = revision::forked(
@@ -578,11 +573,10 @@ async fn fork(State(serving): State<Arc<Serving>>, Json(asked): Json<Forking>) -
             // Not knowing costs nothing here: the walk says it a second later.
             .unwrap_or_default();
 
-        // El esqueleto se genera, el contenido se escribe. Bifurcar **es** un
-        // intento, así que el movimiento lo pone la herramienta y lo que queda
-        // por escribir es lo único que una máquina no puede: qué se vio y qué se
-        // decide. Un cuaderno de laboratorio en el que hay que acordarse de
-        // abrir el nodo es un cuaderno que nadie mantiene.
+        // The skeleton is generated, the content is written. Forking **is** an
+        // attempt, so the tool puts the move down and what is left to write is
+        // the only part a machine cannot: what was seen and what is decided. A
+        // lab notebook you have to remember to open is one nobody keeps.
         let attempt = placed(&bench, &from, &made, &asked.branch);
 
         Ok(json!({
@@ -648,8 +642,8 @@ async fn said(State(serving): State<Arc<Serving>>, At(commit): At<String>) -> Re
     .await
 }
 
-/// Lo que se corrió con esta versión. **Un recorrido y ninguna lectura**: la
-/// curva de cada ensayo no viene aquí, porque crece y esto es una lista.
+/// What was run with this version. **One scan and no fetches**: each trial's
+/// curve is not here, because it grows and this is a list.
 async fn trials(State(serving): State<Arc<Serving>>, At(commit): At<String>) -> Response {
     blocking(move || {
         let bench = Bench::set_up(
@@ -669,8 +663,8 @@ async fn trials(State(serving): State<Arc<Serving>>, At(commit): At<String>) -> 
     .await
 }
 
-/// La curva de un ensayo, que es lo que cuesta una lectura y por eso está
-/// aparte de la lista.
+/// A trial's curve, which is what costs a fetch and is why it is apart from
+/// the list.
 async fn curve(
     State(serving): State<Arc<Serving>>,
     At((commit, trial)): At<(String, u32)>,
@@ -688,7 +682,7 @@ async fn curve(
         let which = seen
             .iter()
             .find(|one| one.trial == trial)
-            .ok_or_else(|| format!("no hay ensayo {trial} en {}", trials.study(&commit)))?;
+            .ok_or_else(|| format!("there is no trial {trial} in {}", trials.study(&commit)))?;
         Ok(json!({"trial": which, "curve": trials.curve(which)?}))
     })
     .await
@@ -707,10 +701,10 @@ async fn say(
             None => None,
             Some(said) => Some(Verdict::read(said).ok_or_else(|| match said.as_str() {
                 "promising" | "dead-end" | "superseded" => format!(
-                    "`{said}` ya no es un veredicto: era una decisión sobre por dónde \
-                     seguir, y se escribe en el razonamiento con su alcance y su motivo"
+                    "`{said}` is no longer a verdict: it was a decision about where to go \
+                     next, and it is written in the reasoning with its scope and its reason"
                 ),
-                _ => format!("`{said}` no es uno: invalid, sound"),
+                _ => format!("`{said}` is not one: invalid, sound"),
             })?),
         };
         if saying.prose.trim().is_empty() && verdict.is_none() {

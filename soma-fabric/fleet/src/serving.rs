@@ -153,7 +153,7 @@ async fn what_ran(State(serving): State<Arc<Serving>>, Query(asked): Query<Asked
                 .map_err(|why| why.to_string())?
                 .pop()
                 .map(|one| one.run)
-                .ok_or_else(|| "no hay ningún run escrito en este store".to_string())?,
+                .ok_or_else(|| "no run has been written in this store yet".to_string())?,
         };
         ran(store.as_ref(), &which, last).map_err(|why| why.to_string())
     })

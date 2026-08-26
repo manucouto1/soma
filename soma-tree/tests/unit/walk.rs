@@ -1,42 +1,42 @@
-//! Qué se pliega al dibujar, que es lo único de un recorrido que es una regla y
-//! no un recorrido.
+//! What folds when a line is drawn, which is the only part of a walk that is a
+//! rule rather than a walk.
 
 use somatize_tree::journal::Verdict;
 use somatize_tree::moves::Course;
 use somatize_tree::walk::folds;
 
 #[test]
-fn se_pliega_lo_que_alguien_decidio_no_seguir() {
+fn what_somebody_decided_to_drop_folds() {
     assert!(folds(Some(Course::Abandon), None, false));
     assert!(folds(Some(Course::Superseded), None, false));
 }
 
 #[test]
-fn no_se_pliega_lo_que_nadie_ha_decidido() {
-    // Por defecto se dibuja todo. Plegar es la respuesta a que un árbol de
-    // cuarenta variantes no se lee, no a que sobre nada.
+fn what_nobody_decided_does_not_fold() {
+    // Everything is drawn by default. Folding is the answer to a tree of forty
+    // variants not reading, not to anything being spare.
     assert!(!folds(None, None, false));
     assert!(!folds(Some(Course::Pursue), None, false));
 }
 
 #[test]
-fn no_se_pliega_lo_que_alguien_ha_marcado_mal() {
-    // El que más importa. Un `invalid` es lo que pone en duda la medida en la
-    // que se apoyó la decisión de abandonar la línea: esconderlo sería esconder
-    // justo la razón para volver a mirarla.
+fn what_somebody_judged_wrong_does_not_fold() {
+    // The one that matters most. An `invalid` is what casts doubt on the
+    // measurement the decision to abandon leaned on: hiding it would hide the
+    // very reason to look at it again.
     assert!(!folds(Some(Course::Abandon), Some(Verdict::Invalid), false));
 }
 
 #[test]
-fn ni_lo_que_hereda_esa_duda() {
-    // La misma razón un nivel más abajo, y la que hace que esto no se pueda
-    // decidir mirando sólo lo que se escribió de este commit.
+fn nor_what_inherits_that_doubt() {
+    // The same reason one level down, and what stops this being decidable from
+    // what was written about this commit alone.
     assert!(!folds(Some(Course::Abandon), None, true));
 }
 
 #[test]
-fn haber_mirado_y_no_encontrar_nada_no_la_despliega() {
-    // `sound` dice que se miró y no había nada malo, así que no hay ninguna
-    // razón nueva para volver: la decisión de abandonarla sigue en pie.
+fn having_looked_and_found_nothing_does_not_unfold_it() {
+    // `sound` says somebody looked and found nothing wrong, so there is no new
+    // reason to come back: the decision to abandon stands.
     assert!(folds(Some(Course::Abandon), Some(Verdict::Sound), false));
 }

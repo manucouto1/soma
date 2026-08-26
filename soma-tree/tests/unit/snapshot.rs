@@ -12,9 +12,9 @@ fn built_against(said: &[(&str, &str)]) -> Snapshot {
             .map(|(what, version)| (what.to_string(), version.to_string()))
             .collect(),
         snapshot: serde_json::json!({}),
-        // Lo que esta prueba mira es el entorno, así que el resto va vacío. No
-        // por comodidad: un `Default::default()` para todo el struct dejaría
-        // que un campo nuevo entrara en la prueba sin que nadie lo mirase.
+        // What this test looks at is the environment, so the rest goes empty.
+        // Not for convenience: a `Default::default()` for the whole struct
+        // would let a new field into the test with nobody looking at it.
         architecture: serde_json::Value::Null,
         inside: serde_json::Value::Null,
         reaches: serde_json::Value::Null,

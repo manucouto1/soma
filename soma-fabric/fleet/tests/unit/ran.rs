@@ -87,7 +87,7 @@ fn what_ran_with_no_host_on_it_ran_here() {
 
     let out = ran(&store, "3f8a", 40).expect("the run reads");
 
-    assert_eq!(out.did[0].host, "aquí", "and it is the first row");
+    assert_eq!(out.did[0].host, "here", "and it is the first row");
     assert_eq!(out.did[0].ran, 1);
     assert_eq!(out.did[0].slices, 0, "nothing crossed to this process");
 }

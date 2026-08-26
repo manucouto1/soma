@@ -47,61 +47,50 @@ pub struct Snapshot {
     /// removed minutes later.
     #[serde(default)]
     pub code: BTreeMap<String, Written>,
-    /// De qué está hecho cada nodo por dentro: `{nodo: [pieza, ...]}`.
+    /// What each node is made of inside: `{node: [piece, ...]}`.
     ///
-    /// Un nodo es una caja y lo que lleva dentro suele ser de lo que va el
-    /// experimento — `Pure` es un envoltorio y el enrutador que tiene dentro es
-    /// la pieza. Dibujar la caja y callarse lo de dentro es dibujar el
-    /// envoltorio.
+    /// A node is a box and what it holds is usually what the experiment is
+    /// about — `Pure` is a wrapper and the router inside it is the piece — so
+    /// drawing the box and saying nothing about the inside draws the wrapper.
     ///
-    /// Leído sin correr nada, así que es la composición **declarada**: lo que
-    /// `__init__` construyó. `somatize.torch.architecture` responde mejor
-    /// —ve hasta lo que no es un módulo— y para eso ejecuta el grafo, que es
-    /// justo lo que este lado no hace nunca.
-    ///
-    /// Opaco, como el resto: el vocabulario es de quien lo escribió.
+    /// Read without running anything, so it is the **declared** composition:
+    /// what `__init__` built. `somatize.torch.architecture` answers better —
+    /// it sees what is not a module — and executes the graph to do it, which
+    /// is what this side never does. Opaque, like the rest.
     #[serde(default)]
     pub inside: serde_json::Value,
-    /// De qué **ficheros** está hecho cada nodo, y dónde para la cuenta.
+    /// What **files** each node is made of, and where the count stops.
     ///
-    /// `code` enseña una clase, que es lo que quiere quien pincha un nodo: un
-    /// nodo **es** su clase. Pero una red se escribe muchas veces en cuatro
-    /// módulos que se juntan en un `__init__`, y de esos cuatro
-    /// `inspect.getsourcefile` sólo sabe uno. Los otros tres no estaban en
-    /// ninguna parte de la respuesta.
+    /// `code` shows one class, which is what somebody clicking a node wants.
+    /// But a network is often written across four modules joined in an
+    /// `__init__`, and `inspect.getsourcefile` knows only one of the four.
     ///
-    /// No es un segundo modelo de qué depende de qué: es el cierre transitivo
-    /// que la huella de soma ya recorría para hashearlo, dicho en voz
-    /// alta. Si cambia lo que entra en una huella, cambia esto con ella.
+    /// Not a second model of what depends on what: it is the transitive closure
+    /// soma's fingerprint already walked in order to hash it, said out loud, so
+    /// it moves when what goes into a fingerprint moves.
     ///
-    /// **Sin fuente dentro**, a propósito: cuarenta commits de ficheros
-    /// enteros son casi toda la respuesta y nada de ella leída. Lo que hay son
-    /// rutas, y el contenido se pide por la suya al abrir uno.
-    ///
-    /// Opaco como `inside` y por lo mismo: el vocabulario es de quien lo
-    /// escribió, y el contrato está en `python/soma_tree_probe.py`.
+    /// **No source inside**, on purpose: forty commits of whole files are
+    /// nearly all of the answer and none of it read. What is here are paths,
+    /// and the content is asked for by its own when somebody opens one.
     #[serde(default)]
     pub reaches: serde_json::Value,
-    /// Los cinco hechos ortogonales de un grafo aparte de qué calcula cada
-    /// nodo: quién lo implementa, dónde corre, en qué dispositivo, qué se
-    /// guarda, qué está congelado, y en qué orden correría.
+    /// The orthogonal facts of a graph beside what each node computes: who
+    /// implements it, where it runs, on which device, what is kept, what is
+    /// frozen, and in what order it would run.
     ///
-    /// Opaco igual que `snapshot`, y por lo mismo: el vocabulario es de
-    /// soma, y un lector de este lado que lo entendiera sería un segundo
-    /// modelo con retraso. Lo único que hace falta aquí es que llegue entero a
-    /// quien dibuja.
+    /// Opaque like `snapshot`: the vocabulary is soma's, and all that is needed
+    /// here is that it reaches whoever draws intact.
     #[serde(default)]
     pub architecture: serde_json::Value,
-    /// El código que **declara** el grafo: el cuerpo de `build`, con los `>>`
-    /// y los `|`.
+    /// The code that **declares** the graph: the body of `build`, with the
+    /// `>>` and the `|`.
     ///
-    /// Es lo único de un grafo que no se puede leer nodo a nodo. Cada clase
-    /// dice qué hace y ninguna dice cómo se conectan, así que sin esto la
-    /// topología sólo se ve dibujada y nunca escrita — y quien la va a editar
-    /// tiene que ir a buscarla al repositorio.
+    /// The one part of a graph that cannot be read node by node — each class
+    /// says what it does and none says how they connect — so without it the
+    /// topology is only ever seen drawn and never written.
     ///
-    /// `None` cuando no hay fuente que leer, que es la misma ausencia que
-    /// `UNVERSIONED` nombra un nivel más abajo.
+    /// `None` when there is no source to read, which is the absence
+    /// `UNVERSIONED` names a level below.
     #[serde(default)]
     pub declaring: Option<Written>,
     /// The nodes named by the content of their items, which nobody has before
@@ -115,34 +104,27 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// What each node's answer will be called, `{nodo: clave}`.
+    /// What each node's answer will be called, `{node: key}`.
     ///
-    /// # Leer dentro de lo opaco, dos campos y sólo dos
+    /// Reading inside the opaque `snapshot` is the one thing this side does not
+    /// do — what a name is made of is the model's business — and this is not
+    /// that: using a name **as a name**, to look it up in a store, is what the
+    /// model publishes it for. Decomposing a key to get something out of it
+    /// would be the other thing, and it would live in `foreseen`.
     ///
-    /// La regla de aquí es que `snapshot` no se abre: de qué está hecho un
-    /// nombre es cosa del modelo, y un lector de este lado que lo entendiera
-    /// sería un segundo modelo con retraso. Esto no lo hace. Usar un nombre
-    /// **como nombre** —buscarlo en un store, ver si está— no es entender de
-    /// qué está hecho, y es justamente lo que el modelo publica esto para.
-    ///
-    /// La línea es esa: si algún día hiciera falta *descomponer* una clave para
-    /// sacar algo de dentro, eso sí sería la otra cosa, y la respuesta estaría
-    /// en `foreseen` y no aquí.
-    ///
-    /// Faltan nodos y no es un olvido: un `.mapped()` se nombra por el
-    /// contenido de sus items, que nadie tiene antes de correr. Esa ausencia se
-    /// lee «no se puede saber» y nunca «no hay datos».
+    /// Nodes are missing and it is not an oversight: a `.mapped()` is named by
+    /// the content of its items, which nobody has before a run. That absence
+    /// reads *cannot tell* and never *no data*.
     pub fn names(&self) -> BTreeMap<String, String> {
         read_map(&self.snapshot, "names")
     }
 
-    /// Qué versión del código tenía cada nodo, `{nodo: huella}`.
+    /// What version of the code each node had, `{node: fingerprint}`.
     ///
-    /// El otro lado de la atribución, y el que aguanta lo que el primero no.
-    /// Una clave se calcula contra el entorno del intérprete que sondea, así
-    /// que sondear hoy un commit de hace tres meses da otras claves y no casan
-    /// con lo que se guardó entonces. La huella la escribió quien corrió, al
-    /// lado del valor, y sigue ahí.
+    /// The side of attribution that survives what the other does not: a key is
+    /// computed against the probing interpreter's environment, so probing a
+    /// three-month-old commit today gives keys matching nothing kept then,
+    /// while the fingerprint was written beside the value by whoever ran.
     pub fn fingerprints(&self) -> BTreeMap<String, String> {
         read_map(&self.snapshot, "fingerprints")
     }
@@ -170,12 +152,11 @@ impl Snapshot {
     }
 }
 
-/// Un `{texto: texto}` de dentro de la respuesta del modelo, o nada.
+/// A `{text: text}` from inside the model's answer, or nothing.
 ///
-/// Nada y no un fallo: un sondeo viejo, guardado antes de que el modelo
-/// publicara este campo, sigue siendo una respuesta buena a todo lo demás. Que
-/// se caiga por leer algo que no le pedimos entonces sería tirar el registro de
-/// una investigación por una función que se añadió después.
+/// Nothing and not a failure: an old probe, kept before the model published
+/// this field, is still a good answer to everything else. Falling over would
+/// throw away an investigation's record for a function added afterwards.
 fn read_map(said: &serde_json::Value, what: &str) -> BTreeMap<String, String> {
     said.get(what)
         .and_then(|found| found.as_object())

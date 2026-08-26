@@ -146,16 +146,16 @@ fn a_verdict_nobody_defined_is_refused_rather_than_guessed_at() {
 }
 
 #[test]
-fn una_palabra_retirada_deja_la_prosa_y_pierde_sólo_el_veredicto() {
-    // La migración entera. Un registro viejo que dice `verdict=dead-end` ya no
-    // se lee como veredicto, así que vuelve como nota —con lo escrito intacto,
-    // que era siempre la parte que valía— en vez de romper la lectura o, peor,
-    // colarse como si aún significara algo.
-    for retirada in ["promising", "dead-end", "superseded"] {
+fn a_withdrawn_word_leaves_the_prose_and_loses_only_the_verdict() {
+    // The whole of the migration. An old record saying `verdict=dead-end` no
+    // longer reads as a verdict, so it comes back as a note — with the writing
+    // intact, which was always the part worth keeping — rather than breaking
+    // the reading or, worse, slipping through as if it still meant something.
+    for withdrawn in ["promising", "dead-end", "superseded"] {
         assert_eq!(
-            Verdict::read(retirada),
+            Verdict::read(withdrawn),
             None,
-            "{retirada} se fue a la capa 2"
+            "{withdrawn} went to layer 2"
         );
     }
 }

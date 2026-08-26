@@ -1880,7 +1880,7 @@ fn a_stamp_is_written_beside_everything_the_run_keeps() {
         .keeping(&notebook)
         .stamping([
             ("env".to_string(), "9f2c1a".to_string()),
-            ("run".to_string(), "una-investigacion/3847d0c1".to_string()),
+            ("run".to_string(), "an-investigation/3847d0c1".to_string()),
         ])
         .run(&plan, Value::number(7.0))
         .unwrap();
@@ -1891,18 +1891,16 @@ fn a_stamp_is_written_beside_everything_the_run_keeps() {
         "{said:?}"
     );
     assert!(
-        said.contains(&("run".to_string(), "una-investigacion/3847d0c1".to_string())),
+        said.contains(&("run".to_string(), "an-investigation/3847d0c1".to_string())),
         "{said:?}",
     );
 }
 
 #[test]
 fn a_stamp_cannot_overwrite_what_the_engine_knows() {
-    // Somebody stamping `node` is not a reason for a blob to start lying about
-    // which node made it. **Dropped and not merely put last**: whether the
-    // first or the last of two pairs wins is the reader's convention, and the
-    // most obvious way to read a list of pairs — turning it into a map — takes
-    // the last. So the pair is never written and no key appears twice.
+    // Dropped and not merely put last: whether the first or the last of two
+    // pairs wins is the reader's convention, and turning a list of pairs into a
+    // map takes the last. So the pair is never written.
     let (g, c, memory, _journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1910,7 +1908,7 @@ fn a_stamp_cannot_overwrite_what_the_engine_knows() {
     Executor::new(&c)
         .remembering(&memory)
         .keeping(&notebook)
-        .stamping([("node".to_string(), "otro".to_string())])
+        .stamping([("node".to_string(), "other".to_string())])
         .run(&plan, Value::number(7.0))
         .unwrap();
 
