@@ -131,14 +131,18 @@ impl Bench {
         let repo = repo.canonicalize()?;
         let config = Config::read(&repo)?;
         let python = config.interpreter(&repo);
-        let probe = probe_beside_the_binary()?;
         // The recipe identifies the probe and what it builds. With nothing to
         // build there is no probing, and an empty recipe is never used: it is
         // the path by which reasoning is read with nothing runnable.
         let recipe = match config.build.as_deref() {
-            Some(build) => recipe(&probe, build, given)?,
+            Some(build) => recipe(build, given)?,
             None => Digest::of(b""),
         };
+        // Laid down whatever the config says: `prettified` and `compared` ask
+        // the probe without needing a `build`, and this costs one write, once
+        // ever, into a directory `Local::at` below already has to be able to
+        // create `blobs/` in.
+        let probe = probe_laid_down(&where_probes_are_remembered())?;
         let remembering = Local::at(match store {
             Some(store) => store.to_path_buf(),
             None => where_probes_are_remembered(),
@@ -297,6 +301,21 @@ pub fn probed<'a>(
 ///
 /// A cache and not a store of record: it holds only what can be worked out
 /// again from a commit, so deleting it costs time and nothing else.
+/// The probe itself, compiled in.
+///
+/// **Not found at run time, because there was nowhere honest to look.** It used
+/// to be sought beside the binary and then, failing that, at the
+/// `CARGO_MANIFEST_DIR` of whoever compiled it — so a `cargo install` left a
+/// binary depending on a registry checkout it does not own, and copying the
+/// file beside the executable was a step nobody performs.
+///
+/// And it does not go in the wheel either, which is the other tempting answer:
+/// the probe belongs to **this tool** while `somatize` belongs to the checkout
+/// being explored, so `python -m somatize.tree.probe` would run the explored
+/// project's probe against its own graph and quietly answer a different
+/// question.
+const PROBE: &str = include_str!("../python/soma_tree_probe.py");
+
 pub fn where_probes_are_remembered() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -309,26 +328,49 @@ pub fn where_probes_are_remembered() -> PathBuf {
 ///
 /// The probe's **own source** is in here, and that is the point: a snapshot is
 /// a pure function of a commit only for a fixed probe.
-fn recipe(probe: &Path, build: &str, given: Option<&Path>) -> Result<Digest, String> {
-    let source = std::fs::read(probe).map_err(|why| format!("{}: {why}", probe.display()))?;
+fn recipe(build: &str, given: Option<&Path>) -> Result<Digest, String> {
     let input = match given {
         Some(given) => std::fs::read(given).map_err(|why| format!("{}: {why}", given.display()))?,
         None => b"sentinel".to_vec(),
     };
     Ok(Digest::of(
-        &[&source[..], build.as_bytes(), &input[..]].concat(),
+        &[PROBE.as_bytes(), build.as_bytes(), &input[..]].concat(),
     ))
 }
 
-/// The probe, which ships beside the binary and not inside the repo being
-/// explored: it is this tool's, and a project should not have to vendor it.
-fn probe_beside_the_binary() -> Result<PathBuf, String> {
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|at| at.join("soma_tree_probe.py")))
-        .filter(|at| at.exists());
-    let developing = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py");
-    beside
-        .or_else(|| developing.exists().then_some(developing))
-        .ok_or_else(|| "soma_tree_probe.py is not beside the binary".to_string())
+/// The compiled-in probe, on disk under `cache`, because `python` is handed a
+/// path.
+///
+/// Named by its own digest under the cache this tool already owns, so it is
+/// written once and can never be stale: a probe that changed is a different
+/// name and the old file is simply not asked for. Three of the four ways the
+/// probe is called pass it as `argv[1]`, and the fourth is already using stdin
+/// for the source it formats, so there is no reading it from a pipe.
+///
+/// Keeping the name in the file keeps it in a traceback, where somebody
+/// debugging their own `build()` will read it — and a file under a cache is
+/// still there when they go and look, which a temporary directory is not.
+///
+/// The cache is a parameter and not read from the environment in here: it is
+/// **this tool's** and never the store `--store` points at, and saying which of
+/// the two it is at the call site is the whole difference.
+pub fn probe_laid_down(cache: &Path) -> Result<PathBuf, String> {
+    let digest = Digest::of(PROBE.as_bytes());
+    let hex = digest
+        .as_str()
+        .rsplit(':')
+        .next()
+        .unwrap_or(digest.as_str());
+    let at = cache.join("probe");
+    let laid = at.join(format!("soma_tree_probe-{hex}.py"));
+    if laid.exists() {
+        return Ok(laid);
+    }
+    std::fs::create_dir_all(&at).map_err(|why| format!("{}: {why}", at.display()))?;
+    // Written beside and moved into place: two walks starting at once must not
+    // hand `python` a file that is half there.
+    let landing = at.join(format!("soma_tree_probe-{hex}.{}.py", std::process::id()));
+    std::fs::write(&landing, PROBE).map_err(|why| format!("{}: {why}", landing.display()))?;
+    std::fs::rename(&landing, &laid).map_err(|why| format!("{}: {why}", laid.display()))?;
+    Ok(laid)
 }
