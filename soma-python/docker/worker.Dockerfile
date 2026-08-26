@@ -52,6 +52,12 @@ WORKDIR /src/soma
 # The manifests first, so that changing a line of Rust does not re-download the
 # whole index.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+# The readme is metadata and not documentation here: `[workspace.package]` says
+# `readme = "README.md"` and `pyproject.toml` says `../README.md`, so it is the
+# wheel's long description. Without it maturin dies with a bare
+# `No such file or directory` naming nothing, and the image stops building the
+# day the package learns how to publish itself.
+COPY README.md ./
 COPY soma-core/Cargo.toml soma-core/
 COPY soma-data/Cargo.toml soma-data/
 COPY soma-health/Cargo.toml soma-health/
