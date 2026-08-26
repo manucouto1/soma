@@ -1377,3 +1377,52 @@ fn going_back_restores_both_halves_of_what_ran() {
     // as an attempt that carried no configuration.
     assert!(said.contains(ran), "{said}");
 }
+
+#[test]
+fn an_invocation_is_kept_from_the_terminal_and_cited_by_what_it_names() {
+    // Without this the other half of a version could only be put in a store
+    // from Python, and `tried --ran` asked for a digest with nowhere to get one.
+    given!(at);
+
+    let file = at.join("invocation.txt");
+    std::fs::write(&file, "run.py --decorr-weight 0.1\n").expect("a file");
+
+    let digest = somatize_tree(at, &["keep", &file.display().to_string()])
+        .trim()
+        .to_string();
+    somatize_tree(
+        at,
+        &[
+            "tried",
+            "decorr-0.1",
+            "-m",
+            "at 0.1",
+            "--cites",
+            "HEAD~1",
+            "--ran",
+            &digest,
+        ],
+    );
+
+    let said = somatize_tree(at, &["go", "decorr-0.1"]);
+    assert!(said.contains("--decorr-weight 0.1"), "{said}");
+}
+
+#[test]
+fn show_says_what_a_commit_was_for_and_not_only_what_was_written_about_it() {
+    // The two disagreed: `here` listed the attempts citing a commit while
+    // `show` said nobody had said anything about it.
+    given!(at);
+    somatize_tree(
+        at,
+        &["tried", "quadratic", "-m", "this way", "--cites", "HEAD~1"],
+    );
+
+    let said = somatize_tree(at, &["show", "HEAD~1"]);
+
+    assert!(said.contains("quadratic"), "{said}");
+    assert!(
+        !said.contains("Nobody has said anything"),
+        "one attempt cites it: {said}",
+    );
+}

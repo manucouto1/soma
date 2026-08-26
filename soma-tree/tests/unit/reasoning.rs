@@ -4,6 +4,7 @@
 //! what a store holds, and a double would be defending the double.
 
 use somatize_store::Local;
+use somatize_tree::journal::{Journal, Verdict};
 use somatize_tree::moves::{Cited, Course, Kind, Moves, Said, Says, Scope, Standing, Writing};
 use somatize_tree::reasoning::{Reasoning, outlined, reasoned};
 
@@ -349,4 +350,167 @@ fn what_an_attempt_cites_comes_back_whole_so_the_way_back_needs_no_index() {
     let cites = &seen(&read, "decorr-0.1").cites;
     assert_eq!(cites[0].id, "3847d0c1");
     assert_eq!(cites[1].what, "config");
+}
+
+#[test]
+fn a_hypothesis_goes_back_to_open_when_what_refuted_it_is_judged_wrong() {
+    // The whole reason a standing is not a field: overwriting one loses the
+    // previous fact, and the previous fact is what it goes back to.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    let h = named(
+        &moves,
+        Kind::Hypothesis,
+        "wider-helps",
+        "width is the bottleneck",
+    );
+    let f = moves
+        .add({
+            let mut writing =
+                Writing::new(Kind::Finding, "it-did-not", "recall did not move", "me");
+            writing.cites = vec![Cited {
+                what: "commit".into(),
+                id: "3847d0c1".into(),
+            }];
+            writing
+        })
+        .expect("a finding");
+    moves
+        .say(Said {
+            from: f,
+            to: h,
+            says: Says::Refutes,
+            scope: Scope::everything(),
+            in_part: false,
+        })
+        .expect("said");
+    assert_eq!(moves.standing().unwrap()[&h], Standing::Refuted);
+
+    Journal::of("t", &kept)
+        .say("3847d0c1", Some(Verdict::Invalid), "me", "the metric lied")
+        .expect("a verdict");
+
+    assert_eq!(moves.standing().unwrap()[&h], Standing::Open);
+    // And nothing was deleted: the edge is still written, and says why it no
+    // longer counts.
+    let read = reasoned("t", &kept).expect("read back");
+    assert_eq!(read.says.len(), 1);
+    assert!(read.says[0].withdrawn);
+}
+
+#[test]
+fn and_a_later_sound_puts_it_back_without_anybody_saying_it_again() {
+    // The journal keeps the last word, so a mistaken `invalid` does not poison
+    // a refutation for good — and withdrawing a verb still has no gesture.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    let h = named(&moves, Kind::Hypothesis, "wider-helps", "width is it");
+    let f = moves
+        .add({
+            let mut writing =
+                Writing::new(Kind::Finding, "it-did-not", "recall did not move", "me");
+            writing.cites = vec![Cited {
+                what: "commit".into(),
+                id: "3847d0c1".into(),
+            }];
+            writing
+        })
+        .expect("a finding");
+    moves
+        .say(Said {
+            from: f,
+            to: h,
+            says: Says::Refutes,
+            scope: Scope::everything(),
+            in_part: false,
+        })
+        .expect("said");
+    let journal = Journal::of("t", &kept);
+    journal
+        .say("3847d0c1", Some(Verdict::Invalid), "me", "the metric lied")
+        .expect("a verdict");
+
+    journal
+        .say(
+            "3847d0c1",
+            Some(Verdict::Sound),
+            "me",
+            "it did not, I misread",
+        )
+        .expect("a second verdict");
+
+    assert_eq!(moves.standing().unwrap()[&h], Standing::Refuted);
+    assert!(!reasoned("t", &kept).expect("read back").says[0].withdrawn);
+}
+
+#[test]
+fn a_finding_is_withdrawn_by_the_attempt_it_hangs_under_and_not_only_by_its_own_citation() {
+    // The shape a real investigation has, and the one the first draft missed: a
+    // finding cites the trial it was seen in, and it is the **attempt** that
+    // names the commit.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    let h = named(&moves, Kind::Hypothesis, "wider-helps", "width is it");
+    let a = moves
+        .add({
+            let mut writing = Writing::new(Kind::Attempt, "wider-2x", "twice the width", "me");
+            writing.cites = vec![Cited {
+                what: "commit".into(),
+                id: "3847d0c1".into(),
+            }];
+            writing
+        })
+        .expect("an attempt");
+    let f = named(&moves, Kind::Finding, "it-did-not", "recall did not move");
+    moves.hang(a, h).expect("hung");
+    moves.hang(f, a).expect("hung");
+    moves
+        .say(Said {
+            from: f,
+            to: h,
+            says: Says::Refutes,
+            scope: Scope::everything(),
+            in_part: false,
+        })
+        .expect("said");
+    assert_eq!(moves.standing().unwrap()[&h], Standing::Refuted);
+
+    Journal::of("t", &kept)
+        .say("3847d0c1", Some(Verdict::Invalid), "me", "the metric lied")
+        .expect("a verdict");
+
+    assert_eq!(moves.standing().unwrap()[&h], Standing::Open);
+}
+
+#[test]
+fn a_finding_on_a_commit_nobody_judged_goes_on_counting() {
+    // A commit under an invalid one inherits doubt and not a judgement, and
+    // nothing here asks git for an ancestry to find out.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    let h = named(&moves, Kind::Hypothesis, "wider-helps", "width is it");
+    let f = moves
+        .add({
+            let mut writing = Writing::new(Kind::Finding, "it-did", "recall moved", "me");
+            writing.cites = vec![Cited {
+                what: "commit".into(),
+                id: "beneath".into(),
+            }];
+            writing
+        })
+        .expect("a finding");
+    moves
+        .say(Said {
+            from: f,
+            to: h,
+            says: Says::Validates,
+            scope: Scope::everything(),
+            in_part: false,
+        })
+        .expect("said");
+    Journal::of("t", &kept)
+        .say("above", Some(Verdict::Invalid), "me", "the metric lied")
+        .expect("a verdict");
+
+    assert_eq!(moves.standing().unwrap()[&h], Standing::Validated);
 }

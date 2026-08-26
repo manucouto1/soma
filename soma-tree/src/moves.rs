@@ -891,17 +891,76 @@ impl<'a> Moves<'a> {
     }
 
     /// How each question and hypothesis stands, counting what reached it.
+    ///
+    /// What was [`withdrawn`](Self::withdrawn) does not count, which is what
+    /// makes a hypothesis go back to `open` on its own.
     pub fn standing(&self) -> Result<BTreeMap<MoveId, Standing>, Trouble> {
         let known = self.all()?;
         let under = self.under()?;
         let says = self.says()?;
+        let withdrawn = self.withdrawn()?;
         Ok(known
             .iter()
             .filter(|(_, body)| matches!(body.kind, Kind::Question | Kind::Hypothesis))
             .map(|(id, body)| {
-                let mine: Vec<&Said> = says.iter().filter(|one| one.to == *id).collect();
+                let mine: Vec<&Said> = says
+                    .iter()
+                    .filter(|one| one.to == *id && !withdrawn.contains(&one.from))
+                    .collect();
                 (*id, stands(body.kind, &mine, &under))
             })
+            .collect())
+    }
+
+    /// The moves whose evidence was judged wrong, so what they said no longer
+    /// counts towards a standing.
+    ///
+    /// **This is where the two layers meet, and it only runs this way.** A
+    /// verdict is about the code — `invalid` is deliberately not a `Course` —
+    /// and a finding read off a measurement that lied has nothing behind it.
+    /// Nothing is deleted: the edge is still written and still drawn, and a
+    /// later `sound` puts it back, because the journal keeps the last word and
+    /// a standing is worked out rather than overwritten.
+    ///
+    /// The **direct** verdict only. A commit under an invalid one inherits
+    /// doubt and not a judgement — `walk` already draws that line — and
+    /// inheriting it needs an ancestry nothing here asks git for.
+    ///
+    /// It reaches **up the DAG** and not only at the move itself: a finding
+    /// usually cites the trial it was seen in and hangs under the attempt, and
+    /// it is the attempt that names the commit. Walking up can only ever pick
+    /// up an attempt or a finding, since those are the only kinds that cite.
+    pub fn withdrawn(&self) -> Result<BTreeSet<MoveId>, Trouble> {
+        let judged = crate::journal::Journal::of(self.tree.clone(), self.kept)
+            .verdicts()
+            .map_err(|why| Trouble::Garbled(why.to_string()))?;
+        let known = self.all()?;
+        let under = self.under()?;
+        let void = |id: &MoveId| {
+            known.get(id).is_some_and(|body| {
+                body.cites.iter().any(|cited| {
+                    cited.what == "commit"
+                        && judged.get(&cited.id) == Some(&crate::journal::Verdict::Invalid)
+                })
+            })
+        };
+        Ok(known
+            .keys()
+            .filter(|id| {
+                let mut seen = HashSet::new();
+                let mut asking = vec![**id];
+                while let Some(one) = asking.pop() {
+                    if !seen.insert(one) {
+                        continue;
+                    }
+                    if void(&one) {
+                        return true;
+                    }
+                    asking.extend(under.parents_of(one));
+                }
+                false
+            })
+            .copied()
             .collect())
     }
 

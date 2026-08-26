@@ -8,7 +8,7 @@
 //! It holds no graph itself — see `somatize_tree::snapshot`.
 
 use clap::{Parser, Subcommand};
-use somatize_store::Digest;
+use somatize_store::{Digest, Store};
 use somatize_tree::bench::{Bench, probed, walking};
 use somatize_tree::data;
 use somatize_tree::findings::{DOWNSTREAM, Findings, RESETTLED, SALTED, STALE, SUSPECT};
@@ -20,7 +20,7 @@ use somatize_tree::snapshot::Snapshot;
 use somatize_tree::trials::{Goal, Trials};
 use somatize_tree::walk::Walk;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -245,6 +245,18 @@ enum Doing {
         #[command(flatten)]
         at: Where,
     },
+    /// Keeps the resolved invocation an attempt ran, and says what to cite it by.
+    ///
+    /// The other half of a version: `--decorr-weight 0.1` and `0.5` are the
+    /// same commit and two experiments, and git has neither. Kept by its
+    /// content, so writing down the same invocation twice is one thing kept
+    /// once and two attempts citing it.
+    Keep {
+        /// The file to keep. Without it, read from stdin.
+        file: Option<PathBuf>,
+        #[command(flatten)]
+        at: Where,
+    },
     /// The reasoning as it stands: every move, indented by what it hangs under.
     ///
     /// The writing verbs had no reader, so what somebody had just written down
@@ -398,6 +410,7 @@ fn main() -> ExitCode {
             at,
         } => speaking(from, says, to, *partly, about, at),
         Doing::Go { moved, branch, at } => going(moved, branch.as_deref(), at),
+        Doing::Keep { file, at } => keeping(file.as_deref(), at),
         Doing::Moves {
             under,
             all_lines,
@@ -620,6 +633,21 @@ fn going(
             println!("    {line}");
         }
     }
+    Ok(true)
+}
+
+/// Keeps an invocation and says what to cite it by.
+fn keeping(file: Option<&Path>, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
+    let bench = at.bench()?;
+    let text = match file {
+        Some(file) => std::fs::read_to_string(file)?,
+        None => std::io::read_to_string(std::io::stdin())?,
+    };
+    if text.trim().is_empty() {
+        return Err("an invocation with nothing in it says nothing".into());
+    }
+    let digest = bench.remembering.put(text.as_bytes())?;
+    println!("{digest}");
     Ok(true)
 }
 
@@ -1206,13 +1234,38 @@ fn showing(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
         .map(|(_, said)| said.as_str())
         .unwrap_or_default();
     println!("{short}  {said}");
+    // What it was **for** comes first, and from the citations: `here` answered
+    // this and `show` did not, so one said nobody had said anything about a
+    // commit while the other listed two attempts citing it.
+    let cited: Vec<_> = bench
+        .moves()
+        .all()?
+        .into_values()
+        .filter(|one| {
+            one.cites
+                .iter()
+                .any(|cited| cited.what == "commit" && cited.id == commit)
+        })
+        .collect();
+    for one in &cited {
+        println!(
+            "  {} · {} · {}",
+            one.name,
+            one.kind,
+            one.prose.lines().next().unwrap_or("")
+        );
+    }
+
     let said: Vec<_> = journal
         .all()?
         .into_iter()
         .filter(|saying| saying.commit == commit)
         .collect();
     if said.is_empty() {
-        println!("\n  Nobody has said anything about this commit.");
+        match cited.is_empty() {
+            true => println!("\n  Nobody has said anything about this commit."),
+            false => println!("\n  And nobody has written a note or a verdict on it."),
+        }
         return Ok(true);
     }
     // Here the prose is fetched, and only here: a scan is what the log pays

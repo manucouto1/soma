@@ -234,20 +234,6 @@ pub fn walking(
     )
 }
 
-/// The tree's name and the store its journal lives in.
-pub fn journalling(
-    repo: &Path,
-    store: Option<&Path>,
-) -> Result<(String, Local), Box<dyn std::error::Error>> {
-    let repo = repo.canonicalize()?;
-    let tree = Config::read(&repo)?.tree(&repo);
-    let kept = Local::at(match store {
-        Some(store) => store.to_path_buf(),
-        None => where_probes_are_remembered(),
-    })?;
-    Ok((tree, kept))
-}
-
 /// How many probes run at once.
 ///
 /// Not the core count, which is the number this looks like it should be. What a

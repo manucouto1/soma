@@ -5737,6 +5737,30 @@ And the way back matters as much: standing on a commit, ask what it was for.
 That is derived from the citations and kept in no index, so it is true the
 moment somebody cites it and cannot go stale.
 
+### Where the two layers meet, and it only runs one way
+
+A standing being derived is what lets one **come back**, and the case is the one
+the model exists for: a refutation read off a measurement that lied. So a move
+citing a commit somebody judged `invalid` is **withdrawn** — what it said stops
+counting — and the hypothesis goes back to `open` with nobody saying anything
+again. A later `sound` puts it back, because the journal keeps the last word.
+
+`invalid` is deliberately not a `Course`: judging the code wrong is not deciding
+where to go next, and the word for it stays in the journal. Which is why this is
+the one place the reasoning reads the record, and it reads the **direct** verdict
+only — a commit under an invalid one inherits doubt and not a judgement, and
+inheriting it would need an ancestry nothing here asks git for.
+
+It reaches **up the DAG**, which running it on a real investigation is what
+showed: a finding cites the trial it was seen in and hangs under the attempt,
+and it is the attempt that names the commit. Looking only at the finding's own
+citation, the rule fired on almost nothing. Walking up can pick up nothing but
+an attempt or a finding, since those are the only kinds that cite at all.
+
+Nothing is deleted and nothing is a field: the edge is still written, still
+drawn, and says it was withdrawn — a standing that moved on its own has to say
+what moved it.
+
 ### Read back in names, and laid out from the rows
 
 The store hands out a slot and the slot stops identifying a move the moment
@@ -5781,6 +5805,7 @@ beside them. The original listed their absence as its own outstanding gap:
 | `go`, and what a commit was for | command |
 | `diff`, `log`, `show`, `trials`, `data` — reading the record | command, and already there |
 | `moves` — the reasoning as an outline | command, because nine verbs that write with no way to read them back is a tool you cannot check your own typing against |
+| `keep` — the invocation half of a version | command, because it is what `tried --ran` cites |
 | reporting a result from the code that produced it | library, and already there |
 | citing a trial from the finding that reads it | library |
 | the reasoning read back: moves, standings, scopes, what cites what | library |
@@ -5802,7 +5827,7 @@ less between it and the work than an API would.
 - [x] standing is derived from what was said, and never read from a field
 - [x] two edges of opposite sign whose scopes touch are `disputed`
 - [x] the same two whose scopes do not touch are `depends`, and not `partly`
-- [ ] a hypothesis goes back to open on its own when what refuted it is invalidated
+- [x] a hypothesis goes back to open on its own when what refuted it is invalidated
 - [x] a decision's scope names what is abandoned, and what is abandoned is a move
 - [x] an attempt nobody ran can be written down, and be what a decision abandons
 - [x] a commit says which moves cite it, without an index saying so

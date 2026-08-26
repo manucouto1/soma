@@ -58,6 +58,10 @@ pub struct Told {
     pub to: String,
     pub scope: Vec<String>,
     pub partly: bool,
+    /// Whether it no longer counts towards a standing, because the commit its
+    /// evidence came from was judged `invalid`. Still written and still drawn:
+    /// a standing that moved on its own has to say what moved it.
+    pub withdrawn: bool,
 }
 
 /// A line somebody abandoned: what it hides, and why, in words.
@@ -151,6 +155,7 @@ pub fn reasoned(tree: &str, kept: &dyn Store) -> Result<Reasoning, Trouble> {
     let under = moves.under()?;
     let standing = moves.standing()?;
     let courses = moves.courses()?;
+    let withdrawn = moves.withdrawn()?;
     let named = |id: MoveId| known.get(&id).map(|body| body.name.clone());
     // A name that resolves to nothing is a move somebody wrote an edge to and
     // then could not read back — dropped rather than drawn as a blank, since a
@@ -195,6 +200,7 @@ pub fn reasoned(tree: &str, kept: &dyn Store) -> Result<Reasoning, Trouble> {
                     to: named(one.to)?,
                     scope: names(one.scope.0.iter().copied().collect()),
                     partly: one.in_part,
+                    withdrawn: withdrawn.contains(&one.from),
                 },
             ))
         })

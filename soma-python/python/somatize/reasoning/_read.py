@@ -75,11 +75,15 @@ def moves(store: "Store", *, tree: str) -> list[Row]:
 
 def says(store: "Store", *, tree: str) -> list[Row]:
     """Everything anybody said from one move towards another: `from`, `says`,
-    `to`, `scope` and `partly`, all in names.
+    `to`, `scope`, `partly` and `withdrawn`, all in names.
 
     `answers`, `validates` and `refutes` are what make a standing; `combines`
     says an attempt **is** the composition of those, which is what lets *each
     worked alone, together they cancel* read as what it is.
+
+    `withdrawn` is an edge whose evidence came from a commit somebody judged
+    `invalid`: it no longer counts towards a standing and is still written down,
+    which is how a standing that moved on its own says what moved it.
     """
     return _read(store, tree)["says"]
 
@@ -105,6 +109,10 @@ def standing(store: "Store", *, tree: str) -> dict[str, str]:
     **touch** are `disputed`, and the same two that do not touch are `depends` —
     the answer depending on the case, which is the most informative outcome an
     investigation gives. Use `covered` to tell one from the other.
+
+    Derived every time and never read from a field, which is what lets one go
+    back to `open` on its own: judge the commit a refutation rested on `invalid`
+    and the edge stops counting, with nothing said again and nothing deleted.
     """
     return {
         one["name"]: one["standing"]

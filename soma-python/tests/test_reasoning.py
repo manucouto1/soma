@@ -182,7 +182,16 @@ def test_combines_is_an_edge_of_its_own_and_is_not_under():
         move("b", "attempt", "deeper"),
         move("both", "attempt", "wider and deeper", under=["a"]),
     )
-    says = [{"from": "both", "says": "combines", "to": "b", "scope": [], "partly": False}]
+    says = [
+        {
+            "from": "both",
+            "says": "combines",
+            "to": "b",
+            "scope": [],
+            "partly": False,
+            "withdrawn": False,
+        }
+    ]
     _, edges = reasoning.cards(rows, says)
 
     assert ("b", "both", "combines") in edges
@@ -287,7 +296,16 @@ def test_what_was_said_arrives_with_where_it_holds(investigated):
     said = reasoning.says(investigated, tree="t")
 
     assert said == [
-        {"from": "it-moved", "says": "validates", "to": "wider", "scope": [], "partly": False}
+        {
+            "from": "it-moved",
+            "says": "validates",
+            "to": "wider",
+            "scope": [],
+            "partly": False,
+            # Nobody judged the commit it rests on, so it counts. What is
+            # withdrawn and why is worked out in `soma-tree` and tested there.
+            "withdrawn": False,
+        }
     ]
 
 
