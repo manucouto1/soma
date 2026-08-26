@@ -5510,3 +5510,286 @@ another node would be the one mistake the whole mechanism exists to prevent.
   content-addressed store where two versions legitimately share a blob needs
   unbinding and a sweep over *every* name, not an `rm`. It arrives with a
   consumer and a decision, not before.
+
+## CU30 — The reasoning of an investigation, versioned beside the code
+
+Twenty-nine slices answer *what does this graph do*. None of them answers *what
+was I trying to find out* — and that is the half an investigation actually
+loses. A repository keeps every edit and no motive. A store keeps every number
+and no question. Six months later the code is readable, the results are
+readable, and why anybody ran them is gone.
+
+What this has to do, and everything below is judged against it: **pin the code,
+the approach and the result so the three are versioned together**, and **give
+the reasoning enough structure that what worked, what did not, and why can be
+seen** rather than reconstructed from memory.
+
+The oracle is `/mnt/cluster/projects/soma-tree`, which built this once and
+proved it against a finished paper. It is read as a questionnaire: below is
+what has to be true, and the call shapes are decided here.
+
+### Two layers, and the rule that says which
+
+**The record** is what can be recalculated: commits, the graph at each of them,
+what an edit did node by node, the trials that ran with each version. Nobody
+types it — it is worked out from git, from a probe and from a store.
+
+**The reasoning** is what somebody thought: the questions, the hypotheses, what
+was tried, what the evidence said, what was decided. No amount of reading the
+repository recovers it.
+
+> **If it can be recalculated it is record. If somebody thought it it is
+> reasoning.**
+
+So a pruned line is derived and never stored, and a verdict is written down and
+never guessed at. The two do not share a unit either: a commit is nobody's
+decision, a question nobody has tried yet has no commit, and one move can
+produce three branches.
+
+### Five kinds, and there are no more
+
+| kind | what it is | what only it can do |
+|---|---|---|
+| `question` | what is not known | the only one that can stand with nothing under it — an untried question is pending work |
+| `hypothesis` | a proposed, falsifiable answer | gets **validated** or **refuted**, verbs a question does not have |
+| `attempt` | what was tried | the only one that touches the record |
+| `finding` | what the evidence says | where the verb edges come from |
+| `decision` | what is done about it | separate from the finding, because two people can agree on one and disagree on the other |
+
+### It is a DAG, and the case that forces it
+
+Two live questions — does more capacity improve interpretability? does it
+improve performance? — one variant that bears on each, and then the question
+neither contained: what if I combine them? That attempt hangs under **both**.
+With a single parent you either choose, or duplicate the node — and a duplicated
+node is two nodes that drift apart.
+
+So `under` is multivalued and a cycle is refused at write time: a walk over one
+does not terminate, including the walk that would draw it.
+
+Which attempts it is *made of* is a different edge: `combines`. That is what
+makes *each one worked alone, together they cancel* readable as what it is,
+rather than as two results that happen to sit near each other.
+
+### Scope, and why standing cannot be a field
+
+An answer holds **where it holds**. Without that, `validated` and `refuted` on
+one hypothesis look like a contradiction, when the ordinary case is two facts
+about two situations. A scope is a set of **roots** — "the whole encoder
+branch" is a root, the whole investigation is none at all — which is what makes
+*do these overlap?* a walk rather than something to materialise.
+
+Standing is **derived and never stored**:
+
+```
+open · answered · partly · validated · partly-validated
+refuted · partly-refuted · disputed · depends
+```
+
+A field somebody overwrites loses the previous fact, and the previous fact is
+what lets a hypothesis go back to open on its own when what refuted it is
+marked invalid. Two of the nine are why it is not a field at all: `disputed` is
+edges of opposite sign whose scopes **touch**; `depends` is validated in some
+situations and refuted in others **without** touching — not half an answer and
+not a conflict, but the answer depending on the case, which is the most
+informative outcome an investigation gives.
+
+That is not hypothetical. Seeded from a finished paper, the central
+hypothesis — *a pure per-symptom decoder is interpretable by construction and
+can match an aggregator* — comes out `depends`. An earlier seeding put both
+halves at the same scope and got `disputed`, which reads as two people
+disagreeing rather than as an answer with a domain.
+
+### What pins the three together
+
+An `attempt` **cites** the record, and a commit is only half of what ran:
+`--decorr-weight 0.1` and `0.5` are the same commit and different experiments.
+So the resolved invocation is kept content-addressed beside it, and a citation
+carries both.
+
+The other direction had to exist too. A commit you cannot ask *what was this
+for* is a change without a motive. So a commit carries the moves that cite it,
+**derived from the citations and kept in no index** — the reasoning is already
+in memory to be drawn, and an index would be a second place saying the same
+thing and the one of the two that goes stale.
+
+It pays for itself on real data: one commit came back cited by **five** attempts,
+told apart only by their configurations. From the code side that was invisible.
+
+And the link to results needs no mechanism at all, because it is already a
+name: `exp/<tree>/<commit>` is both where a commit's journal lives and a study
+name, so trials land under it with nothing written to make them.
+
+### A move carries a name somebody chose
+
+The original identifies a move by the integer the store hands out. That works
+while you hold it in a variable and stops working the moment you do not — a
+second process, a tool call, or the same person a week later, none of whom
+remember that the capacity question was `7`.
+
+So a move carries a **name its author chooses**, unique within the tree, beside
+the id. This is the one addition to the model, and it is not for a machine:
+picking a move up again after a week is the normal case.
+
+### What is drawn, and where the line is
+
+Seeing what worked is half of this, and it splits cleanly. **Deriving is the
+framework's**: the layout of the DAG, the standing of every question, whether
+two scopes touch, what cites what, which lines are folded because somebody
+abandoned them. **Interacting is an app's**: folding what you have read,
+clicking through, editing.
+
+The rules the drawing has to get right are knowledge and not taste:
+
+- **Nothing moves, and the base is at the top.** A position is derived from the
+  shape; a position somebody dragged would have to be stored, and it is not a
+  fact about the investigation. This is not `git log`: an exploration is read
+  from where it started, because what you want to see is what came *out* of it.
+- **A lane per line, never handed out twice.** Freeing a lane when a branch ends
+  looks thrifty and stacks three variants into one column pretending to be one
+  history.
+- **A parent is centred over its children's span**, not their average — an
+  uneven fan drawn on the average leans and looks like it is falling over.
+- **Siblings in the order they were made**, never the order a walk arrives in.
+- **What could not be reached is still drawn.** A move nobody has hung anywhere
+  is work waiting for a place, not a move that hides.
+- **A colour is never the only place a finding lives.** `STALE` is written in
+  words as well: it is the finding the whole thing exists for, and a palette is
+  not something to bet it on.
+
+### Folding is the reader's, and it is not pruning
+
+Two ways a line disappears and they are not the same control. A **pruned** line
+comes folded because somebody decided to abandon it, and it says how many it
+hides and **why**, in words. Anything else folds because the reader has read it
+— no reason, nothing stored, because closing what you have read is not a claim
+about the investigation. Without the second, an outline of fifty-seven moves is
+fifty-seven rows, always.
+
+And pruning never deletes. A line that did not work is the most reusable thing
+an investigation produces.
+
+### What seeding a real investigation caught
+
+Three decisions were written with their scope pointing at the line that
+**produced** them rather than the line they abandon. All three read fine in
+prose and all three were wrong, and the model said so the only way it could:
+pruning folded the branch carrying the paper's headline.
+
+The fix is a fact about the model. **A decision's scope names what is
+abandoned, so what is abandoned has to be a move** — and an attempt nobody ever
+ran is still a move, and precisely the one needed to be able to say it was
+never run.
+
+### What does not earn its place
+
+The original served seventeen routes. Some of them were an in-browser editor
+rather than this, and chasing them would be building for a requirement that
+does not fit:
+
+- **Formatting source** (`ruff format` behind a route) pins nothing and
+  structures nothing. An editor's convenience.
+- **A single `check` verb** — parses, linter quiet, graph builds, node runs —
+  decomposes into things that already exist: what an edit did is
+  `foreseen.changes`, and whether it runs is running it. One verb that bundles
+  a linter into the framework is the framework learning what a linter is.
+- **A knowledge lake** to export findings to. Named in the original as not
+  built, with nothing waiting for it. A hole with no tenant.
+- **`/api/health`**, exit codes, `--json`: a server's and a terminal's.
+
+**Editing is forking** does earn its place, and it is the one that looks like an
+editor and is not: a commit is a version that has already been measured, so
+changing one is wanting another variant from here. It never touches an existing
+branch and never rewrites anything. That is what keeps the code pinned to the
+reasoning at the moment a variant is born — but it is the last thing to build,
+not the first.
+
+### Going back to try another idea
+
+The original navigated by clicking, so it needed no verb for this and none was
+extracted from it. In a terminal it needs one, and it is the first thing that
+pays back the cost of having written the reasoning down at all.
+
+`git checkout` asks for a hash. What anybody actually remembers is the idea:
+
+```
+$ somatize-tree go decorr-0.1
+```
+
+Go to the commit that attempt ran, on a branch of its own, ready to try
+something else from there. Git cannot do this, because git does not know which
+attempt that was — the move's name is what makes it reachable, which is why a
+move carries one.
+
+**A branch of its own and never an existing one.** A commit is a version that
+has already been measured, so arriving at one is arriving to make the *next*
+variant, not to rewrite that one. The original said the same thing about
+editing and enforced it by working in a worktree nobody could see; here the
+person typing is the one holding the checkout, so the honest primitive is a
+branch — and unstaged work is a refusal rather than something to carry along.
+
+And the way back matters as much: standing on a commit, ask what it was for.
+That is derived from the citations and kept in no index, so it is true the
+moment somebody cites it and cannot go stale.
+
+### Which half is a command and which is a library
+
+Both, and the line is not taste: **the terminal is for what happens between
+runs, the library for what happens inside one, and for looking at it.**
+
+Asking a question, hanging an attempt under it, deciding to abandon a line —
+those happen while somebody is thinking, one at a time, with nothing else
+running. `note` and `verdict` were already commands; their siblings belong
+beside them. The original listed their absence as its own outstanding gap:
+*"asking a question or hanging a move under another has no CLI."*
+
+| | where |
+|---|---|
+| `ask`, `suppose`, `tried`, `found`, `decide` — writing the reasoning | command |
+| `hang`, `combines`, rewording | command |
+| `go`, and what a commit was for | command |
+| `diff`, `log`, `show`, `trials`, `data` — reading the record | command, and already there |
+| reporting a result from the code that produced it | library, and already there |
+| citing a trial from the finding that reads it | library |
+| the reasoning read back: moves, standings, scopes, what cites what | library |
+| **drawing** it — the tree, what worked, what did not | library, and a notebook |
+
+A command is also the shape a tool call takes later, so an MCP wraps this with
+less between it and the work than an API would.
+
+### Questionnaire
+
+- [ ] a question can stand with nothing under it, and reads as pending work
+- [ ] a hypothesis can be validated and refuted, and a question cannot
+- [ ] only an attempt and a finding cite the record
+- [ ] a decision carries a course, and nothing else does
+- [ ] one move hangs under two parents, and neither is the parent
+- [ ] `combines` is not `under`, and says an attempt **is** the composition
+- [ ] a cycle is refused when it is written, not when it is walked
+- [ ] a move is reached by a name its author chose, from a process that never saw it created
+- [ ] standing is derived from what was said, and never read from a field
+- [ ] two edges of opposite sign whose scopes touch are `disputed`
+- [ ] the same two whose scopes do not touch are `depends`, and not `partly`
+- [ ] a hypothesis goes back to open on its own when what refuted it is invalidated
+- [ ] a decision's scope names what is abandoned, and what is abandoned is a move
+- [ ] an attempt nobody ran can be written down, and be what a decision abandons
+- [ ] a commit says which moves cite it, without an index saying so
+- [ ] a citation carries the commit **and** the resolved invocation
+- [ ] trials land under a version with nothing written to link them
+- [ ] nothing is ever updated: saying something claims the next slot
+- [ ] a line that was abandoned is still readable
+- [ ] what is suspect below an invalid commit is worked out, never stored
+- [ ] a walk sees every branch, not the ancestry of one tip
+- [ ] the reasoning can be drawn from what is stored, with nothing run again
+- [ ] a move nobody hung anywhere is drawn
+- [ ] pruning folds and never deletes, and says how many and why
+- [ ] folding what you have read writes nothing down
+
+Going back:
+
+- [ ] going to a move by name lands on the commit its attempt cited
+- [ ] on a branch of its own, and never on one that already exists
+- [ ] unstaged work is a refusal, not something carried along
+- [ ] a move that cites no commit cannot be visited, and says so rather than guessing
+- [ ] an attempt citing a commit **and** a resolved invocation restores both halves
+- [ ] standing on a commit says which moves cite it, and says so when none do
