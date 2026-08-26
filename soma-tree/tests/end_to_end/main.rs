@@ -106,17 +106,162 @@ fn an_investigation(python: &Path) -> tempfile::TempDir {
     at
 }
 
-/// Runs the binary in that repository, and returns what it said.
-fn somatize_tree(at: &Path, args: &[&str]) -> String {
-    let said = Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
+/// The interpreter, the repository the tests read, and the one store they
+/// remember in — laid down once for the whole binary.
+///
+/// Once and not per test, and what that buys is not the git. A probe is keyed
+/// on the commit and on nothing else, so copies of one repository ask Python
+/// **once between them** instead of once each: twenty-six tests probing the
+/// same four commits is what had this suite holding seventy-three interpreters
+/// with torch in them at a time, which is twenty-six gigabytes.
+///
+/// Finding the interpreter belongs here too, for the same reason — it is asked
+/// by importing `somatize` in one, and that was another launch per test.
+struct Laid {
+    python: PathBuf,
+    repo: tempfile::TempDir,
+    remembering: tempfile::TempDir,
+}
+
+static LAID: std::sync::LazyLock<Option<Laid>> = std::sync::LazyLock::new(|| {
+    let python = an_interpreter()?;
+    let repo = an_investigation(&python);
+    Some(Laid {
+        python,
+        repo,
+        remembering: tempfile::tempdir().expect("a temporary directory"),
+    })
+});
+
+/// The fan of branches, wanted by three tests, laid down once for the same
+/// reason the investigation is: what is expensive is not building it, it is
+/// probing it. The network spread across files is not here, and that is the
+/// line — those tests ask the probe directly and never open a store, so there
+/// is nothing between them to share.
+static FANNED: std::sync::LazyLock<Option<tempfile::TempDir>> = std::sync::LazyLock::new(|| {
+    let laid = LAID.as_ref()?;
+    Some(warmed(a_fan_of(3, &laid.python)))
+});
+
+/// A repository whose every commit has been probed into the shared store.
+///
+/// Before anybody fans out, which is the whole point: cargo starts twenty
+/// tests at once, so without this twenty of them find the store cold together
+/// and all probe the same commits before any has written an answer. There is
+/// no "after the first test" unless somebody makes one.
+fn warmed(repo: tempfile::TempDir) -> tempfile::TempDir {
+    warm(repo.path());
+    repo
+}
+
+fn warm(repo: &Path) {
+    let said = asking(repo, remembering(), &["log"]);
+    assert!(
+        said.status.code() != Some(2),
+        "the store could not be warmed: {}",
+        String::from_utf8_lossy(&said.stderr),
+    );
+}
+
+/// The investigation, warmed on the way out and not on the way in: warming
+/// asks `LAID` where the store is, and a `LazyLock` cannot be asked that from
+/// inside its own initialiser.
+fn the_investigation() -> &'static Path {
+    static WARM: std::sync::LazyLock<()> =
+        std::sync::LazyLock::new(|| warm(LAID.as_ref().expect("an interpreter").repo.path()));
+    std::sync::LazyLock::force(&WARM);
+    LAID.as_ref().expect("an interpreter").repo.path()
+}
+
+fn the_fan() -> &'static Path {
+    FANNED.as_ref().expect("an interpreter").path()
+}
+
+/// That repository again, in a directory of this test's own.
+///
+/// A copy and not one checkout everybody shares: a test lays out git worktrees
+/// and writes verdicts, and both of those are the repository's. The copy keeps
+/// the commits — git objects are named by their content — which is the half
+/// that has to survive for the shared store to hit.
+///
+/// And it keeps the journals apart without being asked: `tree` falls back to
+/// the repository's own directory name, so two copies are two investigations
+/// sharing one store without seeing each other, which is what that field is
+/// documented to be for.
+fn a_copy_of(master: &Path) -> tempfile::TempDir {
+    let at = tempfile::tempdir().expect("a temporary directory");
+    let said = Command::new("cp")
+        .arg("-a")
+        .arg(format!("{}/.", master.display()))
+        .arg(at.path())
+        .output()
+        .expect("cp runs");
+    assert!(said.status.success(), "copying the fixture: {said:?}");
+
+    // The fixture pins `tree`, so the fall back to the directory's own name
+    // never happens and every copy would write its verdicts into one journal.
+    // Said here rather than taken out of the example: what the example calls
+    // its investigation is the example's business.
+    let config = at.path().join("soma-tree.toml");
+    let named = std::fs::read_to_string(&config)
+        .expect("the fixture has a config")
+        .lines()
+        .map(|line| match line.starts_with("tree = ") {
+            true => format!(
+                "tree = \"{}\"",
+                at.path()
+                    .file_name()
+                    .expect("a temporary directory has a name")
+                    .to_string_lossy()
+            ),
+            false => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&config, named + "\n").expect("the config is writable");
+    at
+}
+
+/// The binary, in that repository, remembering there.
+fn asking(at: &Path, remembering: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
         .args(args)
         .arg("--repo")
         .arg(at)
-        // Its own store, so one test never reads what another remembered.
-        .env("XDG_CACHE_HOME", at.join("cache"))
+        .env("XDG_CACHE_HOME", remembering)
         .current_dir(at)
         .output()
-        .expect("the binary runs");
+        .expect("the binary runs")
+}
+
+/// The store every test shares.
+fn remembering() -> &'static Path {
+    LAID.as_ref()
+        .expect("an interpreter, or the test would have returned")
+        .remembering
+        .path()
+}
+
+/// Runs the binary in that repository, and returns what it said.
+fn somatize_tree(at: &Path, args: &[&str]) -> String {
+    let said = asking(at, remembering(), args);
+    assert!(
+        said.status.code() != Some(2),
+        "somatize-tree {args:?} could not run: {}",
+        String::from_utf8_lossy(&said.stderr),
+    );
+    String::from_utf8_lossy(&said.stdout).into_owned()
+}
+
+/// The same, remembering where nobody else can see.
+///
+/// For the tests that are about **probing itself** rather than about what the
+/// tool says. Both of them assert on what a first look costs — that asking
+/// twice lays out no second worktree, and that the first one is taken away —
+/// and against a store another test has already warmed there is no first look
+/// to assert about, so they would pass without proving anything.
+fn somatize_tree_alone(at: &Path, args: &[&str]) -> String {
+    let said = asking(at, &at.join("cache"), args);
     assert!(
         said.status.code() != Some(2),
         "somatize-tree {args:?} could not run: {}",
@@ -127,14 +272,7 @@ fn somatize_tree(at: &Path, args: &[&str]) -> String {
 
 /// What it said when it refused, which is stderr and not stdout.
 fn soma_tree_refusing(at: &Path, args: &[&str]) -> String {
-    let said = Command::new(env!("CARGO_BIN_EXE_somatize-tree"))
-        .args(args)
-        .arg("--repo")
-        .arg(at)
-        .env("XDG_CACHE_HOME", at.join("cache"))
-        .current_dir(at)
-        .output()
-        .expect("the binary runs");
+    let said = asking(at, remembering(), args);
     assert!(!said.status.success(), "a refusal was expected: {args:?}");
     String::from_utf8_lossy(&said.stderr).into_owned()
 }
@@ -142,19 +280,32 @@ fn soma_tree_refusing(at: &Path, args: &[&str]) -> String {
 /// Every test needs the same two things, and skips for the same reason.
 macro_rules! given {
     ($at:ident) => {
-        let Some(python) = an_interpreter() else {
+        let Some(laid) = LAID.as_ref() else {
             eprintln!("no interpreter that imports somatize: skipped");
             return;
         };
-        let $at = an_investigation(&python);
+        let _ = laid;
+        let $at = a_copy_of(the_investigation());
         let $at = $at.path();
     };
-    // For the tests that lay down a shape of their own.
-    ($python:ident, $unused:ident) => {
-        let Some($python) = an_interpreter() else {
+    // For the three that run the interpreter themselves, to ask it what an
+    // edit does before `somatize-tree` is anywhere near it.
+    ($python:ident, $running:ident) => {
+        let Some(laid) = LAID.as_ref() else {
             eprintln!("no interpreter that imports somatize: skipped");
             return;
         };
+        let $python = laid.python.clone();
+        let $running = ();
+        let _ = $running;
+    };
+    // For the tests that copy a shape of their own and never run the
+    // interpreter themselves.
+    () => {
+        if LAID.as_ref().is_none() {
+            eprintln!("no interpreter that imports somatize: skipped");
+            return;
+        }
     };
 }
 
@@ -356,8 +507,8 @@ fn asking_twice_gives_the_same_answer_and_touches_no_worktree() {
     // little — which is exactly the mistake this tool reports about caches.
     given!(at);
 
-    let once = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
-    let twice = somatize_tree(at, &["log", "HEAD~3..HEAD"]);
+    let once = somatize_tree_alone(at, &["log", "HEAD~3..HEAD"]);
+    let twice = somatize_tree_alone(at, &["log", "HEAD~3..HEAD"]);
 
     assert_eq!(once, twice);
 }
@@ -367,7 +518,7 @@ fn no_worktree_is_left_behind() {
     // Not tidiness: git keeps a record of a worktree in the repository, and the
     // next `worktree add` on the same commit refuses.
     given!(at);
-    somatize_tree(at, &["log", "HEAD~3..HEAD"]);
+    somatize_tree_alone(at, &["log", "HEAD~3..HEAD"]);
 
     let listed = Command::new("git")
         .arg("-C")
@@ -435,8 +586,8 @@ fn a_range_somebody_did_type_is_still_taken_at_their_word() {
 fn every_branch_is_walked_and_not_only_the_one_checked_out() {
     // `rev-list HEAD` follows ancestry, and a sibling is not an ancestor: a
     // walk from one tip cannot see the other variants at all.
-    given!(python, at);
-    let at = a_fan_of(3, &python);
+    given!();
+    let at = a_copy_of(the_fan());
     let at = at.path();
 
     let said = somatize_tree(at, &["log"]);
@@ -451,8 +602,8 @@ fn a_step_comes_from_a_parent_and_not_from_the_line_above_it() {
     // With three branches interleaved in a walk, adjacent entries are three
     // different lines of exploration. A step that paired them would answer
     // confidently about an edit nobody made.
-    given!(python, at);
-    let at = a_fan_of(3, &python);
+    given!();
+    let at = a_copy_of(the_fan());
     let at = at.path();
 
     let walk: serde_json::Value =
@@ -481,8 +632,8 @@ fn doubt_goes_down_a_branch_and_not_across_to_its_siblings() {
     // The bug this is here for: doubt was worked out by asking git for the
     // ancestry path to **a** tip, and with three branches that tip is usually
     // on somebody else's — so a verdict cast on one variant reached nothing.
-    given!(python, at);
-    let at = a_fan_of(3, &python);
+    given!();
+    let at = a_copy_of(the_fan());
     let at = at.path();
     somatize_tree(
         at,
@@ -517,8 +668,8 @@ fn doubt_goes_down_a_branch_and_not_across_to_its_siblings() {
 fn an_edit_that_does_not_parse_is_caught_before_anything_else_runs() {
     // The cheapest question, and the one that has to come first: importing a
     // module to find out it has a typo in it costs an interpreter and a torch.
-    given!(python, unused);
-    let at = an_investigation(&python);
+    given!(python, running);
+    let at = a_copy_of(the_investigation());
 
     let said = Command::new(&python)
         .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py"))
@@ -539,8 +690,8 @@ fn the_graph_still_building_is_its_own_question() {
     // What a linter cannot see: rename a class and `build()` goes on calling
     // the old name. It parses, it lints clean, and it is a commit nobody can
     // run — which is exactly the kind of variant this exists to stop.
-    given!(python, unused);
-    let at = an_investigation(&python);
+    given!(python, running);
+    let at = a_copy_of(the_investigation());
     let file = at.path().join("experiments/encoder.py");
     let was = std::fs::read_to_string(&file).expect("the module");
     std::fs::write(&file, was.replace("class Embed(", "class Embedding(")).expect("an edit");
@@ -574,8 +725,8 @@ fn running_on_real_data_says_so_rather_than_inventing_some() {
     // With no store there is nothing kept to hand the node. A green light from
     // a fabricated value would be worse than no light: it would say an edit was
     // safe on data that never existed.
-    given!(python, unused);
-    let at = an_investigation(&python);
+    given!(python, running);
+    let at = a_copy_of(the_investigation());
 
     let said = Command::new(&python)
         .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py"))
@@ -884,7 +1035,7 @@ fn a_node_says_every_file_its_network_is_written_across() {
     // knows one of the three files and the panel showed that one; the other
     // two were nowhere in the answer, and had been inside the fingerprint from
     // the first day.
-    given!(python, unused);
+    given!(python, running);
     let at = spread_across_files();
 
     let reaches = probed_reaches(&python, at.path());
@@ -912,7 +1063,7 @@ fn each_file_says_which_definitions_of_it_the_node_reaches() {
     // file is shown — it is what gets edited — and which class arrived is said,
     // because otherwise the box says *this node depends on this file* and keeps
     // quiet about the half that matters.
-    given!(python, unused);
+    given!(python, running);
     let at = spread_across_files();
 
     let reaches = probed_reaches(&python, at.path());
@@ -940,7 +1091,7 @@ fn a_file_that_stops_being_reached_leaves_the_answer() {
     // Not a second idea of what depends on what: it is the closure the
     // fingerprint already walked. So it stops naming a file exactly when it
     // stops being in the version, and not one edit later.
-    given!(python, unused);
+    given!(python, running);
     let at = spread_across_files();
     let head = at.path().join("experiments/head.py");
     std::fs::write(

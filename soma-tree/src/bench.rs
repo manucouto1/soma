@@ -234,6 +234,15 @@ pub fn journalling(
     Ok((tree, kept))
 }
 
+/// How many probes run at once.
+///
+/// Not the core count, which is the number this looks like it should be. What a
+/// probe holds is an interpreter with the checkout's own `somatize` imported,
+/// and that is torch: a quarter of a gigabyte, each. So the bound is memory and
+/// it does not grow with the machine — twenty cores would ask for five
+/// gigabytes to walk one line, and `cargo test` runs twenty of *those* at once.
+const AT_ONCE: usize = 4;
+
 /// A snapshot for every one of these commits.
 ///
 /// Asked of the store first and of a checkout second. On a line somebody has
@@ -278,19 +287,42 @@ pub fn probed<'a>(
     // Threads and not tasks: what this waits on is a Python interpreter
     // importing torch, which is somebody else's CPU and not an idle socket.
     // There is nothing here for an executor to interleave.
+    //
+    // A pool of `AT_ONCE` and not a thread per commit, and what the pool shares
+    // is an index rather than a chunk each: a commit that takes a minute holds
+    // up nothing behind it. Answers come back by position, because what names a
+    // snapshot here is the revspec that was asked for and a probe only knows
+    // the hash it resolved to.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Both outlive the scope on purpose: a worker borrows them, so declaring
+    // them inside would be lending what is about to go out of scope.
+    let next = AtomicUsize::new(0);
+    let (tell, heard) = std::sync::mpsc::channel();
     let fresh = std::thread::scope(|scope| {
         let remembering = &bench.remembering;
-        let asking: Vec<_> = trees
-            .iter()
-            .map(|tree| {
-                scope.spawn(move || probing.remembered(remembering, tree.path(), tree.commit()))
-            })
-            .collect();
-        asking
-            .into_iter()
-            .map(|one| one.join().expect("a probe thread does not panic"))
-            .collect::<Vec<_>>()
+        for _ in 0..AT_ONCE.min(trees.len()) {
+            let (tell, next, trees) = (tell.clone(), &next, &trees);
+            scope.spawn(move || {
+                loop {
+                    let n = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(tree) = trees.get(n) else { break };
+                    let said = probing.remembered(remembering, tree.path(), tree.commit());
+                    // The receiver is this scope, which outlives every worker.
+                    let _ = tell.send((n, said));
+                }
+            });
+        }
+        // Or the collector waits on a sender nobody is holding.
+        drop(tell);
+        let mut fresh: Vec<Option<_>> = trees.iter().map(|_| None).collect();
+        for (n, said) in heard {
+            fresh[n] = Some(said);
+        }
+        fresh
     });
+    let fresh = fresh
+        .into_iter()
+        .map(|said| said.expect("every commit laid out was probed"));
     for (commit, snapshot) in missing.iter().zip(fresh) {
         known.insert(commit, snapshot?);
     }
