@@ -7,6 +7,7 @@
 
 use crate::journal::Journal;
 use crate::moves::Moves;
+use crate::reasoning::{Reasoning, reasoned};
 use crate::revision::{self, Worktree};
 use crate::snapshot::{Probing, Snapshot};
 use crate::walk::{self, Walk};
@@ -67,15 +68,18 @@ impl Config {
     /// Read from the repository and not from the checkout: how an experiment
     /// is built is a fact about the project now, and reading it out of each
     /// commit would leave one predating the file unprobeable.
+    ///
+    /// **Not being there is not a failure**, for the same reason `build` is
+    /// optional: a repository from before soma has a reasoning worth reading
+    /// and nothing to probe, and it has no `soma-tree.toml` either. What needs
+    /// a probe still says so, through [`building`](Self::building).
     pub fn read(repo: &Path) -> Result<Self, String> {
         let at = repo.join("soma-tree.toml");
-        let text = std::fs::read_to_string(&at).map_err(|why| {
-            format!(
-                "{} could not be read: {why}\n\nIt says what to build:\n\n    \
-                 build = \"experiments.encoder:build\"\n    python = \".venv/bin/python\"",
-                at.display()
-            )
-        })?;
+        let text = match std::fs::read_to_string(&at) {
+            Ok(text) => text,
+            Err(why) if why.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(why) => return Err(format!("{} could not be read: {why}", at.display())),
+        };
         toml::from_str(&text).map_err(|why| format!("{} is not readable: {why}", at.display()))
     }
 
@@ -174,6 +178,11 @@ impl Bench {
 
     pub fn moves(&self) -> Moves<'_> {
         Moves::of(self.config.tree(&self.repo), &self.remembering)
+    }
+
+    /// The reasoning read back, derived. Fails if the store cannot be read.
+    pub fn reasoning(&self) -> Result<Reasoning, crate::moves::Trouble> {
+        reasoned(&self.config.tree(&self.repo), &self.remembering)
     }
 }
 

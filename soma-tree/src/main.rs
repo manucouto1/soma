@@ -8,11 +8,13 @@
 //! It holds no graph itself — see `somatize_tree::snapshot`.
 
 use clap::{Parser, Subcommand};
+use somatize_store::Digest;
 use somatize_tree::bench::{Bench, probed, walking};
 use somatize_tree::data;
 use somatize_tree::findings::{DOWNSTREAM, Findings, RESETTLED, SALTED, STALE, SUSPECT};
 use somatize_tree::journal::Verdict;
 use somatize_tree::moves::{Cited, Course, Kind, Moves, Said, Says, Scope, Writing as Written};
+use somatize_tree::reasoning;
 use somatize_tree::revision;
 use somatize_tree::snapshot::Snapshot;
 use somatize_tree::trials::{Goal, Trials};
@@ -243,6 +245,22 @@ enum Doing {
         #[command(flatten)]
         at: Where,
     },
+    /// The reasoning as it stands: every move, indented by what it hangs under.
+    ///
+    /// The writing verbs had no reader, so what somebody had just written down
+    /// could only be seen by citing a commit. It reads the **same answer** the
+    /// library draws, so an outline and a figure cannot disagree about what
+    /// folds.
+    Moves {
+        /// Only what hangs under this one. Everything, by default.
+        under: Option<String>,
+        /// Open the lines somebody abandoned. They fold by default, saying how
+        /// many they hide and why.
+        #[arg(long)]
+        all_lines: bool,
+        #[command(flatten)]
+        at: Where,
+    },
     /// What the commit you are on was for: the moves that cite it.
     Here {
         #[arg(default_value = "HEAD")]
@@ -380,6 +398,11 @@ fn main() -> ExitCode {
             at,
         } => speaking(from, says, to, *partly, about, at),
         Doing::Go { moved, branch, at } => going(moved, branch.as_deref(), at),
+        Doing::Moves {
+            under,
+            all_lines,
+            at,
+        } => outlining(under.as_deref(), *all_lines, at),
         Doing::Here { rev, at } => whying(rev, at),
         Doing::Trials { rev, curve, at } => trialling(rev, *curve, at),
         Doing::Data { range, most, at } => dataing(range, *most, at),
@@ -581,6 +604,49 @@ fn going(
         "{branch} · at {short} · {}",
         one.prose.lines().next().unwrap_or("")
     );
+
+    // The other half of the version. A commit says what the code was and not
+    // what was run with it: the same one under `--decorr-weight 0.1` and `0.5`
+    // is two experiments, so arriving at one without its invocation is
+    // arriving at half of it. Printed and never applied — what to do with it
+    // is the caller's, and git is not the thing that ran it.
+    for cited in one.cites.iter().filter(|cited| cited.what == "artifact") {
+        let Some(bytes) = moves.read(&Digest::parse(cited.id.clone()))? else {
+            println!("\n  ran with {} · which is not in this store", cited.id);
+            continue;
+        };
+        println!("\n  ran with:");
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            println!("    {line}");
+        }
+    }
+    Ok(true)
+}
+
+/// The reasoning as an indented outline, or as data with `--json`.
+fn outlining(
+    under: Option<&str>,
+    all_lines: bool,
+    at: &Where,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let bench = at.bench()?;
+    let reasoning = bench.reasoning()?;
+    if at.json {
+        println!("{}", serde_json::to_string_pretty(&reasoning)?);
+        return Ok(true);
+    }
+    if reasoning.moves.is_empty() {
+        println!("Nothing has been written down here yet. `somatize-tree ask` starts it.");
+        return Ok(true);
+    }
+    if let Some(name) = under {
+        reasoning
+            .went(name)
+            .ok_or_else(|| format!("nothing here is called `{name}`"))?;
+    }
+    for line in reasoning::outlined(&reasoning, under, all_lines) {
+        println!("{line}");
+    }
     Ok(true)
 }
 

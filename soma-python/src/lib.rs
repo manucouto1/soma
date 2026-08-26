@@ -11,6 +11,7 @@ mod codec;
 mod frame;
 mod health;
 mod node;
+mod reasoning;
 #[cfg(feature = "remote")]
 mod remote;
 mod source;
@@ -656,6 +657,8 @@ fn _somatize(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(health::leaning, m)?)?;
     m.add_function(wrap_pyfunction!(health::about, m)?)?;
     m.add_function(wrap_pyfunction!(health::family, m)?)?;
+    m.add_function(wrap_pyfunction!(reasoning::reasoning, m)?)?;
+    m.add_function(wrap_pyfunction!(reasoning::reasoning_covers, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codec, m)?)?;
     m.add_function(wrap_pyfunction!(codec::codecs_registered, m)?)?;
     #[cfg(feature = "remote")]

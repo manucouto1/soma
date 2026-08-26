@@ -28,6 +28,7 @@ somatize-core = { path = "soma-core", version = "1.0.0" }
 somatize-store = { path = "soma-store", version = "1.0.0" }
 somatize-data = { path = "soma-data", version = "1.0.0" }
 somatize-health = { path = "soma-health", version = "1.0.0" }
+somatize-tree = { path = "soma-tree", version = "1.0.0", default-features = false }
 # The fabric, home from the repository it spent a day in. It is a family, so
 # it is a folder: the wire carries a slice and the broker says where a host is.
 somatize-fabric-wire = { path = "soma-fabric/wire", version = "1.0.0" }

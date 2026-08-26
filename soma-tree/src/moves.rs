@@ -359,6 +359,28 @@ pub enum Standing {
     Depends,
 }
 
+impl Standing {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Answered => "answered",
+            Self::Partly => "partly",
+            Self::Validated => "validated",
+            Self::PartlyValidated => "partly-validated",
+            Self::Refuted => "refuted",
+            Self::PartlyRefuted => "partly-refuted",
+            Self::Disputed => "disputed",
+            Self::Depends => "depends",
+        }
+    }
+}
+
+impl fmt::Display for Standing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Who hangs under whom. An index over the `under` edges, built so it can be
 /// walked up and down without scanning again.
 #[derive(Debug, Default)]
@@ -833,33 +855,39 @@ impl<'a> Moves<'a> {
     pub fn decided(&self) -> Result<BTreeMap<String, Course>, Trouble> {
         let known = self.all()?;
         let under = self.under()?;
-        let mut said: BTreeMap<String, Course> = BTreeMap::new();
-        // Oldest first, which here is the order of the ids: whoever speaks
-        // last about a commit is the one that counts.
-        for (id, body) in &known {
-            let Some(course) = body.course else { continue };
-            let scope = if body.scope.is_everything() {
-                Scope::of(under.parents_of(*id))
-            } else {
-                body.scope.clone()
-            };
-            // Hanging off nothing and with no scope: it is about no line in
-            // particular, so it colours none rather than colouring all.
-            if scope.is_everything() {
+        // Whoever spoke last about a commit is the one that counts, and the
+        // speaker is a decision: carried through rather than left to the order
+        // the moves happen to be visited in.
+        let mut said: BTreeMap<String, (MoveId, Course)> = BTreeMap::new();
+        for (one, (by, course)) in coursed(&known, &under) {
+            let Some(reached) = known.get(&one) else {
                 continue;
-            }
-            for one in scope.covers(&under) {
-                let Some(reached) = known.get(&one) else {
+            };
+            for cited in &reached.cites {
+                if cited.what != "commit" {
                     continue;
-                };
-                for cited in &reached.cites {
-                    if cited.what == "commit" {
-                        said.insert(cited.id.clone(), course);
+                }
+                match said.get(&cited.id) {
+                    Some((said_by, _)) if *said_by > by => {}
+                    _ => {
+                        said.insert(cited.id.clone(), (by, course));
                     }
                 }
             }
         }
-        Ok(said)
+        Ok(said
+            .into_iter()
+            .map(|(commit, (_, course))| (commit, course))
+            .collect())
+    }
+
+    /// What was decided about each **move**, and by which decision.
+    ///
+    /// The half of [`decided`](Self::decided) that never reaches a commit, and
+    /// the one the reasoning is drawn from: an attempt nobody ran cites nothing
+    /// and is still abandoned.
+    pub fn courses(&self) -> Result<BTreeMap<MoveId, (MoveId, Course)>, Trouble> {
+        Ok(coursed(&self.all()?, &self.under()?))
     }
 
     /// How each question and hypothesis stands, counting what reached it.
@@ -948,6 +976,42 @@ impl<'a> Moves<'a> {
             }
         }
         Err(Trouble::Crowded)
+    }
+}
+
+/// What each move's line was decided to be, and by which decision.
+///
+/// Oldest first, which here is the order of the ids: deciding again is how you
+/// change your mind, and the later decision is the one that counts.
+fn coursed(
+    known: &BTreeMap<MoveId, Move>,
+    under: &Undernath,
+) -> BTreeMap<MoveId, (MoveId, Course)> {
+    let mut said = BTreeMap::new();
+    for (id, body) in known {
+        let Some(course) = body.course else { continue };
+        let scope = abandoning(*id, body, under);
+        if scope.is_everything() {
+            continue;
+        }
+        for one in scope.covers(under) {
+            said.insert(one, (*id, course));
+        }
+    }
+    said
+}
+
+/// What a decision is about: its scope, or where it hangs when it has none.
+///
+/// Where a decision parts company with a question or a hypothesis, for which no
+/// scope means about everything. Here that would be a quiet trap: writing *this
+/// line is dead* while looking at one attempt would mark the whole tree.
+/// Abandoning everything means hanging it off the root or naming it — and a
+/// decision hanging off nothing with no scope colours no line rather than all.
+pub(crate) fn abandoning(id: MoveId, body: &Move, under: &Undernath) -> Scope {
+    match body.scope.is_everything() {
+        true => Scope::of(under.parents_of(id)),
+        false => body.scope.clone(),
     }
 }
 

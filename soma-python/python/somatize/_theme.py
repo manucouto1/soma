@@ -49,6 +49,19 @@ PALETTE = {
     "layer": ("#151821", "#2f3547", "#9aa3b8"),
 }
 
+MOVES = {
+    # What **kind** of move it is: five, and there are no more. A hue each,
+    # because those five are the vocabulary of the layer and a reader who cannot
+    # tell an attempt from a finding is reading a flat list. It never says
+    # good-or-bad — how a question stands is written on it in words.
+    "question": ("#171c28", "#3d4459", INK),
+    "hypothesis": ("#1d1a2b", "#a98bdd", "#d9cbf2"),
+    "attempt": ("#1b2530", "#4d7f8f", "#c7e3ec"),
+    "finding": ("#12291f", "#3f9d6d", "#a9e7c5"),
+    "decision": ("#2a2216", "#eb6834", "#f2c9a8"),
+}
+"""Fill, outline and ink, by what a move is. The reasoning's table."""
+
 MARKS = {
     # What **sort** of thing a layer is: a `Linear` and a `Sigmoid` drawn the
     # same say they are the same thing. By role and never by class. Fill,

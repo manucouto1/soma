@@ -181,6 +181,13 @@ def codec(
 def codecs_registered() -> list[str]:
     """What has a codec registered today, in the order they were registered."""
 
+def reasoning(store: Store, tree: str) -> str:
+    """The reasoning of that investigation as JSON: its moves, what was said,
+    and what folds. Read `somatize.reasoning` instead of this."""
+
+def reasoning_covers(store: Store, tree: str, by: list[str]) -> list[str]:
+    """What a scope with those roots reaches, in the order they were made."""
+
 # ── The record ───────────────────────────────────────────────────────────────
 
 class Recorder:

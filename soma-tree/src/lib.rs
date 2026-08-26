@@ -14,6 +14,7 @@ pub mod data;
 pub mod findings;
 pub mod journal;
 pub mod moves;
+pub mod reasoning;
 pub mod revision;
 pub mod snapshot;
 pub mod trials;

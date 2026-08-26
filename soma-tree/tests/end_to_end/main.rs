@@ -1252,3 +1252,128 @@ fn two_moves_cannot_answer_to_one_name_from_the_terminal_either() {
 
     assert!(said.contains("already names"), "{said}");
 }
+
+#[test]
+fn what_was_just_written_down_can_be_read_from_the_same_place() {
+    // The gap that seeding a real investigation found first: nine verbs that
+    // write and no way to see the result without citing a commit.
+    given!(at);
+
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+    somatize_tree(
+        at,
+        &[
+            "suppose",
+            "wider",
+            "-m",
+            "width is the bottleneck",
+            "--under",
+            "capacity",
+        ],
+    );
+    somatize_tree(at, &["ask", "loose-end", "-m", "and the checkpoint?"]);
+
+    let said = somatize_tree(at, &["moves"]);
+    let lines: Vec<&str> = said.lines().collect();
+
+    assert!(lines[0].starts_with("capacity · question · open"), "{said}");
+    assert!(
+        lines[1].starts_with("  wider · hypothesis · open"),
+        "{said}"
+    );
+    // A move nobody hung anywhere is work waiting for a place, not a move that
+    // hides, so it is a root of its own rather than missing.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("loose-end · question")),
+        "{said}",
+    );
+}
+
+#[test]
+fn an_outline_folds_what_somebody_abandoned_and_says_how_many_and_why() {
+    given!(at);
+
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+    somatize_tree(
+        at,
+        &[
+            "tried",
+            "four-x",
+            "-m",
+            "four times the width",
+            "--under",
+            "capacity",
+        ],
+    );
+    somatize_tree(
+        at,
+        &[
+            "decide",
+            "abandon",
+            "drop-4x",
+            "-m",
+            "it will not fit",
+            "--about",
+            "four-x",
+        ],
+    );
+
+    let folded = somatize_tree(at, &["moves"]);
+    assert!(
+        folded.contains("⋯ 1 folded · abandon · it will not fit"),
+        "{folded}"
+    );
+    assert!(!folded.contains("drop-4x"), "{folded}");
+
+    // And nothing was deleted: a line that did not work is the most reusable
+    // thing an investigation produces.
+    let all = somatize_tree(at, &["moves", "--all-lines"]);
+    assert!(all.contains("drop-4x"), "{all}");
+}
+
+#[test]
+fn a_reasoning_reads_the_same_from_the_terminal_and_as_data() {
+    // One answer read two ways. A second copy of this derivation in whoever
+    // draws it would be a view that quietly disagreed about what an
+    // investigation contains.
+    given!(at);
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+
+    let said: serde_json::Value =
+        serde_json::from_str(&somatize_tree(at, &["moves", "--json"])).expect("json");
+
+    assert_eq!(said["moves"][0]["name"], "capacity");
+    assert_eq!(said["moves"][0]["standing"], "open");
+    assert_eq!(said["moves"][0]["pruned"], false);
+}
+
+#[test]
+fn going_back_restores_both_halves_of_what_ran() {
+    // A commit says what the code was and not what was run with it: the same
+    // one under two configurations is two experiments, so landing on it
+    // without the invocation is landing on half of it.
+    given!(at);
+    let ran = "sha256:0000";
+    somatize_tree(
+        at,
+        &[
+            "tried",
+            "decorr-0.1",
+            "-m",
+            "the decorrelation weight at 0.1",
+            "--cites",
+            "HEAD~1",
+            "--ran",
+            ran,
+        ],
+    );
+
+    let said = somatize_tree(at, &["go", "decorr-0.1"]);
+
+    assert!(said.contains("ran with"), "{said}");
+    // Named even when this store does not hold it, because a blank there reads
+    // as an attempt that carried no configuration.
+    assert!(said.contains(ran), "{said}");
+}

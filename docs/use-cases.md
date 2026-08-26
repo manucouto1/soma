@@ -5641,12 +5641,17 @@ clicking through, editing.
 
 The rules the drawing has to get right are knowledge and not taste:
 
-- **Nothing moves, and the base is at the top.** A position is derived from the
-  shape; a position somebody dragged would have to be stored, and it is not a
-  fact about the investigation. This is not `git log`: an exploration is read
-  from where it started, because what you want to see is what came *out* of it.
+- **Nothing moves, and the walk goes away from where it started.** A position
+  is derived from the shape; a position somebody dragged would have to be
+  stored, and it is not a fact about the investigation. This is not `git log`:
+  an exploration is read from where it began, because what you want to see is
+  what came *out* of it.
+- **Depth grows to the right and siblings stack downward.** A move carries
+  prose, so its card is wide and short, and stacking siblings across would give
+  columns two words wide. The record's rail is the other way up — a commit's
+  subject is one line — and that is the one difference between the two.
 - **A lane per line, never handed out twice.** Freeing a lane when a branch ends
-  looks thrifty and stacks three variants into one column pretending to be one
+  looks thrifty and stacks three variants into one lane pretending to be one
   history.
 - **A parent is centred over its children's span**, not their average — an
   uneven fan drawn on the average leans and looks like it is falling over.
@@ -5732,6 +5737,32 @@ And the way back matters as much: standing on a commit, ask what it was for.
 That is derived from the citations and kept in no index, so it is true the
 moment somebody cites it and cannot go stale.
 
+### Read back in names, and laid out from the rows
+
+The store hands out a slot and the slot stops identifying a move the moment
+nobody is holding it in a variable — which is exactly what reading one back is.
+So the whole read-back answers in **names**: what a move hangs under, where a
+scope holds, who says what to whom. The id stays as a field, because it is what
+says which of three variants was tried first and no walk recovers that.
+
+It is derived once, in `soma-tree`, and read two ways — `somatize-tree moves`
+prints an outline and `somatize.reasoning` hands the same rows to Python. A
+second copy of the derivation behind the drawing would be a view that quietly
+disagreed with the terminal about what an investigation contains.
+
+Two things came out of using it on a seeded investigation rather than designing
+it. A decision hung under nothing and scoped at what it abandons was drawn
+**floating**, seven rows from the line it ended — so a decision belongs beside
+what it abandons, which is the same rule `decided` already runs the other way.
+And a move nobody ran leaves no trace in anything derived from commits, since it
+cites none: what folds is worked out over the **moves** and reaches it.
+
+The layout is a pure function of those rows, so **folding is what you hand it**:
+the lines in `folds` come folded with how many and why, and handing it none
+opens everything. An app that folds what its reader has already read hands its
+own list and needs nothing added here — which is where the line between deriving
+and interacting actually falls.
+
 ### Which half is a command and which is a library
 
 Both, and the line is not taste: **the terminal is for what happens between
@@ -5749,6 +5780,7 @@ beside them. The original listed their absence as its own outstanding gap:
 | `hang`, `combines`, rewording | command |
 | `go`, and what a commit was for | command |
 | `diff`, `log`, `show`, `trials`, `data` — reading the record | command, and already there |
+| `moves` — the reasoning as an outline | command, because nine verbs that write with no way to read them back is a tool you cannot check your own typing against |
 | reporting a result from the code that produced it | library, and already there |
 | citing a trial from the finding that reads it | library |
 | the reasoning read back: moves, standings, scopes, what cites what | library |
@@ -5759,37 +5791,37 @@ less between it and the work than an API would.
 
 ### Questionnaire
 
-- [ ] a question can stand with nothing under it, and reads as pending work
-- [ ] a hypothesis can be validated and refuted, and a question cannot
-- [ ] only an attempt and a finding cite the record
-- [ ] a decision carries a course, and nothing else does
-- [ ] one move hangs under two parents, and neither is the parent
-- [ ] `combines` is not `under`, and says an attempt **is** the composition
-- [ ] a cycle is refused when it is written, not when it is walked
-- [ ] a move is reached by a name its author chose, from a process that never saw it created
-- [ ] standing is derived from what was said, and never read from a field
-- [ ] two edges of opposite sign whose scopes touch are `disputed`
-- [ ] the same two whose scopes do not touch are `depends`, and not `partly`
+- [x] a question can stand with nothing under it, and reads as pending work
+- [x] a hypothesis can be validated and refuted, and a question cannot
+- [x] only an attempt and a finding cite the record
+- [x] a decision carries a course, and nothing else does
+- [x] one move hangs under two parents, and neither is the parent
+- [x] `combines` is not `under`, and says an attempt **is** the composition
+- [x] a cycle is refused when it is written, not when it is walked
+- [x] a move is reached by a name its author chose, from a process that never saw it created
+- [x] standing is derived from what was said, and never read from a field
+- [x] two edges of opposite sign whose scopes touch are `disputed`
+- [x] the same two whose scopes do not touch are `depends`, and not `partly`
 - [ ] a hypothesis goes back to open on its own when what refuted it is invalidated
-- [ ] a decision's scope names what is abandoned, and what is abandoned is a move
-- [ ] an attempt nobody ran can be written down, and be what a decision abandons
-- [ ] a commit says which moves cite it, without an index saying so
-- [ ] a citation carries the commit **and** the resolved invocation
-- [ ] trials land under a version with nothing written to link them
-- [ ] nothing is ever updated: saying something claims the next slot
-- [ ] a line that was abandoned is still readable
-- [ ] what is suspect below an invalid commit is worked out, never stored
-- [ ] a walk sees every branch, not the ancestry of one tip
-- [ ] the reasoning can be drawn from what is stored, with nothing run again
-- [ ] a move nobody hung anywhere is drawn
-- [ ] pruning folds and never deletes, and says how many and why
-- [ ] folding what you have read writes nothing down
+- [x] a decision's scope names what is abandoned, and what is abandoned is a move
+- [x] an attempt nobody ran can be written down, and be what a decision abandons
+- [x] a commit says which moves cite it, without an index saying so
+- [x] a citation carries the commit **and** the resolved invocation
+- [x] trials land under a version with nothing written to link them
+- [x] nothing is ever updated: saying something claims the next slot
+- [x] a line that was abandoned is still readable
+- [x] what is suspect below an invalid commit is worked out, never stored
+- [x] a walk sees every branch, not the ancestry of one tip
+- [x] the reasoning can be drawn from what is stored, with nothing run again
+- [x] a move nobody hung anywhere is drawn
+- [x] pruning folds and never deletes, and says how many and why
+- [x] folding what you have read writes nothing down
 
 Going back:
 
-- [ ] going to a move by name lands on the commit its attempt cited
-- [ ] on a branch of its own, and never on one that already exists
-- [ ] unstaged work is a refusal, not something carried along
-- [ ] a move that cites no commit cannot be visited, and says so rather than guessing
-- [ ] an attempt citing a commit **and** a resolved invocation restores both halves
-- [ ] standing on a commit says which moves cite it, and says so when none do
+- [x] going to a move by name lands on the commit its attempt cited
+- [x] on a branch of its own, and never on one that already exists
+- [x] unstaged work is a refusal, not something carried along
+- [x] a move that cites no commit cannot be visited, and says so rather than guessing
+- [x] an attempt citing a commit **and** a resolved invocation restores both halves
+- [x] standing on a commit says which moves cite it, and says so when none do

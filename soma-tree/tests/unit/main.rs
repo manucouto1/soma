@@ -6,6 +6,7 @@ mod data;
 mod findings;
 mod journal;
 mod moves;
+mod reasoning;
 mod revision;
 mod snapshot;
 mod trials;

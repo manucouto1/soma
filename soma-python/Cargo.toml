@@ -32,6 +32,9 @@ arrow-schema = "59"
 somatize-study = { path = "../soma-study", version = "1.0.0" }
 # The verdict: numbers in, flags out, and no dependencies of its own.
 somatize-health = { workspace = true }
+# The reasoning, read back. `default-features = false` on purpose: the feature
+# it drops is `cli`, and a wheel has no use for an argument parser.
+somatize-tree = { workspace = true }
 # The plan travels to Python as data so that whoever draws it does not have
 # to parse a `Debug`. JSON and not MessagePack: the reader is `json.loads`,
 # which is stdlib, and nobody has to install anything to look at a shape.

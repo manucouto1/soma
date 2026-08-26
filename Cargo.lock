@@ -1496,6 +1496,7 @@ dependencies = [
  "somatize-health",
  "somatize-store",
  "somatize-study",
+ "somatize-tree",
 ]
 
 [[package]]
