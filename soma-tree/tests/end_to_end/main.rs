@@ -197,29 +197,21 @@ fn a_copy_of(master: &Path) -> tempfile::TempDir {
         .output()
         .expect("cp runs");
     assert!(said.status.success(), "copying the fixture: {said:?}");
-
-    // The fixture pins `tree`, so the fall back to the directory's own name
-    // never happens and every copy would write its verdicts into one journal.
-    // Said here rather than taken out of the example: what the example calls
-    // its investigation is the example's business.
-    let config = at.path().join("soma-tree.toml");
-    let named = std::fs::read_to_string(&config)
-        .expect("the fixture has a config")
-        .lines()
-        .map(|line| match line.starts_with("tree = ") {
-            true => format!(
-                "tree = \"{}\"",
-                at.path()
-                    .file_name()
-                    .expect("a temporary directory has a name")
-                    .to_string_lossy()
-            ),
-            false => line.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(&config, named + "\n").expect("the config is writable");
     at
+}
+
+/// What this copy calls its investigation.
+///
+/// The fixture pins `tree` in its config, so the fall back to the directory's
+/// own name never happens and every copy would write into one journal. Said
+/// with `--tree` and not by rewriting the file: an edit there leaves every
+/// copy with a modified working tree, and `go` refuses to move one of those —
+/// correctly, which is how this was found.
+fn calls(at: &Path) -> String {
+    at.file_name()
+        .expect("a temporary directory has a name")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The binary, in that repository, remembering there.
@@ -228,6 +220,8 @@ fn asking(at: &Path, remembering: &Path, args: &[&str]) -> std::process::Output 
         .args(args)
         .arg("--repo")
         .arg(at)
+        .arg("--tree")
+        .arg(calls(at))
         .env("XDG_CACHE_HOME", remembering)
         .current_dir(at)
         .output()
@@ -804,14 +798,10 @@ fn a_goal_that_says_no_direction_is_refused_rather_than_ignored() {
 /// attempt citing it, and a decision with that attempt as its scope.
 fn abandoned(at: &Path, commit: &str) {
     let kept = somatize_store::Local::at(at.join("store")).expect("a store");
-    // Read from the config and not from the directory's name: it is what
-    // separates two investigations sharing a store, and writing under another
-    // name leaves the moves where nobody reads them — with no error, which is
-    // the worst part.
-    let tree = somatize_tree::bench::Config::read(at)
-        .expect("the config")
-        .tree(at);
-    let moves = somatize_tree::moves::Moves::of(tree, &kept);
+    // The same name the binary is given, and not the config's: writing under
+    // another one leaves the moves where nobody reads them, with no error,
+    // which is the worst way for this to be wrong.
+    let moves = somatize_tree::moves::Moves::of(calls(at), &kept);
     let a = moves
         .add(somatize_tree::moves::Writing {
             cites: vec![somatize_tree::moves::Cited {
@@ -1115,4 +1105,150 @@ fn a_file_that_stops_being_reached_leaves_the_answer() {
         !files.contains(&"experiments/parts.py"),
         "nobody reaches `parts.py` any more: {files:?}",
     );
+}
+
+#[test]
+fn a_move_is_written_from_the_terminal_and_found_again_by_its_name() {
+    // The gap the original left: the reasoning could only be written from the
+    // browser, so seeding a tree meant a script against HTTP.
+    given!(at);
+
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+    somatize_tree(
+        at,
+        &[
+            "tried",
+            "quadratic",
+            "-m",
+            "the embedding becomes quadratic",
+            "--under",
+            "capacity",
+            "--cites",
+            "HEAD~1",
+        ],
+    );
+
+    let said = somatize_tree(at, &["here", "HEAD~1"]);
+
+    assert!(said.contains("quadratic"), "{said}");
+    assert!(said.contains("attempt"), "{said}");
+}
+
+#[test]
+fn a_commit_nobody_wrote_a_reason_for_says_that_rather_than_nothing() {
+    // Not the same as there being no reason, and the difference is the whole
+    // point of asking.
+    given!(at);
+
+    let said = somatize_tree(at, &["here", "HEAD"]);
+
+    assert!(
+        said.contains("nobody has written down"),
+        "silence would read as there being no reason: {said}",
+    );
+}
+
+#[test]
+fn going_to_a_move_lands_on_the_commit_it_ran_on_a_branch_of_its_own() {
+    given!(at);
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+    somatize_tree(
+        at,
+        &[
+            "tried",
+            "quadratic",
+            "-m",
+            "this way",
+            "--under",
+            "capacity",
+            "--cites",
+            "HEAD~1",
+        ],
+    );
+    let meant = Command::new("git")
+        .arg("-C")
+        .arg(at)
+        .args(["rev-parse", "--short=12", "HEAD~1"])
+        .output()
+        .expect("git runs");
+    let meant = String::from_utf8_lossy(&meant.stdout).trim().to_string();
+
+    somatize_tree(at, &["go", "quadratic"]);
+
+    let branch = Command::new("git")
+        .arg("-C")
+        .arg(at)
+        .args(["branch", "--show-current"])
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&branch.stdout).trim(),
+        "quadratic",
+        "a branch of its own",
+    );
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(at)
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        meant,
+        "and on the commit that attempt cited",
+    );
+}
+
+#[test]
+fn going_twice_refuses_rather_than_joining_a_line_somebody_is_on() {
+    // A commit is a version that has already been measured, so arriving is
+    // arriving to make the next variant. The refusal is in every language,
+    // because it asks git whether the ref resolves rather than reading a
+    // message git writes in the caller's own.
+    given!(at);
+    somatize_tree(
+        at,
+        &["tried", "quadratic", "-m", "this way", "--cites", "HEAD~1"],
+    );
+    somatize_tree(at, &["go", "quadratic"]);
+
+    let said = soma_tree_refusing(at, &["go", "quadratic"]);
+
+    assert!(said.contains("already a branch"), "{said}");
+    assert!(said.contains("--branch"), "and says the way out: {said}");
+}
+
+#[test]
+fn a_move_that_ran_nothing_cannot_be_visited_and_says_why() {
+    given!(at);
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+
+    let said = soma_tree_refusing(at, &["go", "capacity"]);
+
+    assert!(said.contains("cites no commit"), "{said}");
+}
+
+#[test]
+fn going_with_uncommitted_work_refuses_rather_than_carrying_it_along() {
+    given!(at);
+    somatize_tree(
+        at,
+        &["tried", "quadratic", "-m", "this way", "--cites", "HEAD~1"],
+    );
+    std::fs::write(at.join("experiments/encoder.py"), "# half written\n").expect("a file");
+
+    let said = soma_tree_refusing(at, &["go", "quadratic"]);
+
+    assert!(said.contains("not committed"), "{said}");
+    assert!(said.contains("encoder.py"), "and which work: {said}");
+}
+
+#[test]
+fn two_moves_cannot_answer_to_one_name_from_the_terminal_either() {
+    given!(at);
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+
+    let said = soma_tree_refusing(at, &["ask", "capacity", "-m", "asked twice"]);
+
+    assert!(said.contains("already names"), "{said}");
 }

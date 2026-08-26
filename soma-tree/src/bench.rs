@@ -181,14 +181,19 @@ impl Bench {
 ///
 /// The one entry point both a terminal and a request handler use, so neither
 /// can drift from the other about what an investigation contains.
+/// The bench is handed in and not built here.
+///
+/// It used to take the paths and stand one up of its own, which quietly made
+/// this the second place that reads `soma-tree.toml` — so a name said on the
+/// command line reached the journal and not the walk, and a verdict written
+/// one moment was invisible the next with nothing saying why.
 pub fn walking(
-    repo: &Path,
+    bench: &Bench,
     store: Option<&Path>,
     given: Option<&Path>,
     range: &str,
     most: usize,
 ) -> Result<Walk, Box<dyn std::error::Error>> {
-    let bench = Bench::set_up(repo, store, given)?;
     let probing = bench.probing(store, given);
     let shown = revision::commits_in(&bench.repo, range, most)?;
     if shown.is_empty() {
@@ -203,7 +208,7 @@ pub fn walking(
     // history, the journal, the trials and the reasoning read the same. What
     // is missing is what each edit did.
     let known = match bench.config.build {
-        Some(_) => probed(&bench, &probing, &commits)?,
+        Some(_) => probed(bench, &probing, &commits)?,
         None => HashMap::new(),
     };
     walk::walked(

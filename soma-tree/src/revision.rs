@@ -451,3 +451,55 @@ impl fmt::Display for Trouble {
 }
 
 impl std::error::Error for Trouble {}
+
+/// What is **tracked** and changed, as `git` says it.
+///
+/// Asked before going anywhere: an edit to a tracked file belongs to the
+/// version it was written against, and carrying it to another one is the kind
+/// of help that loses an afternoon.
+///
+/// Untracked files are not it, deliberately. A scratch notebook beside the
+/// code is not work that belongs to where somebody was, and refusing over one
+/// would make the verb unusable on the machine of anybody who keeps one.
+pub fn dirty(repo: &Path) -> Result<String, Trouble> {
+    git(repo, &["status", "--porcelain", "--untracked-files=no"]).map_err(|said| {
+        Trouble::NoWorktree {
+            commit: "HEAD".into(),
+            said,
+        }
+    })
+}
+
+/// Cuts a branch at that commit and moves onto it.
+///
+/// **A branch of its own and never an existing one.** A commit is a version
+/// that has already been measured, so arriving at one is arriving to make the
+/// next variant — and a `checkout` that landed on somebody's branch would put
+/// the next commit on the end of a line that was not being extended.
+pub fn went_to(repo: &Path, branch: &str, commit: &str) -> Result<(), Trouble> {
+    // Asked rather than read off the failure. git speaks the caller's language
+    // — the first draft matched `already exists` and said nothing at all on a
+    // Spanish machine, where it is `ya existe`. A ref either resolves or it
+    // does not, in every locale there is.
+    if git(
+        repo,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .is_ok()
+    {
+        return Err(Trouble::NoSuchBranch {
+            branch: branch.to_string(),
+            said: format!(
+                "`{branch}` is already a branch. Arriving at a version that has been measured \
+                 is arriving to make the next variant, so this never joins a line somebody is \
+                 already on — name another with `--branch`"
+            ),
+        });
+    }
+    git(repo, &["checkout", "-q", "-b", branch, commit])
+        .map(|_| ())
+        .map_err(|said| Trouble::NoSuchBranch {
+            branch: branch.to_string(),
+            said,
+        })
+}

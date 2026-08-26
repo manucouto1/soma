@@ -12,6 +12,7 @@ use somatize_tree::bench::{Bench, probed, walking};
 use somatize_tree::data;
 use somatize_tree::findings::{DOWNSTREAM, Findings, RESETTLED, SALTED, STALE, SUSPECT};
 use somatize_tree::journal::Verdict;
+use somatize_tree::moves::{Cited, Course, Kind, Moves, Said, Says, Scope, Writing as Written};
 use somatize_tree::revision;
 use somatize_tree::snapshot::Snapshot;
 use somatize_tree::trials::{Goal, Trials};
@@ -25,6 +26,38 @@ use std::process::ExitCode;
 struct Cli {
     #[command(subcommand)]
     doing: Doing,
+}
+
+/// What every verb that writes a move takes.
+#[derive(Parser)]
+struct Writing {
+    /// What to call it. How it is found again — by `go`, by `--under`, and by
+    /// you in a week. Unique within the investigation.
+    name: String,
+    /// What it says. Without it, read from stdin.
+    #[arg(short = 'm', long)]
+    message: Option<String>,
+    /// What it hangs under. Multivalued on purpose: a move can answer two
+    /// questions at once, and neither of them is the parent.
+    #[arg(long = "under", value_name = "MOVE")]
+    under: Vec<String>,
+    #[command(flatten)]
+    at: Where,
+}
+
+impl Where {
+    /// The bench these flags describe.
+    ///
+    /// One place and not ten: `--tree` has to be applied after the config is
+    /// read and before anything is asked of the store, and ten call sites
+    /// would be ten chances to forget.
+    fn bench(&self) -> Result<Bench, Box<dyn std::error::Error>> {
+        let mut bench = Bench::set_up(&self.repo, self.store.as_deref(), self.given.as_deref())?;
+        if let Some(tree) = &self.tree {
+            bench.config.tree = Some(tree.clone());
+        }
+        Ok(bench)
+    }
 }
 
 /// Where the answers are looked for and kept, shared by every command.
@@ -44,6 +77,11 @@ struct Where {
     /// not enough to look anything up.
     #[arg(long = "input")]
     given: Option<PathBuf>,
+    /// What this investigation is called, so several share one store without
+    /// seeing each other. Defaults to what `soma-tree.toml` says, and to the
+    /// repository's own name when it says nothing.
+    #[arg(long)]
+    tree: Option<String>,
     /// The probes themselves, unread, for whoever is building on this.
     #[arg(long)]
     json: bool,
@@ -106,6 +144,109 @@ enum Doing {
         /// Why. Worth more than the verdict in six months.
         #[arg(short = 'm', long)]
         message: Option<String>,
+        #[command(flatten)]
+        at: Where,
+    },
+    /// Asks a question: what is not known.
+    ///
+    /// The only kind that can stand with nothing under it — an untried question
+    /// is outstanding work, and it has nowhere else to live.
+    Ask {
+        #[command(flatten)]
+        writing: Writing,
+    },
+    /// Proposes a falsifiable answer to one.
+    Suppose {
+        #[command(flatten)]
+        writing: Writing,
+        /// What it is about. Without it, the whole investigation — which for a
+        /// hypothesis is almost always more than it holds for.
+        #[arg(long = "about", value_name = "MOVE")]
+        about: Vec<String>,
+    },
+    /// Writes down what was tried. The only kind that touches the record.
+    Tried {
+        #[command(flatten)]
+        writing: Writing,
+        /// The commit it ran. Resolved now and kept as a full hash.
+        #[arg(long)]
+        cites: Option<String>,
+        /// The resolved invocation, if it was kept. A commit is only half of
+        /// what ran: the same one under two configurations is two experiments.
+        #[arg(long, value_name = "DIGEST")]
+        ran: Option<String>,
+    },
+    /// Writes down what the evidence says.
+    Found {
+        #[command(flatten)]
+        writing: Writing,
+        /// The trial it was seen in.
+        #[arg(long = "in", value_name = "TRIAL")]
+        in_: Option<String>,
+    },
+    /// Decides what to do about a line: `pursue`, `abandon`, `superseded`.
+    ///
+    /// The scope names **what is abandoned**, and what is abandoned has to be a
+    /// move — an attempt nobody ever ran included, which is precisely the one
+    /// needed to be able to say it was never run.
+    Decide {
+        /// `pursue`, `abandon` or `superseded`.
+        course: String,
+        #[command(flatten)]
+        writing: Writing,
+        /// What is decided about. Required: a decision about everything is not
+        /// a decision.
+        #[arg(long = "about", value_name = "MOVE", required = true)]
+        about: Vec<String>,
+    },
+    /// Hangs a move under another.
+    Hang {
+        /// The move being hung.
+        child: String,
+        /// What it hangs under.
+        #[arg(long = "under", value_name = "MOVE", required = true)]
+        under: Vec<String>,
+        #[command(flatten)]
+        at: Where,
+    },
+    /// Says something from one move to another: `answers`, `validates`,
+    /// `refutes`, `combines`.
+    Says {
+        /// What is speaking.
+        from: String,
+        /// `answers`, `validates`, `refutes` or `combines`.
+        says: String,
+        /// What it is speaking to.
+        to: String,
+        /// It pushes the question along rather than settling it.
+        #[arg(long)]
+        partly: bool,
+        /// Where it holds. Two edges of opposite sign whose scopes **touch**
+        /// are a dispute; the same two that do not touch are an answer that
+        /// depends on the case.
+        #[arg(long = "about", value_name = "MOVE")]
+        about: Vec<String>,
+        #[command(flatten)]
+        at: Where,
+    },
+    /// Goes to the commit a move ran, on a branch of its own.
+    ///
+    /// `git checkout` asks for a hash and what anybody remembers is the idea.
+    /// A commit is a version that has already been measured, so arriving at one
+    /// is arriving to make the **next** variant, never to rewrite that one.
+    Go {
+        /// The move to go to.
+        moved: String,
+        /// What to call the branch. Defaults to the move's own name.
+        #[arg(long)]
+        branch: Option<String>,
+        #[command(flatten)]
+        at: Where,
+    },
+    /// What the commit you are on was for: the moves that cite it.
+    Here {
+        #[arg(default_value = "HEAD")]
+        rev: String,
         #[command(flatten)]
         at: Where,
     },
@@ -183,6 +324,63 @@ fn main() -> ExitCode {
             }
             None => Err(format!("`{verdict}` is not one: invalid").into()),
         },
+        Doing::Ask { writing } => moving(writing, Kind::Question, Carries::default()),
+        Doing::Suppose { writing, about } => moving(
+            writing,
+            Kind::Hypothesis,
+            Carries {
+                about,
+                ..Carries::default()
+            },
+        ),
+        Doing::Tried {
+            writing,
+            cites,
+            ran,
+        } => moving(
+            writing,
+            Kind::Attempt,
+            Carries {
+                commit: cites.as_deref(),
+                ran: ran.as_deref(),
+                ..Carries::default()
+            },
+        ),
+        Doing::Found { writing, in_ } => moving(
+            writing,
+            Kind::Finding,
+            Carries {
+                trial: in_.as_deref(),
+                ..Carries::default()
+            },
+        ),
+        Doing::Decide {
+            course,
+            writing,
+            about,
+        } => match Course::read(course) {
+            Some(course) => moving(
+                writing,
+                Kind::Decision,
+                Carries {
+                    about,
+                    course: Some(course),
+                    ..Carries::default()
+                },
+            ),
+            None => Err(format!("`{course}` is not one: pursue, abandon, superseded").into()),
+        },
+        Doing::Hang { child, under, at } => hanging(child, under, at),
+        Doing::Says {
+            from,
+            says,
+            to,
+            partly,
+            about,
+            at,
+        } => speaking(from, says, to, *partly, about, at),
+        Doing::Go { moved, branch, at } => going(moved, branch.as_deref(), at),
+        Doing::Here { rev, at } => whying(rev, at),
         Doing::Trials { rev, curve, at } => trialling(rev, *curve, at),
         Doing::Data { range, most, at } => dataing(range, *most, at),
         Doing::Show { rev, at } => showing(rev, at),
@@ -201,8 +399,232 @@ fn main() -> ExitCode {
     }
 }
 
+/// What a kind carries beyond its prose, and no kind carries all of it.
+///
+/// A struct because the alternative is six positional arguments of which four
+/// are `None` at every call site — the same reason `Writing` exists one layer
+/// down.
+#[derive(Default)]
+struct Carries<'a> {
+    /// Where it holds. Questions, hypotheses and decisions; the rest is about
+    /// everything and it is not read.
+    about: &'a [String],
+    /// The commit an attempt ran, as a revspec. Resolved before it is kept.
+    commit: Option<&'a str>,
+    /// The resolved invocation, which is the half of an experiment git has not.
+    ran: Option<&'a str>,
+    /// The trial a finding was seen in.
+    trial: Option<&'a str>,
+    /// What a decision decided.
+    course: Option<Course>,
+}
+
+/// Writes a move, hangs it where it was told, and says where it went.
+fn moving(
+    writing: &Writing,
+    kind: Kind,
+    carries: Carries<'_>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let at = &writing.at;
+    let bench = at.bench()?;
+    let prose = match writing.message.as_deref() {
+        Some(said) => said.to_string(),
+        // No `-m`, so from stdin: a hypothesis worth writing down is longer
+        // than a shell wants to be argued with about quoting.
+        None => std::io::read_to_string(std::io::stdin())?,
+    };
+    if prose.trim().is_empty() {
+        return Err("a move with nothing in it says nothing".into());
+    }
+    let moves = bench.moves();
+
+    // Resolved to a full hash and never kept as `HEAD~2`: what an attempt ran
+    // has to still be what it ran tomorrow.
+    let mut cites = Vec::new();
+    if let Some(rev) = carries.commit {
+        cites.push(Cited {
+            what: "commit".into(),
+            id: revision::named(&bench.repo, rev)?,
+        });
+    }
+    if let Some(digest) = carries.ran {
+        cites.push(Cited {
+            what: "artifact".into(),
+            id: digest.to_string(),
+        });
+    }
+    if let Some(trial) = carries.trial {
+        cites.push(Cited {
+            what: "trial".into(),
+            id: trial.to_string(),
+        });
+    }
+
+    let id = moves.add(Written {
+        scope: reached(&moves, carries.about)?,
+        cites,
+        course: carries.course,
+        ..Written::new(
+            kind,
+            &writing.name,
+            prose.trim(),
+            &revision::whoami(&bench.repo),
+        )
+    })?;
+    for parent in &writing.under {
+        moves.hang(id, moves.went(parent)?)?;
+    }
+
+    println!("{} · {kind} · {id}", writing.name);
+    Ok(true)
+}
+
+/// The scope those names reach, or everything when nobody named any.
+fn reached(moves: &Moves, about: &[String]) -> Result<Scope, Box<dyn std::error::Error>> {
+    match about.is_empty() {
+        true => Ok(Scope::everything()),
+        false => {
+            let mut roots = Vec::new();
+            for name in about {
+                roots.push(moves.went(name)?);
+            }
+            Ok(Scope::of(roots))
+        }
+    }
+}
+
+fn hanging(child: &str, under: &[String], at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
+    let bench = at.bench()?;
+    let moves = bench.moves();
+    let child_id = moves.went(child)?;
+    for parent in under {
+        moves.hang(child_id, moves.went(parent)?)?;
+        println!("{child} · under · {parent}");
+    }
+    Ok(true)
+}
+
+fn speaking(
+    from: &str,
+    says: &str,
+    to: &str,
+    partly: bool,
+    about: &[String],
+    at: &Where,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let Some(says) = Says::read(says) else {
+        return Err(format!("`{says}` is not one: answers, validates, refutes, combines").into());
+    };
+    let bench = at.bench()?;
+    let moves = bench.moves();
+    moves.say(Said {
+        from: moves.went(from)?,
+        to: moves.went(to)?,
+        says,
+        scope: reached(&moves, about)?,
+        in_part: partly,
+    })?;
+
+    println!(
+        "{from} · {says}{} · {to}",
+        match partly {
+            true => " in part",
+            false => "",
+        }
+    );
+    Ok(true)
+}
+
+/// Goes to the commit a move ran, on a branch of its own.
+fn going(
+    moved: &str,
+    branch: Option<&str>,
+    at: &Where,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let bench = at.bench()?;
+    let moves = bench.moves();
+    let id = moves.went(moved)?;
+    let known = moves.all()?;
+    let one = known.get(&id).ok_or(format!("`{moved}` reaches no move"))?;
+
+    let Some(commit) = one
+        .cites
+        .iter()
+        .find(|cited| cited.what == "commit")
+        .map(|cited| cited.id.clone())
+    else {
+        return Err(format!(
+            "`{moved}` is a {} and cites no commit, so there is nowhere to go. \
+             Only an attempt runs one",
+            one.kind
+        )
+        .into());
+    };
+
+    // Refused and not carried along: whatever is in the working tree belongs
+    // to where somebody already was, and moving it somewhere it was never
+    // written against is the kind of help nobody asked for.
+    let dirty = revision::dirty(&bench.repo)?;
+    if !dirty.is_empty() {
+        return Err(format!(
+            "there is work here that is not committed, so going would take it somewhere it \
+             was not written:\n{dirty}"
+        )
+        .into());
+    }
+
+    let branch = branch.unwrap_or(moved);
+    revision::went_to(&bench.repo, branch, &commit)?;
+
+    let short = &commit[..12.min(commit.len())];
+    println!(
+        "{branch} · at {short} · {}",
+        one.prose.lines().next().unwrap_or("")
+    );
+    Ok(true)
+}
+
+/// What this commit was for: the moves that cite it.
+fn whying(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
+    let bench = at.bench()?;
+    let commit = revision::named(&bench.repo, rev)?;
+    let short = &commit[..12.min(commit.len())];
+
+    // Derived from the citations and kept in no index: the reasoning is
+    // already read to be drawn, so an index would be a second place saying the
+    // same thing and the one of the two that goes stale.
+    let cited: Vec<_> = bench
+        .moves()
+        .all()?
+        .into_values()
+        .filter(|one| {
+            one.cites
+                .iter()
+                .any(|cited| cited.what == "commit" && cited.id == commit)
+        })
+        .collect();
+
+    match cited.is_empty() {
+        // Not the same as there being no reason: it is that nobody wrote it
+        // down, and saying so is the difference.
+        true => println!("{short} · nobody has written down what this was for"),
+        false => {
+            println!("{short}");
+            for one in cited {
+                println!(
+                    "  {} · {} · {}",
+                    one.name,
+                    one.kind,
+                    one.prose.lines().next().unwrap_or("")
+                );
+            }
+        }
+    }
+    Ok(true)
+}
+
 fn diffing(before: &str, after: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
-    let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
+    let bench = at.bench()?;
     let probing = bench.probing(at.store.as_deref(), at.given.as_deref());
     let commits = [
         revision::named(&bench.repo, after)?,
@@ -228,7 +650,7 @@ fn logging(
     at: &Where,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let walk = walking(
-        &at.repo,
+        &at.bench()?,
         at.store.as_deref(),
         at.given.as_deref(),
         range,
@@ -483,7 +905,7 @@ fn saying(
     message: Option<&str>,
     at: &Where,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
+    let bench = at.bench()?;
     // Resolved to a full hash, never stored as `HEAD~2`: what somebody wrote
     // about a commit has to still be about that commit tomorrow.
     let commit = revision::named(&bench.repo, rev)?;
@@ -515,7 +937,7 @@ fn saying(
 
 /// What data sits under each version, and what belongs to none of them.
 fn dataing(range: &str, most: usize, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
-    let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
+    let bench = at.bench()?;
     let Some(store) = at.store.as_deref() else {
         // Said in full: with no store there is nothing to attribute, and an
         // empty table reads as *nothing is kept* rather than as *you have not
@@ -620,7 +1042,7 @@ fn trialling(
     curve: Option<u32>,
     at: &Where,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
+    let bench = at.bench()?;
     let commit = revision::named(&bench.repo, rev)?;
     let tree = bench.config.tree(&bench.repo);
     let goal = bench.config.towards()?;
@@ -707,7 +1129,7 @@ fn trialling(
 
 /// Everything anybody said about one commit, prose and all.
 fn showing(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
-    let bench = Bench::set_up(&at.repo, at.store.as_deref(), at.given.as_deref())?;
+    let bench = at.bench()?;
     let commit = revision::named(&bench.repo, rev)?;
     let journal = bench.journal();
 
