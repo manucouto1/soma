@@ -138,6 +138,59 @@ def test_two_runs_in_one_environment_write_one_reading(kept, tmp_path):
     assert len(readings) == 1, [b.name for b in readings]
 
 
+def test_what_is_installed_is_read_once_and_not_once_per_run(monkeypatch):
+    # A reading is written on every `forward` that has a store behind it, and
+    # all of what it costs is read off disk: the scan walks the metadata of
+    # every distribution in the environment — ~350 ms where torch is one of
+    # them — and then each version is read again, one file per distribution.
+    #
+    # Uncached that was a toll of 358 ms a run, and it drowned the 121 ms of
+    # weighing a 19 MB batch that CU24 measured. Nothing went red: what a run
+    # says is right either way, and only the clock knew.
+    import importlib.metadata as about
+
+    scans, versions = [], []
+    scan, version = about.packages_distributions, about.version
+
+    def counting_scan():
+        scans.append(1)
+        return scan()
+
+    def counting_version(distribution):
+        versions.append(distribution)
+        return version(distribution)
+
+    monkeypatch.setattr(about, "packages_distributions", counting_scan)
+    monkeypatch.setattr(about, "version", counting_version)
+    # Something has read it already, so the count only means anything from
+    # cold. `cache_clear` is `functools.cache`'s and nothing else's, so asking
+    # for it here is half of what this test asserts.
+    _environment._installed.cache_clear()
+    _environment._version.cache_clear()
+    try:
+        first, second = _environment.environment(), _environment.environment()
+    finally:
+        _environment._installed.cache_clear()
+        _environment._version.cache_clear()
+
+    assert first == second
+    assert len(scans) == 1, f"scanned {len(scans)} times"
+    assert sorted(versions) == sorted(set(versions)), f"read twice: {versions}"
+
+
+def test_a_module_imported_after_the_first_reading_is_still_in_the_next(monkeypatch):
+    # Keeping the scan must not freeze the reading. What goes in is what the
+    # process reached for, and it reaches for more as it runs; only *what is
+    # installed* is what does not move.
+    monkeypatch.setattr(_environment, "_installed", lambda: {"nothing": ["pytest"]})
+
+    before = _environment.environment()
+    assert "pytest" not in before
+
+    monkeypatch.setitem(sys.modules, "nothing", types.ModuleType("nothing"))
+    assert "pytest" in _environment.environment()
+
+
 def test_the_environment_is_the_same_name_twice(tmp_path):
     # Over the JSON with sorted keys, so it is a function of what is in it and
     # not of how the dictionary was built.

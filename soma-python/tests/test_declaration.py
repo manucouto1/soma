@@ -307,3 +307,62 @@ def test_what_a_node_keeps_for_itself_is_not_what_it_was_built_with():
     assert digest(it) == before
     assert written(it) == "Counts(dim=512)"
 
+
+def test_a_store_is_declared_by_what_it_is_and_not_by_where_it_is(tmp_path):
+    # **Steady**, and the one place being faithful was not enough. A store's
+    # `repr` is `Store(/mnt/data/runs)` — a stable text, a true one, and the
+    # wrong half of the answer: it says *where*, and a declaration is *what*.
+    #
+    # Trusted, it put a directory inside every key under it. The same rows in
+    # two folders were two different values, moving a store lost every hit it
+    # had, and the same study over a shared folder here and S3 there — which is
+    # the whole point of a store being a `dyn` — agreed on nothing. Which is
+    # the failure the address rule stops one rung out: a path is not the run,
+    # it is the machine.
+    from somatize import Store
+    from somatize.data import Parquet
+
+    said = []
+    for where in ("here", "elsewhere"):
+        store = Store(str(tmp_path / where))
+        store.bind("rows", store.put(b"the very same rows"))
+        said.append(written(Parquet(store, "rows")))
+
+    assert said[0] == said[1] == "Parquet(name='rows', store=Store())"
+
+
+def test_and_which_rows_they_are_is_still_in_the_name(tmp_path):
+    # **Faithful**, which is what makes dropping the path safe: *which* dataset
+    # this is was never the store's to say. It is the digest of the content, on
+    # the source as its state, and it is in the key already — which is why
+    # `settle` is here and not decoration: a source declared frozen and left
+    # unsettled is refused before the first node, for this very collision.
+    import pyarrow
+    import pyarrow.parquet
+
+    from somatize import Store, foreseen
+    from somatize.data import Parquet, settle
+
+    class Widest(Node):
+        def forward(self, frame, ctx):
+            return 1.0
+
+    def rows_of(how_many):
+        table = pyarrow.table({"sms": [f"row {i}" for i in range(how_many)]})
+        sink = pyarrow.BufferOutputStream()
+        pyarrow.parquet.write_table(table, sink)
+        return sink.getvalue().to_pybytes()
+
+    def named(where, rows):
+        store = Store(str(tmp_path / where))
+        store.bind("rows", store.put(rows))
+        graph = Graph.somatize(
+            Parquet(store, "rows").named("rows").frozen()
+            >> Widest().named("widest").frozen().cached()
+        )
+        settle(graph)
+        return foreseen.names(graph, store=store)
+
+    same = rows_of(3)
+    assert named("here", same) == named("elsewhere", same), "moved, and one value"
+    assert named("third", rows_of(9)) != named("here", same), "and other rows are not"

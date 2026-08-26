@@ -1005,6 +1005,34 @@ fn watched(who: &'static str) -> (Graph, Catalog, Memory, Arc<Journal>) {
 }
 
 #[test]
+fn the_graph_input_is_weighed_once_and_not_once_more_for_the_root() {
+    // A toll, and the only one naming cannot argue away: everything but the
+    // input is already a name, so a cache has to look at all of the input, on
+    // every step, hit or miss. CU24 measured 121 ms for a 19 MB batch.
+    //
+    // `run` weighs it for the record before the walk begins and a root's name
+    // is built on that very digest, so weighing it again pays the toll twice —
+    // which is exactly what asking early saves. It came back once already, and
+    // silently: every other test in this file passes either way.
+    let (g, c, memory, _journal) = watched("encoder");
+    let plan = compile(&g, &c).unwrap();
+    let notebook = Notebook::new();
+
+    let once = || {
+        Executor::new(&c)
+            .remembering(&memory)
+            .keeping(&notebook)
+            .run(&plan, Value::number(7.0))
+            .unwrap()
+    };
+
+    once();
+    assert_eq!(notebook.weighings(), 1, "a miss weighs it once");
+    once();
+    assert_eq!(notebook.weighings(), 2, "and a hit does not weigh it twice");
+}
+
+#[test]
 fn what_is_kept_is_not_computed_again() {
     let (g, c, memory, journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();

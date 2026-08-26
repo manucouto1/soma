@@ -26,7 +26,9 @@ What catches an address is **not** a test on the type: a **list** of
 address-bearing objects has `list.__repr__`, which is defined. So containers are
 walked rather than repr'd, a trusted `__repr__` has its text checked afterwards,
 and a `set` is sorted first, its repr order depending on hash randomisation.
-Beyond that, the answer is `salt=`.
+A type whose `repr` is faithful and still says the wrong thing — a `Store`,
+which answers *where* — declares itself with `__soma_declared__`. Beyond that,
+the answer is `salt=`.
 """
 
 from __future__ import annotations
@@ -44,6 +46,20 @@ __all__ = ["CannotDeclare", "digest", "remember_what_built_it", "written"]
 BUILT_WITH = "_soma_built_with"
 """Where the arguments are kept on the instance. One name, so a subclass calling
 up to its base does not overwrite what the subclass was called with."""
+
+DECLARED = "__soma_declared__"
+"""How a type says it is written down, when that is not what its `repr` says.
+
+For the things whose `repr` answers **where** rather than **what**. A `Store`
+is the case this exists for: `Store(/mnt/data/runs)` is a faithful text and a
+stable one, so the rule below trusts it — and then the same bytes in two
+directories name everything differently, and moving a store loses every hit it
+had. Which is the failure the address rule stops, one rung further out: a path
+is not the run, it is the machine.
+
+Read off the **type** and not the instance, since it is a statement about the
+kind: nobody declares a location per object.
+"""
 
 DEEP = 8
 """How far in to follow what a node holds before giving up. A declaration that
@@ -227,6 +243,12 @@ def _written(value: object, where: str, deep: int, seen: frozenset[int]) -> str:
             f"{name}: {one}" for name, one in sorted(pairs, key=_first)
         )
         return f"{{{inside}}}"
+
+    # Its own say before its repr, and checked all the same: a type saying how
+    # it is declared is still a `__repr__` somebody wrote.
+    own = getattr(type(value), DECLARED, None)
+    if own is not None:
+        return _trusted(own(value), where)
 
     if type(value).__repr__ is not object.__repr__:
         return _trusted(repr(value), where)

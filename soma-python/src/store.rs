@@ -209,6 +209,24 @@ impl PyStore {
     fn __repr__(&self) -> String {
         format!("Store({})", self.where_)
     }
+
+    /// How a store is written into a **declaration**, which is not how it is
+    /// written for a person to read.
+    ///
+    /// A declaration goes into every key under it, and `where_` exists for the
+    /// `repr` alone — a store does not say where it is. Trusting the `repr`
+    /// here put a directory in every name: the same bytes under two paths were
+    /// two different values, moving a store lost every hit it had, and the same
+    /// study over a shared folder here and S3 there — which is the whole point
+    /// of a `dyn Store` — agreed on nothing.
+    ///
+    /// Nothing is lost by saying only `Store()`: *which* rows these are is the
+    /// content digest a source carries as its state, and that is in the key
+    /// already. Nothing unfrozen is kept, so a source with no state has no name
+    /// to collide.
+    fn __soma_declared__(&self) -> String {
+        "Store()".to_string()
+    }
 }
 
 /// A name, and what it points at.

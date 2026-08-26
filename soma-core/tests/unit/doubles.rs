@@ -365,6 +365,11 @@ impl Node for Miscounts {
 #[derive(Default)]
 pub struct Notebook {
     kept: Mutex<Vec<(Key, Kept)>>,
+    /// How many times it was asked to weigh a value by content. Counted here
+    /// because it is the one cost a cache cannot argue away — the input is the
+    /// only part of a name that has to be looked at — so paying it twice for
+    /// one run is the regression a timing has to catch and no assertion did.
+    weighed: Mutex<usize>,
 }
 
 impl Notebook {
@@ -394,6 +399,11 @@ impl Notebook {
             .unwrap_or_default()
     }
 
+    /// How many values it hashed by content.
+    pub fn weighings(&self) -> usize {
+        *self.weighed.lock().expect("nobody poisons this mutex")
+    }
+
     fn entries(&self) -> Vec<(Key, Kept)> {
         self.kept.lock().expect("nobody poisons this mutex").clone()
     }
@@ -401,6 +411,7 @@ impl Notebook {
 
 impl Keeper for Notebook {
     fn key_of(&self, value: &Value) -> Option<Key> {
+        *self.weighed.lock().expect("nobody poisons this mutex") += 1;
         value.travels().then(|| Key::new(format!("{value:?}")))
     }
 

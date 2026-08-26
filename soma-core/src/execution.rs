@@ -649,8 +649,18 @@ impl<'a> Executor<'a> {
         let keeper: &dyn Keeper = keeper;
         // A root reads the graph's input, the one thing hashed by content; from
         // here down it is hashes of hashes, which is what makes a key foreseen.
+        //
+        // And that one hash is [`run`](Self::run)'s: it names the input for the
+        // record before the walk begins, and a root's name is built on the very
+        // same digest. Hashing it again costs exactly what asking early saves —
+        // a 19 MB batch weighed twice is 245 ms where CU24 measured 121. A
+        // slice has no graph input of its own, so `resume` leaves this empty
+        // and the root there is named the long way.
         let above: Vec<Key> = match from {
-            [] => vec![keeper.key_of(graph_input)?],
+            [] => vec![match &self.input {
+                Some(named) => named.clone(),
+                None => keeper.key_of(graph_input)?,
+            }],
             many => many
                 .iter()
                 .map(|id| keys.get(id).map(|keys| whole(keeper, keys)))

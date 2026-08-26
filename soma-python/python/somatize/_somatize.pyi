@@ -165,6 +165,10 @@ class Store:
     def recall(self, name: str) -> Any | None: ...
     def __repr__(self) -> str: ...
 
+    # `Store(where)` for a person to read, `Store()` for a key: a declaration
+    # says what, and where is the machine. See `somatize._declaration.DECLARED`.
+    def __soma_declared__(self) -> str: ...
+
 def codec(
     kind: str,
     of_type: type,
