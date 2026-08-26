@@ -15,7 +15,7 @@ fn the_probe_laid_down_is_the_one_the_recipe_hashed() {
     let cache = tempfile::tempdir().expect("a temporary directory");
     let laid = probe_laid_down(cache.path()).expect("the probe is laid down");
 
-    let contract = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py");
+    let contract = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/soma_tree_probe.py");
     assert_eq!(
         std::fs::read(&laid).expect("it is readable"),
         std::fs::read(&contract).expect("the contract is readable"),

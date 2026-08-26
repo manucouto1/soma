@@ -41,7 +41,6 @@ name:
 | [`somatize-tree`](soma-tree) | what an edit did to a graph, said before anybody runs it |
 | [`somatize-fabric-wire`](soma-fabric/wire) | carrying a slice of a plan to another process |
 | [`somatize-fabric-broker`](soma-fabric/broker) | the name a graph gave a host, turned into a way of reaching it |
-| [`somatize-fabric-fleet`](soma-fabric/fleet) | where the workers are, what they can do, what they are doing |
 
 The API reference is at
 [manucouto1.github.io/soma](https://manucouto1.github.io/soma/).

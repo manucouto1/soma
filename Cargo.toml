@@ -3,7 +3,6 @@ members = [
     "soma-core",
     "soma-data",
     "soma-fabric/broker",
-    "soma-fabric/fleet",
     "soma-fabric/wire",
     "soma-health",
     "soma-python",
@@ -30,8 +29,7 @@ somatize-store = { path = "soma-store", version = "1.0.0" }
 somatize-data = { path = "soma-data", version = "1.0.0" }
 somatize-health = { path = "soma-health", version = "1.0.0" }
 # The fabric, home from the repository it spent a day in. It is a family, so
-# it is a folder: the wire carries a slice, the broker says where a host is,
-# and the fleet is what outlives both and can be asked what is out there.
+# it is a folder: the wire carries a slice and the broker says where a host is.
 somatize-fabric-wire = { path = "soma-fabric/wire", version = "1.0.0" }
 somatize-fabric-broker = { path = "soma-fabric/broker", version = "1.0.0" }
 serde = { version = "1", features = ["derive"] }

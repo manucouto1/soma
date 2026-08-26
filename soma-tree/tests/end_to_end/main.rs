@@ -5,7 +5,7 @@
 //! subprocess, `somatize.foreseen` and the store all still agree once they are
 //! in the same room.
 //!
-//! The repository comes from `examples/an-investigation.sh --only-build`, the
+//! The repository comes from `tests/an-investigation.sh --only-build`, the
 //! **same fixture the example uses**: one definition, two consumers, so the
 //! example cannot rot without this going red.
 //!
@@ -90,7 +90,7 @@ fn a_fan_of(n: usize, python: &Path) -> tempfile::TempDir {
 /// The example's repository, laid down in a temporary directory.
 fn an_investigation(python: &Path) -> tempfile::TempDir {
     let at = tempfile::tempdir().expect("a temporary directory");
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/an-investigation.sh");
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/an-investigation.sh");
     let said = Command::new("bash")
         .arg(&script)
         .arg("--only-build")
@@ -672,7 +672,7 @@ fn an_edit_that_does_not_parse_is_caught_before_anything_else_runs() {
     let at = a_copy_of(the_investigation());
 
     let said = Command::new(&python)
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py"))
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/soma_tree_probe.py"))
         .args(["--build", "experiments.encoder:build", "--check", "embed"])
         .current_dir(at.path())
         .output()
@@ -697,7 +697,7 @@ fn the_graph_still_building_is_its_own_question() {
     std::fs::write(&file, was.replace("class Embed(", "class Embedding(")).expect("an edit");
 
     let said = Command::new(&python)
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py"))
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/soma_tree_probe.py"))
         .args(["--build", "experiments.encoder:build", "--check", "embed"])
         .current_dir(at.path())
         .output()
@@ -729,7 +729,7 @@ fn running_on_real_data_says_so_rather_than_inventing_some() {
     let at = a_copy_of(the_investigation());
 
     let said = Command::new(&python)
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py"))
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/soma_tree_probe.py"))
         .args(["--build", "experiments.encoder:build", "--check", "embed"])
         .current_dir(at.path())
         .output()
@@ -1014,7 +1014,7 @@ fn spread_across_files() -> tempfile::TempDir {
 
 fn probed_reaches(python: &Path, at: &Path) -> serde_json::Value {
     let said = Command::new(python)
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/soma_tree_probe.py"))
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/soma_tree_probe.py"))
         .args(["--build", "experiments.encoder:build", "--commit", "HEAD"])
         .current_dir(at)
         .output()

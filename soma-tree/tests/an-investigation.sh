@@ -5,7 +5,7 @@
 # Run it and read what `somatize-tree` says at each step; it takes about a minute
 # and it is the fastest way to see what the tool is for.
 #
-#     examples/an-investigation.sh
+#     tests/an-investigation.sh
 #
 # With `--only-build <dir>` it lays down the repository and stops, which is
 # what the end-to-end test uses: the example and the test share one fixture, so

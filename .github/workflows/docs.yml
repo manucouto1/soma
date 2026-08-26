@@ -87,8 +87,6 @@ jobs:
               — <span>the cable: a slice of work, carried to another machine</span></li>
             <li><a href="somatize_fabric_broker/index.html"><code>somatize-fabric-broker</code></a>
               — <span>which host a name resolves to</span></li>
-            <li><a href="somatize_fabric_fleet/index.html"><code>somatize-fabric-fleet</code></a>
-              — <span>where the workers are, what they can do, what they are doing</span></li>
           </ul>
           HTML
 

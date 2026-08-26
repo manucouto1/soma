@@ -84,7 +84,6 @@ jobs:
             somatize-tree
             somatize-fabric-wire
             somatize-fabric-broker
-            somatize-fabric-fleet
           "
 
           # Re-running a release must not fail on the crates that already went

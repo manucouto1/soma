@@ -346,7 +346,7 @@ pub fn probed<'a>(
 /// being explored, so `python -m somatize.tree.probe` would run the explored
 /// project's probe against its own graph and quietly answer a different
 /// question.
-const PROBE: &str = include_str!("../python/soma_tree_probe.py");
+const PROBE: &str = include_str!("soma_tree_probe.py");
 
 pub fn where_probes_are_remembered() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME")

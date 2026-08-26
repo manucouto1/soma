@@ -9,7 +9,7 @@ not like the ones after it.
 |---|---|---|---|
 | PyPI `somatize` | yes, from the old implementation | 0.5.1 | **1.0.0** |
 | crates.io `somatize-core`, `somatize-store` | yes, same | 0.5.1 | **1.0.0** |
-| crates.io — the other seven | **never** | — | **1.0.0** |
+| crates.io — the other six | **never** | — | **1.0.0** |
 | crates.io `somatize`, `-runtime`, and eight more | yes | 0.5.1 | **nothing, ever** |
 
 **1.0.0 and not 0.6.0.** This is a re-derivation, not a version more: the names
@@ -33,13 +33,13 @@ configure a publisher for a crate that does not exist yet.
 
 `somatize-core` and `somatize-store` carry theirs over from 0.5.x — same
 repository, same workflow file name, which is why **this file is still called
-`release.yml`**. The other seven have to go out once from a machine with a
+`release.yml`**. The other six have to go out once from a machine with a
 crates.io token, in dependency order:
 
 ```bash
 for c in somatize-core somatize-health somatize-study somatize-store \
          somatize-data somatize-tree somatize-fabric-wire \
-         somatize-fabric-broker somatize-fabric-fleet; do
+         somatize-fabric-broker; do
   cargo publish -p "$c" || break
 done
 ```
@@ -53,7 +53,7 @@ needed had never gone out and nobody knew.
 
 ## Then configure Trusted Publishing
 
-**crates.io** — for each of the nine crates `release.yml` publishes: Settings →
+**crates.io** — for each of the eight crates `release.yml` publishes: Settings →
 Trusted Publishing → GitHub, with
 
 - repository owner `manucouto1`, repository `soma`
@@ -76,7 +76,7 @@ cargo release major     # bumps the shared workspace version and tags v1.0.0
 
 `release.yml` runs on `v*` and does three jobs:
 
-- `publish-crates` — nine crates in dependency order. A version already on
+- `publish-crates` — eight crates in dependency order. A version already on
   crates.io is skipped; **anything else fails the job**.
 - `publish-pypi` — one manylinux wheel plus an sdist, built in a single job so
   nothing passes through artifact storage. **One** wheel and not four:

@@ -2,7 +2,7 @@
 //!
 //! Nothing here holds a graph — a graph is Python and lives for the length of a
 //! subprocess. What crosses back is this, and the fields are the probe's to
-//! add: `python/soma_tree_probe.py` is the contract, and this is one reader of
+//! add: `src/soma_tree_probe.py` is the contract, and this is one reader of
 //! it.
 
 use crate::findings::Findings;

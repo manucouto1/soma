@@ -13,7 +13,6 @@ use somatize_tree::data;
 use somatize_tree::findings::{DOWNSTREAM, Findings, RESETTLED, SALTED, STALE, SUSPECT};
 use somatize_tree::journal::Verdict;
 use somatize_tree::revision;
-use somatize_tree::serving::{Serving, routes};
 use somatize_tree::snapshot::Snapshot;
 use somatize_tree::trials::{Goal, Trials};
 use somatize_tree::walk::Walk;
@@ -110,15 +109,6 @@ enum Doing {
         #[command(flatten)]
         at: Where,
     },
-    /// Serves the line over HTTP, for whoever draws it.
-    Serve {
-        /// Where to listen. Loopback by default: it serves one person's own
-        /// exploration off their own machine.
-        #[arg(long, default_value = "127.0.0.1:7373")]
-        at: String,
-        #[command(flatten)]
-        where_: Where,
-    },
     /// What was run with one version: its trials, and one curve if asked.
     ///
     /// The version is the commit and does not change; the trials grow without
@@ -194,7 +184,6 @@ fn main() -> ExitCode {
             None => Err(format!("`{verdict}` is not one: invalid").into()),
         },
         Doing::Trials { rev, curve, at } => trialling(rev, *curve, at),
-        Doing::Serve { at, where_ } => serving(at, where_),
         Doing::Data { range, most, at } => dataing(range, *most, at),
         Doing::Show { rev, at } => showing(rev, at),
     };
@@ -750,33 +739,5 @@ fn showing(rev: &str, at: &Where) -> Result<bool, Box<dyn std::error::Error>> {
             println!("      {line}");
         }
     }
-    Ok(true)
-}
-
-/// Listens, and hands the line to whoever asks for it.
-fn serving(at: &str, where_: &Where) -> Result<bool, Box<dyn std::error::Error>> {
-    // Read once and thrown away: it is only here so a misconfigured repository
-    // is a message now rather than a 400 on the first request.
-    Bench::set_up(
-        &where_.repo,
-        where_.store.as_deref(),
-        where_.given.as_deref(),
-    )?;
-    let serving = Serving {
-        repo: where_.repo.canonicalize()?,
-        store: where_.store.clone(),
-        given: where_.given.clone(),
-    };
-
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let listening = tokio::net::TcpListener::bind(at).await?;
-        println!("somatize-tree at http://{at}");
-        println!("  GET  /api/walk?range=HEAD~10..HEAD");
-        println!("  GET  /api/said/<rev>");
-        println!("  POST /api/said/<rev>   {{\"verdict\": \"invalid\", \"prose\": \"...\"}}");
-        axum::serve(listening, routes(serving)).await?;
-        Ok::<_, Box<dyn std::error::Error>>(())
-    })?;
     Ok(true)
 }

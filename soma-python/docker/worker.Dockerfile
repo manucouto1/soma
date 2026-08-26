@@ -60,7 +60,6 @@ COPY soma-study/Cargo.toml soma-study/
 COPY soma-tree/Cargo.toml soma-tree/
 COPY soma-fabric/wire/Cargo.toml soma-fabric/wire/
 COPY soma-fabric/broker/Cargo.toml soma-fabric/broker/
-COPY soma-fabric/fleet/Cargo.toml soma-fabric/fleet/
 COPY soma-python/Cargo.toml soma-python/pyproject.toml soma-python/
 # Every member of the workspace, and not only what `python` names: cargo will
 # not load a workspace one of whose members is not there.
