@@ -21,7 +21,7 @@ services:
   worker-a:
     build: &worker
       context: ../../../..
-      dockerfile: soma-python/tests/cluster/docker/worker.Dockerfile
+      dockerfile: soma-python/docker/worker.Dockerfile
       target: worker
     command: &keeping ["python", "-m", "somatize.worker", "--listen", "0.0.0.0:7000", "--store", "/store"]
     ports: ["127.0.0.1:7001:7000"]
@@ -55,7 +55,7 @@ services:
     profiles: ["gpu"]
     build: &torch
       context: ../../../..
-      dockerfile: soma-python/tests/cluster/docker/worker.Dockerfile
+      dockerfile: soma-python/docker/worker.Dockerfile
       target: worker-gpu
     command: *keeping
     ports: ["127.0.0.1:7004:7000"]

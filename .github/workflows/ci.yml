@@ -1,0 +1,276 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege, declared here rather than inherited. The repository default
+# is already read-only, but that is a setting anyone with admin can change from
+# the UI; this file is the record. No job here needs to write anything.
+permissions:
+  contents: read
+
+# Cancel superseded runs on a pull request — pushing three times in a minute
+# should not queue three runs.
+#
+# A push gets a group of its OWN, keyed by commit, and that is the whole
+# point of the expression below. Grouping pushes by ref does not merely
+# fail to protect them: GitHub cancels the *pending* run in a group when a
+# new one arrives, `cancel-in-progress` notwithstanding — that setting only
+# governs runs already executing. Three pushes to main in ten minutes
+# therefore killed the middle one before it started a single job, and that
+# commit has no CI record at all. Keyed by SHA, a push never competes with
+# another push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # PyO3 refuses an interpreter newer than it supports, and the runners ship
+  # one. `.python-version` says 3.13 and pyo3 0.24 accepts it; the two have to
+  # be raised together, which is why the number appears once.
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  lint:
+    name: Format, lint & docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No toolchain action. `rust-toolchain.toml` names the compiler and its
+      # components, and the runners already have rustup; an action told which
+      # version to fetch would be a second copy of that pin, free to disagree
+      # with the one the worker image builds against.
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Setup Python for PyO3
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Point PyO3 at the pinned interpreter
+        run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
+
+      # NOT actions/cache over `target`. That is what killed a run on the old
+      # repository: the workspace after --workspace tests makes a target/ far
+      # larger than the ~14 GB an ubuntu runner has free, and the post-step has
+      # to compress it, needing the space twice over. The runner died with "No
+      # space left on device" AFTER every test had passed. rust-cache caches the
+      # registry and the dependency artifacts but prunes the workspace's own
+      # crates — which are rebuilt anyway — and derives its own key.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: lint
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      # `--all-targets` is not decoration here: the tests are separate crates
+      # outside `src/`, so without it clippy never reads a line of them.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  test:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Setup Python for PyO3
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Point PyO3 at the pinned interpreter
+        run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
+
+      # See the note on the first of these.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: test
+
+      # The 35 end-to-end tests of `somatize-tree` are NOT covered here: they
+      # need an interpreter that can import `somatize`, and without one they
+      # return early and report as passed. The `python` job below installs the
+      # wheel and runs them there, where a skip is made to fail.
+      - name: cargo test
+        run: cargo test --workspace
+
+      # `--workspace` builds default features only, so a type change can pass
+      # everything above and still break code behind a gate. Two gates exist:
+      # `somatize-core/serde` and `somatize-store/s3`.
+      - name: cargo check (every feature-gated path)
+        run: cargo check --workspace --all-targets --all-features
+
+      # The other direction, and it is a claim about the design rather than a
+      # build: with no transport at all, `somatize-python` still compiles. That
+      # is what makes "the wire is a seam" something the compiler checks.
+      - name: cargo check (no transport)
+        run: cargo check -p somatize-python --no-default-features
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: python
+
+      # Every optional half, deliberately. Each of these is a `skipif` in the
+      # suite — torch, plotly, cloudpickle, pyarrow — and a runner missing one
+      # would go green over tests that never ran.
+      - name: Create virtualenv and install deps
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install maturin pytest mypy numpy pandas pyarrow plotly cloudpickle
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      # In debug, which is what `maturin develop` does and what the tests want.
+      # Nothing here measures anything: the same build is 10x slower and the
+      # numbers in `examples/` are not re-derived by CI.
+      - name: Build and install somatize
+        run: |
+          . .venv/bin/activate
+          cd soma-python && maturin develop
+
+      # The package ships `py.typed`, so what it claims about itself is public
+      # API. `tests/test_stubs.py` checks the stub against the module that was
+      # just built; this checks the rest of the package against the stub.
+      - name: mypy
+        run: |
+          . .venv/bin/activate
+          cd soma-python && mypy
+
+      # `tests/cluster` is ignored rather than left to skip itself: it needs
+      # docker and images that take a quarter of an hour to build, and it has a
+      # workflow of its own. Ignoring it says so; skipping it would not.
+      - name: pytest
+        run: |
+          . .venv/bin/activate
+          cd soma-python && pytest tests/ -q --ignore=tests/cluster
+
+      # The one gate that lies by being green. These 35 tests need a Python
+      # that imports `somatize`; without one they print a line and return, and
+      # `cargo test` reports 35 passed either way. The venv above has one, so
+      # the honest check is that the line never appears — 0.1 s of skipping and
+      # 5 s of running look identical in a summary, and only this does not.
+      - name: soma-tree end-to-end (and no silent skips)
+        run: |
+          . .venv/bin/activate
+          export SOMA_TREE_PYTHON="$PWD/.venv/bin/python"
+          cargo test -p somatize-tree --test end_to_end -- --nocapture 2>&1 | tee /tmp/tree.log
+          if grep -q "no interpreter that imports somatize" /tmp/tree.log; then
+            echo "::error::the end-to-end tests skipped — they were green about nothing"
+            exit 1
+          fi
+
+  bucket:
+    name: Store against a real bucket
+    runs-on: ubuntu-latest
+
+    # MinIO and not a fake, for the reason the compose file gives: what is being
+    # checked is that a conditional write is really conditional, and a fake
+    # answers whatever it was written to answer. Pinned to the same release the
+    # local compose uses — `If-None-Match` on PUT is not ancient in MinIO, and
+    # an older tag fails the check `Bucket::at` makes, correctly and
+    # confusingly.
+    services:
+      minio:
+        image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+        env:
+          MINIO_ROOT_USER: somanext
+          MINIO_ROOT_PASSWORD: somanextsecret
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "mc ready local"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+
+    env:
+      SOMA_S3: http://127.0.0.1:9000
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: bucket
+
+      # A store does not create its own bucket: that is the administrator's,
+      # the same way a directory's parent is. So somebody has to, and here it
+      # is the same `mc` one-shot the compose file runs.
+      - name: Make the bucket
+        run: |
+          docker run --rm --network host \
+            --entrypoint sh minio/mc:RELEASE.2025-04-16T18-13-26Z \
+            -c "mc alias set here http://127.0.0.1:9000 somanext somanextsecret \
+                && mc mb --ignore-existing here/soma"
+
+      # `SOMA_S3` being set is somebody saying there is a bucket, so the half of
+      # the contract suite behind it does not skip when it cannot reach one —
+      # it fails. That is the whole handshake, and it is why this job is worth
+      # a minute: locally that half only runs when you remember to bring MinIO
+      # up.
+      # `--nocapture` and the grep are the point of the step, not decoration.
+      # Without `SOMA_S3` this suite reports the same 62 passed and eight of
+      # them quietly ran against a directory instead of a bucket, saying so
+      # only on a stderr nobody reads. A job that cannot reach MinIO would
+      # otherwise be green about the one thing a stub cannot prove: that a
+      # conditional write is really conditional.
+      - name: cargo test (store, against the bucket)
+        run: |
+          cargo test -p somatize-store --features s3 -- --nocapture 2>&1 | tee /tmp/s3.log
+          if grep -q "only ran against a directory" /tmp/s3.log; then
+            echo "::error::the bucket half fell back to a directory — MinIO was not reached"
+            exit 1
+          fi
+
+      - name: Build and install somatize
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install maturin pytest
+          cd soma-python && maturin develop
+
+      - name: pytest (the Python side of the same handshake)
+        run: |
+          . .venv/bin/activate
+          cd soma-python && pytest tests/test_bucket.py -q

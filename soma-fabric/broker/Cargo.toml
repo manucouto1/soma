@@ -3,6 +3,9 @@ name = "somatize-fabric-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "The rendezvous: the name a graph gave a host, turned into a way of reaching it."
 # Same as `wire/`: the test binary lives under `tests/`, and every test target
 # is declared rather than auto-discovered.
 autotests = false
@@ -14,7 +17,7 @@ name = "somatize_fabric_broker"
 somatize-core = { workspace = true, features = ["serde"] }
 # The wire, because a `Path::Direct` has to become something that carries a
 # slice. The protocol and the paths know nothing about it; only the handle does.
-somatize-fabric-wire = { path = "../wire" }
+somatize-fabric-wire = { path = "../wire", version = "1.0.0" }
 serde = { workspace = true }
 # The same MessagePack as the wire next door, and for the same measured reasons.
 # One format across both conversations means one set of tools when something
@@ -27,7 +30,7 @@ rmp-serde = "1"
 rmp-serde = "1"
 # The far side of the wire, so the end-to-end test can stand a real worker on a
 # thread of this process instead of proving the seam against a double.
-somatize-fabric-wire = { path = "../wire" }
+somatize-fabric-wire = { path = "../wire", version = "1.0.0" }
 
 [[test]]
 name = "unit"

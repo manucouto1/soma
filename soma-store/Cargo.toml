@@ -3,6 +3,9 @@ name = "somatize-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Where a computed value is kept: bytes by content, and names that point at them."
 
 [dependencies]
 # The direction is core <- store, never the other way: the core stays with no

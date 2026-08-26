@@ -3,6 +3,9 @@ name = "somatize-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "The graph, the plan of how to run it, and the engine that walks that plan."
 
 [dependencies]
 # Optional, and off by default: the core still compiles with nothing. Whoever

@@ -3,6 +3,7 @@ name = "somatize-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [lib]
 name = "_somatize"
@@ -23,19 +24,24 @@ somatize-fabric-broker = { workspace = true, optional = true }
 somatize-store = { workspace = true, features = ["s3"] }
 # A source is a Rust node, and a frame is what it answers with: this side
 # translates both, which is what `python/` is for.
-somatize-data = { path = "../soma-data" }
+somatize-data = { path = "../soma-data", version = "1.0.0" }
 # To hand one column over as plain Python values, so that a worker with no
 # dataframe library in it can still read a column of text.
 arrow-array = "59"
 arrow-schema = "59"
-somatize-study = { path = "../soma-study" }
+somatize-study = { path = "../soma-study", version = "1.0.0" }
 # The verdict: numbers in, flags out, and no dependencies of its own.
 somatize-health = { workspace = true }
 # The plan travels to Python as data so that whoever draws it does not have
 # to parse a `Debug`. JSON and not MessagePack: the reader is `json.loads`,
 # which is stdlib, and nobody has to install anything to look at a shape.
 serde_json = "1"
-pyo3 = { version = "0.24", features = ["extension-module"] }
+# `abi3-py310` and not one wheel per interpreter: the limited API means a
+# single build answers for 3.10 and everything after it, including versions
+# that did not exist when it was compiled. It is on here rather than only in
+# the release build so that `maturin develop` produces the same artifact the
+# release does — an ABI the tests never exercise is an ABI nobody checked.
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py310"] }
 
 # The wire, and it is optional so that the seam is a fact the compiler checks
 # rather than a claim in a document. `--no-default-features` builds the whole

@@ -3,6 +3,9 @@ name = "somatize-health"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Whether what a run did is healthy — an opinion, and it says so."
 
 # No dependencies, and not even the core's, for the same reason `study` has
 # none: a verdict is arithmetic over numbers somebody else measured. It does not

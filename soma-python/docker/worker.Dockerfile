@@ -5,8 +5,12 @@
 # source tree and no `PYTHONPATH` of yours executes your nodes because they
 # **travelled**, and refuses to guess when they did not.
 #
-#   docker build -f python/tests/cluster/docker/worker.Dockerfile --target worker .
-#   docker build -f python/tests/cluster/docker/worker.Dockerfile --target worker-gpu .
+#   docker build -f soma-python/docker/worker.Dockerfile --target worker .
+#   docker build -f soma-python/docker/worker.Dockerfile --target worker-gpu .
+#
+# It sits here and not under `tests/` because it is published: the cluster
+# suite builds it through `tests/cluster/docker/compose.yaml`, and so does the
+# image on ghcr that somebody standing up workers pulls instead of building.
 #
 # Two stages beyond the build so that the CPU workers stay at ~150 MB: torch is
 # 2.5 GB and only the one with a GPU needs it.
@@ -23,8 +27,12 @@ FROM python:3.13-slim AS wheel
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential curl && rm -rf /var/lib/apt/lists/*
+# No toolchain here on purpose: `rust-toolchain.toml` at the root of the
+# workspace names it, and rustup installs what that file says the first time
+# cargo runs inside `/src/soma`. A number written here as well would be a
+# second copy of the pin, and the two stopped agreeing once already.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --profile minimal --default-toolchain 1.90.0
+        | sh -s -- -y --profile minimal --default-toolchain none
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Pinned like the toolchain and like torch: an installer that changes under you
@@ -43,7 +51,7 @@ RUN --mount=type=cache,target=/root/.cache/uv uv pip install maturin
 WORKDIR /src/soma
 # The manifests first, so that changing a line of Rust does not re-download the
 # whole index.
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY soma-core/Cargo.toml soma-core/
 COPY soma-data/Cargo.toml soma-data/
 COPY soma-health/Cargo.toml soma-health/

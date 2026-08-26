@@ -1,0 +1,6 @@
+# The labels of the machine that runs the cluster suite. Without this,
+# `actionlint` reads `runs-on: [self-hosted, gpu, soma]` as three typos.
+self-hosted-runner:
+  labels:
+    - gpu
+    - soma

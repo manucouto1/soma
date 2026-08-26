@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# The three gates that are fast enough to pay for on every commit. The Python
+# suite, the cluster and the bucket are not here on purpose: they need an
+# interpreter with torch, docker, and a bucket, and a hook that takes four
+# minutes is a hook people pass `--no-verify` to.
+#
+#   ln -s ../../.github/hooks/pre-commit .git/hooks/pre-commit
+#
+# `uv run` and not bare `cargo`: PyO3 refuses the system interpreter, which is
+# ahead of what it supports. `.python-version` names one it accepts.
+#
+# `--all-targets` matters more here than it looks: the tests are separate
+# crates outside `src/`, so without it clippy never reads a line of them.
+set -e
+
+echo "==> cargo fmt --check"
+uv run cargo fmt --all -- --check
+
+echo "==> cargo clippy"
+uv run cargo clippy --workspace --all-targets -- -D warnings
+
+echo "==> cargo test"
+uv run cargo test --workspace --quiet
+
+echo "==> All checks passed"

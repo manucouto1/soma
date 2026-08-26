@@ -1,0 +1,113 @@
+name: Cluster
+
+# Never on `pull_request`, and that is not an oversight. This runs on a
+# self-hosted machine in a **public** repository: a pull request from a fork
+# carries somebody else's code, and a fork-triggered job would run it here, with
+# this machine's docker socket and this machine's GPU. Push, schedule and a
+# button are the three triggers that can only carry code somebody with write
+# access put on `main`.
+on:
+  schedule:
+    # 01:00 UTC — 03:00 in Madrid. Late on purpose: the suite publishes fixed
+    # host ports 7001–7006 and uses one docker compose project, so a run here
+    # and a run on your own checkout collide. Whoever is second gets a port
+    # that is already bound.
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # Only when something the image or the protocol is made of moved. A commit
+    # touching a notebook does not need twenty minutes of containers.
+    paths:
+      - "soma-python/**"
+      - "soma-fabric/**"
+      - "soma-core/**"
+      - "soma-store/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/cluster.yml"
+
+permissions:
+  contents: read
+
+# Never two at once, and never cancelled halfway. Two runs would fight over the
+# ports and over the compose project; a cancelled one leaves containers standing
+# and a store volume half written, which is the state the next run's `down -v`
+# was supposed to be the only source of.
+concurrency:
+  group: cluster
+  cancel-in-progress: false
+
+jobs:
+  cluster:
+    name: A real cluster, GPU included
+    # The machine with the GPU and with the docker layer cache already warm.
+    # Register it with:
+    #   gh api -X POST repos/manucouto1/soma/actions/runners/registration-token
+    #   ./config.sh --url https://github.com/manucouto1/soma --token <it> \
+    #               --labels self-hosted,gpu,soma
+    runs-on: [self-hosted, gpu, soma]
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # `torch==2.10.0+cu128`, pinned to the digit, and pinned to what
+      # `worker.Dockerfile` installs. This suite compares the numbers a training
+      # run gets on the client against the ones it gets on the worker, and two
+      # torch versions are two arithmetics: a mismatch here does not fail as a
+      # version error, it fails as a number that is nearly right.
+      - name: An interpreter for the client
+        run: |
+          python3.13 -m venv .venv
+          . .venv/bin/activate
+          pip install maturin pytest cloudpickle numpy pyarrow
+          pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+
+      - name: Build and install somatize
+        run: |
+          . .venv/bin/activate
+          cd soma-python && maturin develop
+
+      # `build` and not `1`: the point of running this nightly is to catch the
+      # image rotting, and `up` alone reuses whatever was built last time. The
+      # GPU workers rebuild too — the fixtures pass `--build` through to the
+      # profiled services, which they did not always do, and the way that looked
+      # from a test was the *worker* complaining about a protocol the client no
+      # longer speaks.
+      #
+      # `-rs` so that every skip prints its reason, which the next step reads.
+      - name: pytest tests/cluster
+        env:
+          SOMA_CLUSTER: build
+        run: |
+          . .venv/bin/activate
+          cd soma-python
+          pytest tests/cluster -q -rs 2>&1 | tee /tmp/cluster.log
+
+      # The reason this workflow exists on a machine with a GPU at all. Without
+      # one, `worker-gpu` never comes up, the `gpu` and `two_with_torch`
+      # fixtures skip, and **14 of the 26** tests report green having done
+      # nothing — the five device tests and all nine of the search. A summary
+      # saying "12 passed, 14 skipped" and one saying "26 passed" are the same
+      # colour, and this is the difference.
+      - name: No test may skip
+        run: |
+          if grep -qE '[0-9]+ skipped' /tmp/cluster.log; then
+            echo "::error::a cluster test skipped — see the reasons above; \
+                  green here means the GPU workers never came up"
+            exit 1
+          fi
+
+      # Locally the containers are left standing on purpose: a cluster you can
+      # look at is worth having when something failed. On a runner nobody looks,
+      # and what accumulates is volumes. The images stay — they are the cache.
+      - name: Take it down
+        if: always()
+        run: |
+          docker compose -f soma-python/tests/cluster/docker/compose.yaml \
+            --profile gpu down -v || true

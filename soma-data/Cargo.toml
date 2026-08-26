@@ -3,6 +3,9 @@ name = "somatize-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "Where the data comes from, and what it is once it arrives."
 
 [dependencies]
 # The direction is core <- store <- data, and never the other way: the core

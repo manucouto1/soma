@@ -1,0 +1,10 @@
+# One compiler for the three places that build this: your machine, the CI
+# runners and the worker image. They had drifted apart — the Dockerfile pinned
+# 1.90.0 while this checkout was on 1.95.0 — and a lint that only one of them
+# has is a red build nobody can reproduce.
+#
+# Raising it is a commit, which is the point: `cargo` downloads what this file
+# says, so the day the number changes is a day somebody chose.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

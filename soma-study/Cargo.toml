@@ -3,6 +3,9 @@ name = "somatize-study"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "What is above one training run: a search over configurations, and what each trial did."
 
 # No dependencies, and not even the core's: a partition is arithmetic over
 # indices. It does not know what a graph is, and nothing here needs it to.
