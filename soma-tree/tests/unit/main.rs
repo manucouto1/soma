@@ -1,6 +1,7 @@
 //! One test binary, one `mod` per module, as in soma.
 
 mod bench;
+mod counting;
 mod data;
 mod findings;
 mod journal;

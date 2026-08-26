@@ -14,6 +14,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "somatize-tree"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
 
 [dependencies]
 # For `Key` and `NodeId`, which arrive as the engine's own serde form. Nothing
@@ -22,7 +27,10 @@ path = "src/main.rs"
 somatize-core = { workspace = true, features = ["serde"] }
 somatize-store = { workspace = true }
 serde = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+# Behind a feature, and the feature is on by default so a plain `cargo install`
+# still gets the command. It matters for the other tenant: `soma-python` links
+# this crate for the reasoning, and a wheel has no use for an argument parser.
+clap = { version = "4", features = ["derive"], optional = true }
 serde_json = "1"
 toml = "0.8"
 tempfile = "3"

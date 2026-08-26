@@ -253,6 +253,15 @@ impl fmt::Display for Course {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Move {
     pub id: MoveId,
+    /// What its author calls it, unique within the tree.
+    ///
+    /// The id is the store's — it says what order these were written in, and
+    /// it works as an identity for exactly as long as somebody is holding it
+    /// in a variable. Picking an investigation up again is the ordinary case:
+    /// another process, a tool call, or the same person a week later, none of
+    /// whom remember that the capacity question was `7`. So a move is reached
+    /// by a word somebody chose, and that is what makes `go` possible at all.
+    pub name: String,
     pub kind: Kind,
     /// What it is about. Only questions and hypotheses carry one; in the rest
     /// it is everything and is not read.
@@ -274,6 +283,41 @@ pub struct Move {
     pub course: Option<Course>,
     pub who: String,
     pub when: u64,
+}
+
+/// A move somebody is writing, before the store gives it an id.
+///
+/// A struct and not seven arguments: four callers are coming — asking,
+/// trying, finding and deciding — and each cares about a different subset, so
+/// positionally they would be four call sites of `None, Vec::new(), None`
+/// where nobody can see which blank is which.
+pub struct Writing<'a> {
+    pub kind: Kind,
+    /// Unique within the tree. See [`Move::name`].
+    pub name: &'a str,
+    pub prose: &'a str,
+    pub who: &'a str,
+    /// Everything, unless this is a question, a hypothesis or a decision.
+    pub scope: Scope,
+    /// Only an attempt and a finding may carry one.
+    pub cites: Vec<Cited>,
+    /// Only a decision may carry one.
+    pub course: Option<Course>,
+}
+
+impl<'a> Writing<'a> {
+    /// The ordinary case: about everything, citing nothing, deciding nothing.
+    pub fn new(kind: Kind, name: &'a str, prose: &'a str, who: &'a str) -> Self {
+        Self {
+            kind,
+            name,
+            prose,
+            who,
+            scope: Scope::everything(),
+            cites: Vec::new(),
+            course: None,
+        }
+    }
 }
 
 /// One piece of evidence from layer 1.
@@ -391,22 +435,44 @@ impl<'a> Moves<'a> {
     /// Claims the slot exactly as a trial does: no coordinator, and whoever
     /// finds it taken asks for the next. Two people writing at once get two
     /// moves, not one lost.
-    pub fn add(
-        &self,
-        kind: Kind,
-        prose: &str,
-        who: &str,
-        scope: Scope,
-        cites: Vec<Cited>,
-        course: Option<Course>,
-    ) -> Result<MoveId, Trouble> {
+    pub fn add(&self, writing: Writing<'_>) -> Result<MoveId, Trouble> {
+        let Writing {
+            kind,
+            name,
+            prose,
+            who,
+            scope,
+            cites,
+            course,
+        } = writing;
         if course.is_some() && kind != Kind::Decision {
             return Err(Trouble::NotADecision { kind });
         }
+        let name = name.trim();
         let first = self.all()?.keys().copied().max().map_or(0, |last| last + 1);
+
+        // The name is claimed before anything is written, and `claim` and not
+        // read-then-write: between reading that a name is free and taking it,
+        // somebody else does the same, and two moves answer to one word while
+        // the store says nothing. It is the same primitive that hands out a
+        // trial, for the same reason.
+        //
+        // It is claimed at the id we mean to take, and rebound below if the
+        // slot loop had to move on. If that loop gives up altogether the name
+        // is left held, pointing at a move that was never written — which
+        // `went` reports as a name reaching nothing rather than as silence.
+        let held = self.holds(name, first)?;
+        if let Some(by) = held {
+            return Err(Trouble::NameTaken {
+                name: name.to_string(),
+                by,
+            });
+        }
+
         for id in first..first + PATIENCE {
             let body = Move {
                 id,
+                name: name.to_string(),
                 kind,
                 scope: scope.clone(),
                 prose: prose.trim().to_string(),
@@ -431,10 +497,81 @@ impl<'a> Moves<'a> {
                 .claim(&self.named(id, "said", 0), &digest, meta)
                 .map_err(Trouble::Store)?
             {
+                if id != first {
+                    // Ours to overwrite: nobody else got past the claim above.
+                    self.point(name, id)?;
+                }
                 return Ok(id);
             }
         }
         Err(Trouble::Crowded)
+    }
+
+    /// Where a name lives, which is its own record and not a scan of the moves.
+    ///
+    /// A name is asked far more often than the whole reasoning is drawn — every
+    /// `go`, every `--under` — and answering it by walking every move would
+    /// make the cheapest question in the tool cost the most expensive read.
+    fn calls(&self, name: &str) -> String {
+        format!("exp/{}/named/{name}", self.tree)
+    }
+
+    /// Takes the name for this id, or says who already has it.
+    fn holds(&self, name: &str, id: MoveId) -> Result<Option<MoveId>, Trouble> {
+        let digest = self
+            .kept
+            .put(id.to_string().as_bytes())
+            .map_err(Trouble::Store)?;
+        let meta: Meta = vec![
+            ("what".into(), "names".into()),
+            ("move".into(), id.to_string()),
+        ];
+        match self
+            .kept
+            .claim(&self.calls(name), &digest, meta)
+            .map_err(Trouble::Store)?
+        {
+            true => Ok(None),
+            false => Ok(Some(self.went(name)?)),
+        }
+    }
+
+    /// Points an already-held name at the id it ended up with.
+    fn point(&self, name: &str, id: MoveId) -> Result<(), Trouble> {
+        let digest = self
+            .kept
+            .put(id.to_string().as_bytes())
+            .map_err(Trouble::Store)?;
+        let meta: Meta = vec![
+            ("what".into(), "names".into()),
+            ("move".into(), id.to_string()),
+        ];
+        self.kept
+            .bind(&self.calls(name), &digest, meta)
+            .map_err(Trouble::Store)
+    }
+
+    /// The move that name reaches. One lookup, no scan.
+    pub fn went(&self, name: &str) -> Result<MoveId, Trouble> {
+        let name = name.trim();
+        let bound = self
+            .kept
+            .resolve(&self.calls(name))
+            .map_err(Trouble::Store)?
+            .ok_or_else(|| Trouble::NoSuchName {
+                name: name.to_string(),
+            })?;
+        let bytes = self
+            .kept
+            .get(&bound.digest)
+            .map_err(Trouble::Store)?
+            .ok_or_else(|| Trouble::NoSuchName {
+                name: name.to_string(),
+            })?;
+        String::from_utf8_lossy(&bytes)
+            .trim()
+            .parse()
+            .map_err(|_| Trouble::Garbled(format!("`{name}` does not name a move")))
     }
 
     /// Rewords a move. A new slot, and the last wins: what came before is
@@ -875,6 +1012,8 @@ pub enum Trouble {
     Circular { child: MoveId, parent: MoveId },
     Nonsense { says: Says, from: Kind, to: Kind },
     NotADecision { kind: Kind },
+    NameTaken { name: String, by: MoveId },
+    NoSuchName { name: String },
     CannotCite { kind: Kind },
     Crowded,
 }
@@ -895,6 +1034,11 @@ impl fmt::Display for Trouble {
             Self::NotADecision { kind } => {
                 write!(f, "a course is carried by a decision, and this is a {kind}")
             }
+            Self::NameTaken { name, by } => write!(
+                f,
+                "`{name}` already names move {by}. A name is how a move is found again,                  so two of them answering to one word would be a move nobody can reach"
+            ),
+            Self::NoSuchName { name } => write!(f, "nothing here is called `{name}`"),
             Self::CannotCite { kind } => write!(
                 f,
                 "a {kind} is about moves and not about commits or trials: citing belongs \

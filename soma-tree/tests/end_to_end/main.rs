@@ -813,27 +813,30 @@ fn abandoned(at: &Path, commit: &str) {
         .tree(at);
     let moves = somatize_tree::moves::Moves::of(tree, &kept);
     let a = moves
-        .add(
-            somatize_tree::moves::Kind::Attempt,
-            "this way",
-            "me",
-            somatize_tree::moves::Scope::everything(),
-            vec![somatize_tree::moves::Cited {
+        .add(somatize_tree::moves::Writing {
+            cites: vec![somatize_tree::moves::Cited {
                 what: "commit".into(),
                 id: commit.into(),
             }],
-            None,
-        )
+            ..somatize_tree::moves::Writing::new(
+                somatize_tree::moves::Kind::Attempt,
+                "this-way",
+                "this way",
+                "me",
+            )
+        })
         .expect("the attempt");
     moves
-        .add(
-            somatize_tree::moves::Kind::Decision,
-            "it leads nowhere",
-            "me",
-            somatize_tree::moves::Scope::of(vec![a]),
-            Vec::new(),
-            Some(somatize_tree::moves::Course::Abandon),
-        )
+        .add(somatize_tree::moves::Writing {
+            scope: somatize_tree::moves::Scope::of(vec![a]),
+            course: Some(somatize_tree::moves::Course::Abandon),
+            ..somatize_tree::moves::Writing::new(
+                somatize_tree::moves::Kind::Decision,
+                "nowhere",
+                "it leads nowhere",
+                "me",
+            )
+        })
         .expect("the decision");
 }
 

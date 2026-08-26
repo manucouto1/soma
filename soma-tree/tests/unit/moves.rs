@@ -5,7 +5,9 @@
 //! behaves under two writers.
 
 use somatize_store::Local;
-use somatize_tree::moves::{Cited, Course, Kind, Move, Moves, Said, Says, Scope, Standing};
+use somatize_tree::moves::{
+    Cited, Course, Kind, Move, Moves, Said, Says, Scope, Standing, Trouble, Writing,
+};
 
 fn somewhere() -> (tempfile::TempDir, Local) {
     let at = tempfile::tempdir().expect("a temporary directory");
@@ -14,9 +16,31 @@ fn somewhere() -> (tempfile::TempDir, Local) {
 }
 
 /// Adds a move covering everything and citing nothing, the ordinary case.
+///
+/// The name is made up here rather than taken from the prose: two moves in one
+/// test often say nearly the same thing, and a slug of that would collide and
+/// report as a bug in naming rather than in the test.
 fn plain(moves: &Moves, kind: Kind, prose: &str) -> u32 {
+    named(moves, kind, &a_name(), prose)
+}
+
+/// A name nobody else in this binary will take.
+///
+/// Made up rather than slugged from the prose: two moves in one test often say
+/// nearly the same thing, and a collision there would report as a bug in
+/// naming rather than in the test that wrote it.
+fn a_name() -> String {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    format!(
+        "m{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+/// The same, with a name somebody chose.
+fn named(moves: &Moves, kind: Kind, name: &str, prose: &str) -> u32 {
     moves
-        .add(kind, prose, "me", Scope::everything(), Vec::new(), None)
+        .add(Writing::new(kind, name, prose, "me"))
         .expect("a move")
 }
 
@@ -392,12 +416,8 @@ fn an_attempt_cites_layer_one() {
     let moves = Moves::of("t", &kept);
 
     let a = moves
-        .add(
-            Kind::Attempt,
-            "three scales",
-            "me",
-            Scope::everything(),
-            vec![
+        .add(Writing {
+            cites: vec![
                 Cited {
                     what: "commit".into(),
                     id: "4910005c".into(),
@@ -407,8 +427,8 @@ fn an_attempt_cites_layer_one() {
                     id: "exp/t/4910005c/trial/0/0".into(),
                 },
             ],
-            None,
-        )
+            ..Writing::new(Kind::Attempt, &a_name(), "three scales", "me")
+        })
         .unwrap();
 
     let body: Move = moves.all().unwrap().remove(&a).unwrap();
@@ -450,14 +470,12 @@ fn nobody_writing_at_the_same_time_loses_their_move() {
         for which in 0..8 {
             scope.spawn(move || {
                 Moves::of("t", kept)
-                    .add(
+                    .add(Writing::new(
                         Kind::Finding,
+                        &format!("saw-{which}"),
                         &format!("I saw {which}"),
                         "me",
-                        Scope::everything(),
-                        Vec::new(),
-                        None,
-                    )
+                    ))
                     .unwrap();
             });
         }
@@ -536,17 +554,13 @@ fn correcting_the_scope_leaves_what_was_said_with_another_verb() {
 /// An attempt citing a commit, hung wherever it is told.
 fn tried(moves: &Moves, prose: &str, commit: &str, under: &[u32]) -> u32 {
     let id = moves
-        .add(
-            Kind::Attempt,
-            prose,
-            "me",
-            Scope::everything(),
-            vec![Cited {
+        .add(Writing {
+            cites: vec![Cited {
                 what: "commit".into(),
                 id: commit.into(),
             }],
-            None,
-        )
+            ..Writing::new(Kind::Attempt, &a_name(), prose, "me")
+        })
         .unwrap();
     for parent in under {
         moves.hang(id, *parent).unwrap();
@@ -562,14 +576,11 @@ fn abandoning_a_line_reaches_the_commits_its_attempts_cite() {
     tried(&moves, "x2", "aaa", &[q]);
 
     let d = moves
-        .add(
-            Kind::Decision,
-            "not this way",
-            "me",
-            Scope::of(vec![q]),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            scope: Scope::of(vec![q]),
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "not this way", "me")
+        })
         .unwrap();
     moves.hang(d, q).unwrap();
 
@@ -584,14 +595,11 @@ fn an_attempt_hung_after_the_decision_is_born_abandoned() {
     let moves = Moves::of("t", &kept);
     let q = plain(&moves, Kind::Question, "more capacity?");
     let d = moves
-        .add(
-            Kind::Decision,
-            "not this way",
-            "me",
-            Scope::of(vec![q]),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            scope: Scope::of(vec![q]),
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "not this way", "me")
+        })
         .unwrap();
     moves.hang(d, q).unwrap();
 
@@ -610,14 +618,11 @@ fn forking_off_an_abandoned_attempt_starts_clean() {
     let q = plain(&moves, Kind::Question, "more capacity?");
     let a = tried(&moves, "x2", "aaa", &[q]);
     let d = moves
-        .add(
-            Kind::Decision,
-            "x2 leads nowhere",
-            "me",
-            Scope::of(vec![a]),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            scope: Scope::of(vec![a]),
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "x2 leads nowhere", "me")
+        })
         .unwrap();
     moves.hang(d, a).unwrap();
 
@@ -643,14 +648,10 @@ fn a_decision_with_no_scope_is_about_where_it_hangs_not_the_tree() {
     tried(&moves, "more layers", "bbb", &[another]);
 
     let d = moves
-        .add(
-            Kind::Decision,
-            "not this way",
-            "me",
-            Scope::everything(),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "not this way", "me")
+        })
         .unwrap();
     moves.hang(d, a).unwrap();
 
@@ -670,14 +671,10 @@ fn a_decision_hung_off_nothing_with_no_scope_colours_nothing() {
     let q = plain(&moves, Kind::Question, "capacity?");
     tried(&moves, "x2", "aaa", &[q]);
     moves
-        .add(
-            Kind::Decision,
-            "it has to be dropped",
-            "me",
-            Scope::everything(),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "it has to be dropped", "me")
+        })
         .unwrap();
 
     assert!(moves.decided().unwrap().is_empty());
@@ -691,14 +688,11 @@ fn changing_your_mind_is_deciding_again_and_the_last_wins() {
     tried(&moves, "x2", "aaa", &[q]);
     for course in [Course::Abandon, Course::Pursue] {
         let d = moves
-            .add(
-                Kind::Decision,
-                "…",
-                "me",
-                Scope::of(vec![q]),
-                Vec::new(),
-                Some(course),
-            )
+            .add(Writing {
+                scope: Scope::of(vec![q]),
+                course: Some(course),
+                ..Writing::new(Kind::Decision, &a_name(), "…", "me")
+            })
             .unwrap();
         moves.hang(d, q).unwrap();
     }
@@ -713,14 +707,10 @@ fn a_course_on_something_that_is_not_a_decision_is_refused() {
 
     assert!(
         moves
-            .add(
-                Kind::Finding,
-                "I saw that it does not",
-                "me",
-                Scope::everything(),
-                Vec::new(),
-                Some(Course::Abandon),
-            )
+            .add(Writing {
+                course: Some(Course::Abandon),
+                ..Writing::new(Kind::Finding, &a_name(), "I saw that it does not", "me")
+            })
             .is_err()
     );
 }
@@ -739,14 +729,11 @@ fn correcting_a_decisions_scope_makes_it_reach_the_commits() {
     let f = plain(&moves, Kind::Finding, "latency goes up");
     moves.hang(f, a).unwrap();
     let d = moves
-        .add(
-            Kind::Decision,
-            "we are not carrying on",
-            "me",
-            Scope::of(vec![f]),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            scope: Scope::of(vec![f]),
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "we are not carrying on", "me")
+        })
         .unwrap();
     moves.hang(d, f).unwrap();
     assert!(moves.decided().unwrap().is_empty(), "it gets nowhere");
@@ -764,14 +751,15 @@ fn correcting_the_scope_touches_neither_the_prose_nor_the_course() {
     let moves = Moves::of("t", &kept);
     let q = plain(&moves, Kind::Question, "capacity?");
     let d = moves
-        .add(
-            Kind::Decision,
-            "we are not carrying on, nobody pays that latency",
-            "me",
-            Scope::everything(),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            course: Some(Course::Abandon),
+            ..Writing::new(
+                Kind::Decision,
+                &a_name(),
+                "we are not carrying on, nobody pays that latency",
+                "me",
+            )
+        })
         .unwrap();
 
     moves
@@ -794,14 +782,11 @@ fn changing_the_course_touches_neither_the_prose_nor_the_scope() {
     let q = plain(&moves, Kind::Question, "capacity?");
     tried(&moves, "x2", "aaa", &[q]);
     let d = moves
-        .add(
-            Kind::Decision,
-            "we are not carrying on",
-            "me",
-            Scope::of(vec![q]),
-            Vec::new(),
-            Some(Course::Abandon),
-        )
+        .add(Writing {
+            scope: Scope::of(vec![q]),
+            course: Some(Course::Abandon),
+            ..Writing::new(Kind::Decision, &a_name(), "we are not carrying on", "me")
+        })
         .unwrap();
 
     moves
@@ -935,4 +920,119 @@ fn citing_touches_neither_the_prose_nor_the_scope_nor_the_course() {
     let body = moves.all().unwrap().remove(&a).unwrap();
     assert_eq!(body.prose, "x2, the good one");
     assert_eq!(moves.under().unwrap().parents_of(a), vec![q]);
+}
+
+#[test]
+fn a_move_is_reached_by_the_name_its_author_chose() {
+    // The whole reason a name exists: the id works while somebody is holding
+    // it, and this is the process that never saw it created.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    let q = named(
+        &moves,
+        Kind::Question,
+        "capacity-vs-interpretability",
+        "does more capacity help?",
+    );
+
+    let again = Moves::of("t", &kept);
+
+    assert_eq!(again.went("capacity-vs-interpretability").unwrap(), q);
+}
+
+#[test]
+fn finding_a_name_costs_one_lookup_and_not_a_walk_of_every_move() {
+    // Said as a test because it is the reason the name has a record of its
+    // own: `go` and every `--under` ask this, and answering it by reading the
+    // whole reasoning would make the cheapest question the most expensive one.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    for n in 0..20 {
+        named(&moves, Kind::Question, &format!("q{n}"), "one of many");
+    }
+
+    let counted = crate::counting::Counting::over(kept);
+    let moves = Moves::of("t", &counted);
+    counted.forget();
+    moves.went("q17").expect("the move");
+
+    let (resolves, scans, fetches) = counted.seen();
+    assert_eq!(scans, 0, "a name is resolved, never scanned for");
+    assert_eq!(
+        (resolves, fetches),
+        (1, 1),
+        "one lookup and the id behind it"
+    );
+}
+
+#[test]
+fn two_moves_cannot_answer_to_one_name() {
+    // Not a nicety: a name is how a move is found again, so a second one
+    // taking it is a move nobody can reach.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    let first = named(&moves, Kind::Question, "the-same", "asked first");
+
+    let again = moves.add(Writing::new(
+        Kind::Hypothesis,
+        "the-same",
+        "asked second",
+        "me",
+    ));
+
+    assert!(
+        matches!(again, Err(Trouble::NameTaken { by, .. }) if by == first),
+        "it says who has it: {again:?}",
+    );
+}
+
+#[test]
+fn the_move_refused_for_its_name_was_never_written() {
+    // A refusal that half-wrote would leave a move with no name, which is a
+    // move nobody can reach — the very thing the refusal is for.
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    named(&moves, Kind::Question, "taken", "asked first");
+    let before = moves.all().unwrap().len();
+
+    let _ = moves.add(Writing::new(
+        Kind::Hypothesis,
+        "taken",
+        "asked second",
+        "me",
+    ));
+
+    assert_eq!(moves.all().unwrap().len(), before);
+}
+
+#[test]
+fn a_name_nobody_took_says_so_rather_than_answering_about_another_move() {
+    let (_at, kept) = somewhere();
+    let moves = Moves::of("t", &kept);
+    named(&moves, Kind::Question, "one", "the only one");
+
+    let went = moves.went("another");
+
+    assert!(matches!(went, Err(Trouble::NoSuchName { .. })), "{went:?}",);
+}
+
+#[test]
+fn one_tree_does_not_see_another_trees_names() {
+    // Two investigations share a store on purpose, and `tree` is what keeps
+    // them apart. A name is scoped by it like everything else.
+    let (_at, kept) = somewhere();
+    named(&Moves::of("one", &kept), Kind::Question, "shared", "mine");
+
+    let other = Moves::of("another", &kept);
+
+    assert!(matches!(
+        other.went("shared"),
+        Err(Trouble::NoSuchName { .. })
+    ));
+    assert!(
+        other
+            .add(Writing::new(Kind::Question, "shared", "also mine", "me"))
+            .is_ok(),
+        "the same word is free in another tree",
+    );
 }
