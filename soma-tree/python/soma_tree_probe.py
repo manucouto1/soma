@@ -427,7 +427,7 @@ def checked(build, node, given, store):
                 {
                     "what": "the graph builds",
                     "ok": True,
-                    "said": f"{len(graph.nodes())} nodos: {' · '.join(graph.nodes())}",
+                    "said": f"{len(graph.nodes())} nodes: {' · '.join(graph.nodes())}",
                 }
             )
         except Exception as why:
@@ -438,7 +438,7 @@ def checked(build, node, given, store):
                     "said": f"{type(why).__name__}: {why}",
                 }
             )
-            marks.extend(marked(inside(why, at.name), f"{type(why).__name__}: {why}", "construir"))
+            marks.extend(marked(inside(why, at.name), f"{type(why).__name__}: {why}", "build"))
 
     if graph is None:
         return {"checks": said, "diagnostics": marks, "output": printed.getvalue()}
