@@ -1,18 +1,13 @@
-//! The seam with the transport: sending slices to another process from Python.
-//!
-//! Not one domain decision here, as in the rest of this crate — two adapters and
-//! a calling convention:
+//! The seam with the wire: sending slices to another process from Python. Not
+//! one domain decision — two adapters and a calling convention:
 //!
 //! | from here | to there |
 //! |---|---|
-//! | [`PyWorker`] | a transport `Worker`, wrapped so Python can hold it |
-//! | [`PyProvision`] | a Python object with `accepts` and `catalog`, seen as a `Provision` |
+//! | [`PyWorker`] | a `Worker`, wrapped so Python can hold it |
+//! | [`PyProvision`] | a Python object with `accepts` and `catalog`, as a `Provision` |
 //!
 //! `cloudpickle` appears nowhere because it is not Rust's business: the artifact
-//! is a pile of bytes neither the core nor the transport looks at, and the one
-//! that decides they are a pickle is `somatize.worker`, in Python. The same
-//! boundary as three other places — the core does not know what a node asks for,
-//! what an `Opaque` carries, or what a serialized catalog is.
+//! is a pile of bytes neither the core nor the wire looks at.
 
 use crate::codec::Codecs;
 use crate::node::PyNode;
@@ -132,17 +127,13 @@ fn serving_provisioned(provision: &PyProvision) -> Serving<'_> {
 /// unpack would be handed maps where its nodes expect what they were sent.
 static CODECS: Codecs = Codecs;
 
-/// The same worker, keeping what it is sent **and** what its nodes produce.
+/// The same worker, keeping what it is sent **and** what its nodes produce. One
+/// directory, two questions that stay two.
 ///
-/// One directory answers the two questions and they stay two: a catalog that is
-/// not sent twice, and a node that is not run twice. Neither is on unless a
-/// `store` was given.
-///
-/// **With the codecs in front of the second**, exactly as the client puts them
-/// in front of its own: without them a worker keeps what is made of numbers and
+/// **With the codecs in front of the second**, exactly as the client puts them in
+/// front of its own: without them a worker keeps what is made of numbers and
 /// quietly keeps nothing else, so the same `.cached()` node would hit here and
-/// miss there for no reason the user could see. What reaches the store is bytes
-/// either way, and the store never learns Python exists.
+/// miss there for no reason the user could see.
 fn keeping<'a>(
     serving: Serving<'a>,
     kept: Option<&'a Arc<dyn Store>>,

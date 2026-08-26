@@ -31,9 +31,6 @@ class Watch(Node):
         return x
 
 
-# ── Declaring where ──
-
-
 def test_on_places_a_node():
     g = Graph.somatize(Add(1).named("a").on("cuda:0"))
     assert g.devices() == {"a": "cuda:0"}
@@ -98,9 +95,6 @@ def test_replacing_overwrites_the_previous_one():
     assert g.devices() == {"a": "meta"}
 
 
-# ── What gets rejected, and where ──
-
-
 @pytest.mark.parametrize(
     "bad, warning",
     [
@@ -124,9 +118,6 @@ def test_placing_a_node_that_does_not_exist_fails():
     g = Graph.somatize(Add(1).named("a"))
     with pytest.raises(ValueError, match="encodr"):
         g.place("encodr", "cpu")
-
-
-# ── What reaches the node ──
 
 
 def test_the_node_sees_where_it_was_told_to_run():
@@ -175,9 +166,6 @@ def test_the_device_shows_up_in_the_ctxs_repr():
     assert node.seen == "Ctx(device=cpu)"
 
 
-# ── What placing does NOT change ──
-
-
 def test_placing_does_not_change_the_plan():
     without = Graph.somatize(Add(1).named("a") >> (Add(2).named("b") | Add(3).named("c")))
     with_ = Graph.somatize(
@@ -191,9 +179,6 @@ def test_placing_does_not_change_the_result():
     without = Graph.somatize(Add(1).named("a") >> Add(10).named("b"))
     with_ = Graph.somatize((Add(1).named("a") >> Add(10).named("b")).on("meta"))
     assert without.forward(0.0) == with_.forward(0.0) == 11.0
-
-
-# ── The postcondition: disobeying is not free ──
 
 
 class Fake:
@@ -242,8 +227,6 @@ def test_unplaced_nothing_is_checked():
     assert g.forward(1.0).device == "cpu"
 
 
-# ── With real torch ──
-
 torch = pytest.importorskip("torch")
 nn = torch.nn
 
@@ -291,8 +274,6 @@ def test_a_node_that_ignores_its_device_is_caught():
     with pytest.raises(ValueError, match="declared `meta` but returned a value on `cpu`"):
         g.forward(Opaque(torch.zeros(2, 4)))
 
-
-# ── And with a GPU, if there is one ──
 
 no_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA")
 

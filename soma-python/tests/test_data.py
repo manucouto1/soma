@@ -69,9 +69,6 @@ def trained(g, data, steps=300):
     return g
 
 
-# ── The case this exists for ──
-
-
 def test_an_input_the_model_is_not_using_is_found_in_one_afternoon():
     g = two_branches()
     data = batches()
@@ -109,9 +106,6 @@ def test_two_channels_that_both_carry_it_say_nothing():
     trained(g, data)
 
     assert leaning(contribution(g, data, objective=MSE)) == {}
-
-
-# ── What it measures, and how ──
 
 
 def test_nothing_is_trained_and_nothing_is_changed():

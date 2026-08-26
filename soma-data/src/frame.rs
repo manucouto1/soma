@@ -10,35 +10,23 @@ use std::fmt;
 
 /// Rows and columns, together with what each column is called and holds.
 ///
-/// # Why it is a type of ours and not `RecordBatch` in an `Opaque`
+/// A type of ours rather than a `RecordBatch` in an `Opaque` for two reasons
+/// that are not style: a codec is an `impl` of somebody else's trait and the
+/// orphan rule wants one of the two types to be ours, and this is the word the
+/// design is written in — *the difference between training and deploying is how
+/// many rows the frame brings*.
 ///
-/// It could be: [`Value::opaque`] takes anything, and a `RecordBatch` is
-/// `Send + Sync`. It is a type of ours for two reasons that are not style.
-///
-/// A codec — Arrow IPC, when a frame first has to cross a wire — is an `impl` of
-/// somebody else's trait, and the orphan rule wants one of the two types to be
-/// ours. And this is the word the whole design is written in: *the difference
-/// between training and deploying is how many rows the frame brings*. 4096 from
-/// a folder of parquet while training, one from a topic in production, the same
-/// graph and the same nodes underneath.
-///
-/// # What it is not
-///
-/// It is not a tensor and it does not want to be. Numbers and fixed-size lists
-/// of them are contiguous Arrow buffers, so whoever converts pays a reshape and
-/// not a copy; text is not a tensor until something tokenizes it, and an image
-/// is bytes until something decodes it. **The conversion is a node**, and it is
-/// the same node whether the frame came from a file or from a topic.
+/// It is not a tensor and does not want to be. Numbers and fixed-size lists of
+/// them are contiguous Arrow buffers, so converting is a reshape and not a copy;
+/// text is not a tensor until something tokenizes it. **The conversion is a
+/// node**, and the same node whether the frame came from a file or a topic.
 #[derive(Debug, Clone)]
 pub struct Frame(RecordBatch);
 
 impl Frame {
-    /// What gets written beside the bytes, and what a store keeps forever.
-    ///
-    /// Named after the **format** and not after the language: what is on disk is
-    /// an Arrow IPC stream, and whoever reads it back may be a `polars` on the
-    /// other side of the wall. A `kind` that said `soma.Frame` would be a name
-    /// only this library could honour.
+    /// What gets written beside the bytes. Named after the **format** and not
+    /// the language: what is on disk is an Arrow IPC stream, and whoever reads
+    /// it back may be a `polars` on the other side of the wall.
     pub const KIND: &'static str = "arrow.RecordBatch";
 
     /// This batch, as a frame.
@@ -63,12 +51,9 @@ impl Frame {
         &self.0
     }
 
-    /// As a value, which is how it crosses an edge.
-    ///
-    /// `Opaque` and not a variant of its own: the core has no dependencies at
-    /// all and is not going to learn what a column is. It is the same door a
-    /// tensor goes through, and the same one it stops being able to go through
-    /// when nobody registered a codec for it.
+    /// As a value, which is how it crosses an edge. `Opaque` and not a variant
+    /// of its own: the core has no dependencies and is not going to learn what a
+    /// column is.
     pub fn value(self) -> Value {
         Value::opaque(self)
     }
@@ -78,11 +63,9 @@ impl Frame {
         value.downcast::<Self>()
     }
 
-    /// What it weighs in bytes: Arrow IPC, buffers and all.
-    ///
-    /// No encoding pass and no per-value work — what goes out is close to what
-    /// was already in memory, which is the reason for Arrow being the type that
-    /// crosses an edge rather than something converted to at the edges.
+    /// What it weighs in bytes: Arrow IPC, buffers and all. No encoding pass and
+    /// no per-value work, which is the reason Arrow is the type that crosses an
+    /// edge rather than something converted to at the edges.
     pub fn written(&self) -> Result<Vec<u8>, FrameError> {
         let mut out = Vec::new();
         let mut writer = StreamWriter::try_new(&mut out, self.schema())

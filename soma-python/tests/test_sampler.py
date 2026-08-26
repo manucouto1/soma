@@ -19,9 +19,6 @@ def space():
     )
 
 
-# ── The space ──
-
-
 def test_it_is_built_up_and_every_call_gives_back_a_new_one():
     # So the same base can be handed to two studies without one of them growing
     # a knob the other did not ask for.
@@ -51,9 +48,6 @@ def test_two_knobs_by_the_same_name_are_refused():
         Space().real("lr", 0.0, 1.0).int("lr", 1, 2)
 
 
-# ── A point is a mapping, and it is the trial's name ──
-
-
 def test_a_point_is_handed_straight_to_a_factory():
     point = Sampler.random().ask(space(), 0)
 
@@ -69,9 +63,6 @@ def test_a_point_writes_itself_down_because_that_is_the_trial_name():
 
     assert str(point).startswith("lr=")
     assert str(point) != str(Sampler.grid(2).ask(space(), 1))
-
-
-# ── The three schemes ──
 
 
 def test_a_grid_walks_every_combination_and_then_runs_out():
@@ -151,9 +142,6 @@ def test_two_of_the_three_ignore_what_finished_and_that_is_why_there_are_three()
 
     guided = Sampler.tpe(startup=4, seed=0)
     assert str(guided.ask(s, 2, [])) != str(guided.ask(s, 2, finished))
-
-
-# ── What is refused, and what is written down ──
 
 
 def test_a_direction_that_is_not_one_is_caught_where_it_was_typed():

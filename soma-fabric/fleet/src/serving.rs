@@ -1,28 +1,20 @@
 //! The fleet over HTTP, for whoever draws it.
 //!
-//! axum 0.8 on tokio, which is not a taste: it is what somatize-tree runs and what
-//! chatty-the-lab's backend runs, so landing there is moving routes rather than
-//! rewriting a server. Mounted at the root here; under a prefix wherever this
-//! goes.
+//! axum 0.8 on tokio, which is not a taste: it is what somatize-tree runs and
+//! what chatty-the-lab's backend runs, so landing there is moving routes rather
+//! than rewriting a server.
 //!
-//! # Nothing is held between requests
+//! **Nothing is held between requests** — no cached scan, no open worker, no
+//! registry in memory. What makes that affordable is that everything this
+//! answers is already written down, one reading per machine and the record, so
+//! a second request is a scan and not a conversation. It is also what leaves
+//! the platform's shape undecided: a handler that keeps nothing is the same
+//! code as a module of one backend and as a service behind a URL.
 //!
-//! No cached scan, no open worker, no registry in memory. What makes that
-//! affordable is that everything this answers is already written down — one
-//! reading per machine, rewritten, and the record — so a second request is a
-//! scan and not a conversation.
-//!
-//! It is also what leaves the platform's shape undecided: a handler that keeps
-//! nothing is the same code as a module of one backend and as a service behind
-//! a URL. The decision can be made later because it was not made here.
-//!
-//! # Everything here blocks, and none of it blocks the runtime
-//!
-//! Reading a store is a blocking call — a directory, or a round trip to a
-//! bucket. On an async runtime that is not a slow handler, it is a **stalled
-//! thread** nobody else's request can get past, so the work goes to
-//! [`spawn_blocking`](tokio::task::spawn_blocking) and the async side only ever
-//! hands back a result.
+//! Everything here blocks and none of it blocks the runtime: reading a store is
+//! a blocking call, and on an async runtime that is a **stalled thread** nobody
+//! else's request can get past, so the work goes to
+//! [`spawn_blocking`](tokio::task::spawn_blocking).
 
 use crate::listing::{Listed, Listing, Trouble};
 use crate::{Fleet, naming, ran, runs};
@@ -48,7 +40,7 @@ pub struct Serving {
     /// **The server's rule and not the view's.** Written in two places it would
     /// live in two languages, and the day it changed a terminal and a browser
     /// would both look right and quietly disagree about which machines are
-    /// there — which is the mistake somatize-tree wrote down about pruning.
+    /// there.
     pub quiet_after: u64,
     /// How many records to read to learn what the graphs call these machines.
     pub read_records: usize,
@@ -56,8 +48,7 @@ pub struct Serving {
     ///
     /// A file, because what holds a listing beyond one client is the local
     /// broker and it is not written. The routes over it are the shape a broker
-    /// will answer, so landing there is where the answer comes from and not what
-    /// it looks like.
+    /// will answer.
     pub listing: PathBuf,
 }
 

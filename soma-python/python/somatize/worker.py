@@ -2,51 +2,27 @@
 
     python -m somatize.worker --listen 127.0.0.1:7000 [--store /scratch/soma]
 
-An independent process, in the background, on whatever machine. It starts
-**empty** — it does not know what `tokenize` is — and waits for someone to
-connect and send it what to build its catalog from. There is no way of giving it
-a catalog by hand, and that is on purpose: **a worker receives the plan and
-resolves the implementations**.
-
-## The strategies, and how they differ
+An independent process on whatever machine. It starts **empty** — it does not
+know what `tokenize` is — and waits for someone to connect and send it what to
+build its catalog from. There is no way of giving it one by hand, on purpose.
 
 | artifact kind | what arrives | what the worker supplies |
 |---|---|---|
 | `project` *(default)* | names, versions and state | **the code**, from its clone |
 | `pickle` | the code and the state | nothing |
 
-`project` is the one you want when the worker runs in a clone of the project: it
-sends tens of bytes per node, couples no interpreters, and **checks the version**
-— if your clone is half-updated, it finds out before executing. `pickle` removes
-all friction when the worker does not have your code: a bare node, a
-`pip install`, and that is it. A worker accepts both, by `kind`.
+`project` is what you want when the worker runs in a clone of the project: tens
+of bytes per node, no coupling between interpreters, and it **checks the
+version** — `--strict` *(default)* stops with both versions in front of you and
+`--lucky` runs anyway and says so on `stderr`.
 
-With `project`, if the class here is not the version the graph was written
-against, `--strict` *(default)* stops and says so with both versions in front of
-you, and `--lucky` executes whatever it has and **reports it on `stderr`** —
-running a different version silently is what gets discovered three days later.
+**Whoever reaches this port runs code here**, as their user. There is no
+authentication and there is not going to be one — that is `srun`'s and `ssh`'s
+job. Bind to `127.0.0.1` and tunnel, or to a private interface inside a cluster.
 
-## The port belongs on a network you trust
-
-A worker executes what it is sent, and that is the whole point of it — but say
-it plainly: `pickle` artifacts are opened with `cloudpickle.loads`, and `project`
-ones resolve classes out of this clone, so **whoever reaches this port runs code
-here**, as their user. There is no authentication and there is not going to be
-one: this is `srun`'s and `ssh`'s job, not a framework's.
-
-Bind it to `127.0.0.1` and reach it through a tunnel, or to a private interface
-inside a cluster. `0.0.0.0` on a machine with a public address is handing out a
-shell.
-
-## What this module does NOT solve
-
-The **environment**. `cloudpickle` moves your objects, it does not move `torch`.
-If the dependencies your nodes import are not installed here, the `loads` fails
-with an ordinary `ModuleNotFoundError`. Installing them belongs to whoever stands
-the worker up, and putting it in here cost the original soma 420 lines of
-environment manager and a hot `pip install`.
-
-Which is a **recipe and not a mechanism**, and it fits in one file::
+It does not solve the **environment**: `cloudpickle` moves your objects, not
+`torch`. That belongs to whoever stands the worker up, and putting it in here
+cost the original 420 lines and a hot `pip install`. It fits in one file::
 
     #!/usr/bin/env -S uv run --script
     # /// script
@@ -56,17 +32,8 @@ Which is a **recipe and not a mechanism**, and it fits in one file::
     from somatize import worker
     worker.listen("0.0.0.0:7000", store="/scratch/soma")
 
-`uv lock --script` leaves the resolution beside it, so the machine that claims a
-trial from a shared folder gets the environment the one that wrote it had —
-without a shared env on NFS and without a `module load`. Nothing in here knows
-what `uv` is, and that is the point: it is the same file the worker already was.
-
-## `stdout` is the wire
-
-The protocol's messages go over this process's standard output, so at startup
-`sys.stdout` is redirected to `sys.stderr`: a stray `print()` in one of your
-nodes would otherwise break them. A library that writes to file descriptor 1
-directly would still break it; that is rare and we do not paper over it.
+`stdout` **is** the wire, so at startup `sys.stdout` is redirected to `stderr`: a
+stray `print()` in one of your nodes would otherwise break the protocol.
 """
 
 from __future__ import annotations
@@ -96,13 +63,10 @@ __all__ = [
 
 @runtime_checkable
 class Provision(Protocol):
-    """How a worker turns an artifact into a catalog.
-
-    Named as a `Protocol` because there are three of these in this file and none
-    of them inherits from the others: `Pickles`, `Project` and the `Strategies`
-    that dispatches between them by `kind`. It is the seam `transport`'s
-    `Provision` trait is filled from, and a user with a fourth way of packing
-    nodes writes one of these and passes it to `listen`.
+    """How a worker turns an artifact into a catalog. A `Protocol` because there
+    are three of these here and none inherits from the others. It is the seam
+    `wire`'s `Provision` trait is filled from, and a user with a fourth way of
+    packing nodes writes one and passes it to `listen`.
     """
 
     def accepts(self, client: str, kind: str) -> str | None:
@@ -114,11 +78,9 @@ class Provision(Protocol):
 
 
 def runtime() -> str:
-    """How this process identifies itself to the other side, so a mismatch is
-    refused on connect instead of surfacing inside a `loads`.
-
-    `somatize`'s version goes in here, and that is why it does not go into each
-    class's fingerprint.
+    """How this process identifies itself, so a mismatch is refused on connect
+    instead of surfacing inside a `loads`. `somatize`'s version goes here, which
+    is why it does not go into each class's fingerprint.
     """
     import cloudpickle
 
@@ -249,15 +211,11 @@ def listen(
 ) -> None:
     """Stands on `addr` and serves whoever connects. It does not return.
 
-    `provision` says what the implementations are resolved with; by default,
-    `project` and `pickle`. `stdout` is not touched — here the wire is the
-    socket — and `opened` is called once with the real address, so port `0` can
-    be asked for.
-
-    `store` is a directory, and it answers two questions that stay two: an
-    artifact it already has is **not sent again**, and a node whose answer is
-    already there is **not run again**. Shared between workers — a mount, a
-    network folder — the second one to be stood up starts warm.
+    `provision` says what the implementations are resolved with. `stdout` is not
+    touched — here the wire is the socket — and `opened` is called once with the
+    real address, so port `0` can be asked for. `store` answers two questions
+    that stay two: an artifact it already has is not sent again, and a node whose
+    answer is there is not run again.
     """
     return _listen_provisioned(
         addr, default() if provision is None else provision, opened, store=store,
@@ -269,15 +227,9 @@ def main(argv: list[str] | None = None) -> None:
     """`python -m somatize.worker [--listen HOST:PORT] [--store DIR] [--lucky]`.
 
     Without `--listen` it talks over standard input, which is for testing.
-    `--lucky` executes even if its code is not the version the graph was written
-    against; by default it stops. `--store` is a directory to keep things in.
-
-    `--reporting SECONDS` writes a reading of this machine into that store on a
-    clock — how loaded it is, how much memory is left, how long it has been up.
-    It is the half of *the health of the workers* that nobody on the other end
-    can work out, and the store is where it goes because an idle worker's
-    connection is one nobody is reading. Off unless asked for, and it needs a
-    `--store`.
+    `--reporting SECONDS` writes a reading of this machine into the store on a
+    clock — it goes to the store because an idle worker's connection is one
+    nobody is reading. Off unless asked for, and it needs a `--store`.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     _read_the_codecs()
@@ -300,21 +252,14 @@ def main(argv: list[str] | None = None) -> None:
 def _read_the_codecs() -> None:
     """Registers what this worker knows how to read, **before** it serves.
 
-    A codec has to be there before a value arrives and not be discovered while
-    one is being unpacked. Discovered, the first import of a large native
-    extension happens inside a request thread while the GIL is being handed
-    back and forth, and with torch that is not an error but **heap corruption**:
-    `free(): chunks in smallbin corrupted`, a worker that dies with no
-    traceback, and a client told only that it closed without answering.
+    A codec has to be there before a value arrives. Discovered instead, the first
+    import of a large native extension happens inside a request thread while the
+    GIL is handed back and forth, and with torch that is not an error but **heap
+    corruption**: a worker that dies with no traceback, and a client told only
+    that it closed without answering.
 
-    It hid for a long time because the first job a worker got was usually a
-    small one, which imported torch harmlessly; it surfaced the day a second
-    torch worker was stood up whose very first job was a training run.
-
-    This is not the worker learning about your project. `somatize.torch` is
-    soma's own, and a worker that can carry a tensor is one that has read
-    the codec for it. One that has no torch carries no tensors, and that is a
-    worker too.
+    Not the worker learning about your project: `somatize.torch` is soma's own,
+    and one that has no torch carries no tensors, which is a worker too.
     """
     try:
         import somatize.torch  # noqa: F401
@@ -336,12 +281,6 @@ def _after(flag: str, argv: list[str], needed: bool = False) -> str | None:
     `needed` says the flag is not optional, and the two overloads above are it
     said in types: asking for one that has to be there answers a `str` and not a
     `str | None`, so the caller has nothing to check.
-
-    It **was a dead parameter** — declared, passed as `needed=True` by `main`,
-    and never read — which is exactly what annotating this file turned up. It
-    changes nothing that runs today, because the one call that passes it is
-    already inside `if "--listen" in argv`; what it removes is a promise the
-    signature was making and the body was not keeping.
     """
     if flag not in argv:
         if needed:

@@ -6,31 +6,15 @@ use somatize_core::{Codec, CodecError, as_written, written_down};
 
 /// Writes frames down so they can be kept or sent, and reads them back.
 ///
-/// # The second implementor of `Codec`, and from another crate
+/// The **second implementor of `Codec`, and from another crate** — the first was
+/// `python/`'s registry of `dump`/`load` pairs — which is what keeps the hole a
+/// hole. A unit struct because the format is the format and there is nothing to
+/// configure; whoever runs the engine hands it in, and a store and a wire get
+/// the same bytes because what a frame weighs has one answer.
 ///
-/// The first was `python/`'s, holding a registry of `dump`/`load` pairs the user
-/// filled. This one knows exactly one thing and needs no registry: a
-/// [`Frame`] is Arrow IPC. Which is what a hole is for — the trait stays a trait
-/// because the implementations really do come from elsewhere, and neither of the
-/// two could have been written in `transport`.
-///
-/// # A unit struct, because it holds nothing
-///
-/// There is nothing to configure: the format is the format. Whoever runs the
-/// engine hands it in — `Packing::over(&cache, &Ipc)` for a store,
-/// `Worker::dispatch` for a wire — and the same bytes come out either way,
-/// because what a frame weighs is one question with one answer.
-///
-/// # What it refuses
-///
-/// An opaque that is not a frame. It says so rather than guessing, which is the
-/// same frontier every codec draws: *what nobody registered a codec for does not
-/// travel*.
-///
-/// A graph carrying tensors **and** rows wants both codecs at once, and that is
-/// what `python/`'s does: a frame is handed here, anything else goes to the
-/// registry it holds. One that asks each in turn, rather than a bigger one that
-/// knows both.
+/// It refuses an opaque that is not a frame rather than guessing. A graph
+/// carrying tensors **and** rows wants both codecs, which is what `python/`'s
+/// does: a frame comes here, anything else goes to its registry.
 pub struct Ipc;
 
 impl Codec for Ipc {

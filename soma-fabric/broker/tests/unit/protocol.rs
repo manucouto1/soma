@@ -19,8 +19,6 @@ fn round_trip_reply(reply: Reply) {
     assert_eq!(Reply::from_bytes(&bytes).unwrap(), reply);
 }
 
-// ── The six messages ──
-
 #[test]
 fn every_thing_the_client_says_goes_and_comes_back_equal() {
     for ask in [
@@ -72,8 +70,6 @@ fn a_host_keeps_its_name_across_the_wire() {
         other => panic!("that was a Reach, not {other:?}"),
     }
 }
-
-// ── The greeting, which is the only reason any of this is versioned ──
 
 /// What another version's client would put on the wire: the same first message
 /// with a number this binary has never heard of.
@@ -151,8 +147,6 @@ fn a_greeting_that_grew_a_field_cannot_be_read_which_is_why_it_must_not_grow() {
          nobody will find out until two binaries meet"
     );
 }
-
-// ── Bytes that are not messages ──
 
 #[test]
 fn leftovers_are_as_suspicious_as_missing_bytes() {

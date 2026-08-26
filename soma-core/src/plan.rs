@@ -1,25 +1,17 @@
 //! The decided shape of an execution.
 //!
-//! A [`Graph`] says which nodes exist; a `Plan` says **how they are walked**,
-//! and that is a separate decision: the same structure can run in sequence, all
-//! at once, or spread across machines.
+//! A [`Graph`] says which nodes exist; a `Plan` says **how they are walked**.
+//! An enum and not a trait of executors: the ways of executing are a closed set,
+//! so the day a variant arrives the engine's `match` stops compiling and
+//! somebody has to decide, instead of falling into a wildcard arm.
 //!
-//! It is an enum and not a trait of executors on purpose. The ways of executing
-//! are a **closed** set that we decide, so the compiler keeps track: the day a
-//! variant arrives, the engine's `match` stops compiling and someone has to
-//! decide what to do, instead of falling into a wildcard arm.
+//! Every step carries **where its input comes from**, which is what makes a plan
+//! self-contained — executing never looks at the graph again — and why fans in
+//! both directions need no special variant.
 //!
-//! Every step carries **where its input comes from** written on it. That is what
-//! makes a plan self-contained — executing it never looks at the graph again —
-//! and it is why fans, in both directions, need no special variant.
-//!
-//! # How the shape is recovered
-//!
-//! [`compile`] does not flatten the graph, it **decomposes** it. The DSL's `>>`
-//! and `|` are serial and parallel composition, so the tree you wrote is in
-//! there — and it has to be recovered from the graph, because the same graph
-//! built with `node()`/`edge()` in a loop must give the same plan (decision 6 of
-//! CU5). The expression tree is the **oracle**, not the source.
+//! [`compile`] does not flatten the graph, it **decomposes** it, recovering the
+//! tree from the graph and never from the expression: the same graph built with
+//! `node()`/`edge()` in a loop has to give the same plan.
 //!
 //! | case | yields |
 //! |---|---|
@@ -30,28 +22,20 @@
 //! | no cut | flat sequence: it is not series-parallel |
 //!
 //! A **series cut** `(A, B)` is what a `>>` produces: the crossing edges run
-//! from **all** the sinks of `A` to **all** the sources of `B`, and from nowhere
-//! else. Checking that in full is what keeps a multi-node branch from being
-//! split down the middle. Only the **prefixes of a topological order** need
-//! testing, and that is provable: in a serial composition every node of `A`
-//! precedes every node of `B` in *any* topological order.
+//! from **all** the sinks of `A` to **all** the sources of `B` and from nowhere
+//! else. Only the prefixes of a topological order need testing, since in a
+//! serial composition every node of `A` precedes every node of `B` in any
+//! topological order.
 //!
 //! There are DAGs without a tree — a theorem, not a gap here. The minimal
 //! forbidden pattern is the "N": `a→c`, `a→d`, `b→d`. See Valdes, Tarjan and
 //! Lawler, *The recognition of series parallel digraphs*, SIAM J. Comput. 11(2),
-//! 1982. And there is a fortunate boundary: **the image of the DSL is exactly
-//! the series-parallel graphs**, so the N can only be built with
-//! `node()`/`edge()`, and those fall to the last case.
-//!
-//! # Distribution, which is a second step
+//! 1982. The image of the DSL is **exactly** the series-parallel graphs, so the
+//! N is only reachable through `node()`/`edge()` and falls to the last case.
 //!
 //! [`compile`] does not see the [`Placement`]; [`distribute`] does, and wraps
-//! the slices running elsewhere in [`Plan::Remote`]. Two steps and not one
-//! because the two halves of "where" do not weigh the same: a
-//! [`Device`](crate::Device) is **inert** for the traversal, so placing cannot
-//! alter what comes out of `compile`, and that stays an invariant. A [`Host`] is
-//! not: crossing a wire is a step of another nature, and how often it is crossed
-//! depends on how you group.
+//! what runs elsewhere in [`Plan::Remote`]. Two steps because a
+//! [`Device`](crate::Device) is inert for the traversal and a [`Host`] is not.
 
 use crate::{Catalog, Graph, Host, NodeId, Placement};
 use std::fmt;
@@ -74,10 +58,9 @@ pub enum Plan {
     /// One after another, in topological order. Each reads what it needs from
     /// what has already been produced.
     Sequence(Vec<Plan>),
-    /// Branches launched **at the same time**, one per connected component —
-    /// so they are disjoint, which is what the dropped `Plan::Parallel` was
-    /// not. Each is a whole plan, so a branch runs start to finish on one
-    /// thread.
+    /// Branches launched **at the same time**, one per connected component, so
+    /// they are disjoint. Each is a whole plan, so a branch runs start to
+    /// finish on one thread.
     Wave(Vec<Plan>),
     /// This whole slice executes elsewhere. A complete plan and not a step, so
     /// a chain of five nodes on the same host is sent once.
@@ -89,10 +72,9 @@ pub enum Plan {
     },
 }
 
-/// Decides how this graph is walked.
-///
-/// The catalog is only consulted to check that every node has an
-/// implementation: since CU6 the shape no longer depends on **what** each one is.
+/// Decides how this graph is walked. The catalog is only consulted to check
+/// that every node has an implementation: the shape does not depend on what
+/// each one is.
 pub fn compile(graph: &Graph, catalog: &Catalog) -> Result<Plan, CompileError> {
     if graph.is_empty() {
         return Ok(Plan::Empty);
@@ -127,23 +109,17 @@ pub enum Destination<'p> {
 }
 
 impl Plan {
-    /// Every step, in declaration order, **wherever it runs**: what a plan does
-    /// does not depend on where, so a [`Remote`](Plan::Remote) is entered.
-    ///
-    /// This is the walk that "which nodes are in here?" wants, and there were
-    /// three copies of it before there was one — one of them in another crate,
-    /// which had rewritten a private helper of this one because there was no way
-    /// to ask.
+    /// Every step, in declaration order, **wherever it runs**: a
+    /// [`Remote`](Plan::Remote) is entered, because what a plan does does not
+    /// depend on where.
     pub fn steps(&self) -> impl Iterator<Item = Step<'_>> {
         Steps { left: vec![self] }
     }
 
     /// What decides where each part of this plan runs, in declaration order.
-    ///
-    /// The other walk, and it differs in one line: a [`Remote`](Plan::Remote) is
-    /// **not** entered, because it already says where it goes. That is what
-    /// makes [`distribute`] idempotent — a plan that has already travelled is
-    /// not opened up and sent again.
+    /// Differs from [`steps`](Self::steps) in one line: a
+    /// [`Remote`](Plan::Remote) is **not** entered, which is what makes
+    /// [`distribute`] idempotent.
     pub fn destinations(&self) -> impl Iterator<Item = Destination<'_>> {
         Destinations { left: vec![self] }
     }
@@ -193,11 +169,9 @@ impl<'p> Iterator for Destinations<'p> {
     }
 }
 
-/// Wraps the slices that run on another host in [`Plan::Remote`].
-///
-/// It groups **as much as it can**, descending only where a slice is spread
-/// across several places. Idempotent, and a plan with no hosts comes out of
-/// here unchanged.
+/// Wraps the slices that run on another host in [`Plan::Remote`], grouping as
+/// much as it can and descending only where a slice is spread across places.
+/// Idempotent; a plan with no hosts comes out unchanged.
 pub fn distribute(plan: &Plan, placement: &Placement) -> Plan {
     if placement.is_local() {
         return plan.clone();
@@ -227,9 +201,8 @@ fn wrap(plan: &Plan, placement: &Placement) -> Plan {
         Where::All(None) | Where::Nothing => plan.clone(),
         Where::Mixed => match plan {
             Plan::Sequence(plans) => Plan::Sequence(runs(plans, placement)),
-            // Branches are wrapped one by one, without regrouping two of the
-            // same host: that would change their declaration order, which is
-            // observable. All on one host was already wrapped whole above.
+            // One by one, without regrouping two of the same host: that would
+            // change their declaration order, which is observable.
             Plan::Wave(branches) => {
                 Plan::Wave(branches.iter().map(|p| wrap(p, placement)).collect())
             }
@@ -297,11 +270,9 @@ fn uniform(plan: &Plan, placement: &Placement) -> Where {
     }
 }
 
-/// The shape of a subset of nodes, in topological order.
-///
-/// The subset is always **closed under paths** — a topological prefix, its
-/// complement, or a connected component — which is why reachability inside the
-/// subgraph coincides with reachability in the whole graph.
+/// The shape of a subset of nodes, in topological order. The subset is always
+/// closed under paths, which is why reachability inside the subgraph coincides
+/// with reachability in the whole graph.
 fn decompose<'g>(graph: &'g Graph, nodes: &[&'g NodeId]) -> Plan {
     match nodes {
         [] => Plan::Empty,

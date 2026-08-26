@@ -3,17 +3,11 @@
     t = Trainer(g, objective=..., optimizer=..., auditing=True,
                 watching=Recorder(store, run="tuesday"))
 
-This is the **measuring** half of CU21 and it decides nothing. What it produces
-is a `health` fact per node per audited step — numbers, in the same record as
-everything else — and whether those numbers are bad is `somatize.health`'s
-opinion, taken later and re-takeable with other bounds.
-
-That split is the invariant of the whole layer written as two files: *a
-diagnosis has to be reproducible from the stored record, without training
-again*. If the thresholds lived here, they would be baked into the measurement
-and an argument about a bound would cost an afternoon of GPU.
-
-## Where the numbers come from
+The **measuring** half, and it decides nothing: what it produces is a `health`
+fact per node per audited step — numbers, in the same record as everything else —
+and whether they are bad is `somatize.health`'s opinion, re-takeable with other
+bounds. Thresholds baked in here would make an argument about one cost an
+afternoon of GPU.
 
 | what | from |
 |---|---|
@@ -23,14 +17,10 @@ and an argument about a bound would cost an afternoon of GPU.
 | effective rank, group CKA | a snapshot pass, on a cadence |
 | the update's stable rank | two snapshots of a weight, on a cadence |
 
-## What it costs, and why almost all of it is opt-in
-
-The per-step half is O(numel) reductions on tensors that are already in memory:
-a norm, a comparison, a mean. The **snapshot** half is an SVD, and it runs every
-`snapshot` steps rather than every step for exactly that reason. Channels are
-off unless asked for, because a per-channel reduction is another pass.
-
-Nothing here changes what the network computes. Hooks read; they do not write.
+The per-step half is O(numel) reductions on tensors already in memory. The
+**snapshot** half is an SVD, which is why it runs every `snapshot` steps, and
+channels are off unless asked for. Nothing here changes what the network
+computes: hooks read, they do not write.
 """
 
 from __future__ import annotations
@@ -68,16 +58,11 @@ DEAD_EPS = 1e-7
 
 
 class Audit:
-    """Watches the nodes of a graph and says what it saw.
-
-    Built by the `Trainer` when `auditing=` is given; there is little reason to
-    make one by hand except to choose a cadence::
+    """Watches the nodes of a graph and says what it saw. Built by the `Trainer`
+    when `auditing=` is given; little reason to make one by hand except to choose
+    a cadence or to declare `groups`, the channel partitions a node keeps apart::
 
         Trainer(g, ..., auditing=Audit(every=10, channels=True))
-
-    `groups` declares channel partitions a node is meant to keep apart, so that
-    two of them carrying the same information can be found::
-
         Audit(groups={"encoder": {"audio": range(0, 64), "text": range(64, 128)}})
     """
 
@@ -124,14 +109,13 @@ class Audit:
         #: raising.
         self.watching: dict[Key, Any] = {}
 
-    # ── Attaching ──
 
     def watch(self, graph: "Graph") -> "Audit":
         """Hooks every node of this graph, and — with `inside=` — what is in it.
 
         What comes back is keyed by node, and by `node.path.to.submodule` for
-        anything inside one. The dot is not decoration: it is what lets a
-        figure colour the **node** while the hover says which layer of it.
+        anything inside one. The dot is what lets a figure colour the **node**
+        while the hover says which layer of it.
         """
         self.release()
         self.watching = {}
@@ -158,14 +142,12 @@ class Audit:
             hook.remove()
         self._hooks = []
 
-    # ── Measuring ──
 
     def observed(self, graph: "Graph") -> list[Fact]:
         """One `health` fact per node, for the step that just finished.
 
-        Called by the `Trainer` after `backward`, which is the only moment when
-        the activations of this step and the gradients for them are both in
-        hand. Empty on a step this audit is not measuring.
+        Called after `backward`, the only moment when this step's activations and
+        the gradients for them are both in hand. Empty on an unmeasured step.
         """
         self._step += 1
         if (self._step - 1) % self.every:
@@ -192,9 +174,8 @@ class Audit:
     def _windowed(self, key: Key, one: dict[str, Any]) -> Fact:
         """This step's numbers, reduced over the window a verdict is taken on.
 
-        The maxima are maxima over the window and the rest are the latest,
-        which is not an inconsistency: `DEAD` asks *did this ever happen* and a
-        gradient norm asks *what is it now*.
+        The maxima are maxima over the window and the rest are the latest:
+        `DEAD` asks *did this ever happen*, a gradient norm asks *what is it now*.
         """
         kept = self._history.setdefault(key, [])
         kept.append(one)
@@ -213,9 +194,6 @@ class Audit:
         if len(usual) >= 3:
             said["update_rank_usual"] = usual[len(usual) // 2]
         return said
-
-
-# ── What one hook sees ──
 
 
 def _forward_of(audit: "Audit", key: Key) -> Callable[[Any, Any, Any], None]:
@@ -258,8 +236,8 @@ def _of_channels(audit: "Audit", key: Key, t: "_torch.Tensor") -> dict[str, Any]
     """Per-channel means, accumulated across the window.
 
     The channel axis is the last one, which is what a `Linear` produces and what
-    a transformer carries. A convolution's is not, and saying so is better than
-    guessing: this measures what it can name.
+    a transformer carries. A convolution's is not, and this measures what it can
+    name rather than guessing.
     """
     if t.dim() < 2:
         return {}
@@ -350,9 +328,8 @@ def _leakage(
 ) -> float | None:
     """The largest linear CKA between two declared groups of channels.
 
-    Kornblith et al. (2019). The centring is not decoration: CKA is defined on
-    centred features, and without it two representations that merely share an
-    offset read as the same one.
+    Kornblith et al. (2019). The centring is not decoration: without it two
+    representations that merely share an offset read as the same one.
     """
     named = list(groups)
     features = {}
@@ -379,9 +356,8 @@ def _cka(x: "_torch.Tensor", y: "_torch.Tensor") -> float:
 def _ignored(kept: dict[str, Any]) -> dict[str, Any]:
     """Channels alive in the forward pass that no gradient ever comes back for.
 
-    Gradient starvation: the network computes something and never asks for it.
-    A **dormant** channel is not ignored — it is not computing anything to be
-    ignored — so the two are counted apart.
+    Gradient starvation: the network computes something and never asks for it. A
+    **dormant** channel is not ignored, so the two are counted apart.
     """
     per_channel = kept.get("act_per_channel")
     grads = kept.get("grad_per_channel")
@@ -395,12 +371,11 @@ def _ignored(kept: dict[str, Any]) -> dict[str, Any]:
 
 
 def _update_rank(kept: Any, held: Any) -> dict[str, Any]:
-    """The stable rank of `W_t - W_{t-d}`: how many directions this node moved
-    in between two snapshots.
+    """The stable rank of `W_t - W_{t-d}`: how many directions this node moved in
+    between two snapshots.
 
-    `||A||_F^2 / ||A||_2^2`, which needs one singular value rather than all of
-    them. Recorded and drawn; **not** flagged by default — see
-    `health/tests/narrowing.py` for the measurement that decided that.
+    `||A||_F^2 / ||A||_2^2`, one singular value rather than all of them. Recorded
+    and drawn; **not** flagged by default — see `health/tests/narrowing.py`.
     """
     weight = _biggest(held)
     if weight is None:
@@ -434,9 +409,8 @@ def _modules(held: Any) -> list[tuple[str, Any]]:
     """The torch modules a node holds, as `[(attribute, module)]`.
 
     A node is the user's class and there is no protocol for *give me your
-    layers* — `parameters()` is all a node promises. Its attributes are where
-    the modules are, which is the same place the original looked, and the
-    attribute's name is what keeps two of them apart.
+    layers* — `parameters()` is all a node promises — so its attributes are where
+    the modules are, and the attribute's name keeps two of them apart.
     """
     if torch is None or isinstance(held, type):
         return []
@@ -459,9 +433,8 @@ def _tensor(output: Any) -> "_torch.Tensor | None":
 def _slope(name: str, kept: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """How a metric is moving over the window, relative to its own size.
 
-    Relative, so that a rank of 40 falling by one and a norm of 0.4 falling by
-    a hundredth are the same finding. Silent under three points: two make a
-    line through anything.
+    Relative, so a rank of 40 falling by one and a norm of 0.4 falling by a
+    hundredth are the same finding. Silent under three points.
     """
     over = [step[name] for step in kept if name in step and math.isfinite(step[name])]
     if len(over) < 3 or over[0] == 0:
@@ -476,18 +449,13 @@ def _scoped(
     most: int,
     depth: int = 0,
 ) -> list[tuple[str, Any]]:
-    """Which submodules of a node to look at, as `[(path, module)]`.
+    """Which submodules of a node to look at, as `[(path, module)]`. Three ways of
+    saying it: `True` is *look inside and work out where*, an `int` is *this many
+    levels down*, a list is *these, by name*. The root is never in the answer.
 
-    Three ways of saying it, because three questions get asked. `True` is *look
-    inside and work out where*; an `int` is *this many levels down*; a list of
-    patterns is *these, by name*. The root is never in the answer — it is
-    already audited under the node's own id.
-
-    The automatic one is the original's, and the heuristic is worth keeping:
-    **direct children that own parameters, descending one extra level through a
-    single-child wrapper.** That last clause is the `nn.Sequential` case, which
-    is what almost everybody writes, and without it the automatic scope answers
-    *the sequential* and nothing useful.
+    The automatic one is the original's heuristic: **direct children that own
+    parameters, descending one extra level through a single-child wrapper** —
+    the `nn.Sequential` case, without which it answers *the sequential*.
     """
     import fnmatch
 

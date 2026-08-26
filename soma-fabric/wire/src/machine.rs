@@ -1,55 +1,38 @@
 //! What a machine says about itself. The one thing no record can derive.
 //!
 //! Everything else about a worker is already written down by whoever asked it
-//! to do something: which slices crossed, how long the round trip took, what
-//! ran over there and what it produced. Turn the record on its side and you
-//! have a fleet view without anybody keeping a registry.
+//! to do something. What is **not** in there is the machine — how loaded it is,
+//! how much memory is left, how long it has been up — which is the half of *see
+//! the health of the workers* that a scan cannot answer.
 //!
-//! What is **not** in there is the machine — how loaded it is, how much memory
-//! is left, how long it has been up. Nobody on the other end can work that out,
-//! and it is the half of *see the health of the workers* that a scan cannot
-//! answer.
-//!
-//! # A level of its own, and it stays out of the core
-//!
-//! A load average is not a fact about a graph. Putting it in
+//! A load average is not a fact about a graph, so putting it in
 //! [`Fact`](somatize_core::Fact) as its own variant would be the engine
-//! learning what a machine is, which is the mistake that keeps `loss` out of
-//! the core too. So the vocabulary lives **here**, where a host is already a
-//! thing, and it crosses as `(kind, pairs)` inside
-//! [`Fact::Said`](somatize_core::Fact::Said) — the shape CU20 named as the one
-//! place the levels meet.
+//! learning what a machine is. The vocabulary lives **here**, where a host is
+//! already a thing, and it crosses as `(kind, pairs)` inside
+//! [`Fact::Said`](somatize_core::Fact::Said).
 //!
-//! Which costs nothing on the wire. `Answer::Saw` already carries a `Fact`, the
-//! client already relays one straight to its watcher, and the engine already
-//! wraps whatever arrives in [`Fact::Elsewhere`] — so this **arrives saying
-//! which host it came from** without one line attributing it, and no message
-//! had to be added to the protocol.
+//! Which costs nothing on the wire: `Answer::Saw` already carries a `Fact`, and
+//! the engine already wraps whatever arrives in [`Fact::Elsewhere`] — so this
+//! **arrives saying which host it came from** without one line attributing it.
 //!
-//! # It is read, not judged
-//!
-//! No thresholds, here or anywhere near here. A machine at 0.9 busy is a
-//! machine at 0.9 busy; whether that is bad is somebody's opinion at a bound,
-//! and this library keeps those in `health/` where they can be argued with
-//! against a record that has already been written.
+//! It is read and never judged. No thresholds here or near here: whether 0.9
+//! busy is bad is somebody's opinion at a bound, and those live in `health/`.
 
 use somatize_core::Fact;
 use std::time::Duration;
 
 /// What one machine looks like right now.
 ///
-/// A struct and not an enum: these are not alternatives, they are a snapshot,
-/// and every one of them is measured at the same instant. `None` is **nobody
-/// measured it** and never zero — a kernel that does not keep a load average is
-/// not a machine that is idle.
+/// A struct and not an enum: these are not alternatives but a snapshot, every
+/// one of them measured at the same instant. `None` is **nobody measured it**
+/// and never zero — a kernel that keeps no load average is not an idle machine.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Machine {
     /// How long this worker process has been up.
     ///
     /// Its own monotonic clock and never a wall clock: two machines' wall
-    /// clocks disagree by minutes on a cluster as a matter of course, and CU21
-    /// already ruled that two of them would not have composed. What the reader
-    /// gets is a duration, and *when* is stamped by whoever writes it down.
+    /// clocks disagree by minutes on a cluster as a matter of course. What the
+    /// reader gets is a duration, and *when* is stamped by whoever writes it.
     pub up: Duration,
     /// The run queue against the number of cores, so two machines of different
     /// sizes can be compared.
@@ -71,11 +54,11 @@ pub struct Machine {
     /// What this machine calls **itself**: its hostname and this process.
     ///
     /// Not the name the graph gave it. **A worker does not know that name** —
-    /// `w1` is the client's word and it is why the client is the one that
-    /// attributes a fact. So a reading written to a store, where there is no
-    /// client to attribute it, has to be filed under something the worker can
-    /// know on its own, and this is it. Whoever reads joins the two by seeing
-    /// the same `id` on a reading that **did** come down a wire.
+    /// `w1` is the client's word, which is why the client attributes a fact. A
+    /// reading written to a store has no client to attribute it, so it is filed
+    /// under something the worker can know on its own, and whoever reads joins
+    /// the two by seeing the same `id` on a reading that **did** come down a
+    /// wire.
     pub id: String,
 }
 
@@ -84,8 +67,7 @@ impl Machine {
     ///
     /// Everything comes from `/proc`, which is Linux. Elsewhere the fields are
     /// `None` and say so by being `None` — a worker on a laptop still reports
-    /// its uptime and how much it has served, which is the part that never
-    /// needed a kernel.
+    /// its uptime and how much it has served.
     pub fn here(up: Duration, served: u64) -> Self {
         let cores = std::thread::available_parallelism()
             .map(|one| one.get())
@@ -104,9 +86,8 @@ impl Machine {
     ///
     /// Named `machine`, which is what it will be written down as and what a
     /// reader filters on. A field that was not measured is **absent** rather
-    /// than empty: the record has no null and a reader that finds no `busy`
-    /// has to be able to tell *this kernel does not say* from *nothing is
-    /// running*.
+    /// than empty: a reader that finds no `busy` has to be able to tell *this
+    /// kernel does not say* from *nothing is running*.
     pub fn said(&self) -> Fact {
         let mut pairs = vec![
             ("up_us".into(), self.up.as_micros().to_string()),
@@ -131,25 +112,20 @@ impl Machine {
 
     /// A reading, back out of the pairs [`said`](Self::said) wrote.
     ///
-    /// Here and not wherever it is read, which is the whole point: two halves
-    /// of one format in two crates drift, and the day a field is added the
-    /// writer and the reader would each look right and disagree about what a
-    /// reading is. Whoever reads a store, a record or a fact off a wire gets
-    /// the same answer because there is only one of these.
+    /// Here and not wherever it is read: two halves of one format in two crates
+    /// drift, and the day a field is added the writer and the reader would each
+    /// look right and disagree about what a reading is.
     ///
     /// **What is not there is `None`**, which is the rule the other half writes
-    /// by: absent means nobody measured it and never that something is zero. A
-    /// field that *is* there and will not parse is treated the same way, on
-    /// purpose — a reading written by a version that says `busy` differently is
-    /// still a reading, and refusing all of it would throw away the uptime for
-    /// the sake of the load average. It is the same decision this file already
-    /// makes about a `/proc` line it does not understand.
+    /// by. A field that *is* there and will not parse is treated the same way,
+    /// on purpose — refusing all of it would throw away the uptime for the sake
+    /// of the load average.
     pub fn read(pairs: &[(String, String)]) -> Self {
         Self {
-            // Absent is zero here and only here: `up` and `served` are not
-            // measurements of a kernel, they are what the process itself
-            // counted, and a reading that does not carry them is one this
-            // version cannot read rather than a machine that did not say.
+            // Absent is zero here and only here: `up` and `served` are what
+            // the process itself counted and not measurements of a kernel, so a
+            // reading without them is one this version cannot read rather than
+            // a machine that did not say.
             up: Duration::from_micros(parsed(pairs, "up_us").unwrap_or(0)),
             busy: parsed(pairs, "busy"),
             cores: parsed(pairs, "cores"),
@@ -177,10 +153,9 @@ fn parsed<T: std::str::FromStr>(pairs: &[(String, String)], what: &str) -> Optio
 /// Where a reading of this machine is filed in a store.
 ///
 /// **One name per machine and rewritten every time**, not one per reading. That
-/// is CU18's shape and it buys two things: a store that does not grow while a
-/// worker sits there, and liveness for free — the store stamps every write, so
-/// a reading that has not moved is a machine that has stopped, and finding that
-/// out is a scan with no fetches.
+/// buys two things: a store that does not grow while a worker sits there, and
+/// liveness for free — the store stamps every write, so a reading that has not
+/// moved is a machine that has stopped, found out by a scan with no fetches.
 pub fn filed(id: &str) -> String {
     format!("machine/{id}")
 }

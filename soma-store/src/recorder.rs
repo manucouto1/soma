@@ -1,61 +1,30 @@
 //! The engine's [`Watcher`], filled in by a [`Store`]: what happened, kept.
 //!
-//! The hole the core left, plugged with the thing the core cannot have —
-//! somewhere for the record to live. What arrives here is a stream of facts;
-//! what is written is **one record per `forward`**, which is a different grain
-//! and deliberately so.
-//!
-//! # Why the grain is a `forward` and not a node
-//!
-//! Five nodes trained ten thousand steps are fifty thousand node executions.
-//! A record each would be fifty thousand writes and a scan nobody can afford;
-//! one record for the whole training run would have no step 500 in it at all.
-//! The `forward` is the unit the engine actually has: a [`Plan`] is walked once
-//! per one, and [`Fact::Finished`] is emitted by exactly that walk.
-//!
-//! # The shape, which is CU18's and not a new one
+//! What arrives is a stream of facts; what is written is **one record per
+//! `forward`**. Five nodes trained ten thousand steps are fifty thousand node
+//! executions — a record each is a scan nobody can afford — and one record for
+//! the whole run has no step 500 in it. The `forward` is the unit the engine
+//! has: a [`Plan`] is walked once per one.
 //!
 //! ```text
 //! run/<id>/<n>
 //! ```
 //!
-//! In the **record**, which a scan already carries:
+//! In the **record**, which a scan already carries: `run`, `forward`, `took_us`,
+//! `state = ok | broke`, `nodes`, and `<kind>.<field>` for whatever was asked
+//! for with [`summarising`](Recorder::summarising). In the **blob**: every fact,
+//! flattened, in the order it arrived. So *how is it going* costs one scan and
+//! no fetches, and only the detail is paid for — the last row is what keeps a
+//! training curve on the cheap side of that line.
 //!
-//! ```text
-//! run            = the id this run was given, or the one it was handed
-//! forward        = which one, from zero
-//! took_us        = how long all of it took
-//! state          = ok | broke
-//! nodes          = how many ran
-//! <kind>.<field> = whatever was asked for with `summarising`
-//! ```
+//! Two ways in, and they come through different doors so nothing has to be
+//! guessed: [`saw`](Watcher::saw) is the engine's and a terminal fact closes a
+//! record, while [`said`](Recorder::said) is for a vocabulary that is not — a
+//! loss, which arrives **after** the `forward` it belongs to and is written into
+//! the one that closed last.
 //!
-//! In the **blob**, for whoever wants the detail: every fact, flattened, in the
-//! order it arrived. So "how is it going" costs one scan and no fetches, and
-//! only the detail is paid for — the same split, for the same reason, as a
-//! trial's record.
-//!
-//! The last row is what keeps a **training curve** on the cheap side of that
-//! line: ten thousand losses read one blob at a time is ten thousand round
-//! trips, and it is the one number somebody wants from every step.
-//!
-//! # Two ways in, and they are not the same question
-//!
-//! [`saw`](Watcher::saw) is the engine's, and a terminal fact closes a record.
-//! [`said`](Recorder::said) is for whatever vocabulary is not the engine's —
-//! level 2's loss, which is Python's and arrives **after** the `forward` it
-//! belongs to has already ended. That one is written into the record that was
-//! last closed, rewriting it, which a store already does: a name is a question
-//! and its answer can be refreshed.
-//!
-//! Guessing which of the two a fact was would have been impossible and there is
-//! no need: they come through different doors.
-//!
-//! # What it does not do
-//!
-//! It does not judge. Whether 400 ms is slow is CU21's opinion about this, and
-//! the invariant that keeps the two apart is that the opinion has to be
-//! reachable from what is written here without running anything again.
+//! It does not judge. Whether 400 ms is slow is an opinion about this, and it
+//! has to be reachable from what is written here without running again.
 
 use crate::{Meta, Store, StoreError};
 use somatize_core::{Fact, Watcher};
@@ -76,11 +45,9 @@ struct Pending {
     closed: bool,
 }
 
-/// Writes down what happened, one record per `forward`.
-///
-/// It **owns** its store, where a [`Cache`](crate::Cache) borrows one, and the
-/// difference is a fact about their lives: a cache is made for one `forward`
-/// and a recorder counts them, so it outlives every call it is passed to.
+/// Writes down what happened, one record per `forward`. It **owns** its store
+/// where a [`Cache`](crate::Cache) borrows one: a cache is made for one
+/// `forward` and a recorder counts them.
 pub struct Recorder {
     store: Arc<dyn Store>,
     run: String,
@@ -91,11 +58,9 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// A recorder over this store, under a name of its own.
-    ///
-    /// The name is made here and can be read back with [`run`](Self::run),
-    /// because a `forward` in a notebook has no reason to invent one and still
-    /// has to be findable afterwards.
+    /// A recorder over this store, under a name of its own — made here and
+    /// readable with [`run`](Self::run), because a `forward` in a notebook has
+    /// no reason to invent one and still has to be findable.
     pub fn over(store: Arc<dyn Store>) -> Self {
         Self::named(store, made_up())
     }
@@ -114,20 +79,10 @@ impl Recorder {
     /// The same recorder, with these kinds of fact carried **in the record** and
     /// not only in the blob, as `<kind>.<field>`.
     ///
-    /// It is the lesson CU18 already paid for. A trial keeps its score beside
-    /// its configuration in the record, so a sampler rebuilds a whole history
-    /// with **one scan and no fetches**, and only a pruner comparing curves pays
-    /// for blobs. The same question is asked here of every training curve ever
-    /// drawn: ten thousand steps read one at a time is ten thousand round trips
-    /// against a bucket, and the number wanted from each of them is one.
-    ///
-    /// Which kinds those are is the caller's, exactly as the vocabulary is:
-    /// `Recorder::over(store).summarising(["loss"])` is what a training run
-    /// wants, and this crate does not learn what a loss is to know it.
-    ///
-    /// The **last** fact of each kind in a `forward` is the one carried. A
-    /// forward has one loss; if it somehow had two, the one that stands is the
-    /// one that was said last.
+    /// Ten thousand losses read one blob at a time is ten thousand round trips
+    /// and the number wanted from each is one. Which kinds those are is the
+    /// caller's, so this crate does not learn what a loss is. The **last** fact
+    /// of each kind in a `forward` is the one carried.
     pub fn summarising(mut self, kinds: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.summarising = kinds.into_iter().map(Into::into).collect();
         self
@@ -138,16 +93,10 @@ impl Recorder {
         &self.run
     }
 
-    /// One fact from a vocabulary that is not the engine's.
-    ///
-    /// It lands in the `forward` in flight, or — if that one has already ended,
-    /// which is the normal case for a loss — in the one that ended last, whose
-    /// record is rewritten. Nothing is lost and nothing lands in the wrong step.
-    ///
-    /// The fields are text to text because that is what a record is; the
-    /// vocabulary is the caller's, exactly as an [`Artifact`]'s `kind` is.
-    ///
-    /// [`Artifact`]: https://docs.rs/somatize-fabric-wire
+    /// One fact from a vocabulary that is not the engine's. It lands in the
+    /// `forward` in flight, or — the normal case for a loss — in the one that
+    /// ended last, whose record is rewritten. The fields are text to text
+    /// because that is what a record is; the vocabulary is the caller's.
     pub fn said(&self, kind: &str, fields: Vec<(String, String)>) {
         let mut pending = self.pending.lock().expect("nobody poisons this mutex");
         pending.facts.push((kind.to_string(), fields));
@@ -209,11 +158,10 @@ impl Watcher for Recorder {
     }
 }
 
-/// What a scan carries, so that "how is it going" costs no fetches.
-///
-/// Read back off the facts rather than counted as they arrive: a record that is
-/// rewritten has to say the same thing about the same facts however many times
-/// it is written, and a counter that only goes up would not.
+/// What a scan carries, so that *how is it going* costs no fetches. Read back
+/// off the facts rather than counted as they arrive: a rewritten record has to
+/// say the same thing about the same facts, and a counter that only goes up
+/// would not.
 fn meta(run: &str, summarising: &[String], pending: &Pending) -> Meta {
     let how_many = |kind: &str| pending.facts.iter().filter(|(one, _)| one == kind).count();
     let mut meta = vec![

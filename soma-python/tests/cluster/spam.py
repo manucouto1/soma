@@ -38,9 +38,6 @@ batch a **rectangle**, and a batch that is not one cannot be the seam of a
 shape to have a gradient of."""
 
 
-# ── The pipeline ──
-
-
 class Clean(Node):
     """Rows in, a rectangle of token ids out — and **not one line of torch**.
 
@@ -134,9 +131,6 @@ def _ids(text):
 def _padded(ids, width):
     """Cut to `width`, and filled with the padding id when it is short."""
     return (ids + [0] * width)[:width]
-
-
-# ── The data ──
 
 
 def messages(how_many=1600):

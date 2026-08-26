@@ -63,8 +63,6 @@ fn run(
         .run(&plan, input)
 }
 
-// ── That the other process exists ──
-
 #[test]
 fn a_node_placed_away_really_runs_in_another_process() {
     // `where` returns the pid of whoever executes it. If the distribution were
@@ -95,8 +93,6 @@ fn the_same_graph_undistributed_runs_here() {
 
     assert_eq!(number(&output) as u32, std::process::id());
 }
-
-// ── That the work arrives and comes back ──
 
 #[test]
 fn a_whole_chain_goes_away_and_comes_back_with_the_result() {
@@ -235,8 +231,6 @@ fn the_same_worker_serves_several_runs() {
     }
 }
 
-// ── The placement crosses, because it is data ──
-
 #[test]
 fn the_node_over_there_sees_the_device_it_was_given_here() {
     // What `placement.rs` has been promising since CU10: "the day a subgraph
@@ -264,8 +258,6 @@ fn without_a_device_the_node_over_there_sees_none_either() {
 
     assert_eq!(run(&g, &c, &p, &w, Value::Null).unwrap(), Value::Null);
 }
-
-// ── What goes wrong ──
 
 #[test]
 fn a_name_nobody_resolves_is_not_executed_here_just_in_case() {
@@ -332,8 +324,6 @@ fn an_opaque_produced_over_there_does_not_come_back_either() {
 
     assert!(said.contains("does not cross"), "{said}");
 }
-
-// ── With a codec, which is where the frontier really is ──
 
 /// The same one the worker runs with `--codec`: two ends that do not agree on
 /// how something is written down do not understand each other.
@@ -505,8 +495,6 @@ fn the_dsl_sends_a_slice_away_without_assembling_anything_by_hand() {
     );
 }
 
-// ── The whole thesis: two processes overlap ──
-
 #[test]
 fn two_workers_really_do_run_at_the_same_time() {
     // What having processes and not threads buys. The two nodes agree to meet
@@ -610,8 +598,6 @@ fn two_trips_to_the_same_worker_queue_up_without_getting_lost() {
     );
 }
 
-// ── What is written on `stdout` is not a message ──
-
 #[test]
 fn something_printed_on_the_workers_stdout_is_reported_and_does_not_hang() {
     // The cap in `frame` exists for exactly this: four ASCII characters read as
@@ -636,8 +622,6 @@ fn something_printed_on_the_workers_stdout_is_reported_and_does_not_hang() {
     );
 }
 
-// ── The empty worker: the catalog arrives over the wire ──
-//
 // The other kind of worker. It starts without knowing what `x` is, and the
 // client tells it. The artifact in these tests is plain text — `x=5` — and not a
 // pickle, on purpose: what is being tested is the mechanism, and the mechanism
@@ -852,8 +836,6 @@ fn a_broken_artifact_is_rejected_saying_where() {
     assert!(said.contains("not_a_number"), "{said}");
 }
 
-// ── The artifact is set once ──
-
 #[test]
 fn offering_the_same_artifact_twice_does_nothing() {
     // The graph calls `offering` on every run, so repeating it has to be free.
@@ -914,8 +896,6 @@ fn before_greeting_the_artifact_can_still_be_swapped() {
     );
 }
 
-// ── The two kinds of worker cannot be confused ──
-
 #[test]
 fn offering_an_artifact_to_a_worker_that_already_has_a_catalog_is_rejected() {
     // It is not ignored: throwing away its catalog or silently keeping it would
@@ -948,19 +928,12 @@ fn an_empty_worker_nobody_provisions_is_rejected() {
     assert!(said.contains("starts empty"), "{said}");
 }
 
-// ── Standing: the worker stops being a child of the client ──
-//
 // This is the real use case. Everything above starts the worker from the test
 // itself, so it dies with it; here the worker stands up on its own, serves
 // whoever connects, and is still alive when the client leaves.
 
 use std::io::BufRead;
 
-/// Stands up a standing worker and returns it and its address.
-///
-/// It reports the address on `stdout` — where there is no wire — because it is
-/// asked for port `0`: picking a fixed number in a test is asking for two
-/// concurrent runs to collide.
 /// A worker standing on a port, and the guarantee that it stops.
 ///
 /// A `Drop` and not a `kill()` on the last line of each test: a test that fails
@@ -976,6 +949,11 @@ impl Drop for Standing {
     }
 }
 
+/// Stands up a standing worker and returns it and its address.
+///
+/// It reports the address on `stdout` — where there is no wire — because it is
+/// asked for port `0`: picking a fixed number in a test is asking for two
+/// concurrent runs to collide.
 fn standing(empty: bool) -> (Standing, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_test-worker"));
     cmd.args(["--listen", "127.0.0.1:0"]);
@@ -1157,8 +1135,6 @@ fn two_simultaneous_connections_against_the_same_standing_worker() {
     );
 }
 
-// ── That a worker can already know the answer ──
-
 #[test]
 fn what_a_worker_already_kept_is_not_run_again() {
     // The `Keeper` reaching the far side. `counts` answers how many times it has
@@ -1287,8 +1263,6 @@ fn a_client_that_keeps_nothing_still_lets_the_worker_keep() {
         "the worker kept it, and this side keeps nothing at all"
     );
 }
-
-// ── What the far side says while it is still working ──
 
 /// Keeps every fact and **when** it arrived, measured from a start the test
 /// gives it.

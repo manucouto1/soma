@@ -51,12 +51,8 @@ struct Parts {
     mapped: Vec<NodeId>,
 }
 
-/// A lone node.
-///
-/// Named after its type, because this is the last place that knows it: what a
-/// node is called is half of the key its output is kept under, and one line
-/// later there is only an `Arc<dyn Node>`. Python does the same thing with the
-/// class name.
+/// A lone node, named after its type: this is the last place that knows it, and
+/// what a node is called is half of the key its output is kept under.
 pub fn node<N: Node + 'static>(id: impl Into<NodeId>, implementation: N) -> Wire {
     single(
         id.into(),
@@ -184,11 +180,8 @@ impl Wire {
     }
 
     /// This whole piece settled: its state does not change while the graph
-    /// runs. The innermost one wins, like the rest.
-    ///
-    /// Only half of it, and the half the core can hold: whoever knows what a
-    /// gradient is has to make it true, and says it again with the digest of the
-    /// state it settled at. See [`Memory::freeze`].
+    /// runs, innermost first. Only the half the core can hold — whoever knows
+    /// what a gradient is says it again with the digest. See [`Memory::freeze`].
     pub fn frozen(self) -> Wire {
         Wire {
             parts: self.parts.map(|mut parts| {
@@ -198,12 +191,9 @@ impl Wire {
         }
     }
 
-    /// This whole piece worth keeping: what each of its nodes produces is looked
-    /// up before being computed, and kept after.
-    ///
-    /// Declaring it does not make it honest — that is
-    /// [`cacheable`](crate::cacheable)'s question, and it is asked before
-    /// running, not here.
+    /// This whole piece worth keeping: what each node produces is looked up
+    /// before being computed and kept after. Whether it can honestly be kept is
+    /// [`cacheable`](crate::cacheable)'s question, asked before running.
     pub fn cached(self) -> Wire {
         Wire {
             parts: self.parts.map(|mut parts| {
@@ -213,12 +203,8 @@ impl Wire {
         }
     }
 
-    /// This whole piece maps over the items of its input: hand it a list and it
-    /// answers with a list as long, item for item.
-    ///
-    /// It is what gives a cache the grain of an **item**: without it, adding one
-    /// document to a list of a thousand changes the name of the list and all
-    /// thousand miss.
+    /// This whole piece maps over the items of its input: a list in, a list as
+    /// long out. What gives a cache the grain of an **item**.
     pub fn mapped(self) -> Wire {
         Wire {
             parts: self.parts.map(|mut parts| {

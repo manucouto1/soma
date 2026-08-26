@@ -1,42 +1,22 @@
-//! The engine's [`Keeper`], filled in by a [`Store`].
-//!
-//! The hole the core left, plugged with the two things the core cannot have: an
-//! algorithm to hash with, and somewhere for bytes to live. From here the engine
-//! gets a name for what a node is about to produce, and an answer to whether
-//! that name has been seen before.
-//!
-//! # What a name is made of
+//! The engine's [`Keeper`], filled in by a [`Store`]: an algorithm to hash with
+//! and somewhere for bytes to live, the two things the core cannot have.
 //!
 //! ```text
 //! key(root) = sha256( the input, in bytes )
-//! key(node) = sha256( identity | state | salt | the keys above it )
+//! key(node) = sha256( identity | declaration | state | salt | the keys above )
 //! ```
 //!
-//! The pieces of a recipe are **framed by their length** before being hashed,
-//! and that is not a detail: run together, `["ab", "c"]` and `["a", "bc"]` would
-//! be the same string, and two different recipes under one name is the one
-//! failure a cache must not have.
+//! The pieces are **framed by their length** before being hashed: run together,
+//! `["ab", "c"]` and `["a", "bc"]` would be one string, and two recipes under
+//! one name is the failure a cache must not have.
 //!
-//! # Two namespaces in one store
+//! A cached value is bound under `value:<key>` and an artifact under
+//! `artifact:<kind>:<id>`, so one directory holds both without an id that reads
+//! like a key being mistaken for one.
 //!
-//! A cached value is bound under `value:<key>` where an artifact is bound under
-//! `artifact:<kind>:<id>`. The same directory holds both — which is the point of
-//! a store that is a directory — and an artifact whose id happens to read like a
-//! key still cannot be mistaken for one.
-//!
-//! # MessagePack again, and it is not the same decision
-//!
-//! The bytes of a value are written the same way the worker's protocol writes
-//! them, and the few lines that do it are written twice on purpose. What crosses
-//! a wire and what sits in a store for a year are the same shape today and have
-//! no reason to stay so: the wire's two ends are the same binary from the same
-//! `cargo build`, and a store outlives every binary that ever wrote into it.
-//! Sharing the code would have made that one decision instead of two.
-//!
-//! What does **not** travel is the same, though, and for the same reason: a
-//! [`Value::Opaque`] points into the process that made it. Here it fails with
-//! the type in front of you, and `somatize.torch` is what turns a tensor into
-//! bytes before it ever gets this far.
+//! The bytes are written with MessagePack, the same way the wire writes them,
+//! and those few lines are duplicated on purpose: a wire's two ends are the same
+//! binary, and a store outlives every binary that wrote into it.
 
 use crate::{Digest, Meta, Store, StoreError};
 use somatize_core::{Keeper, KeeperError, Kept, Key, Value};
@@ -136,14 +116,9 @@ fn key(digest: Digest) -> Key {
 
 /// Where a value is bound, which is not where an artifact is.
 ///
-/// **Public, and that is a decision**, the same one the engine's metadata
-/// constants got and for the same reason. A key is what a recipe is called; the
-/// name is where a value under that key is bound, and the two are not the same
-/// string. Anybody reading a store back — *which of these hashes is the answer
-/// this version would ask for?* — needs to get from one to the other, and the
-/// alternative is every reader carrying its own `format!` of this, which is two
-/// places saying the same thing with no way to tell which governs the day they
-/// disagree.
+/// Public: a key is what a recipe is called and this is where its value lives,
+/// and every reader carrying its own `format!` of the difference is two places
+/// saying one thing.
 pub fn name_of(key: &Key) -> String {
     format!("value:{key}")
 }

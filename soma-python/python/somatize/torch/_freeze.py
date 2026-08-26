@@ -2,24 +2,18 @@
 
 The core **declares** — a settled node's state does not change while the graph
 runs — and reasons over that: it is what lets it refuse a cache that cannot be
-honoured. It does not know what a gradient is, and it is not going to. Obeying
-is here, exactly as moving a tensor to a GPU is the node's job and not the
-core's.
+honoured. It does not know what a gradient is. Obeying is here, exactly as
+moving a tensor to a GPU is the node's job and not the core's.
 
-Two things happen here, and they are the same thing seen twice:
-
-- `requires_grad_(False)`, so the gradient really does stop. Without it, the
-  value restored from a cache is a **leaf** and the net above it stops training
-  in silence.
-- the digest of the weights, **hashed once, here**. Settling is what makes both
-  the gradient rule and the stability of the key true at the same time, so this
-  is the one moment worth paying for it — and without it, two checkpoints of the
-  same class would share a key, which is the one kind of hit that is a bug.
+Two things happen, and they are the same thing seen twice: `requires_grad_(False)`,
+so the gradient really does stop — without it the value restored from a cache is
+a **leaf** and the net above it stops training in silence — and the digest of the
+weights, **hashed once, here**, without which two checkpoints of one class share
+a key, which is the one kind of hit that is a bug.
 
 The digest is not `torch.save`'s bytes: it is the names, dtypes, shapes and raw
-bytes of the tensors, in order. That way the same weights hash the same whether
-they sit on a GPU or on a CPU, which they have to for a store two machines
-share.
+bytes of the tensors, in order, so the same weights hash the same on a GPU and on
+a CPU, which they have to for a store two machines share.
 """
 
 from __future__ import annotations
@@ -38,8 +32,8 @@ def freeze(graph: "Graph", *node_ids: str) -> None:
     """Settles these nodes — or whatever was already declared `.frozen()`.
 
     With ids it declares and obeys; with none it only obeys, which is what
-    `Trainer` calls so that a `.frozen()` in the expression is true before the
-    first step rather than after somebody notices.
+    `Trainer` calls so a `.frozen()` in the expression is true before the first
+    step rather than after somebody notices.
     """
     for node_id in node_ids or list(graph.frozen()):
         implementation = graph.implementation(node_id)
@@ -51,11 +45,9 @@ def state_digest(implementation: object) -> str | None:
     """The digest of the state it is settled at, or `None` if it has none.
 
     Three ducks and not one, because the project's own nodes use all three:
-    whoever already knows what it is settled at — a source, whose version the
-    store worked out — is asked first and believed; whoever has a `state_dict`
-    is asked for it by name; whoever only has `parameters()` is asked for those,
-    in order. Whoever has none has no state, and a tokenizer does not stop being
-    a node for it.
+    whoever already knows what it is settled at is asked first and believed,
+    whoever has a `state_dict` is asked for it by name, whoever only has
+    `parameters()` is asked for those in order. Whoever has none has no state.
 
     It has to be the same three `Graph._check_it_was_obeyed` looks at, or a node
     would be told to settle and then have nothing to settle with.
@@ -103,8 +95,8 @@ def _stop_the_gradient(implementation: object) -> None:
     """No parameter of this node asks for a gradient any more.
 
     Freezing a node is not freezing its prefix: the gradient still crosses it
-    towards whatever is above. That is why the rule the core checks is about the
-    **whole prefix** and not about one node.
+    towards whatever is above, which is why the rule the core checks is about the
+    **whole prefix**.
     """
     parameters = getattr(implementation, "parameters", None)
     if parameters is None:

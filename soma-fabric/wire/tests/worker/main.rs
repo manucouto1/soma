@@ -12,21 +12,14 @@
 //! ```
 //!
 //! With `--listen` it prints the address it ended up open on to `stdout`, which
-//! there really is free — the wire is the socket. That way a test can ask for
-//! port `0` and find out which one it got, instead of picking a number and
-//! praying.
-//!
-//! It is a binary and not an `example` because a test needs to know its path,
-//! and `CARGO_BIN_EXE_` only exists for binaries.
+//! there really is free — the wire is the socket — so a test can ask for port
+//! `0` and find out which one it got. A binary and not an `example` because a
+//! test needs to know its path, and `CARGO_BIN_EXE_` only exists for binaries.
 //!
 //! It also works as a template for what a worker is, which is not much: build
 //! its catalog — or know how to interpret the one it is sent — and call `serve`.
-//! Not one `println!`, since the wire runs over `stdout`.
-//!
-//! The `Provision` here uses no cloudpickle or anything like it, and that is on
-//! purpose: its artifact is plain text, `a=1,b=10`. It serves to show that **the
-//! mechanism is not a Python one** — what travels is bytes this crate does not
-//! look at, and whoever interprets them can be anyone.
+//! Its `Provision` uses no cloudpickle or anything like it and its artifact is
+//! plain text, `a=1,b=10`, on purpose: **the mechanism is not a Python one**.
 
 use somatize_core::{Catalog, Ctx, Node, NodeError, Value};
 use somatize_core::{Codec, CodecError};
@@ -80,10 +73,9 @@ impl Node for WhereIRan {
 
 /// Writes down the one thing it knows how to: a `u32` behind an opaque.
 ///
-/// Deliberately not Python's, and deliberately trivial. What it shows is that
-/// the hole is a hole — whoever knows what an opaque carries fills it, and this
-/// crate is none the wiser — and that **both ends have to agree**, which here
-/// they do by both being this.
+/// Deliberately trivial. What it shows is that the hole is a hole — whoever
+/// knows what an opaque carries fills it — and that **both ends have to
+/// agree**, which here they do by both being this.
 struct U32s;
 
 /// What a written-down `u32` looks like once it is only maps and numbers.
@@ -244,10 +236,9 @@ impl Node for Times {
 /// Takes its time, so that a test can tell a fact that arrived **while** the
 /// work was going from one that arrived with the answer.
 ///
-/// It is the only way to check that from the outside: batched or live, the
-/// facts are the same facts and arrive in the same order. What differs is
-/// **when**, and the only way to measure when is to have something slow behind
-/// the first one.
+/// Batched or live, the facts are the same facts in the same order; what
+/// differs is **when**, and the only way to measure that is something slow
+/// behind the first one.
 struct Slow;
 
 impl Node for Slow {

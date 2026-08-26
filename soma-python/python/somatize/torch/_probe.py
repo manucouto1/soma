@@ -6,47 +6,26 @@
     probe(g, x, watching=Recorder(store, run="before"))
     diagnose(store, run="before")
 
-The static half of CU21, and it is the same half of the same wall: this
-**measures** and decides nothing. What comes out is a `health` fact per layer —
-numbers, in the same record as everything else, under the same keys — and
-whether those numbers are bad is `somatize.health`'s opinion.
-
-A probe is **one `forward` that was recorded and never trained**. That is not a
-metaphor for the record's benefit: it is literally `run/<id>/0`, which is why
-`diagnose`, `seen`, `profile`, `overlaid` and `alerts` all read a probe without
-knowing one exists. Nothing new was added to the record's shape and nothing new
-had to learn to read it.
-
-## The three numbers, and why none of them is a gradient norm
+The static half, and the same half of the same wall: this **measures** and
+decides nothing. A probe is **one `forward` that was recorded and never trained**
+— literally `run/<id>/0`, which is why `diagnose`, `seen`, `profile`, `overlaid`
+and `alerts` all read one without knowing it exists.
 
 | what | how | why not something else |
 |---|---|---|
-| `signal_gain` | the scale here against the last normalisation upstream | the drift is geometric, so what matters is the ratio and not the size |
-| `jacobian_gain` | `sqrt(E‖Jᵀv‖²)` from here to the output, over random probes | the **backward** signal, scale-free, so it means the same thing at every depth |
-| `jacobian_spread` | `s_max / s_rms` of the sketch `JᵀV` | dynamical isometry is about the spectrum's *shape*, and a mean cannot see it |
+| `signal_gain` | the scale here against the last normalisation upstream | the drift is geometric, so what matters is the ratio |
+| `jacobian_gain` | `sqrt(E‖Jᵀv‖²)` from here to the output | the backward signal, scale-free at every depth |
+| `jacobian_spread` | `s_max / s_rms` of the sketch `JᵀV` | isometry is about the spectrum's *shape* |
 
-There is deliberately no `grad_norm` here. At initialisation there is no loss,
-so a parameter gradient would have to be taken against a target somebody made
-up, and the number would land in the same field the audit fills from a real
-loss — at a different scale, judged by the same bound. Two things with one name
-is how a threshold quietly stops meaning anything. The backward direction is
-`jacobian_gain`, which needs no target and is a ratio.
+There is deliberately no `grad_norm`: at initialisation there is no loss, so a
+parameter gradient would be taken against a target somebody made up and would
+land in the same field the audit fills from a real one.
 
-## What it costs
-
-Two forwards and `k` backwards — and the `k` are over the whole network, **not
-`k` per layer**. Every layer reads its own `Jᵀv` off the same backward, which is
-what puts this in front of a training run rather than instead of one.
-`is_grads_batched` does the `k` in a single call where `vmap` can follow the
-model, and falls back to a loop where it cannot, saying so.
-
-The second forward is `architecture`'s, under `no_grad`, and it is what decides
-**which** layers are measured. Walking the modules here instead would be one
-forward cheaper and would break the invariant the whole layer rests on — *every
-layer that can carry a flag has a box* — because a module walk and what the
-figure draws are not the same set once `fx` has had its say.
-
-Nothing here changes what the network computes, and no weight is moved.
+Two forwards and `k` backwards, and the `k` are over the whole network and **not
+`k` per layer**. The second forward is `architecture`'s, under `no_grad`, and it
+is what decides **which** layers are measured — walking the modules here would
+break the invariant the layer rests on, *every layer that can carry a flag has a
+box*. Nothing here changes what the network computes.
 """
 
 from __future__ import annotations
@@ -101,19 +80,11 @@ def probe(
 ) -> dict[str, dict[str, Any]]:
     """What this graph looks like at initialisation, as `{where: numbers}`.
 
-    `where` is a node, or `node.path.to.submodule` — the same keys the audit
-    uses and the same scope the figure draws, so a finding from a probe lands on
-    exactly the box a finding from a run would.
-
-    The answer is the shape `somatize.health.seen` returns from a store, which
-    is what lets the same numbers be judged either way::
-
-        from somatize._somatize import verdict
-        {where: verdict(numbers) for where, numbers in probe(g, x).items()}
-
-    `watching=` takes a `Recorder` or anything callable, the same as a
-    `Trainer`'s, and writing them down is what makes the diagnosis re-askable
-    tomorrow at another bound.
+    `where` is a node, or `node.path.to.submodule` — the same keys the audit uses
+    and the same scope the figure draws, so a finding from a probe lands on the
+    box a finding from a run would. The answer is the shape
+    `somatize.health.seen` returns from a store. `watching=` takes a `Recorder`
+    or anything callable.
     """
     if torch is None:
         raise RuntimeError("`probe` needs torch")
@@ -156,22 +127,14 @@ def _watching(
 ) -> dict[Key, Any]:
     """Which module each key names, taken from what the figure will draw.
 
-    Not from `_worth_drawing` directly, which is what the audit does and what
-    this did first. **The scope has to be the drawing's scope**, and those two
-    are not the same thing: `architecture` runs the module walk and then splices
-    the symbolic view over it, so at `depth=1` a walk opens a composite the
-    figure keeps whole — and a finding on a layer with no box lands nowhere.
+    Not from `_worth_drawing`, which is what the audit does: **the scope has to
+    be the drawing's scope**. `architecture` splices the symbolic view over the
+    module walk, so at `depth=1` a walk opens a composite the figure keeps whole
+    — and a finding on a layer with no box lands nowhere.
 
-    > Every layer that can carry a flag has a box.
-
-    Folded paths are watched too. Six identical blocks are drawn once and
-    measured six times, because measuring one of them and calling it the other
-    five is a diagnosis of a network nobody built; a finding on any of them
-    lands on the box that stands for them, which is what `folded` is for.
-
-    It costs a second forward, and this one is under `no_grad`. At
-    initialisation that is worth an invariant being true by construction rather
-    than by coincidence.
+    Folded paths are watched too: six identical blocks are drawn once and
+    measured six times, because measuring one and calling it the other five is a
+    diagnosis of a network nobody built.
     """
     said = {}
     # Wrapped here as well: `architecture` obeys the rule every input obeys and
@@ -206,9 +169,6 @@ def _module_at(held: dict[str, Any], path: str) -> Any:
         return None
 
 
-# ── One forward, and what each layer said while it ran ──
-
-
 def _caught(
     seen: dict[Key, Caught],
     order: list[Key],
@@ -216,9 +176,8 @@ def _caught(
 ) -> Callable[[Any, Any, Any], None]:
     """A forward hook that keeps what went in and what came out.
 
-    The tensors themselves and not statistics of them: the Jacobian half needs
-    to differentiate through them afterwards, and a number cannot be
-    differentiated.
+    The tensors themselves and not statistics of them: the Jacobian half needs to
+    differentiate through them, and a number cannot be differentiated.
     """
 
     def saw(module: Any, args: Any, out: Any) -> None:
@@ -256,16 +215,11 @@ def _signal(
 ) -> None:
     """The scale of the signal, against where the last normalisation left it.
 
-    A norm layer resets the scale, so drift measured from the input would blame
-    a layer for what happened three norms ago. Resetting the reference at one is
-    **structure and not a bound** — which is why it belongs here, on the
-    measuring side of the wall, and the threshold does not.
-
-    In execution order, which is what a hook gives and what a chain means. A
-    layer inside a branch is measured against the trunk it hangs off, and that
-    is the honest reading: a branch running hot and added to something bigger
-    has not moved the signal, and the layer that consumes the sum is where the
-    drift shows up.
+    A norm resets the scale, so drift measured from the input would blame a layer
+    for what happened three norms ago — resetting the reference is **structure
+    and not a bound**. In execution order, which is what a chain means: a branch
+    running hot and added to something bigger has not moved the signal, and the
+    layer that consumes the sum is where the drift shows.
     """
     reference = _scale(_tensor(_unwrapped(example)))
     for key in order:
@@ -293,19 +247,14 @@ def _isometry(
     output: Any,
     probes: int,
 ) -> None:
-    """The Jacobian from each layer to the output, sketched with random probes.
+    """The Jacobian from each layer to the output, sketched with random probes:
+    `k` unit probes pushed into the output and one backward each, every layer
+    reading its own `Jᵀv` off the same pass.
 
-    `k` unit probes pushed into the output and one backward each; every layer
-    reads its own `Jᵀv` off the same pass. What comes back is a `k × n` sketch
-    of `Jᵀ`, and two numbers come out of it:
-
-    - `jacobian_gain`, the root mean square of `‖Jᵀv‖` — the factor a gradient
-      at the output arrives here by. Its profile over depth is the vanishing
-      picture, measured with no optimizer, no target and no step.
-    - `jacobian_spread`, `s_max / s_rms` of the sketch. A flat spectrum makes
-      the `k` columns look Gaussian and the ratio sits near one; a spectrum with
-      a long tail does not. Pennington et al. (2017) is the claim that the shape
-      matters and not only the mean.
+    Two numbers out of the `k × n` sketch — `jacobian_gain`, the root mean square
+    of `‖Jᵀv‖`, which is the vanishing picture with no optimizer and no target;
+    and `jacobian_spread`, `s_max / s_rms`, Pennington et al. (2017)'s claim that
+    the shape matters and not only the mean.
     """
     if output is None or not torch.is_tensor(output) or not output.requires_grad:
         warnings.warn(
@@ -351,9 +300,8 @@ def _sketched(
 ) -> Any:
     """`k` vector-Jacobian products, batched where `vmap` can follow the model.
 
-    The fallback is a plain loop and it is `k` times slower, which is worth
-    saying out loud rather than discovering: a probe that quietly costs a
-    training step is a probe nobody runs.
+    The fallback is a plain loop and it is `k` times slower, said out loud rather
+    than discovered: a probe that quietly costs a training step is one nobody runs.
     """
     try:
         return torch.autograd.grad(output, made, grad_outputs=v, is_grads_batched=True,
@@ -376,9 +324,6 @@ def _sketched(
                 if g is not None:
                     held.append(g)
     return [torch.stack(held) if held else None for held in (kept or [])]
-
-
-# ── Odds and ends ──
 
 
 def _scale(what: Any) -> float | None:

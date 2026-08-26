@@ -1,9 +1,5 @@
-//! What a node's output is called.
-//!
-//! Thin on purpose, and the thinness is the point: the core does not compute a
-//! key, it carries one. What is pinned down here is that it stays exactly the
-//! text it was given, because a `Keeper` on one machine and a `Keeper` on
-//! another have to agree on it letter for letter.
+//! What a node's output is called. Thin on purpose: the core carries a key, it
+//! does not compute one, and it stays exactly the text it was given.
 
 use somatize_core::Key;
 use std::collections::HashMap;

@@ -65,9 +65,6 @@ def a_study(store, space, how_many=12, **rest):
     scored(store, space, points, **rest)
 
 
-# ── Which knob mattered ──
-
-
 def test_a_knob_that_decides_the_score_comes_out_near_one(store, space):
     a_study(store, space)
 
@@ -123,9 +120,6 @@ def test_the_biggest_comes_first(store, space):
     said = importance(store, space, study=STUDY)
 
     assert [value for _, value in said] == sorted((v for _, v in said), reverse=True)
-
-
-# ── Drawn ──
 
 
 def test_the_table_shows_the_pruned_ones_too_and_says_which(store, space):
@@ -208,9 +202,6 @@ def test_a_study_nobody_has_finished_is_a_statement_and_not_an_exception(store, 
 
     assert figure.data == ()
     assert "nothing has finished yet" in figure.layout.annotations[0].text
-
-
-# ── Which way is better comes from the study, and is never guessed ──
 
 
 def test_the_table_reads_the_direction_the_study_recorded(store, space):

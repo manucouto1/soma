@@ -1,8 +1,5 @@
-//! The place where a node runs: how it is written and what gets rejected.
-//!
-//! What is tested here is the enum's honest boundary: the **shape** is
-//! validated by the core, the **existence** only torch knows. `cuda:7` compiles
-//! on a machine with a single GPU; that it does not exist shows at run time.
+//! The place where a node runs: how it is written and what gets rejected. The
+//! **shape** is validated here; the **existence** only torch knows.
 
 use somatize_core::{Device, DeviceError};
 

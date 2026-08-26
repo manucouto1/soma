@@ -1,26 +1,21 @@
 //! The line of exploration, over HTTP, for whoever draws it.
 //!
 //! axum 0.8 on tokio, which is not a taste: `chatty-the-lab`'s backend is on
-//! exactly those, and its integration plan already names the panel this feeds —
-//! *Graph Version Control*. Landing there should be moving routes rather than
-//! rewriting a server.
+//! exactly those and its integration plan already names the panel this feeds,
+//! so landing there should be moving routes rather than rewriting a server.
 //!
-//! # Everything here blocks, and none of it blocks the runtime
-//!
-//! Answering one request runs `git`, sometimes a Python interpreter, and a scan
-//! of a store — every one of them a blocking call. On an async runtime that is
-//! not a slow handler, it is a **stalled executor**: the thread cannot take
-//! anybody else's request while it waits. So the work goes to
-//! [`spawn_blocking`](tokio::task::spawn_blocking) and the async side only ever
+//! Everything here blocks and none of it blocks the runtime. Answering one
+//! request runs `git`, sometimes a Python interpreter, and a scan of a store,
+//! and on an async runtime that is not a slow handler but a **stalled
+//! executor** — so the work goes to
+//! [`spawn_blocking`](tokio::task::spawn_blocking) and the async side only
 //! hands over a result.
 //!
-//! # Nothing is held between requests
-//!
-//! No cached walk, no open repository. What makes that affordable is that the
+//! Nothing is held between requests: no cached walk, no open repository. The
 //! expensive half — a probe of a commit — is already remembered in the store,
 //! content-addressed and for ever, so a second request is a scan and not an
-//! interpreter. Keeping state here would buy little and would have to be
-//! invalidated by somebody committing, which is a thing this cannot see.
+//! interpreter. State here would buy little and would have to be invalidated
+//! by somebody committing, which is a thing this cannot see.
 
 use crate::bench::{Bench, journalling, probed, walking};
 use crate::journal::{Journal, Verdict};

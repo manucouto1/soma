@@ -6,25 +6,17 @@ use crate::{Point, Space};
 
 /// Cover the space evenly, one binary bisection per knob.
 ///
-/// The same promise as [`Halton`](super::Halton) — uniform *by construction for
-/// every prefix*, not uniform in expectation — and the reason both are here is
-/// where each one pays for it. Halton reads knob `d` in base the `d`-th prime,
-/// so the promise thins out as the primes grow. This one reads **every** knob in
-/// base two and gets the knobs to differ some other way: each has its own set of
-/// direction numbers, chosen so that no two of them fall into step.
+/// The same promise as [`Halton`](super::Halton) — uniform by construction for
+/// every prefix — paid for elsewhere: Halton reads knob `d` in base the `d`-th
+/// prime, so its cover thins as the primes grow, while this reads every knob in
+/// base two and separates them with a set of direction numbers each.
 ///
-/// Chosen, and that is the price. Those numbers are a **table**, and a table is
-/// data that has to be right: a Sobol sequence built on the wrong ones does not
-/// fail, it just covers worse and nobody finds out. This one is Joe and Kuo's
-/// (2008), and there is a test that walks the first dimensions against published
-/// values, because reading it is not a way of checking it.
-///
-/// Its ceiling is that table: past [`KNOBS`] dimensions `ask` answers `None`,
-/// from the very first trial rather than quietly somewhere in the middle. Halton
-/// has no ceiling, which is the other half of why there are two.
-///
-/// Its point is a function of the **seed and the index**, so it derives like the
-/// rest and a machine that claimed trial 7 needs nobody.
+/// Chosen, and that is the price: a Sobol sequence built on the wrong numbers
+/// does not fail, it covers worse and nobody finds out. These are Joe and Kuo's
+/// (2008), and a test walks the first dimensions against published values,
+/// because reading a table is not a way of checking it. Past [`KNOBS`]
+/// dimensions `ask` answers `None` from the first trial rather than quietly in
+/// the middle. Its point is a function of the **seed and the index**.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sobol {
     /// The seed, which here shifts the digits rather than drawing them: without
@@ -78,11 +70,9 @@ impl Sobol {
     }
 }
 
-/// This knob's direction numbers: the `i`-th is what gets folded in when bit `i`
-/// of the step is set.
-///
-/// The first `s` come from the table; the rest are the recurrence the primitive
-/// polynomial stands for, `a` being its middle coefficients read as bits.
+/// This knob's direction numbers: the `i`-th is folded in when bit `i` of the
+/// step is set. The first `s` come from the table; the rest are the recurrence
+/// the primitive polynomial stands for.
 fn directions(which: usize) -> [u32; BITS] {
     let (a, m) = DIRECTIONS[which];
     let mut numbers = [0u32; BITS];
@@ -116,11 +106,9 @@ fn shift(seed: u64, which: usize) -> u32 {
 }
 
 /// Joe and Kuo's direction numbers, `(the polynomial's middle coefficients, the
-/// numbers it starts from)`, one row per knob.
-///
-/// *Constructing Sobol sequences with better two-dimensional projections*, SIAM
-/// J. Sci. Comput. 30, 2635–2654 (2008) — the `new-joe-kuo-6` table, which is
-/// the one the rest of the world means when it says Sobol.
+/// numbers it starts from)`, one row per knob. *Constructing Sobol sequences
+/// with better two-dimensional projections*, SIAM J. Sci. Comput. 30, 2635–2654
+/// (2008) — the `new-joe-kuo-6` table.
 const DIRECTIONS: [(u32, &[u32]); KNOBS] = [
     (0, &[]),
     (0, &[1]),

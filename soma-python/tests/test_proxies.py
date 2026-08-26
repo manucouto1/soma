@@ -48,9 +48,6 @@ def small():
     return chain([Block() for _ in range(3)])
 
 
-# ── They can be taken ──
-
-
 def test_three_of_them_never_see_a_label(small):
     # The point of the family: a candidate can be scored before there is
     # anything to train it on.
@@ -77,9 +74,6 @@ def test_one_that_reads_a_loss_and_was_given_none_says_which(small):
 def test_something_that_is_not_a_proxy_is_refused_by_name(small):
     with pytest.raises(ValueError, match="fisher"):
         proxy(small, torch.randn(8, 16), "fisher")
-
-
-# ── And they leave nothing behind ──
 
 
 def test_nothing_is_trained_and_no_weight_moves(small):
@@ -110,9 +104,6 @@ def test_no_gradient_is_left_hanging_off_the_candidate(small):
             objective=torch.nn.functional.mse_loss)
 
     assert all(p.grad is None for p in parameters(small))
-
-
-# ── What they are, and what they are not ──
 
 
 def test_a_proxy_is_a_ranking_and_says_nothing_about_one_network(small):

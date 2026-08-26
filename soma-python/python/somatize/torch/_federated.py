@@ -1,38 +1,22 @@
 """Putting together what several training runs learnt apart.
 
-The level-3 question, and the one CU11 put off and changed the shape of on the
-way: not *is a node's state a `Value`* but **what does a training run export**.
-The answer here is the smallest one that is true — its weights, node by node —
-and what to do with several of them is a **function**.
+The level-3 question: not *is a node's state a `Value`* but **what does a
+training run export**. The smallest answer that is true — its weights, node by
+node — and what to do with several of them is a **function**::
 
-# Why a function and not a node, and not a graph either
+    for _ in range(rounds):
+        for client in clients:
+            client.fit(client.data)
+        average = fedavg([client.export() for client in clients])
+        for client in clients:
+            client.load(average)
 
-A federated round is: every client trains on what it has, somebody averages the
-weights, everybody starts the next round from the average. Written down:
+That is a `for` over a list and it stays one. A graph earns its keep when there
+are **dependencies to declare**, and this has none. `fedavg`, `fedprox`,
+`fedyogi` and `scaffold` differ in **arithmetic**, which is what a function is
+for; the day a topology stops being flat, that day it is a graph.
 
-```python
-for _ in range(rounds):
-    for client in clients:
-        client.fit(client.data)
-    average = fedavg([client.export() for client in clients])
-    for client in clients:
-        client.load(average)
-```
-
-That is a `for` over a list, and it stays a `for` over a list. A graph earns its
-keep when there are **dependencies to declare** — this has none: the clients do
-not read each other, and the order they run in is nobody's business. The original
-soma put training runs and graph slices in the same enum and that was the
-mistake; the three levels exist so that this one can be a list.
-
-`fedavg`, `fedprox`, `fedyogi` and `scaffold` differ in **arithmetic**, which is
-what a function is for. The day one of them needs a topology that is not flat —
-hierarchical, gossip — that day it is a graph, and not before.
-
-# What is not in here
-
-**The optimizer's state.** Momentum is local to a client and averaging it is not
-FedAvg; whoever wants it says so by exporting it themselves.
+The optimizer's state is not in here: momentum is local to a client.
 """
 
 from __future__ import annotations
@@ -50,19 +34,14 @@ def fedavg(
     sizes: Sequence[float] | None = None,
 ) -> Export:
     """The average of what several training runs exported, weight for weight.
+    `sizes` is how many samples each one saw, which is what FedAvg weights by;
+    left out, they weigh the same::
 
-    `sizes` is how many samples each one saw, which is what FedAvg weights by —
-    a client with ten times the data pulls ten times as hard. Left out, they
-    weigh the same.
-
-    ```python
-    average = fedavg([client.export() for client in clients], sizes=[900, 100])
-    ```
+        average = fedavg([client.export() for client in clients], sizes=[900, 100])
 
     What is **not** averaged is whatever is not a floating-point number: a
-    `num_batches_tracked` is a count, and the mean of two counts is not a count.
-    The first one's is kept, which is what every implementation of this does and
-    none of them says out loud.
+    `num_batches_tracked` is a count and the mean of two counts is not one. The
+    first one's is kept, which every implementation does and none says out loud.
     """
     each = list(exports)
     if not each:

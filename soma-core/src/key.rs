@@ -1,32 +1,19 @@
 //! What names what a node produces, before it produces it.
 //!
-//! A key is a Merkle hash **over the recipe**, not over the data: the identity
-//! of the node, the digest of the state it is settled at, and the keys of its
-//! predecessors. Only a root hashes content. That is the whole point — the key
-//! is known *before* anything runs, so changing the classifier does not touch
-//! the key of the embeddings underneath it.
+//! A key is a Merkle hash **over the recipe** and not over the data: the
+//! identity of the node, what it was built with, the digest of the state it is
+//! settled at, and the keys of its predecessors. Only a root hashes content, so
+//! the key is known before anything runs and changing the classifier does not
+//! touch the key of the embeddings underneath it.
 //!
-//! The core does not compute one. Hashing needs an algorithm and the core has no
-//! dependencies, so a `Key` arrives from the [`Keeper`](crate::Keeper) and this
-//! is only the shape it arrives in — the same division of labour as
-//! [`Host`](crate::Host), which is a name and not an address.
-//!
-//! # And `Keys`, which arrived the day something produced one
-//!
-//! Caching item by item wants a key **per item** and not per node. This module
-//! used to say there was no `Keys` because nothing produced one, and that a
-//! variant nobody can construct is worse than one that arrives late. Something
-//! produces one now — a node declared `.mapped()` — so it is here, and every
-//! `match` on it had to be written by somebody deciding, which is exactly what
-//! [`Plan`](crate::Plan) has no `#[non_exhaustive]` for.
+//! The core computes none of them: hashing needs an algorithm and the core has
+//! no dependencies, so a `Key` arrives from the [`Keeper`](crate::Keeper) and
+//! this is only the shape it arrives in.
 
 use std::fmt;
 
-/// What a node's output is called, wherever it is kept.
-///
-/// Text and not bytes because it is a name: it ends up in a store's index, in a
-/// log line and in an error message, and hex that cannot be read aloud helps
-/// nobody.
+/// What a node's output is called, wherever it is kept. Text and not bytes
+/// because it is a name: it ends up in an index, a log line and an error.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(
     feature = "serde",
@@ -57,13 +44,9 @@ impl fmt::Display for Key {
 
 /// What a node's output is called: one name, or one per item.
 ///
-/// The second is what a [`.mapped()`](crate::Memory::map) node produces, and the
-/// whole reason it exists: with one name per node, adding a document to a list
-/// of a thousand changes the name of the list and every one of the thousand
-/// misses. With one per item, the thousand hit and the new one runs.
-///
-/// **Not `#[non_exhaustive]`**, like every other enum here: the day a third
-/// shape is needed, every `match` stops compiling and somebody decides.
+/// The second is what a [`.mapped()`](crate::Memory::map) node produces: with
+/// one name per node, adding a document to a list of a thousand misses all
+/// thousand; with one per item, the thousand hit and the new one runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Keys {
@@ -75,10 +58,9 @@ pub enum Keys {
 }
 
 impl Keys {
-    /// The one name, if there is one. `None` for a list of them: a caller that
-    /// wants to keep the whole thing under a single name has to say what that
-    /// name is made of, and [`Keeper::combine`](crate::Keeper::combine) is where
-    /// that is decided rather than here.
+    /// The one name, if there is one. `None` for a list of them: what a single
+    /// name over many is made of is
+    /// [`Keeper::combine`](crate::Keeper::combine)'s to decide.
     pub fn one(&self) -> Option<&Key> {
         match self {
             Self::One(key) => Some(key),

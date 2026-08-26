@@ -1,26 +1,19 @@
 """What a run was executed against, and the short name it goes by.
 
-## Why this is not in a key, and is written down anyway
-
-A fingerprint stops at what is installed: `numpy` is noted by name and
-distribution version, and a standard-library module by its bare name, because
-the interpreter is compared at the greeting rather than hashed into every class.
-So the version of Python a value was produced under is **not** in its key, and
-two interpreters can produce the same name for the same node.
+A fingerprint stops at what is installed — the interpreter is compared at the
+greeting rather than hashed into every class — so the version of Python a value
+was produced under is **not** in its key.
 
 That is the right call for naming and the wrong one for provenance. A store
 outlives every process that wrote to it, and *what was this produced against* is
-a question asked months later by somebody holding a hash and nothing else. The
-key cannot answer it and never will, because a key does not run backwards.
+a question asked months later by somebody holding a hash and nothing else; a key
+does not run backwards. So it is written beside the value instead: the digest on
+each blob, and the reading of it once per environment, under a name anybody can
+`cat`.
 
-So it is written beside the value instead: the digest on each blob, and the
-reading of it once per environment, under a name anybody can `cat`.
-
-## What goes in
-
-What the process actually reached for — the distributions behind whatever is in
-`sys.modules` — and not the whole of `pip list`. Installing something unrelated
-does not move it, which is what makes two runs comparable at all.
+What goes in is what the process actually reached for — the distributions behind
+whatever is in `sys.modules` — and not the whole of `pip list`, so installing
+something unrelated does not move it.
 """
 
 from __future__ import annotations

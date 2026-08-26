@@ -6,28 +6,18 @@ use crate::{Point, Space};
 
 /// Cover the space evenly instead of drawing from it evenly.
 ///
-/// The second of the three that look at **nothing**, and what separates it from
-/// [`Random`](super::Random) is not what it looks at but what it promises.
-/// Random is uniform *in expectation*: over enough trials every corner gets its
-/// share, and nothing stops the next two from landing on top of each other. This
-/// is uniform *by construction, for every prefix* — of the first `base²` trials
-/// exactly one lands in each cell of a `base²` grid, and there is no arrangement
-/// of the indices that makes it otherwise.
-///
-/// That promise is what a study spread over a shared folder wants. Two machines
-/// taking different numbers out of the folder do not collide, and it is not that
-/// collision is unlikely: it cannot be arranged.
+/// What separates it from [`Random`](super::Random) is not what it looks at —
+/// both look at nothing — but what it promises. Random is uniform *in
+/// expectation*; this is uniform *by construction, for every prefix*: of the
+/// first `base²` trials exactly one lands in each cell of a `base²` grid, and no
+/// arrangement of the indices makes it otherwise. For a study handed out of a
+/// folder that is the difference between a collision being unlikely and there
+/// being no way to arrange one.
 ///
 /// Knob `d` is read in base the `d`-th prime, which is why the promise thins out
-/// once there are many knobs — the high primes need a long prefix before they
-/// look like anything, and two of them drift into step. The scramble is what
-/// holds it together, and a hyperparameter space with more than a handful of
-/// knobs is rare enough that the seam is somewhere nobody stands.
-/// [`Sobol`](super::Sobol) is the same idea without that seam, at the price of a
-/// table.
-///
-/// Its point is a function of the **seed and the index**, so it derives like the
-/// other two and a machine that claimed trial 7 needs nobody.
+/// once there are many knobs: the high primes need a long prefix before they
+/// look like anything. [`Sobol`](super::Sobol) has no such seam, at the price of
+/// a table. Its point is a function of the **seed and the index**.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Halton {
     /// The seed, which here permutes the digits rather than drawing them: with
@@ -63,18 +53,13 @@ impl Halton {
 }
 
 /// The index written in `base`, read back with its digits reversed and
-/// scrambled — a number in `0.0..1.0`.
-///
-/// Reversing is the whole trick: consecutive indices differ in their *last*
-/// digit, which after the reversal is the *first*, so they land far apart.
+/// scrambled — a number in `0.0..1.0`. Reversing is the trick: consecutive
+/// indices differ in their last digit, which becomes the first.
 ///
 /// **Every place is scrambled, including the zeroes the index never reaches.**
-/// That is not a detail: scrambling only the digits actually written down puts a
-/// one-digit index and a two-digit one on two different grids, and then the
-/// first `base²` trials stop landing one per cell — which is the whole of what
-/// this is for. It also settles trial zero, which has no digits at all: it comes
-/// out as the offsets themselves, a point like any other rather than the corner
-/// of the space.
+/// Scrambling only the digits written down would put a one-digit index and a
+/// two-digit one on different grids, and the first `base²` trials would stop
+/// landing one per cell. It also settles trial zero, which has no digits.
 fn radical(base: u64, index: u64, seed: u64, which: usize) -> f64 {
     let mut state = seed ^ (which as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     // Never zero, so `digit -> multiplier * digit + offset` is a permutation of

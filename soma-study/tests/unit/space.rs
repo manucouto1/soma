@@ -111,8 +111,6 @@ fn it_writes_itself_down_and_says_which_ranges_are_logarithmic() {
     );
 }
 
-// ── Reading a point back off a record ──
-
 fn searched() -> Space {
     Space::new()
         .with("lr", real(1e-5, 1e-1))

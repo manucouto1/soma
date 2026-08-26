@@ -12,20 +12,14 @@ use somatize_data::Frame;
 
 /// The batch of columns a source answered with, as Python sees it.
 ///
-/// # Why it arrives as this and not as a dataframe
+/// Not a dataframe, because which dataframe is not ours to decide: what comes
+/// out of a source is Arrow, and `polars`, `pandas` and `pyarrow` all read it, so
+/// this hands over [`ipc`](PyFrame::ipc) and `somatize.data` turns it into
+/// whichever is installed. A crate that imported one would make it a dependency
+/// of a worker that only counts rows.
 ///
-/// Because which dataframe is not ours to decide. What comes out of a source is
-/// Arrow, and `polars`, `pandas` and `pyarrow` all read Arrow — so this hands
-/// over [`ipc`](PyFrame::ipc) and `somatize.data` turns it into whichever of
-/// them is installed. A crate that imported one of the three would make it a
-/// dependency of a worker that only counts rows.
-///
-/// # What it costs
-///
-/// A frame reaching a node is one `Arc` clone: the buffers stay where they are
-/// and nothing is converted. Asking for [`ipc`](PyFrame::ipc) is where bytes get
-/// written, and that is the caller's decision to make once, not the frontier's
-/// to make on every edge.
+/// A frame reaching a node is one `Arc` clone; asking for `ipc` is where bytes
+/// get written, and that is the caller's decision to make once.
 #[pyclass(name = "Frame", module = "somatize._somatize", frozen)]
 pub struct PyFrame {
     pub(crate) inner: Frame,
@@ -62,17 +56,10 @@ impl PyFrame {
             .collect()
     }
 
-    /// One column, as a list of Python values.
-    ///
-    /// The reason this exists next to [`ipc`](PyFrame::ipc): a worker whose
-    /// whole image is 193 MB and has no tensors in it should not have to
-    /// install a dataframe library to read a column of text. `to_polars` is for
-    /// when there is work to do on the rows; this is for when a node wants the
-    /// values and nothing else.
-    ///
-    /// The types it hands over are the ones a `Value` already has — text,
-    /// numbers, booleans — and anything else says so rather than guessing. A
-    /// missing value is `None`.
+    /// One column, as a list of Python values. It exists next to
+    /// [`ipc`](PyFrame::ipc) because a worker whose whole image is 193 MB should
+    /// not have to install a dataframe library to read a column of text. The
+    /// types are the ones a `Value` already has; a missing value is `None`.
     fn column(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
         let batch = self.inner.batch();
         let at = batch.schema().index_of(name).map_err(|_| {

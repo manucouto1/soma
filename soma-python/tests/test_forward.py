@@ -16,9 +16,6 @@ class Fail(Node):
         raise RuntimeError("I broke")
 
 
-# ── The happy path ──
-
-
 def test_an_empty_graph_returns_its_input(g):
     assert g.forward("intact") == "intact"
 
@@ -65,9 +62,6 @@ def test_without_input_the_node_receives_none(g):
 
     g.node("receives", Receives())
     assert g.forward() == "fine"
-
-
-# ── The failures ──
 
 
 def test_an_object_without_forward_fails_when_registered(g):
@@ -130,9 +124,6 @@ def test_what_a_node_keeps_outlives_the_run(g):
 
     assert g.forward(None) == 1
     assert g.forward(None) == 2, "the second run started from scratch"
-
-
-# ── Fans, in both directions ──
 
 
 def test_several_leaves_come_out_as_a_map_keyed_by_name(g):

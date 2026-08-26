@@ -120,8 +120,6 @@ fn nothing_in_it_is_a_judgement() {
     );
 }
 
-// ── And back again, because somebody has to read one ──
-
 #[test]
 fn a_reading_written_down_comes_back_the_same_reading() {
     let said = Machine {

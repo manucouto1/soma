@@ -69,9 +69,6 @@ def ran(store, how, space, trial, me="m", state=DONE, score=None, reports=None,
     return point
 
 
-# ── Handing the work out, which costs no message ──
-
-
 def test_a_trial_somebody_claimed_is_not_claimable_twice(store):
     # The whole of how work is handed out: the loser simply goes to the next
     # number. Nothing is sent anywhere, so nothing can be lost in flight.
@@ -100,9 +97,6 @@ def test_whatever_else_is_in_the_store_is_not_a_trial(store):
     ran(store, how, knobs, 0)
 
     assert len(trials(store, knobs, study="s")) == 1
-
-
-# ── What a scan costs, which is the reason for the split ──
 
 
 class Counting:
@@ -157,9 +151,6 @@ def test_a_machine_that_ran_none_of_them_rebuilds_the_whole_history(store):
     assert [str(point) for point, _ in history] == [str(point) for point in mine]
 
 
-# ── What each state means, and that they are not the same ──
-
-
 def test_a_pruned_trial_is_not_a_configuration_that_scored_badly(store):
     # Its score is real and it is **not** comparable: it was measured after
     # fewer epochs. A sampler told otherwise learns something untrue.
@@ -207,9 +198,6 @@ def test_a_retry_is_the_next_attempt_and_whoever_reads_keeps_the_higher(store):
 
     assert [one["who"] for one in trials(store, knobs, study="s")] == ["the next one"]
     assert len(finished(store, knobs, study="s")) == 1
-
-
-# ── Lying about what is in flight, which is what parallel guiding needs ──
 
 
 class Said:
@@ -318,9 +306,6 @@ def test_the_schemes_that_look_at_nothing_are_unmoved_by_it(store):
         assert how.ask(knobs, 2, []) == how.ask(knobs, 2, told), str(how)
 
 
-# ── When somebody stopped writing ──
-
-
 def test_a_trial_nobody_has_touched_for_a_while_stops_being_lied_about(store):
     how, knobs = Sampler.sobol(seed=0), space()
     folder = Folder(
@@ -369,9 +354,6 @@ def test_and_a_study_where_everything_stopped_does_not_look_abandoned(store):
     )
 
     assert abandoned(folder, study="s", stale=10) == []
-
-
-# ── And the one it is all for: four processes, one folder ──
 
 
 MACHINE = """
@@ -446,9 +428,6 @@ def test_and_what_they_searched_is_what_one_machine_alone_would_have(tmp_path):
     assert [str(point) for point, _ in finished(store, knobs, study="s")] == [
         str(alone.ask(knobs, trial, [])) for trial in range(HOW_MANY)
     ]
-
-
-# ── Which way is better, which the number does not say ──
 
 
 def test_a_score_carries_the_direction_it_was_searched_in(store):

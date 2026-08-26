@@ -1,31 +1,23 @@
-//! The store, from Python. A directory two machines can both see.
+//! The store, from Python. A directory — or a bucket — two machines can both
+//! see.
 //!
-//! Until now it was reachable only as a **string**: `forward(store=...)` and
-//! `Trainer(store=...)`, a place the engine kept things in and nobody else could
-//! open. That is enough while the only thing being kept is what the engine
-//! decided to keep. It stops being enough the moment a training run has
-//! something of its own to write down — its weights — and another machine has to
-//! read it.
-//!
-//! # Two ways of asking, and they are the same store
+//! It used to be reachable only as a **string** the engine kept things in, which
+//! is enough while the only thing kept is what the engine decided to keep. It
+//! stops being enough the moment a training run has weights of its own to write
+//! down and another machine has to read them.
 //!
 //! | asked in | what it deals in | who it is for |
 //! |---|---|---|
 //! | [`put`](PyStore::put) / [`get`](PyStore::get) / [`bind`](PyStore::bind) / [`resolve`](PyStore::resolve) | **bytes** | the store exactly as Rust sees it |
 //! | [`keep`](PyStore::keep) / [`recall`](PyStore::recall) | **values**, tensors included | whoever has something to keep and not bytes |
 //!
-//! The first four are `somatize_store::Store`, one for one, and they invent no
-//! vocabulary. The last two are `Keeper`'s, which is also not new, and they are
-//! there because the thing this was opened for — an export — is a map of tensors
-//! and not bytes. Without them everybody writes their own `torch.save`, and the
-//! one that gets `weights_only` wrong writes a way into a shared directory.
+//! The first four are `somatize_store::Store` one for one; the last two are
+//! `Keeper`'s, and they are here because an export is a map of tensors. Without
+//! them everybody writes their own `torch.save`, and whoever gets
+//! `weights_only` wrong writes a way into a shared directory.
 //!
-//! # Names and content, which stay two questions
-//!
-//! Bytes are known by **what they are** and names point at them. The same
-//! weights written on two machines are one blob, and a name is how a round of
-//! training is found again. It is git's model and it is the store's, and putting
-//! it in front of Python changes neither.
+//! Bytes are known by **what they are** and names point at them, which is git's
+//! model: the same weights written on two machines are one blob.
 
 use crate::codec::{pack, unpack};
 use crate::value;
@@ -42,12 +34,9 @@ use somatize_store::{
 use std::sync::Arc;
 
 /// Something that keeps bytes by their content, and names that point at them.
-///
-/// A `dyn Store` and not a `Local`, since there are two: a directory and a
-/// bucket. Which one this is does not reach the rest of Python — `take`,
-/// `report` and `gather` take a store and never ask what kind it is, and that is
-/// what lets a study run over a shared folder here and over S3 there without a
-/// line of it changing.
+/// A `dyn Store` and not a `Local`, since there are two — and which one this is
+/// does not reach the rest of Python, which is what lets a study run over a
+/// shared folder here and over S3 there without a line changing.
 #[pyclass(name = "Store", module = "somatize._somatize", frozen)]
 pub struct PyStore {
     /// An `Arc` and not a `Box` because a store outlives the call it was passed
@@ -76,17 +65,14 @@ impl PyStore {
         })
     }
 
-    /// The same store, on a bucket: S3, MinIO, R2 — for a cluster where there is
-    /// no directory two machines can both see.
+    /// The same store, on a bucket: S3, MinIO, R2 — for a cluster with no shared
+    /// directory. `hosted=True` puts the bucket in the host name, which recent
+    /// AWS wants; the default puts it in the path, which MinIO wants. Without
+    /// `key`/`secret` it reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
     ///
-    /// `hosted=True` puts the bucket in the host name, which is what AWS wants
-    /// for anything made recently; the default puts it in the path, which is
-    /// what MinIO wants. Without `key`/`secret` it reads `AWS_ACCESS_KEY_ID` and
-    /// `AWS_SECRET_ACCESS_KEY`, which is where everything else looks.
-    ///
-    /// **It talks to the endpoint before returning**: an endpoint that takes a
+    /// **It talks to the endpoint before returning**: one that takes a
     /// conditional write and writes anyway would hand every trial to every
-    /// machine and never say so, so it is tried rather than assumed.
+    /// machine and never say so.
     #[staticmethod]
     #[pyo3(signature = (endpoint, bucket, *, region = "us-east-1", key = None, secret = None, hosted = false))]
     fn on_bucket(
@@ -148,12 +134,8 @@ impl PyStore {
     }
 
     /// Points a name at some bytes **only if nobody has**, and says whether it
-    /// did. This is how work gets handed out.
-    ///
-    /// Not `resolve` and then `bind`: between the two somebody else does the
-    /// same, and two machines train the same round while nobody trains the next
-    /// one. Whoever is told `True` does the work; whoever is told `False` goes
-    /// and asks for the next thing::
+    /// did. This is how work gets handed out — not `resolve` then `bind`, since
+    /// between the two somebody else does the same::
     ///
     ///     me = store.put(f"{socket.gethostname()}/{os.getpid()}".encode())
     ///     if store.claim(f"round/{r}/client/{k}", me):
@@ -182,17 +164,14 @@ impl PyStore {
             .collect())
     }
 
-    /// Keeps a value under a name — tensors and all, by the codecs.
-    ///
-    /// The two lines that make an export cross a machine::
+    /// Keeps a value under a name — tensors and all, by the codecs. The two
+    /// lines that make an export cross a machine::
     ///
     ///     store.keep("round/3", trainer.export())
     ///     trainer.load(store.recall("round/3"))
     ///
-    /// What reaches the directory is bytes, and the directory never learns that
-    /// any of it was a tensor. Something nobody registered a codec for is
-    /// refused with its type in front of you, which is the same frontier as
-    /// everywhere else.
+    /// What reaches the directory is bytes, and it never learns any of it was a
+    /// tensor. Something nobody registered a codec for is refused with its type.
     #[pyo3(signature = (name, what, meta = None))]
     fn keep(
         &self,
@@ -288,13 +267,10 @@ fn failed(e: somatize_store::StoreError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
-/// The store a call was pointed at: a `Store`, or a path to a directory.
-///
-/// **Both, and not one.** A path is what somebody standing a worker up on a
-/// command line has, and a `Store` is what somebody who opened one by hand has —
-/// and since [`PyStore::on_bucket`] exists, insisting on a path is insisting
-/// that a cache lives on a disk. Two ways of saying the same thing, and only one
-/// of them could say "a bucket".
+/// The store a call was pointed at: a `Store`, or a path to a directory. **Both,
+/// and not one** — a path is what somebody standing a worker up on a command
+/// line has, and since [`PyStore::on_bucket`] exists, insisting on a path is
+/// insisting that a cache lives on a disk.
 pub fn opened(store: Option<&Bound<'_, PyAny>>) -> PyResult<Option<Arc<dyn Store>>> {
     let Some(store) = store else {
         return Ok(None);

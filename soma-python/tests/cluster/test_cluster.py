@@ -39,9 +39,6 @@ def hostnames(*answers):
     return {answer["host"] for answer in answers}
 
 
-# ── The code goes over the wire ──
-
-
 def test_a_worker_with_none_of_your_code_runs_your_nodes(sends_the_code):
     # `Shout` lives in a file no image has and no mount reaches. If it ran over
     # there, it travelled.
@@ -128,9 +125,6 @@ def test_with_lucky_it_runs_its_own_version_and_says_so(has_the_code, worker_log
     assert "Scale" in worker_logs("worker-lucky")
 
 
-# ── A store shared between machines ──
-
-
 def test_what_one_worker_kept_another_one_reads(sends_the_code):
     # The two slices meeting: CU12 carries the work, CU13 keeps what it produced,
     # and the store is a volume both containers mount.
@@ -175,9 +169,6 @@ def test_the_artifact_is_kept_where_both_of_them_can_see_it(sends_the_code, in_c
     assert "artifact:pickle:" in seen_from_b, seen_from_b
 
 
-# ── The one with a GPU ──
-
-
 def test_a_node_sent_to_the_gpu_lands_on_the_gpu(gpu, sends_the_code):
     # The placement crosses the wire and is **obeyed over there**: the core says
     # where, the node moves itself. Here the two halves are on different
@@ -201,9 +192,6 @@ def test_the_same_node_on_a_machine_without_one_is_told_nothing(gpu, sends_the_c
 
     assert out["said"] == ""
     assert out["landed"] == "cpu"
-
-
-# ── Training, which a wire cuts unless somebody carries the gradient ──
 
 
 def test_training_a_node_on_another_machine_stops_instead_of_half_learning(gpu, sends_the_code):

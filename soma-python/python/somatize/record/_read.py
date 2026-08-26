@@ -1,10 +1,8 @@
 """Reading back what happened.
 
-The other half of CU20. A `Recorder` writes `run/<id>/<n>`; these read it, and
-they are functions over a `Store` for the same reason `gather` and `take` are:
-touching the folder is not pure, and level 3 has no type. Neither has this.
-
-# What each one costs, because that is the whole design
+A `Recorder` writes `run/<id>/<n>`; these read it, and they are functions over a
+`Store` for the same reason `gather` and `take` are: touching the folder is not
+pure, and this level has no type.
 
 The record of a `forward` carries the summary and its **blob** carries the
 detail, so the split is a price list::
@@ -13,25 +11,13 @@ detail, so the split is a price list::
     facts                      one fetch
     nodes, fleet               one scan and a fetch per forward
 
-Everything a progress view asks for — how far along, how long each step took,
-which broke, what the loss is doing — is on the free side. The per-node detail
-is the expensive one and it is asked once, not once a step.
+Everything a progress view asks for is on the free side. `curve` is free only for
+what the recorder was told to summarise — `Recorder(store, summarising=["loss"])`
+— and it says which of the two it did rather than being quietly slow.
 
-`curve` is free only for what the recorder was told to summarise::
-
-    Recorder(store, run="tuesday", summarising=["loss"])
-
-Without that the losses are in the blobs and reading ten thousand of them is ten
-thousand round trips. It says which of the two it did, rather than being quietly
-slow.
-
-# Live and read back are two different paths, on purpose
-
-While a run is going, what you want arrives at `watching=` and costs nothing to
-get. These are for what is over, or for what **another machine** is doing —
-where there is no connection, and a scan is the only thing there is. The rows
-they answer with have the same shape either way, so whatever draws one draws the
-other.
+Live and read back are two paths on purpose: while a run is going what you want
+arrives at `watching=`, and these are for what is over or for what **another
+machine** is doing. The rows have the same shape either way.
 """
 
 from __future__ import annotations
@@ -58,14 +44,10 @@ NUMERIC = ("forward", "took_us", "nodes")
 
 
 def runs(store: "Store") -> list[Row]:
-    """Every run this store holds, newest last.
-
-    One scan and no fetches. What comes back is one dict per run: how many
-    `forward`s it has, how many broke, when the first and last were written, and
-    how long they took in total.
-
-    The one to call first, because a store holds whatever anybody put in it —
-    a cache, a study, artifacts — and this is the question "what is in here".
+    """Every run this store holds, newest last. One scan and no fetches: how many
+    `forward`s each has, how many broke, when the first and last were written,
+    and how long they took. The one to call first, because a store holds whatever
+    anybody put in it.
     """
     seen: dict[str, Row] = {}
     for record in _records(store):
@@ -93,12 +75,10 @@ def runs(store: "Store") -> list[Row]:
 
 
 def forwards(store: "Store", *, run: str) -> list[Row]:
-    """Every `forward` of that run, in order, as the record says it.
-
-    One scan and no fetches — which is what makes this the thing a progress view
-    reads in a loop. `forward`, `took_us` and `nodes` come back as numbers;
-    anything the recorder was told to summarise comes back beside them under its
-    own `<kind>.<field>` name, as text.
+    """Every `forward` of that run, in order, as the record says it. One scan and
+    no fetches, which is what makes this what a progress view reads in a loop.
+    Anything the recorder was told to summarise comes back under its own
+    `<kind>.<field>` name, as text.
     """
     rows: list[Row] = []
     for record in _records(store):
@@ -118,14 +98,10 @@ def forwards(store: "Store", *, run: str) -> list[Row]:
 
 
 def facts(store: "Store", *, run: str, forward: int) -> list[Fact] | None:
-    """Everything that happened in one `forward`, in the order it arrived.
-
-    The detail, and the one call that costs a fetch. Each fact is the same dict
-    a `watching=` callable was handed while it was running — `Fact::flattened`
-    and nothing else — so what you looked at live is what you read back.
-
-    `None` when there is no such `forward`, which is not a failure: a run that
-    is still going has not written the next one yet.
+    """Everything that happened in one `forward`, in the order it arrived. The
+    detail, and the one call that costs a fetch. Each fact is the same dict a
+    `watching=` callable was handed, so what you looked at live is what you read
+    back. `None` for no such `forward`, which is not a failure.
     """
     bound = store.resolve(f"{PREFIX}{run}/{forward}")
     if bound is None:
@@ -134,16 +110,10 @@ def facts(store: "Store", *, run: str, forward: int) -> list[Fact] | None:
 
 
 def curve(store: "Store", *, run: str, of: str = "loss.value") -> list[tuple[int, float]]:
-    """One number per `forward`, as `(forward, value)` pairs.
-
-    What a training curve is. `of` names the field: `loss.value` when the
-    recorder was told to summarise `loss`, and otherwise anything a fact carries
-    — `took_us` for how long each step took.
-
-    Free when the field is in the record, and one fetch per `forward` when it is
-    not. Which of the two happened is said out loud by `curve_costs`, because a
-    reader that is quietly a thousand times slower is worse than one that
-    refuses.
+    """One number per `forward`, as `(forward, value)` pairs — a training curve.
+    `of` names the field: `loss.value` when the recorder summarised `loss`, and
+    otherwise anything a fact carries. Free when the field is in the record and
+    one fetch per `forward` when it is not, which `curve_costs` says out loud.
     """
     drawn = []
     for row in forwards(store, run=run):
@@ -181,25 +151,14 @@ STANDING = "machine/"
 def standing(store: "Store") -> dict[str, Row]:
     """Every machine writing readings into this store, as `{id: reading}`.
 
-    The **idle** half. A worker says what it looks like on a clock whether or
-    not anybody is asking it to do anything, and it goes here rather than down a
-    wire for a reason that is CU20's rule and not a preference: a client only
-    reads the socket while a job is in flight, so an idle worker's connection is
-    one nobody is reading.
+    The **idle** half: a worker says what it looks like on a clock whether or not
+    anybody is asking it for anything, and it goes here rather than down a wire
+    because a client only reads the socket while a job is in flight.
 
-    Keyed by what the machine calls **itself** — its hostname and process — and
-    not by the name the graph gave it, because on this path there is no client
-    and `w1` is the client's word. `fleet` joins the two.
-
-    `quiet_s` is how far behind the newest reading in this store each one is,
-    measured **writer against writer** and never against this machine's clock:
-    those are two clocks on two machines and on a cluster they disagree by
-    minutes as a matter of course. It is CU18's liveness rule, and it has the
-    same honest hole — a fleet where **everything** stopped has no newest write
-    to be behind, so nothing looks quiet. Which costs nothing: if nobody is
-    writing, nobody is asking this either.
-
-    One scan and no fetches.
+    Keyed by what the machine calls **itself**, since on this path there is no
+    client and `w1` is the client's word; `fleet` joins the two. `quiet_s` is how
+    far behind the newest reading each one is, measured **writer against writer**
+    and never against this machine's clock. One scan and no fetches.
     """
     said: dict[str, Row] = {}
     # Not `_records`, which asks for a run: a reading of a machine belongs to no
@@ -218,37 +177,24 @@ def standing(store: "Store") -> dict[str, Row]:
 
 
 def fleet(store: "Store", *, run: str, last: int | None = None) -> list[Row]:
-    """What each machine did, as the inverse of `nodes`.
-
-    The record is written run → `forward` → node, and *where* is an attribute of
-    a fact. This turns it the other way up, because *what is this machine doing*
-    is a question nobody could ask of it and is the one somebody with three
-    hosts came for.
+    """What each machine did, as the inverse of `nodes`. The record is written
+    run → `forward` → node with *where* as an attribute, and this turns it the
+    other way up.
 
     **There is no registry and no heartbeat.** A machine is here because it did
-    something, and what it did is already written down: `left` says a slice
-    crossed to it and how long the whole round trip took, and every fact from
-    over there carries its `host`. The original keeps a coordinator with a
-    `last_heartbeat` and a thirty-second timeout; this has no coordinator to
-    keep one in, and CU18 already answered liveness a different way — not *does
-    it answer* but *is it still writing*.
+    something, and what it did is already written down.
 
     `busy`, `memory`, `cores`, `up_us` and `served` are the half **no record can
-    derive** — nobody on this end can work out how loaded another machine is. A
-    worker says them itself, down the connection that is already open, and they
-    arrive under a `host` because the engine wraps whatever comes back. They are
-    the newest reading and not an average: the question is what the machine is
-    like now. `None` is a machine that did not say, which on a kernel with no
-    `/proc` is most of them.
+    derive** — the worker says them itself, down the connection that is already
+    open. The newest reading and not an average; `None` is a machine that did not
+    say.
 
     `waiting_us` is the column that only exists up here: the round trip **minus**
-    what actually ran over there, which is the wire, the queue and the codec. It
-    is the number that says whether sending it was worth it, and no per-node view
-    can produce it because neither half of the subtraction belongs to a node.
+    what actually ran over there — the wire, the queue and the codec — and
+    neither half of that subtraction belongs to a node.
 
-    It costs a scan and a fetch per `forward`, the same as `nodes`. `last=N`
-    reads only the last N, which is the question worth asking of a fleet that is
-    working now.
+    A scan and a fetch per `forward`, the same as `nodes`; `last=N` reads only
+    the last N.
     """
     seen: dict[str, Row] = {}
     # What each machine calls itself, learned from the readings that **did**
@@ -342,15 +288,10 @@ def fleet(store: "Store", *, run: str, last: int | None = None) -> list[Row]:
 
 
 def nodes(store: "Store", *, run: str, last: int | None = None) -> list[Row]:
-    """What each node did over the run, added up.
-
-    The aggregated view, and the one that answers *is the profiling
-    reasonable*: per node, how many times it ran, how long in total and on
-    average, how often it was read back instead, and where it ran.
-
-    **It costs a fetch per `forward`**, because which node did what is in the
-    blobs. `last=N` reads only the last N, which is what you want when a run is
-    ten thousand steps long and the question is what it is doing now.
+    """What each node did over the run, added up: how many times it ran, how long
+    in total and on average, how often it was read back instead, and where. **It
+    costs a fetch per `forward`**, because which node did what is in the blobs;
+    `last=N` reads only the last N.
     """
     rows = forwards(store, run=run)
     if last is not None:
@@ -390,11 +331,8 @@ def nodes(store: "Store", *, run: str, last: int | None = None) -> list[Row]:
 
 
 def _records(store: "Store") -> list["Bound"]:
-    """Every record of a run in this store.
-
-    A store holds whatever anybody put in it, so belonging to a run is a
-    question and not an assumption — the same guard `study` puts in front of a
-    trial's name.
+    """Every record of a run in this store. A store holds whatever anybody put in
+    it, so belonging to a run is a question and not an assumption.
     """
     return [
         record

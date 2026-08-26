@@ -214,11 +214,10 @@ pub struct Probing<'a> {
     /// What identifies this probing, everything but the commit: the build, the
     /// input, and **the probe's own source**.
     ///
-    /// That last one is not belt and braces. A snapshot is a pure function of a
+    /// That last is not belt and braces. A snapshot is a pure function of a
     /// commit only *given a fixed probe*, so the day `declared` learned to read
     /// an object's attributes, every snapshot taken before it became wrong — in
-    /// exactly the way this tool exists to catch. Same lesson one level up, and
-    /// the reason it is paid for here.
+    /// exactly the way this tool exists to catch.
     pub recipe: Digest,
 }
 
@@ -272,19 +271,14 @@ impl Probing<'_> {
 
     /// What the edit did, for each of these pairs of `(older, newer)`.
     ///
-    /// Pairs and not an ordered list, because **a step is an edge**. Three
-    /// variants of one idea are three branches off one commit, and two entries
-    /// next to each other in a walk are then two different lines of
-    /// exploration: comparing them would answer confidently about an edit
-    /// nobody ever made.
+    /// Pairs and not an ordered list, because **a step is an edge**: two
+    /// entries next to each other in a walk of three branches are two different
+    /// lines of exploration, and comparing them would answer confidently about
+    /// an edit nobody made.
     ///
-    /// One subprocess for the whole walk. Comparing needs no checkout and no
-    /// graph, only the model and the snapshots, so nine comparisons paying for
-    /// nine interpreters would be the slowest part of a walk of ten commits.
-    ///
-    /// The model is `somatize.foreseen`'s. Nothing here decides what a finding
-    /// means — one implementation of something still being designed beats two
-    /// that drift.
+    /// One subprocess for the whole walk — comparing needs no checkout and no
+    /// graph, only the model and the snapshots. The model is
+    /// `somatize.foreseen`'s and nothing here decides what a finding means.
     pub fn compared(
         &self,
         taken: &HashMap<&str, Snapshot>,
@@ -402,11 +396,11 @@ impl Probing<'_> {
     /// Runs the probe in a checkout and reads what it wrote, with the bytes it
     /// wrote — which are what gets kept.
     ///
-    /// A subprocess and not a library call, and it is the whole reason this
-    /// tool has two languages in it: the graph only exists once the checkout's
-    /// own code has been imported and run, against the soma *that*
-    /// checkout pins. Reaching into it from here would be running one version
-    /// of the engine over another version's declarations.
+    /// A subprocess and not a library call, and it is why this tool has two
+    /// languages in it: the graph only exists once the checkout's own code has
+    /// been imported and run, against the soma *that* checkout pins. Reaching
+    /// into it from here would run one version of the engine over another
+    /// version's declarations.
     pub fn taken(&self, working: &Path, commit: &str) -> Result<(Snapshot, Vec<u8>), Trouble> {
         let mut asking = Command::new(self.python);
         asking
@@ -487,7 +481,7 @@ impl fmt::Display for Trouble {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // The commonest failure by far, and worth naming precisely: the
-            // interpreter that can import soma is rarely the one on PATH.
+            // interpreter that can import somatize is rarely the one on PATH.
             Self::Unreachable { python, why } => {
                 write!(f, "`{python}` could not be run: {why}")
             }

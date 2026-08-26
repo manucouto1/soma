@@ -1,27 +1,16 @@
-//! What happened, on its way to Python.
-//!
-//! Two things, and they are the two ends of the same seam: a [`Recorder`]
-//! exposed so a training run can keep what happened, and an adapter that hands
-//! every fact to whatever Python callable was given — which is what makes a
-//! notebook able to draw a curve **while** it is being drawn.
-//!
-//! # One shape, in both directions
+//! What happened, on its way to Python: a [`Recorder`] exposed so a training run
+//! can keep what happened, and an adapter that hands every fact to whatever
+//! Python callable was given — which is what lets a notebook draw a curve
+//! **while** it is being drawn.
 //!
 //! A fact reaches Python as a `dict` with a `fact` key naming it and its fields
-//! beside it, all text — which is **exactly what would be written down**, since
-//! it is [`Fact::flattened`] and nothing else. So there is one shape to learn,
-//! and what you print is what you would find in the store.
-//!
-//! It goes the other way too: [`PyRecorder`] is callable with that same `dict`,
-//! which is how level 2 — a loss, a step, an update — gets into the record
-//! without the core ever learning what a loss is. The `Trainer` calls
-//! `watching(...)` and does not care which of the two it was handed.
-//!
-//! # Fanning out is a list, and it is not the core's problem
+//! beside it, all text — **exactly what would be written down**, since it is
+//! [`Fact::flattened`] and nothing else. It goes the other way too:
+//! [`PyRecorder`] is callable with that same `dict`, which is how a loss gets
+//! into the record without the core learning what one is.
 //!
 //! `watching=[recorder, print]` builds one watcher holding two. The core
-//! provides a hole and does not manage tenants; here is where the second one
-//! goes.
+//! provides a hole and does not manage tenants.
 
 use crate::store::PyStore;
 use pyo3::exceptions::PyValueError;
@@ -46,18 +35,15 @@ pub struct PyRecorder {
 #[pymethods]
 impl PyRecorder {
     /// A recorder over this store. Without a `run` it makes a name up, and
-    /// [`run`](Self::run) says which — a `forward` in a notebook has no reason
-    /// to invent one and still has to be findable afterwards.
+    /// [`run`](Self::run) says which.
     ///
     /// `summarising` names the kinds of fact that go **into the record** as
-    /// `<kind>.<field>` and not only into its blob, which is what makes reading
-    /// them back cost one scan instead of one fetch per `forward`::
+    /// `<kind>.<field>` and not only into its blob, which makes reading them back
+    /// cost one scan instead of one fetch per `forward`::
     ///
     ///     Recorder(store, run="tuesday", summarising=["loss"])
     ///
-    /// That is what a training run wants, and it is said here rather than
-    /// guessed there: `loss` is this side's word, and the store does not learn
-    /// it.
+    /// Said here rather than guessed there: `loss` is this side's word.
     #[new]
     #[pyo3(signature = (store, *, run = None, summarising = None))]
     fn new(store: &PyStore, run: Option<String>, summarising: Option<Vec<String>>) -> Self {
@@ -125,12 +111,9 @@ impl Watcher for Recording {
     }
 }
 
-/// Hands every fact to a Python callable.
-///
-/// It takes the GIL to do it, from whatever thread the engine is on — including
-/// a wave's, which is why the call is short and does nothing but build a `dict`.
-/// Whatever the callable then does with it is Python's business, and if it wants
-/// to be asynchronous about it that is where the queue goes.
+/// Hands every fact to a Python callable, taking the GIL from whatever thread
+/// the engine is on — including a wave's, which is why the call is short and
+/// does nothing but build a `dict`.
 struct Calling(Py<PyAny>);
 
 impl Watcher for Calling {

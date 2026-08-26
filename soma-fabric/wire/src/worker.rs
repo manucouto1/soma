@@ -1,34 +1,30 @@
 //! A process that gets sent work. This side.
 //!
-//! The first real implementation of [`Transport`], and it does what the GIL will
-//! not allow with threads: two Python nodes in the same wave interleave but do
-//! not overlap, and in two processes they do.
+//! The first real implementation of [`Transport`], and it does what the GIL
+//! will not allow with threads: two Python nodes in the same wave interleave
+//! but do not overlap, and in two processes they do.
 //!
 //! **The session opens by itself, and once.** The greeting is sent not when the
 //! process starts but **before the first job**: a worker that stands up and
-//! receives nothing should have done nothing. After that, [`dispatch`] does not
-//! greet again while the conversation is alive.
-//!
-//! [`dispatch`]: Transport::dispatch
+//! receives nothing should have done nothing.
 //!
 //! **A worker serves one at a time.** [`Transport`] is `Sync`, so two branches
-//! of a wave can call `dispatch` at once — and a pipe does not fit two
+//! of a wave can call [`dispatch`] at once, and a pipe does not fit two
 //! conversations. The `Mutex` queues them, which is correct and not a
-//! limitation: a worker is **one** process. If you want two at once, stand up
-//! two workers and place them on two hosts.
+//! limitation: a worker is **one** process, and two at once means two workers
+//! on two hosts.
 //!
-//! # Two ends, and the one that matters is the second
+//! [`dispatch`]: Transport::dispatch
 //!
 //! ```ignore
 //! Worker::spawn(Command::new("./my-worker"))   // a child, over pipes
 //! Worker::connect("node3:7000")                // one that was already standing
 //! ```
 //!
-//! The first is convenient for testing and **does not satisfy the use case**: as
-//! long as the client starts the process, there is no independent worker worth
-//! the name. The second is the real form. That the conversation never finds out
-//! which it is falls out of [`frame`](crate::frame) working over
-//! `impl Read`/`impl Write`.
+//! The first is convenient for testing and **does not satisfy the use case**:
+//! as long as the client starts the process, there is no independent worker
+//! worth the name. That the conversation never finds out which it is falls out
+//! of [`frame`](crate::frame) working over `impl Read`/`impl Write`.
 //!
 //! [`Worker::spawn`] takes a ready-made [`Command`] rather than a path because
 //! this library does not know what your binary is called, nor what environment
@@ -54,7 +50,6 @@ pub struct Worker {
     carries: Mutex<Option<(Artifact, String)>>,
     /// Who writes down what would not otherwise cross. `None` is the whole of
     /// Rust: there, an opaque carries something nobody has said how to write.
-    ///
     /// Owned and not lent, unlike [`Serving`](crate::Serving)'s: this type has
     /// no lifetime and is held inside an `Arc` by whoever executes.
     codec: Option<Arc<dyn Codec>>,
@@ -176,8 +171,8 @@ impl Worker {
     /// opaque carries.
     ///
     /// Without one, a value that only exists in this process is refused at
-    /// encoding time, as it always was. With one, it crosses as bytes and the
-    /// refusal is left for what nobody registered a codec for.
+    /// encoding time. With one, it crosses as bytes and the refusal is left for
+    /// what nobody registered a codec for.
     pub fn packing(mut self, codec: Arc<dyn Codec>) -> Self {
         self.codec = Some(codec);
         self
@@ -207,13 +202,12 @@ impl Open {
     /// the far side says on the way to `seen`.
     ///
     /// It reads **until an answer is terminal**, which is the one change the
-    /// whole live half of this needed: [`Answer::Saw`] is not an answer to
-    /// anything, it is the worker talking while it works, and the loop is what
-    /// turns a blocked read into a stream.
+    /// live half of this needed: [`Answer::Saw`] is not an answer to anything,
+    /// it is the worker talking while it works.
     ///
     /// A fact is passed on exactly as it was emitted. Attributing it to a host
-    /// is the engine's job, not this one's: here the host is an address, and the
-    /// name the graph gave it is not known.
+    /// is the engine's job: here the host is an address, and the name the graph
+    /// gave it is not known.
     fn say(
         &mut self,
         request: &Request,
@@ -233,8 +227,8 @@ impl Open {
             match Answer::from_bytes(&answer).map_err(|e| TransportError::new(e.to_string()))? {
                 // Not an answer: keep waiting for one. A client that is not
                 // watching still has to read these off the socket — dropping
-                // them is what it means not to watch, and leaving them there
-                // would desynchronise the conversation.
+                // them is what not watching means, and leaving them there would
+                // desynchronise the conversation.
                 Answer::Saw(fact) => {
                     if let Some(seen) = seen {
                         seen.saw(&fact);
@@ -307,8 +301,7 @@ impl Transport for Worker {
 
         // Written down before the message is built, so the refusal in
         // `Request::to_bytes` is untouched and still guards: by the time it
-        // looks, whatever had a codec is already bytes. Nothing to write down
-        // means nothing is copied.
+        // looks, whatever had a codec is already bytes.
         let (input, known) = match self.codec.as_deref() {
             None => (cargo.input.clone(), cargo.known.to_vec()),
             Some(codec) => (
@@ -339,8 +332,7 @@ impl Transport for Worker {
 ///
 /// A failure here is not a value left behind: everything in this answer was
 /// written down by the other side a moment ago, so one that cannot be read back
-/// means the two ends do not register the same codecs — and that is the answer,
-/// not a value to work around.
+/// means the two ends do not register the same codecs — and that is the answer.
 fn live(codec: &dyn Codec, outcome: Outcome) -> Result<Outcome, TransportError> {
     Ok(Outcome {
         last: codec.unpacked(&outcome.last).map_err(as_transport_error)?,

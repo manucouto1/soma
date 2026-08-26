@@ -5,17 +5,15 @@
 //! subprocess, `somatize.foreseen` and the store all still agree once they are
 //! in the same room.
 //!
-//! The repository comes from `examples/an-investigation.sh --only-build`, which
-//! is the **same fixture the example uses**. One definition, two consumers: the
+//! The repository comes from `examples/an-investigation.sh --only-build`, the
+//! **same fixture the example uses**: one definition, two consumers, so the
 //! example cannot rot without this going red.
 //!
-//! # It skips rather than fails without an interpreter
-//!
-//! Building a graph needs a Python that can import `somatize`, which is a
-//! `maturin develop` away and not something a checkout has. `SOMA_TREE_PYTHON`
-//! names one; without it the workspace's own `.venv` is tried. A test that
-//! failed here would be reporting on somebody's environment and calling it a
-//! bug in the tool.
+//! It skips rather than fails without an interpreter. Building a graph needs a
+//! Python that can import `somatize`, which is a `maturin develop` away and
+//! not something a checkout has; `SOMA_TREE_PYTHON` names one, and without it
+//! the workspace's own `.venv` is tried. A test that failed here would be
+//! reporting on somebody's environment and calling it a bug in the tool.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -160,8 +158,6 @@ macro_rules! given {
     };
 }
 
-// ── The three kinds of edit, told apart ──
-
 #[test]
 fn a_constructor_argument_moves_the_name_so_the_cache_misses() {
     given!(at);
@@ -254,8 +250,6 @@ fn a_walk_reaches_one_commit_past_its_range() {
 
     assert_eq!(said.matches('│').count(), 3, "{said}");
 }
-
-// ── The journal ──
 
 #[test]
 fn a_verdict_is_written_down_and_shows_up_in_the_walk() {
@@ -441,8 +435,6 @@ fn a_range_somebody_did_type_is_still_taken_at_their_word() {
     assert_eq!(said.status.code(), Some(2), "trouble, not a short walk");
 }
 
-// ── Three variants of one idea are three branches ──
-
 #[test]
 fn every_branch_is_walked_and_not_only_the_one_checked_out() {
     // `rev-list HEAD` follows ancestry, and a sibling is not an ancestor: a
@@ -524,8 +516,6 @@ fn doubt_goes_down_a_branch_and_not_across_to_its_siblings() {
         "and nothing on anybody else's branch: {doubted:?}",
     );
 }
-
-// ── Whether an edit survives, before anybody commits it ──
 
 #[test]
 fn an_edit_that_does_not_parse_is_caught_before_anything_else_runs() {

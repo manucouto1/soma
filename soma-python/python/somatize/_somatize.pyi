@@ -4,20 +4,14 @@ Hand-written, because there is no stub generator that reads `#[pymethods]` and
 tells the truth about a `PyResult<Option<PyObject>>`. A hand-written stub can
 lie, so `tests/test_stubs.py` checks it against the module that was **built**:
 same names, same methods, same parameters, same defaults. What no test can check
-is whether a type is *right* — that part is read from `python/src/*.rs`, and the
-rule when reading it is that `PyResult<T>` is `T` (the error is an exception,
-not a value) while `Option<T>` is `T | None`.
+is whether a type is *right* — that part is read from `python/src/*.rs`, where
+`PyResult<T>` is `T` and `Option<T>` is `T | None`.
 
-Two PyO3 facts worth knowing before editing this:
-
-- A `#[new]`'s signature lands on the **type** (`cls.__text_signature__`), not on
-  `__new__`, so the test compares constructors there.
-- A `#[staticmethod]` arrives as a plain `builtin_function_or_method` with no
-  `self`, which is why the ones below carry `@staticmethod` and the instance
-  methods do not.
-
-Nothing here is re-exported from `somatize/__init__.py` by this file: the
-package decides its own surface, and this only describes what it is describing.
+Two PyO3 facts worth knowing before editing this: a `#[new]`'s signature lands on
+the **type** (`cls.__text_signature__`) and not on `__new__`, so the test
+compares constructors there; and a `#[staticmethod]` arrives as a plain
+`builtin_function_or_method` with no `self`, which is why the ones below carry
+`@staticmethod` and the instance methods do not.
 """
 
 import builtins
@@ -81,9 +75,8 @@ class Graph:
         """The object registered under that id — `None` if there is none.
 
         `Any` rather than `Any | None`: what comes back is the caller's own
-        object and unchecked either way, and the miss is a wrong id, which
-        is a bug at the call site and not a case to handle at twenty of
-        them."""
+        object and unchecked either way, and the miss is a wrong id, which is a
+        bug at the call site."""
 
     # The shape of an execution
     def plan(self) -> str:
@@ -263,10 +256,8 @@ class Space:
     """What is being searched over. Every method answers a new `Space`.
 
     `int` below is a method named after the builtin, which shadows it for the
-    rest of the class body — so everything after it spells the builtin
-    `builtins.int`. That is not a style choice: without it a checker reads
-    `-> int` as *this method*, which is the one error mypy found in the first
-    draft of this file.
+    rest of the class body — so everything after it spells `builtins.int`. Not a
+    style choice: without it a checker reads `-> int` as *this method*.
     """
 
     def __init__(self) -> None: ...

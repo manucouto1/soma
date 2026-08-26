@@ -147,9 +147,8 @@ fn a_node_that_still_changes_may_not_keep_its_own_output() {
 
 #[test]
 fn a_node_above_that_still_changes_stops_it_too() {
-    // The whole point of the rule being about **prefixes**: freezing the node
-    // and leaving what feeds it training would restore a value that is a leaf,
-    // and everything above it would quietly stop learning.
+    // Why the rule is about **prefixes**: freezing the node and leaving what
+    // feeds it training restores a leaf, and everything above stops learning.
     let graph = chain();
     let mut memory = settled(&graph);
     memory.cache("c", None);

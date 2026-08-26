@@ -5,42 +5,22 @@
     said = contribution(g, batches, objective=mse, over=("symptoms", "text"))
     leaning(said)          # {"symptoms": ["IGNORED_INPUT(symptoms)"], ...}
 
-## Why this exists
+From a real research project: symptom channels for detecting a mental-health
+condition, where interpretability and performance could be had one at a time and
+never together. **Months** went into diagnosing the architecture, and the problem
+was in the data — the predictive signal was in the *self-disclosure* and not in
+the presence of symptoms. No amount of looking at gradients was going to say so.
 
-From a real research project. Symptom channels for detecting a mental-health
-condition, where symptomatic interpretability and performance could be had one
-at a time and never together. **Months** went into diagnosing the architecture.
-The problem was in the data: the predictive signal was in the *self-disclosure*
-and not in the presence of symptoms, and no amount of looking at gradients was
-ever going to say so.
+What says so takes an afternoon: take an input away and score it again.
+`somatize.health` asks whether a network is **learning**; this asks whether it is
+learning what you meant.
 
-What says so takes one afternoon: take an input away and score it again. If the
-channel the whole study was built around costs nothing to remove, it is not what
-the model is using — and every hour spent on the network was an hour spent in
-the wrong place.
+**Shuffled and not zeroed.** A zero is a value, often an unusually informative
+one. Shuffling keeps the distribution of the channel and destroys only its
+correspondence with the answer, which is the thing being asked about.
 
-This is a different question from `somatize.health`, and they are easy to
-confuse. That one asks whether a network is **learning**; this asks whether it
-is learning what you meant.
-
-## Shuffled and not zeroed
-
-A zero is a value, and often an unusually informative one: a network that has
-never seen an all-zero channel falls over for a reason that has nothing to do
-with importance. Shuffling keeps the distribution of the channel and destroys
-only its **correspondence with the answer**, which is exactly the thing being
-asked about.
-
-Across the batch, so what is broken is which row goes with which — the same
-thing permutation importance has always done, and for the same reason.
-
-## What it is not
-
-It is a **ranking**, not an attribution: it says an input orders the results,
-not that it is worth so many points. Two inputs carrying the same signal both
-look unimportant, because removing either leaves the other. That is a true
-thing about the data and not a flaw in the method, and it is worth knowing
-before somebody concludes that neither matters.
+It is a **ranking** and not an attribution: two inputs carrying the same signal
+both look unimportant, because removing either leaves the other.
 """
 
 from __future__ import annotations
@@ -76,19 +56,13 @@ def contribution(
 ) -> dict[str, float]:
     """How much worse the score gets without each input, as `{name: drop}`.
 
-    `batches` is an iterable of `(input, target)` — the same shape a `Trainer`
-    takes — and `input` is a mapping, because a graph with two branches is fed
-    a map and the keys are what gets taken away one at a time.
+    `batches` is an iterable of `(input, target)` — the shape a `Trainer` takes —
+    and `input` is a mapping, because a graph with two branches is fed a map and
+    the keys are what gets taken away. `over` names which to try.
 
-    `over` names which keys to try. Without it, all of them.
-
-    `repeats` is how many shuffles each input gets, averaged. Three is enough to
-    stop one unlucky permutation deciding an afternoon's conclusion, and it
-    costs three forward passes per input per batch — which is why this is a
-    thing you run once and not a thing you run every step.
-
-    Nothing is trained and nothing is changed: the model is asked the same
-    question with one of its inputs scrambled.
+    `repeats` is how many shuffles each gets, averaged: three is enough to stop
+    one unlucky permutation deciding an afternoon's conclusion. Nothing is
+    trained and nothing changed.
     """
     each: list[Batch] = [(dict(one), target) for one, target in batches]
     if not each:
@@ -135,16 +109,12 @@ def shares(
 
 
 def shuffled(what: Any, order: Sequence[int]) -> Any:
-    """One input, with its rows put in that order.
+    """One input, with its rows put in that order. An `Opaque` is unwrapped and
+    wrapped again, since shuffling the wrapper rather than the tensor would be a
+    quiet way of measuring nothing.
 
-    An `Opaque` is unwrapped and wrapped again, because that is how a tensor
-    reaches a graph at all and shuffling the wrapper rather than the tensor
-    would be a very quiet way of measuring nothing.
-
-    Torch tensors, lists and tuples. What is **not** touched is anything else —
-    a string, a number, something this library has never seen — because
-    shuffling a thing whose first axis is not the batch is not a measurement,
-    it is a different question asked by accident.
+    Torch tensors, lists and tuples. Anything else is left alone: shuffling a
+    thing whose first axis is not the batch is a different question by accident.
     """
     from somatize import Opaque
 
@@ -198,9 +168,8 @@ def _scored(
 ) -> float:
     """The mean objective over these batches. Nothing is trained.
 
-    Under `no_grad` where torch is here: nothing is going to be differentiated
-    and a graph kept alive for a backward pass that never comes is memory spent
-    on nothing — on a real model, enough of it to matter.
+    Under `no_grad` where torch is here: a graph kept alive for a backward pass
+    that never comes is memory spent on nothing.
     """
     try:
         import torch

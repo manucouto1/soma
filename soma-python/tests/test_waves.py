@@ -20,9 +20,6 @@ from conftest import Add, Mean
 DEADLINE = 10
 
 
-# ── Nodes that watch how they get executed ──
-
-
 class Noter(Node):
     """Notes itself in a shared list: who, when and on what thread."""
 
@@ -81,9 +78,6 @@ def in_another_process(source):
         )
 
 
-# ── The shape of the plan ──
-
-
 def test_a_chain_has_no_waves():
     g = Graph.somatize(Add(1).named("a") >> Add(10).named("b"))
     assert "Wave" not in g.plan()
@@ -125,9 +119,6 @@ def test_the_dsl_with_branches_gives_the_same_plan_as_node_and_edge():
         by_hand.edge(source, target)
 
     assert dsl.plan() == by_hand.plan()
-
-
-# ── That the threads really exist ──
 
 
 def test_the_branches_run_at_the_same_time():
@@ -195,9 +186,6 @@ def test_the_real_execution_order_respects_the_edges():
         )
 
 
-# ── That the result depends on none of the above ──
-
-
 def test_the_diamond_gives_the_same_spread_out_as_in_a_row():
     g = Graph.somatize(
         Add(1).named("s") >> (Add(10).named("l") | Add(100).named("r")) >> Mean().named("j")
@@ -225,9 +213,6 @@ def test_executing_twice_gives_the_same_thing():
     assert [g.forward(0) for _ in range(5)] == [56.0] * 5
 
 
-# ── Failures ──
-
-
 def test_if_two_branches_fail_the_first_is_always_the_one_reported():
     # Both genuinely fail at the same time — they agree to meet before breaking
     # — so which one arrives first is a race; the error reported is not.
@@ -251,9 +236,6 @@ def test_the_error_says_which_branch_it_was():
         g.forward(0)
 
 
-# ── What the DSL cannot write ──
-
-
 def test_a_graph_that_is_not_series_parallel_executes_even_without_being_spread():
     # The "N": `a→c, a→d, b→d`. It has no series-parallel tree — that is a
     # theorem — so there is no wave; and it cannot be written with `>>` and `|`,
@@ -266,9 +248,6 @@ def test_a_graph_that_is_not_series_parallel_executes_even_without_being_spread(
 
     assert "Wave" not in g.plan(), "the N has no tree to recover"
     assert g.forward(0) == {"c": 101.0, "d": 1.5}
-
-
-# ── The GIL ──
 
 
 def test_the_engine_releases_the_gil_while_it_runs():

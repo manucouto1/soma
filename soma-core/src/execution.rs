@@ -1,36 +1,17 @@
 //! The engine: walking a [`Plan`] and executing what it says.
 //!
-//! It lives in the core, not in the bindings, because walking *is* domain
-//! logic. Python only supplies the implementations.
+//! Walking is domain logic, so it lives here and not in the bindings; Python
+//! only supplies the implementations. The engine never looks at the graph —
+//! every plan step carries where its input comes from.
 //!
-//! The engine never looks at the graph: every plan step carries where its input
-//! comes from, and here it is only looked up in what was already produced.
+//! When one thing reaches a node it receives that thing; when several do, a
+//! [`Value::Map`] keyed by whoever produced each. Aggregating them is the
+//! receiving node's job.
 //!
-//! Every node is advanced the same way — ask, serve whatever it asks for, ask
-//! again — so a node that finishes on the first turn needs no separate path.
-//!
-//! When **one** thing reaches a node it receives that thing; when several do, a
-//! [`Value::Map`] keyed by whoever produced each. Fan-in is neither a plan
-//! variant nor a kind of node, it is the shape an input with several origins
-//! takes; aggregating them is the receiving node's job, i.e. library.
-//!
-//! # The keys travel beside what was produced, not inside it
-//!
-//! A cached node has to be named before it runs, and its name is built out of
-//! the names of what it reads — so a [`Key`] has to reach it along the same
-//! edge its input does. labchain hangs that hash **inside** the value, because
-//! it has no engine: the pipeline is the user's code and the only place left to
-//! put one is the data. Here the walk already carries `produced` everywhere, so
-//! the keys go in a **table beside it** — same lifetime, same copy into a
-//! wave's branches, same retention in [`Executor::resume`] — and neither
-//! [`Value`] grows a wrapper every `forward` would have to unwrap, nor does the
-//! [`Node`](crate::Node) contract change.
-//!
-//! Nothing of this happens without both [`Executor::remembering`] and
-//! [`Executor::keeping`]: with either missing the table stays empty and the
-//! engine is what it was. They are two calls and not one because they are two
-//! kinds of thing — what is remembered is **declared** and travels, a keeper is
-//! **injected** and does not.
+//! Keys travel in a table **beside** `produced`, never inside a [`Value`], so
+//! the [`Node`](crate::Node) contract does not change. Nothing is named without
+//! both [`Executor::remembering`] (declared, travels) and [`Executor::keeping`]
+//! (injected, does not).
 
 use crate::{
     Cargo, Catalog, Ctx, Device, Fact, Host, Keeper, Kept, Key, Keys, Memory, NodeError, NodeId,
@@ -40,49 +21,27 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::Instant;
 
-/// What the engine writes beside a value it keeps.
-///
-/// **Public, and that is a decision.** They were private while the engine was
-/// the only one that wrote them and the only one that read them back. It is not
-/// any more: a store outlives every process that wrote to it, and *which code
-/// made this blob* is a question somebody asks months later with a different
-/// tool in their hand. Reading it means agreeing on these three strings, and
-/// the alternative — the reader copying the literals — is two places saying the
-/// same thing, with no way to tell which governs the day they disagree.
+/// What the engine writes beside a value it keeps. Public because a store
+/// outlives the process that wrote to it and readers need these strings.
 pub const NODE: &str = "node";
 
-/// Which version of the code produced it.
-///
-/// Written beside the value rather than mixed into the name, which is what
-/// makes a cache that has quietly gone cold tellable from one that is working.
+/// Which version of the code produced it, written beside the value rather than
+/// mixed into the name.
 pub const FINGERPRINT: &str = "fingerprint";
 
-/// What the graph was fed, by the name its content has.
-///
-/// The one piece of provenance the caller **cannot** supply: only a
-/// [`Keeper`](crate::Keeper) can hash a [`Value`], so only the engine is
-/// standing where this is knowable. And it cannot be recovered afterwards —
-/// a key does not run backwards — so a blob written without it can never be
-/// told which input it belongs to. That is the whole reason it is written now
-/// rather than worked out later.
-///
-/// Only on [`run`](Executor::run) and never on [`resume`](Executor::resume): a
-/// worker is handed a slice, and what arrives at a slice is not the graph's
-/// input. Stamping it there would be a confident lie. Whoever coordinates knows
-/// the real one and can send it along in its own stamp.
+/// What the graph was fed, by the name its content has. Only a
+/// [`Keeper`](crate::Keeper) can hash a [`Value`], and a key does not run
+/// backwards, so it is written now or never. Set on [`run`](Executor::run) and
+/// never on [`resume`](Executor::resume): a slice is not handed the graph's
+/// input.
 pub const INPUT: &str = "input";
 
-/// The words the engine writes itself, so nobody else writes them.
-///
-/// Public because refusing a stamp is done where somebody is typing, and that
-/// is not here: a layer that wants to say *`node` is not yours to set* has to
-/// be able to ask which ones are.
+/// The words the engine writes itself, so a layer that refuses a stamp can ask
+/// which ones are taken.
 pub const OURS: [&str; 3] = [NODE, FINGERPRINT, INPUT];
 
-/// Executes plans.
-///
-/// A type and not a bare function because executing needs context: today the
-/// store, the placement and the transports.
+/// Executes plans. A type and not a bare function because executing needs
+/// context: the store, the placement and the transports.
 pub struct Executor<'a> {
     catalog: &'a Catalog,
     placement: Option<&'a Placement>,
@@ -95,25 +54,16 @@ pub struct Executor<'a> {
     /// Which host it knows how to reach, and by what route. A list because
     /// there are two or three of them.
     transports: Vec<(Host, &'a dyn Transport)>,
-    /// Who is told what happened. **Injected**, like the keeper, and for the
-    /// same reason: where a fact ends up belongs to whoever runs, not to the
-    /// graph, so it does not travel.
+    /// Who is told what happened. Injected, so it does not travel.
     watcher: Option<&'a dyn Watcher>,
-    /// Where this walk's timeline starts, so that every fact can say **when**
-    /// and not only how long.
-    ///
-    /// Set once per [`run`](Self::run) or [`resume`](Self::resume) and read all
-    /// the way down, which is why it is a field rather than an argument: it is
-    /// one number for the whole walk and threading it through six signatures
-    /// would say it was six.
+    /// Where this walk's timeline starts, so a fact can say **when** and not
+    /// only how long. One number for the whole walk, hence a field.
     since: Option<Instant>,
     /// What else to write beside everything this run keeps. **Injected**, like
     /// the keeper, and opaque: see [`stamping`](Self::stamping).
     stamp: Vec<(String, String)>,
-    /// The name of what the graph was fed. Worked out once per
-    /// [`run`](Self::run), for the same reason `since` is: one value for the
-    /// whole walk, and hashing the input once per kept node would be paying for
-    /// the same answer at every step.
+    /// The name of what the graph was fed, worked out once per
+    /// [`run`](Self::run) rather than at every kept node.
     input: Option<Key>,
 }
 
@@ -140,28 +90,17 @@ impl<'a> Executor<'a> {
         self
     }
 
-    /// The same executor, knowing what is remembered about each node.
-    ///
-    /// **Declared and not injected**, which is why it is its own call and not
-    /// half of [`keeping`](Self::keeping): what is remembered belongs to the
-    /// graph, so it **travels** with a slice that goes to another host — and a
-    /// worker that keeps things is of no use if nobody told it what any of the
-    /// nodes are. Whoever coordinates may perfectly well keep nothing itself.
-    ///
-    /// Whether what it declares can honestly be kept is
-    /// [`cacheable`](crate::cacheable)'s question, and it is asked by whoever
-    /// has the graph: the engine never looks at one.
+    /// The same executor, knowing what is remembered about each node. Declared,
+    /// so it **travels** with a slice — its own call and not half of
+    /// [`keeping`](Self::keeping), which does not.
     pub fn remembering(mut self, memory: &'a Memory) -> Self {
         self.memory = Some(memory);
         self
     }
 
-    /// The same executor, with somewhere to keep what it names.
-    ///
-    /// **Injected**, like the transports: it is whoever runs who
-    /// says where things are kept, and it does not travel. Without it — or
-    /// without [`remembering`](Self::remembering) — the keys are not even
-    /// computed, which is why a graph that declares nothing pays nothing.
+    /// The same executor, with somewhere to keep what it names. Injected.
+    /// Without it, or without [`remembering`](Self::remembering), no key is
+    /// even computed.
     pub fn keeping(mut self, keeper: &'a dyn Keeper) -> Self {
         self.keeper = Some(keeper);
         self
@@ -175,15 +114,8 @@ impl<'a> Executor<'a> {
         self
     }
 
-    /// The same executor, telling this one what it sees.
-    ///
-    /// **Injected and does not travel**, like the keeper: a slice sent to
-    /// another host is executed by an engine over there with a watcher of its
-    /// own, and what it sees comes back attributed rather than emitted here.
-    ///
-    /// Without it nothing is measured and no [`Fact`] is built — the emit sites
-    /// take a closure, so a run nobody watches pays a branch and not an
-    /// allocation.
+    /// The same executor, telling this one what it sees. Injected, so a slice
+    /// sent away is watched over there and comes back attributed.
     pub fn watching(mut self, watcher: &'a dyn Watcher) -> Self {
         self.watcher = Some(watcher);
         self
@@ -191,50 +123,29 @@ impl<'a> Executor<'a> {
 
     /// The same executor, writing this beside everything it keeps.
     ///
-    /// **The core does not know what is in it**, and that is the point. Which
-    /// environment produced a value, which run it belonged to, which commit was
-    /// checked out — every one of those is a fact about the world outside a
-    /// graph, and a core that had a field for any of them would be a core that
-    /// had learnt a word belonging to whoever is standing above it. The same
-    /// division of labour as [`Meta`](crate::Meta) itself, and as the name a
-    /// study is filed under: a string the caller chooses and this passes
-    /// through untouched.
-    ///
-    /// **Injected and does not travel**, like the keeper: what a value's
-    /// provenance is belongs to whoever ran, not to the graph. A slice sent to
-    /// another host is stamped by the engine over there, with whatever that
-    /// side was told.
-    ///
-    /// It exists because a store outlives the process that wrote to it. Without
-    /// it a cache is a pile of hashes that nobody can ever attribute again — not
-    /// wrong, just mute, which is worse the longer it is left.
+    /// Opaque text the core passes through untouched: an environment, a commit,
+    /// a run are facts about the world outside a graph. Injected, so a slice
+    /// sent away is stamped by the engine over there.
     pub fn stamping(mut self, stamp: impl IntoIterator<Item = (String, String)>) -> Self {
         self.stamp = stamp.into_iter().collect();
         self
     }
 
-    /// Hands over one fact, if anybody is listening.
-    ///
-    /// The closure is the whole point: `node.clone()` and a formatted message
-    /// are not paid for by a run that nobody is watching, which is most of them.
+    /// Hands over one fact, if anybody is listening. The closure is why a run
+    /// nobody watches pays a branch and not an allocation.
     fn saw(&self, fact: impl FnOnce() -> Fact) {
         if let Some(watcher) = self.watcher {
             watcher.saw(&fact());
         }
     }
 
-    /// Executes the plan and returns what it produced. The first failure stops
-    /// the execution.
-    ///
-    /// This is where a run **ends**, and the only place that says so: a
-    /// [`Fact::Finished`] or a [`Fact::Broke`] closes the record either way.
-    /// [`resume`](Self::resume) deliberately says nothing of the sort — a slice
-    /// executed for somebody else is not a `forward`.
+    /// Executes the plan and returns what it produced; the first failure stops
+    /// it. The only place a run is said to end — [`resume`](Self::resume) says
+    /// nothing of the sort, because a slice is not a `forward`.
     pub fn run(&self, plan: &Plan, input: Value) -> Result<Value, RunError> {
         let began = Instant::now();
-        // The input's name, once. `None` when there is no keeper to hash with,
-        // or when the input cannot leave this process — the same absence that
-        // stops anything under it being named at all, said the same way.
+        // `None` when there is no keeper, or when the input cannot leave this
+        // process — the same absence that leaves everything under it nameless.
         let named = self.keeper.and_then(|keeper| keeper.key_of(&input));
         let walking = self.since(began).fed(named);
         let answer = walking.running(plan, input);
@@ -249,10 +160,8 @@ impl<'a> Executor<'a> {
         answer
     }
 
-    /// The same executor with a timeline of its own, for one walk.
-    ///
-    /// A copy and not a mutation, because [`run`](Self::run) takes `&self`: an
-    /// executor is shared, and a run is not.
+    /// The same executor with a timeline of its own, for one walk. A copy
+    /// because [`run`](Self::run) takes `&self`: an executor is shared.
     fn since(&self, began: Instant) -> Self {
         Self {
             catalog: self.catalog,
@@ -289,8 +198,7 @@ impl<'a> Executor<'a> {
         let last = self.walk(plan, &input, &mut produced, &mut keys, &unneeded)?;
 
         // A graph's output is that of its leaves: one leaf gives that value,
-        // several a map keyed by each — the same shape as an input with several
-        // origins, so a diamond comes back round.
+        // several a map keyed by each, so a diamond comes back round.
         let leaves = terminals(plan);
         Ok(match leaves.as_slice() {
             [] | [_] => last,
@@ -309,15 +217,9 @@ impl<'a> Executor<'a> {
     }
 
     /// Executes a slice that already knows what came before: what a worker does
-    /// on receiving one.
-    ///
-    /// `known` is fed in as if this very run had produced it, so the steps read
-    /// it through their `from`, and `named` likewise: a slice that arrives
-    /// without the keys of what it reads can name nothing it produces, which is
-    /// a cache that stops at the process boundary rather than an error.
-    ///
-    /// What comes back does **not** include either of them, and both are ordered
-    /// by id because this crosses a process boundary.
+    /// on receiving one. `known` and `named` are fed in as if this run had
+    /// produced them; neither comes back, and both are ordered by id because
+    /// this crosses a process boundary.
     pub fn resume(
         &self,
         plan: &Plan,
@@ -325,18 +227,16 @@ impl<'a> Executor<'a> {
         known: Vec<(NodeId, Value)>,
         named: Vec<(NodeId, Keys)>,
     ) -> Result<Outcome, RunError> {
-        // A slice counts from its own start: what it says about `when` is a
-        // fact about the slice, and whoever draws it adds the offset of the
-        // `Left` it arrived under.
+        // A slice counts from its own start: an offset into a slice is a fact
+        // about the slice, and two wall clocks would not have composed.
         let walking = self.since(Instant::now());
         let mut produced: HashMap<NodeId, Value> = known.into_iter().collect();
         let mut keys: HashMap<NodeId, Keys> = named.into_iter().collect();
         let brought: Vec<NodeId> = produced.keys().cloned().collect();
         let named: Vec<NodeId> = keys.keys().cloned().collect();
 
-        // A slice is not pruned: what it produces goes back to whoever sent it,
-        // and only that side knows which of it is read. The client already did
-        // the working out, and a node it did not want is not in the plan.
+        // A slice is not pruned: only the sender knows which of what it
+        // produces is read, and it already left out what it did not want.
         let last = walking.walk(plan, &input, &mut produced, &mut keys, &HashSet::new())?;
 
         produced.retain(|id, _| !brought.contains(id));
@@ -360,9 +260,8 @@ impl<'a> Executor<'a> {
     ) -> Result<Value, RunError> {
         match plan {
             Plan::Empty => Ok(graph_input.clone()),
-            // Nothing reads what this one makes that is not already kept, so
-            // there is nothing for it to be for. Its name is already in `keys`
-            // — worked out without it — so whoever hit downstream still hits.
+            // Nothing reads what this makes that is not already kept. Its name
+            // is in `keys` regardless, so whoever hit downstream still hits.
             Plan::Execute { node, .. } if unneeded.contains(node) => {
                 self.saw(|| Fact::Spared { node: node.clone() });
                 Ok(Value::Null)
@@ -371,9 +270,8 @@ impl<'a> Executor<'a> {
                 self.over_items(node, from, graph_input, produced, keys)
             }
             Plan::Execute { node, from } => {
-                // Worked out already, if anybody worked it out: naming the root
-                // is the one place a value is hashed by content, and doing it
-                // twice would make asking early cost exactly what it saves.
+                // Naming the root is the one place a value is hashed by
+                // content; twice would cost exactly what asking early saves.
                 let key = match keys.get(node) {
                     Some(Keys::One(named)) => Some(named.clone()),
                     _ => self.key_for(node, from, graph_input, keys),
@@ -385,10 +283,9 @@ impl<'a> Executor<'a> {
                 // input is not even assembled.
                 let output = match self.recalled(node, key.as_ref()) {
                     Some(kept) => kept,
-                    // What was kept when the store was asked, and gone when it
-                    // was read. Rare, and it has to be said rather than turned
-                    // into a puzzle: what feeds this was skipped **because** the
-                    // answer was there, so there is nothing left to run.
+                    // Kept when the store was asked, gone when it was read.
+                    // What feeds this was skipped *because* the answer was
+                    // there, so there is nothing left to run.
                     None if from.iter().any(|id| unneeded.contains(id)) => {
                         return Err(RunError::Vanished { node: node.clone() });
                     }
@@ -433,16 +330,9 @@ impl<'a> Executor<'a> {
         self.memory.is_some_and(|memory| memory.is_mapped(node))
     }
 
-    /// One step of a node that maps: the items it is missing, and no more.
-    ///
-    /// The whole difference from an ordinary step is **where the grain is**. An
-    /// ordinary node is named once and either its whole output is there or none
-    /// of it is; a mapped one is named once per item, so a list of a thousand
-    /// where one is new runs once and reads back nine hundred and ninety-nine.
-    ///
-    /// The input is assembled first here, and there is no way around it: an
-    /// ordinary hit does not even build its input, but the names of these items
-    /// are made out of the items, so they have to be in hand.
+    /// One step of a node that maps: the items it is missing, and no more. Its
+    /// input is assembled first and there is no way around it — the names of
+    /// these items are made out of the items.
     fn over_items(
         &self,
         node: &NodeId,
@@ -521,14 +411,11 @@ impl<'a> Executor<'a> {
         Ok(output)
     }
 
-    /// One name per item, or `None` when nothing is being remembered at all.
+    /// One name per item, or `None` when nothing is being remembered.
     ///
-    /// **Where the per-item chain starts is where content is hashed.** If what
-    /// is above already has a name for each item, these are built out of those
-    /// and nothing is hashed; if it does not — a root, or a list that came out
-    /// of a node nobody mapped — then each item is hashed by its content, which
-    /// is the only thing that makes the same document in another list the same
-    /// item. Its **position** would not: that is the whole point.
+    /// If what is above already names each item these are built out of those;
+    /// if not, each item is hashed by **its own content** — its position would
+    /// not make the same document in another list the same item.
     fn keys_for_items(
         &self,
         node: &NodeId,
@@ -566,11 +453,8 @@ impl<'a> Executor<'a> {
         )
     }
 
-    /// What is kept for each of these, asked **in one call**.
-    ///
-    /// Which is why [`Keeper::recall`] has taken a slice since the first day: a
-    /// thousand items against a store on the far end of a network is a thousand
-    /// round trips unless it is one.
+    /// What is kept for each of these, asked in one call: a thousand items
+    /// against a remote store is a thousand round trips unless it is one.
     fn recalled_items(&self, node: &NodeId, mine: &[Key]) -> Vec<Option<Value>> {
         let nothing = vec![None; mine.len()];
         let Some((keeper, memory)) = self.keeper.zip(self.memory) else {
@@ -591,12 +475,10 @@ impl<'a> Executor<'a> {
         }
     }
 
-    /// Launches a wave's branches at once and merges what they produced.
-    ///
-    /// Each branch starts with a **copy** of what was produced so far and
-    /// returns only its own; being connected components, what each adds is
-    /// disjoint and merging cannot clobber anything. Copying is cheap — a
-    /// `Value` clones by `Arc` — and in exchange there is not a single lock.
+    /// Launches a wave's branches at once and merges what they produced. Each
+    /// gets a copy of `produced` and returns only its own; being connected
+    /// components they are disjoint, so merging clobbers nothing and there is
+    /// no lock.
     fn at_once(
         &self,
         branches: &[Plan],
@@ -643,9 +525,8 @@ impl<'a> Executor<'a> {
         Ok(Value::Null)
     }
 
-    /// Sends a slice elsewhere and merges whatever comes back. It is given only
-    /// what it reads and does not produce, because the wire is the expensive
-    /// part.
+    /// Sends a slice elsewhere and merges whatever comes back, given only what
+    /// it reads and does not produce.
     fn elsewhere(
         &self,
         host: &Host,
@@ -680,15 +561,12 @@ impl<'a> Executor<'a> {
             known: &known,
             keys: &named,
             placement: self.placement.unwrap_or(&nowhere),
-            // It travels whether or not there is a keeper here: what is
-            // remembered is the graph's, and the one that keeps things may be
-            // the other side.
+            // Travels whether or not there is a keeper here: what is
+            // remembered is the graph's, and the far side may be the keeper.
             memory: self.memory.unwrap_or(&nothing),
         };
-        // What the far side sees is emitted there and relayed raw; attributing
-        // it to a host happens **here**, because here is where the host has a
-        // name. So a worker's engine emits exactly what it would emit at home,
-        // and nothing that travelled has to be rewritten.
+        // The far side emits exactly what it would emit at home; attributing
+        // it happens here, because here is where the host has a name.
         let attributed = self.watcher.map(|to| Attributed {
             host: host.clone(),
             to,
@@ -716,20 +594,15 @@ impl<'a> Executor<'a> {
         Ok(outcome.last)
     }
 
-    /// Run it, and attribute whatever it says to it.
-    ///
-    /// Whatever the node takes to answer — a retry, a model, three rounds of
-    /// something — happens inside it, and the engine neither counts it nor
-    /// bounds it. It cannot: it has no way to tell a loop that will not end from
-    /// work that is slow, and guessing wrong either way is worse than not
-    /// guessing.
+    /// Run it, and attribute whatever it says to it. Whatever the node takes to
+    /// answer happens inside it: the engine cannot tell a loop that will not end
+    /// from work that is slow, so it neither counts nor bounds.
     fn advance(&self, node: &NodeId, input: Value) -> Result<Value, RunError> {
         let ctx = Ctx {
             device: self.device(node),
         };
-        // Around the `forward` and nothing else: what is measured is the node,
-        // not the bookkeeping around it, so the number means the same thing
-        // whether or not this node is cached, mapped or on another machine.
+        // Around the `forward` and nothing else, so the number means the same
+        // whether or not the node is cached, mapped or on another machine.
         let at = self.so_far();
         let began = Instant::now();
         let answer = self.implementation(node)?.forward(&input, &ctx);
@@ -745,10 +618,8 @@ impl<'a> Executor<'a> {
                 Ok(output)
             }
             Err(source) => {
-                // Said before the error is returned, which is the whole reason
-                // this is a fact and not a line in `RunError`: by the time the
-                // caller sees the failure the run is over, and whoever is
-                // watching wanted to know **which node** while it was happening.
+                // Said before the error is returned: by the time the caller
+                // sees it the run is over, and a watcher wanted the node now.
                 self.saw(|| Fact::Failed {
                     node: node.clone(),
                     why: source.to_string(),
@@ -763,15 +634,9 @@ impl<'a> Executor<'a> {
 
     /// The name this node's output will have, **before** it has one.
     ///
-    /// One of the two seams of the cache, and it has a name of its own because
-    /// it is where the observer of gradients will hang: it is the one place
-    /// that sees every edge with what crosses it already decided.
-    ///
-    /// `None` — no name — whenever anything the recipe is made of is missing:
-    /// no keeper, nothing said about what implements this node, or a
-    /// predecessor that has no key either. It is not a failure. It means this
-    /// output cannot be kept and neither can anything below it, and the run
-    /// goes on exactly as it did before any of this existed.
+    /// `None` whenever anything the recipe is made of is missing. Not a
+    /// failure: it means neither this output nor anything below it can be kept.
+    /// One of the two seams of the cache — the one that sees every edge.
     fn key_for(
         &self,
         node: &NodeId,
@@ -782,9 +647,8 @@ impl<'a> Executor<'a> {
         let (keeper, memory) = (self.keeper?, self.memory?);
         let identity = memory.identity_of(node)?;
         let keeper: &dyn Keeper = keeper;
-        // A root reads the graph's input, and the input is the one thing in the
-        // whole chain hashed **by its content** — from here down it is hashes
-        // of hashes, which is what makes a key knowable before anything runs.
+        // A root reads the graph's input, the one thing hashed by content; from
+        // here down it is hashes of hashes, which is what makes a key foreseen.
         let above: Vec<Key> = match from {
             [] => vec![keeper.key_of(graph_input)?],
             many => many
@@ -808,45 +672,15 @@ impl<'a> Executor<'a> {
     /// The names the whole plan will produce, and the nodes that will not have
     /// to produce them.
     ///
-    /// # Why this can be worked out at all
+    /// Names first, since a key needs nothing to have run;
+    /// then [`present`](Keeper::present) says which answers are already there;
+    /// then backwards from the leaves, because a node whose answer is kept does
+    /// not need its inputs. Gives up towards **keeping** a node in two places: a
+    /// mapped node, named by its items' content, and a node with no key.
     ///
-    /// Because [`key_for`](Self::key_for) says so: *the name this node's output
-    /// will have, **before** it has one*. Only the graph's input is hashed by
-    /// content; from there down a key is made of keys, so every name in the plan
-    /// is knowable with nothing executed. One question to the keeper —
-    /// [`present`](Keeper::present), which a store answers by name and without
-    /// reading anything — says which of those answers are already there.
-    ///
-    /// # And then backwards
-    ///
-    /// From the leaves up: a node is needed if something that will really run
-    /// reads it. A node whose answer is already kept **does not need its
-    /// inputs** — which is the whole point, and what makes a settled encoder
-    /// under a head that hit cost nothing rather than cost a forward whose
-    /// result is dropped a microsecond later.
-    ///
-    /// Two places it deliberately gives up, and both are conservative — they
-    /// keep a node rather than skip one:
-    ///
-    /// - a **mapped** node is named by the content of its items, so its names
-    ///   are not knowable before it has its input. It counts as a miss, and
-    ///   everything above it stays.
-    /// - a node with **no key at all** — nothing said about what implements it,
-    ///   or something unnameable upstream — is a miss for the same reason it
-    ///   was never cached.
-    ///
-    /// # Asked for on its own
-    ///
-    /// [`run`](Self::run) makes this pass before its first node, and it is
-    /// public because the answer is worth having **without** the run: two
-    /// versions of the same graph name the same node differently exactly when
-    /// the recipe changed, and comparing the two sets says what a change did
-    /// before anybody pays to find out. What is not in a key is not in the
-    /// answer either — the fingerprint of the code is metadata, and what a node
-    /// was constructed with never was in one.
-    ///
-    /// Without a [`keeper`](Self::keeping) and a [`memory`](Self::remembering)
-    /// it names nothing, which is the same silence a run gets.
+    /// Public because the answer is worth having without the run: two versions
+    /// of a graph name a node differently exactly when its recipe changed.
+    /// Names nothing without a keeper and a memory.
     pub fn foreseen(
         &self,
         plan: &Plan,
@@ -879,9 +713,8 @@ impl<'a> Executor<'a> {
         let keys: Vec<&Key> = asked.iter().map(|(_, key)| key).collect();
         let there = match keeper.present(&keys) {
             Ok(there) => there,
-            // A keeper that cannot answer is not the end of the run, here as
-            // everywhere else: nothing is skipped and everything is computed,
-            // which is what happened before any of this existed.
+            // A keeper that cannot answer is not the end of the run: nothing
+            // is skipped and everything is computed.
             Err(why) => {
                 eprintln!("what is already kept could not be looked up: {why}");
                 return (named, HashSet::new());
@@ -913,13 +746,9 @@ impl<'a> Executor<'a> {
         (named, unneeded)
     }
 
-    /// What is kept under this node's name, if it is kept at all.
-    ///
-    /// A keeper that cannot answer is **not** the end of the run: the value is
-    /// recomputed and the trouble is said out loud, the same as a worker whose
-    /// store cannot be reached asks the client instead of refusing. A cache is
-    /// an optimization, and an optimization that can kill a run at hour three
-    /// is not one.
+    /// What is kept under this node's name, if it is kept at all. A keeper that
+    /// cannot answer recomputes and says so — an optimization that can kill a
+    /// run at hour three is not one.
     fn recalled(&self, node: &NodeId, key: Option<&Key>) -> Option<Value> {
         let (keeper, memory) = (self.keeper?, self.memory?);
         let key = key?;
@@ -934,10 +763,8 @@ impl<'a> Executor<'a> {
             }
         };
 
-        // The fingerprint is not in the key on purpose — a cosmetic refactor
-        // would invalidate half the store in silence — so this is where the two
-        // are put side by side. It is said, and what was kept is used: whoever
-        // wants the other behaviour asks for it.
+        // The fingerprint is deliberately not in the key, so this is where the
+        // two are put side by side. It is said, and what was kept is used.
         if let (Some(declared), Some(written)) = (memory.fingerprint_of(node), fingerprint(&kept))
             && declared != written
         {
@@ -953,11 +780,8 @@ impl<'a> Executor<'a> {
         Some(kept.value)
     }
 
-    /// Keeps what this node produced, if it was said to be worth keeping.
-    ///
-    /// The other seam. A node with no `.cached()` still got a key above and
-    /// still passed it on — it just does not land anywhere, which is what makes
-    /// declaring the cache node by node cost nothing to the chain.
+    /// Keeps what this node produced, if it was said to be worth keeping. A
+    /// node with no `.cached()` still got a key and still passed it on.
     fn keep(&self, node: &NodeId, key: Option<&Key>, output: &Value) {
         let (Some(keeper), Some(memory), Some(key)) = (self.keeper, self.memory, key) else {
             return;
@@ -972,17 +796,10 @@ impl<'a> Executor<'a> {
         if let Some(fed) = &self.input {
             meta.push((INPUT, fed.as_str()));
         }
-        // What the engine knows is not shadowed by a caller who happened to
-        // pick one of its words. **Dropped and not merely put last**: whether
-        // last or first wins is the reader's convention, not this one's, and
-        // the most obvious way to read a list of pairs — turning it into a
-        // map — takes the last. So the pair never gets written, and the meta
-        // of a value has no key in it twice.
-        //
-        // Silently here on purpose: the layer a person types in refuses it out
-        // loud, and by the time a stamp reaches this it has already been
-        // checked. What is left for this to be is an invariant, and an
-        // invariant that can be talked out of is not one.
+        // What the engine knows is not shadowed by a caller who picked one of
+        // its words. Dropped and not put last: the obvious way to read a list
+        // of pairs takes the last. Silent here because the layer a person types
+        // in already refused it out loud.
         meta.extend(
             self.stamp
                 .iter()
@@ -1011,15 +828,9 @@ impl<'a> Executor<'a> {
     }
 }
 
-/// A watcher that says where what it is told happened, and passes it on.
-///
-/// Private, and it belongs to the engine rather than to the transport: a
-/// `Transport` relays what came off the wire untouched — it has no business
-/// knowing what a fact means — while the name of the host it reached is
-/// something only the walk has, because that name is the graph's.
-///
-/// One wrapper per dispatch, so a slice that carries on to a third machine
-/// arrives nested and comes out of [`Fact::flattened`] with the route in order.
+/// A watcher that says where what it is told happened, and passes it on. One
+/// wrapper per dispatch, so a slice that carried on to a third machine comes out
+/// of [`Fact::flattened`] with its route in order.
 struct Attributed<'a> {
     host: Host,
     to: &'a dyn Watcher,
@@ -1034,11 +845,8 @@ impl Watcher for Attributed<'_> {
     }
 }
 
-/// Why the execution could not be finished.
-///
-/// The structural things were already ruled out in [`compile`](crate::compile).
-/// What is here are failures of the implementations, or of a plan that does not
-/// match its catalog.
+/// Why the execution could not be finished. The structural things were ruled
+/// out in [`compile`](crate::compile); these are the implementations' failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
     /// The plan names a node this catalog does not know.
@@ -1147,9 +955,8 @@ fn gather(
     graph_input: &Value,
     produced: &HashMap<NodeId, Value>,
 ) -> Result<Value, RunError> {
-    // Topological order already ran the predecessors, so what is missing here is
-    // not a bug in the walk: it is a value that stayed in the process that made
-    // it, because it could not leave one.
+    // Topological order already ran the predecessors, so what is missing stayed
+    // in the process that made it, unable to leave one.
     let recall = |id: &NodeId| {
         produced.get(id).cloned().ok_or_else(|| RunError::Lost {
             node: node.clone(),
@@ -1168,12 +975,8 @@ fn gather(
 }
 
 /// One name for what a node produced, whether it has one or a thousand.
-///
-/// A list of item keys becomes a single key by being combined, and it is
-/// [`Keeper::combine`] that decides how rather than anything here: the core does
-/// not know what a hash is. What matters is that it is **deterministic and
-/// depends on all of them**, so that whatever reads the whole list is named
-/// after the whole list.
+/// [`Keeper::combine`] decides how; what matters is that it is deterministic and
+/// depends on all of them.
 fn whole(keeper: &dyn Keeper, keys: &Keys) -> Key {
     match keys {
         Keys::One(key) => key.clone(),

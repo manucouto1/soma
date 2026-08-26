@@ -3,29 +3,19 @@
 //! [`Reaching`](crate::Reaching) is one host; this is everything that has to be
 //! true across all of them, and there are exactly two such things.
 //!
-//! # Ask eagerly, connect lazily
-//!
-//! These pull in opposite directions and both are real, so the split is between
-//! them rather than in one direction:
-//!
-//! - **Asking** where a host is costs tens of bytes and has to happen before
-//!   the first node runs, because what gets packed for a host depends on which
-//!   hosts turn out to be the same place.
-//! - **Connecting** to it costs a socket, a process, or both, and a graph names
-//!   hosts a run may never reach — a branch not taken is a worker not needed.
-//!
+//! **Ask eagerly, connect lazily.** Asking where a host is costs tens of bytes
+//! and has to happen before the first node runs, because what gets packed for a
+//! host depends on which hosts turn out to be the same place. Connecting costs
+//! a socket, a process, or both, and a graph names hosts a run may never reach.
 //! So a rendezvous is asked for once and remembered here, and the wire it
-//! describes is opened the first time somebody actually sends work. Which also
-//! means the ask happens **once** however it was triggered: a client that
-//! resolved every host up front to decide what to pack finds the answers already
-//! here when the run reaches them.
+//! describes is opened the first time somebody actually sends work — which also
+//! means the ask happens **once** however it was triggered.
 //!
-//! # Two names for one place are one wire
-//!
-//! The rule [`Path::shared`] states, enforced here because here is the only
-//! place that can see two hosts at once. Without it, a process named twice gets
-//! provisioned twice — and since a worker has one catalog, the second half
-//! replaces the first and takes every activation with it.
+//! **Two names for one place are one wire**, the rule [`Path::shared`] states,
+//! enforced here because here is the only place that can see two hosts at once.
+//! Without it a process named twice gets provisioned twice, and since a worker
+//! has one catalog, the second half replaces the first and takes every
+//! activation with it.
 
 use crate::{Ask, Embedded, Endpoint, Host, Needs, Path, Reply, Unanswered};
 use somatize_core::{Codec, TransportError};
@@ -71,8 +61,7 @@ impl Session {
     /// Where this host is, asking the broker if nobody has yet.
     ///
     /// Public because deciding what to pack needs it before the run starts:
-    /// what goes to a host depends on which hosts are the same place, and that
-    /// is what this answers.
+    /// what goes to a host depends on which hosts are the same place.
     pub fn find(&self, host: &Host) -> Result<Path, TransportError> {
         let mut found = locked(&self.found);
         if let Some(path) = found.get(host) {
@@ -114,10 +103,10 @@ impl Session {
 
     /// The wire to this host, opening it if this is the first work for it.
     ///
-    /// `carries` is what to provision the far side with. Handed to the wire when
-    /// it is born and only sent if the far side asks for it — and if this wire
-    /// was already open for another name of the same place, the artifact is the
-    /// same one by construction, which the wire treats as nothing to do.
+    /// `carries` is what to provision the far side with, handed to the wire when
+    /// it is born and only sent if the far side asks. If this wire was already
+    /// open for another name of the same place, the artifact is the same one by
+    /// construction, which the wire treats as nothing to do.
     pub fn wire(
         &self,
         host: &Host,
@@ -149,14 +138,13 @@ impl Session {
     /// A token that is **equal for two hosts that share a wire** and different
     /// for two that do not.
     ///
-    /// It exists for whoever decides what to pack. A worker has one catalog, so
-    /// what is packed is packed per *wire* and not per *name* — and the only
+    /// It exists for whoever decides what to pack: a worker has one catalog, so
+    /// what is packed is packed per *wire* and not per *name*, and the only
     /// thing that knows which names are one wire is this. Handing out a token
-    /// rather than the path keeps the rule here: a caller can group by equality
-    /// without learning what a path is or when two of them count as one.
+    /// rather than the path keeps the rule here.
     ///
     /// The bytes of the path itself, so two tokens are equal exactly when the
-    /// paths are — and with the host appended when the path is not shared, so a
+    /// paths are — with the host appended when the path is not shared, so a
     /// command listed twice is two tokens and gets run twice.
     pub fn wire_token(&self, host: &Host) -> Result<Vec<u8>, TransportError> {
         let path = self.find(host)?;
@@ -209,10 +197,9 @@ impl Session {
                     ))
                 })?
             }
-            // In the message since the first version on purpose, so that the day
-            // the negotiation picks one it is new behaviour and not a new
-            // protocol. Until then, saying so beats failing further down as a
-            // connection that never happened.
+            // In the message since the first version on purpose, so that the
+            // day the negotiation picks one it is new behaviour and not a new
+            // protocol.
             not_yet => {
                 return Err(TransportError::new(format!(
                     "the broker put `{host}` {not_yet}, and this client only knows how to \

@@ -46,9 +46,6 @@ def trained(g, store, steps=3, **how):
     return recorder
 
 
-# ── What is in here at all ──
-
-
 def test_a_store_says_which_runs_it_holds(g, store):
     trained(g, store)
 
@@ -74,9 +71,6 @@ def test_a_store_nobody_recorded_into_says_so_rather_than_failing(store):
     assert forwards(store, run="never") == []
 
 
-# ── Step by step, which is the free one ──
-
-
 def test_every_forward_comes_back_in_order_with_its_numbers_as_numbers(g, store):
     trained(g, store)
 
@@ -95,9 +89,6 @@ def test_a_forward_that_broke_is_visible_without_reading_its_blob(store):
     (row,) = forwards(store, run="tuesday")
     assert row["state"] == "broke"
     assert row["nodes"] == 1, "only the one that got to run"
-
-
-# ── The curve, which is the one everybody draws ──
 
 
 def test_a_summarised_loss_is_read_with_one_scan(g, store):
@@ -124,9 +115,6 @@ def test_anything_a_fact_carries_can_be_a_curve(g, store):
     drawn = curve(store, run="tuesday", of="took_us")
     assert [forward for forward, _ in drawn] == [0, 1, 2]
     assert all(took > 0 for _, took in drawn)
-
-
-# ── The detail, and the aggregate ──
 
 
 def test_the_facts_of_one_forward_are_what_was_seen_live(g, store):
@@ -176,9 +164,6 @@ def test_a_node_that_was_read_back_is_not_averaged_as_a_fast_one(tmp_path):
     assert a["ran"] == 1, "the second one was read back"
     assert a["recalled"] == 1
     assert a["mean_us"] == a["took_us"], "over the one time it really ran"
-
-
-# ── The fleet, which is the record turned the other way up ──
 
 
 def test_a_run_says_what_each_machine_did(tmp_path):
@@ -340,9 +325,6 @@ def test_a_run_with_nobody_else_in_it_says_nothing_about_machines(tmp_path):
 
     assert here["host"] == "here"
     assert here["busy"] is None and here["served"] is None
-
-
-# ── The idle half, which is the one no connection can carry ──
 
 
 def _standing(store, port, seconds="0.3"):

@@ -16,8 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///
 /// The rules travel with the answer on purpose. *Quiet* is not a fact in the
 /// store, it is a bound somebody chose, and a screen that showed it without
-/// saying which bound would be presenting an opinion as a reading — which is
-/// the one thing this whole section refuses to do.
+/// saying which bound would be presenting an opinion as a reading.
 #[derive(Debug, Clone, Serialize)]
 pub struct Fleet {
     /// The machines, by what they call themselves.
@@ -36,39 +35,28 @@ pub struct Fleet {
     /// where it is worth it: the honest hole in measuring writer against writer
     /// is that a fleet where *everything* stopped has no newest write to be
     /// behind, so nothing looks quiet — and that is exactly when somebody is
-    /// looking. Said once, about the whole fleet, and attributed.
-    ///
-    /// It can be negative: a worker whose clock runs ahead writes a stamp in
-    /// this reader's future, and saying `-4` is more use than pretending it is
-    /// zero. `None` is a store nobody has ever written a reading into.
+    /// looking. It can be negative, and saying `-4` is more use than pretending
+    /// it is zero; `None` is a store nobody has written a reading into.
     pub since_newest_s: Option<i64>,
 }
 
 impl Fleet {
     /// Everything writing into this store.
     ///
-    /// # Writer against writer, and never against this clock
-    ///
     /// How far behind each machine is, is measured against **the newest reading
     /// in this store** and not against the clock of whoever is asking. Those are
     /// two clocks on two machines, and on a cluster they disagree by minutes as
     /// a matter of course — so a panel run from a laptop whose clock drifted
-    /// would declare a working fleet dead, or a dead one working, and be
-    /// confident about it either way.
+    /// would declare a working fleet dead, or a dead one working.
     ///
     /// It has an honest hole and the answer carries it: a fleet where
     /// **everything** stopped has no newest write to be behind, so nothing looks
-    /// quiet. That is what [`Fleet::since_newest_s`] is for — one crossing
-    /// between clocks, at the level where it is worth making, and labelled.
+    /// quiet. That is what [`Fleet::since_newest_s`] is for.
     ///
-    /// `quiet_after` is **told and not derived**, and that is not laziness: the
-    /// store keeps one reading per machine and rewrites it, so there is no
-    /// history to work a cadence out of. A worker's `--reporting` interval is
-    /// whoever started it's business, and a panel that guessed it would call a
-    /// machine dead for reporting slowly.
-    ///
-    /// `read_records` bounds the join. It costs a fetch each; the rest is a
-    /// scan.
+    /// `quiet_after` is **told and not derived**: the store keeps one reading
+    /// per machine and rewrites it, so there is no history to work a cadence out
+    /// of, and a panel that guessed would call a machine dead for reporting
+    /// slowly. `read_records` bounds the join — a fetch each; the rest is a scan.
     pub fn read(
         store: &dyn Store,
         quiet_after: u64,
@@ -128,7 +116,6 @@ impl Fleet {
 /// The head of the name a reading is filed under.
 ///
 /// The wire's `filed` builds the whole thing and owns the decision; this is the
-/// prefix a scan filters on, which is the one part of it a reader needs and the
-/// one part a name cannot be taken apart without. That the two still agree is a
-/// test and not a comment — `tests/unit/fleet.rs` asks `filed` itself.
+/// prefix a scan filters on. That the two still agree is a test and not a
+/// comment — `tests/unit/fleet.rs` asks `filed` itself.
 static FILED: &str = "machine/";

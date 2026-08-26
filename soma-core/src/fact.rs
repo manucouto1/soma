@@ -1,40 +1,18 @@
-//! What happened while a plan ran: the vocabulary of level 1, which is the
-//! engine's.
+//! What happened while a plan ran: the vocabulary of level 1, the engine's.
 //!
-//! A **fact and not a judgement**. Whether 400 ms is slow, whether a gradient is
-//! dying, whether a hit rate is bad — none of that is here, and that is the
-//! split CU19 drew: the record is what happened, the diagnosis is an opinion
-//! about it, and the invariant is that the opinion has to be reproducible from
-//! the record without running again.
+//! A fact and not a judgement. Whether 400 ms is slow or a gradient is dying is
+//! an opinion about the record, and the invariant is that the opinion has to be
+//! reproducible from the record without running again.
 //!
-//! # Why an enum, and why it may grow large
+//! An enum because the set is closed and the engine knows it. What the original
+//! got wrong was not the number of variants but putting three vocabularies in
+//! one — a fact beside an opinion about facts. Here each level keeps its own:
+//! this is the engine's, a training run's is Python's, a study's is a record on
+//! disk. **They do not meet in Rust, they meet in the record**, and
+//! [`Fact::flattened`] is that meeting: a name and text-to-text pairs.
 //!
-//! Because the set is closed and the engine knows it: there are only so many
-//! things a walk can see, and when one is added the compiler finds every
-//! `match`. What the original got wrong was not the **number** of variants — it
-//! was putting three vocabularies in one, so `NodeStarted` (a fact) sat beside
-//! `HealthFlag` (an opinion) beside seven variants of a layer that no longer
-//! exists.
-//!
-//! Here each level keeps its own vocabulary in its own language: this is the
-//! engine's, the trainer's is Python's, and the study's has been a record on
-//! disk since CU18. **They do not meet in Rust — they meet in the record.**
-//!
-//! # Emitted as an enum, written down as pairs
-//!
-//! [`Fact::flattened`] is the whole of that meeting: a name and text-to-text
-//! fields, which is the shape [`Meta`] already has in the store. What is typed
-//! stays typed where the compiler can help, and what crosses to another
-//! vocabulary crosses as the flattest thing there is.
-//!
-//! [`Meta`]: https://docs.rs/somatize-store
-//!
-//! # Durations and not instants
-//!
-//! Every measurement here is a [`Duration`], deliberately. A fact from another
-//! machine is worth reading — a node took 12 ms over there — while a wall clock
-//! from another machine is two clocks that disagree, which is the problem CU18
-//! already solved by comparing writers with writers. **When** something was
+//! Every measurement is a [`Duration`] and never an instant. A duration from
+//! another machine is worth reading; two wall clocks disagree. **When** it was
 //! written down is the store's business, and it stamps it.
 
 use crate::{Device, Host, Key, NodeId};
@@ -48,40 +26,28 @@ pub enum Fact {
     Ran {
         /// Which one.
         node: NodeId,
-        /// How long after this run started it began.
-        ///
-        /// A **duration and not an instant**, like everything else here, and
-        /// that is what lets it mean something from another machine: an offset
-        /// into a slice is a fact about the slice. A slice that ran elsewhere
-        /// counts from **its own** start, so whoever draws a timeline adds the
-        /// offset of the [`Fact::Left`] it arrived under. Two wall clocks would
-        /// not have composed at all.
+        /// How long after this run started it began. An offset into a slice
+        /// is a fact about the slice, so one that ran elsewhere counts from its
+        /// own start and a timeline adds the [`Fact::Left`] it arrived under.
         began: Duration,
-        /// How long its `forward` took, and nothing else: whatever it did in
-        /// there — a retry, three rounds of something — is inside that number
-        /// because the engine does not look inside a node.
+        /// How long its `forward` took. Whatever it did in there is inside
+        /// that number: the engine does not look inside a node.
         took: Duration,
         /// Where it was told to run, if it was told.
         device: Option<Device>,
     },
-    /// A node was advanced and did not answer.
-    ///
-    /// Emitted **before** the run stops, which is the point: without it the
-    /// only thing left is a `RunError` at the top, and which node it was has to
-    /// be read out of a message.
+    /// A node was advanced and did not answer. Emitted **before** the run
+    /// stops, so a watcher learns which node while it is happening.
     Failed {
         /// Which one.
         node: NodeId,
         /// What it said.
         why: String,
     },
-    /// A node was not run because nobody needed what it makes: everything that
-    /// reads it had its answer kept already.
+    /// A node was not run because nobody needed what it makes.
     ///
-    /// It is a fact and not an absence on purpose. A node that is simply not in
-    /// the record cannot be told from one that was never in the graph, and
-    /// *why is there no time for `clean`* is a question somebody reading a run
-    /// will have.
+    /// A fact and not an absence: a node missing from a record cannot be told
+    /// from one that was never in the graph.
     Spared {
         /// Which one.
         node: NodeId,
@@ -101,11 +67,8 @@ pub enum Fact {
         /// The name it was written under.
         key: Key,
     },
-    /// A node that maps over its items, item by item.
-    ///
-    /// The grain that CU16 separated: a node named once per item runs for the
-    /// ones that are new and reads the rest back, so one number is not enough to
-    /// say what happened.
+    /// A node that maps over its items, item by item — it runs the new ones
+    /// and reads the rest back, so one number would not say what happened.
     Items {
         /// Which one.
         node: NodeId,
@@ -114,11 +77,8 @@ pub enum Fact {
         /// How many of them did not have to be computed.
         recalled: usize,
     },
-    /// A slice of the plan crossed to another machine, and came back.
-    ///
-    /// `took` is the whole round trip, wire included — which is the number that
-    /// answers whether sending it was worth it, and it is not the sum of what
-    /// happened over there.
+    /// A slice of the plan crossed to another machine, and came back. `took`
+    /// is the whole round trip, which is not the sum of what happened there.
     Left {
         /// Whose machine.
         host: Host,
@@ -127,13 +87,9 @@ pub enum Fact {
         /// How long the round trip took.
         took: Duration,
     },
-    /// And this is what happened over there.
-    ///
-    /// Recursive so that a slice which carries on to a third host still says
-    /// where each thing happened, and so that **nothing that travelled has to be
-    /// rewritten**: whoever relays wraps, and the engine over there emits
-    /// exactly what it would emit at home. Flattening turns the nesting into a
-    /// `host` field, so the written form is flat.
+    /// And this is what happened over there. Recursive, so a slice that
+    /// carried on to a third host still says where each thing happened and
+    /// nothing that travelled is rewritten; flattening turns it into a `host`.
     Elsewhere {
         /// Whose machine.
         host: Host,
@@ -142,43 +98,25 @@ pub enum Fact {
     },
     /// A level that is **not** the engine had something to say, already flat.
     ///
-    /// The carrier and not the vocabulary. The core does not learn what a load
-    /// average is, the same way it never learned what a loss is — what it
-    /// learns is that other levels exist and that one of them may be speaking
-    /// from **another machine**, where a Python object cannot reach the
-    /// notebook and only bytes can.
-    ///
-    /// `(kind, pairs)` is not a new shape either: it is exactly what
-    /// [`flattened`](Fact::flattened) produces, which CU20 named as the one
-    /// place the vocabularies meet. So this crosses the wire in the message
-    /// that already exists, gets wrapped in [`Fact::Elsewhere`] like everything
-    /// else, and arrives saying which host it came from without anybody having
-    /// to attribute it.
-    ///
-    /// Level 2 does **not** use this: a loss is computed where the notebook is
-    /// and goes straight into the record. This is for a level that is over
-    /// there.
+    /// The carrier and not the vocabulary: the core does not learn what a load
+    /// average is, only that other levels exist and one may be speaking from
+    /// another machine. Not for level 2, whose loss is computed where the
+    /// notebook is and goes straight into the record.
     Said {
         /// What kind of thing it is, which is what it will be written down as.
         kind: String,
         /// And its fields, text to text, already in the written form.
         pairs: Vec<(String, String)>,
     },
-    /// The whole thing is over.
-    ///
-    /// Emitted by [`Executor::run`](crate::Executor::run) and **not** by
-    /// [`resume`](crate::Executor::resume): a `forward` is a run, and a slice
-    /// executed for somebody else is not one. It is what tells whoever is
-    /// writing where one record ends and the next begins.
+    /// The whole thing is over. Emitted by [`Executor::run`](crate::Executor::run)
+    /// and not by [`resume`](crate::Executor::resume): a slice is not a
+    /// `forward`. It is what tells a writer where one record ends.
     Finished {
         /// How long all of it took.
         took: Duration,
     },
-    /// ...or it is over because of this.
-    ///
-    /// The other terminal fact, so a record is closed either way. What went
-    /// wrong at the level of the run: a host nobody could reach, a value that
-    /// could not travel. A node that failed said so as [`Fact::Failed`] first.
+    /// ...or it is over because of this: the other terminal fact, so a record
+    /// is closed either way. A node that failed said so as [`Fact::Failed`].
     Broke {
         /// What stopped it.
         why: String,
@@ -189,16 +127,8 @@ impl Fact {
     /// This fact as a name and text-to-text fields: **how it is written down**,
     /// which is not how it is emitted.
     ///
-    /// The one place the three vocabularies can meet, and the reason the core
-    /// never learns what a loss is: level 2 produces this shape directly from
-    /// Python and lands in the same record, beside these.
-    ///
     /// [`Fact::Elsewhere`] does not survive as a name — it becomes a `host`
-    /// field on whatever it wrapped, so a reader has columns and not a tree.
-    /// The name borrows from `self` rather than being `&'static`: a
-    /// [`Fact::Said`] carries a kind that came off a wire, so it is a `String`
-    /// and there is nothing static about it. Every other variant still hands
-    /// back a literal, which coerces.
+    /// field on whatever it wrapped, so a reader gets columns and not a tree.
     pub fn flattened(&self) -> (&str, Vec<(String, String)>) {
         match self {
             Self::Ran {
@@ -255,9 +185,8 @@ impl Fact {
                     took_us(took),
                 ],
             ),
-            // Already flat, and it stays that way. Copying it into another
-            // shape here would be this crate deciding something about a
-            // vocabulary it deliberately does not know.
+            // Already flat, and reshaping it here would be this crate deciding
+            // something about a vocabulary it does not know.
             Self::Said { kind, pairs } => (kind.as_str(), pairs.clone()),
             Self::Elsewhere { host, saw } => {
                 let (kind, mut said) = saw.flattened();
@@ -271,19 +200,15 @@ impl Fact {
         }
     }
 
-    /// Whether this fact ends a run, whichever way it ended.
-    ///
-    /// Asked by whoever writes records so it does not have to know the
-    /// vocabulary: a variant added later that also ends one is added here and
-    /// every writer follows.
+    /// Whether this fact ends a run, whichever way. Asked by whoever writes
+    /// records so it does not have to know the vocabulary.
     pub fn ends_a_run(&self) -> bool {
         matches!(self, Self::Finished { .. } | Self::Broke { .. })
     }
 }
 
-/// A duration as whole microseconds. An integer and not a float because this is
-/// text that somebody reads with `cat` and something else parses, and neither
-/// should have to think about how many decimals were written.
+/// A duration as whole microseconds — an integer, because this is text somebody
+/// reads with `cat` and something else parses.
 fn took_us(took: &Duration) -> (String, String) {
     ("took_us".into(), took.as_micros().to_string())
 }

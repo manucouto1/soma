@@ -20,19 +20,10 @@ use ::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 /// memory.freeze("sms", Some(sms.version().to_string()));   // and it cost no bytes
 /// ```
 ///
-/// # It reads nothing until it is asked
-///
 /// Declaring it resolves the name and stops there: a graph that names a dataset
-/// has not opened it, which is the half of a virtual table that is actually
-/// worth having. The bytes arrive on the first span and are held from then on.
-///
-/// # It reads the version it stated, not the name it was given
-///
-/// A name in a store points at a digest, and this keeps the **digest**. So a
-/// dataset rebound under the same name while a run is in flight does not change
-/// what that run is reading, and the key the cache computed still describes the
-/// rows that went in. Resolving once is not an optimization, it is what makes
-/// the version true.
+/// has not opened it. And it keeps the **digest**, not the name, so a dataset
+/// rebound mid-run does not change what that run is reading — resolving once is
+/// what makes the version true.
 pub struct Parquet {
     store: Arc<dyn Store>,
     name: String,
@@ -59,11 +50,9 @@ impl Parquet {
         })
     }
 
-    /// What this dataset is, for the key of everything computed from it.
-    ///
-    /// The digest of the content, which the store had already worked out when
-    /// the bytes were put there. This is what goes to `Memory::freeze`, and it
-    /// is the reason a source can be settled without reading itself.
+    /// What this dataset is, for the key of everything computed from it: the
+    /// digest of the content, which the store had already worked out. This is
+    /// what lets a source be settled without reading itself.
     pub fn version(&self) -> &str {
         self.version.as_str()
     }
@@ -74,11 +63,8 @@ impl Parquet {
         &self.name
     }
 
-    /// The rows that span names.
-    ///
-    /// Short is not an error: the last span of a dataset is whatever is left,
-    /// and one past the end is a frame with no rows — which is how a reader
-    /// finds out it has arrived.
+    /// The rows that span names. Short is not an error: the last span is
+    /// whatever is left, and one past the end is a frame with no rows.
     pub fn read(&self, span: Span) -> Result<Frame, ParquetError> {
         let file = self.file()?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file.clone())

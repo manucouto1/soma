@@ -1,19 +1,15 @@
 //! What is known about the samples being cut, which is never the samples.
 //!
 //! A [`Partition`](crate::Partition) is given how many there are and, when the
-//! cut needs it, one `u32` per sample saying which class it belongs to or which
-//! group it travels with. Nothing else. The labels are a tensor and the tensor
-//! stays in Python: what crosses is the class **as a number**, and turning `y`
-//! into those numbers is one line where `y` already lives.
-//!
-//! That is the whole reason cross-validation can be Rust without the core ever
-//! learning what a dataset is.
+//! cut needs it, one `u32` per sample for its class or its group. The labels are
+//! a tensor and the tensor stays in Python: what crosses is the class **as a
+//! number**. That is the whole reason cross-validation can be Rust without the
+//! core ever learning what a dataset is.
 
 use std::fmt;
 
-/// How many samples there are, and what is known about each of them.
-///
-/// Built up, because most cuts need only the count:
+/// How many samples there are, and what is known about each. Built up, because
+/// most cuts need only the count:
 ///
 /// ```
 /// use somatize_study::Samples;

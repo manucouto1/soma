@@ -35,8 +35,7 @@ enum What {
         ///
         /// Told and not derived: the store keeps one reading per machine and
         /// rewrites it, so there is no cadence in there to work out. Three
-        /// times a common `--reporting 30`, so a worker that reports slowly is
-        /// not called dead for it.
+        /// times a common `--reporting 30`.
         #[arg(long, default_value_t = 90)]
         quiet_after: u64,
         /// How many records to read to learn what the graphs call these
@@ -65,8 +64,7 @@ enum What {
     ///
     /// What it writes is what a worker and a run write, through the store's own
     /// types — so the screens draw from it exactly what they draw from a
-    /// cluster. It is a fixture and it says so; nothing else in this binary
-    /// invents anything.
+    /// cluster. It is a fixture and it says so.
     Seed {
         /// Where to write it. Anything already there is left alone.
         #[arg(long)]

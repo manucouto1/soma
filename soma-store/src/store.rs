@@ -4,13 +4,8 @@ use crate::Digest;
 use std::fmt;
 
 /// What you want to remember about something you stored, in the order you say
-/// it: the code's fingerprint, which run produced it, what it is.
-///
-/// Text and not a closed type because the vocabulary is the caller's — the same
-/// division of labour as an [`Artifact`]'s `kind`. What this crate does with it
-/// is write it down and hand it back.
-///
-/// [`Artifact`]: https://docs.rs/somatize-fabric-wire
+/// it. Text and not a closed type because the vocabulary is the caller's; what
+/// this crate does with it is write it down and hand it back.
 pub type Meta = Vec<(String, String)>;
 
 /// A name, what it points at, and what was said about it.
@@ -45,25 +40,19 @@ pub trait Store: Send + Sync {
     /// Points a name at some bytes **only if nobody has**, and says whether it
     /// did. This is how work gets handed out.
     ///
-    /// Not `resolve` and then `bind`: between the two, somebody else does the
-    /// same, and two machines train the same round while nobody trains the next
-    /// one. It has to be **one** operation that either takes the name or finds
-    /// it taken, which is why it is on the trait and has no default — a default
-    /// written out of the other two would be a race with a doc comment on it.
-    ///
-    /// Whoever claims it does the work. Whoever is told `false` goes and asks
-    /// for the next thing.
+    /// Not `resolve` then `bind`: between the two somebody else does the same,
+    /// and two machines train the same round while nobody trains the next. Hence
+    /// on the trait with no default — one written out of the other two would be
+    /// a race with a doc comment on it.
     fn claim(&self, name: &str, digest: &Digest, meta: Meta) -> Result<bool, StoreError>;
 
     /// What that name points at, if anything.
     fn resolve(&self, name: &str) -> Result<Option<Bound>, StoreError>;
 
-    /// The same for many at once, answering in the order they were asked.
-    ///
-    /// In the trait from the first day, and not for symmetry: a cache that works
-    /// item by item asks thousands at a time, and against a store on the far end
-    /// of a network that is thousands of round trips unless it is one call. The
-    /// default is the loop; whoever can do better overrides it.
+    /// The same for many at once, in the order they were asked. In the trait
+    /// from the first day: a cache that works item by item asks thousands at a
+    /// time, which against a remote store is thousands of round trips unless it
+    /// is one call. The default is the loop.
     fn resolve_many(&self, names: &[&str]) -> Result<Vec<Option<Bound>>, StoreError> {
         names.iter().map(|name| self.resolve(name)).collect()
     }
@@ -73,23 +62,15 @@ pub trait Store: Send + Sync {
         digests.iter().map(|digest| self.get(digest)).collect()
     }
 
-    /// Everything bound here, for whoever wants to look at what there is.
-    ///
-    /// A scan, and that is the point: the records are the truth, and an index
-    /// that answers this faster is something you build from them and can throw
+    /// Everything bound here. A scan, and that is the point: the records are the
+    /// truth, and an index that answers faster is built from them and thrown
     /// away.
     fn bound(&self) -> Result<Vec<Bound>, StoreError>;
 }
 
-/// One record, in the JSON it is kept as.
-///
-/// Readable with `cat`, which was a requirement before it was a format: a store
-/// whose truth you cannot look at is one you cannot debug at three in the
-/// morning.
-///
-/// **Here and not in an implementor**, because it is what makes a directory and
-/// a bucket the same store: two copies of this would drift, and the day they did
-/// nothing would fail — the records would simply stop being each other's.
+/// One record, in the JSON it is kept as — readable with `cat`, which was a
+/// requirement before it was a format. Here and not in an implementor, because
+/// it is what makes a directory and a bucket the same store.
 pub(crate) fn record(name: &str, digest: &Digest, meta: Meta) -> Result<Vec<u8>, StoreError> {
     let bound = Bound {
         name: name.to_string(),

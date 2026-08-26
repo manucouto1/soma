@@ -71,9 +71,6 @@ def in_another_process(building):
     return said.stdout.strip()
 
 
-# ── Faithful: two declarations, two texts ──
-
-
 def test_two_arguments_are_two_declarations():
     assert digest(Embed(512)) != digest(Embed(64))
 
@@ -100,9 +97,6 @@ def test_a_mapping_built_in_another_order_is_the_same_mapping():
 
 def test_and_another_mapping_is_not():
     assert digest(Holds(c={"a": 1})) != digest(Holds(c={"a": 2}))
-
-
-# ── Steady: one declaration, one text, in any process ──
 
 
 def test_a_set_is_written_down_in_an_order_of_its_own():
@@ -136,9 +130,6 @@ def test_what_a_node_holds_is_the_same_text_in_another_process():
     )
 
     assert here == there
-
-
-# ── And what can be neither is refused, saying which ──
 
 
 def test_a_repr_that_writes_its_own_address_is_refused():
@@ -239,9 +230,6 @@ def test_a_name_and_not_a_source_is_what_a_class_or_a_function_writes():
     assert written(Holds(cls=Helper, fn=len)) == "Holds(cls=Helper, fn=len)"
 
 
-# ── What the graph does with it ──
-
-
 def test_two_nodes_built_differently_are_not_kept_under_one_name(tmp_path):
     from somatize import foreseen
 
@@ -318,3 +306,4 @@ def test_what_a_node_keeps_for_itself_is_not_what_it_was_built_with():
 
     assert digest(it) == before
     assert written(it) == "Counts(dim=512)"
+

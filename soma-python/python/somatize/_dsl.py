@@ -3,18 +3,13 @@
     Graph.somatize(Source() >> (Left() | Right()) >> Mean())
 
 `>>` chains, `|` opens branches, `.on()` places on a device, `.at()` sends to
-another host, `.frozen()` says the state does not change and `.cached()` says
-the output is worth keeping. A `>>` between two open branches joins them: whatever leaves them
-all enters whatever comes next, which is exactly fan-in — the node on the right
-receives a map keyed by each branch.
+another host, `.frozen()` says the state does not change and `.cached()` says the
+output is worth keeping. A `>>` between two open branches joins them, which is
+fan-in: the node on the right receives a map keyed by each branch.
 
-There is **a single kind of node**, just as the core has a single trait: a node
-takes what arrived along the edges and returns what it produced. What elsewhere
-is called a filter and what is called a step are the same thing here, and there
-is no return type that could tell them apart.
-
-Mind the precedence, which is Python's (and the same in Rust): `>>` binds
-tighter than `|`, so the branches go in parentheses.
+There is **a single kind of node**, as the core has a single trait. Precedence is
+Python's, and the same in Rust: `>>` binds tighter than `|`, so the branches go
+in parentheses.
 """
 
 from __future__ import annotations
@@ -51,21 +46,17 @@ class Topology:
         return _fill(self, "device", device)
 
     def at(self, host: str) -> Piece:
-        """The same piece, in another process. The innermost one wins alike, and
-        **independently** of `.on()`, so the two can be written in any order.
-
-        A host is a **name**: what it resolves to is said by whoever executes,
-        with `forward(..., broker=Broker.embedded({...}))`.
+        """The same piece, in another process. The innermost one wins, and
+        **independently** of `.on()`, so the two can be written in any order. A
+        host is a **name**: what it resolves to is said by whoever executes.
         """
         return _fill(self, "host", host)
 
     def frozen(self) -> Piece:
         """The same piece, settled: its state does not change while the graph
-        runs. The innermost one wins alike.
-
-        Here it is **declared**; making it true is `somatize.torch.freeze`,
-        which turns the gradient off and hashes the weights. The same division as
-        `.on()`, where the core says where and the node moves itself.
+        runs. Here it is **declared**; making it true is `somatize.torch.freeze`,
+        the same division as `.on()`, where the core says where and the node
+        moves itself.
         """
         return _fill(self, "frozen", True)
 
@@ -73,29 +64,20 @@ class Topology:
         """The same piece, worth keeping: what each of its nodes produces is
         looked up before being computed, and kept after.
 
-        It costs to keep, so it is opt-in — and a node without it **does not
-        break the chain**: its key is still computed and passed on, it is just
-        not stored.
-
-        `salt` tells apart two runs the key cannot tell apart on its own:
-        `.cached(salt="a100-fp16")`. What is **not** in the key is the device,
-        nor the fingerprint of the code.
+        Opt-in, because keeping costs — and a node without it **does not break
+        the chain**: its key is still computed and passed on. `salt` tells apart
+        two runs the key cannot. Not in the key: the device, nor the fingerprint.
         """
         return _fill(self, "cached", _Kept(salt))
 
     def mapped(self) -> Piece:
-        """The same piece, mapping over the items of its input: hand it a list
-        and it answers with a list as long, item for item.
+        """The same piece, mapping over the items of its input: a list in, a list
+        as long out, item for item.
 
-        It is what gives a cache the grain of an **item**. Without it, adding one
-        document to a list of a thousand changes the name of the list and all
-        thousand miss; with it, the thousand are read back and the one runs.
-
-        The node is handed **only the items that are missing**, so it still
-        batches: what arrives is a list and what goes back is a list of the same
-        length, in the same order. An item is named after **itself** — the same
-        document in another list is the same item — which is why this is worth
-        anything and why its position would not do.
+        What gives a cache the grain of an **item** — without it, one new
+        document among a thousand makes all thousand miss. The node is handed
+        **only the items that are missing**, so it still batches, and an item is
+        named after **itself** rather than after its position.
         """
         return _fill(self, "mapped", True)
 
@@ -142,10 +124,8 @@ class Declared(Topology):
 
     What was said lives in a **dict** and not in four attributes, because
     `.frozen()` and `.cached()` are already methods of `Topology` and an
-    attribute of the same name would shadow them: you would declare one node and
-    then find the second `.frozen()` was not callable. A key that is not there
-    means nothing was said, which is not the same as having been said `None` —
-    `.cached(salt=None)` is a cache without salt.
+    attribute of the same name would shadow them. A key that is not there means
+    nothing was said, which is not `.cached(salt=None)`.
     """
 
     def __init__(self, obj: Node, node_id: str | None = None, **said: Any) -> None:
@@ -163,19 +143,12 @@ class Node(Topology, ABC):
     cannot be instantiated."""
 
     def __init_subclass__(cls, **said: Any) -> None:
-        """Remembers what each instance is **built with**, which is half of its
-        key — `Embed(512)` and `Embed(64)` are one class and two answers.
+        """Remembers what each instance is **built with**, which is half of its key.
 
-        Captured here and not read off the object afterwards, and that is the
-        whole point: what a node holds is not what it was built with. A node
-        that counts its calls, caches a client or moves a tensor onto a device
-        has attributes that **move while it runs**, and a key built from those
-        would change under a graph that never changed. What was passed to
-        `__init__` cannot move.
-
-        Bound against the signature, so `Layer(64, 32)`, `Layer(64, out=32)` and
-        `Layer(in_=64, out=32)` are one declaration and not three: a key that
-        depended on how the call was typed would miss for a rename.
+        Captured here and not read off the object afterwards, which is the whole
+        point: a node that counts its calls or caches a client has attributes
+        that move **while it runs**. Bound against the signature, so `Layer(64,
+        32)` and `Layer(in_=64, out=32)` are one declaration.
         """
         super().__init_subclass__(**said)
         from somatize import _declaration
@@ -195,12 +168,9 @@ class Node(Topology, ABC):
 
 
 def _fill(topology: Topology, field: str, value: Any) -> Piece:
-    """Hands one thing out to the leaves that were not told it already.
-
-    It is handed out at declaration time because a piece stops existing once
-    materialized: all of this is a per-node fact. Each field looks at only its
-    own, which is what makes them independent — a node can be settled without
-    being kept, placed without being settled, and any combination of the rest.
+    """Hands one thing out to the leaves that were not told it already. At
+    declaration time, because a piece stops existing once materialized. Each
+    field looks at only its own, which is what makes them independent.
     """
     # A new name and not a reassignment, so that "neither a `Chain` nor a
     # `Fork`" narrows to `Declared` and the two attribute reads below are
@@ -239,14 +209,10 @@ def _branches(topology: Topology) -> list[Topology]:
 
 
 def _note_the_code(g: "Graph", node_id: str, obj: object) -> None:
-    """Which version of the class this graph was written against.
-
-    **Metadata**, never part of a key: a cosmetic refactor must not invalidate
-    half a store in silence. It gets compared on a hit and said on `stderr`.
-
-    Only for what is kept, because computing it means parsing an AST. And a
-    class with no source to read — a notebook, an `exec` — simply has none: it
-    is a comparison that cannot be made, not a reason to fail.
+    """Which version of the class this graph was written against. **Metadata**,
+    never part of a key: a cosmetic refactor must not invalidate half a store in
+    silence, so it is compared on a hit and said on `stderr`. Only for what is
+    kept, since computing it means parsing an AST.
     """
     from somatize import _fingerprint
 

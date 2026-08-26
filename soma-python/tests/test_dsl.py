@@ -6,9 +6,6 @@ from conftest import Add, Mean
 from somatize import Graph, Node
 
 
-# ── Chaining ──
-
-
 def test_a_single_node_is_already_a_graph():
     g = Graph.somatize(Add(1))
     assert g.nodes() == ["add"]
@@ -25,9 +22,6 @@ def test_named_sets_the_id():
     g = Graph.somatize(Add(1).named("first") >> Add(10).named("second"))
     assert g.nodes() == ["first", "second"]
     assert g.edges() == [("first", "second")]
-
-
-# ── Opening and closing branches ──
 
 
 def test_a_diamond_reads_at_a_glance():
@@ -63,9 +57,6 @@ def test_three_branches():
     assert g.forward(0) == {"a": 1.0, "b": 2.0, "c": 3.0}
 
 
-# ── The class forces it, and it is the DSL's only door ──
-
-
 def test_the_class_forces_forward_to_be_implemented():
     class WithoutForward(Node):
         pass
@@ -95,9 +86,6 @@ def test_an_outside_object_still_comes_in_through_the_lower_door(g):
 
     g.node("foreign", Foreign())
     assert g.forward(21) == 42.0
-
-
-# ── The DSL and the calls build the same thing ──
 
 
 def test_the_dsl_is_nothing_but_node_and_edge():

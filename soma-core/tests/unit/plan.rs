@@ -1,11 +1,8 @@
 //! Compiling: from the structure to the decided shape.
 //!
-//! Half of this file checks **concrete shapes** — which tree comes out of which
-//! graph — and the other half **invariants** that have to hold for any graph:
-//! that no node executes twice, that none is left out, and that the order the
-//! plan dictates respects the edges. The invariants are the ones that would
-//! have caught the bug that killed `Plan::Parallel` in CU4, which is why they
-//! run over a battery of topologies and not over one.
+//! Half concrete shapes — which tree comes out of which graph — and half
+//! invariants that hold for any graph. The invariants are what would have caught
+//! the bug that killed `Plan::Parallel`, hence a battery and not one case.
 
 use crate::doubles::Add;
 use somatize_core::{
@@ -44,8 +41,6 @@ fn plan_of(nodes: &[&str], edges: &[(&str, &str)]) -> Plan {
     let (g, c) = graph_with(nodes, edges);
     compile(&g, &c).unwrap()
 }
-
-// ── The usual, which does not change ──
 
 #[test]
 fn an_empty_graph_compiles_to_nothing() {
@@ -99,8 +94,6 @@ fn a_node_without_an_implementation_never_gets_to_execute() {
     );
 }
 
-// ── The shapes: which tree comes out of which graph ──
-
 #[test]
 fn two_loose_nodes_are_a_wave_of_two_branches() {
     // With no edges at all, the graph is two components: `a | b`.
@@ -143,9 +136,8 @@ fn closing_two_branches_is_one_node_reading_from_two() {
 
 #[test]
 fn a_diamond_executes_the_join_node_exactly_once() {
-    // The case that broke `Plan::Parallel` in CU4: its branches overlapped and
-    // `join` ended up in both. Here the branches are connected components, so
-    // `join` cannot be in either: it is emitted outside the wave.
+    // The case that broke `Plan::Parallel`: its branches overlapped and `join`
+    // ended up in both. Connected components cannot, so it is emitted outside.
     assert_eq!(
         plan_of(
             &["source", "left", "right", "join"],
@@ -169,9 +161,8 @@ fn a_diamond_executes_the_join_node_exactly_once() {
 
 #[test]
 fn a_branch_of_several_nodes_is_a_single_branch_of_the_wave() {
-    // `a >> (b >> b2 >> b3 | c >> c2) >> d`. It is the case that rules out
-    // grouping by topological level: this way `b2` does not wait on `c`, and
-    // the whole branch fits on one thread.
+    // `a >> (b >> b2 >> b3 | c >> c2) >> d`, which rules out grouping by
+    // topological level: `b2` does not wait on `c` and the branch fits a thread.
     assert_eq!(
         plan_of(
             &["a", "b", "b2", "b3", "c", "c2", "d"],
@@ -202,11 +193,9 @@ fn a_branch_of_several_nodes_is_a_single_branch_of_the_wave() {
 
 #[test]
 fn the_series_cut_does_not_split_a_branch_down_the_middle() {
-    // `(a >> a2 | b) >> (c | d)`. Here there is no node everything passes
-    // through, so looking for a "barrier node" would fail and end up putting
-    // `a` in a wave with `b` and leaving `a2` loose. The series cut looks at
-    // both whole ends, which is why it recovers the `a >> a2` branch in one
-    // piece.
+    // `(a >> a2 | b) >> (c | d)`. No node everything passes through, so a
+    // "barrier node" would put `a` in a wave with `b` and leave `a2` loose. The
+    // series cut looks at both whole ends and recovers `a >> a2` in one piece.
     assert_eq!(
         plan_of(
             &["a", "a2", "b", "c", "d"],
@@ -302,16 +291,11 @@ fn two_unrelated_graphs_are_two_branches_even_if_each_is_long() {
     );
 }
 
-// ── What is not series-parallel ──
-
 #[test]
 fn the_n_has_no_tree_and_is_walked_in_sequence() {
     // `a→c, a→d, b→d` is the minimal pattern that is not series-parallel
-    // (Valdes, Tarjan and Lawler, 1982). There is neither a cut nor components,
-    // so it is walked as before waves existed: in a row, without parallelism.
-    //
-    // And it cannot be written with the DSL: `>>` and `|` only generate
-    // series-parallel graphs. Getting here requires `node()`/`edge()`.
+    // (Valdes, Tarjan and Lawler, 1982): no cut and no components, so it is
+    // walked in a row. It cannot be written with the DSL.
     assert_eq!(
         plan_of(&["a", "b", "c", "d"], &[("a", "c"), ("a", "d"), ("b", "d")]),
         Plan::Sequence(vec![
@@ -340,8 +324,6 @@ fn an_n_does_not_spoil_the_parallelism_of_what_sits_beside_it() {
     );
     assert_eq!(branches[1], execute("other", &[]));
 }
-
-// ── Invariants: they hold for any graph ──
 
 /// One topology from the battery. It is named so the failure says which it was.
 struct Topology {
@@ -432,10 +414,8 @@ fn battery() -> Vec<Topology> {
     ]
 }
 
-/// The plan's steps, in the order they would execute.
-///
-/// A wave's branches are flattened one after another: since they are
-/// independent, any interleaving will do, and that is the easiest to read.
+/// The plan's steps, in the order they would execute. A wave's branches are
+/// flattened one after another: they are independent, so any interleaving does.
 fn steps(plan: &Plan) -> Vec<(NodeId, Vec<NodeId>)> {
     // The core walks its own plan now; this is here so the invariants below read
     // as they did, and so a change to that walk is felt from outside the crate.
@@ -508,9 +488,8 @@ fn every_step_declares_exactly_its_predecessors_in_the_graph() {
 
 #[test]
 fn the_branches_of_a_wave_share_no_node() {
-    // It is what makes merging what each branch produced unable to clobber
-    // anything, and it falls out for free from the branches being connected
-    // components.
+    // What makes merging what each branch produced unable to clobber anything,
+    // and it is free from the branches being connected components.
     fn check(plan: &Plan, name: &str) {
         match plan {
             Plan::Empty | Plan::Execute { .. } => {}
@@ -548,13 +527,6 @@ fn the_same_graph_always_compiles_the_same() {
     }
 }
 
-// ── Distribution: which slices travel together ──
-//
-// `compile` does not see the placement and `distribute` does. These tests are
-// the half the other step cannot have: the shape that comes out of a plan **and**
-// a map of hosts. None of them builds an executor, because distributing is not
-// executing.
-
 fn placed(hosts: &[(&str, &str)]) -> Placement {
     let mut placement = Placement::new();
     for (id, host) in hosts {
@@ -577,9 +549,8 @@ fn at(host: &str, inner: Plan) -> Plan {
 
 #[test]
 fn without_any_host_the_plan_comes_out_identical() {
-    // The guarantee bought by separating `compile` from `distribute`: as long as
-    // nobody places a host, the second step does not exist. Over the whole
-    // battery, not over one case.
+    // What separating `compile` from `distribute` buys: with nobody placing a
+    // host, the second step does not exist. Over the battery, not one case.
     for Topology { name, nodes, edges } in battery() {
         let (g, c) = graph_with(&nodes, &edges);
         let plan = compile(&g, &c).unwrap();
@@ -626,9 +597,8 @@ fn a_whole_chain_on_one_host_is_a_single_trip() {
 
 #[test]
 fn a_consecutive_run_is_not_split_into_one_trip_per_node() {
-    // The one that really catches the bug: `decompose` leaves sequences flat, so
-    // wrapping child by child would give three consecutive `Remote`s for what is
-    // a single trip.
+    // The one that catches the bug: `decompose` leaves sequences flat, so
+    // wrapping child by child would give three `Remote`s for one trip.
     assert_eq!(
         distributed(
             &["a", "b", "c", "d"],
@@ -792,8 +762,6 @@ fn the_same_plan_and_the_same_placement_always_distribute_the_same() {
         assert_eq!(distribute(&plan, &placement), first);
     }
 }
-
-// ── The two ways of walking a plan ──
 
 #[test]
 fn the_steps_come_out_in_the_order_they_were_declared() {

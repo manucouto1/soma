@@ -1,74 +1,32 @@
 """What a node was built with: `Embed(dim=512, dropout=0.1)`, and its digest.
 
 `Embed(512)` and `Embed(64)` are one class, one identity and **two different
-answers**. Without this they share a name in a store, and the second one is
-handed the first one's — no error, no warning, the wrong tensor. It is the same
-failure a checkpoint nobody hashed has, and it is in a key for the same reason.
-
-## What was passed in, and not what is lying around
+answers**. Without this they share a name in a store and the second is handed the
+first one's — no error, no warning, the wrong tensor.
 
 The declaration is **what was handed to `__init__`**, captured there, and not
-what the object turns out to be holding later. That distinction is the whole
-thing working or not: a node that counts its calls, caches a client or moves a
-tensor onto a device has attributes that move **while it runs**, and a key made
-of those would change under a graph nobody changed — the encoder would run again
-every step and the cache would look broken.
+what the object turns out to be holding later: a node that counts its calls or
+caches a client has attributes that move **while it runs**. Bound against the
+signature with defaults filled in, so `Layer(64, 32)` and `Layer(in_=64, out=32)`
+are one declaration.
 
-Bound against the signature and with the defaults filled in, so `Layer(64, 32)`,
-`Layer(64, out=32)` and `Layer(in_=64, out=32)` are one declaration. A key that
-depended on how the call was typed would miss for a rename.
+Why this is in a key and the code's fingerprint is not: saying `Embed(512)` is a
+**decision** readable in a microsecond, while editing a `forward` is not a
+decision about this node and costs an AST to read. There is nothing to compare on
+here anyway — there is no hit, there is a **collision**.
 
-Anything that is *not* a `Node` — something held as an argument — has nothing
-captured, so it is read off its attributes instead. That is a best effort and it
-errs the safe way: over-sensitive misses cost time, and being blind costs the
-wrong answer.
+A key is computed on the client and **again** on a worker, so two failures, and
+they are not symmetric. **Unstable** — one declaration, two texts, an address —
+costs a cache that misses forever and never says why. **Lossy** — two
+declarations, one text, a truncated tensor or a scrubbed `<Helper>` — costs **the
+wrong value served in silence**. So neither is accepted: what cannot be written
+faithfully *and* identically twice raises `CannotDeclare`.
 
-## Why this is in a key and the code's fingerprint is not
-
-They look alike and they are not. Saying `Embed(512)` is a **decision** the
-caller made and can be read off the object in a microsecond; editing the body of
-`forward` is not a decision about this node at all, and reading it costs an AST.
-A cosmetic refactor must not invalidate half a store, so the fingerprint stays
-beside the value and is compared on a hit. A different argument is not cosmetic
-and there is nothing to compare on: there is no hit, there is a **collision**.
-
-## Two ways to be wrong, and only one of them is safe
-
-A key is computed on the client and computed **again** on a worker, so the text
-this produces has to mean the same thing in another process. Two failures, and
-they are not symmetric:
-
-- **Unstable** — the same declaration written down differently in two processes.
-  `<mine.Helper object at 0x7f43d73faf90>` is the usual one. The cost is a cache
-  that misses forever and never says why: bad, and not incorrect.
-- **Lossy** — two different declarations written down the same way. A truncated
-  tensor, a scrubbed `<Helper>`. The cost is **the wrong value served in
-  silence**, which is the bug this exists to close.
-
-So neither is accepted. Anything that cannot be written down faithfully *and*
-identically twice raises `CannotDeclare`, and `Graph._check_it_was_obeyed`
-refuses the graph before the first node with the attribute named — the same
-answer CU13 gives everywhere: what cannot be honoured is refused, not discovered
-later as a run that was quietly wrong.
-
-## What catches an address, and what does not
-
-Not a test on the type. `type(obj).__repr__ is object.__repr__` is right about
-the object in front of it and blind to what it holds: a **list** of those objects
-has `list.__repr__`, which is defined, and the addresses come through from
-inside. So containers are walked here rather than repr'd, and the one place a
-`__repr__` we did not write is trusted — an object that has its own — the text it
-produced is checked afterwards.
-
-A `set` is the same trap wearing other clothes: its repr's order depends on hash
-randomisation, so it is stable within a process and not between two. Sorted here,
-before anything sees it.
-
-**What is left, said out loud**: a `__repr__` we trust could hide a set, or an
-`fd=3`, inside itself. The angle-bracket rule catches most of that — CPython's
-convention is that `<…>` means *this has no faithful repr* — and enums, classes
-and functions are pulled out before it, since they wear angle brackets and are
-perfectly stable. Beyond that, the answer is `salt=`.
+What catches an address is **not** a test on the type: a **list** of
+address-bearing objects has `list.__repr__`, which is defined. So containers are
+walked rather than repr'd, a trusted `__repr__` has its text checked afterwards,
+and a `set` is sorted first, its repr order depending on hash randomisation.
+Beyond that, the answer is `salt=`.
 """
 
 from __future__ import annotations
@@ -112,13 +70,9 @@ class CannotDeclare(Exception):
 
 def remember_what_built_it(cls: type[Any]) -> None:
     """Wraps a class's `__init__` so every instance keeps what it was built with.
-
-    `somatize.Node.__init_subclass__` calls it, so a user writes nothing. The
-    arguments are bound to the signature and the defaults filled in, which is
-    what makes `Layer(64, 32)` and `Layer(in_=64, out=32)` one declaration.
-
-    Only the **outermost** `__init__` records: a subclass calling up to its base
-    would otherwise have the base's empty arguments overwrite its own.
+    `somatize.Node.__init_subclass__` calls it, so a user writes nothing. Only
+    the **outermost** `__init__` records: a subclass calling up to its base would
+    otherwise have the base's empty arguments overwrite its own.
     """
     built = cls.__init__
     if getattr(built, "_soma_remembers", False):
@@ -148,11 +102,10 @@ def _bound(
     args: tuple[Any, ...],
     said: dict[str, Any],
 ) -> dict[str, Any]:
-    """The arguments by the name each one was declared under, defaults included.
-
-    A signature that will not take them is not this module's problem to report —
-    the call itself is about to fail with the error the user needs. What it must
-    not do is lose them, so the raw call is kept as a fallback.
+    """The arguments by the name each was declared under, defaults included. A
+    signature that will not take them is not this module's to report — the call
+    is about to fail with the error the user needs — but it must not lose them,
+    so the raw call is kept as a fallback.
     """
     try:
         binding = inspect.signature(built).bind(None, *args, **said)
@@ -196,11 +149,9 @@ def _written(value: object, where: str, deep: int, seen: frozenset[int]) -> str:
     """One value, at `where`, with `deep` levels left and `seen` holding what is
     already being written, so a cycle is refused rather than followed.
 
-    The order of the rungs is the whole design. Anything that wears angle
-    brackets and is nonetheless stable — an enum, a class, a function — comes
-    out before the rule that refuses angle brackets, and containers come out
-    before the rule that trusts a `__repr__`, because a container's `__repr__`
-    is its own and what leaks is inside it.
+    The order of the rungs is the design: anything that wears angle brackets and
+    is nonetheless stable comes out before the rule that refuses them, and
+    containers before the rule that trusts a `__repr__`.
     """
     if isinstance(value, PLAIN):
         return repr(value)
@@ -315,12 +266,9 @@ def _first(pair: tuple[str, str]) -> str:
 
 
 def _trusted(text: str, where: str) -> str:
-    """A `__repr__` somebody else wrote, checked rather than believed.
-
-    An address is the run. Angle brackets are CPython saying *this has no
-    faithful repr* — which is true of a socket, a file, a generator and a
-    lambda, and the stable ones that wear them have already been taken out
-    above.
+    """A `__repr__` somebody else wrote, checked rather than believed. An address
+    is the run; angle brackets are CPython saying *this has no faithful repr*,
+    and the stable ones that wear them were taken out above.
     """
     if AN_ADDRESS.search(text):
         return _refuse(

@@ -49,9 +49,6 @@ def store(tmp_path):
     return str(tmp_path)
 
 
-# ── That it keeps, and that it reads back ──
-
-
 def test_what_is_kept_is_not_computed_again(store):
     encoder = Counts()
     g = Graph.somatize(encoder.named("encoder").frozen().cached())
@@ -114,9 +111,6 @@ def test_a_node_that_keeps_nothing_does_not_break_the_chain(store):
     assert encoder.calls == 1
 
 
-# ── The salt, which is the knob for what the key cannot see ──
-
-
 def test_the_same_recipe_twice_is_one_name(store):
     # What the salt exists to break: two runs the key cannot tell apart.
     first, second = Counts(), Counts()
@@ -134,9 +128,6 @@ def test_a_salt_is_another_name(store):
     )
 
     assert second.calls == 1, "the salt has to reach the key, or it does nothing"
-
-
-# ── The prefix rule ──
 
 
 def test_a_cache_over_something_that_can_still_change_is_refused(store):
@@ -173,9 +164,6 @@ def test_a_graph_that_declares_nothing_is_never_asked_anything():
     # this slice pays nothing.
     g = Graph.somatize(Add(1).named("encoder") >> Counts().named("head"))
     assert g.forward(1.0) == 2.0
-
-
-# ── The fingerprint, which is beside the value and not in the name ──
 
 
 def test_the_code_changing_says_so_and_uses_what_is_kept(store, capfd):
@@ -225,9 +213,6 @@ def _second_version():
     return Twin()
 
 
-# ── What cannot be written down ──
-
-
 def test_an_opaque_nobody_can_write_down_is_said_and_not_fatal(store, capfd):
     # A store that cannot take something is not a reason to lose an afternoon's
     # run: it is said on `stderr` and the value is simply not kept. The name of
@@ -253,9 +238,6 @@ def test_two_classes_of_the_same_name_are_the_same_identity(store):
     assert Counts().__class__.__name__ != Encoder().__class__.__name__
     g = Graph.somatize(Counts().named("n").frozen().cached())
     assert g.forward(1.0, store=store) == 1.0
-
-
-# ── How it is declared ──
 
 
 def test_a_whole_piece_is_declared_at_once():
@@ -297,9 +279,6 @@ def test_the_version_of_the_code_is_noted_only_for_what_is_kept():
     g = Graph.somatize(Counts().named("a") >> Counts().named("b").frozen().cached())
 
     assert list(g.fingerprints()) == ["b"]
-
-
-# ── That what was declared was really obeyed ──
 
 
 class Stateful(Node):
@@ -393,9 +372,6 @@ def test_a_node_with_no_state_needs_nobody_to_settle_it(store):
     # asking it to be settled by hand would be asking for a digest of nothing.
     g = Graph.somatize(Counts().named("n").frozen().cached())
     assert g.forward(1.0, store=store) == 1.0
-
-
-# ── With the grain of an item ──
 
 
 class Embeds(Node):

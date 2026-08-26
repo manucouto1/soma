@@ -52,9 +52,6 @@ def run(g, store, live=None, steps=20):
     return recorder
 
 
-# ── One figure, two sources ──
-
-
 def test_live_and_read_back_draw_the_same_thing(g, tmp_path):
     store, live = Store(str(tmp_path)), Live(title="tuesday")
     run(g, store, live)
@@ -72,9 +69,6 @@ def test_live_keeps_one_row_per_forward_and_not_one_per_fact(g, tmp_path):
     run(g, Store(str(tmp_path)), live, steps=12)
 
     assert len(live.rows) == 12
-
-
-# ── The smoothing, which is where a figure could start lying ──
 
 
 def test_the_smoothed_line_stays_inside_what_was_measured():
@@ -119,9 +113,6 @@ def test_a_forward_with_no_loss_is_a_gap_and_not_a_zero(g, tmp_path):
     assert series(progress(store, run="tuesday"), "loss") == [0.5, None]
 
 
-# ── What the figure says happened ──
-
-
 def test_a_forward_that_broke_is_marked_and_only_then_is_it_in_the_legend(tmp_path):
     fine, store = Graph.somatize(Add(1).named("a")), Store(str(tmp_path))
     run(fine, store, steps=2)
@@ -155,9 +146,6 @@ def test_a_node_is_coloured_by_where_it_ran_and_by_nothing_else(tmp_path):
     where = dict(zip(bars.y, bars.marker.color))
     assert where["a"] == _theme.PALETTE["cuda"][0]
     assert where["b"] == _theme.PALETTE["cpu"][0]
-
-
-# ── One product ──
 
 
 def test_the_graph_and_the_run_are_drawn_from_the_same_table():

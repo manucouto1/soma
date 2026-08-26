@@ -5,24 +5,15 @@
     profile(store, run="tuesday")        # the depth profile, which is the picture
     flags(store, run="tuesday")          # what is wrong, and what to do about it
 
-## Why the profile is the picture
-
-Vanishing is not a property of a layer, it is a **shape over depth**: with a
-saturating non-linearity the backpropagated signal shrinks geometrically, so the
-early layers go quiet while the last one still learns. One number per node says
-nothing about that and the profile says all of it — which is why `about()` for
-`VANISHING` tells you to look here rather than at the node it fired on.
-
-Drawn in log, because the interesting range is six orders of magnitude and a
-linear axis would show one bar and seven zeros.
-
-## The one colour that means a judgement
+Vanishing is not a property of a layer, it is a **shape over depth**: the early
+layers go quiet while the last one still learns. One number per node says nothing
+about that and the profile says all of it, which is why `about("VANISHING")`
+sends you here rather than to the node it fired on. Drawn in log, because the
+interesting range is six orders of magnitude.
 
 Everywhere else in this library hue says **where** something ran and never
-good-or-bad. Here it is allowed to mean bad, because here that is the subject:
-this module draws opinions, and it is the only one that does. What it may not
-do is put that colour on the figures that draw facts — CU20's curves stay as
-they are.
+good-or-bad. Here it is allowed to mean bad, because here that is the subject —
+and it may not put that colour on the figures that draw facts.
 """
 
 from __future__ import annotations
@@ -52,14 +43,10 @@ def profile(
     thresholds: "Thresholds | None" = None,
     last: int | None = None,
 ) -> Figure:
-    """One measurement per node, across the graph — the shape over depth.
-
-    `of` is any number the audit wrote down: `grad_norm`, `update_ratio`,
-    `param_norm`, `act_abs_mean`, `eff_rank`, `update_rank`. A node that raised
-    a flag is drawn in the alarm colour and says which flag on its hover.
-
-    Nodes are in the order they were declared, which for a chain is the order
-    the gradient travelled — backwards. That is the axis the pathology lives on.
+    """One measurement per node, across the graph — the shape over depth. `of` is
+    any number the audit wrote down. A node that raised a flag is drawn in the
+    alarm colour and says which on its hover. Nodes are in declaration order,
+    which for a chain is the order the gradient travelled, backwards.
     """
     go = _theme.plotly()
     measured = seen(store, run=run, last=last)
@@ -117,14 +104,10 @@ def flags(
     thresholds: "Thresholds | None" = None,
     last: int | None = None,
 ) -> Figure:
-    """What is wrong with each node, and what to do about it.
-
-    A table and not a list, because a diagnosis without its advice is a word
-    somebody has to go and look up.
-
-    A node with nothing wrong is not a row. Empty would read as *checked and
-    fine*, and no flags does not mean that: a metric nobody measured cannot
-    raise one.
+    """What is wrong with each node, and what to do about it. A table and not a
+    list, because a diagnosis without its advice is a word somebody has to look
+    up. A node with nothing wrong is not a row: empty would read as *checked and
+    fine*, and a metric nobody measured cannot raise a flag.
     """
     go = _theme.plotly()
     said = diagnose(store, run=run, thresholds=thresholds, last=last)
@@ -193,26 +176,17 @@ def overlaid(
     last: int | None = None,
     inside: Inside | None = None,
 ) -> Figure:
-    """The graph, with what is wrong marked on the nodes it is wrong in.
-
-    The answer to *where* — which is the question a diagnosis of a distributed
-    graph actually raises. A list of flags says a node is ill; the graph says
-    which node, on which machine, and what feeds it.
+    """The graph, with what is wrong marked on the nodes it is wrong in — the
+    answer to *where*, which is the question a diagnosis of a distributed graph
+    raises.
 
     Health gets a **channel of its own**: the fill goes on saying where a node
-    runs, the outline turns to the alarm colour, and the flags are a badge under
-    the name. Recolouring the fill would have let *is this unhealthy* eat *where
-    does this run*, and on a graph spread over three machines that is the
-    answer somebody came for.
+    runs, the outline turns to the alarm colour, and the flags are a badge.
+    Recolouring the fill would let *is this unhealthy* eat *where does this run*.
 
-    `inside` is what `somatize.torch.architecture` gives back, and passing it
-    is what makes a finding land **on the layer it is about** rather than piling
-    every one of them into the node's label. Without it a graph of four nodes
-    with ten findings comes out ten times wider than it is tall with nothing
-    readable in it, which is what it did.
-
-    Findings from inside a node whose architecture was not drawn land on the
-    node, because that is then the only box there is to mark.
+    `inside` is what `somatize.torch.architecture` gives back, and passing it is
+    what makes a finding land **on the layer it is about**. Findings from a node
+    whose architecture was not drawn land on the node.
     """
     return graph.figure(
         overlay=where(store, run=run, thresholds=thresholds, last=last, inside=inside),
@@ -233,7 +207,7 @@ def where(
     What `overlaid` hands to the figure, and what to hand to `graph.figure()`
     yourself if you are composing something else. A finding inside a node is
     named on its flag — `LEAKAGE in net.2` — because the box it lands on is the
-    node and the layer would otherwise be lost.
+    node.
     """
     drawn = {
         f"{node}.{one.path}"
@@ -263,20 +237,14 @@ def where(
 
 
 class Alerts:
-    """What is wrong, as cards a notebook cell shows on its own.
+    """What is wrong, as cards a notebook cell shows on its own::
 
         alerts(store, run="tuesday")
 
-    The loud one. A table is for reading and this is for **noticing**: it is
-    what the original framework put on the screen as toasts, and the reason it
-    exists is that a finding nobody saw is a finding nobody had.
-
-    HTML and not a figure, because that is what a card is. It carries the node,
-    the flag, and what to do about it — the advice comes from the same place the
-    thresholds do, so a card cannot say something the verdict did not.
-
-    Outside a notebook it prints, so a script says the same thing without
-    needing a browser.
+    The loud one: a table is for reading and this is for **noticing**, because a
+    finding nobody saw is a finding nobody had. HTML and not a figure, carrying
+    the node, the flag and what to do about it — the advice comes from where the
+    thresholds do, so a card cannot say what the verdict did not.
     """
 
     def __init__(

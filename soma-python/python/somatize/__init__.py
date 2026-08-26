@@ -17,19 +17,14 @@ returns what it produced — there is no wrapper around either::
     g.forward("  hello  ")
 
 Whatever a node takes to answer — a retry, a model, three rounds of something —
-happens **inside it**, holding whatever client that takes. The engine runs it
-once and takes what comes back.
+happens **inside it**. `Graph()` with `node()` and `edge()` is still there for
+when the topology is built in a loop or comes from outside.
 
-`Graph()` with `node()` and `edge()` is still there for when the topology is
-built in a loop or comes from outside.
+`codec(kind, type, dump=..., load=...)` says how something wrapped in `Opaque` is
+written down, which is what lets a graph **keep** what it produces.
 
-`codec(kind, type, dump=..., load=...)` says how something wrapped in `Opaque`
-is written down, which is what lets a graph **keep** what it produces:
-`somatize.torch` registers the one for a tensor on being imported.
-
-`Store(directory)` is that same place, opened by hand — bytes by their content
-and names that point at them. A directory two machines can both see is how a
-training run written down on one is read back on another::
+`Store(directory)` is that same place, opened by hand. A directory two machines
+can both see is how a training run written down on one is read back on another::
 
     store.keep("round/3", trainer.export())
     trainer.load(store.recall("round/3"))

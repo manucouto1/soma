@@ -139,8 +139,6 @@ fn a_repository_with_one_commit_walks_it_and_stops() {
     assert_eq!(parent_of(at.path(), &commits[0]), None);
 }
 
-// ── Three variants of one idea are three branches ──
-
 /// A base, and `n` branches of two commits each off it.
 fn a_fan_of(n: usize) -> tempfile::TempDir {
     let at = a_line_of(0);
@@ -218,8 +216,6 @@ fn every_line_gets_the_commit_under_it_and_not_just_the_oldest() {
         "three lines, three commits underneath them",
     );
 }
-
-// ── Editing is forking ──
 
 #[test]
 fn a_class_is_spliced_back_into_its_file_and_nothing_around_it_moves() {

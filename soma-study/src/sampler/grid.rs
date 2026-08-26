@@ -7,15 +7,10 @@ use crate::{Dimension, Point, Setting, Space};
 /// Walk the whole space and stop.
 ///
 /// The only scheme that **runs out**: `ask` answers `None` once every
-/// combination has been handed out, and that is how a study written as a `for`
-/// knows when to stop without being told a number.
-///
-/// What is continuous has to be cut to be enumerated, and `steps` says how
-/// finely. An `Int` narrower than that is taken whole — a range of five values
-/// is five points, not `steps` of them.
-///
-/// **The first dimension varies fastest**, so consecutive trials differ in the
-/// knob declared first. Worth knowing when a grid is stopped early.
+/// combination is handed out, which is how a study written as a `for` stops
+/// without being told a number. What is continuous is cut by `steps`, and an
+/// `Int` narrower than that is taken whole. **The first dimension varies
+/// fastest**, which is worth knowing when a grid is stopped early.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Grid {
     /// How many values to take from each continuous knob.

@@ -3,15 +3,10 @@
     g.figure()          # a plotly Figure, to show or to compose
     g                   # in a notebook: the same figure, straight in the cell
 
-## What is drawn, and why it is the plan and not the graph
-
-The **plan** — `compile` then `distribute` — because that is where the decisions
-show: a `Wave` is what runs at once, a `Remote` is what crosses to another
-machine. A bare list of edges says neither.
-
-The plan is a **tree**, so placing it needs no layout engine and no crossing
-heuristic: one pass upwards asking each subtree its size, one pass downwards
-handing out positions. That is the whole algorithm.
+What is drawn is the **plan** — `compile` then `distribute` — because that is
+where the decisions show: a `Wave` is what runs at once, a `Remote` what crosses
+to another machine, and a bare list of edges says neither. The plan is a **tree**,
+so placing it needs no layout engine and no crossing heuristic.
 
 | in the plan | on the figure |
 |---|---|
@@ -21,35 +16,15 @@ handing out positions. That is the whole algorithm.
 | `Remote` | a frame labelled with the host |
 | `Empty` | an empty figure that says so |
 
-`Sequence` gets no frame of its own: top-to-bottom is already how the figure is
-read, and the root is always one — a box around everything is a border.
+**The boxes say when, and the arrows say what feeds what.** A graph that is not
+series-parallel falls back to a flat `Sequence`, and there the nesting stops
+saying who feeds whom: the truth lives entirely in each step's `from`. The `N`
+(`a→c`, `a→d`, `b→d`) is the case, and it is in the tests.
 
-## The arrows are not decoration
-
-`decompose` in the core is a real series-parallel decomposition, and it has a way
-out at the bottom (`plan.rs`): a graph that is **not** series-parallel — only
-reachable through `node()`/`edge()`, never through the DSL — falls back to a flat
-`Sequence`. There the nesting no longer says who feeds whom; the truth lives
-entirely in each step's `from`.
-
-So the boxes say **when**, and the arrows say **what feeds what**. For a graph
-built with `>>` and `|` the two agree. For the other one the arrows are all there
-is, and a figure without them would be a lie. The `N` — `a→c`, `a→d`, `b→d` — is
-the case, and it is in the tests.
-
-## One table of colours, and it is not in this file any more
-
-The fill says **where a node runs**, and nothing else. Whether it is cached,
-frozen or mapped is a badge in the label: three facts cannot share one fill, and
-inventing a precedence between them would only hide two of the three.
-
-The table is looked up with `[]` and never with `.get(…, default)`. In the
-original soma the same colours lived in four tables keyed by the same strings,
-two of which ended in a catch-all arm — so a typo came out as the alarm colour
-instead of failing. Here a typo raises.
-
-When a second figure arrived — a run, drawn — the same rule applied one level up,
-so the table moved to `somatize._theme` and both read it from there.
+The fill says **where a node runs** and nothing else; cached, frozen and mapped
+are badges in the label, because three facts cannot share one fill. The colours
+live in `somatize._theme` and are looked up with `[]` and never with
+`.get(…, default)`, so a typo fails rather than coming out as the alarm colour.
 """
 
 from __future__ import annotations
@@ -151,17 +126,11 @@ light and whose curves are dark is two products."""
 
 @dataclass(frozen=True)
 class Box:
-    """One rectangle, placed.
-
-    `kind` is `"node"`, `"wave"`, `"remote"`, `"layer"` or `"group"`; a layer's
-    `mark` says what **sort** of thing it is, which is what decides how it is
-    drawn. A `Linear` and a `Sigmoid` are not the same kind of thing and drawing
-    them the same says they are.
-
-    A `"group"` is a repeated block, drawn as a frame around the layers in it
-    with its `×N` on the frame — because four encoder layers opened up are eight
-    boxes each saying `×4`, which is the count said eight times and the block
-    said none.
+    """One rectangle, placed. `kind` is `"node"`, `"wave"`, `"remote"`, `"layer"`
+    or `"group"`; a layer's `mark` says what **sort** of thing it is, which
+    decides how it is drawn. A `"group"` is a repeated block, a frame with its
+    `×N` on it, because four encoder layers opened up are eight boxes each
+    saying `×4`.
     """
 
     kind: str
@@ -220,18 +189,10 @@ def boxes(
 ) -> list[Box]:
     """Where every box goes, for a plan as `Graph.plan_json()` gives it.
 
-    `labels` maps a node id to the lines that will be written in it, and is only
-    read to work out how wide the box has to be; without it a node is as wide as
-    its id.
-
-    `inside` maps a node to `[(path, what), ...]` — what it is **made of** — and
-    turns its box into a frame with those stacked in it. It is data and this
-    module does not know where it came from: `somatize.torch.architecture`
-    reads it off the modules, and something that is not torch could answer the
-    same question about itself.
-
-    Pure, and with no plotly anywhere near it — which is what makes the layout
-    testable on its own.
+    `labels` maps a node id to the lines written in it, read only to work out how
+    wide the box has to be. `inside` maps a node to `[(path, what), ...]` and
+    turns its box into a frame. Pure, with no plotly near it, which is what makes
+    the layout testable on its own.
     """
     out: list[Box] = []
     _place(plan, 0.0, 0.0, labels or {}, out, inside)
@@ -243,28 +204,16 @@ def figure(
     overlay: Overlay | None = None,
     inside: InsideMap | None = None,
 ) -> Figure:
-    """The graph as a `plotly.graph_objects.Figure`.
+    """The graph as a `plotly.graph_objects.Figure`. Everything is read back from
+    what was declared, so this never runs anything and never needs a store.
 
-    Everything drawn is read back from what was declared — `nodes()`, `edges()`,
-    `devices()`, `hosts()`, `cached()`, `frozen()`, `mapped_nodes()`,
-    `identities()`, `fingerprints()` — so this never runs anything and never
-    needs a store.
+    `inside` opens a node up — a node is often a whole architecture and a cube is
+    not a picture of one, so its box becomes a **frame**.
 
-    `inside` opens a node up: `{node: [(path, what), ...]}`, which
-    `somatize.torch.architecture` reads off the modules a node holds. A node is
-    often a whole architecture and a cube is not a picture of one — so its box
-    becomes a **frame**, which is the shape a `Wave` and a `Remote` already are.
-
-    `overlay` is what **happened**, laid over what was declared:
-    `{node: [flag, ...]}`, which is what `somatize.health.overlaid` builds out
-    of a diagnosis. An empty one has to give a byte-identical drawing, and that
-    is a test — it is what lets the declaration keep being drawable by somebody
-    who has never run anything.
-
-    It gets a **channel of its own**. The fill goes on saying where a node runs
-    and nothing else; health is the outline and a badge. Recolouring the fill
-    would be two facts in one channel, and the answer to *is this unhealthy*
-    would have eaten the answer to *where does it run*.
+    `overlay` is what **happened**, laid over what was declared; an empty one has
+    to give a byte-identical drawing, and that is a test. It gets a **channel of
+    its own** — the fill goes on saying where a node runs and health is the
+    outline — or *is this unhealthy* would eat *where does it run*.
     """
     go = _theme.plotly()
     import json
@@ -368,13 +317,10 @@ def figure(
             from_, to = where_in.get(f"{node}.{a}"), where_in.get(f"{node}.{b}")
             if from_ is None or to is None:
                 continue
-            # An edge that comes **down** into a block ends at the block, not
-            # at the layer inside it: the frame's header is where the `×N` is
-            # written, and an arrow through a label reads as neither. A skip
-            # comes in through the side and never touches the header, so it
-            # keeps going to the layer it really feeds — which is the `+`, and
-            # saying *into the block* there would lose the one thing the skip
-            # is about.
+            # An edge coming **down** into a block ends at the block and not at
+            # the layer inside it: the header is where the `×N` is written, and
+            # an arrow through a label reads as neither. A skip comes in through
+            # the side and keeps going to the layer it really feeds.
             around, head = _inner_edge(
                 from_,
                 _entered(from_, to, blocks.get(f"{node}.{mine.get(b)}"))
@@ -528,12 +474,9 @@ def _node_size(
     labels: Labels,
     inside: InsideMap | None = None,
 ) -> tuple[float, float]:
-    """A node's box: its own lines, plus room for what it is made of.
-
-    A node with an `inside` becomes a **frame** — the same shape a `Wave` or a
-    `Remote` already is — because that is what it turns out to be: a thing that
-    contains things. Nothing new had to be invented for it, which is usually the
-    sign that the layout was right.
+    """A node's box: its own lines, plus room for what it is made of. A node with
+    an `inside` becomes a **frame**, the same shape a `Wave` or a `Remote`
+    already is, so nothing new had to be invented for it.
     """
     lines = labels.get(node) or (node,)
     tall = max(NODE_H, 2 * PAD_Y + LINE_H * len(lines))
@@ -560,16 +503,12 @@ def _stack(
     labels: Labels,
     out: list[Box],
 ) -> None:
-    """The layers of an expanded node, placed **by what feeds what**.
-
-    A stack cannot show a skip connection. What is placed here is a small DAG,
-    by rank — the longest way down from an input — so what runs at the same
-    depth sits on the same row and an edge that jumps a row is a skip and looks
-    like one.
+    """The layers of an expanded node, placed **by what feeds what**: a small DAG
+    by rank, so an edge that jumps a row is a skip and looks like one.
 
     No crossing minimisation and no Sugiyama: an architecture is mostly a line
-    with a few jumps in it, and a heuristic that reorders rows would move boxes
-    around between two runs of the same figure.
+    with a few jumps, and a heuristic that reorders rows would move boxes between
+    two runs of the same figure.
     """
     if not inside:
         return
@@ -625,12 +564,9 @@ def _stack(
 
 
 def _lifted(placed: Placed, inside: "Inside") -> dict[int, float]:
-    """How far each row drops to make room for the headers above it.
-
-    A repeated block gets a strip at the top for its `×N`, and every row from
-    there down moves by that much. Accumulated rather than per block, because
-    two blocks in a row each want their own strip and the second one has to
-    clear the first.
+    """How far each row drops to make room for the headers above it. Accumulated
+    rather than per block, because two blocks in a row each want their own strip
+    and the second has to clear the first.
     """
     rows: dict[str, list[int]] = {}
     for one, (row, *_) in placed:
@@ -650,8 +586,7 @@ def _ranked(inside: "Inside") -> Placed:
     """Where each layer goes: `(layer, (row, x, width))`.
 
     The rank is the longest way down, which is what puts a skip's two ends on
-    rows that are not adjacent — and that gap is the whole reason the picture is
-    worth drawing.
+    rows that are not adjacent — and that gap is why the picture is worth drawing.
     """
     layers = {one.path: one for one in inside.layers}
     feeds: dict[str, list[str]] = {path: [] for path in layers}
@@ -708,9 +643,9 @@ def _width_before(
 ) -> int | None:
     """The width of the nearest thing above this that has one.
 
-    Walking back past what has no shape is the whole of it: an `Add` has no
-    shape of its own, and stopping at one is how a pooling layer that really
-    does go from thirty-two to one comes out drawn as a plain box.
+    Walking back past what has no shape is the whole of it: an `Add` has none,
+    and stopping at one is how a pooling layer that really does go from
+    thirty-two to one comes out drawn as a plain box.
     """
     for one in feeds.get(path, []):
         if one in seen or one not in layers:
@@ -772,15 +707,10 @@ def _layer_text(one: "Layer") -> str:
 
 
 def _two_lines(one: "Layer | Box") -> tuple[str, str]:
-    """What is written on a layer, over two lines.
-
-    What it **is** on the first and what it **produces** on the second. One line
-    makes a reader parse a sentence to find a number, and the number is what
-    they came for.
-
-    A non-linearity and a dropout get **one** line: they cannot change a shape,
-    so writing the one they were handed says nothing and takes the room their
-    silhouette needs to stay thin.
+    """What is written on a layer, over two lines: what it **is**, and what it
+    **produces**. One line makes a reader parse a sentence to find the number
+    they came for. A non-linearity and a dropout get one line — they cannot
+    change a shape, and the room is what their silhouette needs to stay thin.
     """
     # A `Box`'s label is optional where a `Layer`'s is not, and this takes both.
     top = (one.label or "") + (
@@ -864,8 +794,8 @@ def _lines(
 def _labelled(box: Box) -> str:
     """What is written on a layer: what it is, and what it produces.
 
-    The shape is on it and not on the hover, because it is the one thing that
-    makes a **bottleneck** a picture: `512 → 8 → 512` is visible and
+    The shape is on it and not on the hover, because it is what makes a
+    **bottleneck** a picture: `512 → 8 → 512` is visible and
     `Linear · Linear · Linear` is not.
     """
     top, below = _two_lines(box)
@@ -900,8 +830,7 @@ def _worst(flags: Sequence[str]) -> str:
     """What colour a set of findings is drawn in: the family of the first one.
 
     First and not blended: `verdict` already puts what stops a run soonest at
-    the front, so the colour is the family of the thing to look at first. A
-    blend of six families is a seventh colour that means nothing.
+    the front. A blend of six families is a seventh colour that means nothing.
     """
     for flag in flags:
         try:
@@ -914,9 +843,9 @@ def _worst(flags: Sequence[str]) -> str:
 def _flag_family(name: str) -> str:
     """Which family a flag belongs to, from the crate that decides it.
 
-    Not `_family`, which this file already had and which answers a different
-    question — which device family a node runs on. Two names for two questions,
-    and the day they were one name the graph was drawn with a flag's colour.
+    Not `_family`, which answers a different question — which device family a
+    node runs on. Two names for two questions, and the day they were one name
+    the graph was drawn with a flag's colour.
     """
     from somatize._somatize import family
 
@@ -930,12 +859,9 @@ def _bare(flag: str) -> str:
 
 
 def _named_after(node: str, identity: str) -> bool:
-    """Whether the id says nothing the class name does not.
-
-    A node with no id of its own gets the class lowercased — `Tokenize` becomes
-    `tokenize` — and a second one of the same class gets `_2` after it. Writing
-    both lines then says the same word twice. The class is still on the hover,
-    where it costs nothing.
+    """Whether the id says nothing the class name does not. A node with no id of
+    its own gets the class lowercased, so writing both lines would say the same
+    word twice. The class is still on the hover, where it costs nothing.
     """
     lowered = identity.lower()
     return node == lowered or node.startswith(f"{lowered}_")
@@ -979,9 +905,9 @@ def _hover(
 def _safe(text: object) -> str:
     """Escapes what came from whoever declared the graph.
 
-    Plotly reads a subset of HTML in labels and in hover text, so a node called
+    Plotly reads a subset of HTML in labels and hover text, so a node called
     `<script>` is not a curiosity: it is the same hole the original soma had a
-    test for, and this is where it is closed.
+    test for.
     """
     return html.escape(str(text), quote=False)
 
@@ -993,14 +919,10 @@ def _silhouette(
     width: float,
     how: str,
 ) -> dict[str, Any]:
-    """One layer, drawn as the **kind of thing** it is.
-
-    A `Linear`, a convolution, a recurrent cell and a non-linearity are four
-    different kinds of thing, and four identical rectangles with different words
-    in them make the reader do the sorting a picture was supposed to have done.
-
-    An SVG path in data coordinates, so the silhouette scales with the box and
-    there is nothing to keep in step by hand.
+    """One layer, drawn as the **kind of thing** it is: four identical rectangles
+    with different words in them make the reader do the sorting a picture was
+    supposed to have done. An SVG path in data coordinates, so the silhouette
+    scales with the box.
     """
     x, y, w, h = box.x, box.y, box.w, box.h
     r, cut, skew = h / 2, min(h / 2, 10.0), min(w / 8, 12.0)
@@ -1066,13 +988,10 @@ say **there are several of these**, which is the part a shape can carry.
 
 
 def _plates(box: Box, line: str, how: str) -> list[dict[str, Any]]:
-    """The lanes behind a layer that runs several of itself at once.
-
-    Offset copies of its own silhouette, and **no edges between them**. Torch
-    packs the heads of a `MultiheadAttention` into one projection, so there is
-    no second module anywhere and four boxes wired together would be a graph
-    nobody built. What is true is that this one operation happens several times
-    over, and that is what a stack of plates says.
+    """The lanes behind a layer that runs several of itself at once: offset copies
+    of its own silhouette, and **no edges between them**. Torch packs the heads of
+    a `MultiheadAttention` into one projection, so four boxes wired together would
+    be a graph nobody built.
     """
     if not box.parallel or box.parallel < 2:
         return []
@@ -1090,8 +1009,8 @@ def _tapered(box: Box, skew: float) -> str:
     """A shape that changes the shape, drawn changing: narrowing when what comes
     out is smaller than what went in, widening when it is bigger.
 
-    This is what makes a **bottleneck** look like one instead of like three
-    identical boxes with different numbers written on them.
+    What makes a **bottleneck** look like one instead of three identical boxes
+    with different numbers written on them.
     """
     x, y, w, h = box.x, box.y, box.w, box.h
     if box.narrows is None or box.narrows == 0:
@@ -1163,9 +1082,9 @@ HEAD = 12.0
 def _crosses(source: Box, target: Box, obstacles: Sequence[Box]) -> bool:
     """Whether the straight edge would pass through a box that is not its ends.
 
-    An edge drawn over a node reads as an edge **into** that node, which is the
-    figure saying something that is not true. Cheap to ask and worth asking: it
-    only happens where the nesting already stopped saying who feeds whom.
+    An edge drawn over a node reads as an edge **into** it, which is the figure
+    saying something untrue. It only happens where the nesting already stopped
+    saying who feeds whom.
     """
     x0, y0 = source.cx, source.y + source.h
     x1, y1 = target.cx, target.y
@@ -1208,17 +1127,11 @@ def _routed(
     """One edge that cannot go straight, as `(shapes, annotation, lane)`.
 
     Around means **outside everything**, down, and in through the side of what
-    reads it. The lane is outside the whole drawing rather than outside the boxes
-    in the way, because a lane threaded between two of them is a lane that will
-    cross a third the next time the layout changes.
+    reads it: a lane threaded between two boxes is one that will cross a third
+    the next time the layout changes. `apart` is which lane on that side it gets.
 
-    `apart` is which lane on that side this one gets, so that edges which all
-    have to go around stay countable.
-
-    The lane comes back because **the caller has to make room for it**. Outside
-    every box is outside the extent the boxes gave, and a canvas measured from
-    the boxes alone cuts the lane off — which is a figure whose arrows leave it
-    on one side and come back on the other.
+    The lane comes back because **the caller has to make room for it** — a canvas
+    measured from the boxes alone cuts it off.
     """
     left, right = span
     # The near side, so an edge that skips one box does not cross the figure.
@@ -1247,28 +1160,19 @@ BIGGEST = 1600.0
 
 
 def _sized(wide: float, tall: float) -> dict[str, float]:
-    """A figure big enough to hold what is in it, **in proportion**.
-
-    The y axis is anchored to the x so a box is not stretched into a different
-    box. That makes width and height one decision and not two: capping the width
-    of a figure whose contents are wider than the cap does not shrink it, it
-    **cuts the right-hand side off** — and the arrows that reached the node over
-    there went with it.
-
-    So both are scaled by the same factor when either is too big, which is the
-    only way to make a thing smaller without making it shorter.
+    """A figure big enough to hold what is in it, **in proportion**. The y axis is
+    anchored to the x, so capping the width of something wider than the cap would
+    not shrink it, it would **cut the right-hand side off**. Both are scaled by
+    the same factor when either is too big.
     """
     scale = min(1.0, BIGGEST / max(wide, tall, 1.0))
     return {"width": max(360, wide * scale), "height": max(240, tall * scale)}
 
 
 def _bent(source: Box, target: Box) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """One edge with nothing in the way, as `(shapes, annotation)`.
-
-    Straight down when it really is straight down; a curve when it has to move
-    across. A long diagonal cutting over a figure is the thing that makes a
-    graph of four nodes look like a cat's cradle, and a bend that leaves and
-    arrives vertically reads as *this feeds that* rather than as a line.
+    """One edge with nothing in the way, as `(shapes, annotation)`. Straight down
+    when it really is; a curve when it has to move across, because a long
+    diagonal is what makes a graph of four nodes look like a cat's cradle.
     """
     x0, y0 = source.cx, source.y + source.h
     x1, y1 = target.cx, target.y
@@ -1287,13 +1191,10 @@ def _bent(source: Box, target: Box) -> tuple[list[dict[str, Any]], dict[str, Any
 
 
 def _entered(source: Box, target: Box, block: Box | None) -> Box:
-    """The block an edge lands in, when it lands on it from directly above.
-
-    The row is kept from the layer, because a skip is *how many rows it jumps*
-    and a block has no row of its own — measuring the picture instead of the
-    graph is the mistake `_inner_edge` already has a comment about. And the
-    height is trimmed to the header, so the arrow stops on the frame's top edge
-    rather than at the middle of everything inside it.
+    """The block an edge lands in, when it lands from directly above. The row is
+    kept from the layer, because a skip is *how many rows it jumps* and a block
+    has no row of its own. The height is trimmed to the header, so the arrow
+    stops on the frame's top edge.
     """
     if block is None or source.row is None or target.row is None:
         return target
@@ -1307,12 +1208,10 @@ def _inner_edge(
     target: Box,
     frame: Box,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """One edge between two layers of the same node.
-
-    Straight down when they are next to each other; **out into the gutter** when
-    the edge jumps a row, which is what a skip connection is. Drawing a skip as
-    a long straight arrow through everything between its ends is drawing an
-    arrow into each of them.
+    """One edge between two layers of the same node. Straight down when they are
+    next to each other; **out into the gutter** when it jumps a row, which is what
+    a skip is — drawing one as a long straight arrow through everything between
+    its ends is drawing an arrow into each of them.
     """
     # By **row** and not by how far apart they look: a non-linearity is drawn
     # shorter than a Linear, so two neighbours can be further apart in pixels

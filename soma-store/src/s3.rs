@@ -1,32 +1,16 @@
 //! A store that is a bucket: S3, MinIO, R2 — anything that speaks the protocol.
+//! For a cluster with no shared mount, and **behind the `s3` feature**, since
+//! TLS and an XML parser are some eighty crates a directory does not need.
 //!
-//! [`Local`](crate::Local) needs a directory everybody can see, and on a cluster
-//! with no shared mount there is none. This is the other way to have one, and it
-//! is **behind the `s3` feature**: TLS and an XML parser are some eighty crates,
-//! and a directory needs none of them.
+//! A bucket and a directory are the **same store**: the same split from the same
+//! [`Digest::path`](crate::Digest) and the same JSON inside, so a directory can
+//! be moved onto a bucket with `aws s3 sync` and back.
 //!
-//! # A bucket and a directory are the same store
-//!
-//! Deliberately, and it is worth more than a browsable bucket: the same split,
-//! from the same [`Digest::path`](crate::Digest), and the same JSON inside. So a
-//! directory can be moved onto a bucket with `aws s3 sync` and back, and neither
-//! end has to know. Naming an object after the digest **of the name** rather
-//! than after the name also settles what a key may contain, which on a
-//! filesystem was already settled the same way.
-//!
-//! # What is genuinely different
-//!
-//! **`claim` is a conditional PUT.** On a filesystem it is a hard link, which
-//! fails when the name is taken; here it is `If-None-Match: *`, which is the
-//! same promise from the other side, and the signature covers the header.
-//!
-//! **A scan costs a round trip per name.** `bound()` lists and then reads, and
-//! the reading is fanned out over threads. The trait already expected this —
-//! `resolve_many` and `get_many` are batch *"because against a store on the far
-//! end of a network that is thousands of round trips unless it is one call"* —
-//! and the way out, when it starts hurting, is the one
-//! [`Store::bound`](crate::Store::bound) names itself: an index built from the
-//! records that can be thrown away.
+//! Two things are genuinely different. `claim` is a conditional PUT —
+//! `If-None-Match: *`, the same promise a hard link makes from the other side,
+//! and the signature covers the header. And a scan costs a round trip per name,
+//! so `bound()` lists and then reads fanned out over threads; the way out when
+//! it hurts is the index [`Store::bound`](crate::Store::bound) already names.
 
 use crate::store::{read_record, record};
 use crate::{Bound, Digest, Meta, Store, StoreError};
@@ -60,16 +44,10 @@ pub struct Bucket {
 
 impl Bucket {
     /// The store on this bucket, checking on the way in that it can hand work
-    /// out.
-    ///
-    /// `endpoint` is the service — `https://s3.eu-west-1.amazonaws.com`,
-    /// `http://minio:9000` — and `style` says whether the bucket goes in the
-    /// host or in the path. MinIO wants [`UrlStyle::Path`]; AWS wants
-    /// [`UrlStyle::VirtualHost`] for anything made recently.
-    ///
-    /// **It talks to the endpoint before returning**, twice, to find out whether
-    /// a conditional write is really conditional here. See [`Bucket::checks`]
-    /// for what that costs and why it is not optional.
+    /// out. `style` says whether the bucket goes in the host or the path — MinIO
+    /// wants [`UrlStyle::Path`], recent AWS [`UrlStyle::VirtualHost`]. **It spends
+    /// two round trips on the endpoint before returning**, proving that a
+    /// conditional write really is conditional there.
     pub fn at(
         endpoint: &str,
         bucket: &str,
@@ -98,15 +76,10 @@ impl Bucket {
         Ok(store)
     }
 
-    /// Whether a conditional write is conditional here. Two round trips, and the
-    /// reason they are not optional.
-    ///
-    /// `claim` is how work is handed out: whoever takes the name does the work.
-    /// An endpoint that accepts `If-None-Match: *` and writes anyway — some
-    /// S3-compatible services do — makes every `claim` answer `true`, so every
-    /// machine takes every trial and **nothing anywhere says so**. A store that
-    /// cannot promise this is refused here rather than discovered in a study
-    /// whose numbers are already wrong.
+    /// Whether a conditional write is conditional here. Two round trips, and not
+    /// optional: an endpoint that accepts `If-None-Match: *` and writes anyway —
+    /// some do — makes every `claim` answer `true`, so every machine takes every
+    /// trial and nothing anywhere says so.
     fn checks(&self) -> Result<(), StoreError> {
         let key = format!(
             "probe/{}-{}",

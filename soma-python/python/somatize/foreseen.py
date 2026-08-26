@@ -1,6 +1,4 @@
-"""What a graph's nodes will be called, before anything runs — and what an edit did.
-
-Two questions, and only the first is about one graph::
+"""What a graph's nodes will be called before anything runs, and what an edit did::
 
     from somatize import foreseen
 
@@ -9,17 +7,13 @@ Two questions, and only the first is about one graph::
     foreseen.changes(before, after)          # what the edit did
     foreseen.snapshot(g)                     # the same, kept for later
 
-The engine already makes this pass before its first node — a name is a hash of
-the **recipe** and not of the data, so only the graph's input is hashed by
-content and from there down they are hashes of hashes. Asking for it on its own
-is what turns *is my cache still good?* into a question answered in a millisecond
-rather than by running.
+A name is a hash of the **recipe** and not of the data, so only the graph's input
+is hashed by content and from there down they are hashes of hashes. The engine
+already makes this pass before its first node; asking for it on its own turns
+*is my cache still good?* into a millisecond instead of a run.
 
-## What an edit did, as findings and not as buckets
-
-`changes` answers `{node: [finding, ...]}`, which is the shape
-`somatize.health` already uses, and for the same reason: what happens to a node
-is **more than one fact** and a node with nothing said about it is fine.
+`changes` answers `{node: [finding, ...]}` — the shape `somatize.health` uses,
+and for the same reason: what happens to a node is more than one fact.
 
 | finding | what it says |
 |---|---|
@@ -33,83 +27,19 @@ is **more than one fact** and a node with nothing said about it is fine.
 | `UNVERSIONED` | its answer is kept and nobody can say whether its code moved |
 | `UNKNOWN` | it cannot be named on one side or the other |
 
-The first three are one question split three ways, because **two different
-questions get asked of the same answer**. *Does my cache still hold* is all three
-at once: a node frozen at another checkpoint really does produce another answer,
-and its name moving is the cache being right. *Did the code change* is `CHANGED`
-alone — weights belong to a version, they are not a version, and a rerun of the
-same architecture on new data is the same thing trained again and not a different
-thing.
+The first three are one question split three ways, because two questions get
+asked of one answer: *does my cache still hold* is all three, *did the code
+change* is `CHANGED` alone — weights belong to a version, they are not one.
 
-`CHANGED` against `DOWNSTREAM` is what makes a list of forty nodes readable: it
-says **where the edit is**, and the rest is what inherited it. Who feeds a node
-is part of its shape because rewiring it moves its key without touching anything
-the node is made of.
+`STALE` exists because the fingerprint of the code is deliberately not in the
+key: editing a `forward` renames nothing, so a diff that only looked at names
+would answer *nothing changed* to the very edit being asked about. Here it is an
+**opinion and not an invalidation**, and it reaches down as `SUSPECT`.
+`UNKNOWN` must never be read as *unchanged*: a `.mapped()` node is named by items
+nobody has yet.
 
-More than one can be true at once — a node reworked *and* resalted says both —
-and `SUSPECT` rides on top of any of them, because reading a stale answer happens
-to a node whatever became of its own name. What is exclusive is the group: a name
-either moved or did not, so nothing that moved is also `STALE`, `UNVERSIONED`,
-`ADDED`, `GONE` or `UNKNOWN`.
-
-`UNKNOWN` is not an omission and must never be read as *unchanged*. A `.mapped()`
-node is named by the content of its items, which nobody has yet, and nothing
-under it can be named either. Saying "unchanged" there is the one answer that
-costs somebody a week.
-
-## `STALE`, which is the finding this exists for
-
-The fingerprint of the code is **deliberately not in the key** — a cosmetic
-refactor would invalidate half the store in silence, so it is kept beside the
-value and compared on a hit. The cost of that decision is that editing the body
-of a `forward` renames nothing, and a diff that only looked at names would answer
-*nothing changed* to the very edit being asked about.
-
-So it is looked at here, where it is an **opinion and not an invalidation**:
-`STALE` is the finding that says *you should have bumped the salt*.
-
-It needs both fingerprints, and a class with no source to read has none — a
-notebook cell, an `exec`. That absence is `UNVERSIONED` and not silence, because
-silence here is the exact lie this module exists to avoid: in a notebook, where
-every node is defined in a cell, a graph compared with an edited copy of itself
-would answer *nothing to report* about an afternoon of edits. Putting the nodes
-in a module is what answers it.
-
-It is asked **only of a node whose answer is kept**, which is the scope a version
-is recorded at: parsing an AST for a node nothing is remembered about would be
-paid by everyone who declares a graph. So a graph that keeps nothing gets no
-opinion about its code and is not told forty times over.
-
-And it **reaches down**, which is what `SUSPECT` is for. A stale node hits, so
-everything under it goes on being fed the answer the old code gave — including
-what recomputes, which recomputes from it. Leaving those silent would be saying
-*checked, and fine* about the half of a graph that is quietly running last week's
-encoder.
-
-## Two graphs, or two snapshots
-
-`changes` takes either. A `Graph` is a live object, and two versions of one
-module do not coexist in an interpreter — so comparing **two commits** means
-comparing what was written down, which is what `snapshot` is: a `dict` of plain
-JSON with the names already worked out.
-
-The two are interchangeable because a snapshot carries everything the comparison
-reads and nothing else. Two of them are comparable when they were taken with the
-**same input**, which the default — none at all — always is.
-
-## What it costs, and what it does not need
-
-Neither `names` nor `changes` reads or writes anything: naming is the `Keeper`'s
-and the keeper is the store's — the core computes no hash — so a store is only
-where the hash function comes from, and a temporary one, which is what
-`store=None` opens, gives the same names. `unneeded` is the only one that looks
-inside, and it looks by name and fetches nothing.
-
-And **the input is not needed either**. Every key on both sides carries the same
-hash of it, so which one it is cancels out of every comparison: `changes` with no
-input at all gives the same findings as `changes` with the real batch, and does
-not pay the 121 ms of weighing it. Pass one only when the names themselves are
-what you want.
+Each side is a `Graph` or a `snapshot` of one, because two versions of a module
+do not coexist in an interpreter. Nothing here reads or writes a store.
 """
 
 from __future__ import annotations
@@ -156,7 +86,6 @@ def names(
     store: "Store | str | None" = None,
 ) -> dict[str, str]:
     """What each node's answer will be called — `{node: name}` — with nothing run.
-
     A node missing from it cannot be named in advance, which is what a
     `.mapped()` node and anything under it are.
     """
@@ -184,11 +113,9 @@ def snapshot(
     *,
     store: "Store | str | None" = None,
 ) -> Snapshot:
-    """Everything `changes` reads about a graph, as plain JSON, so a version of it
-    can be kept and compared against one that no longer exists in this process.
-
-    Two are comparable when they were taken with the same `input`, which the
-    default — none at all — always is.
+    """Everything `changes` reads about a graph, as plain JSON, so a version can
+    be compared against one that no longer exists in this process. Two are
+    comparable when taken with the same `input`, which the default always is.
     """
     with _somewhere(store) as place:
         return _snapshot(graph, input, place)
@@ -201,12 +128,9 @@ def changes(
     *,
     store: "Store | str | None" = None,
 ) -> dict[str, list[str]]:
-    """What an edit did, as `{node: [finding, ...]}` — see the findings above.
-    A node with nothing said about it is not in it.
-
-    Each side is a `Graph` or a `snapshot` of one; `input` and `store` are only
-    used for the ones that are still graphs, since a snapshot has been named
-    already.
+    """What an edit did, as `{node: [finding, ...]}`. A node with nothing said
+    about it is not in it. `input` and `store` are only used for a side that is
+    still a graph, since a snapshot has been named already.
     """
     with _somewhere(store) as place:
         # Written as a pair rather than built from a generator: `_which` reads
@@ -265,12 +189,9 @@ def _below(side: Snapshot, roots: list[str]) -> set[str]:
 
 def _snapshot(graph: "Graph | Snapshot", input: Any, place: "Store | str") -> Snapshot:
     """One side of the comparison, whether it arrived as a graph or already as
-    this.
-
-    `shape` is what implements a node, what it was built with, and who feeds
-    it, all three together, because they are one question — *what is this node* —
-    and none of them is something that happened to it. `state` and `salt` are
-    apart since they move a name without the code moving at all.
+    this. `shape` is what implements a node, what it was built with and who feeds
+    it, because those are one question; `state` and `salt` are apart since they
+    move a name without the code moving.
     """
     if isinstance(graph, dict):
         return graph
@@ -311,11 +232,8 @@ def _declared(graph: "Graph") -> dict[str, str]:
 
 
 def _named(graph: "Graph", input: Any, place: "Store | str") -> dict[str, str]:
-    """The one name of each node that has one.
-
-    A node whose output is named item by item is left out rather than flattened:
-    the pass never produces one today, and the honest answer if it ever does is
-    *cannot tell*, which is the side everything else here gives up on.
+    """The one name of each node that has one. A node named item by item is left
+    out rather than flattened: the honest answer is *cannot tell*.
     """
     said = json.loads(graph.foreseen_json(input, store=place))
     return {node: keys["One"] for node, keys in said["keys"].items() if "One" in keys}

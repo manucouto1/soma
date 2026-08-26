@@ -19,8 +19,6 @@ use somatize_fabric_wire::Serving;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 
-// ── Doubles ──
-
 struct Add(f64);
 
 impl Node for Add {
@@ -83,8 +81,6 @@ fn run_through(host: &str, transport: &dyn Transport, input: f64) -> Result<Valu
         .map_err(|why| why.to_string())
 }
 
-// ── The rendezvous waits until somebody needs it ──
-
 #[test]
 fn building_a_handle_asks_the_broker_nothing() {
     // A graph names hosts a run may never reach: a branch not taken is a worker
@@ -120,8 +116,6 @@ fn a_host_whose_address_nobody_is_on_names_the_host_and_the_address() {
     assert!(why.contains("w1") && why.contains("127.0.0.1:1"), "{why}");
 }
 
-// ── The session is opened once, for all the hosts ──
-
 #[test]
 fn four_hosts_share_one_greeting() {
     // A greeting belongs to the conversation, not to a host. Four of them would
@@ -152,8 +146,6 @@ fn four_hosts_share_one_greeting() {
     assert_eq!(reaches, 4, "one rendezvous each: {heard:?}");
 }
 
-// ── What is not taken is not released ──
-
 #[test]
 fn a_rendezvous_nobody_took_is_not_let_go_of() {
     let (session, heard) = noting(vec![(Host::new("w1"), nowhere())]);
@@ -168,8 +160,6 @@ fn a_rendezvous_nobody_took_is_not_let_go_of() {
         "it released something it never held"
     );
 }
-
-// ── The three paths this client cannot take yet ──
 
 #[test]
 fn the_paths_the_negotiation_has_not_arrived_for_are_refused_by_name() {
@@ -195,8 +185,6 @@ fn the_paths_the_negotiation_has_not_arrived_for_are_refused_by_name() {
         );
     }
 }
-
-// ── End to end, over a real wire ──
 
 #[test]
 fn a_slice_reaches_a_real_worker_through_the_broker() {
@@ -335,8 +323,6 @@ fn needs_is_empty_and_travels_anyway() {
         "the rendezvous did not carry a `Needs`"
     );
 }
-
-// ── Two names for one place, and one name run twice ──
 
 /// A worker standing on a port of this machine, and the address it took.
 fn a_worker_standing() -> String {

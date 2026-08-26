@@ -1,7 +1,5 @@
-//! The unit test binary. One `mod` per module of `src/`.
-//!
-//! The tests live outside `src/` on purpose: they are another crate, so they
-//! only see the public API and cannot lean on anything private to pass.
+//! The unit test binary, one `mod` per module of `src/`. Outside `src/` on
+//! purpose: another crate, so it can only lean on the public API.
 
 mod build;
 mod device;

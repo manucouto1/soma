@@ -1,10 +1,7 @@
 //! What the two sides say to each other, and in what order.
 //!
 //! Two enums, together because they are a single vocabulary: a message on its
-//! own means nothing without the one that answers it. No `#[non_exhaustive]`,
-//! like the rest of the project's enums.
-//!
-//! # The conversation
+//! own means nothing without the one that answers it.
 //!
 //! ```text
 //! → Hello { runtime, offering }        once per session
@@ -20,57 +17,38 @@
 //!   | Done { last, produced, keys } | Failed(why)
 //! ```
 //!
-//! # The one answer that does not end anything
+//! `Saw` is the one answer that ends nothing, and it is why an execution on
+//! another machine is watchable while it happens. It needed no port and no
+//! second connection: between `Work` and `Done` the client is **already
+//! blocked** on this socket, and that idle direction is the whole mechanism.
+//! Where there is no connection — a study handed out of a folder — facts go to
+//! the store and whoever wants them scans, which is the same rule: facts follow
+//! whatever channel is already there.
 //!
-//! `Saw` is why an execution on another machine is watchable while it happens
-//! rather than after it. It needed no port, no second connection and no bus:
-//! between sending `Work` and reading `Done` the client is **already blocked**
-//! on this socket, and that idle direction is the whole mechanism. Reading one
-//! answer became reading until one of them is terminal.
-//!
-//! Where there is no connection — a study handed out of a folder, CU18 — facts
-//! go to the store and whoever wants them scans. That is not a second design:
-//! it is the same rule, which is that facts follow whatever channel is already
-//! there.
-//!
-//! # Why it is announced before being sent
-//!
-//! The `Hello` carries the artifact's **name**, not the artifact: a pickled
-//! catalog with weights inside is megabytes, and asking "do you have
-//! `sha256:abc…`?" is forty bytes.
-//!
-//! And a consequence worth more than the saving: **the day a store exists — a
-//! MinIO, an S3, a shared folder — the worker tries it before answering `Send`,
-//! and the protocol does not change a line.** The store becomes a cache in front
-//! of this conversation rather than a fork in the design. It is git's
+//! The `Hello` carries the artifact's **name** and not the artifact, so asking
+//! *do you have `sha256:abc…`?* is forty bytes. And the consequence is worth
+//! more than the saving: **the day a store exists the worker tries it before
+//! answering `Send`, and the protocol does not change a line.** It is git's
 //! `have`/`want` and `docker push`'s layer exchange.
 //!
-//! # The same thing in bytes
-//!
-//! MessagePack through `serde`, and the two choices behind that are worth
-//! saying out loud because an earlier version of this wrote the bytes by hand,
-//! 470 lines of them, on the argument that a `#[derive(Serialize)]` would hide
-//! the domain decision about [`Value::Opaque`]. That argument was wrong: an
-//! `Arc<dyn Any>` cannot be derived at all, so the decision has to be written by
-//! hand either way. What the 470 lines actually bought was an unversioned format
-//! and an inspector we would also have had to write.
-//!
-//! **Why MessagePack and not `postcard` or `bincode`**: measured, not guessed.
-//! `postcard` throws away the message of a custom serialization error, and here
-//! that message is the one explaining why an opaque value cannot travel;
-//! `bincode` writes more bytes. Being self-describing also means these bytes can
-//! be read with any MessagePack tool the day something goes wrong on a machine
-//! you cannot attach a debugger to.
+//! In bytes it is MessagePack through `serde`. An earlier version wrote them by
+//! hand, 470 lines, on the argument that a `#[derive(Serialize)]` would hide the
+//! decision about [`Value::Opaque`]; that was wrong, since an `Arc<dyn Any>`
+//! cannot be derived at all and the decision has to be written by hand either
+//! way. What the 470 lines bought was an unversioned format and an inspector.
+//! MessagePack rather than `postcard` or `bincode` was measured: `postcard`
+//! throws away the message of a custom serialization error — here the one
+//! explaining why an opaque value cannot travel — and `bincode` writes more
+//! bytes.
 //!
 //! An `Opaque` carries something that **only exists in this process**, so it
-//! fails on the way out, with the node and the host in front of you. It is asked
+//! fails on the way out, with the node and the host in front of you. Asked
 //! through [`Value::travels`], so the refusal is [`MessageError::Opaque`] and
-//! not whatever a serializer felt like saying. Catching it at compile time
-//! cannot be done: which value travels along an edge is a run-time matter.
-//!
+//! not whatever a serializer felt like saying; catching it at compile time
+//! cannot be done, since which value travels along an edge is a run-time matter.
 //! Mind the asymmetry: an [`Artifact`](crate::Artifact)'s bytes **do** cross
-//! unlooked-at. An artifact is a pile of bytes opaque by design; an `Opaque` is
-//! a pointer into this process disguised as a value.
+//! unlooked-at, being a pile of bytes opaque by design, while an `Opaque` is a
+//! pointer into this process disguised as a value.
 //!
 //! And still no version: both sides are the same binary from the same
 //! `cargo build`. The day they stop being so, the place for one is the `Hello`,
@@ -83,12 +61,10 @@ use std::fmt;
 
 /// What the client says.
 ///
-/// The first `allow` in the project, and it is worth saying why rather than
-/// leaving it to be discovered: `Work` is far bigger than `Hello`, and clippy is
-/// right about the arithmetic and wrong about what to do. Boxing it would buy an
-/// allocation on every message to save a few hundred bytes of stack on one that
-/// is about to be serialized anyway — and `Hello` is sent **once per session**
-/// while `Work` is the whole conversation.
+/// The `allow` is deliberate: `Work` is far bigger than `Hello`, and boxing it
+/// would buy an allocation on every message to save a few hundred bytes of
+/// stack on one that is about to be serialized anyway — and `Hello` is sent
+/// **once per session** while `Work` is the whole conversation.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -145,10 +121,8 @@ pub enum Answer {
     /// Something happened over there, and the work is **not** over.
     ///
     /// The only non-terminal answer there is, and it costs no second connection
-    /// because the client is already blocked reading this one: between `Work`
-    /// and `Done` the socket was idle in one direction, and this is what fills
-    /// it. Last in the enum on purpose — the variant's index is what goes on the
-    /// wire.
+    /// because the client is already blocked reading this one. Last in the enum
+    /// on purpose — the variant's index is what goes on the wire.
     Saw(Fact),
 }
 
@@ -217,17 +191,13 @@ fn read<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, MessageError>
 /// A mirror of [`Request`], and not the type itself, because of the fields
 /// `serde` cannot decide on its own: the **placement** and the **memory**. Only
 /// what belongs to *this plan's* nodes travels — sending the whole thing would
-/// put on the wire where nodes that do not even exist there run, and what is
-/// remembered of them — and of the placement the **host** half does not travel
-/// at all, having already done its job when it decided this slice would leave.
-/// `serde` sees one field at a time, so those transformations live here.
+/// put on the wire where nodes that do not exist there run — and of the
+/// placement the **host** half does not travel at all, having done its job when
+/// it decided this slice would leave. `serde` sees one field at a time, so
+/// those transformations live here.
 ///
-/// The memory is the one thing here that is **built** rather than borrowed: a
-/// projection has to be made somewhere, and it is a handful of short strings
-/// against a plan and its values.
-///
-/// Two mirrors and not one so that sending copies nothing. **Their variants have
-/// to stay in the same order**: what goes on the wire is the index.
+/// Two mirrors and not one so that sending copies nothing. **Their variants
+/// have to stay in the same order**: what goes on the wire is the index.
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize)]
 enum Sending<'a> {
@@ -336,9 +306,8 @@ fn devices_in<'a>(plan: &'a Plan, placement: &'a Placement) -> Vec<(&'a NodeId, 
 ///
 /// **Written out one fact at a time, which is a hole with a name on it**: a new
 /// thing to remember that is not added here does not fail — it simply stops
-/// being true on the other side of the wire, which is the worst way for anything
-/// to be wrong. Whoever adds a fifth thing to [`Memory`] adds a line here and a
-/// test that crosses.
+/// being true on the other side of the wire, which is the worst way for
+/// anything to be wrong.
 fn memory_in(plan: &Plan, memory: &Memory) -> Memory {
     let mut mine = Memory::new();
     for id in plan.steps().map(|step| step.node) {

@@ -1,25 +1,18 @@
 """One table of colours, for everything this library draws.
 
-CU19 said it about the graph — *"looked up with `[]` and never with
-`.get(…, default)`; in the original soma the same colours lived in four tables
-keyed by the same strings, so a typo came out as the alarm colour instead of
-failing"* — and the moment there was a second figure the same rule applied one
-level up. A product whose graph is light and whose curves are dark is two
-products.
+Looked up with `[]` and never with `.get(…, default)`: in the original soma the
+same colours lived in four tables keyed by the same strings, so a typo came out
+as the alarm colour instead of failing. A product whose graph is light and whose
+curves are dark is two products.
 
-Dark, and not as a preference dressed up as a decision: what these figures are
-for is being looked at for a long time beside a training run, and a bright
-rectangle in a notebook at two in the morning is a bright rectangle. The ink is
-off-white rather than white and the ground is off-black rather than black,
-because full-contrast edges buzz.
+Dark, and not a preference dressed up as a decision: what these figures are for
+is being looked at for a long time beside a training run. The ink is off-white
+rather than white and the ground off-black rather than black, because
+full-contrast edges buzz.
 
-# What a colour is allowed to mean
-
-The same discipline as the graph's fill: **one fact per channel**. Hue says
-*where* something ran or *which* series it is; it never doubles as good-or-bad.
-The only colour that means a judgement is `alarm`, and it is used for exactly one
-thing — a `forward` that broke — which is a fact and not an opinion. Whatever
-CU21 decides is *unhealthy* will need its own channel and it is not this one.
+**One fact per channel.** Hue says *where* something ran or *which* series it is;
+it never doubles as good-or-bad. The only colour that means a judgement is
+`alarm`, used for exactly one thing — a `forward` that broke — which is a fact.
 """
 
 from __future__ import annotations
@@ -57,13 +50,10 @@ PALETTE = {
 }
 
 MARKS = {
-    # What **sort** of thing a layer is. A `Linear` and a `Sigmoid` are not the
-    # same kind of thing, and drawing them the same says they are. By role and
-    # never by class, so a non-linearity nobody has heard of is still drawn as
-    # one.
-    #
-    # Fill, outline, ink, and how tall it is as a fraction of a full row: what
-    # holds weights gets a box, and what does not gets a mark.
+    # What **sort** of thing a layer is: a `Linear` and a `Sigmoid` drawn the
+    # same say they are the same thing. By role and never by class. Fill,
+    # outline, ink, and how tall it is as a fraction of a full row — what holds
+    # weights gets a box, what does not gets a mark.
     "learned": ("#1c2333", "#4a5a86", "#cfd8ee", 1.0),
     "conv": ("#1b2530", "#4d7f8f", "#c7e3ec", 1.0),
     "recurrent": ("#1c2333", "#6f7bd1", "#cfd8ee", 1.0),
@@ -187,10 +177,9 @@ def axis(**over: Any) -> dict[str, Any]:
 def plotly() -> Any:
     """`plotly.graph_objects`, or an error that says how to get it.
 
-    `Any` and not `ModuleType`: every caller reaches for `go.Figure` or
-    `go.Scatter`, and a checker rejects an attribute on a `ModuleType` it cannot
-    resolve. Since plotly ships no types there is nothing to resolve it against,
-    so the honest answer is the one that admits it.
+    `Any` and not `ModuleType`: every caller reaches for `go.Figure`, and a
+    checker rejects an attribute on a `ModuleType` it cannot resolve. plotly
+    ships no types, so the honest answer is the one that admits it.
     """
     try:
         import plotly.graph_objects as go

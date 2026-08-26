@@ -1,46 +1,33 @@
 //! Turning what only exists in this process into bytes, and back.
 //!
-//! `Opaque` was the one thing that could not leave: it carries a live Python
-//! object, and neither a wire nor a store takes one. That frontier does not
-//! disappear here, it **moves**: from "the variant" to "the variant nobody
-//! registered a codec for", which is the more precise statement of the two —
-//! what cannot travel is not a tensor, it is a tensor nobody said how to write
-//! down.
+//! `Opaque` was the one thing that could not leave. That frontier does not
+//! disappear here, it **moves**: from *the variant* to *the variant nobody
+//! registered a codec for*.
 //!
 //! ```python
 //! codec("torch.Tensor", torch.Tensor, dump=..., load=...)
 //! ```
 //!
-//! # One pair of passes, and two places it is asked for
+//! What this crate fills is [`Codecs`], and that is all — opaques out on the way
+//! in, opaques back on the way out, so the wire never learns what one carries. A
+//! **store** wants the same two passes and gets the same answer: what a tensor
+//! weighs written down is one question. So there is no second type for it, and
+//! `somatize_store` still never learns Python exists.
 //!
-//! What this crate fills is [`Codecs`] — `somatize_transport::Codec` — and
-//! that is all: opaques out on the way in, opaques back on the way out, so the
-//! transport never learns what an opaque carries.
-//!
-//! A **store** wants the same two passes, and it is the same answer: what a
-//! tensor weighs written down is one question whether the bytes are going to a
-//! directory or down a socket. So there is no second type here for it —
-//! `Packing::over(keeper, &Codecs)` is the core's, written once for whoever
-//! has a codec, and `somatize_store` still never learns Python exists.
-//!
-//! What a packed opaque looks like — the shape itself lives in the core,
-//! beside the trait, so that what this side writes and what `data/` writes are
-//! the same thing — and what the risk of it is:
+//! The shape of a packed opaque lives in the core, beside the trait, so that what
+//! this side writes and what `data/` writes are the same thing:
 //!
 //! ```text
 //! {"__soma_opaque__": "torch.Tensor", "bytes": b"..."}
 //! ```
 //!
-//! A user whose own map has that exact key gets it read back as an opaque. It is
-//! known and accepted: the alternative is a variant in the core's `Value` that
-//! exists only because Python is behind it.
+//! A user whose own map has that exact key gets it read back as an opaque. Known
+//! and accepted: the alternative is a variant in the core's `Value` that exists
+//! only because Python is behind it.
 //!
-//! # What this does **not** give back
-//!
-//! A gradient. What comes out of `load` is a **leaf**: the graph that produced
-//! it is gone, and the backward pass stops there. That is why a cached prefix
-//! has to be frozen, and it is checked before running rather than discovered as
-//! a net that quietly stopped training.
+//! What `load` gives back is a **leaf**: the graph that produced it is gone. That
+//! is why a cached prefix has to be frozen, checked before running rather than
+//! discovered as a net that quietly stopped training.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -51,12 +38,9 @@ use somatize_core::{Codec, CodecError, anything_written, as_written, written_dow
 use somatize_data::{Frame, Ipc};
 
 /// What is registered, by the name it was registered under: `kind → (type,
-/// dump, load)`.
-///
-/// A Python dict and not a Rust map because what it holds are Python objects,
-/// and because the order it is walked in is the order they were registered:
-/// the first type that matches wins, which is what makes registering a subclass
-/// after its base a thing you can do.
+/// dump, load)`. A Python dict, because it holds Python objects and because it
+/// is walked in registration order — the first type that matches wins, which is
+/// what makes registering a subclass after its base work.
 static CODECS: GILOnceCell<Py<PyDict>> = GILOnceCell::new();
 
 fn codecs(py: Python<'_>) -> &Bound<'_, PyDict> {
@@ -91,12 +75,8 @@ pub fn codecs_registered(py: Python<'_>) -> Vec<String> {
         .collect()
 }
 
-/// The same two passes, for a wire instead of a store.
-///
-/// Nothing of its own: what a tensor weighs in bytes is one question, and it has
-/// one answer whether the bytes are going to a directory or down a socket. It is
-/// a unit struct because the registry it reads is the process's, not this
-/// object's.
+/// The same two passes, for a wire instead of a store. Nothing of its own: a
+/// unit struct, because the registry it reads is the process's.
 pub struct Codecs;
 
 impl Codec for Codecs {
@@ -269,12 +249,9 @@ fn matching<'py>(
     Ok(None)
 }
 
-/// What this object's type is called, and every type it inherits from, the way
-/// a codec would have been named after it: `torch.Tensor`.
-///
-/// The whole line and not just the type, so that an `nn.Parameter` finds the
-/// codec registered for a tensor rather than a codec of its own that nobody
-/// wrote.
+/// What this object's type is called, and every type it inherits from, the way a
+/// codec would have been named after it. The whole line, so an `nn.Parameter`
+/// finds the codec registered for a tensor.
 fn type_names(obj: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     let mut names = Vec::new();
     for class in obj.get_type().mro().iter() {

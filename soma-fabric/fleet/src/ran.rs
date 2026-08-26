@@ -4,29 +4,20 @@
 //! a fact. **What did this machine do** is a question nobody can ask of it in
 //! that shape, and it is the one somebody with three hosts came for.
 //!
-//! # The column that only exists up here
+//! `waiting_us` is the column that only exists up here: the round trip
+//! **minus** what actually ran over there — the wire, the queue and the codec.
+//! It says whether sending it was worth it, and no per-node view can produce it
+//! because neither half of the subtraction belongs to a node. Never below zero:
+//! a `left` counted on one `forward` and the work it carried counted on another
+//! would otherwise read as a machine that finished before it was asked.
 //!
-//! `waiting_us` is the round trip **minus** what actually ran over there: the
-//! wire, the queue and the codec. It is the number that says whether sending it
-//! was worth it, and no per-node view can produce it because neither half of the
-//! subtraction belongs to a node — `left` is the client's fact and `ran` is the
-//! worker's.
+//! The machine says the half no record can derive — how loaded it is — which
+//! arrives wrapped in `Fact::Elsewhere` under the graph's name, and the
+//! **newest wins**: a reading is a snapshot, and the question is what the
+//! machine is like now.
 //!
-//! Never below zero. A `left` counted on one `forward` and the work it carried
-//! counted on another would otherwise read as a machine that finished before it
-//! was asked.
-//!
-//! # And the machine says the half no record can derive
-//!
-//! How loaded it is. That arrives as a reading wrapped in `Fact::Elsewhere`,
-//! under the graph's name, and the **newest wins**: a reading is a snapshot and
-//! the question is what the machine is like now, not what it averaged.
-//!
-//! # What this costs
-//!
-//! A scan and a fetch per `forward`. The same as the join next door and for the
-//! same reason: what is in the scan is the summary, and the hosts are in the
-//! blob.
+//! A scan and a fetch per `forward`, because what is in the scan is the summary
+//! and the hosts are in the blob.
 
 use serde::Serialize;
 use somatize_store::{Bound, Store, StoreError};

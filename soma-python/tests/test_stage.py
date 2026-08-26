@@ -152,9 +152,6 @@ def test_a_join_lands_after_the_deepest_branch(g):
     ]
 
 
-# ── What a stage is made of ──
-
-
 def test_a_hold_is_named_after_the_real_producer(g):
     g.node("a", Add(1))
     g.node("b", Add(2))
@@ -265,9 +262,6 @@ def test_a_stage_takes_what_it_holds_and_ignores_the_rest(g):
     assert second.graph.forward(None) == 9.0
 
 
-# ── The three properties the backward pass hangs off ──
-
-
 TOPOLOGIES = {
     "a chain through another host": (
         lambda: Add(1) >> Add(2).at("w1") >> Add(3),
@@ -337,10 +331,6 @@ def test_a_stage_provisions_the_whole_graph_and_not_its_half(g):
     for stage in stages(g):
         stage.graph.provision({"w1": worker})
     assert worker.carried == [["a", "c"], ["a", "c"], ["a", "c"]]
-
-
-
-# ── Somebody standing beside a node ──
 
 
 def with_company(g):

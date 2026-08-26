@@ -83,9 +83,6 @@ def batch(n=8, seed=0):
     return torch.randn(n, IN), torch.randint(0, CLASSES, (n,))
 
 
-# ── What a training run exports ──
-
-
 def test_it_is_the_weights_node_by_node():
     g = net()
     exported = trainer(g).export()
@@ -145,9 +142,6 @@ def test_the_optimizer_state_is_not_in_it():
     ), "something that is not a weight came out"
 
 
-# ── And what it refuses ──
-
-
 def test_loading_something_this_graph_does_not_have_is_refused_by_name():
     g = net()
     t = trainer(g)
@@ -202,9 +196,6 @@ def test_but_one_trained_here_is_exported_like_any_other():
     t = trainer(g, trains=trains)
 
     assert sorted(t.export()) == ["body", "head"]
-
-
-# ── Putting several together ──
 
 
 def test_the_average_of_one_is_that_one():
@@ -276,9 +267,6 @@ def test_one_size_per_training_run_and_not_a_number_of_them():
 
     with pytest.raises(ValueError, match="2 training runs .* 3 sizes"):
         fedavg([one, other], sizes=[1, 2, 3])
-
-
-# ── And the one that says it was worth doing ──
 
 
 def rule():

@@ -54,9 +54,6 @@ def mine():
     return lambda what: f"test/{os.getpid()}/{what}"
 
 
-# ── Opening one, which is where the credentials are ──
-
-
 def test_a_bucket_with_no_credentials_anywhere_says_which_one_it_wanted(monkeypatch):
     # Where everything else looks, so nobody has to pass what `aws` already
     # reads. When it is not there either, the message names the variable.
@@ -79,9 +76,6 @@ def test_credentials_are_taken_from_the_environment_when_none_are_given(monkeypa
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", SECRET)
 
     assert repr(Store.on_bucket(ENDPOINT, BUCKET)) == f"Store({ENDPOINT}/{BUCKET})"
-
-
-# ── Bytes and names, which are the same two questions as a directory's ──
 
 
 @needs_a_bucket
@@ -116,9 +110,6 @@ def test_a_name_nobody_has_can_be_claimed_and_one_somebody_has_cannot(bucket, mi
     assert bucket.resolve(name).digest == ours, "the second one overwrote it"
 
 
-# ── Values, which is the layer that only exists here ──
-
-
 @needs_a_bucket
 def test_a_map_of_tensors_goes_in_and_comes_out_a_map_of_tensors(bucket, mine):
     # A codec is a fact about the value and not about where it is going, so this
@@ -136,9 +127,6 @@ def test_a_map_of_tensors_goes_in_and_comes_out_a_map_of_tensors(bucket, mine):
 @needs_a_bucket
 def test_recalling_what_nobody_kept_is_nothing_and_not_a_failure(bucket, mine):
     assert bucket.recall(mine("never")) is None
-
-
-# ── A graph's cache, which until now could only be a disk ──
 
 
 class Counts(Node):
@@ -163,9 +151,6 @@ def test_what_a_graph_keeps_can_live_on_a_bucket(bucket, mine):
     assert g.forward(7.0, store=bucket) == 7.0
     assert g.forward(7.0, store=bucket) == 7.0
     assert counts.calls == 1, "the second answer came out of the bucket"
-
-
-# ── And the point of all of it: nothing above knows which one it has ──
 
 
 def searched(store, study):

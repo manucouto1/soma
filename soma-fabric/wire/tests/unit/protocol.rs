@@ -34,8 +34,6 @@ fn round_trip(request: Request) {
     assert_eq!(Request::from_bytes(&bytes).unwrap(), request);
 }
 
-// ── The values ──
-
 #[test]
 fn the_values_go_and_come_back_equal() {
     for value in [
@@ -84,8 +82,6 @@ fn a_map_keeps_its_order() {
         ["z", "a", "m"]
     );
 }
-
-// ── The plan and what travels with it ──
 
 #[test]
 fn the_plans_go_and_come_back_equal() {
@@ -272,8 +268,6 @@ fn the_host_does_not_travel_as_a_placement() {
     assert!(placement.is_local());
 }
 
-// ── The greeting and the provisioning ──
-
 #[test]
 fn a_greeting_without_an_artifact_goes_and_comes_back() {
     round_trip(Request::Hello {
@@ -319,8 +313,6 @@ fn an_artifacts_bytes_are_not_looked_at() {
     });
 }
 
-// ── The answers ──
-
 #[test]
 fn the_answers_go_and_come_back_equal() {
     for answer in [
@@ -341,8 +333,6 @@ fn the_answers_go_and_come_back_equal() {
         assert_eq!(Answer::from_bytes(&bytes).unwrap(), answer);
     }
 }
-
-// ── What does not cross ──
 
 #[test]
 fn an_opaque_does_not_fit_on_the_wire() {
@@ -399,8 +389,6 @@ fn an_opaque_does_not_come_back_either() {
     );
 }
 
-// ── Bytes that are not the ones that were written ──
-
 #[test]
 fn half_the_bytes_are_not_read_halfway() {
     let bytes = bytes_of(&work(Value::text("something fairly long"))).unwrap();
@@ -433,8 +421,6 @@ fn bytes_that_are_not_a_message_are_reported() {
         MessageError::Malformed(_)
     ));
 }
-
-// ── That what is already written still opens ──
 
 /// A value the way it was written down before bytes were asked for by name.
 ///

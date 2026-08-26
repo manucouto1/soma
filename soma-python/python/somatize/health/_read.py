@@ -1,7 +1,7 @@
 """Diagnosing a run from what was written down.
 
-The third of the three things CU19 split observability into, and the one that
-is an **opinion**. What makes the split real is that this reads the *record*::
+The third of the three things CU19 split observability into, and the one that is
+an **opinion**. What makes the split real is that this reads the *record*::
 
     diagnose(store, run="tuesday")
 
@@ -14,20 +14,13 @@ bounds::
 > **A diagnosis has to be reproducible from the stored record, without training
 > again.**
 
-That sentence has been in `docs/use-cases.md` since CU19 and this module is
-where it stops being an aspiration. It is a test: the same store, judged twice
-at two bounds, answers twice — and an argument about a threshold costs a scan
-rather than an afternoon of GPU.
+That is a test here: the same store, judged twice at two bounds, answers twice —
+and an argument about a threshold costs a scan rather than an afternoon of GPU.
 
-## Which steps a verdict is taken over
-
-`last=N` reads the last N `forward`s, which is the question worth asking of a
-run in flight. Without it, all of them.
-
-Each `health` fact already carries what the audit reduced over its own window —
-the maxima that `DEAD` and `SATURATED` read are maxima over that. What happens
-here is choosing which of those facts to look at, and the **latest one per
-node** is what gets judged: a run that recovered is not still ill.
+`last=N` reads the last N `forward`s, which is the question worth asking of a run
+in flight. Each `health` fact already carries what the audit reduced over its own
+window, and what happens here is choosing which of those facts to look at: the
+**latest one per node**, because a run that recovered is not still ill.
 """
 
 from __future__ import annotations
@@ -52,17 +45,14 @@ def diagnose(
     thresholds: Thresholds | None = None,
     last: int | None = None,
 ) -> dict[str, list[str]]:
-    """What is wrong, as `{where: [flag, ...]}`.
+    """What is wrong, as `{where: [flag, ...]}`. `where` is a node, or
+    `node.path.to.submodule` when `inside=` was asked to look in.
 
-    `where` is a node, or `node.path.to.submodule` when `inside=` was asked to
-    look in.
+    A node with nothing wrong is **not in the answer**. Empty would say *this was
+    checked and is fine*, and no flags does not mean that: a metric nobody
+    measured cannot raise one, and `seen` is what says what was measured.
 
-    A node with nothing wrong is **not in the answer**. Empty would say *this
-    was checked and is fine*, and no flags does not mean that: a metric nobody
-    measured cannot raise one. `seen` is what says what was measured.
-
-    It costs a fetch per `forward` looked at, because the numbers are in the
-    blobs. `last=N` is how a run of ten thousand steps is asked about now.
+    A fetch per `forward` looked at, because the numbers are in the blobs.
     """
     said: dict[str, list[str]] = {}
     for node, one in seen(store, run=run, last=last).items():
@@ -81,10 +71,9 @@ def seen(
     """The numbers a verdict would be taken over — the latest of each.
 
     Keyed by node, and by `node.path.to.submodule` for anything `inside=` was
-    asked to look at. The dot is what lets a figure colour the **node** while
-    the detail says which layer of it: a node is often a whole architecture,
-    and *this node is unhealthy* is not an answer when the node is twenty
-    layers deep.
+    asked to look at. The dot is what lets a figure colour the **node** while the
+    detail says which layer of it: *this node is unhealthy* is not an answer when
+    the node is twenty layers deep.
 
     For looking at what was measured rather than at what somebody thinks of it,
     and for taking the verdict yourself with `verdict(seen[where], bounds)`.
@@ -121,8 +110,7 @@ def history(
     """One measurement of one node over the run, as `(forward, value)` pairs.
 
     What a curve is drawn from — a gradient norm falling away, an update ratio
-    drifting, the stable rank of an update collapsing. A fetch per `forward`,
-    so `last=` is worth using.
+    drifting. A fetch per `forward`, so `last=` is worth using.
     """
     drawn: list[tuple[int, float]] = []
     for which, numbered in enumerate(_rows(store, run=run, last=last, numbered=True)):
@@ -173,9 +161,8 @@ def _numbers(fact: Fact) -> dict[str, float | bool]:
 def _number(what: Any) -> float | None:
     """Text back to a number, or `None` where it was not one.
 
-    A record is text — that is what makes it readable with `cat` — so this is
-    where it stops being text. `None` and not zero: a metric that could not be
-    read must not pass for one that was measured at zero.
+    A record is text — that is what makes it readable with `cat`. `None` and not
+    zero: a metric that could not be read must not pass for one measured at zero.
     """
     try:
         value = float(what)

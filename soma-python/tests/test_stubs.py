@@ -70,9 +70,6 @@ UNIVERSAL = {
 DERIVED_FROM_EQ = {"__ne__", "__lt__", "__le__", "__gt__", "__ge__"}
 
 
-# ── Reading the stub ─────────────────────────────────────────────────────────
-
-
 def _tree() -> ast.Module:
     return ast.parse(STUB.read_text(), filename=str(STUB))
 
@@ -148,9 +145,6 @@ def _stub_method(node: ast.ClassDef, name: str) -> ast.FunctionDef | None:
     return None
 
 
-# ── Reading the built module ─────────────────────────────────────────────────
-
-
 def _runtime_classes() -> dict[str, type]:
     return {
         n: o
@@ -194,9 +188,6 @@ def _own_attributes(cls: type) -> set[str]:
         if not isinstance(v, (staticmethod, classmethod))
         if not (n.startswith("__") and n.endswith("__"))
     }
-
-
-# ── What has to hold ─────────────────────────────────────────────────────────
 
 
 def test_the_stub_is_there_and_the_package_says_it_is_typed():

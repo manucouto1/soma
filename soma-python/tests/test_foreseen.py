@@ -79,9 +79,6 @@ def three(salt=None):
     )
 
 
-# ── A name, without a run ──
-
-
 def test_a_name_is_had_without_running_the_node_that_earns_it(store):
     g = Graph.somatize(Counts().named("a") >> Explodes().named("b").cached())
 
@@ -105,9 +102,6 @@ def test_what_cannot_be_foreseen_is_missing_rather_than_wrong(store):
     assert foreseen.names(g, [1, 2], store=store) == {}
 
 
-# ── What would not have to run ──
-
-
 def test_what_is_already_kept_says_what_would_not_have_to_run(store):
     g = chain()
 
@@ -122,9 +116,6 @@ def test_asking_what_would_not_run_needs_somewhere_to_look():
     # temporary directory would answer "everything runs" and be believed.
     with pytest.raises(TypeError):
         foreseen.unneeded(chain(), "x")
-
-
-# ── What an edit did ──
 
 
 def test_a_graph_compared_with_itself_has_nothing_said_about_it():
@@ -219,9 +210,6 @@ def test_the_input_cancels_out_of_the_comparison():
     )
 
 
-# ── The code that changed and the name that did not say so ──
-
-
 def test_an_edit_the_key_cannot_see_is_said_out_loud():
     # The fingerprint is deliberately not in the key: a cosmetic refactor would
     # invalidate half the store in silence. The cost is that a real edit renames
@@ -311,9 +299,6 @@ def test_a_bumped_salt_is_what_stale_is_asking_for():
     assert foreseen.changes(before, after) == {"b": ["SALTED"]}
 
 
-# ── Two graphs, or two snapshots ──
-
-
 def test_a_snapshot_answers_exactly_as_the_graph_it_was_taken_of():
     # The whole contract of the second door: whichever side arrives as which,
     # the findings are the same ones. A snapshot that drifted from a graph would
@@ -361,9 +346,6 @@ def test_a_snapshot_carries_the_words_and_not_only_the_digest():
     kept = foreseen.snapshot(chain())
 
     assert kept["declared"] == {"a": "Counts()", "b": "Counts()"}
-
-
-# ── The bridge underneath it ──
 
 
 def test_the_names_foreseen_are_json_and_ordered_by_id(store):

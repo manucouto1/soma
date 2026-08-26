@@ -1,30 +1,20 @@
 """The `project` artifact: names and state, without code.
 
 It is what gets sent to a worker that **already has the project**. Instead of
-serializing your whole objects, what travels is:
+serializing your whole objects, what travels is the **state** of each node with a
+plain `pickle` — a reference to the class by name plus its `__dict__` — and a
+**manifest** saying which version of the code the client expected for each class:
+`net:Filter → Filter(43b0bf6e)`. Two nodes are forty-eight bytes, and not one
+line of code travels.
 
-- the **state** of each node, with a plain `pickle` — which is a reference to
-  the class by name, plus its `__dict__`. Your hyperparameters go in there;
-- a **manifest** saying which version of the code the client expected for each
-  class: `net:Filter → Filter(43b0bf6e)`.
+Versioning comes in through `find_class`, which `pickle` calls when it finds a
+reference to a class: the name is resolved against the worker's clone, its
+fingerprint compared against the manifest's, and the decision made. The whole
+policy lives in one method and `pickle` does the rest, nested objects included.
 
-Two nodes are forty-eight bytes. Compared with `cloudpickle`, which also puts in
-the classes' bytecode and their closures, there is no contest — and in exchange
-there is no coupling to the interpreter, because not one line of code travels.
-
-## Where versioning comes in
-
-Through `find_class`, which `pickle` calls when it finds a reference to a class.
-The name is resolved against the worker's clone, its fingerprint compared against
-the manifest's, and the decision made. The whole policy lives in one method and
-`pickle` does the rest — including the objects nested inside the state.
-
-## What to know before trusting it
-
-`pickle` **does not call `__init__`** when rebuilding: it creates the object
-empty and sets the state on it. A node whose `__init__` opens a connection or
-loads a model has to say how that is redone in `__getstate__`/`__setstate__`,
-just as it would to be saved to disk.
+What to know before trusting it: `pickle` **does not call `__init__`** when
+rebuilding. A node whose `__init__` opens a connection or loads a model has to
+say how that is redone in `__getstate__`/`__setstate__`, as it would to be saved.
 """
 
 from __future__ import annotations
@@ -125,8 +115,8 @@ class _Resolves(pickle.Unpickler):
 
 
 def _find(module: str, name: str) -> Any:
-    """The class, by the module hint the client left and failing that by
-    sweeping its package — one package, because importing has effects.
+    """The class, by the module hint the client left and failing that by sweeping
+    its package — one package, because importing has effects.
 
     The sweep is needed because moving a class between files does not change its
     fingerprint, on purpose, so the hint stops holding while the name does not.

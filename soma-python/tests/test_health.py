@@ -82,9 +82,6 @@ def store(tmp_path):
     return Store(str(tmp_path))
 
 
-# ── The invariant ──
-
-
 def test_a_diagnosis_is_taken_from_the_record_and_not_from_the_run(store):
     # No graph, no torch, no optimizer in the call: a store and a name. That is
     # what makes the third row of observability a separate thing from the
@@ -119,9 +116,6 @@ def test_a_threshold_nobody_has_is_refused_by_name(store):
         Thresholds(grad_lo=1e-9)
 
 
-# ── The depth profile, which is what vanishing actually is ──
-
-
 def test_a_deep_sigmoid_stack_starves_its_early_layers(store):
     # The classic pathology: sigma' <= 0.25 per layer, so with unit-gain init
     # the backpropagated signal shrinks geometrically with depth. It is a
@@ -153,9 +147,6 @@ def test_the_update_ratio_lands_a_healthy_layer_near_a_thousandth(store):
     assert got[ids[0]]["update_ratio"] < 1e-8
 
 
-# ── The other pathologies ──
-
-
 def test_a_block_whose_relu_cuts_everything_off_is_dead(store):
     # A large negative bias puts every pre-activation under zero, so the layer
     # outputs nothing at all.
@@ -181,9 +172,6 @@ def test_a_gradient_too_big_to_step_on_explodes(store):
 
     said = diagnose(store, run="a-run")
     assert any("EXPLODING" in flags for flags in said.values()), said
-
-
-# ── The guard: they may not cry wolf ──
 
 
 def test_a_healthy_shallow_stack_raises_nothing_macro(store):
@@ -213,9 +201,6 @@ def test_a_node_with_no_weights_is_not_diagnosed_at_all(store):
     trained(g, store, steps=6)
 
     assert "through" not in seen(store, run="a-run")
-
-
-# ── What it costs, and what it does not change ──
 
 
 def test_a_run_that_is_not_audited_says_nothing_about_health(store):
@@ -251,9 +236,6 @@ def test_auditing_does_not_change_what_the_network_computes(store):
     assert torch.equal(weights(True), weights(None))
 
 
-# ── What a flag says about itself ──
-
-
 def test_every_flag_it_raises_says_what_to_do_about_it(store):
     torch.manual_seed(0)
     g, _ = chain([Block(activation="sigmoid") for _ in range(8)])
@@ -267,9 +249,6 @@ def test_every_flag_it_raises_says_what_to_do_about_it(store):
 def test_something_that_is_not_a_flag_says_so():
     with pytest.raises(ValueError, match="not a flag"):
         about("SLIGHTLY_OFF")
-
-
-# ── The architecture a node holds ──
 
 
 def test_a_node_says_what_it_is_made_of():
@@ -594,9 +573,6 @@ def test_depth_counts_composites_opened_and_not_names():
     assert len(whole.layers) == 1, "one box, and it says what is in it"
     assert whole.layers[0].made_of
     assert len(opened.layers) > 4, "and `depth=1` opens it"
-
-
-# ── Before a step is taken ──
 
 
 def test_a_probe_is_one_forward_that_was_recorded_and_never_trained(store):

@@ -78,9 +78,6 @@ def trainer(g, lr=0.05):
     )
 
 
-# ── A graph's parameters ──
-
-
 def test_it_collects_those_of_every_node_that_has_any():
     g = net()
     assert len(parameters(g)) == 4  # weight and bias of each layer
@@ -115,9 +112,6 @@ def test_whoever_is_trained_elsewhere_is_left_out_by_name():
     )
     assert len(parameters(g)) == 4
     assert len(parameters(g, without={"alone": split()})) == 2
-
-
-# ── Building the Trainer: what gets rejected ──
 
 
 def test_a_graph_without_parameters_fails_when_building_the_trainer():
@@ -200,9 +194,6 @@ def test_freezing_a_part_is_legitimate_and_passes():
     assert trainable.step(batches()[0]) > 0
 
 
-# ── Training ──
-
-
 def test_training_brings_the_loss_down():
     t = trainer(net())
     result = t.fit(batches(), epochs=10)
@@ -257,9 +248,6 @@ def test_an_input_that_is_not_a_tensor_crosses_as_always():
     assert trainer(g).step(batch) > 0
 
 
-# ── Several training runs: a list, not a graph ──
-
-
 def test_two_nets_from_the_same_factory_do_not_share_weights():
     # The counterexample that ruled out "one graph, N catalogs": cloning a
     # catalog clones `Arc`s, i.e. the replicas would share the weights and all
@@ -282,9 +270,6 @@ def test_the_hyperparameter_search_is_a_list_comprehension():
 
     best = min(study, key=lambda lr: study[lr].loss)
     assert best == 1e-2, {lr: r.loss for lr, r in study.items()}
-
-
-# ── With a GPU: CU10 and CU11 at once ──
 
 
 @no_cuda
@@ -326,9 +311,6 @@ def test_the_target_goes_to_meet_the_output_on_its_device():
     trainer(g).step((input_, target))  # the output ends up on cuda:0
 
     assert target.device.type == "cpu", "and the user's batch stays as it was"
-
-
-# ── A graph that is cut: the Trainer drives ──
 
 
 def two_of_them():
@@ -448,9 +430,6 @@ def test_kept_after_a_cut_is_refused():
 
 def _weights(graph, node_id):
     return float(graph.implementation(node_id).lin.weight.detach().abs().sum())
-
-
-# ── A group of steps, and one update ──
 
 
 def in_two_halves(batch):
@@ -587,9 +566,6 @@ def test_a_group_is_a_whole_number_of_steps_and_at_least_one():
             accumulating(net(), every=wrong)
 
 
-# ── And across a cut, where the far side has to count the same steps ──
-
-
 def test_a_cut_graph_accumulates_in_step_with_the_whole_one():
     # The one that catches a far side out of phase: it counts its own `learn`
     # calls, so if the two groups were not the same group the weights over there
@@ -646,9 +622,6 @@ def test_a_technique_that_names_its_own_group_wins_over_the_trainers():
 
     assert t.every == 2
     assert trains["encoder"].every == 3
-
-
-# ── A batch that does not fit, cut into pieces ──
 
 
 def with_micro(g, micro, every=1, lr=0.1, trains=None):

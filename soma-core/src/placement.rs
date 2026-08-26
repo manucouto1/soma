@@ -1,40 +1,20 @@
-//! Where each node runs.
+//! Where each node runs: the fourth fact, beside [`Graph`](crate::Graph) (what
+//! exists), [`Catalog`](crate::Catalog) (who executes it) and
+//! [`Plan`](crate::Plan) (when).
 //!
-//! A type of its own, and not a field of [`Graph`](crate::Graph) or
-//! [`Catalog`](crate::Catalog), because placing is a fourth fact:
-//!
-//! | piece | answers |
-//! |---|---|
-//! | [`Graph`](crate::Graph) | **what** exists and how it connects |
-//! | [`Catalog`](crate::Catalog) | **who** executes it |
-//! | `Placement` | **where** |
-//! | [`Plan`](crate::Plan) | **when**, and with what concurrency |
-//!
-//! It does not fit in the graph — a `Graph` is topology only, and the engine
-//! does not look at it — nor in the catalog, which is the half that is **not**
-//! data: the day a subgraph travels to another machine, the placement travels
+//! It does not fit in the graph — topology only — nor in the catalog, which is
+//! the half that is **not** data: when a subgraph travels, the placement travels
 //! with it and the implementations do not.
 //!
-//! # The two halves, and who obeys each
+//! Two maps and not a pair, because the two halves are obeyed by different
+//! people: [`distribute`](crate::distribute) reads the [`Host`] when deciding
+//! the shape, and the node reads the [`Device`] through `ctx.device` when
+//! executing. A node can have either, both or neither. Hence
+//! [`compile`](crate::compile) sees neither: a device is inert for the traversal,
+//! and crossing a wire is a separate, named step.
 //!
-//! | half | who reads it | when |
-//! |---|---|---|
-//! | [`Host`] | [`distribute`](crate::distribute) | when deciding the shape |
-//! | [`Device`] | the node, via `ctx.device` | when executing it |
-//!
-//! The node obeys the [`Device`] because the core does not know how to move
-//! anything to a GPU; it cannot obey the [`Host`], because its code does not run
-//! here. Hence two maps and not a pair: a node can have a host without a device,
-//! a device without a host, both, or neither.
-//!
-//! And hence [`compile`](crate::compile) sees neither. A device is **inert** for
-//! the traversal, so placing cannot alter the plan. A host is not, but crossing
-//! a wire is decided in a separate, named step.
-//!
-//! A bare map is what it is, without checking that the ids exist: that is
-//! checked where there is a graph in front of you — [`Wire::on`](crate::Wire::on)
-//! and [`Wire::at`](crate::Wire::at) can only name their own nodes, and the
-//! bindings' `place()` validates against the graph.
+//! A bare map, without checking that the ids exist: that is checked where there
+//! is a graph in front of you.
 
 use crate::{Device, Host, NodeId};
 use std::collections::{HashMap, HashSet};
@@ -77,23 +57,11 @@ impl Placement {
 
     /// Every host this placement names, once each, in a fixed order.
     ///
-    /// The half of [`host_of`](Self::host_of) that reads the other way, and it
-    /// exists because of who asks. A client that was handed a dictionary of
-    /// workers already knew the names — they were its keys. A client that talks
-    /// to a broker does not: it has to ask *which hosts does this graph name*,
-    /// and then ask the broker for each. The names live here and nowhere else.
-    ///
-    /// **Once each**, because a host named by ten nodes is one rendezvous, not
-    /// ten. And **sorted**, which is not tidiness: these come out of a `HashMap`,
-    /// and iterating one gives a different order every run. That would make the
-    /// order rendezvous are asked for — and so the order failures happen in —
-    /// irreproducible, and this project has already paid for a nondeterministic
-    /// order once, when an artifact's id changed because the caller reordered a
-    /// dictionary.
-    ///
-    /// A `Vec` and not an `impl Iterator`: deduplicating means collecting, so
-    /// the work is already done and pretending it is lazy would only be a
-    /// costume.
+    /// The half of [`host_of`](Self::host_of) that reads the other way, for the
+    /// client that talks to a broker and so does not already know the names.
+    /// Once each, because a host named by ten nodes is one rendezvous. **Sorted**,
+    /// because these come out of a `HashMap` and an irreproducible order would
+    /// make the order failures happen in irreproducible too.
     pub fn hosts(&self) -> Vec<&Host> {
         let mut named: Vec<&Host> = self.hosts.values().collect();
         named.sort();

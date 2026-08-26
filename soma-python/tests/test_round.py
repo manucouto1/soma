@@ -31,9 +31,6 @@ def store(tmp_path):
     return Store(str(tmp_path / "shared"))
 
 
-# ── One client at a time, where nothing races ──
-
-
 def test_the_only_client_of_a_round_averages_it_itself(store):
     average = gather(store, weights(4), run="r", round=0, clients=1, mine=0)
 
@@ -72,9 +69,6 @@ def test_and_so_are_two_rounds_of_one(store):
     assert torch.equal(second["body"]["0"], torch.full((4,), 7.0))
 
 
-# ── When somebody does not turn up ──
-
-
 def test_it_gives_up_after_the_deadline_and_says_who_is_missing(store):
     started = time.monotonic()
 
@@ -105,9 +99,6 @@ def test_and_everybody_in_with_no_average_is_a_different_thing_to_say(store):
     assert "started again" in str(e.value)
 
 
-# ── How much data each of them saw, which nobody has to be asked ──
-
-
 def test_the_size_travels_in_the_record_so_the_averaging_can_weigh_by_it(store):
     store.keep("r/round/0/client/1", weights(0), {"size": "100"})
 
@@ -136,9 +127,6 @@ def test_one_client_saying_its_size_and_another_not_is_not_half_a_weighting(stor
     )
 
     assert torch.equal(average["body"]["0"], torch.full((4,), 5.0))
-
-
-# ── And the one it is all for: four processes, one folder ──
 
 
 CLIENT = """

@@ -23,13 +23,11 @@ impl Worktree {
     /// Resolves a revspec and lays that commit out under `beneath`, in a
     /// directory called `as_`.
     ///
-    /// The name comes from the caller and not from the commit, because the two
-    /// sides of a comparison are allowed to be the **same** commit — a diff of
-    /// one revision against itself is how you ask what a store already holds —
-    /// and two worktrees of one commit under one name is a refusal from git.
-    ///
-    /// Detached on purpose: an experiment tree reads commits, and a branch
-    /// checked out in two places at once is another such refusal.
+    /// The name is the caller's and not the commit's, because the two sides of
+    /// a comparison are allowed to be the **same** commit — asking what a store
+    /// already holds is a diff of one revision against itself — and two
+    /// worktrees of one commit under one name is a refusal from git. Detached
+    /// for the same reason: a branch checked out twice is another one.
     pub fn of(repo: &Path, revspec: &str, beneath: &Path, as_: &str) -> Result<Self, Trouble> {
         let commit = git(
             repo,
@@ -72,7 +70,7 @@ impl Worktree {
     }
 
     /// The whole hash, which is what a cache is keyed on: twelve characters is
-    /// plenty to read and not something to name a stored answer after.
+    /// plenty to read and too few to name a stored answer after.
     pub fn commit(&self) -> &str {
         &self.commit
     }
@@ -80,10 +78,10 @@ impl Worktree {
 
 impl Drop for Worktree {
     fn drop(&mut self) {
-        // A worktree left behind is not just a directory: git keeps a record of
-        // it in the repo, and the next `worktree add` on the same commit
-        // refuses. Said out loud rather than swallowed, because the fix is
-        // `git worktree prune` and nobody guesses that.
+        // A worktree left behind is not just a directory: git keeps a record
+        // of it and the next `worktree add` on the same commit refuses. Said
+        // out loud, because the fix is `git worktree prune` and nobody guesses
+        // that.
         let removing = git(
             &self.repo,
             &[
@@ -144,10 +142,9 @@ pub fn commits_in(repo: &Path, asked: &str, most: usize) -> Result<Vec<String>, 
 
 /// The commit under each of these that is not one of them.
 ///
-/// A range says which commits to **show**, and a step needs the one below it.
-/// With one line that is a single commit at the bottom; with three branches it
-/// is one under **each** of them, because every line needs something of its own
-/// to be compared against.
+/// A range says which commits to **show**, and a step needs the one below it:
+/// with three branches that is one under **each**, since every line needs
+/// something of its own to be compared against.
 pub fn beneath(repo: &Path, commits: &[String]) -> Vec<String> {
     let inside: std::collections::HashSet<&str> = commits.iter().map(String::as_str).collect();
     let mut under: Vec<String> = parents_of(repo, commits)
@@ -162,9 +159,8 @@ pub fn beneath(repo: &Path, commits: &[String]) -> Vec<String> {
 
 /// The commit before this one, if it has one.
 ///
-/// Needed because a range says which commits to **show** and a step needs the
-/// one underneath: without this the oldest commit shown could not say what it
-/// did, which is the same reason `git log -p` reaches past the range too.
+/// Reaches past the range for the same reason `git log -p` does: otherwise the
+/// oldest commit shown could not say what it did.
 pub fn parent_of(repo: &Path, commit: &str) -> Option<String> {
     git(repo, &["rev-parse", "--verify", &format!("{commit}^")]).ok()
 }
@@ -172,8 +168,8 @@ pub fn parent_of(repo: &Path, commit: &str) -> Option<String> {
 /// The full hash a revspec names.
 ///
 /// Resolved before anything is written down, never stored as somebody typed
-/// it: `HEAD~2` is a different commit tomorrow, and a note about a commit has
-/// to still be about that commit.
+/// it: `HEAD~2` is another commit tomorrow, and a note has to stay about the
+/// commit it was about.
 pub fn named(repo: &Path, revspec: &str) -> Result<String, Trouble> {
     git(
         repo,
@@ -228,10 +224,8 @@ fn within(file: &str) -> Result<PathBuf, String> {
 
 /// Who each of these commits comes from, in one call.
 ///
-/// A walk prints a line and a **DAG has edges**: three variants of one idea are
-/// three branches off one commit, and a range flattens them into an order that
-/// says nothing about which came from which. Asked for all of them at once
-/// because `rev-list` already answers it that way.
+/// A walk prints a line and a **DAG has edges**: a range flattens three
+/// branches into an order that says nothing about which came from which.
 pub fn parents_of(repo: &Path, commits: &[String]) -> Vec<(String, Vec<String>)> {
     let mut asking = vec!["rev-list", "--no-walk", "--parents"];
     asking.extend(commits.iter().map(String::as_str));
@@ -287,11 +281,9 @@ impl Splice {
 /// A checkout of `from` with one class replaced, and nothing committed.
 ///
 /// Shared by checking and forking on purpose: what gets measured has to be the
-/// same tree that gets committed, or a green light means nothing.
-///
-/// `branch` cuts one; `None` leaves it detached, which is what a check wants —
-/// asking whether an edit survives should not litter somebody's repository
-/// with branches for the answers that were no.
+/// same tree that gets committed, or a green light means nothing. `branch`
+/// cuts one; `None` leaves it detached, which is what a check wants — asking
+/// whether an edit survives should not litter a repository with the noes.
 pub fn laid_out(
     repo: &Path,
     from: &str,
@@ -330,10 +322,9 @@ pub fn laid_out(
     git(repo, &how).map_err(of)?;
 
     let writing = working.join(&inside);
-    // The panel shows one class and a file usually holds four. Splicing the
-    // edited one back into the rest is not a nicety: writing what the panel
-    // showed would silently drop the imports, the sibling classes and the
-    // `build()` that ties them together.
+    // The panel shows one class and a file usually holds four. Writing what
+    // the panel showed would silently drop the imports, the sibling classes
+    // and the `build()` that ties them together.
     let spliced = std::fs::read_to_string(&writing)
         .map_err(|why| of(why.to_string()))
         .and_then(|whole| at.into(&whole, what).map_err(of))?;
@@ -358,13 +349,10 @@ pub fn forget(repo: &Path, working: &Path) -> Result<String, String> {
 /// Cuts a branch at `from`, replaces one class in `file`, and commits it.
 ///
 /// **Editing is forking.** A commit is a version that has already been
-/// measured, so changing one is not a thing anybody gets to do — and wanting to
-/// is wanting the other thing: another variant, from here. So this never
-/// touches an existing branch and never rewrites anything; the worst it can do
-/// is leave a branch nobody asked for.
-///
-/// Done in a worktree of its own so somebody's checkout, their index and their
-/// unstaged work are all left exactly as they were.
+/// measured, so wanting to change one is wanting another variant from here:
+/// this never touches an existing branch and never rewrites anything, and the
+/// worst it can do is leave a branch nobody asked for. In a worktree of its
+/// own, so somebody's checkout, index and unstaged work are left alone.
 pub fn forked(
     repo: &Path,
     from: &str,
@@ -408,13 +396,10 @@ pub fn whoami(repo: &Path) -> String {
 
 /// What each commit was called and when it was made, in one call.
 ///
-/// One call and not one per commit: a walk of forty would otherwise be forty
-/// subprocesses to read forty lines git will hand over together.
-///
-/// The time is not decoration. Which of three variants somebody tried first is
-/// a question about **when**, and the order a walk arrives in cannot answer it:
-/// with commits made in the same second, `rev-list` falls back to the order it
-/// traverses refs, which is their names — so branches would be laid out
+/// The time is not decoration: which of three variants was tried first is a
+/// question about **when**, and the order a walk arrives in cannot answer it —
+/// for commits made in the same second `rev-list` falls back to the order it
+/// traverses refs, which is their names, so branches would come out
 /// alphabetically and look chronological.
 pub fn told(repo: &Path, commits: &[String]) -> HashMap<String, (u64, String)> {
     let mut asking = vec!["log", "--no-walk", "--format=%H%x00%ct%x00%s"];

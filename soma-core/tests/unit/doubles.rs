@@ -1,7 +1,5 @@
-//! Fake nodes and drivers, shared by the other modules.
-//!
-//! Note that none of them declares what "kind" it is: what tells them apart is
-//! what they answer.
+//! Fake nodes shared by the other modules. None declares what kind it is:
+//! what tells them apart is what they answer.
 
 use somatize_core::{
     Cargo, Catalog, Ctx, Device, Fact, Keeper, KeeperError, Kept, Key, Keys, Memory, Node,
@@ -91,8 +89,6 @@ impl Node for Immediate {
     }
 }
 
-// ── What it takes to look inside a wave ──
-
 /// Where the execution went: who, in what order, and on what thread.
 #[derive(Default)]
 pub struct Journal(Mutex<Vec<(String, ThreadId)>>);
@@ -154,12 +150,9 @@ impl MeetingPoint {
     }
 }
 
-/// Does not finish until `how_many` have arrived.
-///
-/// It is how to check that two branches run **at the same time** without
-/// sleeping for a single millisecond: were they executed one after the other,
-/// the first would wait forever. The deadline turns that hang into a named
-/// error rather than a test that never returns.
+/// Does not finish until `how_many` have arrived — how two branches are shown
+/// to run at the same time without sleeping a millisecond. The deadline turns a
+/// hang into a named error.
 pub struct Rendezvous {
     pub point: Arc<MeetingPoint>,
     pub how_many: usize,
@@ -207,8 +200,6 @@ impl Node for Panics {
     }
 }
 
-// ── What it takes to look inside a placement ──
-
 /// Where each node was told to run.
 #[derive(Default)]
 pub struct Ledger(Mutex<Vec<(String, Option<Device>)>>);
@@ -231,10 +222,8 @@ impl Ledger {
     }
 }
 
-/// Notes where it was told to run and returns its input untouched.
-///
-/// It is everything a core node can do with a device: see it. Moving something
-/// to a GPU is not this layer's business.
+/// Notes where it was told to run and returns its input untouched: everything a
+/// core node can do with a device is see it.
 pub struct Ubiquitous(pub &'static str, pub Arc<Ledger>);
 
 impl Node for Ubiquitous {
@@ -248,14 +237,9 @@ impl Node for Ubiquitous {
     }
 }
 
-// ── Fake transports ──
-
-/// Executes the slice **right here**, noting what it was sent.
-///
-/// There is no process, no bytes, no pipes: that belongs to
-/// `somatize-fabric-wire`. What this exercises is the core's seam — what gets
-/// sent, what comes back, where it is merged — and that is why a double that
-/// never leaves its seat will do.
+/// Executes the slice **right here**, noting what it was sent. What this
+/// exercises is the core's seam — what gets sent, what comes back, where it is
+/// merged — so a double that never leaves its seat will do.
 pub struct Mirror {
     catalog: Arc<Catalog>,
     /// What reached it on each trip, in order.
@@ -303,9 +287,9 @@ impl Transport for Mirror {
             memory: cargo.memory.clone(),
         });
 
-        // What a real worker does: the engine over there is told, and what it
-        // says is handed straight back untouched. A double that swallowed them
-        // would make the far half of the live view untestable without a process.
+        // What a real worker does: the engine over there is told and what it
+        // says is handed straight back, or the far half of the live view would
+        // be untestable without a process.
         let mut over_there = somatize_core::Executor::new(&self.catalog).placed(cargo.placement);
         if let Some(seen) = seen {
             over_there = over_there.watching(seen);
@@ -318,8 +302,7 @@ impl Transport for Mirror {
                 cargo.keys.to_vec(),
             )
             // A real one cannot carry back what only exists over there, and
-            // neither does this: a double that answers more than a wire can is a
-            // double that hides the case.
+            // a double that answers more than a wire can hides the case.
             .map(Outcome::travelling)
             .map_err(|e| TransportError::new(e.to_string()))
     }
@@ -376,11 +359,9 @@ impl Node for Miscounts {
     }
 }
 
-/// Hashes by writing the recipe down, and keeps what it is given in a map.
-///
-/// No `sha256` here on purpose: what the engine needs from a keeper is that two
-/// different recipes give two different keys, and a key that spells its recipe
-/// out gives that **and** a failed assertion you can read.
+/// Hashes by writing the recipe down, and keeps what it is given in a map. No
+/// `sha256` on purpose: a key that spells its recipe out gives two different
+/// keys for two recipes **and** a failed assertion you can read.
 #[derive(Default)]
 pub struct Notebook {
     kept: Mutex<Vec<(Key, Kept)>>,
@@ -424,9 +405,9 @@ impl Keeper for Notebook {
     }
 
     fn combine(&self, parts: &[&str]) -> Key {
-        // Length-prefixed, because the one failure a cache must not have is two
-        // recipes under one name: run together, `["ab", "c"]` and `["a", "bc"]`
-        // would be the same string.
+        // Length-prefixed: run together, `["ab", "c"]` and `["a", "bc"]` would
+        // be one string, and two recipes under one name is the failure a cache
+        // must not have.
         Key::new(
             parts
                 .iter()
@@ -463,11 +444,8 @@ impl Keeper for Notebook {
     }
 }
 
-/// Keeps every fact it is told, in the order it was told them.
-///
-/// The double a `Watcher` needs: what is being checked is not what the engine
-/// **returned** but what it **said while it was working**, and those two answers
-/// come out of different holes.
+/// Keeps every fact it is told, in order. What is checked is not what the engine
+/// returned but what it said while it was working.
 #[derive(Default)]
 pub struct Told(Mutex<Vec<Fact>>);
 

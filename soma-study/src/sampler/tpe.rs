@@ -7,16 +7,10 @@ use crate::{Dimension, Goal, Point, Setting, Space};
 /// Tree-structured Parzen Estimator: model what the good trials did, model what
 /// the bad ones did, and propose where the first is likely and the second is not.
 ///
-/// The third of the three, and what each scheme **looks at** is the whole
-/// difference between them: [`Grid`](super::Grid) looks at the space's shape,
-/// [`Random`](Random) at nothing, and this at **what already happened**.
-///
-/// Which is also its one honest cost: the other two derive their point from the
-/// seed and the index alone, so any machine can reproduce trial 7 on its own.
-/// This one cannot — it is guided, so it depends on what the asking machine had
-/// already seen. A study that spreads over a shared folder gets a different
-/// search than one run in a single process, and that is not a bug to fix, it is
-/// what being guided means.
+/// The one that looks at **what already happened**, which is also its one honest
+/// cost: it cannot derive trial 7 from the seed and the index alone, so a study
+/// spread over a folder gets a different search than one in a single process.
+/// That is what being guided means, not a bug to fix.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tpe {
     /// Which way is better.
@@ -51,14 +45,12 @@ impl Tpe {
         }
 
         let (good, mut bad) = self.split(&scored);
-        // What is in flight: somebody is trying it and nobody knows yet how it
-        // will do. It goes in the pile to keep away from — that is the whole of
-        // *constant liar* — but it **does not vote on how big the other pile
-        // is**. Counted, it would push the quantile up and promote a trial that
-        // was in the bad pile into the good one; if that trial sat next to the
-        // one being tried, the warning would pull the search **towards** it.
-        // Measured, and it is not a small effect: one proposal in two hundred
-        // landing on the occupied region became thirty-nine.
+        // In flight: somebody is trying it and nobody knows how it will do. It
+        // goes in the pile to keep away from — that is *constant liar* — but it
+        // **does not vote on how big the other pile is**. Counted, it would push
+        // the quantile up and promote a trial out of the bad pile; if that trial
+        // sat next to the one in flight, the warning would pull the search
+        // towards it. Measured: one proposal in two hundred became thirty-nine.
         bad.extend(
             seen.iter()
                 .filter(|(_, at)| at.is_none())
@@ -183,11 +175,9 @@ fn drawn_from(values: &[f64], from: f64, to: f64, state: &mut u64) -> f64 {
     place.clamp(from, to)
 }
 
-/// How likely that place is under the window those values make.
-///
-/// The prior — a wide bell over the whole range, weighted as one extra
-/// observation — is what stops a pile of three trials from declaring the rest of
-/// the space impossible, and what keeps the ratio of the two windows finite.
+/// How likely that place is under the window those values make. The prior — a
+/// wide bell over the range, weighted as one extra observation — is what stops
+/// three trials declaring the rest of the space impossible.
 fn density(values: &[f64], from: f64, to: f64, place: f64) -> f64 {
     if values.is_empty() {
         return bell_at(place, (from + to) / 2.0, (to - from) / 2.0);

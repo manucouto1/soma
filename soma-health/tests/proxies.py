@@ -91,9 +91,6 @@ def candidate(depth, width, how):
     return torch.nn.Sequential(*made, torch.nn.Linear(width, INPUT))
 
 
-# ── The five ──
-
-
 def synflow(net, x):
     """Tanaka et al. (2020). Data-free: every weight made positive, a batch of
     ones through it, and the sum of what each parameter contributes."""
@@ -165,9 +162,6 @@ def naswot(net, x):
     agree = code @ code.t() + (1 - code) @ (1 - code).t()
     sign, value = torch.linalg.slogdet(agree.double() + 1e-3 * torch.eye(x.shape[0]).double())
     return float(value) if sign > 0 else float("-inf")
-
-
-# ── What they are being compared against ──
 
 
 def trained(make, steps=1500, seed=0):

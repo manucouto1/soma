@@ -1,10 +1,10 @@
 """Level 3: what is above one training run.
 
-The graph is a network — the scale of one ``forward``. The ``Trainer`` is a
-training run — the scale of an afternoon. This is the level above, and like a
-federated round it has **no type**: N training runs are a ``for``::
+The graph is a network — one ``forward``. The ``Trainer`` is a training run — an
+afternoon. This is the level above and, like a federated round, it has **no
+type**: N training runs are a ``for``::
 
-    from somatize.study import Partition
+    from somatize.study import Partition, Pruner, Sampler, Space
     from somatize.torch import Trainer
 
     space = Space().real("lr", 1e-5, 1e-1, log=True).choice("opt", ["adam", "sgd"])
@@ -16,45 +16,30 @@ federated round it has **no type**: N training runs are a ``for``::
         t = Trainer(g, objective=cross_entropy, optimizer=Adam(parameters(g)))
         finished.append((point, t.fit(data, epochs=10).loss))
 
-What lives here are the pieces that ``for`` asks for, and they all have the same
-shape: **numbers in, a decision out — never a tensor**. That is what lets all of
-it be Rust while the loop stays in Python, where torch is.
+What lives here are the pieces that ``for`` asks for, all of one shape: **numbers
+in, a decision out — never a tensor**. That is what lets it be Rust while the
+loop stays in Python.
 
-A ``Pruner`` says whether a trial that is going badly is worth another epoch,
-and it **stops nothing**: it answers, and the loop stops calling the trainer::
+A ``Pruner`` says whether a trial going badly is worth another epoch, and it
+**stops nothing** — it answers and the loop stops calling::
 
-    pruner = Pruner.median(goal="min", warmup=2, startup=5)
-    finished = []
+    for epoch in range(50):
+        reported.append(t.fit(data, epochs=1).loss)
+        if why := pruner.verdict(reported, finished):
+            break
 
-    for config in configs:
-        t = Trainer(build(config), objective=cross_entropy, optimizer=...)
-        reported = []
-        for epoch in range(50):
-            reported.append(t.fit(data, epochs=1).loss)
-            if why := pruner.verdict(reported, finished):
-                print(f"dropped at epoch {epoch}: {why}")
-                break
-        finished.append(reported)
+The three schemes differ in what they judge against: ``median``/``percentile``
+the other trials, ``threshold`` a constant, ``patience`` the trial itself. The
+samplers differ in what they **look at**: ``grid`` at the space's shape and it is
+the one that runs out, ``random``/``halton``/``sobol`` at nothing, ``tpe`` at what
+already happened. All but ``tpe`` derive their point from the seed and the
+**index**, so a machine that claimed trial 7 gets the same point without
+replaying six.
 
-``Trainer.step`` was already the primitive and ``fit`` sugar over it, so none of
-this added a line to level 2. The three schemes differ in what they judge
-against: ``median``/``percentile`` the other trials, ``threshold`` a constant,
-``patience`` the trial itself.
-
-The three samplers differ in **what they look at**: ``grid`` at the space's
-shape — and it is the one that runs out, so ``ask`` answering ``None`` is how a
-``for`` stops without being told a number —, ``random`` at nothing, and ``tpe``
-at what already happened. The first two derive their point from the seed and the
-**index**, so a machine that claimed trial 7 out of a shared folder gets the same
-point without replaying six; ``tpe`` cannot, and that is what being guided means.
-
-``Partition`` is five schemes and not sklearn's fifteen, because stratifying and
-grouping are not different algorithms — stratifying is a k-fold inside each
-class, grouping is a k-fold over the groups. What is left over is parameters:
-``LeaveOneOut`` is ``kfold(n)``, a holdout of one part in k is fold 0 of a
-k-fold, and purged cross-validation is ``time_series(k, gap=...)``.
-
-It is not called ``Split``: ``somatize.torch.Split`` is already split learning.
+``Partition`` is five schemes and not sklearn's fifteen, because stratifying is a
+k-fold inside each class and grouping a k-fold over the groups; the rest are
+parameters. It is not called ``Split``: ``somatize.torch.Split`` is already split
+learning.
 """
 
 from somatize._somatize import Partition, Point, Pruner, Sampler, Space

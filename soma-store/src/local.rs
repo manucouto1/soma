@@ -1,10 +1,7 @@
-//! A store that is a directory. The one that works today.
-//!
-//! No dependencies beyond hashing and a text format, because a shared folder is
-//! what there already is — a network mount, a scratch directory, `/tmp` in a
-//! test. [`Bucket`](crate::Bucket) is the other one, for a cluster with no
-//! shared mount, and it lays its bytes out exactly like this — so a directory
-//! can be copied onto a bucket and back and neither end has to know.
+//! A store that is a directory. The one that works today, with no dependencies
+//! beyond hashing and a text format, because a shared folder is what there
+//! already is. [`Bucket`](crate::Bucket) is the other one and lays its bytes out
+//! exactly like this, so one can be copied onto the other.
 //!
 //! ```text
 //! <root>/blobs/ab/sha256_abc…    the bytes, named by their content
@@ -12,14 +9,10 @@
 //! <root>/tmp/…                   where a write lands before its rename
 //! ```
 //!
-//! The two directory characters come from the **hash**, not from the front of
-//! the digest: `sha256:` is the same in all of them, and a single directory with
-//! every blob in it is what this split exists to avoid.
-//!
-//! A record's file is named by the digest **of the name**, not by the name: a
-//! cache key is hex and an artifact's id is whatever its producer chose, and no
-//! filesystem takes every string a caller can invent. The name itself is inside
-//! the record, so `grep` still finds it.
+//! The two directory characters come from the **hash** and not the front of the
+//! digest, which is the same in all of them. A record's file is named by the
+//! digest **of the name**: no filesystem takes every string a caller can invent,
+//! and the name itself is inside the record, so `grep` still finds it.
 
 use crate::store::{read_record, record};
 use crate::{Bound, Digest, Meta, Store, StoreError};

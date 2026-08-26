@@ -6,13 +6,10 @@ use crate::Goal;
 use std::fmt;
 use std::num::NonZeroUsize;
 
-/// Prune what has stopped improving on its own best.
-///
-/// Early stopping, and the third of the three things a verdict can be measured
-/// against: the others, a constant, **itself**. Like
-/// [`Threshold`](super::Threshold) it needs no other trial, and unlike both of
-/// the others it can prune a run that is doing perfectly well in the field and
-/// simply is not going anywhere.
+/// Prune what has stopped improving on its own best. Early stopping, and the
+/// third thing a verdict can be measured against: the others, a constant,
+/// **itself**. Unlike both of the others it can prune a run that is doing
+/// perfectly well in the field and simply is not going anywhere.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Patience {
     /// How many reports without an improvement before it goes.

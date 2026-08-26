@@ -1,55 +1,28 @@
-//! What is remembered about each node.
+//! What is remembered about each node: the fifth fact, beside [`Graph`] (what
+//! exists), [`Catalog`](crate::Catalog) (who executes it),
+//! [`Placement`](crate::Placement) (where) and [`Plan`](crate::Plan) (when).
 //!
-//! The fifth fact, and like the other four it is a type of its own because it
-//! answers a question of its own:
-//!
-//! | piece | answers |
-//! |---|---|
-//! | [`Graph`] | **what** exists and how it connects |
-//! | [`Catalog`](crate::Catalog) | **who** executes it |
-//! | [`Placement`](crate::Placement) | **where** |
-//! | [`Plan`](crate::Plan) | **when**, and with what concurrency |
-//! | `Memory` | **what is remembered** |
-//!
-//! Four maps, independent of each other for the same reason `Placement` has two:
-//! a node can be frozen without being cached, named without being frozen, and
-//! any combination of the rest.
-//!
-//! # What goes in a key and what does not
+//! Four maps, independent of each other: a node can be frozen without being
+//! cached, named without being frozen, and any combination of the rest.
 //!
 //! ```text
-//! key(root) = H(content)                              ← the only place data is hashed
+//! key(root) = H(content)                       ← the only place data is hashed
 //! key(node) = H(identity, declaration, state, keys of its predecessors)
 //! ```
 //!
-//! The **identity** is the name of what implements the node — the class, in
-//! Python — and it is in the key because without it two different nodes called
-//! `embed` collide in a shared store. The **declaration** is what that class was
-//! built with, and it is in for the same reason one step down: `Embed(512)` and
-//! `Embed(64)` are one class, one name and two different answers, and without it
-//! the second one is handed the first one's.
-//!
-//! The **fingerprint of the code** is *not*: a cosmetic refactor would
-//! invalidate half the store in silence. It is kept beside the value and
-//! compared on a hit, which turns the same event into a line on `stderr` instead
-//! of a cache that quietly went cold. The line between the two is what the
-//! caller **said** against how it is **written**: saying `Embed(512)` is a
-//! decision, and editing the body of `forward` is not — and only the first can
-//! be pinned down cheaply and identically in every process, which a key computed
-//! on a client and again on a worker has to be.
-//!
-//! # Frozen, which the core defines without knowing what a gradient is
+//! The **identity** is in the key or two different nodes called `embed` collide
+//! in a shared store; the **declaration** is in for the same reason one step
+//! down, since `Embed(512)` and `Embed(64)` are one class and two answers. The
+//! **fingerprint of the code** is deliberately not: a cosmetic refactor would
+//! invalidate half the store in silence, so it is kept beside the value and
+//! compared on a hit. The line is what the caller **said** against how it is
+//! **written** — only the first can be pinned down identically in every
+//! process, which a key computed on a client and again on a worker must be.
 //!
 //! **A frozen node's state does not change while the graph runs.** That is a
-//! statement about cache validity, and the core can hold it the same way it
-//! holds a [`Device`](crate::Device): as inert information it reasons over —
-//! here, [`cacheable`] — and somebody else obeys. `somatize.torch` is what
-//! turns it true, with `requires_grad_(False)`, exactly as the node and not the
-//! core is what moves a tensor to a GPU.
-//!
-//! And it is why the digest of the state is given **to** `freeze`: settling is
-//! what makes both things true at once, so it is the one moment worth paying to
-//! hash the weights at.
+//! statement about cache validity, held here as inert information the core
+//! reasons over in [`cacheable`] and somebody else obeys — `somatize.torch` is
+//! what makes it true with `requires_grad_(False)`.
 
 use crate::{Graph, NodeId};
 use std::collections::{HashMap, HashSet};
@@ -61,8 +34,7 @@ use std::fmt;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Memory {
     /// The ones whose state does not change while the graph runs, each with the
-    /// digest of the state it is settled at — `None` for one with no state to
-    /// settle, like a tokenizer.
+    /// digest of the state it is settled at — `None` when there is none.
     frozen: HashMap<NodeId, Option<String>>,
     /// The ones whose output is worth keeping, each with the salt its declarer
     /// added, if any.
@@ -96,25 +68,20 @@ impl Memory {
     }
 
     /// Says what this node was built with, as a digest of the arguments that
-    /// made it. In the key, beside the identity: the class is half of *what this
-    /// node is* and what it was constructed with is the other half.
+    /// made it. The class is half of what a node is; this is the other half.
     pub fn declared_as(&mut self, id: impl Into<NodeId>, declaration: impl Into<String>) {
         self.declarations.insert(id.into(), declaration.into());
     }
 
-    /// What it was built with, if anybody could say. Absent is **not** a reason
-    /// to refuse a key — a node built by hand, or one holding something that
-    /// cannot be written down the same way twice, still has one. Refusing is
-    /// [`cacheable`]'s side of it, and only where an answer is kept.
+    /// What it was built with, if anybody could say. Absent is not a reason to
+    /// refuse a key; refusing is [`cacheable`]'s side of it.
     pub fn declaration_of(&self, id: &NodeId) -> Option<&str> {
         self.declarations.get(id).map(String::as_str)
     }
 
-    /// Says this node's state does not change from here on, and the digest of
-    /// the state it is settled at — `None` when there is no state to settle.
-    ///
-    /// Called twice on purpose: declaring `.frozen()` says it with no digest,
-    /// and whoever knows how to hash the weights says it again with one.
+    /// Says this node's state does not change from here on, with the digest of
+    /// the state it is settled at. Called twice on purpose: `.frozen()` says it
+    /// with no digest, and whoever can hash the weights says it again with one.
     pub fn freeze(&mut self, id: impl Into<NodeId>, state: Option<String>) {
         self.frozen.insert(id.into(), state);
     }
@@ -130,15 +97,13 @@ impl Memory {
     }
 
     /// Says this node's output is worth keeping, with the caller's salt if they
-    /// gave one — `.cached(salt="a100-fp16")` is how you tell apart two runs the
-    /// key cannot tell apart on its own.
+    /// gave one — how you tell apart two runs the key cannot.
     pub fn cache(&mut self, id: impl Into<NodeId>, salt: Option<String>) {
         self.cached.insert(id.into(), salt);
     }
 
-    /// Whether this node's output is kept. A node that is not is **not** a break
-    /// in the chain: its key is still computed and passed on, it is just not
-    /// stored.
+    /// Whether this node's output is kept. Not being kept is no break in the
+    /// chain: its key is still computed and passed on.
     pub fn is_cached(&self, id: &NodeId) -> bool {
         self.cached.contains_key(id)
     }
@@ -148,15 +113,11 @@ impl Memory {
         self.cached.get(id)?.as_deref()
     }
 
-    /// Says this node maps over the items of its input: hand it a list, it
-    /// answers with a list as long, and item `i` out is what item `i` in became.
+    /// Says this node maps over the items of its input: a list in, a list as
+    /// long out, item `i` out from item `i` in.
     ///
-    /// It is what makes a cache work **item by item**. Without it, adding one
-    /// document to a list of a thousand changes the name of the list and all
-    /// thousand miss; with it, the thousand hit and the one runs.
-    ///
-    /// Declared and not asked: the core cannot look at a node and tell whether
-    /// it maps, the same way it cannot tell whether one is frozen.
+    /// What makes a cache work item by item — one new document among a thousand
+    /// runs once instead of missing all thousand. Declared and not asked.
     pub fn map(&mut self, id: impl Into<NodeId>) {
         self.mapped.insert(id.into());
     }
@@ -203,27 +164,19 @@ impl Memory {
     }
 }
 
-/// Whether what this graph says to keep can honestly be kept.
+/// Whether what this graph says to keep can honestly be kept. A free function
+/// for the same reason [`compile`](crate::compile) is one: it needs the graph
+/// **and** the table.
 ///
-/// A free function and not a method for the same reason
-/// [`compile`](crate::compile) is one: it needs the graph **and** the table, so
-/// it was never a method of either.
-///
-/// The rule is one line and it is a rule about **prefixes**:
-///
-/// > a node's output can be kept if nothing upstream of it can change — itself
+/// > A node's output can be kept if nothing upstream of it can change — itself
 /// > included.
 ///
-/// Freezing the node alone is not enough. In torch's terms, freezing layer 3 of
-/// 5 does not stop the gradient crossing it towards layers 1 and 2, and the
-/// value that would be restored from the store is a **leaf**: the backward pass
-/// would stop there and everything above it would quietly stop training. The
-/// same rule falls out a second way, without mentioning gradients at all — the
-/// digest of the state is in the key, so a node that keeps changing gets a new
-/// key every run and never hits, only fills the store.
-///
-/// Being named is checked in the same walk, because a node with no identity has
-/// no key, and a chain with a hole in it delivers no key to what is below.
+/// Freezing the node alone is not enough: what is restored from a store is a
+/// leaf, so the backward pass stops there and everything above it quietly stops
+/// training. The same rule falls out without mentioning gradients — the digest
+/// of the state is in the key, so a node that keeps changing never hits and only
+/// fills the store. Being named is checked in the same walk, since a chain with
+/// a hole in it delivers no key below.
 pub fn cacheable(graph: &Graph, memory: &Memory) -> Result<(), MemoryError> {
     for id in graph.nodes() {
         if !memory.is_cached(id) {

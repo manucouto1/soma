@@ -51,9 +51,6 @@ def write(tmp_path, monkeypatch):
     return do_it
 
 
-# ── What travels ──
-
-
 def test_the_kind_is_what_the_wire_calls_it():
     assert KIND == "project"
 
@@ -75,9 +72,6 @@ def test_the_round_trip_gives_back_the_nodes_with_their_state(write):
     assert list(nodes) == ["f"]
     assert nodes["f"].threshold == 5
     assert type(nodes["f"]) is module.Filter, "it resolved against this clone"
-
-
-# ── The version, class by class ──
 
 
 def test_another_version_of_the_class_stops_it(write):
@@ -122,7 +116,6 @@ def test_a_class_that_is_not_yours_is_not_versioned(write):
     assert unpack(pack({"f": node}))["f"].extra == {"a": [1, 2]}
 
 
-# ── Finding the class, when the module hint no longer holds ──
 #
 # Moving a class between files without touching it does not change its
 # fingerprint — on purpose, so it stays the same version. Then the hint stops

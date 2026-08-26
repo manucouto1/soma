@@ -185,14 +185,11 @@ pub fn walked(
         None => Vec::new(),
     };
 
-    // A verdict is written about **one** commit. That its descendants are
-    // suspect is worked out here and not stored, which is why a commit made
-    // tomorrow under an invalid one needs nobody to go back and say so.
-    //
-    // Walked over the parents already in hand rather than asked of git: an
-    // ancestry-path question needs a tip to walk **towards**, and with three
-    // branches the tip is usually on somebody else's — so a verdict cast on
-    // one variant would quietly reach nothing at all.
+    // A verdict is written about **one** commit; that its descendants are
+    // suspect is worked out here. Walked over the parents already in hand
+    // rather than asked of git: an ancestry-path question needs a tip to walk
+    // **towards**, and with three branches the tip is usually on somebody
+    // else's, so a verdict cast on one variant would reach nothing.
     let journal = Journal::of(tree, kept);
     let verdicts = journal.verdicts()?;
     let mut doubted: HashSet<String> = HashSet::new();

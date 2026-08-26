@@ -39,9 +39,6 @@ VOCAB, DIM, HID, CLASSES, LENGTH = 32, 8, 6, 3, 4
 TEXTS = ["the dog runs", "a cat sleeps", "birds fly high", "the fish swims"]
 
 
-# ── A node with no gradients, no weights and no state ──
-
-
 class Tokenize(Node):
     """Text to ids. Deterministic on purpose: `hash()` of a str is salted per
     process, and a cache keyed by content cannot live with that."""
@@ -57,9 +54,6 @@ class Tokenize(Node):
             ids.append(words + [0] * (LENGTH - len(words)))
         # A plain list: it crosses, and it is kept, without a codec.
         return ids
-
-
-# ── The body: trainable first, settled afterwards ──
 
 
 class Embed(Node):
@@ -156,9 +150,6 @@ def settled(expression, head, store, lr=1e-2):
     )
 
 
-# ── The whole thing ──
-
-
 def test_the_body_runs_once_per_batch_and_the_head_once_per_step(body, batches, tmp_path):
     expression, (tokenize, embed, block) = body
     pretrained(expression, batches)
@@ -253,9 +244,6 @@ def test_there_is_one_kept_value_per_node_and_batch(body, batches, tmp_path):
     assert len(values) == 12, f"three kept nodes over four batches: {kept}"
 
 
-# ── The node with no gradients, which is not a special case ──
-
-
 def test_a_tokenizer_is_kept_without_anybody_registering_a_codec(body, batches, tmp_path):
     # What it returns is a list of ints, not a tensor: it crosses as data and is
     # kept as data. `Opaque` is for what cannot.
@@ -323,9 +311,6 @@ def test_the_trainer_settles_what_was_declared_on_its_own(body, batches, tmp_pat
 
     assert graph.frozen()["embed"].startswith("sha256:")
     assert not any(p.requires_grad for p in embed.parameters())
-
-
-# ── That nothing is trained by halves in silence ──
 
 
 class Cut(Node):

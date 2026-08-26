@@ -19,8 +19,6 @@ fn value(x: f64) -> Value {
     Value::number(x)
 }
 
-// ── Naming ──
-
 #[test]
 fn the_pieces_of_a_recipe_cannot_run_into_each_other() {
     // The one failure a cache must not have: two recipes under one name. Run
@@ -67,8 +65,6 @@ fn what_only_exists_in_this_process_has_no_name() {
         None
     );
 }
-
-// ── Keeping and recalling ──
 
 #[test]
 fn what_is_kept_comes_back_the_same() {
@@ -170,8 +166,6 @@ fn what_cannot_leave_this_process_cannot_be_kept_and_says_so() {
     assert!(why.contains("opaque"), "{why}");
     assert!(why.contains("process"), "{why}");
 }
-
-// ── Living in the same store as everything else ──
 
 #[test]
 fn a_kept_value_can_be_found_by_looking_at_what_is_there() {

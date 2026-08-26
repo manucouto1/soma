@@ -6,15 +6,11 @@ use crate::{Point, Space};
 
 /// Uniform in every knob, independently.
 ///
-/// The baseline, and not a straw man: over a space where only a few knobs
-/// matter, random search finds a good configuration in far fewer trials than a
-/// grid, because a grid spends its budget re-testing the knobs that do not
+/// The baseline and not a straw man: over a space where few knobs matter, random
+/// search beats a grid, which spends its budget re-testing the ones that do not
 /// (Bergstra and Bengio, 2012). It is what [`Tpe`](super::Tpe) falls back to
-/// before it has anything to learn from.
-///
-/// Its point for a given trial is a function of the **seed and the index**, so
-/// two machines drawing trial 7 out of the same shared folder draw the same
-/// point, in any order and without talking.
+/// before it has anything to learn from. Its point is a function of the **seed
+/// and the index**, so two machines drawing trial 7 draw the same point.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Random {
     /// The seed. There is no "unseeded": a search you cannot re-run is a result

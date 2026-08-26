@@ -31,8 +31,6 @@ fn unplaced_is_not_the_same_as_on_cpu() {
     assert_eq!(placement.of(&"b".into()), None);
 }
 
-// ── What the DSL places ──
-
 #[test]
 fn on_places_the_whole_piece() {
     let (_, _, placement, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).on(Device::Cuda(0)))
@@ -74,8 +72,6 @@ fn what_is_not_placed_stays_unplaced() {
     assert!(placement.is_empty());
 }
 
-// ── And what does not change ──
-
 #[test]
 fn placing_does_not_change_the_plan() {
     // It is true by construction — `compile` does not see the placement — and it
@@ -110,12 +106,6 @@ fn placing_does_not_change_the_graph() {
     assert_eq!(g, g_placed);
 }
 
-// ── The other half of "where": the host ──
-//
-// A device says which part of a machine; a host, which machine. It is the same
-// question at two scales, which is why they live in the same `Placement` — but
-// as two maps, because they are genuinely independent.
-
 #[test]
 fn a_node_can_go_to_a_host() {
     let mut placement = Placement::new();
@@ -146,8 +136,6 @@ fn the_two_halves_do_not_shadow_each_other() {
     assert_eq!(placement.len(), 1, "it is one node, not two");
 }
 
-// ── Reading the hosts back, which is what a broker is asked for ──
-
 #[test]
 fn the_hosts_it_names_come_back_once_each() {
     // A host named by three nodes is one rendezvous, not three.
@@ -170,9 +158,8 @@ fn a_placement_that_sends_nothing_away_names_no_hosts() {
 
 #[test]
 fn the_order_does_not_depend_on_the_order_they_were_placed_in() {
-    // The point of sorting, and not tidiness: these come out of a `HashMap`.
-    // Without this, the order rendezvous are asked for — and so the order
-    // failures happen in — changes between two runs of the same graph.
+    // Not tidiness: these come out of a `HashMap`, so without sorting the order
+    // rendezvous are asked for changes between two runs of the same graph.
     let mut one = Placement::new();
     for (id, host) in [("a", "w3"), ("b", "w1"), ("c", "w2")] {
         one.place_at(id, Host::new(host));
@@ -224,8 +211,6 @@ fn without_hosts_the_placement_is_local() {
     assert!(!placement.is_local());
 }
 
-// ── What the DSL sends away ──
-
 #[test]
 fn at_sends_the_whole_piece() {
     let (_, _, placement, _) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).at("w1"))
@@ -248,10 +233,9 @@ fn with_hosts_the_innermost_one_wins_too() {
 
 #[test]
 fn an_inner_device_does_not_stop_the_outer_host_from_arriving() {
-    // The counterexample that forced the list to be split in two. With a single
-    // list, `.at` would have skipped `a` for "already having a place" and it
-    // would have ended up without a host for having asked for a GPU — which
-    // there is no way of writing on purpose.
+    // The counterexample that split the list in two: with one, `.at` would have
+    // skipped `a` for already having a place, and it would have ended up
+    // without a host for having asked for a GPU.
     let (_, _, placement, _) = ((node("a", Add(1.0)).on(Device::Cuda(0)) >> node("b", Add(1.0)))
         .at("w1"))
     .somatize()
@@ -299,9 +283,8 @@ fn each_branch_to_its_own_host() {
 
 #[test]
 fn sending_away_changes_neither_the_graph_nor_what_compile_produces() {
-    // The same that already held for devices: `compile` sees none of this. What
-    // does change is what comes out of `distribute`, and that is tested in
-    // `plan.rs`.
+    // As for devices: `compile` sees none of this. What changes is what comes
+    // out of `distribute`, tested in `plan.rs`.
     let (g, c, _, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)))
         .somatize()
         .unwrap();

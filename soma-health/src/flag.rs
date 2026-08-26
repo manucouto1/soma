@@ -5,40 +5,30 @@ use std::fmt;
 /// One thing that looks wrong with a node.
 ///
 /// An enum because the set is closed and named: a diagnosis is only useful if
-/// two runs of it say the same word for the same thing, and a free-text
-/// complaint is a thing nobody can filter on. When one is added the compiler
-/// finds every `match` — including whoever draws them.
-///
-/// Every variant here is an **opinion at a threshold**, and none of them is a
-/// fact. The facts are in the record; these are what somebody thinks of them.
+/// two runs of it say the same word for the same thing. Every variant is an
+/// **opinion at a threshold** and none of them is a fact — the facts are in the
+/// record; these are what somebody thinks of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Flag {
     /// A number stopped being a number. Nothing below it means anything.
     Nan,
     /// Or stopped being finite.
     Inf,
-    /// The parameter gradients are so small this node is not being trained.
-    ///
-    /// The classic depth pathology: with unit-gain init through a saturating
-    /// non-linearity the backpropagated signal shrinks geometrically, so it is
-    /// the **early** layers that go quiet while the last one still learns.
-    /// Vanishing is a profile over depth, not a property of a network.
+    /// The parameter gradients are so small this node is not being trained. The
+    /// classic depth pathology, and a **profile over depth** rather than a
+    /// property of a network: the early layers go quiet while the last learns.
     Vanishing,
     /// The parameter gradients are so large the next step will not be a step.
     Exploding,
     /// The signal has grown over a stretch nobody is normalising.
     ///
-    /// **A conjunction, and both halves are load-bearing.** Drifting alone is a
-    /// network that is fine and having no normalisation alone is a network that
-    /// is fine; the structural half is baked into the measurement, which counts
-    /// the gain from the last normalisation upstream rather than from the
-    /// input. A badly-initialised stack *with* a norm layer drifts under 3x and
-    /// trains — structure alone would have flagged it anyway.
+    /// A conjunction, and both halves are load-bearing: the structural half is
+    /// baked into the measurement, which counts the gain from the last
+    /// normalisation upstream. A badly-initialised stack *with* a norm layer
+    /// drifts under 3x and trains.
     ///
-    /// **One-sided, and that is measured rather than assumed.** It says nothing
-    /// about a signal that shrank: a stack whose output arrives five
-    /// ten-thousandths of the size it went in trained as well as a healthy one,
-    /// because Adam is scale-invariant per parameter. See
+    /// One-sided, and measured rather than assumed: it says nothing about a
+    /// signal that shrank, because Adam is scale-invariant per parameter. See
     /// `health/tests/normalisation.py`.
     MissingNormalisation,
     /// Most of what this node outputs is zero, on at least one step.
@@ -50,43 +40,30 @@ pub enum Flag {
     /// where the derivative is nothing. Also read off the maximum.
     Saturated,
     /// It is moving, but by so little relative to its own weights that it will
-    /// not arrive.
-    ///
-    /// The ratio of update to weight, which practice puts near `1e-3`. It is
-    /// the cheapest signal there is and the original measured it without ever
-    /// saying anything about it.
+    /// not arrive. The ratio of update to weight, which practice puts near
+    /// `1e-3` — the cheapest signal there is.
     Stalled,
     /// It is moving so much relative to its own weights that each step throws
     /// away where it was.
     Overstepping,
-    /// How many channels are dead — output near zero across the window.
-    ///
-    /// Separate from [`Flag::Dead`] because a layer can be perfectly alive with
-    /// a quarter of its width doing nothing, and that is a width problem rather
-    /// than a layer problem.
+    /// How many channels are dead — output near zero across the window. Separate
+    /// from [`Flag::Dead`]: a layer can be alive with a quarter of its width
+    /// doing nothing, which is a width problem and not a layer problem.
     DeadChannels(usize),
     /// How many channels are **alive and never asked for**: they compute
-    /// something and no gradient ever comes back for it.
-    ///
-    /// Gradient starvation, and the distinction from a dormant channel matters
-    /// — a dormant one is not computing anything to be ignored.
+    /// something and no gradient comes back. Gradient starvation, and a dormant
+    /// channel is not the same thing — it is computing nothing to be ignored.
     IgnoredChannels(usize),
     /// Two groups of channels the architecture means to keep apart are carrying
     /// the same information, by linear CKA.
     Leakage,
     /// The update has collapsed into a few directions compared with what this
-    /// run was doing before.
-    ///
-    /// The earliest warning there is: it moves thousands of steps before the
-    /// loss does, because by the time a loss spikes the damage is already in
-    /// the weights.
+    /// run was doing before. The earliest warning there is: it moves thousands
+    /// of steps before the loss does.
     Narrowing,
-    /// An input the model is not using: taking it away costs nothing.
-    ///
-    /// The finding that is worth the whole slice. When it is the channel the
-    /// research was **about**, every other diagnosis has been looking in the
-    /// wrong place — and a network with a perfectly healthy gradient can be
-    /// ignoring an input all afternoon without a single other flag firing.
+    /// An input the model is not using: taking it away costs nothing. A network
+    /// with a perfectly healthy gradient can be ignoring an input all afternoon
+    /// without a single other flag firing.
     IgnoredInput(String),
     /// One input carries everything, and nothing else would take over.
     ///
@@ -123,16 +100,10 @@ impl Flag {
         }
     }
 
-    /// Which family of trouble this is.
-    ///
-    /// A closed set, and it exists so that a figure can give each family a
-    /// colour instead of painting everything one red. Six alarms that all look
-    /// the same are one alarm, and the first thing anybody asks of a network
-    /// with four findings on it is whether they are four problems or one.
-    ///
-    /// The families are by **what to do about them**, not by what was measured:
-    /// `VANISHING` and `EXPLODING` are both the signal not arriving at a usable
-    /// size, and both are answered by looking at depth and initialisation.
+    /// Which family of trouble this is. A closed set, so a figure can give each
+    /// family a colour instead of painting everything one red. By **what to do
+    /// about them** and not by what was measured: `VANISHING` and `EXPLODING`
+    /// are both answered by looking at depth and initialisation.
     pub fn family(&self) -> &'static str {
         match self {
             Self::Nan | Self::Inf => "numeric",
@@ -148,11 +119,8 @@ impl Flag {
         }
     }
 
-    /// What to do about it, in one line.
-    ///
-    /// Part of the flag and not of whoever draws it: the thresholds and the
-    /// advice are the same opinion, and splitting them is how a dashboard ends
-    /// up telling somebody something this crate never said.
+    /// What to do about it, in one line. Part of the flag and not of whoever
+    /// draws it: the thresholds and the advice are the same opinion.
     pub fn about(&self) -> &'static str {
         match self {
             Self::Nan => "a number stopped being one; every metric below this is meaningless",

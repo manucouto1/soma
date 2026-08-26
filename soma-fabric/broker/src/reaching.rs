@@ -1,48 +1,33 @@
 //! One host, reached through a broker, standing in the engine's `Transport`
 //! hole.
 //!
-//! This is the seam: above it the engine says *carry this slice to `w1`* and
-//! knows nothing else; below it a broker was asked where `w1` is and a wire was
-//! opened to whatever it said. Neither half learns about the other.
+//! The seam: above it the engine says *carry this slice to `w1`* and knows
+//! nothing else; below it a broker was asked where `w1` is and a wire was opened
+//! to whatever it said. Neither half learns about the other.
 //!
 //! Thin on purpose. Everything true across hosts — where each one turned out to
 //! be, which of them are the same place — belongs to the
-//! [`Session`](crate::Session), because it is the only thing that sees more than
-//! one at a time. What is left here is one name, what is staged for it, and the
-//! wire once there is one.
+//! [`Session`](crate::Session), the only thing that sees more than one at a
+//! time. What is left here is one name, what is staged for it, and the wire once
+//! there is one.
 //!
-//! # The connection waits until somebody sends work
+//! **The connection waits until somebody sends work.** A graph names hosts a run
+//! may never reach, so this opens nothing when it is built; the rendezvous may
+//! already have happened, but a rendezvous is tens of bytes and a connection is
+//! a socket or a process. The visible consequence: **an unreachable host now
+//! fails when it is needed rather than when it is named.**
 //!
-//! A graph names hosts a run may never reach: a branch not taken is a worker not
-//! needed. So this opens nothing when it is built. The **rendezvous** may
-//! already have happened — deciding what to pack needs it — but a rendezvous is
-//! tens of bytes and a connection is a socket or a process.
+//! Packing an artifact is expensive and happens up front, because a worker has
+//! **one** catalog and half of one is a different catalog. Those two look like
+//! they conflict and do not: [`Reaching::offering`] *stages* the artifact, and
+//! the bytes only move inside the wire's own greeting, on the first dispatch —
+//! so the same artifact twice does nothing, and changing one out from under an
+//! open session fails rather than swapping a catalog with live state in it.
 //!
-//! It has a visible consequence worth stating: **an unreachable host now fails
-//! when it is needed rather than when it is named.** Before a broker existed,
-//! `Worker::at("bad:7000")` failed in the constructor; now that failure surfaces
-//! from inside the run. Better behaviour, and a change rather than a side
-//! effect.
-//!
-//! # What is provisioned, and when
-//!
-//! Packing an artifact is expensive and happens up front, before the first node
-//! runs, because a worker has **one** catalog and half of one is a different
-//! catalog. Opening a connection is not, and does not. Those two look like they
-//! conflict and do not: [`Reaching::offering`] *stages* the artifact, and the
-//! bytes only move inside the wire's own greeting, on the first dispatch.
-//!
-//! So the whole of `Worker::offering`'s rule survives the lazy boundary: the
-//! same artifact twice does nothing, and changing one out from under an open
-//! session fails rather than swapping a catalog with live state in it.
-//!
-//! # What is not honoured yet, said out loud
-//!
-//! A [`Reply::Met`](crate::Reply::Met) can carry a `good_for`, and **nothing
-//! here enforces it**. No broker issues one today — the embedded one has no
-//! policy — so enforcing it would be a mechanism with no tenant. The day one
-//! does, the enforcement is this type's and not the engine's: it is the only
-//! thing that knows when the rendezvous was granted.
+//! A [`Reply::Met`](crate::Reply::Met) can carry a `good_for` and **nothing here
+//! enforces it**: no broker issues one today, so enforcing it would be a
+//! mechanism with no tenant. The day one does, the enforcement is this type's —
+//! it is the only thing that knows when the rendezvous was granted.
 
 use crate::{Host, Session};
 use somatize_core::{Cargo, Outcome, Plan, Transport, TransportError, Watcher};
@@ -146,9 +131,8 @@ impl Drop for Reaching {
     /// Lets the rendezvous go, so that no client has to remember to.
     ///
     /// Only one that was taken: a handle nobody sent work to never held
-    /// anything. Nothing fails if this does not arrive — which is exactly why
-    /// the failure is swallowed. A run that finished is not a run to report an
-    /// error from.
+    /// anything. Nothing fails if this does not arrive, which is why the failure
+    /// is swallowed — a run that finished is not a run to report an error from.
     fn drop(&mut self) {
         if locked(&self.open).is_some() {
             self.session.done(&self.host);

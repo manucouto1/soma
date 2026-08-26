@@ -7,12 +7,9 @@
 use crate::{Point, Setting};
 use std::fmt;
 
-/// One knob and what it may be.
-///
-/// Three kinds and not more: a bool is a `Choice` of two, and a "power of two
-/// between 16 and 512" is an `Int` read as a log. What is not here is a
-/// **conditional** dimension — a knob that only exists when another took a
-/// particular value — which needs a consumer before it needs a design.
+/// One knob and what it may be. Three kinds and not more: a bool is a `Choice`
+/// of two, and a *power of two between 16 and 512* is an `Int` read as a log.
+/// Not here: a **conditional** dimension, which needs a consumer first.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dimension {
     /// Anything between the two.
@@ -132,19 +129,13 @@ impl Space {
 
     /// The point that text names, read against these knobs.
     ///
-    /// The other half of [`Point`]'s `Display`, and it needs the space in front
-    /// of it: `batch=64` on its own does not say whether 64 is a whole number or
-    /// an option of a [`Choice`](Dimension::Choice) that happens to be spelt
-    /// `"64"`. The knobs are what settles it.
+    /// The other half of [`Point`]'s `Display`, and it needs the space: `batch=64`
+    /// on its own does not say whether 64 is a whole number or a
+    /// [`Choice`](Dimension::Choice) spelt `"64"`. This is what makes a study's
+    /// history come back in **one scan and no fetches**.
     ///
-    /// This is what a study's record costs: a trial's configuration is kept as
-    /// text next to its score, so **the whole history comes back in one scan of
-    /// the folder and not one fetch per trial**.
-    ///
-    /// Every knob of this space has to be there and nothing else may be: a
-    /// record written against another space is a different study, and saying so
-    /// beats quietly reading half of it.
-    ///
+    /// Every knob has to be there and nothing else may be: a record written
+    /// against another space is a different study.
     /// ```
     /// use somatize_study::{Dimension, Space};
     ///

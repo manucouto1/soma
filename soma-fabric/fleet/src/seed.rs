@@ -5,25 +5,18 @@
 //! the screens draw from it is what they will draw from a cluster, and the day
 //! a format moves this stops working rather than going on lying.
 //!
-//! # Why a fixture can have a past at all
-//!
-//! A store stamps a name when it is bound, so a reading written now is a
-//! machine that is up to date, and there is no way to ask it for a stamp from
-//! ten minutes ago. That would make *quiet* impossible to see without waiting
-//! for it.
-//!
-//! What makes it possible is the same decision that made liveness right: how
-//! far behind a machine is, is measured **against the newest reading in the
-//! store** and never against anybody's clock. So a fixture does not need a past
-//! — it needs a *spread*. The stamps here are offsets from one instant, and the
-//! fleet they describe reads the same in a minute and in a year.
+//! A store stamps a name when it is bound, so there is no way to ask it for a
+//! stamp from ten minutes ago, which would make *quiet* impossible to see
+//! without waiting for it. What makes a past possible is the decision that made
+//! liveness right: how far behind a machine is, is measured **against the
+//! newest reading in the store**. So a fixture does not need a past — it needs
+//! a *spread*, and the fleet these offsets describe reads the same in a minute
+//! and in a year.
 //!
 //! The record is written by hand at the store's documented path rather than
-//! through `bind`, because `bind` is the thing that stamps. It is the store's
-//! own public [`Bound`] at the store's own documented layout, and
-//! `tests/unit/seed.rs` reads every one of them back through
-//! [`Store::bound`] — so if that layout ever moves, this fails loudly instead of
-//! seeding a store nobody can read.
+//! through `bind`, because `bind` is the thing that stamps. `tests/unit/seed.rs`
+//! reads every one of them back through [`Store::bound`], so if that layout
+//! moves this fails loudly instead of seeding a store nobody can read.
 
 use crate::listing::{Listed, Listing};
 use serde_json::json;
@@ -46,8 +39,8 @@ pub struct Sown {
 /// Writes a fleet into this directory: five machines, a run across two of them,
 /// and — if a path is given — a listing that names four.
 ///
-/// The five are chosen to be every state there is, because a fixture that only
-/// shows the ordinary case is a fixture that hides the interesting half:
+/// The five are every state there is, because a fixture that only shows the
+/// ordinary case hides the interesting half:
 ///
 /// | machine | behind the newest | what it shows |
 /// |---|---|---|
@@ -164,8 +157,7 @@ fn reading(
 ///
 /// `gpu-box` is the case worth having in a fixture: twelve slices crossed to it
 /// and three quarters of the round trip was waiting. The machine is at 0.05 —
-/// it is not busy, it is waiting — and no per-node view can say that, because
-/// neither half of the subtraction belongs to a node.
+/// it is not busy, it is waiting — and no per-node view can say that.
 fn sow_a_run(root: &Path, store: &dyn Store, run: &str, now: u64) -> Result<(), StoreError> {
     let forwards = [
         vec![

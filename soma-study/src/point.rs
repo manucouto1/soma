@@ -1,10 +1,8 @@
 //! One configuration: what each knob was set to.
 //!
-//! What a sampler answers and what a training run is handed. It writes itself
-//! down — `batch=32,lr=0.001` — because that is a trial's **name**: the thing a
-//! record is filed under and, the day a fold is cached, half of its key. Derived
-//! from the values in the space's order, so two machines that never spoke file
-//! the same configuration under the same name.
+//! It writes itself down — `batch=32,lr=0.001` — because that is a trial's
+//! **name**: what a record is filed under. Derived from the values in the
+//! space's order, so two machines that never spoke file it identically.
 
 use std::fmt;
 

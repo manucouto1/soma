@@ -7,35 +7,18 @@
     coordinates(store, space, study="widths")
 
 All three read a `Store` and nothing else, so a machine that ran none of these
-trials draws them — which is the point of a study handed out of a folder.
+trials draws them, and all three are **one scan and no fetches**.
 
-## What each one costs
+`table` shows pruned trials too, with their state; `influence` and `coordinates`
+use only what ran to the end, for the same reason `finished` leaves the others
+out — a pruned score was measured after fewer epochs.
 
-`table` and `influence` are **one scan and no fetches**: the configuration and
-the score are both in the record, which is the shape CU18 gave it. `coordinates`
-is the same scan. Nothing here reads a blob; a pruner's curves are the only
-thing that does.
-
-## Pruned and finished are not ranked together
-
-`table` shows both, with their state. `influence` and `coordinates` use only the
-trials that ran to the end, for the same reason `finished` leaves the others
-out: a pruned score is real and was measured after fewer epochs, so ranking the
-two together says a trial that was stopped early did badly, when all that is
-known is that it was stopped.
-
-## The direction comes from the study, and is never guessed
-
-Getting it backwards is the quietest kind of lie a figure can tell: everything
-is drawn, nothing raises, and the region you read as promising is the one to
-stay away from. `table` sorting the wrong way round is the same lie with a
-different label — it says *best first* either way.
-
-So neither of them defaults. The direction is read out of the record, where
-`report` wrote it, and `goal=` overrides it for a study that predates its being
-written down. When nobody says at all: `table` gives up on the claim and falls
-back to the order the trials ran in, and `coordinates` raises, because a colour
-scale has two ends and drawing one is saying which is good.
+**The direction comes from the study and is never guessed.** Getting it backwards
+is the quietest lie a figure can tell: everything is drawn, nothing raises, and
+the region you read as promising is the one to stay away from. When nobody says,
+`table` gives up the claim and falls back to the order the trials ran in, and
+`coordinates` raises — a colour scale has two ends, and drawing one is saying
+which is good.
 """
 
 from __future__ import annotations
@@ -74,17 +57,13 @@ because a `Space` does not say how a knob was searched."""
 def table(
     store: "Store", space: "Space", *, study: str, goal: str | None = None
 ) -> Figure:
-    """Every scored trial, best first, with the configuration that got it.
+    """Every scored trial, best first, with the configuration that got it. One
+    scan and no fetches. Pruned trials are here too and say so.
 
-    One scan and no fetches. Pruned trials are here too and say so: they are
-    what the study spent its time on, and hiding them would make a run of
-    thirty look like a run of fourteen.
-
-    *Best* needs a direction, and it comes from the record — `goal` overrides
-    it, for a study that was run before the direction was written down. When
-    neither says, the trials come back **in the order they were run** and the
-    title says so, because a table headed *best first* that is sorted the wrong
-    way round is worse than a table that is not sorted.
+    *Best* needs a direction, which comes from the record; `goal` overrides it.
+    When neither says, the trials come back **in the order they were run** and
+    the title says so — a table headed *best first* sorted the wrong way round is
+    worse than one that is not sorted.
     """
     go = _theme.plotly()
     goal = _goal(store, study=study, goal=goal)
@@ -134,8 +113,7 @@ def influence(store: "Store", space: "Space", *, study: str) -> Figure:
     """How decisive each knob was: |rho| against the score, biggest first.
 
     A rank correlation, so it says *this knob orders the results* and not *this
-    knob is worth these many points*. One bar near zero is a knob you can stop
-    searching; one near one is the knob the study is actually about.
+    knob is worth these many points*.
     """
     go = _theme.plotly()
     mattered = list(reversed(importance(store, space, study=study)))
@@ -174,32 +152,19 @@ def coordinates(
     goal: str | None = None,
 ) -> Figure:
     """Every finished trial as a **curve** across the knobs, coloured by score.
-
     The one picture that shows a *region* of the space rather than one knob at a
-    time: where the good curves bunch together is where to look next.
+    time.
 
     Drawn by hand out of splines rather than with plotly's `Parcoords`, which
-    only draws straight segments. What that costs is `Parcoords`' brushing —
-    dragging a range on an axis to filter — and what it buys is that a trial
-    reads as one continuous thing instead of a zigzag, which is what makes a
-    bundle of them visible as a bundle.
+    only draws straight segments. That costs its brushing and buys a trial
+    reading as one continuous thing. A curve is an interpolation **between axes,
+    where there is nothing to be wrong about** — a point exists only where it
+    crosses an axis — and still drawn gently, because a curve bulging past the
+    top of an axis reads as a value beyond its range.
 
-    A curve is an interpolation and it is between axes, where **there is nothing
-    to be wrong about**: a point exists only where it crosses an axis, and it
-    crosses at the value it has. Nothing is being claimed about the space in
-    between, and that is exactly what a rolling mean over a loss could not say.
-    It is still drawn gently, because a curve bulging past the top of an axis
-    reads as a value beyond its range even when it means nothing at all.
-
-    There is no colour scale beside it: the score is the last axis, so the
-    colour is the same fact read twice. What it is for is making a bundle
-    visible as a bundle.
-
-    `goal` comes from the record and this parameter overrides it. Unlike
-    `table`, which can fall back to the order the trials ran in, there is no
-    such fallback here — a colour scale has two ends and drawing one means
-    saying which is good — so a study that recorded no direction and a caller
-    that names none is an error rather than a guess.
+    No colour scale beside it: the score is the last axis. Unlike `table` there
+    is no fallback, so a study that recorded no direction and a caller that names
+    none is an error rather than a guess.
     """
     go = _theme.plotly()
     from plotly.colors import sample_colorscale
@@ -373,9 +338,9 @@ def _scored(
 ) -> list["Trial"]:
     """Every trial with a score, best first. Pruned ones included.
 
-    `goal` decides which end *best* is. `None` means nobody said, and then this
-    does not pretend to know: the order is the one the trials were run in, which
-    is a fact, rather than an ascending sort called *best first*.
+    `goal` decides which end *best* is. `None` means nobody said, and then the
+    order is the one the trials were run in — a fact, rather than an ascending
+    sort called *best first*.
     """
     scored = [
         one

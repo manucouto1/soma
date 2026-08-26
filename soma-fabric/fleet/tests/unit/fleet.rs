@@ -191,8 +191,6 @@ fn a_store_with_nothing_in_it_is_an_empty_fleet_and_not_a_failure() {
     assert!(fleet.seen.is_empty());
 }
 
-// ── And the one that stands up a real worker ──
-//
 // Everything above builds a reading the way the wire builds one, which is the
 // right fixture and still a fixture: it agrees with `said()` because both halves
 // are written here. This one has a **real worker** report into a real store on a

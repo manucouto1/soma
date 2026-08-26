@@ -52,9 +52,6 @@ def batch():
     return torch.randn(6, IN)
 
 
-# ── The gradient really does stop ──
-
-
 def test_freezing_turns_the_gradient_off():
     layer = Layer(IN, MID)
     g = Graph.somatize(layer.named("encoder"))
@@ -142,9 +139,6 @@ def test_the_optimizer_still_points_at_the_same_weights():
     assert [id(p) for p in parameters(g)] == before
 
 
-# ── A tensor, written down and read back ──
-
-
 def test_a_tensor_goes_to_bytes_and_comes_back():
     x = torch.randn(3, 4)
     assert torch.equal(load(dump(x)), x)
@@ -161,9 +155,6 @@ def test_the_codec_is_registered_by_importing():
     from somatize._somatize import codecs_registered
 
     assert KIND in codecs_registered()
-
-
-# ── The whole thing, which is what it was for ──
 
 
 def test_a_settled_encoder_is_kept_and_read_back(tmp_path):

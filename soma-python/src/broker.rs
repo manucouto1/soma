@@ -1,20 +1,13 @@
-//! The seam with the rendezvous: finding out where a host is, from Python.
+//! The seam with the rendezvous: finding out where a host is, from Python. Not
+//! one domain decision — what a host resolves to, which hosts are the same
+//! place, and when a wire is opened are all decided in the broker crate.
 //!
-//! Not one domain decision here, as in the rest of this crate — one adapter and
-//! a calling convention. What a host resolves to, which hosts turn out to be
-//! the same place, and when a wire is opened are all decided in
-//! `somatize-fabric-broker`; this hands Python a door to them.
-//!
-//! # Why Python is given a token and not a path
-//!
-//! Deciding what to pack is Python's — it is the half that knows what a
-//! `cloudpickle` is. But it must not decide *who shares a catalog*: a worker
-//! has one, and two names for one process provisioned separately keeps only the
-//! second half, taking every activation over there with it.
-//!
-//! So [`PyBroker::wire_token`] answers with opaque bytes that are equal exactly
-//! when two hosts are one wire. Python groups by equality and never learns what
-//! a path is, nor when two of them count as one.
+//! Deciding what to pack is Python's, since it is the half that knows what a
+//! `cloudpickle` is. But it must not decide *who shares a catalog*: a worker has
+//! one, and two names for one process provisioned separately keeps only the
+//! second half. So [`PyBroker::wire_token`] answers with opaque bytes that are
+//! equal exactly when two hosts are one wire, and Python groups by equality
+//! without ever learning what a path is.
 
 use crate::codec::Codecs;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -42,13 +35,10 @@ pub struct PyBroker {
 
 #[pymethods]
 impl PyBroker {
-    /// A broker inside this process, knowing where these hosts are.
-    ///
-    /// The values are what the wire needs to get there: a `"host:port"` string
-    /// for a worker that is already standing, or an `argv` list for one to be
-    /// started as a child.
-    ///
-    /// Nothing is connected to here. What this costs is a thread and a map.
+    /// A broker inside this process, knowing where these hosts are. The values
+    /// are what the wire needs to get there: a `"host:port"` for a worker that is
+    /// standing, or an `argv` list for one to be started as a child. Nothing is
+    /// connected to here.
     #[new]
     #[pyo3(signature = (listing))]
     fn new(listing: &Bound<'_, PyDict>) -> PyResult<Self> {
@@ -71,12 +61,8 @@ impl PyBroker {
     }
 
     /// Bytes that are equal for two hosts that share a wire, so whoever decides
-    /// what to pack can group by them.
-    ///
-    /// This is where the rendezvous happens: **asking is eager**, because what
-    /// gets packed for a host depends on which hosts are the same place, and
-    /// that has to be settled before the first node runs. Connecting is not,
-    /// and is not done here.
+    /// what to pack can group by them. **Asking is eager**, because what gets
+    /// packed depends on which hosts are the same place; connecting is not.
     fn wire_token<'py>(&self, py: Python<'py>, host: &str) -> PyResult<Bound<'py, PyBytes>> {
         let token = self
             .session

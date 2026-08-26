@@ -1,24 +1,21 @@
 //! Who turns an artifact into a catalog. The far side.
 //!
-//! It is the hole this crate leaves so as not to learn what a `cloudpickle` is.
-//! A generic worker starts with a `Provision` and no catalog; when a client
+//! The hole this crate leaves so as not to learn what a `cloudpickle` is. A
+//! generic worker starts with a `Provision` and no catalog; when a client
 //! arrives, it decides whether to accept it and what to build.
-//!
-//! Two methods, each answering a question that cannot be answered here:
 //!
 //! | question | why it is not ours |
 //! |---|---|
 //! | can this client provision me? | only whoever deserializes knows what couples to what |
 //! | what comes out of these bytes? | we do not know what the bytes are |
 //!
-//! `accepts` is the original's lesson written as a method. The old soma's worker
-//! chose an interpreter with `$SOMA_PYTHON` or `python3` from the `PATH`, and a
-//! pickled filter can only be rebuilt by an interpreter "close enough" to the
-//! one that pickled it — with a different one cloudpickle returns the class's
-//! `__dict__` instead of an instance, which surfaces as `'dict' object is not
-//! callable` from inside a subprocess, with nothing pointing at the version gap.
-//! Hence the client **identifies itself** in the greeting: refusing on connect,
-//! with both versions in front of you, is cheaper than anything afterwards.
+//! `accepts` is the original's lesson written as a method: its worker chose an
+//! interpreter with `$SOMA_PYTHON` or `python3` from the `PATH`, and a pickled
+//! filter can only be rebuilt by an interpreter close enough to the one that
+//! pickled it — with a different one cloudpickle returns the class's `__dict__`
+//! instead of an instance, surfacing as `'dict' object is not callable` from
+//! inside a subprocess with nothing pointing at the version gap. Hence the
+//! client **identifies itself** in the greeting.
 
 use somatize_core::Catalog;
 use std::fmt;

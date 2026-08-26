@@ -7,20 +7,14 @@ use std::fmt;
 
 /// Prune what is doing worse at this step than `p` percent of the others.
 ///
-/// **The median pruner is `p = 50`**, which is why there is no `Median` scheme
-/// of its own — the original had both, and one of them was the other with a
-/// number filled in. [`median`](Percentile::median) is a constructor.
-///
-/// What is compared is each trial's **best so far**, not its latest value: a
-/// single bad epoch is noise, and a run that already touched a good number has
-/// shown it can.
+/// **The median pruner is `p = 50`**, which is why there is no `Median` scheme —
+/// [`median`](Percentile::median) is a constructor. What is compared is each
+/// trial's **best so far** and not its latest: one bad epoch is noise.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Percentile {
-    /// Between `0` and `100`, and it is **the share that is kept** — so a
-    /// smaller one prunes more, which is the way round optuna reads it too.
-    ///
-    /// At `50` the better half survives. At `100` only what is behind *every*
-    /// finished trial goes. At `0` everything but the best of them goes.
+    /// Between `0` and `100`, and **the share that is kept** — a smaller one
+    /// prunes more, the way round optuna reads it. At `50` the better half
+    /// survives; at `0` everything but the best does not.
     pub p: f64,
     /// Which way is better.
     pub goal: Goal,

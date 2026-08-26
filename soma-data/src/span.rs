@@ -5,25 +5,15 @@ use std::fmt;
 
 /// The rows a source is being asked for: `take` of them, starting at `at`.
 ///
-/// # Why the coordinate travels and the rows do not
-///
 /// This is what a graph reading from a source is handed as its **input**, and
-/// the input is the one value a cache hashes by content. A span is two numbers,
-/// so naming it is free; the rows it stands for are named by the source's
-/// version instead, which the store already knew. Handing the batch itself is
-/// what costs 121 ms a step on a batch of images — see the crate's docs.
+/// the input is the one value a cache hashes by content. Two numbers, so naming
+/// it is free; the rows are named by the source's version instead.
 ///
-/// # And it is what makes a stream cacheable
-///
-/// A span is a **position**, and a position is repeatable: rows 400..500 are the
-/// same rows tomorrow, whatever else has arrived since. So a source read by span
-/// is settled — `frozen`, in the engine's word — and everything under it can be
-/// kept, even while the far end keeps growing. What moves is not the source's
-/// state, it is **which spans exist**.
-///
-/// A source that answers *whatever is newest* is the other thing, and the engine
-/// already refuses to cache under it, because its answer cannot be asked for
-/// twice.
+/// And it is what makes a stream cacheable. A span is a **position**, and a
+/// position is repeatable: rows 400..500 are the same rows tomorrow, whatever
+/// has arrived since. What moves is not the source's state, it is which spans
+/// exist. A source answering *whatever is newest* is the other thing, and the
+/// engine already refuses to cache under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// The first row, counting from zero.

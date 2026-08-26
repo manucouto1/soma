@@ -33,16 +33,13 @@ def _ids(texts):
     return torch.tensor(rows)
 
 
-# ── A node without gradients: text → text, and it is NOT wrapped ──
-
-
 class Lemmatizer(Node):
     def forward(self, texts, ctx):
         return [t.strip().lower().replace("running", "run") for t in texts]
 
 
-# ── The three with parameters. Note: they hold the modules, they do not
-# inherit from nn.Module ──
+# The three with parameters. Note: they hold the modules, they do not
+# inherit from nn.Module.
 #
 # Inheriting from `nn.Module` registers the parameters on its own, but breaks
 # calling the node as a module: our `forward` carries `ctx` and torch calls it
@@ -107,16 +104,10 @@ def _parameters(g):
     return [p for nid in g.nodes() for p in getattr(g.implementation(nid), "parameters", list)()]
 
 
-# ── The topology ──
-
-
 def test_each_part_is_a_node(pipeline):
     g, _ = pipeline
     assert g.nodes() == ["lemmatizer", "encoder", "bottleneck", "classifier"]
     assert g.plan().count("Execute") == 4
-
-
-# ── The gradients ──
 
 
 def test_the_backward_pass_crosses_the_three_nodes_with_parameters(pipeline):
@@ -146,9 +137,6 @@ def test_the_node_without_gradients_coexists_without_breaking_anything(pipeline)
     assert lemmatizer.forward(["  Running  "], None) == ["run"]
 
     g.forward(TEXTS)  # and the whole pipeline still works
-
-
-# ── The training loop, which goes OUTSIDE the graph ──
 
 
 def test_the_pipeline_trains(pipeline):

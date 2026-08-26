@@ -1,10 +1,5 @@
-//! The name of the process where a node runs.
-//!
-//! There is little to check and that is on purpose: a host is a name, not an
-//! address, so there is nothing to validate here. What does get pinned down is
-//! exactly that — that it does not validate — because it is what separates it
-//! from `Device`, and the temptation to give it a grammar will come along by
-//! itself.
+//! The name of the process where a node runs. There is little to check and that
+//! is the point: a host is a name, not an address.
 
 use somatize_core::{Device, Host};
 use std::str::FromStr;
@@ -29,10 +24,8 @@ fn two_different_names_are_two_hosts() {
 
 #[test]
 fn a_host_has_no_grammar_and_a_device_does() {
-    // The asymmetry, written down so it shows if anyone deletes it. `Device` is
-    // a closed set we decide, so a typo fails **at declaration time**. Hosts are
-    // named by the user: there is no list to close, and `afternoon-worker` is no
-    // less valid than `worker1`.
+    // The asymmetry, written down so it shows if anyone deletes it: `Device` is
+    // a closed set, so a typo fails at declaration time. Hosts are the user's.
     assert!(Device::from_str("cude:0").is_err());
     assert_eq!(Host::new("afternoon-worker").as_str(), "afternoon-worker");
 }

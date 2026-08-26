@@ -3,17 +3,15 @@
 //! A generic worker starts **without a catalog**: it knows how to execute plans
 //! and does not know what `tokenize` is. The artifact is what tells it, and this
 //! crate **does not look at what it carries** — that is the
-//! [`Provision`](crate::Provision)'s business, the third appearance of the same
-//! division of labour. A `cloudpickle` of Python objects, a zip of a package, or
-//! a factory name are the same `bytes` field with a different `kind`.
+//! [`Provision`](crate::Provision)'s business. A `cloudpickle` of Python
+//! objects, a zip of a package, or a factory name are the same `bytes` field
+//! with a different `kind`.
 //!
-//! # Why the `id` is set by whoever produces it
-//!
-//! Hashing the bytes here would be the natural thing, and it is not done:
-//! **without interpreting the content there is no criterion for saying when two
-//! artifacts are the same one**. Two pickles of the same catalog can differ byte
-//! for byte. Whoever produces it knows what identifies it — a `sha256`, a
-//! package version, a deployment id — and says so. Here we compare strings.
+//! The `id` is set by whoever produces it rather than hashed here: **without
+//! interpreting the content there is no criterion for saying when two artifacts
+//! are the same one**, and two pickles of one catalog can differ byte for byte.
+//! Whoever produces it knows what identifies it and says so; here we compare
+//! strings.
 
 /// What turns an empty worker into one that can execute your graph.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

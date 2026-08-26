@@ -25,10 +25,8 @@ def parameters(
         trains = {"body": Split(SGD, lr=0.1)}
         Adam(parameters(g, without=trains), lr=1e-3)
 
-    It takes anything you can ask `in` of, so the same dict you hand the
-    `Trainer` does. Leaving them in is not a detail and is refused there: a node
-    trained where it runs and also held by this optimizer is **updated twice**
-    when where it runs is here.
+    Leaving them in is refused by the `Trainer`: a node trained where it runs and
+    also held by this optimizer is **updated twice** when where it runs is here.
     """
     seen: set[int] = set()
     all_of_them: list["torch.nn.Parameter"] = []

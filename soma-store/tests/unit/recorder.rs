@@ -167,8 +167,6 @@ fn a_run_can_be_given_the_name_it_already_has() {
     assert!(store.resolve("run/tuesday/0").unwrap().is_some());
 }
 
-// ── The other vocabulary, which arrives late ──
-
 #[test]
 fn what_level_two_says_lands_in_the_forward_it_belongs_to() {
     // A loss is computed **after** the `forward` that produced it has ended, so
@@ -230,8 +228,6 @@ fn rewriting_a_record_says_the_same_thing_about_the_same_facts() {
         5
     );
 }
-
-// ── What is worth having in the record and not only in the blob ──
 
 #[test]
 fn what_was_asked_to_be_summarised_is_in_the_record_itself() {

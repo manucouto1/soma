@@ -53,9 +53,6 @@ class Counts(Node):
         return float(frame.rows)
 
 
-# ── A source is a node ──
-
-
 def test_a_graph_is_handed_a_coordinate_and_the_node_gets_the_rows(store):
     holding(store, "data/numbers", parquet(1000))
     counts = Counts()
@@ -94,9 +91,6 @@ def test_a_frame_is_whichever_dataframe_you_have_installed(store):
 def test_a_name_nobody_bound_says_so_when_it_is_declared(store):
     with pytest.raises(ValueError, match="data/nothing"):
         Parquet(store, "data/nothing")
-
-
-# ── And its version is in the key ──
 
 
 def test_a_dataset_is_not_read_twice_for_the_same_span(store, where):
@@ -174,9 +168,6 @@ def test_the_version_is_what_the_store_already_knew(store):
     assert Parquet(store, "data/numbers").version == digest
 
 
-# ── And it crosses a wire ──
-
-
 def test_rows_read_here_are_tokenized_over_there(store, where):
     # The shape a cluster has: the dataset is where the client is, the work is
     # somewhere else. A frame is an opaque like a tensor, so it crosses the same
@@ -192,9 +183,6 @@ def test_rows_read_here_are_tokenized_over_there(store, where):
     )
 
     assert g.forward({"at": 0, "take": 32}, broker=worker) == 32.0
-
-
-# ── A column, without a dataframe library ──
 
 
 def test_a_column_comes_over_as_plain_python_values(store):

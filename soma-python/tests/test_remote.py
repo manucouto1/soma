@@ -23,9 +23,6 @@ cloudpickle = pytest.importorskip("cloudpickle")
 cloudpickle.register_pickle_by_value(sys.modules[__name__])
 
 
-# ── Nodes that are going to travel ──
-
-
 class Add(Node):
     def __init__(self, how_much):
         self.how_much = how_much
@@ -156,9 +153,6 @@ def generic(host="w1", **how):
     return Broker.embedded({host: Worker.generic(mode="network", **how)})
 
 
-# ── Declaring, which starts nothing ──
-
-
 def test_at_sends_a_node_to_a_host():
     g = Graph.somatize(Add(1).named("a") >> Add(2).named("b").at("w1"))
     assert g.hosts() == {"b": "w1"}
@@ -227,9 +221,6 @@ def test_placing_devices_only_distributes_nothing():
     # The CU10 invariant: a device is inert as far as the traversal goes.
     g = Graph.somatize((Add(1).named("a") >> Add(2).named("b")).on("meta"))
     assert "Remote" not in g.plan()
-
-
-# ── Executing there, with a real worker ──
 
 
 def test_a_node_sent_away_runs_in_another_process():
@@ -320,9 +311,6 @@ def test_a_print_in_a_node_does_not_break_the_wire():
     assert g.forward("intact", broker=w) == "intact"
 
 
-# ── What goes wrong ──
-
-
 def test_a_mode_that_is_not_one_of_the_two_is_rejected():
     with pytest.raises(ValueError, match="'project' or 'network'"):
         Worker.generic(mode="carrier-pigeon")
@@ -385,9 +373,6 @@ def test_an_opaque_produced_over_there_that_nobody_can_write_down_stays_there():
 
     with pytest.raises(ValueError, match="nothing says how to write one down"):
         g.forward(None, broker=w)
-
-
-# ── And the half that is new: with a codec, it crosses ──
 
 
 def test_a_tensor_crosses_whole_and_is_the_same_tensor_over_there():
@@ -490,7 +475,6 @@ def test_a_broker_takes_a_dict_from_host_to_worker():
         g.forward(0, broker=Broker.embedded({"w1": "I am not a worker"}))
 
 
-# ── That the code really arrives ──
 #
 # The hole the first version of this had: cloudpickle serializes by
 # **reference** what comes from an importable module, so a node living in
@@ -534,9 +518,6 @@ def test_send_does_not_leave_cloudpickles_global_registry_touched():
     assert cloudpickle.dumps(sample_net.Greet) == before
 
 
-# ── What an artifact is called, which decides what a worker keeps ──
-
-
 def test_the_artifact_does_not_depend_on_the_order_the_nodes_came_in():
     # The id is the digest of these bytes and a dict pickles in insertion order,
     # so the same nodes handed over in another order **were another artifact**.
@@ -566,9 +547,6 @@ def test_two_graphs_over_the_same_nodes_are_one_artifact():
         return _pack(nodes, "network", ())
 
     assert artifact(forward) == artifact(backward)
-
-
-# ── What a worker is told it is going to need ──
 
 
 def test_provision_says_out_loud_what_forward_says_on_its_own():
@@ -650,7 +628,6 @@ def test_a_cached_tensor_is_kept_by_the_worker_too(tmp_path):
     assert torch.equal(second, torch.tensor([1.0])), "the worker ran it again"
 
 
-# ── Two names for one place, which is one catalog ──
 #
 # The rule is proved next door in `soma-fabric`, against a wire: two hosts at
 # one address share it, two with the same `argv` do not. What is proved here is

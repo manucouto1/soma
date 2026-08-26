@@ -1,14 +1,9 @@
 //! The far side: serving whatever arrives, over standard input or a port.
 //!
-//! Two axes, and they do not mix:
-//!
-//! - **where it listens**: [`Serving::over_stdin`] talks to a client that
-//!   started it; [`Serving::listen`] opens a port and serves whoever comes. The
-//!   second is what makes a worker an independent process.
-//! - **where it gets what it executes**: it brings it, or it is sent it.
-//!
-//! On the second, there are **two kinds of worker** and neither can pretend to
-//! be the other:
+//! Two axes, and they do not mix. **Where it listens**:
+//! [`Serving::over_stdin`] talks to a client that started it, and
+//! [`Serving::listen`] opens a port and serves whoever comes, which is what
+//! makes a worker an independent process. **Where it gets what it executes**:
 //!
 //! | | where it gets it | who uses it |
 //! |---|---|---|
@@ -17,32 +12,23 @@
 //!
 //! Two constructors and not an optional parameter because they reject different
 //! things: offering the first an artifact is an error, and not offering the
-//! second one is too. An `Option` would have turned both rejections into a
-//! branch that gets forgotten.
+//! second one is too. An `Option` would have turned both into a branch that
+//! gets forgotten.
 //!
-//! # Where the catalog comes from
-//!
-//! A worker either brings its own or is sent one in an artifact, and that is
-//! the whole of it. What arrives is **cached by the artifact's id**, so a second run resends
-//! nothing. One is kept, not a map: collecting Python catalogs would be
+//! What arrives is **cached by the artifact's id**, so a second run resends
+//! nothing. One is kept and not a map: collecting Python catalogs would be
 //! collecting live objects with nobody saying when they are released.
 //!
-//! # One thread per conversation, and why
+//! **One thread per conversation.** The first version served connections one at
+//! a time and deadlocked: two branches of a wave against one worker open two
+//! connections, the second sits in the `accept` queue, and the first does not
+//! release its own until the `forward` finishes. Serializing was right, but at
+//! **message** granularity and not session granularity.
 //!
-//! The first version served connections **one at a time** — it seemed consistent
-//! with "a worker is one process" — and deadlocked: two branches of a wave
-//! against the same worker open two connections, the second sits in the `accept`
-//! queue, and the first does not release its own until the `forward` finishes.
-//! The integration test caught it, which is where it had to show. The lesson:
-//! serializing was right, but **at message granularity, not session
-//! granularity**.
-//!
-//! # `stdout` is the wire
-//!
-//! Not one `println!` in a worker: the messages go over its standard output. For
-//! talking there is `stderr`, which [`Worker`](crate::Worker) leaves inherited
-//! for exactly that. In Python this is more dangerous, because a stray `print`
-//! in a user's node — or in a library on import — does the same thing.
+//! `stdout` **is** the wire, so not one `println!` in a worker; for talking
+//! there is `stderr`, which [`Worker`](crate::Worker) leaves inherited. In
+//! Python this is more dangerous, because a stray `print` in a user's node — or
+//! in a library on import — does the same thing.
 
 use crate::frame;
 use crate::machine::{self, Machine};
@@ -91,10 +77,10 @@ impl<'a> Serving<'a> {
 
     /// The same worker, with somewhere to keep the artifacts it is sent.
     ///
-    /// This is the `have`/`want` finally having a `have`: on being offered an
-    /// artifact it already has **in the store**, it says `Ready` and not a byte
-    /// crosses. A shared folder between workers means the second one to be stood
-    /// up is provisioned without the client noticing.
+    /// The `have`/`want` finally having a `have`: offered an artifact it already
+    /// has **in the store**, it says `Ready` and not a byte crosses. A shared
+    /// folder means the second worker stood up is provisioned without the
+    /// client noticing.
     pub fn store(mut self, store: &'a dyn Store) -> Self {
         self.store = Some(store);
         self
@@ -103,13 +89,11 @@ impl<'a> Serving<'a> {
     /// Writes a reading of this machine to the store this often, whether or not
     /// anybody is asking it to do anything.
     ///
-    /// The idle half, and the pipe is CU20's rule rather than a preference:
-    /// *where a connection is open, facts come back down it; where there is
-    /// none, they go to the store*. An idle worker's connection is one **nobody
-    /// is reading** — a client only reads the socket while a job is in flight —
-    /// so beating down it would fill a buffer nobody drains, block this process
-    /// on the write, and hand over the **oldest** beats whenever somebody
-    /// finally looked. Which is the worst available answer to *is it alive now*.
+    /// The idle half, and the pipe is CU20's rule: *where a connection is open,
+    /// facts come back down it; where there is none, they go to the store*. An
+    /// idle worker's connection is one **nobody is reading**, so beating down it
+    /// would fill a buffer nobody drains and hand over the **oldest** beats
+    /// whenever somebody finally looked.
     ///
     /// Off unless asked for, and it does nothing without a
     /// [`store`](Serving::store) to write to.
@@ -121,14 +105,12 @@ impl<'a> Serving<'a> {
     /// The same worker, able to keep what the slices it runs produce.
     ///
     /// Separate from [`Serving::store`] and not derived from it: that one keeps
-    /// **artifacts**, so that a worker is not sent a catalog it already has;
-    /// this one keeps **values**, so that a node whose answer is already known
-    /// is not run at all. Both can be the same directory underneath, and the two
-    /// questions still have nothing to do with each other.
+    /// **artifacts**, so a worker is not sent a catalog it already has; this one
+    /// keeps **values**, so a node whose answer is already known is not run at
+    /// all. Both can be the same directory underneath.
     ///
     /// What is remembered about each node does not come from here: it arrives
-    /// with the work, because it belongs to the graph and the graph is over
-    /// there.
+    /// with the work, because it belongs to the graph.
     pub fn keeping(mut self, keeper: &'a dyn Keeper) -> Self {
         self.keeper = Some(keeper);
         self
@@ -139,8 +121,7 @@ impl<'a> Serving<'a> {
     ///
     /// **The same codecs as the client's**, or the two ends do not understand
     /// each other — which is what the error says when it happens. Whoever stands
-    /// this worker up installs it; here it is one more thing that was lent, like
-    /// the store, and it does not travel.
+    /// this worker up installs it; it does not travel.
     pub fn packing(mut self, codec: &'a dyn Codec) -> Self {
         self.codec = Some(codec);
         self
@@ -237,9 +218,8 @@ struct Shared<'a> {
     loaded: Mutex<Loaded<'a>>,
     /// When this **process** came up, and how much it has run in total.
     ///
-    /// Here and not on a `Session`, which is one client's conversation: a
-    /// worker that has served three clients has served them all, and an uptime
-    /// that restarted whenever somebody reconnected would be a figure of
+    /// Here and not on a `Session`, which is one client's conversation: an
+    /// uptime that restarted whenever somebody reconnected would be a figure of
     /// connections dressed as a figure of machines.
     since: Instant,
     served: AtomicU64,
@@ -320,14 +300,14 @@ impl Loaded<'_> {
 
 /// A watcher that puts what it saw back down the same connection.
 ///
-/// The far half of the live view, and it decides nothing: it does not write, it
-/// does not name, it does not group. A fact goes out exactly as the engine here
-/// emitted it, and the client is the one that says it came from this host —
-/// because the name of this host is the graph's, and a worker does not know it.
+/// The far half of the live view, and it decides nothing: a fact goes out
+/// exactly as the engine here emitted it, and the client is the one that says
+/// it came from this host — because the name of this host is the graph's, and a
+/// worker does not know it.
 ///
 /// Behind a `Mutex` because a [`Wave`](somatize_core::Plan::Wave) emits from
-/// several threads at once, and half a frame interleaved with half of another is
-/// a connection that cannot be resynchronised.
+/// several threads at once, and half a frame interleaved with half of another
+/// is a connection that cannot be resynchronised.
 struct Relaying<'a, W: Write + Send> {
     to: &'a Mutex<W>,
 }
@@ -336,8 +316,7 @@ impl<W: Write + Send> Watcher for Relaying<'_, W> {
     fn saw(&self, fact: &Fact) {
         // Nothing here can be reported and nothing here should stop the run: a
         // fact that cannot be written means the connection is gone, and the
-        // answer that is about to be sent down it will say so properly. Being
-        // loud once per fact would be the noisiest possible way to say it.
+        // answer about to be sent down it will say so properly.
         let Ok(encoded) = Answer::Saw(fact.clone()).to_bytes() else {
             return;
         };
@@ -356,8 +335,7 @@ impl<W: Write + Send> Watcher for Relaying<'_, W> {
 ///
 /// One name, rewritten. The store stamps every write, so a reading that has not
 /// moved is a machine that has stopped, and finding that out is a scan with no
-/// fetches. It is CU18's shape and it is the only one that does not grow while
-/// a worker sits there doing nothing.
+/// fetches.
 fn reporting(shared: &Shared<'_>, every: Duration, stop: &AtomicBool) {
     let Some(store) = shared.store else {
         return;
@@ -492,9 +470,7 @@ fn reply<W: Write + Send>(
             // What this machine looks like, said **before** the work rather
             // than after: a reading taken once the slice is over is a reading
             // of a machine that has just stopped, and the question is what it
-            // was like while it was asked. It rides the connection that is
-            // already open, which is CU20's rule for anything that happens
-            // where somebody is listening.
+            // was like while it was asked.
             shared.served.fetch_add(1, Ordering::Relaxed);
             Relaying { to: output }.saw(&shared.reading().said());
 
@@ -506,9 +482,8 @@ fn reply<W: Write + Send>(
                     // A worker holds **one** catalog. If somebody else
                     // provisioned it with another artifact after this client
                     // greeted, executing now would run their implementations —
-                    // and an id that exists in both would do it in silence. It
-                    // is checked here and not at the greeting because that is
-                    // where it can go wrong, and here there is no race to lose.
+                    // and an id that exists in both would do it in silence.
+                    // Checked here because this is where it can go wrong.
                     (Some(mine), Loaded::Sent { id, .. }) if mine != id => {
                         return Answer::Failed(format!(
                             "this worker was provisioned with `{id}` after you greeted \
@@ -541,7 +516,7 @@ fn reply<W: Write + Send>(
             // Alive again before anything reads it, and not at the boundary
             // where a node is handed its argument: a value that only passes
             // through here is never handed to anybody, and the two ends have to
-            // be the same one or this is impossible to explain.
+            // be the same one.
             let (input, known) = match shared.codec {
                 None => (input, known),
                 Some(codec) => match (codec.unpacked(&input), unpacked_all(codec, &known)) {
@@ -565,11 +540,10 @@ fn reply<W: Write + Send>(
 /// with a codec does travel — asking before writing it down would leave behind
 /// exactly what this exists to carry.
 ///
-/// The two halves are not treated alike, and it is the same rule as ever:
-/// `produced` is what the steps here read, so one that cannot be written down
-/// **stays here** and is named by `RunError::Lost` if anybody reads it; `last`
-/// is the value of the slice itself and has a reader over there by definition,
-/// so there the codec's own words are the answer.
+/// The two halves are not treated alike: `produced` is what the steps here read,
+/// so one that cannot be written down **stays here** and is named by
+/// `RunError::Lost` if anybody reads it; `last` is the value of the slice itself
+/// and has a reader over there by definition.
 fn answering(codec: Option<&dyn Codec>, outcome: Outcome) -> Answer {
     let Some(codec) = codec else {
         return Answer::Done(outcome.travelling());
@@ -600,8 +574,7 @@ fn answering(codec: Option<&dyn Codec>, outcome: Outcome) -> Answer {
 ///
 /// A store that cannot be reached is **not** a refusal: it is one trip more, so
 /// it is noted and we ask the client. What does refuse is an artifact that is
-/// there and cannot be opened, because that is the same failure as one arriving
-/// broken over the wire.
+/// there and cannot be opened, which is the same failure as one arriving broken.
 fn kept(
     store: Option<&dyn Store>,
     provision: &dyn Provision,
@@ -643,10 +616,10 @@ fn keep(store: &dyn Store, kind: &str, id: &str, bytes: &[u8]) -> Result<(), Sto
 
 /// What an artifact is called in the store.
 ///
-/// The kind is in the name because two artifacts of different kinds can honestly
-/// be given the same id by whoever produces them — the same catalog pickled and
-/// packed as a manifest — and opening one with the other's `Provision` is not a
-/// mistake worth allowing.
+/// The kind is in the name because two artifacts of different kinds can
+/// honestly be given the same id by whoever produces them — the same catalog
+/// pickled and packed as a manifest — and opening one with the other's
+/// `Provision` is not a mistake worth allowing.
 fn name_of(kind: &str, id: &str) -> String {
     format!("artifact:{kind}:{id}")
 }

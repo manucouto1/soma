@@ -17,8 +17,6 @@ fn ids(nodes: Vec<&NodeId>) -> Vec<&str> {
     nodes.into_iter().map(NodeId::as_str).collect()
 }
 
-// ── Construction ──
-
 #[test]
 fn an_empty_graph_is_valid() {
     let g = Graph::new();
@@ -65,8 +63,6 @@ fn free_id_suffixes_until_it_finds_a_gap() {
     g.add_node("clean_2").unwrap();
     assert_eq!(g.free_id("clean").as_str(), "clean_3");
 }
-
-// ── What cannot be built ──
 
 #[test]
 fn two_nodes_cannot_share_a_name() {
@@ -128,8 +124,6 @@ fn a_node_does_not_connect_to_itself() {
         GraphError::WouldCycle { .. }
     ));
 }
-
-// ── Topology queries ──
 
 #[test]
 fn predecessors_and_successors() {

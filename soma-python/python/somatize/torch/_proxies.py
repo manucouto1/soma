@@ -1,7 +1,6 @@
 """Scoring a candidate without training it.
 
     from somatize.torch import proxies
-    from somatize.study import Space, ask
 
     for trial in range(200):                       # the loop is level 3's
         g = build(ask(space, trial))               # and it has no type
@@ -9,38 +8,25 @@
 
 **A proxy is not a `Flag`, and it never was.** `synflow` of one network is a
 number with no meaning; it only means something next to another network's. That
-puts it at level 3 — where a study is a `for` and there is no type at all — and
-not in the vocabulary of a diagnosis, which is about *this* network.
-
-Which leaves one question worth asking of any of them, and it is not "does it
-correlate with the score":
+puts it at level 3 and not in the vocabulary of a diagnosis, which is about
+*this* network. Which leaves the one question worth asking of any of them:
 
 > **Does it beat counting parameters?**
 
 Size is free. Abdelfattah et al. (ICLR 2021) report `synflow` at 0.76 rank
-correlation with parameter count across NAS-Bench-201, which is close to saying
-it measures size — so a proxy that costs a forward and a backward has to earn
-the difference. What that came to when it was measured here is in
-`health/tests/proxies.py`, and the honest answer is beside each one below.
-
-## The five
+correlation with parameter count across NAS-Bench-201, so a proxy that costs a
+forward and a backward has to earn the difference. What that came to when it was
+measured here is in `health/tests/proxies.py`.
 
 | proxy | what it reads | what it needs |
 |---|---|---|
 | `synflow` | `sum(abs(w * dR/dw))` with every weight made positive | nothing but a shape |
 | `snip` | the same product against a real loss | a batch and a target |
-| `grasp` | `-sum(w * H g)`, so a second backward through the gradient | a batch and a target |
+| `grasp` | `-sum(w * H g)`, a second backward through the gradient | a batch and a target |
 | `zen` | how far the output moves when the input is nudged | a batch |
 | `naswot` | how differently the units switch across a batch | a batch |
 
-Three of them never see a label, which is the point of the family: a candidate
-can be scored before there is anything to train it on.
-
-## What it takes
-
-A **graph**, the same as `probe` and `architecture`, because a candidate
-architecture in this library is a graph. A bare module becomes one by being a
-node's, which is one line and is how everything else here works.
+Three never see a label, which is the point of the family.
 """
 
 from __future__ import annotations
@@ -82,16 +68,12 @@ def proxy(
     target: Any = None,
     objective: Objective | None = None,
 ) -> float:
-    """One cheap score for one candidate, higher being better.
+    """One cheap score for one candidate, higher being better. `of` names which —
+    see `EVERY`. `snip` and `grasp` want a `target` and an `objective`.
 
-    `of` names which — see `EVERY`. `snip` and `grasp` want a `target` and an
-    `objective` because they read a real loss; the other three do not, and
-    handing them one is not an error, it is ignored.
-
-    The units are nobody's and comparing two runs of the same proxy is the only
-    thing it is for, which is why every one of these that spans decades comes
-    back as a logarithm: a rank correlation does not care and a person reading
-    the numbers does.
+    The units are nobody's, and comparing two runs of the same proxy is the only
+    thing it is for, which is why every one that spans decades comes back as a
+    logarithm.
     """
     if torch is None:
         raise RuntimeError("`proxy` needs torch")
@@ -118,10 +100,9 @@ def proxies(
 ) -> dict[str, float]:
     """Every proxy that can be taken with what it was given, as `{name: score}`.
 
-    Without a `target` and an `objective` the three that read a loss are **not
-    in the answer**, rather than being in it as `None`. A score that is missing
-    and a score that is bad have to look different, which is the same rule
-    `Seen` keeps on the other side of the library.
+    Without a `target` and an `objective` the three that read a loss are **not in
+    the answer**, rather than being in it as `None`: a score that is missing and
+    a score that is bad have to look different.
     """
     said: dict[str, float] = {}
     for name in EVERY:
@@ -134,9 +115,6 @@ def proxies(
     return said
 
 
-# ── The five ──
-
-
 def _synflow(
     graph: "Graph",
     example: Any,
@@ -147,8 +125,8 @@ def _synflow(
 
     Every weight is made positive and a batch of ones is pushed through, so what
     comes back is a property of the **topology** — how much of the network a
-    signal can reach — with the values taken out of it. That is the whole idea
-    and it is also the reason to be suspicious: a bigger network reaches more.
+    signal can reach. That is the whole idea and also the reason to be
+    suspicious: a bigger network reaches more.
     """
     held = parameters(graph)
     signs = [p.sign() for p in held]
@@ -240,13 +218,10 @@ def _naswot(
     _objective: Objective | None,
 ) -> float:
     """Mellor et al. (2021). Two inputs that switch the same units the same way
-    are two inputs this network cannot tell apart; the log determinant of the
-    Hamming kernel is how many it can.
-
-    The code is the **sign** of each activation's output rather than a `relu`
-    mask, so a `tanh` network gets a code too. Saying that out loud matters: the
-    paper is about rectifiers, and this is the obvious extension rather than the
-    paper's claim.
+    are two this network cannot tell apart; the log determinant of the Hamming
+    kernel is how many it can. The code is the **sign** of each activation rather
+    than a `relu` mask, so a `tanh` network gets one too — the obvious extension
+    rather than the paper's claim.
     """
     codes: list[Any] = []
     hooks: list[Any] = []
@@ -272,9 +247,6 @@ def _naswot(
     sign, value = torch.linalg.slogdet(
         agree.double() + 1e-3 * torch.eye(rows, dtype=torch.float64))
     return float(value) if sign > 0 else float("-inf")
-
-
-# ── Odds and ends ──
 
 
 def _ran(graph: "Graph", example: Any) -> Any:

@@ -1,12 +1,9 @@
 """`Graph` — the Rust object plus what can only live in Python.
 
-Almost all of `Graph` is in Rust. What cannot be is `somatize`: it receives an
-expression made of Python objects and walks it, so it lives here.
-
-It is written as a method in the class body, and not assigned onto the Rust
-class at import time, because a `#[pyclass]` is an immutable type — attributes
-cannot be hung on it — and because even if they could, what is assigned is
-invisible to `help()`, to an IDE, and to a type checker.
+Almost all of it is in Rust. What cannot be is `somatize`, which walks an
+expression made of Python objects, and it is written in the class body rather
+than assigned at import time: a `#[pyclass]` is immutable, and what is assigned
+is invisible to `help()`, an IDE and a type checker.
 """
 
 from __future__ import annotations
@@ -26,13 +23,10 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class Carrier(Protocol):
-    """A worker this side can hand an artifact to.
-
-    A `Protocol` and not `somatize.Worker`, because what `provision` needs is
-    the one method — and the Rust `Worker` the engine downcasts to does not have
-    it. `somatize._remote.Worker` adds it, and anything else that packs nodes
-    the same way is as good; `_share_out` asks for it by name and says so when it
-    is missing, which is the check this only describes.
+    """A worker this side can hand an artifact to. A `Protocol` and not
+    `somatize.Worker`, because what `provision` needs is the one method and the
+    Rust `Worker` the engine downcasts to does not have it. `_share_out` asks for
+    it by name and says so when it is missing.
     """
 
     def carry(self, nodes: dict[str, Any]) -> None: ...
@@ -52,15 +46,10 @@ class Graph(_RustGraph):
     def node(self, *args: Any) -> str:
         """Adds a node and returns its id, noting **what it was built with**.
 
-        Here and not in `_dsl`, because a graph built by hand in a loop reaches
-        the same door and has the same collision without it: `Embed(512)` and
-        `Embed(64)` are one class and two answers, and what tells them apart is
-        the only half of a key that lives in the object.
-
-        Something that cannot be written down the same way in two processes is
-        passed over in silence here, and refused in `_check_it_was_obeyed` if a
-        cache turns out to depend on it. Declaring a graph is not the moment to
-        fail: running one with a cache it cannot honour is.
+        Here and not in `_dsl`, because a graph built by hand in a loop has the
+        same collision: `Embed(512)` and `Embed(64)` are one class and two
+        answers. What cannot be written down the same way in two processes is
+        passed over here and refused in `_check_it_was_obeyed`.
         """
         from somatize import _declaration
 
@@ -72,18 +61,12 @@ class Graph(_RustGraph):
         return node_id
 
     def figure(self, overlay: Overlay | None = None, inside: Inside | None = None) -> Figure:
-        """The graph drawn, as a `plotly.graph_objects.Figure`.
-
-        Nothing is executed to draw it: everything on the figure was declared.
-        Needs the `viz` extra; without it the error says so.
+        """The graph drawn, as a `plotly.graph_objects.Figure`. Nothing is
+        executed to draw it. Needs the `viz` extra.
 
         `inside` opens a node up — `{node: [(path, what), ...]}`, which
-        `somatize.torch.architecture` reads off the modules it holds. A node is
-        often a whole architecture and a cube is not a picture of one.
-
-        `overlay` lays what **happened** over what was declared —
-        `{node: [flag, ...]}`, which `somatize.health.overlaid` builds out of a
-        diagnosis. An empty one draws exactly what no overlay draws.
+        `somatize.torch.architecture` reads off the modules it holds. `overlay`
+        lays what **happened** over what was declared, `{node: [flag, ...]}`.
         """
         from somatize import _figure
 
@@ -97,15 +80,9 @@ class Graph(_RustGraph):
         """What a notebook shows for `g` on its own: the figure.
 
         The *mimebundle* and not `_repr_html_`, because that is how a plotly
-        figure actually reaches a cell — a notebook sanitises the `<script>` a
-        hand-written HTML repr would need, which is the same wall the original
-        soma hit and answered by writing its own SVG renderer.
-
-        `None` when there is no plotly, when the graph is too big to read, and
-        when plotly itself answers with nothing — which is what it does outside a
-        notebook, where no renderer is configured. In all three the cell falls
-        back to `__repr__`. Asking for `figure()` by hand still draws whatever
-        you asked for: the guard is against a surprise, not against you.
+        figure reaches a cell. `None` without plotly, for a graph too big to
+        read, and outside a notebook — in all three the cell falls back to
+        `__repr__`, and `figure()` by hand still draws.
         """
         from somatize import _figure
 
@@ -128,14 +105,11 @@ class Graph(_RustGraph):
     ) -> Any:
         """Executes the whole graph and returns what it produced.
 
-        With `broker=Broker.embedded({"w1": Worker.at(...)})` you say who knows
-        where each host is. **This method sends the nodes**, not you: the graph
-        is the one that knows which goes where.
+        `broker=Broker.embedded({"w1": Worker.at(...)})` says who knows where
+        each host is. **This method sends the nodes**, not you.
 
         `store` is a directory or a `Store`: with one, whatever was declared
-        `.cached()` is looked up before being computed and kept afterwards. Both
-        and not one, because a `Store` is the only one of the two that can say
-        "a bucket" — and a path is what whoever has a directory already has.
+        `.cached()` is looked up before being computed and kept after.
 
         `watching` is told what happened, as it happens::
 
@@ -143,11 +117,9 @@ class Graph(_RustGraph):
             g.forward(x, watching=Recorder(store))          # kept
             g.forward(x, watching=[Recorder(store), draw])  # both
 
-        A fact arrives as a `dict` with a `fact` key naming it and text beside
-        it — the same shape it is written down as, so what you print is what you
-        would find in the store. **A node on another machine is no different**:
-        what its worker saw comes back down the connection that was already
-        open, and says which host it was.
+        A fact arrives as a `dict` with a `fact` key naming it — the same shape
+        it is written down as. What a worker saw comes back down the connection
+        that was already open.
         """
         self._check_it_was_obeyed()
         self.provision(broker)
@@ -164,20 +136,10 @@ class Graph(_RustGraph):
     ) -> dict[str, str] | None:
         """What gets written beside everything this run keeps.
 
-        The environment goes in **without anybody asking**, and that is the
-        point: provenance that has to be remembered is provenance that is
-        missing from exactly the runs nobody thought were going to matter. It is
-        also the one thing here the engine cannot work out and the key will
-        never carry — a fingerprint stops at what is installed, so the version
-        of the interpreter is not in any name a run produces.
-
-        The reading of it is bound once, under `env/<digest>`, so what travels
-        on each value is twelve characters and what explains them is one record
-        anybody can `cat`. Whoever reads this store back a year from now needs
-        both: the short name to group by, and the long one to understand.
-
-        Only with a store, because without one nothing is kept and there is
-        nothing to say it about.
+        The environment goes in **without anybody asking**: provenance that has
+        to be remembered is missing from exactly the runs nobody thought were
+        going to matter, and no key will ever carry it since a fingerprint stops
+        at what is installed. Bound once under `env/<digest>`. Only with a store.
         """
         if store is None:
             return stamping
@@ -188,12 +150,9 @@ class Graph(_RustGraph):
         name = _environment.named(said)
 
         # Bound and not claimed: two runs in the same environment write the same
-        # reading, so whoever gets there second is writing what is already
-        # there. A claim would be asking who won a race that has no loser.
-        #
-        # And a failure here does not stop a run. Not being able to write down
-        # what the environment was is worth a line on `stderr`; refusing to
-        # execute over it would be losing the work to save the label.
+        # reading, so a claim would be asking who won a race with no loser. And
+        # a failure here does not stop a run — refusing to execute over it would
+        # be losing the work to save the label.
         try:
             kept = store if isinstance(store, Store) else Store(str(store))
             kept.keep(f"{_environment.WHERE}/{name}", said)
@@ -207,26 +166,14 @@ class Graph(_RustGraph):
     def provision(self, broker: Broker | dict[str, Any] | None) -> None:
         """Tells each host what it is going to need, before the first node runs.
 
-        `forward` calls it, so whoever runs a graph in one go never says it out
-        loud. Whoever runs one **in pieces** — stage by stage, or its transpose —
-        does not have to either: a piece provisions the graph it is a piece of,
-        entire.
+        `forward` calls it, and whoever runs a graph **in pieces** does not have
+        to either: a piece provisions the graph it is a piece of, entire. That is
+        why the method exists — a worker has **one** catalog, and half of one is
+        a different catalog, refused mid-session and swallowed in silence by a
+        worker that has not greeted yet.
 
-        That is the whole reason for the method to exist, and it is not a
-        courtesy: a worker has **one** catalog, and half of one is a different
-        catalog. Handing it over is refused mid-session and swallowed in silence
-        by a worker that has not greeted yet, taking with it every activation and
-        every optimizer state that lived over there.
-
-        A host that gets nothing is told nothing, for the same reason: an
-        artifact with no nodes in it is a catalog too, and it would take the
-        place of the one the next graph is about to send.
-
-        **Two hosts that turn out to be one place are told once**, with the union
-        of what they hold. Which of them are one place is the broker's to know,
-        and it is asked here — the rendezvous is what has to happen before
-        anything is packed, while the wire itself waits for somebody to send
-        work down it.
+        A host that gets nothing is told nothing, and **two hosts that turn out
+        to be one place are told once**, with the union of what they hold.
         """
         if broker is None:
             return
@@ -259,18 +206,11 @@ class Graph(_RustGraph):
     def _check_it_was_obeyed(self) -> None:
         """That whoever was declared settled really was settled.
 
-        The core cannot ask this. It says `.frozen()` means "this node's state
-        does not change", and it cannot tell a node with **no state to settle** —
-        a tokenizer — from one whose weights **nobody has hashed yet**: both
-        arrive as a state of `None`. Only whoever knows what a weight is can
-        tell, and here that is a duck: something with `state_dict` or
-        `parameters` has state.
-
-        And it is not a detail. Without the digest of the weights the key does
-        not depend on them, so two different checkpoints of the same class share
-        a name — and what comes back is the wrong tensor, with no error and no
-        warning. It is the one failure a cache must not have, and it is checked
-        wherever a cache is declared, store or no store.
+        The core cannot ask this: it cannot tell a node with **no state to
+        settle** — a tokenizer — from one whose weights **nobody has hashed yet**,
+        since both arrive as `None`. Without the digest the key does not depend
+        on the weights, so two checkpoints of one class share a name and the
+        wrong tensor comes back with no error and no warning.
         """
         from somatize import _declaration
 
@@ -321,14 +261,11 @@ class Graph(_RustGraph):
     def _share_out(self, broker: Broker) -> list[tuple[list[str], dict[str, Any]]]:
         """Which nodes fall to each **wire**, and which host names share it.
 
-        Grouped by wire and not by host for the reason `provision` states: two
-        names for one process get one catalog, and provisioning it twice with
-        half each time leaves it without the other half.
-
-        A host the broker does not know is left out rather than raised over.
-        Naming a host nobody listed is not this step's failure to report: the
-        run either reaches that slice or it does not, and whichever happens says
-        so with the slice in front of it.
+        Grouped by wire and not by host: two names for one process get one
+        catalog, and provisioning it twice with half each time leaves it without
+        the other half. A host the broker does not know is left out rather than
+        raised over — whichever way the run goes, it says so with the slice in
+        front of it.
         """
         hosts = self.hosts()
         share: dict[bytes, tuple[list[str], dict[str, Any]]] = {}
@@ -375,13 +312,10 @@ class Graph(_RustGraph):
 
 
 def _has_state(implementation: object) -> bool:
-    """Whether this node has anything worth hashing, asked as a duck: whoever
-    answers none of them has no state, and does not stop being a node for it.
-
-    Three and not two since there are sources: weights are `state_dict` or
-    `parameters`, and a dataset is `version`. They are the same question — *what
-    is this node settled at* — and the same failure if nobody answers it, which
-    is two different things kept under one name.
+    """Whether this node has anything worth hashing, asked as a duck. Three and
+    not two since there are sources: weights are `state_dict` or `parameters`,
+    and a dataset is `version`. One question — *what is this node settled at* —
+    and one failure if nobody answers it.
     """
     return any(
         getattr(implementation, what, None) is not None

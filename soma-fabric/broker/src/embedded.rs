@@ -5,29 +5,20 @@
 //! back to this and the graph runs on whatever workers it can reach. Not a
 //! degraded mode with its own code — the same path with another broker.
 //!
-//! # It is a thread, and the messages are really serialized
+//! It is a thread and the messages are really serialized, and neither is waste.
+//! What crosses here is a rendezvous: a run with four workers is nine messages,
+//! a few tens of microseconds all told, once, outside the loop. **The broker is
+//! in the control route and steps out of the cargo one**, so the price of being
+//! honest here is not measurable there — and being honest buys the messages
+//! being exercised for real from the first day, by a round trip that actually
+//! happens.
 //!
-//! Both of those look like waste and neither is. What crosses here is a
-//! rendezvous: tens of bytes, once per host per session. A run with four
-//! workers is nine messages — one greeting, four rendezvous, four goodbyes —
-//! which is a few tens of microseconds all told, once, outside the loop. What
-//! crosses the wire next door is an activation: megabytes, once per forward,
-//! fifty thousand forwards. **The broker is in the first and steps out of the
-//! second**, so the price of being honest here is not measurable there.
-//!
-//! And being honest buys the thing that matters: the messages are exercised for
-//! real from the first day, by a round trip that actually happens, before any
-//! broker exists outside a process. A protocol whose only implementation never
-//! serialized anything would be a protocol nobody had tested.
-//!
-//! # One thread, and it must not become a hang
-//!
-//! The failure this type exists to not have is a client blocked forever on an
-//! answer that is never coming. Every channel operation here maps to
-//! [`Unanswered::Gone`], never to an `unwrap`, and that is pinned by a test
-//! rather than by care — which is why [`Embedded::served_by`] is public: without
-//! a way to stand up a desk that fails, the one failure mode worth testing is
-//! the one that cannot be.
+//! One thread, and it must not become a hang. The failure this type exists not
+//! to have is a client blocked forever on an answer that is never coming, so
+//! every channel operation maps to [`Unanswered::Gone`] and never to an
+//! `unwrap`, pinned by a test — which is why [`Embedded::served_by`] is public:
+//! without a way to stand up a desk that fails, the one failure mode worth
+//! testing is the one that cannot be.
 
 use crate::{Ask, Host, Path, Reply, Unreadable};
 use std::collections::BTreeMap;
@@ -39,20 +30,16 @@ use std::thread::JoinHandle;
 /// A broker running on a thread of this process.
 pub struct Embedded {
     /// The way in, behind a lock for the same reason the wire's `Worker` holds
-    /// one: this has to be `Sync` so that two branches of a wave can reach it at
+    /// one: this has to be `Sync` so two branches of a wave can reach it at
     /// once, and one channel does not fit two conversations halfway through.
-    /// The lock queues them, which is correct and not a limitation — a
-    /// rendezvous takes microseconds.
     ///
     /// `Option` so that [`Drop`] can let it go **before** joining: the thread
-    /// ends when its end of the channel closes, and joining first would wait for
-    /// something that is waiting for us.
+    /// ends when its end of the channel closes, and joining first would wait
+    /// for something that is waiting for us.
     desk: Mutex<Option<Sender<Errand>>>,
     /// Whether the session has been opened. **Once per broker and not once per
     /// host**: a greeting belongs to the conversation, and a run across four
-    /// workers that sent four of them would be asking the same question four
-    /// times. The same rule the wire's `Worker` states for its own session, for
-    /// the same reason.
+    /// workers that sent four of them would be asking one question four times.
     greeted: Mutex<bool>,
     /// So the thread is joined rather than left behind. `Option` for the same
     /// reason: `Drop` has to take it.
@@ -72,8 +59,7 @@ impl Embedded {
     /// The listing is fixed when the broker opens and the thread owns it, which
     /// is why there is no lock around it and no way for two threads to disagree
     /// about where `w1` is. A host that has to be added is a broker that has to
-    /// be opened — which is what happens anyway, since the names come from a
-    /// graph that is about to run.
+    /// be opened.
     pub fn open(listing: impl IntoIterator<Item = (Host, Path)>) -> Self {
         let listing: BTreeMap<Host, Path> = listing.into_iter().collect();
         Self::served_by(move |ask| answer(&listing, ask))
@@ -81,12 +67,9 @@ impl Embedded {
 
     /// A broker whose answers come from `desk`.
     ///
-    /// Public for one reason, and it is a present one rather than a future one:
-    /// the worst thing this type can do is turn a panic into a hang, and there
-    /// is no way to test that a desk which fails is reported as a failure
-    /// without being able to stand up a desk that fails. The local broker will
-    /// want this too, with an accept loop in front, but that is not why it is
-    /// here.
+    /// Public for one reason, and a present one: the worst thing this type can
+    /// do is turn a panic into a hang, and there is no way to test that a desk
+    /// which fails is reported as a failure without being able to stand one up.
     pub fn served_by(mut desk: impl FnMut(Ask) -> Reply + Send + 'static) -> Self {
         let (to_desk, errands) = channel::<Errand>();
         let thread = std::thread::Builder::new()
@@ -120,8 +103,7 @@ impl Embedded {
     ///
     /// Idempotent on purpose: whoever needs a rendezvous calls this first and
     /// does not have to know whether somebody else already did. A refusal is a
-    /// refusal of the **session** — after it there is no conversation — which is
-    /// why it is not swallowed and retried.
+    /// refusal of the **session**, which is why it is not swallowed and retried.
     pub fn greet(&self) -> Result<(), Unanswered> {
         let mut greeted = match self.greeted.lock() {
             Ok(greeted) => greeted,
@@ -147,7 +129,7 @@ impl Embedded {
     /// Every message has exactly one answer except [`Ask::Done`], which has
     /// none — use [`Embedded::done`] for that one. Asking it here is refused
     /// rather than waited on, because the alternative is the hang this type is
-    /// built to not have.
+    /// built not to have.
     pub fn ask(&self, ask: &Ask) -> Result<Reply, Unanswered> {
         if let Ask::Done { .. } = ask {
             return Err(Unanswered::NoAnswerToThat);
@@ -162,8 +144,7 @@ impl Embedded {
     ///
     /// An embedded broker holds nothing, so nothing is released. It is sent
     /// anyway because the same client code talks to a broker that does hold
-    /// things, and a session that ends is the difference between metering and
-    /// guessing.
+    /// things.
     pub fn done(&self, host: &Host) -> Result<(), Unanswered> {
         let (back, _) = channel();
         self.post(&Ask::Done { host: host.clone() }, back)
@@ -186,8 +167,8 @@ impl Embedded {
 
 /// What an embedded broker answers, given what it knows.
 ///
-/// A free function and not a method so that it is the thread's and not shared:
-/// the listing moves in when the broker opens and never comes back out.
+/// A free function and not a method so that it is the thread's: the listing
+/// moves in when the broker opens and never comes back out.
 fn answer(listing: &BTreeMap<Host, Path>, ask: Ask) -> Reply {
     match ask {
         Ask::Hello { protocol, .. } => Reply::to_greeting(protocol),
@@ -221,9 +202,8 @@ fn answer(listing: &BTreeMap<Host, Path>, ask: Ask) -> Reply {
 }
 
 /// The last resort when even the refusal will not encode. It cannot happen with
-/// today's messages — none of them carries anything a serializer can object to
-/// — but the alternative is an `unwrap` on the one thread whose panic is a
-/// client that waits forever.
+/// today's messages, but the alternative is an `unwrap` on the one thread whose
+/// panic is a client that waits forever.
 fn unanswerable(why: &str) -> Vec<u8> {
     Reply::Refused(format!(
         "the broker could not put its own answer into bytes: {why}"

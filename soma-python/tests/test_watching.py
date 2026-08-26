@@ -38,9 +38,6 @@ def kinds(seen):
     return [fact["fact"] for fact in seen]
 
 
-# ── Being told ──
-
-
 def test_nobody_watching_is_the_run_it_always_was(g):
     assert g.forward(0.0) == 11.0
 
@@ -85,9 +82,6 @@ def test_several_are_told_and_something_that_is_not_callable_is_refused(g):
     assert kinds(one) == kinds(other) == ["ran", "ran", "finished"]
     with pytest.raises(ValueError, match="Recorder"):
         g.forward(0.0, watching=7)
-
-
-# ── Kept ──
 
 
 def test_a_recorder_writes_one_record_per_forward(g, tmp_path):
@@ -143,9 +137,6 @@ def test_what_is_printed_is_what_is_written(g, tmp_path):
     assert written[0]["node"] == seen[0]["node"]
 
 
-# ── The other machine ──
-
-
 def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
     from somatize import Broker, Worker
 
@@ -175,9 +166,6 @@ def test_what_ran_on_a_worker_comes_back_saying_which_host(tmp_path):
     assert seen[2]["node"] == "b"
     assert seen[2]["host"] == "w1", "a worker does not know its own name; we do"
     assert seen[3]["host"] == "w1", "and the round trip is its own fact"
-
-
-# ── Level 2, which is this side's own vocabulary ──
 
 
 def test_a_training_step_says_the_loss_and_when_it_moved(tmp_path):

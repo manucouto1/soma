@@ -1,18 +1,15 @@
 //! What an edit did, read rather than decided.
 //!
-//! The model lives in `somatize.foreseen` and not here. Its vocabulary, its
-//! propagation, its 24 tests — one implementation of a thing that is still
-//! being designed, rather than two that drift. What this module is, is a typed
-//! reader of what it answers.
+//! The model lives in `somatize.foreseen` and not here — its vocabulary, its
+//! propagation and its 24 tests, one implementation rather than two that
+//! drift. This is a typed reader of what it answers.
 //!
-//! # The one axis that is still ours, and how it is not a second model
-//!
-//! `identity` is the name of a class, so `Embed(0.5)` and `Embed(0.9)` are one
-//! recipe **and** one AST: `foreseen.changes` answers `{}` to that edit today.
-//! The probe reads what an object was constructed with and **folds it into the
-//! fingerprint** before asking. `STALE`, and the walk that turns it into
-//! `SUSPECT`, key off the fingerprint — so they become true of this axis for
-//! free, and nothing about the model is reimplemented on this side.
+//! One axis is still this side's, and it is not a second model: `identity` is
+//! a class name, so `Embed(0.5)` and `Embed(0.9)` are one recipe and one AST,
+//! and `foreseen.changes` answers `{}` to that edit. The probe reads what an
+//! object was constructed with and folds it into the fingerprint before
+//! asking, so `STALE` — and the walk that turns it into `SUSPECT` — becomes
+//! true of this axis for free.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -30,10 +27,9 @@ pub const SUSPECT: &str = "SUSPECT";
 
 /// The findings that mean somebody typed something here.
 ///
-/// `STALE` is one of them, and it is the whole reason this list is not just
-/// `CHANGED`: a rewritten `forward` does not move a name, so the model says
-/// `STALE` and nothing else. Leaving it out would answer *nobody edited
-/// anything* to the very edit this exists to catch.
+/// `STALE` is one of them, and it is why this list is not just `CHANGED`: a
+/// rewritten `forward` moves no name, so leaving it out would answer *nobody
+/// edited anything* to the very edit this exists to catch.
 const AN_EDIT: [&str; 4] = ["CHANGED", "ADDED", "GONE", STALE];
 /// The findings a name moved by, that no code moved by.
 const NOT_A_VARIANT: [&str; 2] = [RESETTLED, SALTED];
@@ -80,8 +76,7 @@ impl Findings {
     ///
     /// A retrained node is not one of them, and neither is what sits under it:
     /// its results moved without it becoming another variant, which is what a
-    /// trial is. So when nobody edited anything, nothing here is answering a
-    /// different question than it was yesterday.
+    /// trial is.
     pub fn not_comparable(&self) -> Vec<&str> {
         if self.the_edit().is_empty() {
             return Vec::new();

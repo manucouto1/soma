@@ -1,8 +1,5 @@
-//! What the engine says while it works.
-//!
-//! The other answer a run gives. `run` returns a value; this is everything that
-//! happened on the way to it, and the two come out of different holes on
-//! purpose: a value arrives when it is over, and a fact arrives when it happens.
+//! What the engine says while it works: the other answer a run gives. A value
+//! arrives when it is over, a fact when it happens.
 
 use crate::doubles::{Add, Cable, EachOne, Fail, Journal, Mirror, Notebook, Told, Witness};
 use somatize_core::{
@@ -33,8 +30,6 @@ fn away(ids: &[&str]) -> Placement {
     placement
 }
 
-// ── Nobody is watching, which is most runs ──
-
 #[test]
 fn a_run_nobody_watches_behaves_exactly_as_it_did() {
     let (g, c, _) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
@@ -44,8 +39,6 @@ fn a_run_nobody_watches_behaves_exactly_as_it_did() {
 
     assert_eq!(out, Value::number(11.0));
 }
-
-// ── What one forward says ──
 
 #[test]
 fn every_node_that_ran_is_said_so_in_the_order_it_ran() {
@@ -77,9 +70,8 @@ fn a_run_ends_with_one_fact_that_says_it_is_over() {
 
 #[test]
 fn a_node_that_failed_says_which_one_before_the_run_stops() {
-    // The whole reason this is a fact and not a line in `RunError`: by the time
-    // the caller reads the error the run is over, and whoever was watching
-    // wanted to know which node while it was happening.
+    // Why this is a fact and not a line in `RunError`: by the time the caller
+    // reads the error the run is over.
     let mut g = Graph::new();
     let mut c = Catalog::new();
     g.add_node("a").unwrap();
@@ -137,8 +129,6 @@ fn an_empty_plan_still_says_it_finished() {
 
     assert_eq!(told.kinds(), ["finished"]);
 }
-
-// ── The cache, which is the interesting half of what a run does ──
 
 #[test]
 fn a_hit_and_a_miss_are_two_different_facts() {
@@ -209,8 +199,6 @@ fn a_node_that_maps_says_how_many_items_it_did_not_have_to_compute() {
     );
 }
 
-// ── And what happened on the other machine ──
-
 #[test]
 fn what_ran_over_there_arrives_here_saying_where_it_ran() {
     let (g, here, there) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
@@ -266,9 +254,8 @@ fn the_round_trip_is_its_own_fact_and_not_the_sum_of_what_happened_there() {
 
 #[test]
 fn a_slice_that_went_away_says_nothing_about_finishing() {
-    // A `forward` is a run; a slice executed for somebody else is not one. If
-    // `resume` said `finished` too, whoever writes records would close this
-    // forward in the middle of it.
+    // A `forward` is a run and a slice executed for somebody else is not. If
+    // `resume` said `finished`, a writer would close this forward mid-way.
     let (g, here, there) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
     let placement = away(&["b"]);
     let plan = distribute(&compile(&g, &here).unwrap(), &placement);
@@ -288,13 +275,10 @@ fn a_slice_that_went_away_says_nothing_about_finishing() {
     );
 }
 
-// ── When, and not only how long ──
-
 #[test]
 fn every_node_says_where_it_sat_on_the_run_s_own_timeline() {
-    // What makes a picture of *what ran when* possible at all. A duration from
-    // the run's start and not a wall clock, so it still means something when it
-    // comes back from another machine.
+    // A duration from the run's start and not a wall clock, so it still means
+    // something coming back from another machine.
     let (g, c, _) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
     let plan = compile(&g, &c).unwrap();
     let told = Told::new();
@@ -318,9 +302,8 @@ fn every_node_says_where_it_sat_on_the_run_s_own_timeline() {
 
 #[test]
 fn a_slice_counts_from_its_own_start_and_not_from_the_run_s() {
-    // `resume` is not a run. What a slice says about *when* is a fact about the
-    // slice, and whoever draws a timeline adds the offset of the `Left` it
-    // arrived under — two wall clocks would not have composed at all.
+    // What a slice says about *when* is a fact about the slice; a timeline adds
+    // the offset of the `Left` it arrived under.
     let (g, here, there) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
     let placement = away(&["b"]);
     let plan = distribute(&compile(&g, &here).unwrap(), &placement);

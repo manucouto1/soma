@@ -1,15 +1,13 @@
 """Cutting a graph into stages: what runs in one `forward` and what cannot.
 
-A pass stops being a single `forward` where the chain that joins the output to
-the input breaks, and that happens for two reasons that look different and are
-the same one: the value **crossed a cable** — what arrives on the other side is
-data, not the graph that produced it — or **something trained the node that
-produced it**, and whoever trains a node lets go of its activation by
-construction.
+A pass stops being a single `forward` where the chain joining the output to the
+input breaks, and that happens for two reasons that are the same one: the value
+**crossed a cable**, or **something trained the node that produced it** and let
+go of the activation.
 
 Hence the pair `(host, trained)`: an edge whose two ends do not share it is a
 **cut**, and a cut is a stage boundary. Grouping by the pair is what makes local
-greedy and split learning the same path through the code.
+greedy and split learning one path through the code::
 
     trained(n)  said by whoever trains, and not asked of the node
     where(n)    `hosts().get(n)`, `None` meaning here
@@ -17,45 +15,25 @@ greedy and split learning the same path through the code.
     level(n)    0 with no predecessors, else `max(level(p) + cut(p, n))`
     stage k     the nodes with `level(n) == k`
 
-Where a thing **runs** is declared in the graph and is nobody else's business;
-which of them is **trained on its own** is a fact of the training run, and the
-same graph is the same graph with or without one. So `stages` is told, and a
-node is never asked.
+Three properties fall out, and they make the backward pass demonstrable: every
+cut edge crosses a boundary, no cut edge stays inside a stage, and no edge goes
+backwards — so the stages in reverse are a valid order to walk back through.
 
-Three properties fall out, and they are what make the backward pass
-demonstrable: every cut edge crosses a stage boundary, no cut edge stays inside
-a stage, and no edge goes backwards — so the stages in reverse are a valid order
-to walk backwards through.
+**A stage is not uniform in host on purpose**: `A.at("a") | B.at("b")` is one
+stage and a single `forward`, with the wave rebuilt inside it.
 
-**A stage is not uniform in host on purpose.** `A.at("a") | B.at("b")` is *one*
-stage and a single `forward`, and `compile`/`distribute` rebuild the wave
-inside it. The waves are kept by not being clever about them.
+A stage is remade as a `Graph` of its own: a `Held` for each value from outside —
+named with **the id of the real producer**, so a fan-in map is what it was in the
+whole graph —, the same node objects, and a `Tap` for each value somebody outside
+reads. Neither is ever placed, and a stage knows whose piece it is, because half
+a catalog is another catalog and a worker has only one.
 
-A stage is remade as a `Graph` of its own: a `Held` for each value that comes
-from outside — named with **the id of the real producer**, so the fan-in map a
-node receives is nailed to what it was in the whole graph —, the same node
-objects, and a `Tap` for each value somebody outside reads, because `run` gives
-back only the terminals and without one the value of a node that feeds inside
-*and* outside never comes back.
+A `Held` gives back what it was handed **verbatim**: whoever fills it says how it
+crosses. A `Tap` can wrap, being the last one.
 
-`Held` and `Tap` are never placed: they do not show up in `hosts()`, do not go
-into `_share_out` and are in no artifact. And a stage knows **whose piece it
-is**, so running it tells a worker what the whole graph would have told it: half
-a catalog is another catalog, and a worker has only one.
-
-A `Held` gives back what it was handed, **verbatim**: whoever fills it says how
-it crosses — an `Opaque` for a tensor staying in this process, plain data when
-there is a cable ahead. A `Tap` can wrap, because it is the last one and its
-value goes straight to Python.
-
-`around` is the other half: it puts somebody **beside** a node, in the two
-positions training needs — before it, where the input becomes something a
-gradient can be asked of, and after it, where the activation is kept. Nothing
-here knows what either of them does with that; what it knows is that a node with
-company still has to be a node in a graph.
-
-There is no torch here on purpose: how a graph is cut is a fact of the graph and
-of who trains what, and neither of those is a loss.
+`around` puts somebody **beside** a node, in the two positions training needs.
+Nothing here knows what either does; what it knows is that a node with company
+still has to be a node in a graph. There is no torch in this module on purpose.
 """
 
 from __future__ import annotations
@@ -138,22 +116,17 @@ class Stage:
 
     def fill(self, produced: dict[str, Any]) -> None:
         """Hands in what earlier stages produced: it takes what it holds and
-        ignores the rest, because a stage reads from any stage before it.
-
-        **Every** hold is written, and one that is not there is emptied: a stage
-        is run again every step, and a value left over from the last one is worse
-        than the error saying nobody handed it in.
+        ignores the rest. **Every** hold is written and one that is not there is
+        emptied — a value left over from the last step is worse than the error
+        saying nobody handed it in.
         """
         for node_id, held in self.holds.items():
             held.value = produced.get(node_id, _NOTHING)
 
     def read(self, out: Any) -> dict[str, Any]:
-        """What `forward` gave back, keyed by the node that produced it instead
-        of by the tap that carried it.
-
-        Off the leaves and not off the taps: a transposed stage can end in a node
-        nobody is waiting for, and then what came back is a map even with a
-        single tap in it.
+        """What `forward` gave back, keyed by the node that produced it instead of
+        by the tap that carried it. Off the leaves and not the taps: a transposed
+        stage can end in a node nobody is waiting for.
         """
         if not self.taps:
             return {}
@@ -164,22 +137,13 @@ class Stage:
 
     def transposed(self) -> "Stage":
         """The same stage with its edges the other way round, which is what a
-        backward pass is: another forward, of the transpose.
+        backward pass is: another forward, of the transpose. The same objects,
+        ids and `.at()`, because the gradient of a node is worked out where the
+        node ran; what swap places are the two ends.
 
-        The same objects, the same ids and the same `.at()`, because the gradient
-        of a node is worked out where the node ran. What swap places are the two
-        ends: what was a `Tap` — a value going out — is a `Held` now — a gradient
-        coming in — and what was a `Held` is a `Tap`.
-
-        **Only whatever takes a gradient** is transposed, which is the trainer
-        beside a node and never the node: handing a node an envelope would be
-        handing it something it would read as an input. What sits between them is
-        walked **through**: the gradient a trainer gives back is owed to whoever
-        fed the chain that reached it, however many nodes of its own that chain
-        went through on the way in.
-
-        Nothing about keeping travels either: what runs along these edges is not
-        what the node produces, so there is nothing here to name after it.
+        **Only whatever takes a gradient** is transposed — the trainer beside a
+        node and never the node, which would read an envelope as an input. What
+        sits between them is walked **through**.
         """
         mine = [
             node_id
@@ -236,11 +200,8 @@ class Stage:
 
 def stages(graph: "Graph", learns: Iterable[str] = ()) -> list[Stage]:
     """The graph cut into stages, in the order they run. One stage means there is
-    no cut and the graph is its own single pass.
-
-    `learns` is the ids of whatever breaks the chain where it stands, said by
-    whoever trains and not asked of the nodes: which of them is trained on its
-    own is a fact of the training run, and a graph is the same graph either way.
+    no cut. `learns` is the ids of whatever breaks the chain where it stands,
+    said by whoever trains and not asked of the nodes.
     """
     level = _levels(graph, set(learns))
     if not level:
@@ -270,11 +231,9 @@ def _levels(graph: "Graph", learns: set[str]) -> dict[str, int]:
 
 
 def takes_a_gradient(implementation: object) -> bool:
-    """Whether this is something that takes a gradient rather than an input.
-
-    A duck, and one that only ever meets **the framework's own** objects: a
-    trainer put beside a node by whoever trains. A user's node is never asked
-    this, and never has to answer it.
+    """Whether this is something that takes a gradient rather than an input. A
+    duck that only ever meets **the framework's own** objects: a user's node is
+    never asked this.
     """
     return getattr(implementation, "learn", None) is not None
 
@@ -331,19 +290,13 @@ def around(
     put: dict[str, tuple[Any, Any]],
 ) -> tuple["Graph", set[str]]:
     """The same graph with somebody standing on each side of the nodes named.
-
     `put` is `{node_id: (before, after)}`, and what comes back is the graph and
-    the ids of everything the three of them occupy — which is exactly what
-    `stages` has to be told breaks the chain.
+    the ids of everything the three occupy — which is what `stages` has to be
+    told breaks the chain.
 
-    **The id stays with the `after`.** What the rest of the graph calls `x` is
-    what `x` gives out, and with a trainer around it what it gives out is what
-    the trainer let go of, so nobody downstream has to be told anything: their
-    fan-in maps are keyed the same as they always were. The node itself moves to
-    `x:computes`, and the `before` position is `x:in`.
-
-    The original graph is not touched — its nodes are the same objects, and this
-    is another graph over them.
+    **The id stays with the `after`**: what the rest of the graph calls `x` is
+    what `x` gives out, so nobody downstream is told anything. The original graph
+    is not touched.
     """
     hosts, devices = graph.hosts(), graph.devices()
     frozen, cached, fingerprints = graph.frozen(), graph.cached(), graph.fingerprints()

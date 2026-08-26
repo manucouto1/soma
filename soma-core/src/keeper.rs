@@ -1,21 +1,17 @@
 //! Who hashes and who keeps. The hole.
 //!
-//! The fourth of the same shape, and the reason is the same as the other three:
-//! **the core provides the hole; whoever knows what goes in it is a library.**
-//! Here it is doubly true — hashing is `sha256` and keeping is a directory or a
-//! bucket, and the core has no dependencies at all.
+//! The same shape as the rest, and the reason is the same: **the core provides
+//! the hole; whoever knows what goes in it is a library.** Here it is doubly
+//! true — hashing is `sha256` and keeping is a directory or a bucket, and the
+//! core has no dependencies at all.
 //!
 //! | hole | who fills it | what they know that the core does not |
 //! |---|---|---|
-//! | [`Node`](crate::Node) | the user | what a step does |
-//! | [`Driver`](crate::Driver) | whoever executes | what a request means |
+//! | [`Node`](crate::Node) | the user | what a node does |
 //! | [`Transport`](crate::Transport) | a library | what a wire is |
+//! | [`Codec`](crate::Codec) | a library | how to write down what lives in one process |
+//! | [`Watcher`](crate::Watcher) | whoever executes | what to do with a fact |
 //! | `Keeper` | a library | what a hash is, and where bytes live |
-//!
-//! Only one implementor today, which brushes against the rule that a trait needs
-//! two. It stands for the same reason [`Transport`](crate::Transport) does: the
-//! implementation **has to** be in another crate, or the core eats `sha2` and
-//! `serde`.
 
 use crate::{Key, Value};
 use std::fmt;
@@ -23,40 +19,26 @@ use std::fmt;
 /// Hashes recipes and keeps what they name.
 pub trait Keeper: Send + Sync {
     /// The key of a value **by its content**, which only a root needs: from
-    /// there down, keys come from keys.
-    ///
-    /// `None` if the value cannot leave this process — a
-    /// [`Value::Opaque`](crate::Value::Opaque) at any depth — and that is not a
-    /// failure. It means nothing below it can be keyed, so nothing below it is
-    /// cached, and the run goes on.
+    /// there down, keys come from keys. `None` if the value cannot leave this
+    /// process, which is not a failure — nothing below it is cached either.
     fn key_of(&self, value: &Value) -> Option<Key>;
 
-    /// One key out of the ingredients of a recipe, in the order given.
-    ///
-    /// **The parts have to stay apart**: run together, `["ab", "c"]` and
-    /// `["a", "bc"]` would name the same thing, and two different recipes
-    /// sharing a key is the one failure a cache must not have.
+    /// One key out of the ingredients of a recipe, in the order given. **The
+    /// parts have to stay apart**: run together, `["ab", "c"]` and
+    /// `["a", "bc"]` would name the same thing.
     fn combine(&self, parts: &[&str]) -> Key;
 
-    /// What is kept under each of these, in the order they were asked.
-    ///
-    /// In the trait in **batch form** from the first day, and not for symmetry:
-    /// against a store on the far end of a network, one question per item is
+    /// What is kept under each of these, in the order they were asked. In batch
+    /// form from the first day: against a remote store, one question per item is
     /// one round trip per item.
     fn recall(&self, keys: &[&Key]) -> Result<Vec<Option<Kept>>, KeeperError>;
 
     /// Whether each of these is kept, **without reading any of it**.
     ///
-    /// It exists because a key is knowable before anything runs: from the
-    /// graph's input down, keys come from keys. So the engine can ask which
-    /// answers it already has before executing a step, and then not execute
-    /// what only fed one of them — the node under a cache that hit has nothing
-    /// left to be for.
-    ///
-    /// The default is honest and expensive: it reads them. Whoever can answer
-    /// by name alone should say so, because that is the difference between a
-    /// scan and a fetch per node, and the whole point of asking early is not
-    /// paying for what will not be used.
+    /// A key is knowable before anything runs, so the engine can ask which
+    /// answers it already has and then not execute what only fed one of them.
+    /// The default is honest and expensive — it reads them; whoever can answer
+    /// by name alone should say so, or asking early costs what it saves.
     fn present(&self, keys: &[&Key]) -> Result<Vec<bool>, KeeperError> {
         Ok(self
             .recall(keys)?
@@ -72,12 +54,8 @@ pub trait Keeper: Send + Sync {
 }
 
 /// Something that was kept, on the way back: the value, and what was said
-/// beside it when it was written.
-///
-/// The metadata comes back because of one line of the design — the fingerprint
-/// of the code is **not** in the key, it is written next to the value and
-/// compared on a hit. Without it here, a cache that quietly went cold could not
-/// be told from one that is working.
+/// beside it. The metadata comes back because the fingerprint of the code is
+/// not in the key — it is written next to the value and compared on a hit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Kept {
     /// What was kept.

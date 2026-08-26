@@ -82,15 +82,6 @@ fn the_failure_survives_whatever_you_glue_on_afterwards() {
     assert_eq!(err, GraphError::DuplicateNode("a".into()));
 }
 
-// ── The oracle: the plan reproduces the expression tree ──
-//
-// `>>` and `|` are serial and parallel composition, so the expression you write
-// **is** a tree. `compile` does not receive it — the graph has only nodes and
-// edges, and has to give the same thing when built in a loop with
-// `node()`/`edge()`, which was decision 6 of CU5 — so it **recovers** it. These
-// tests check that it recovers it whole: they are the oracle the whole
-// decomposition comes from.
-
 fn execute(id: &str, from: &[&str]) -> Plan {
     Plan::Execute {
         node: id.into(),
@@ -262,13 +253,10 @@ fn a_branch_that_opens_and_closes_inside_itself() {
     );
 }
 
-// ── What is remembered, declared as part of the expression ──
-
 #[test]
 fn every_node_is_named_after_what_implements_it() {
-    // The last place that knows: one line later there is only an `Arc<dyn
-    // Node>`. Python does the same with the class name, and the name is half of
-    // what a key is made of.
+    // The last place that knows the type: one line later there is only an
+    // `Arc<dyn Node>`, and the name is half of what a key is made of.
     let (_, _, _, memory) = (node("a", Add(1.0)) >> node("b", Mean)).somatize().unwrap();
 
     let name_of = |id: &str| memory.identity_of(&id.into()).unwrap().to_string();
@@ -279,9 +267,8 @@ fn every_node_is_named_after_what_implements_it() {
 
 #[test]
 fn a_whole_piece_settles_at_once_and_that_does_not_keep_anything() {
-    // The two are independent, like the device and the host: a node can be
-    // settled without being worth keeping, and the other way round is what
-    // `cacheable` refuses.
+    // Independent, like the device and the host: settled without being worth
+    // keeping, and the other way round is what `cacheable` refuses.
     let (_, _, _, memory) = ((node("a", Add(1.0)) >> node("b", Add(1.0))).frozen()
         >> node("c", Add(1.0)))
     .somatize()
@@ -308,9 +295,8 @@ fn a_whole_piece_is_kept_at_once_and_that_settles_nothing() {
 
 #[test]
 fn what_is_declared_and_what_it_is_worth_are_two_questions() {
-    // Declaring a cache does not make it honest: `cacheable` is what answers
-    // that, it needs the graph as well as the table, and it is asked by whoever
-    // is about to run — never by the engine, which does not look at a graph.
+    // Declaring a cache does not make it honest: `cacheable` answers that, and
+    // it needs the graph as well as the table.
     let (graph, _, _, memory) = (node("a", Add(1.0)) >> node("b", Add(1.0)).cached())
         .somatize()
         .unwrap();

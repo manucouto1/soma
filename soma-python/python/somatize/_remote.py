@@ -25,10 +25,10 @@ from somatize._somatize import Broker as _RustBroker
 def _by_value(modules: Iterable[str]) -> Iterator[None]:
     """Makes these modules travel **inside** the artifact.
 
-    cloudpickle serializes by reference whatever comes from an importable
-    module, which leaves out exactly the case a generic worker is for: your
-    nodes in `my_package/net.py` and a worker that cannot import it. It
-    unregisters afterwards, because that registry is global to the process.
+    cloudpickle serializes by reference whatever comes from an importable module,
+    which leaves out exactly the case a generic worker is for: your nodes in
+    `my_package/net.py` and a worker that cannot import it. It unregisters
+    afterwards, because that registry is global to the process.
     """
     import cloudpickle
 
@@ -52,21 +52,14 @@ class Worker:
 
     A declaration and not a connection, which is the change a broker brings::
 
-        # on the other machine, in the background
-        python -m somatize.worker --listen 0.0.0.0:7000
-
-        # here
-        g.place_at("tokenize", "w1")
+        python -m somatize.worker --listen 0.0.0.0:7000     # on the other machine
         g.forward(x, broker=Broker.embedded({"w1": Worker.at("node3:7000")}))
 
-    `mode` says what gets sent: `"project"` *(default)* sends names, versions
-    and state, and the worker supplies the code from its clone; `"network"`
-    sends the code too, with `cloudpickle`, and `send=["my_package"]` makes your
-    own modules travel inside it.
-
+    `mode` says what gets sent: `"project"` *(default)* sends names, versions and
+    state and the worker supplies the code from its clone; `"network"` sends the
+    code too, and `send=["my_package"]` makes your own modules travel inside it.
     Because it declares rather than connects, **a host that is not there fails
-    when it is needed rather than when it is named** — inside the run, and not
-    in this constructor.
+    when it is needed rather than when it is named**.
     """
 
     target: str | list[str]
@@ -136,15 +129,13 @@ class Worker:
 
 
 class Broker(_RustBroker):
-    """Where the hosts of a graph are, and who resolves them.
-
-    One deployment today — the one inside this process, which is what makes soma
-    work with no platform, no head node and no internet::
+    """Where the hosts of a graph are, and who resolves them. One deployment
+    today — the one inside this process, which is what makes soma work with no
+    platform and no head node::
 
         g.forward(x, broker=Broker.embedded({"w1": Worker.at("node3:7000")}))
 
-    The others — a local one on a head node, and the platform's — speak the same
-    protocol, so what changes for a client is which broker, and that is a URL.
+    The others speak the same protocol, so what changes for a client is a URL.
     """
 
     _packing: dict[str, Worker]
@@ -174,9 +165,8 @@ class Broker(_RustBroker):
         know it.
 
         `None` rather than an exception because a graph may name a host nobody
-        listed, and that is not this step's failure to report: either the run
-        reaches it or it does not, and whichever happens says so with the slice
-        in front of it.
+        listed: either the run reaches it or it does not, and whichever happens
+        says so with the slice in front of it.
         """
         try:
             return self.wire_token(host)
@@ -187,17 +177,12 @@ class Broker(_RustBroker):
 def _pack(nodes: dict[str, Any], mode: str, send: Sequence[str]) -> tuple[str, bytes]:
     """The nodes as an artifact, whichever way applies.
 
-    **By id, always.** The artifact's id is the digest of these bytes, and a dict
-    pickles in insertion order — so the same nodes handed over in another order
-    were another artifact. Two things fell out of that, and neither was
-    intentional: a `Worker` serving two hosts changed id when the caller
-    reordered the dict it was given, which defeats the `have`/`want` and the
-    store's artifact cache; and a second graph over the same nodes — the transpose of the
-    first, which is how a backward pass crosses a wire — provisioned the worker
-    again, **swapping the catalog it had live** and losing with it every
-    activation and every optimizer state over there.
-
-    Sorting makes the id depend on what is in the artifact and on nothing else.
+    **By id, always.** The artifact's id is the digest of these bytes and a dict
+    pickles in insertion order, so the same nodes in another order were another
+    artifact. Two things fell out of that: a `Worker` serving two hosts changed
+    id when the caller reordered the dict, defeating the `have`/`want`; and the
+    transpose provisioned the worker again, **swapping the catalog it had live**
+    and losing every activation over there.
     """
     nodes = dict(sorted(nodes.items()))
     if mode == "project":

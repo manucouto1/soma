@@ -4,7 +4,7 @@
 //! [`Placement`](crate::Placement) is data: if it carried
 //! `tcp://10.0.0.2:7000` inside, the same graph could no longer run on another
 //! cluster without editing it. With a name, whoever **executes** decides what
-//! `worker1` resolves to — the same boundary as [`Driver`](crate::Driver).
+//! `worker1` resolves to — the same boundary a `Transport` draws.
 //!
 //! And that is why it is not an enum, even though [`Device`](crate::Device) is.
 //! A device is a closed set we decide, and a typo has to fail at declaration

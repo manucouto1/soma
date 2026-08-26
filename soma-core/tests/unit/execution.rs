@@ -17,8 +17,6 @@ fn number(v: &Value) -> f64 {
     *x
 }
 
-// ── Filters ──
-
 #[test]
 fn an_empty_plan_returns_its_input() {
     let out = Executor::new(&Catalog::new())
@@ -124,10 +122,6 @@ fn a_filters_failure_says_which_node_it_was() {
     assert!(err.to_string().contains("I broke"));
 }
 
-// ── Steps ──
-
-// ── A node keeps whatever it keeps, and the engine keeps nothing ──
-
 #[test]
 fn what_a_node_kept_is_still_there_the_next_time_the_graph_runs() {
     // The catalog holds **the node**, not a copy per run, so its state outlives
@@ -165,8 +159,6 @@ fn what_a_node_kept_is_still_there_the_next_time_the_graph_runs() {
         "the second run started from scratch"
     );
 }
-
-// ── Waves: what happens when two branches are launched at once ──
 
 /// Builds the graph, compiles it and runs it with nodes that note where they
 /// went. Returns the journal and what came out.
@@ -481,8 +473,6 @@ fn a_graph_that_is_not_series_parallel_still_executes_correctly() {
     );
 }
 
-// ── The placement: it reaches the node, and does nothing else ──
-
 /// A graph of witnesses that note where they were told to run.
 fn witnesses(ids: &[&'static str], ledger: &Arc<Ledger>) -> (Graph, Catalog) {
     let mut g = Graph::new();
@@ -609,12 +599,6 @@ fn placing_does_not_change_what_the_graph_produces() {
     assert_eq!(without, with);
 }
 
-// ── What is distributed, while there is nobody to carry it ──
-//
-// The plan already knows how to say "this runs over there" and the engine does
-// not yet know how to get there. What is pinned down here is that this shows: a
-// slice placed away is **not** executed at home for lack of a transport.
-
 #[test]
 fn a_slice_on_another_host_without_a_transport_stops_saying_which() {
     let (g, c, placement, _) = (node("a", Add(1.0)) >> node("b", Add(1.0)).at("worker1"))
@@ -676,11 +660,6 @@ fn what_runs_away_still_counts_as_a_leaf() {
         RunError::NoTransport(Host::new("w1"))
     );
 }
-
-// ── What crosses over to a transport, and what comes back ──
-//
-// No processes: that belongs to `somatize-fabric-wire`. What is pinned down here
-// is the core's seam — what gets sent, what comes back and where it is merged.
 
 /// The same graph built twice: one for here, one for "there".
 fn both_sides(nodes: &[(&str, f64)], edges: &[(&str, &str)]) -> (Graph, Catalog, Catalog) {
@@ -868,8 +847,6 @@ fn distributed_or_not_the_result_is_the_same() {
     }
 }
 
-// ── `resume`: what a worker does on receiving a slice ──
-
 #[test]
 fn resume_feeds_in_what_it_was_given_as_if_it_had_produced_it() {
     let mut c = Catalog::new();
@@ -999,9 +976,8 @@ fn what_stayed_over_there_names_both_ends_when_somebody_here_reads_it() {
 
 #[test]
 fn an_outcome_leaves_behind_what_cannot_travel_and_keeps_what_it_answers_with() {
-    // `last` is the value of the slice itself and has a reader on the other side
-    // by definition, so it is not filtered: refusing it is the honest answer.
-    // What is filtered is the middle of the slice, which was read where it ran.
+    // `last` has a reader on the other side by definition, so it is not
+    // filtered; what is, is the middle of the slice, read where it ran.
     let outcome = Outcome {
         last: Value::number(1.0),
         produced: vec![
@@ -1016,12 +992,6 @@ fn an_outcome_leaves_behind_what_cannot_travel_and_keeps_what_it_answers_with() 
         vec![(NodeId::from("plain"), Value::number(2.0))]
     );
 }
-
-// ── What is remembered, and what does not get run twice ──
-//
-// The engine's half of the cache: a key travelling beside what was produced,
-// a lookup before the node and a write after it. What a key is *made of* is a
-// keeper's business and lives with the double.
 
 /// A graph of one node that writes itself down when it runs.
 fn watched(who: &'static str) -> (Graph, Catalog, Memory, Arc<Journal>) {
@@ -1067,9 +1037,8 @@ fn what_is_kept_is_not_computed_again() {
 
 #[test]
 fn a_different_input_is_a_different_name_and_the_node_runs() {
-    // The other half of the one above, and the reason the root is the one place
-    // content is hashed: a cache that answers the same for two inputs is not a
-    // cache, it is a bug.
+    // Why the root is the one place content is hashed: a cache that answers the
+    // same for two inputs is not a cache.
     let (g, c, memory, journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1114,9 +1083,8 @@ fn what_is_above_names_what_is_below() {
 
 #[test]
 fn the_fingerprint_of_the_code_is_not_part_of_the_name() {
-    // Deliberate, and the whole reason the fingerprint is written *beside* the
-    // value: a cosmetic refactor must not invalidate half the store in silence.
-    // What it does is get compared on a hit and said out loud.
+    // Deliberate: the fingerprint is beside the value and not in the key, so a
+    // cosmetic refactor does not invalidate half the store in silence.
     let (g, c, memory, journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1156,9 +1124,8 @@ fn the_fingerprint_of_the_code_is_not_part_of_the_name() {
 
 #[test]
 fn a_node_that_keeps_nothing_still_passes_its_name_on() {
-    // `.cached()` is opt-in because keeping costs; not declaring it must not
-    // break the chain, or declaring it node by node would be declaring it for
-    // the whole graph.
+    // `.cached()` is opt-in; not declaring it must not break the chain, or
+    // declaring it node by node would declare it for the whole graph.
     let journal = Journal::new();
     let (g, c, _, memory) = (node("encoder", Witness("encoder", journal.clone())).frozen()
         >> node("head", Witness("head", journal.clone()))
@@ -1274,10 +1241,9 @@ fn the_names_a_slice_brings_are_not_the_names_it_gives() {
 
 #[test]
 fn the_names_and_what_is_remembered_cross_to_the_other_side() {
-    // A slice that leaves has to be able to name what it produces, and for that
-    // it needs the names of what it reads and the table that says what any of it
-    // is. Both travel in the `Cargo`, like the placement and for the same
-    // reason: they are data.
+    // A slice that leaves has to name what it produces, so it needs the keys of
+    // what it reads and the table that says what any of it is. Both travel in
+    // the `Cargo`, like the placement: they are data.
     let (g, c, placement, memory) = (node("encoder", Add(1.0)).frozen().cached()
         >> node("head", Add(1.0)).frozen().cached().at("worker1"))
     .somatize()
@@ -1310,9 +1276,8 @@ fn the_names_and_what_is_remembered_cross_to_the_other_side() {
 
 #[test]
 fn what_is_remembered_travels_with_nobody_here_to_keep_anything() {
-    // The two are not one call for exactly this: a coordinator that keeps
-    // nothing still has to say what the nodes are, or whoever does keep things
-    // over there can name none of them.
+    // Not one call, for exactly this: a coordinator that keeps nothing still
+    // has to say what the nodes are.
     let (g, c, placement, memory) = node("head", Add(1.0))
         .frozen()
         .cached()
@@ -1337,8 +1302,6 @@ fn what_is_remembered_travels_with_nobody_here_to_keep_anything() {
         Some("unit::doubles::Add")
     );
 }
-
-// ── A node that maps, and a cache with the grain of an item ──
 
 /// A one-node graph whose node maps, cached, with a journal of what it was made
 /// to look at.
@@ -1420,10 +1383,9 @@ fn the_second_run_looks_at_nothing() {
 
 #[test]
 fn a_new_item_among_old_ones_is_the_only_one_looked_at() {
-    // **The whole reason this exists.** With one name per node, adding a
-    // document changes the name of the list and all of them miss; with one per
-    // item, the old ones are read back and the new one runs — and the order of
-    // the answer is the order of the input, not the order things were computed.
+    // The whole reason this exists: with one name per node a new document makes
+    // all of them miss; with one per item the old ones are read back — and the
+    // answer keeps the input's order, not the order things were computed.
     let (g, c, memory, journal) = mapping();
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1535,13 +1497,6 @@ fn what_reads_a_mapped_node_is_named_after_the_whole_list() {
     assert_eq!(changed, 2, "one item changed and the head has to run again");
 }
 
-// ── What only fed an answer that was already kept ──
-//
-// A name is knowable before anything runs — that is what `key_for` is for — so
-// the engine can ask what it already has and then not compute what only fed one
-// of those answers. The whole section is about the difference between *not
-// keeping* something and *not needing* it.
-
 /// An encoder under a head, both settled and only the head kept.
 fn under_a_kept_head() -> (Arc<Journal>, Graph, Catalog, Memory) {
     let journal = Journal::new();
@@ -1556,9 +1511,8 @@ fn under_a_kept_head() -> (Arc<Journal>, Graph, Catalog, Memory) {
 
 #[test]
 fn what_only_fed_an_answer_that_was_kept_is_not_run() {
-    // The expensive half of a graph is usually the half at the top: a settled
-    // encoder, a dataset. Running it to throw its result away a microsecond
-    // later is the cost this removes.
+    // The expensive half is usually the top: a settled encoder, a dataset. This
+    // is what stops it running to have its result dropped a microsecond later.
     let (journal, g, c, memory) = under_a_kept_head();
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1592,9 +1546,7 @@ fn and_the_answer_is_still_the_answer() {
 
 #[test]
 fn and_it_says_so_rather_than_leaving_a_hole_in_the_record() {
-    // A node that is simply absent cannot be told from one that was never in
-    // the graph, and *why is there no time for `encoder`* is a question whoever
-    // reads a run will have.
+    // A node simply absent cannot be told from one never in the graph.
     let (_, g, c, memory) = under_a_kept_head();
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1620,9 +1572,8 @@ fn and_it_says_so_rather_than_leaving_a_hole_in_the_record() {
 
 #[test]
 fn but_what_somebody_else_still_reads_is_run() {
-    // The rule is about **every** reader. One of them having its answer already
-    // says nothing about the others, and skipping here would be wrong output
-    // rather than a slow run.
+    // The rule is about **every** reader: skipping because one of them already
+    // has its answer would be wrong output, not a slow run.
     let journal = Journal::new();
     let mut g = Graph::new();
     let mut c = Catalog::new();
@@ -1660,10 +1611,9 @@ fn but_what_somebody_else_still_reads_is_run() {
 
 #[test]
 fn a_node_that_maps_keeps_everything_above_it() {
-    // The one place this has to give up, and it gives up in the safe
-    // direction: the names of a mapped node's answers are made out of the
-    // **items**, so they are not knowable until it has them. It counts as a
-    // miss and what feeds it stays.
+    // The one place this gives up, and in the safe direction: a mapped node's
+    // names are made out of its items, so they are unknowable until it has
+    // them. It counts as a miss and what feeds it stays.
     let journal = Journal::new();
     let mut g = Graph::new();
     let mut c = Catalog::new();
@@ -1704,9 +1654,8 @@ fn a_node_that_maps_keeps_everything_above_it() {
 
 #[test]
 fn and_a_slice_nobody_needs_is_not_sent_at_all() {
-    // The saving is not the work over there, it is the **round trip**: the
-    // client works out that nothing reads what comes back, so no message is
-    // written at all.
+    // The saving is the round trip and not the work: nothing reads what comes
+    // back, so no message is written at all.
     let (g, here, there) = both_sides(&[("a", 1.0), ("b", 10.0)], &[("a", "b")]);
     let placement = away(&["a"]);
     let mirror = Mirror::new(there);
@@ -1732,14 +1681,6 @@ fn and_a_slice_nobody_needs_is_not_sent_at_all() {
     assert_eq!(mirror.trips().len(), 1, "the second run went nowhere");
 }
 
-// ── The names, asked for without a run ──
-//
-// `foreseen` is public because the answer is worth having on its own. Two
-// versions of one graph name a node differently exactly when its recipe
-// changed, so comparing two sets of names says what an edit did — before
-// anybody pays to find out. What a run does with the answer is unchanged; this
-// section is about asking for it alone.
-
 /// A chain of three, all named by `somatize`, the middle one kept.
 fn a_chain_kept_in_the_middle(salt: Option<&str>) -> (Graph, Catalog, Memory) {
     let (g, c, _, mut memory) =
@@ -1760,9 +1701,8 @@ fn only_name(named: &std::collections::HashMap<NodeId, Keys>, id: &str) -> Key {
 
 #[test]
 fn the_names_foreseen_are_the_names_things_are_kept_under() {
-    // The whole contract in one assertion: what the cold pass says a node's
-    // output will be called is what the run then calls it. A `foreseen` that
-    // drifted from `key_for` would be a diff that quietly lies.
+    // The whole contract in one assertion: what the cold pass says a node will
+    // be called is what the run calls it. Drift here is a diff that lies.
     let (g, c, memory) = a_chain_kept_in_the_middle(None);
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1776,9 +1716,8 @@ fn the_names_foreseen_are_the_names_things_are_kept_under() {
 
 #[test]
 fn nothing_ran_to_find_out() {
-    // A node that cannot run at all still has a name: the recipe is enough, and
-    // that is what makes the question askable about a graph nobody can execute
-    // here — no GPU, no dataset, no weights.
+    // The recipe is enough, which is what makes the question askable about a
+    // graph nobody can execute here — no GPU, no dataset, no weights.
     let (g, c, _, mut memory) = (node("a", Add(1.0)) >> node("b", Panics))
         .somatize()
         .unwrap();
@@ -1796,10 +1735,9 @@ fn nothing_ran_to_find_out() {
 
 #[test]
 fn a_changed_recipe_renames_what_is_under_it_and_nothing_above() {
-    // The property the whole thing rests on. A salt is the smallest change to a
-    // recipe there is, and it has to reach every name below it and no name
-    // above it: that asymmetry is what tells an edit that invalidated an
-    // encoder from one that only touched the head.
+    // A salt is the smallest change to a recipe there is, and it has to reach
+    // every name below and none above: that asymmetry is what tells an edit
+    // that invalidated an encoder from one that only touched the head.
     let (g, c, plain) = a_chain_kept_in_the_middle(None);
     let (_, _, salted) = a_chain_kept_in_the_middle(Some("a100-fp16"));
     let plan = compile(&g, &c).unwrap();
@@ -1829,10 +1767,9 @@ fn a_changed_recipe_renames_what_is_under_it_and_nothing_above() {
 
 #[test]
 fn what_cannot_be_foreseen_is_missing_rather_than_wrong() {
-    // A mapped node is named by the content of its items, which nobody has
-    // yet. It is left out, and so is everything under it: whoever compares two
-    // of these has to read the absence as "cannot tell". Saying "unchanged"
-    // here would be the one answer that costs somebody a week.
+    // A mapped node is named by items nobody has yet, so it and everything
+    // under it are left out. Reading that as "unchanged" is the one answer that
+    // costs somebody a week.
     let (g, c, _, memory) = (node("a", Add(1.0)).mapped() >> node("b", Mean))
         .somatize()
         .unwrap();
@@ -1850,9 +1787,8 @@ fn what_cannot_be_foreseen_is_missing_rather_than_wrong() {
 
 #[test]
 fn without_a_keeper_nothing_is_named() {
-    // The same silence a run gets, and for the same reason: the core has no
-    // algorithm to hash with. A caller that forgot the store gets an empty
-    // answer, not a wrong one.
+    // The same silence a run gets: the core has no algorithm to hash with, so a
+    // caller that forgot the store gets an empty answer and not a wrong one.
     let (g, c, memory) = a_chain_kept_in_the_middle(None);
     let plan = compile(&g, &c).unwrap();
 
@@ -1865,10 +1801,9 @@ fn without_a_keeper_nothing_is_named() {
 
 #[test]
 fn what_a_node_was_built_with_is_in_its_name() {
-    // The other half of *what implements this node*. The class is one answer for
-    // `Embed(512)` and `Embed(64)`, and they are two different answers — so
-    // without this the second one is handed the first one's, with no error and
-    // no warning.
+    // The other half of *what implements this node*: `Embed(512)` and
+    // `Embed(64)` are one class and two answers, so without this the second is
+    // handed the first one's with no error and no warning.
     let (g, c, memory) = a_chain_kept_in_the_middle(None);
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1895,9 +1830,8 @@ fn what_a_node_was_built_with_is_in_its_name() {
 
 #[test]
 fn and_nobody_saying_what_built_it_is_not_a_reason_to_refuse_a_name() {
-    // A graph built by hand, or one holding something that cannot be written
-    // down twice the same way. Refusing is `cacheable`'s side of it and only
-    // where an answer is kept; here there is still a name.
+    // A graph built by hand, or one holding something unwritable twice the same
+    // way. Refusing is `cacheable`'s side of it; here there is still a name.
     let (g, c, memory) = a_chain_kept_in_the_middle(None);
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1910,14 +1844,11 @@ fn and_nobody_saying_what_built_it_is_not_a_reason_to_refuse_a_name() {
     assert_eq!(named.len(), 3);
 }
 
-// ── What a value says about where it came from ──
-
 #[test]
 fn what_the_graph_was_fed_is_written_beside_what_it_produced() {
-    // A store outlives every process that wrote to it, and a key does not run
-    // backwards: without this, *which input produced this blob* is a question
-    // with no answer left anywhere. It is the one piece of provenance the
-    // caller cannot supply either — only a keeper can hash a value.
+    // A store outlives every process that wrote to it and a key does not run
+    // backwards, so *which input produced this blob* has no answer left. Only a
+    // keeper can hash a value, so the caller could not supply it either.
     let (g, c, memory, _journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -1937,10 +1868,9 @@ fn what_the_graph_was_fed_is_written_beside_what_it_produced() {
 
 #[test]
 fn a_stamp_is_written_beside_everything_the_run_keeps() {
-    // The core does not know what an environment is, or a commit, and must not
-    // learn: they are facts about the world outside a graph. So they arrive as
-    // text the caller chose and this passes through untouched — the same
-    // division of labour as the name a study is filed under.
+    // The core must not learn what an environment or a commit is: they are
+    // facts about the world outside a graph, so they arrive as text the caller
+    // chose and pass through untouched.
     let (g, c, memory, _journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();
@@ -2001,9 +1931,8 @@ fn a_stamp_cannot_overwrite_what_the_engine_knows() {
 #[test]
 fn a_slice_does_not_claim_to_know_what_the_graph_was_fed() {
     // What arrives at a worker is a slice's input and not a graph's, so
-    // stamping it would be a confident lie about the one field that cannot be
-    // checked afterwards. Whoever coordinates knows the real one and can send
-    // it along in a stamp of its own.
+    // stamping it would be a confident lie about the one field nothing can
+    // check afterwards.
     let (g, c, memory, _journal) = watched("encoder");
     let plan = compile(&g, &c).unwrap();
     let notebook = Notebook::new();

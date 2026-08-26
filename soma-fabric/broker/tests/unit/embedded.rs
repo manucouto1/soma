@@ -23,8 +23,6 @@ fn reach(host: &str) -> Ask {
     }
 }
 
-// ── What it answers ──
-
 #[test]
 fn it_greets_whoever_speaks_its_version() {
     let broker = Embedded::open([(Host::new("w1"), at("node3:7000"))]);
@@ -134,8 +132,6 @@ fn the_session_stays_open_across_rendezvous() {
     ));
 }
 
-// ── Done, the one message with no answer ──
-
 #[test]
 fn letting_a_rendezvous_go_does_not_wait_for_anything() {
     let broker = Embedded::open([(Host::new("w1"), at("node3:7000"))]);
@@ -154,8 +150,6 @@ fn asking_done_is_refused_rather_than_waited_on() {
         Err(Unanswered::NoAnswerToThat)
     );
 }
-
-// ── The thread ──
 
 #[test]
 fn a_desk_that_panics_is_reported_and_not_waited_on() {

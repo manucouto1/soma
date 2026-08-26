@@ -1,11 +1,9 @@
 //! Which way is better.
 //!
-//! A loss goes down and an accuracy goes up, and nothing in a number says
-//! which. Everything at this level that compares two results needs to be told:
-//! a pruner cannot decide anything without it, and neither will a sampler.
-//!
-//! It lives on the piece that compares rather than being passed to every call,
-//! so a pruner without a direction is a state that cannot be written down.
+//! A loss goes down and an accuracy goes up, and nothing in a number says which,
+//! so everything at this level that compares two results has to be told. It
+//! lives on the piece that compares rather than being passed to every call, so a
+//! pruner without a direction is a state that cannot be written down.
 
 use std::fmt;
 use std::str::FromStr;

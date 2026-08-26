@@ -1,11 +1,8 @@
 //! What a client and a broker say to each other, and in what order.
 //!
-//! Two enums, together because they are a single vocabulary — the same reason
-//! the wire next door keeps its `Request` and `Answer` in one file. They are
-//! **not** called `Request` and `Answer`: a client holds both conversations at
-//! once, and two same-named types in scope is a rename at every use site.
-//!
-//! # The conversation
+//! Two enums, together because they are a single vocabulary. They are **not**
+//! called `Request` and `Answer`: a client holds both conversations at once,
+//! and two same-named types in scope is a rename at every use site.
 //!
 //! ```text
 //! → Hello { protocol, who }            once per session
@@ -18,42 +15,25 @@
 //! ```
 //!
 //! Six messages, and the whole point of them is the **first field of the first
-//! one**.
-//!
-//! # Why this one is versioned when the wire is not
-//!
-//! The wire says, correctly, that it needs no version because *"both sides are
-//! the same binary from the same `cargo build`"*. For a broker that day is the
-//! first: the platform's is deployed by us, and the client is installed by
-//! whoever installs it, whenever they feel like it. It is the only structural
-//! difference between the two conversations, and it is cheaper written down here
-//! than discovered on somebody else's cluster.
-//!
-//! **The rule is exact match.** A broker refuses a [`PROTOCOL`] it does not
-//! speak, rather than guessing which half of a stranger's vocabulary it
+//! one**. The wire next door needs no version because both sides are the same
+//! binary from the same `cargo build`; for a broker that day is the first, since
+//! the platform's is deployed by us and the client is installed by whoever
+//! installs it. **The rule is exact match**: a broker refuses a [`PROTOCOL`] it
+//! does not speak rather than guessing which half of a stranger's vocabulary it
 //! understands, and [`Reply::Welcome`] carries its own number so the refusal can
-//! say something useful instead of *"no"*.
+//! say something useful.
 //!
-//! And a caution against a promise this does not make: MessagePack through
-//! `serde` writes these positionally, so **adding a field is a version bump**,
-//! not a free extension. What the version buys is that the mismatch is a
-//! sentence at the greeting instead of a struct read off by one at three in the
-//! morning. Adding a *variant* is the same story from the other side: an older
-//! reader meets an index it has no arm for and says so.
+//! A caution against a promise this does not make: MessagePack through `serde`
+//! writes these positionally, so **adding a field is a version bump** and not a
+//! free extension. What the version buys is that the mismatch is a sentence at
+//! the greeting instead of a struct read off by one at three in the morning.
 //!
-//! # The two holes with nothing in them yet
-//!
-//! [`Ask::Hello::who`] and [`Reply::Met::good_for`] are `Option`, and the
-//! embedded broker leaves both `None`. They are here because the design says
-//! the platform's broker *"adds authentication, pairing, leases and metering,
-//! and the protocol is identical — what it brings is policy, not mechanism"*,
-//! and that sentence is only true if the slots the policy writes into already
-//! exist. Without `good_for` a lease cannot be revoked without inventing a
-//! message; without `who` an identity has nowhere to go. Two fields are the
-//! difference between that claim and a slogan.
-//!
-//! The **policy** is still not here, and will not be: what an identity is worth
-//! and how long a rendezvous lasts are the platform's opinions.
+//! [`Ask::Hello::who`] and [`Reply::Met::good_for`] are `Option` and the
+//! embedded broker leaves both `None`. They are here because the platform's
+//! broker adds policy and not mechanism, and that is only true if the slots the
+//! policy writes into already exist: without `good_for` a lease cannot be
+//! revoked without inventing a message, and without `who` an identity has
+//! nowhere to go. The policy itself is the platform's opinion and stays there.
 
 use crate::Path;
 use serde::{Deserialize, Serialize};
@@ -64,8 +44,7 @@ use std::time::Duration;
 /// The version of this vocabulary that this binary speaks.
 ///
 /// One number for the whole conversation and not one per message: a client that
-/// understands `Reach` but not `Met` is not a client, and versioning each
-/// message separately would be four negotiations to save nothing.
+/// understands `Reach` but not `Met` is not a client.
 pub const PROTOCOL: u16 = 1;
 
 /// What the client says.
@@ -78,18 +57,16 @@ pub enum Ask {
         /// with this one about everything else.
         protocol: u16,
         /// Whatever the far side's policy needs in order to know who is asking.
-        /// Opaque here, and `None` everywhere there is no policy.
-        ///
-        /// Named `who` because `as` is a keyword; the design document calls it
-        /// `as` and means this.
+        /// Opaque here, and `None` everywhere there is no policy. Named `who`
+        /// because `as` is a keyword.
         who: Option<Identity>,
     },
     /// Introduce me to this host.
     ///
     /// The name is the graph's — `w1`, `gpu-a` — and resolving it is the whole
-    /// job of a broker. It is a [`Host`] and not a string so that the thing the
-    /// engine placed and the thing the broker resolves are the same type all the
-    /// way down.
+    /// job of a broker. A [`Host`] and not a string, so that the thing the
+    /// engine placed and the thing the broker resolves are the same type all
+    /// the way down.
     Reach {
         /// The name the graph gave it.
         host: Host,
@@ -98,9 +75,9 @@ pub enum Ask {
     },
     /// I am done with this host: let the rendezvous go.
     ///
-    /// Nothing is held by an embedded broker, so nothing is released. It is here
-    /// because without it the platform cannot tell a session that ended from one
-    /// that died, and telling those apart is metering rather than politeness.
+    /// Nothing is held by an embedded broker, so nothing is released. It is
+    /// here because without it the platform cannot tell a session that ended
+    /// from one that died, which is metering rather than politeness.
     Done {
         /// Which one.
         host: Host,
@@ -123,16 +100,14 @@ pub enum Reply {
         /// How to reach them.
         path: Path,
         /// How long this rendezvous is good for, counting from when you read
-        /// it. `None` is *"nobody is taking this back"*, which is every broker
-        /// that has no policy.
+        /// it. `None` is *nobody is taking this back*, which is every broker
+        /// with no policy.
         ///
-        /// A **duration and not an instant**, and this is not a detail of
-        /// convenience: an `Instant` does not serialize and means nothing off
-        /// its own process, and a wall clock was already ruled out next door —
-        /// two machines on a cluster disagree by minutes as a matter of course,
+        /// A **duration and not an instant**: an `Instant` does not serialize
+        /// and means nothing off its own process, and a wall clock was already
+        /// ruled out next door — two machines on a cluster disagree by minutes,
         /// so an expiry stamped there and read here would be a lease that
-        /// expires in the past. What crosses is *how long*; *when* is stamped by
-        /// whoever reads it.
+        /// expires in the past.
         good_for: Option<Duration>,
     },
     /// That host cannot be reached, and here is why. Belongs to the rendezvous:
@@ -143,20 +118,18 @@ pub enum Reply {
 /// Who is asking, for whoever has an opinion about it.
 ///
 /// A string, and this crate never looks inside: the same boundary as the wire's
-/// `runtime`, which is opaque there and read by whoever implements `Provision`.
-/// What a token is worth is the platform's business, and the day it is a signed
-/// something rather than a string, it is still bytes with a name on them.
+/// `runtime`. What a token is worth is the platform's business, and the day it
+/// is a signed something rather than a string, it is still bytes with a name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Identity(pub String);
 
 /// What a slice needs of whoever runs it.
 ///
-/// **Empty, and named.** This is where *"this wants a GPU with 40 GB"* will go,
+/// **Empty, and named.** This is where *this wants a GPU with 40 GB* will go,
 /// and it goes nowhere until there is a queue that reads it — inventing fields
-/// now would be describing a matching policy nobody has written against machines
-/// nobody has described. What it buys empty is that the day it fills, `Reach`
-/// does not change shape.
+/// now would be describing a matching policy nobody has written. What it buys
+/// empty is that the day it fills, `Reach` does not change shape.
 ///
 /// A struct and not a unit so that filling it is an edit here rather than a
 /// change of kind at every construction site.
@@ -241,10 +214,9 @@ fn read<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Unreadable> {
 /// never a message at all.
 ///
 /// A struct and not an enum, unlike the wire's, and the difference is the
-/// domain rather than the taste: there a message can also fail because a value
-/// only exists in its own process, which is a second, entirely different thing
-/// to be. Nothing in this conversation carries a value, so there is one way to
-/// fail and a closed set of one is a struct.
+/// domain: there a message can also fail because a value only exists in its own
+/// process. Nothing in this conversation carries a value, so there is one way
+/// to fail and a closed set of one is a struct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unreadable(String);
 

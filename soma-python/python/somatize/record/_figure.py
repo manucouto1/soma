@@ -8,36 +8,19 @@
     progress(store, run="tuesday")     # afterwards, or another machine's
     spent(store, run="tuesday")
 
-## The same picture from two sources, which is the point
-
 `progress` reads a store and `Live` is handed facts as they happen, and they draw
-**the same figure** — because a fact read back is the very dict a watcher was
-given. So there is one drawing function here and two ways to fill it, rather than
-a live view and a report that slowly stop agreeing.
+**the same figure**, because a fact read back is the very dict a watcher was
+given — one drawing function and two ways to fill it, rather than a live view
+and a report that slowly stop agreeing.
 
-## Why the smooth line is a mean and not a spline through the points
+The smooth line is a **rolling mean** and not a spline: a spline through measured
+values invents the values between them, and an overshoot dips below a minimum
+that never happened. Figures here may simplify and may not lie, so the raw series
+stays underneath, thin and faint.
 
-A spline drawn through measured values invents the values between them, and an
-overshoot on a loss curve can dip below a minimum that never happened. This
-project's rule about figures is that they may simplify and may not lie.
-
-So the bold line is a **rolling mean**, which is a stated transformation, and the
-raw series stays underneath it, thin and faint. Nothing is hidden by the
-smoothing: what was measured is on the figure, and what is easy to read is
-admitted to be an average. It is also what anybody who has watched a loss curve
-expects to see.
-
-## What is drawn, and what is deliberately not
-
-Progress and cost: the loss, how long each `forward` took, and which of them
-broke. That last one is the only judgement on the figure and it is not one — a
-`forward` that broke is a fact in the record.
-
-Nothing here says whether a number is *bad*. A gradient that is dying, a layer
-that is saturated, a rate that has stalled: those are opinions with arguable
-thresholds, they are CU21, and the invariant is that they have to be reachable
-from the stored record without training again. When they exist they get a channel
-of their own; they do not get to recolour these.
+The only judgement on the figure is a `forward` that broke, which is a fact in
+the record. Whether a number is *bad* is an opinion with an arguable threshold,
+and those get a channel of their own.
 """
 
 from __future__ import annotations
@@ -71,13 +54,10 @@ def progress(
     run: str,
     smooth: int | None = None,
 ) -> Figure:
-    """How a run went, step by step: the loss, the time, and what broke.
-
-    One scan when the recorder was told to summarise the loss, and a fetch per
-    `forward` when it was not — `curve_costs` says which.
-
-    `smooth` is the window of the rolling mean, in `forward`s. `0` draws only
-    what was measured.
+    """How a run went, step by step: the loss, the time, and what broke. One scan
+    when the recorder summarised the loss and a fetch per `forward` when it did
+    not — `curve_costs` says which. `smooth` is the window of the rolling mean,
+    in `forward`s; `0` draws only what was measured.
     """
     return _drawn(forwards(store, run=run), title=run, smooth=smooth)
 
@@ -86,19 +66,13 @@ def gantt(store: "Store", *, run: str, forward: int = 0) -> Figure:
     """One `forward` on a timeline: what ran when, and what was waiting.
 
     The picture `spent` cannot draw. A total says a node cost four hundred
-    milliseconds; this says whether those four hundred were **beside** the rest
-    of the graph or in front of it, which is the difference between a slow node
-    and a bottleneck.
+    milliseconds; this says whether those were **beside** the rest of the graph
+    or in front of it.
 
-    Every fact carries `began_us` — how far into the run it started — so a
-    `Wave` shows as overlapping bars and a `Sequence` as a staircase. A slice
-    that ran on another machine counts from **its own** start, so its bars are
-    shifted by the `left` they arrived under. That is not a fudge: an offset
-    into a slice is a fact about the slice, and two wall clocks would not have
-    composed at all.
-
-    One `forward` and not an average of them, because an average of timelines
-    is not a timeline.
+    Every fact carries `began_us`, so a `Wave` shows as overlapping bars. A slice
+    that ran elsewhere counts from **its own** start and is shifted by the `left`
+    it arrived under — two wall clocks would not have composed. One `forward` and
+    not an average, because an average of timelines is not one.
     """
     go = _theme.plotly()
     bars = _bars(facts(store, run=run, forward=forward) or [])
@@ -139,12 +113,8 @@ def gantt(store: "Store", *, run: str, forward: int = 0) -> Figure:
 
 def _bars(seen: Sequence[Fact]) -> list[Bar]:
     """The facts of one `forward` as `(name, began, took)`, in the order they
-    started.
-
-    A `left` carries the slice it framed, so what ran over there is shifted onto
-    this timeline by adding its offset — and drawn in its own colour, because
-    *this happened elsewhere* is the thing a timeline of a distributed graph is
-    for.
+    started. A `left` carries the slice it framed, so what ran over there is
+    shifted onto this timeline and drawn in its own colour.
     """
     bars: list[Bar] = []
     waiting: dict[str, list[tuple[Fact, float, float]]] = {}
@@ -207,32 +177,24 @@ def _read(fact: Fact, name: str) -> float | None:
 
 
 def spent(store: "Store", *, run: str, last: int | None = None) -> Figure:
-    """Where the time went, added up per node — the aggregate view.
-
-    Bars are coloured by **where** the node ran, which is the same table the
-    graph is drawn with: a device is green, another machine is orange.
-
-    It costs a fetch per `forward`, because which node did what is in the blobs.
-    `last=N` reads only the last N, which is the question worth asking of a run
-    that is ten thousand steps long.
+    """Where the time went, added up per node. Bars are coloured by **where** the
+    node ran, from the same table the graph is drawn with. A fetch per `forward`,
+    because which node did what is in the blobs; `last=N` reads only the last N.
     """
     return _spent(nodes(store, run=run, last=last), title=run)
 
 
 class Live:
-    """A run drawn while it happens. Hand it to `watching=`.
+    """A run drawn while it happens. Hand it to `watching=`::
 
         live = Live()
         live                                   # the cell shows it
         g.forward(x, watching=live)
 
-    In a notebook with `ipywidgets` it redraws in place; without one it still
-    tallies everything and `figure()` gives the same picture at any moment.
-    Either way it holds only the summary of each `forward` — one row of numbers —
-    so watching a run for an afternoon does not grow with it.
-
-    It keeps nothing on disk. A `Live` beside a `Recorder` is the normal pairing:
-    one to look at now, one to have afterwards.
+    With `ipywidgets` it redraws in place; without one it still tallies
+    everything and `figure()` gives the same picture. It holds one row of numbers
+    per `forward`, so watching for an afternoon does not grow with it, and keeps
+    nothing on disk — a `Live` beside a `Recorder` is the normal pairing.
     """
 
     def __init__(
@@ -314,9 +276,9 @@ class Live:
     ) -> dict[str, Any] | None:
         """In a notebook cell: the figure, and nothing about this object.
 
-        The same wall CU19 walked into — a figure reaches a cell through the
-        mimebundle it publishes, not through hand-written HTML — and the same
-        way out. An empty bundle has to become `None` or the cell shows neither.
+        A figure reaches a cell through the mimebundle it publishes, not through
+        hand-written HTML. An empty bundle has to become `None` or the cell shows
+        neither.
         """
         try:
             bundle = self.figure()._repr_mimebundle_(include, exclude, **rest)
@@ -424,17 +386,10 @@ def _drawn(
 def machines(store: "Store", *, run: str, last: int | None = None) -> Figure:
     """The run, per machine: what each one worked and what it was waited on.
 
-    The inverse of `spent`, and the split is the whole of it. A bar is the round
-    trip and it comes in two parts — the time a machine spent **working**, and
-    the time it was **waited on**: the wire, the queue and the codec. Neither
-    half belongs to a node, which is why no per-node view can draw this and why
-    it is worth its own figure.
-
-    It is the answer to *was sending it worth it*, and the answer is often no
-    and obvious the moment it is a picture: a slice with sixty microseconds of
-    work behind a second of round trip is a slice that should have stayed here.
-
-    Costs what `fleet` costs — a scan and a fetch per `forward`.
+    The inverse of `spent`, and the split is the whole of it: a bar is the round
+    trip in two parts — time spent **working**, and time **waited on**, which is
+    the wire, the queue and the codec. Neither half belongs to a node, which is
+    why no per-node view can draw this. Costs what `fleet` costs.
     """
     return _machines(fleet(store, run=run, last=last), title=run)
 
@@ -512,8 +467,7 @@ def _itself(one: "Row") -> str:
 
     On the hover and not on the bar, because the bar is time and this is not:
     one fact per channel, the same rule the graph's fill obeys. A machine that
-    said nothing says so — `None` is *nobody asked it*, and on this end that is
-    every machine but the ones being sent work.
+    said nothing says so — `None` is *nobody asked it*.
     """
     said = []
     if one.get("busy") is not None:
@@ -575,9 +529,9 @@ def _spent(tally: Sequence["Row"], *, title: str) -> Figure:
 def _family(one: "Row") -> str:
     """Which row of the one table this node is drawn with.
 
-    Where it ran, and nothing else — the same rule the graph's fill obeys. A
-    node that ran on another machine is that first: which device it used over
-    there is on the hover, where a second fact belongs.
+    Where it ran, and nothing else — the same rule the graph's fill obeys. A node
+    that ran on another machine is that first; which device it used over there is
+    on the hover, where a second fact belongs.
     """
     if one["hosts"]:
         return "remote"
@@ -619,18 +573,12 @@ def _smoothed(
 ) -> list[float | None]:
     """A **centred** rolling mean, ignoring the gaps.
 
-    Centred and not trailing: a trailing mean is the same curve shifted to the
-    right, and drawn on top of the raw series that shift reads as the smoothing
-    disagreeing with the measurement. Nothing is being predicted here — every
-    point of the run is already in hand — so there is no reason to lag it.
+    Centred and not trailing: a trailing mean is the same curve shifted right,
+    and drawn over the raw series that shift reads as the smoothing disagreeing
+    with the measurement. Nothing is predicted — every point is in hand.
 
-    The window scales with the run so that forty points and ten thousand are
-    smoothed by eye to the same degree. `window=0` gives back what it was given,
-    which is how you ask for no smoothing at all.
-
-    Prefix sums, so it stays linear: a live view redraws this on every step, and
-    a window of five hundred over ten thousand points done the naive way is five
-    million additions a frame.
+    The window scales with the run, so forty points and ten thousand look equally
+    smoothed. Prefix sums, because a live view redraws this every step.
     """
     if window == 0:
         return values

@@ -12,11 +12,9 @@
 use std::fmt;
 use std::str::FromStr;
 
-/// The place where a node executes.
-///
-/// It travels **as text**, through [`Display`](fmt::Display) and [`FromStr`]:
-/// a variant number would be shorter and would break silently the day the enum
-/// grows in the middle.
+/// The place where a node executes. It travels **as text**, through
+/// [`Display`](fmt::Display) and [`FromStr`]: a variant number would break
+/// silently the day the enum grows in the middle.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(
     feature = "serde",

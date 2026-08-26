@@ -1,31 +1,19 @@
 """How N clients that never speak to each other finish a round together.
 
 `fedavg` is the arithmetic and this is the meeting: everybody writes what they
-learnt into a directory they all mounted, and everybody leaves with the average
-of it. There is no server, no port and no protocol — a folder, and `claim`.
+learnt into a directory they all mounted, and everybody leaves with the average.
+No server, no port, no protocol — a folder, and `claim`::
 
-```python
-# the same script on every machine; Slurm gives out `mine`
-for r in range(rounds):
-    trainer.fit(my_data)
-    trainer.load(gather(store, trainer.export(), run="cifar", round=r,
-                        clients=4, mine=int(os.environ["SLURM_PROCID"])))
-```
+    # the same script on every machine; Slurm gives out `mine`
+    for r in range(rounds):
+        trainer.fit(my_data)
+        trainer.load(gather(store, trainer.export(), run="cifar", round=r,
+                            clients=4, mine=int(os.environ["SLURM_PROCID"])))
 
-# Nobody is in charge, and that is what `claim` is for
-
-A round needs somebody to wait for all of it and average it, and the obvious
-answer — a coordinator process — is a thing that has to stay alive, and a run
-that hangs on a weekend when it does not. So instead: **whoever finds the round
-complete claims the averaging**, and exactly one of them can win that, because
-that is what a claim is. The winner averages and publishes; the others find the
-average on their next look.
-
-The cost of it is that every client runs the same script and one of them does a
-little more work than the others, once a round. The saving is a process nobody
-has to babysit.
-
-# What a round is made of, on disk
+A round needs somebody to wait for all of it and average it, and a coordinator is
+a process that has to stay alive — and a run that hangs over a weekend when it
+does not. So **whoever finds the round complete claims the averaging**, and
+exactly one can win that, because that is what a claim is.
 
 ```text
 <run>/round/<r>/client/<k>    what client k learnt   (its size in the record)
@@ -33,18 +21,9 @@ has to babysit.
 <run>/round/<r>/average       the mean               (what everybody leaves with)
 ```
 
-`run` is there so two training runs sharing a directory are two training runs.
-
-# When somebody does not turn up
-
-A node falls over, Slurm has no room, a client is simply slow: without an answer
-the round waits for ever, and a run that hangs is worse than one that stops. So
-there is a deadline, and running out of it says **which clients are missing** by
-name — which is the difference between "it hung" and "node 7 never started".
-
-Waiting longer is a number; deciding to go on without them is a policy, and it is
-not this function's to make. `fedavg` takes whatever list you hand it, so whoever
-wants a round of three out of four says so themselves.
+Without a deadline the round waits for ever, so running out of it says **which
+clients are missing** by name. Waiting longer is a number; going on without them
+is a policy and not this function's to make.
 """
 
 from __future__ import annotations
@@ -75,14 +54,10 @@ def gather(
     within: float = 600.0,
     asking: float = 1.0,
 ) -> Any:
-    """Puts this client's round in, waits for everybody else's, and gives back
-    the average of all of them.
-
-    `run` names this training run, `round` which round it is, `clients` how many
-    there are and `mine` which one this is — whatever Slurm handed out. `size` is
-    how much data this client saw, and it travels in the record so that whoever
-    ends up averaging can weigh by it.
-
+    """Puts this client's round in, waits for everybody else's, and gives back the
+    average. `run` names the training run, `round` which round, `clients` how
+    many there are and `mine` which one this is. `size` is how much data this
+    client saw, and it travels in the record so whoever averages can weigh by it.
     Raises `TimeoutError` after `within` seconds, naming who never turned up.
     """
     store.keep(_client(run, round, mine), what, {SIZE: str(size)} if size else None)
@@ -106,9 +81,9 @@ def gather(
 def _the_mean(store: "Store", run: str, round: int, clients: int) -> Any:
     """The average of what everybody put in, published for them to find.
 
-    Written **before** it is returned, and not after: the client that does this
-    is also a client, and if it went on to the next round with an average nobody
-    else could see, the round would have happened for one of them.
+    Written **before** it is returned: the client that does this is also a
+    client, and if it went on with an average nobody else could see, the round
+    would have happened for one of them.
     """
     puts = [store.resolve(_client(run, round, which)) for which in range(clients)]
     exports = []

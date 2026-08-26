@@ -32,18 +32,10 @@ impl Digest {
     }
 
     /// How it is split into a directory and a file, so no directory ends up with
-    /// a million entries in it.
-    ///
-    /// The directory comes from the **hash** and not from the whole string: with
-    /// the `sha256:` in front, every digest starts the same way and everything
-    /// would land in a single `sh/`, which is the one directory this split
-    /// exists to avoid. The file keeps the whole thing, so the same hex under
-    /// two algorithms is still two files.
-    ///
-    /// **Public because it is a fact shared between implementors and not
-    /// `Local`'s private business**: a directory and a bucket lay their bytes
-    /// out the same way, which is what lets one be copied into the other, and
-    /// two copies of this split would drift and quietly end that.
+    /// a million entries. The directory comes from the **hash** and not the whole
+    /// string — every digest starts `sha256:`, and they would all land in one
+    /// `sh/`. Public because a directory and a bucket lay bytes out the same way,
+    /// which is what lets one be copied into the other.
     pub fn path(&self) -> (String, String) {
         let hash = flatten(self.0.rsplit(':').next().unwrap_or(&self.0));
         let head = hash.get(..2).unwrap_or(hash.as_str()).to_string();

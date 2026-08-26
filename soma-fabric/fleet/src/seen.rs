@@ -1,7 +1,5 @@
 //! One machine, as this section sees it.
 //!
-//! # Two names, and they are not interchangeable
-//!
 //! A worker calls itself `node3-4127` — its hostname and its pid, because two
 //! workers on one box are two workers. A graph calls it `w1`. **The machine
 //! does not know that second name**, so the two only ever meet in one place: a
@@ -12,14 +10,11 @@
 //! and not of the machine, which is why a generic *online* / *offline* would be
 //! a lie: a machine can be perfectly alive and belong to nobody.
 //!
-//! # Why the fields are restated rather than a `Machine` embedded
-//!
-//! A [`Machine`](somatize_fabric_wire::Machine) already has a written form and it
-//! is `said()` — `(kind, pairs)`, the one place the levels meet. Deriving
-//! `Serialize` on it would give it a second one, and a type with two written
-//! forms is a type whose two readers eventually disagree. So this is a view of
-//! one, built by whoever answers a request, and the JSON below is **this
-//! section's** and says so.
+//! The fields are restated rather than a [`Machine`](somatize_fabric_wire::Machine)
+//! embedded, because that type already has a written form — `said()`, the one
+//! place the levels meet — and a type with two written forms is a type whose two
+//! readers eventually disagree. This is a view of one, and the JSON below is
+//! **this section's**.
 
 use serde::Serialize;
 use somatize_core::Host;

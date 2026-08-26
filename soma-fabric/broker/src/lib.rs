@@ -2,9 +2,9 @@
 //! it.
 //!
 //! A client always does the same thing — it talks to a broker — and the only
-//! thing that changes between having a platform account, having a head node, and
-//! having neither is **which** broker, which is a URL. There is no second code
-//! path and no degraded mode.
+//! thing that changes between having a platform account, having a head node,
+//! and having neither is **which** broker, which is a URL. There is no second
+//! code path and no degraded mode.
 //!
 //! | deployment | what it is | what it adds |
 //! |---|---|---|
@@ -12,25 +12,17 @@
 //! | local | a process on a head node | reachable by more than one client |
 //! | platform | ours | authentication, pairing, leases, metering |
 //!
-//! # What is here today
+//! Here today: `protocol` and [`Path`] — three questions, four answers, and the
+//! four ways a pair of endpoints can end up talking — and [`Embedded`], the
+//! first of the three deployments. The other two arrive with their consumers,
+//! and so does a `Broker` trait: today it would have one implementor.
 //!
-//! [`protocol`] and [`path`]: three questions, four answers, and the four ways
-//! a pair of endpoints can end up talking. [`Embedded`], the first of the three
-//! deployments and the one that makes soma work with no platform at all. The
-//! local and platform brokers arrive with their consumers.
-//!
-//! There is deliberately **no `Broker` trait**. Today there would be one
-//! implementor, and a trait with one implementor is the shape this project was
-//! started to stop writing. It arrives with the second.
-//!
-//! # The one decision worth knowing before reading the code
-//!
-//! **Control and cargo go by different routes.** What crosses here is a
-//! rendezvous — tens of bytes, once per host per session. What crosses the wire
-//! next door is an activation — megabytes, once per forward, fifty thousand
-//! forwards. The broker is in the first and steps out of the second, which is
+//! The one decision worth knowing before reading the code: **control and cargo
+//! go by different routes.** What crosses here is a rendezvous — tens of bytes,
+//! once per host per session — while what crosses the wire next door is an
+//! activation. The broker is in the first and steps out of the second, which is
 //! why an embedded broker can be a thread with real serialized messages and
-//! still cost nothing that anyone can measure.
+//! still cost nothing anyone can measure.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

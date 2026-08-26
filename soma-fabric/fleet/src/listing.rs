@@ -1,31 +1,11 @@
 //! The names a graph writes, and what each of them resolves to.
 //!
-//! # It is the local broker's, and it is here on loan
-//!
-//! What holds a listing beyond the life of one client is the **local broker**,
-//! the second of the three deployments, and it is not written. So for now the
-//! listing is a file this reads and writes, and the shape of these routes is
-//! what a broker will answer — a name, a path, and which names are one wire.
-//! Moving it is then a matter of where the answer comes from.
-//!
-//! # Who decides that two names are one wire
-//!
-//! Not this. A real [`Embedded`] broker is opened over the listing and asked for
-//! a `wire_token` per name, which is the very call a client makes when it works
-//! out what to pack. Two names come back with the same bytes exactly when they
-//! would share a wire — and a catalog.
-//!
-//! Working it out here instead would have been four lines and a second opinion
-//! about a rule that decides whether a run keeps its state: an **address** is an
-//! identity, so two names for it are two names for it, while a **command** is a
-//! thing to run and running it twice gives two of them.
-//!
-//! # Why the ladder is answered by the server
-//!
-//! All four rungs are in the message and two can be answered. Which two is a
-//! fact about the code and not about a screen, so it is said here: the day the
-//! negotiation makes another one answerable, no view has to be edited to stop
-//! greying it out.
+//! It is the local broker's, and it is here on loan: what holds a listing
+//! beyond the life of one client is the **local broker**, the second of the
+//! three deployments, and it is not written. So for now the listing is a file
+//! this reads and writes, and the shape of these routes is what a broker will
+//! answer — a name, a path, and which names are one wire. Moving it is then a
+//! matter of where the answer comes from.
 
 use serde::{Deserialize, Serialize};
 use somatize_fabric_broker::{Embedded, Endpoint, Host, Path as Reach, Session};
@@ -72,8 +52,7 @@ pub struct Wire {
     /// What it resolves to: an address, or the command that would be run.
     ///
     /// The endpoint alone and not `Path`'s own sentence, which is written for a
-    /// Rust error message and in another language. Saying which rung it is on
-    /// is [`Wire::rung`]'s job, and one of the two saying it is enough.
+    /// Rust error message. Saying which rung it is on is [`Wire::rung`]'s job.
     pub how: String,
     /// Which rung of the ladder it is on.
     pub rung: &'static str,

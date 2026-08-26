@@ -1,38 +1,27 @@
 //! How a pair of endpoints ends up talking, once the broker has introduced them.
 //!
 //! Four variants, cheapest first, and **all four are here while only two can be
-//! answered**. That is deliberate and it is the one place this crate builds
-//! ahead of its consumer: the alternative is that adding the shared mount and
-//! the relay later changes [`Reply::Met`](crate::Reply), and a message that
-//! changes is a version that changes for everybody. The ladder is the design;
-//! what arrives later is the **probing that chooses**, not the vocabulary.
+//! answered**. That is the one place this crate builds ahead of its consumer,
+//! deliberately: the alternative is that adding the shared mount and the relay
+//! later changes [`Reply::Met`](crate::Reply), and a message that changes is a
+//! version that changes for everybody. The ladder is the design; what arrives
+//! later is the **probing that chooses**, not the vocabulary.
 //!
-//! # An id, never a handle
-//!
-//! [`Path::InProcess`] is the case where nothing is transferred at all, and the
-//! temptation is to answer it with the thing itself — a pointer to something
-//! standing in this process. It cannot: every message here has to survive a
-//! round trip through bytes, including the ones an embedded broker answers
-//! without ever leaving the process. So it answers with a [`SlotId`], and the
-//! client resolves that against its own registry.
-//!
-//! Which turned out to cost nothing and buy a consistency nobody planned:
-//! [`Path::Relayed`] has exactly the same shape, an id that only means something
-//! to whoever issued it, and the conformance suite can round-trip every message
-//! there is — including the one for the case that transfers nothing.
-//!
-//! # Why a pipe and a socket are the same path
+//! [`Path::InProcess`] transfers nothing at all, and the temptation is to
+//! answer it with a pointer to something standing in this process. It cannot:
+//! every message here has to survive a round trip through bytes, including the
+//! ones an embedded broker answers without leaving the process. So it answers
+//! with a [`SlotId`] the client resolves against its own registry — which cost
+//! nothing and bought a consistency nobody planned, since [`Path::Relayed`] has
+//! exactly the same shape.
 //!
 //! [`Path::Direct`] means **a duplex byte stream between the two ends, with the
-//! broker out of it**. Not "a TCP address": a worker started as a child process
-//! and spoken to over its pipes is the same path, and the wire next door already
-//! decided this — `frame` works over `impl Read`/`impl Write`, and its `Worker`
-//! says so out loud: *"that the conversation never finds out which it is falls
-//! out of frame working over impl Read/impl Write"*.
-//!
-//! So what varies is **how the stream is obtained**, which is why the variant
-//! carries an [`Endpoint`] and not an address. Getting this wrong is how the
-//! ladder grows a fifth rung that is really the third one twice.
+//! broker out of it**, and not *a TCP address*: a worker started as a child and
+//! spoken to over its pipes is the same path, which the wire next door already
+//! decided by making `frame` work over `impl Read`/`impl Write`. So what varies
+//! is **how the stream is obtained**, which is why the variant carries an
+//! [`Endpoint`]. Getting this wrong is how the ladder grows a fifth rung that
+//! is really the third one twice.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -46,9 +35,8 @@ pub enum Path {
     /// that never actually left home and pays for a trip anyway.
     ///
     /// **Never inferred.** Whoever registers a host says it is in-process; a
-    /// broker that works it out by comparing addresses would quietly undo the
-    /// reason a worker is a separate process in the first place, which is the
-    /// GIL.
+    /// broker that worked it out by comparing addresses would quietly undo the
+    /// reason a worker is a separate process, which is the GIL.
     InProcess {
         /// Where the client finds it, in a registry only the client has.
         slot: SlotId,
@@ -84,10 +72,9 @@ pub enum Endpoint {
     /// A worker to be started here, as a child, and spoken to over its pipes:
     /// `["python", "-m", "somatize.worker"]`.
     ///
-    /// It is a whole `argv` and not a path because whoever stands a worker up
-    /// decides what it is called, what environment it needs, and whether it goes
-    /// inside an `srun`. The wire's `Worker::spawn` takes a ready-made command
-    /// for the same reason.
+    /// A whole `argv` and not a path because whoever stands a worker up decides
+    /// what it is called, what environment it needs, and whether it goes inside
+    /// an `srun`.
     Command(Vec<String>),
 }
 
@@ -116,14 +103,12 @@ impl Path {
     /// It matters more than it looks. A worker has *one* catalog, and half of
     /// one is a different catalog: provisioning the same process twice, once
     /// per host name, swaps what it had live and takes every activation over
-    /// there with it. So getting this wrong is not an extra socket, it is a run
+    /// there with it. Getting this wrong is not an extra socket, it is a run
     /// that quietly loses its state.
     ///
     /// An **address** is an identity: the same host and port is the same
-    /// process, and two names for it are two names for it. A **command** is
-    /// not — it is a thing to run, and running it twice gives two of them.
-    /// That is not a nicety either: today's suite stands up two hosts from the
-    /// identical `argv` and requires two processes.
+    /// process. A **command** is not — it is a thing to run, and running it
+    /// twice gives two of them.
     pub fn shared(&self) -> bool {
         !matches!(
             self,

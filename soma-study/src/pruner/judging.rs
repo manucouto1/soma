@@ -9,11 +9,9 @@ pub(super) fn latest(mine: &[f64]) -> Option<(usize, f64)> {
     mine.last().map(|&value| (mine.len() - 1, value))
 }
 
-/// A value that is not a number is not comparable to anything, and it is
-/// exactly what a run that diverged reports. **Every scheme asks this first**,
-/// including the ones that would otherwise never prune this early: a `NaN` loss
-/// does not recover, and the epochs spent finding that out are the cheapest
-/// ones a pruner can save.
+/// A value that is not a number is not comparable to anything, and it is what a
+/// diverged run reports. **Every scheme asks this first**: a `NaN` loss does not
+/// recover, and those epochs are the cheapest a pruner can save.
 pub(super) fn not_a_number(at: usize, value: f64) -> Option<Reason> {
     value.is_nan().then_some(Reason::NotANumber { at })
 }

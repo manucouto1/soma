@@ -44,9 +44,6 @@ def trainer():
     )
 
 
-# ── The three schemes, and what each judges against ──
-
-
 def test_the_median_drops_what_is_behind_the_trials_that_finished():
     finished = [[3.0], [1.0], [2.0], [4.0]]
     median = Pruner.median(startup=1)
@@ -108,9 +105,6 @@ def test_maximizing_is_said_and_not_guessed_from_the_numbers():
     assert Pruner.median(goal="min", startup=1).verdict(accuracy, finished) is None
 
 
-# ── What is refused, and where ──
-
-
 def test_a_direction_that_is_not_one_is_caught_where_it_was_typed():
     # Not as a search that quietly optimised backwards for an afternoon.
     with pytest.raises(ValueError, match="`min`"):
@@ -131,9 +125,6 @@ def test_a_pruner_writes_itself_down_for_the_record_of_a_run():
     rules = [Pruner.median(), Pruner.median(goal="max"), Pruner.diverged()]
     assert len({str(r) for r in rules}) == 3
     assert len({Pruner.median(), Pruner.median(), Pruner.diverged()}) == 2
-
-
-# ── And the whole point: nothing is asked of the trainer ──
 
 
 def test_a_pruned_trial_simply_stops_being_stepped():

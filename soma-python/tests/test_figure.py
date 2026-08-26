@@ -219,9 +219,6 @@ def test_a_figure_with_nothing_to_show_reads_as_nothing(g, monkeypatch):
     assert g._repr_mimebundle_() is None
 
 
-# ── An edge that would cross a node goes around it ──
-
-
 def _paths(figure):
     """The routed edges: shapes drawn as an SVG path rather than a rectangle."""
     return [s for s in figure.layout.shapes if s.type == "path"]
@@ -287,9 +284,6 @@ def test_a_segment_is_tested_against_a_box_exactly():
     assert not _figure._hits(0.0, 50.0, 9.0, 50.0, box), "stops short of it"
 
 
-# ── What happened, laid over what was declared ──
-
-
 def test_an_empty_overlay_draws_exactly_what_no_overlay_draws():
     # The property that lets the declaration stay drawable by somebody who has
     # never run anything, and the original left it written down.
@@ -324,9 +318,6 @@ def test_the_flags_are_written_on_the_box_and_not_counted():
 
     assert "DEAD_CHANNELS" in said
     assert "(7)" not in said, "the count is on the hover, where there is room"
-
-
-# ── A node opened up ──
 
 
 def _inside(layers, edges=()):
@@ -462,9 +453,6 @@ def test_a_layer_that_narrows_is_drawn_wide_at_the_top():
     assert max(top) - min(top) > max(bottom) - min(bottom), f"drawn upside down: {path}"
 
 
-# ── A repeated block, and what runs several of itself at once ──
-
-
 def _blocked(layers, edges, groups=None):
     """The same, with each layer saying which repeated block it belongs to and
     how many identical lanes it is."""
@@ -556,9 +544,6 @@ def test_one_lane_is_not_several_and_draws_nothing_extra(g):
 
     assert not [one for one in figure.layout.shapes
                 if one.type == "path" and one.line.width == 0.8]
-
-
-# ── And every arrow inside the picture ──
 
 
 def _points(path):

@@ -9,8 +9,6 @@ fn said(seen: &Seen) -> Vec<String> {
         .collect()
 }
 
-// ── Nothing measured says nothing ──
-
 #[test]
 fn a_node_nobody_measured_is_not_called_healthy_and_is_not_flagged() {
     // The distinction the whole crate turns on: no flags is not a clean bill.
@@ -18,8 +16,6 @@ fn a_node_nobody_measured_is_not_called_healthy_and_is_not_flagged() {
     // was taken and came out fine.
     assert!(said(&Seen::default()).is_empty());
 }
-
-// ── Gradients ──
 
 #[test]
 fn a_gradient_too_small_to_train_on_says_so() {
@@ -54,8 +50,6 @@ fn a_gradient_cannot_be_both() {
     }
 }
 
-// ── Activations, and the rule about maxima ──
-
 #[test]
 fn a_layer_that_dies_one_step_in_four_is_dead() {
     // The original's finding, and the reason this reads the maximum: the mean
@@ -87,8 +81,6 @@ fn a_layer_pinned_where_the_derivative_is_nothing_says_so() {
 
     assert_eq!(said(&seen), ["SATURATED"]);
 }
-
-// ── The update, against the weights ──
 
 #[test]
 fn a_node_moving_too_little_next_to_its_own_weights_says_so() {
@@ -123,8 +115,6 @@ fn a_healthy_ratio_is_near_a_thousandth_and_says_nothing() {
     }
 }
 
-// ── Channels ──
-
 #[test]
 fn dead_channels_are_counted_and_are_not_the_same_as_a_dead_layer() {
     // A layer can be perfectly alive with a quarter of its width doing
@@ -147,8 +137,6 @@ fn a_channel_alive_and_never_asked_for_is_its_own_finding() {
 
     assert_eq!(said(&seen), ["IGNORED_CHANNELS(3)"]);
 }
-
-// ── The signal, before a step is taken ──
 
 #[test]
 fn a_signal_growing_where_nothing_normalises_it_says_so() {
@@ -239,8 +227,6 @@ fn two_groups_carrying_the_same_information_leak() {
     assert!(said(&apart).is_empty());
 }
 
-// ── The update's spectrum, which moves before the loss does ──
-
 #[test]
 fn a_collapsing_update_says_nothing_at_the_default_bound_because_it_is_off() {
     // Measured, and the measurement did not support it: healthy runs dipped to
@@ -302,8 +288,6 @@ fn an_update_that_is_merely_low_rank_all_along_is_not_narrowing() {
     assert!(somatize_health::verdict(&seen, &theirs).is_empty());
 }
 
-// ── Plasticity, which is a conjunction ──
-
 #[test]
 fn losing_plasticity_needs_all_three_signs_at_once() {
     let losing = Seen {
@@ -336,8 +320,6 @@ fn and_any_one_of_them_alone_is_ordinary() {
     assert!(said(&growing).is_empty());
     assert!(said(&quiet).is_empty());
 }
-
-// ── The order, and thresholds as data ──
 
 #[test]
 fn what_stops_a_run_is_read_first() {

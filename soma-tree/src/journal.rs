@@ -1,69 +1,41 @@
 //! What somebody said about a commit: a verdict, a note, a reason for pruning.
 //!
-//! # Append-only, and the latest wins
+//! Nothing is ever updated. A store lives on NFS or in a bucket, where making
+//! an index the truth would mean a single writer — so saying something is
+//! claiming the next slot under a commit, and a commit's verdict *is* the last
+//! one anybody claimed. Two machines saying something in the same instant both
+//! succeed, one after the other, and neither loses what the other wrote.
 //!
-//! A verdict is mutable — a line looks promising in the morning and is a dead
-//! end by six — and the obvious shape for that is a row somebody updates. It is
-//! the wrong one here. A store lives on NFS or in a bucket, and
-//! `somatize_store` says why in as many words: *making an index the truth
-//! would mean a single writer, and a single writer over NFS is exactly where
-//! this breaks*.
+//! The store's cost rule decides the rest: a record comes back free on a scan
+//! and a blob is a fetch, so a verdict lives in the record — reading forty
+//! commits is one scan — and the prose in the blob, fetched only by whoever
+//! asked to read it.
 //!
-//! So nothing is ever updated. Saying something is **claiming the next slot**
-//! under a commit, and what a commit's verdict *is* means the last one anybody
-//! claimed. Two machines saying something at the same moment both succeed, one
-//! after the other, because [`claim`](somatize_store::Store::claim) either
-//! takes a name or finds it taken — and neither loses what the other wrote.
+//! There were four verdicts, and only `invalid` was ever a property of the
+//! *code*: `promising`, `dead-end` and `superseded` were somebody deciding
+//! where to go next, and they now live in layer 2 as
+//! [`Kind::Decision`](crate::moves::Kind::Decision), under the question they
+//! answered. Nothing was migrated, because nothing had to be — an old record
+//! saying `verdict=dead-end` reads as a note with its prose intact.
 //!
-//! # What is in the record and what is in the blob
-//!
-//! The store's cost rule, which is not a detail: a record comes back free on a
-//! scan, a blob is a fetch. So a verdict lives in the **record**, where reading
-//! forty commits' worth costs one scan and nothing else, and the prose lives in
-//! the **blob**, fetched only by whoever asked to read it.
-//!
-//! # What a verdict is now, and what left
-//!
-//! There were four: `promising`, `dead-end`, `superseded` and `invalid`. Only
-//! the last was ever a property of the *code*. The other three were somebody
-//! deciding where to go next, stuck onto a commit with no scope saying which
-//! line they meant and no room for why — and they now live in layer 2 as
-//! [`Kind::Decision`](crate::moves::Kind::Decision) with a
-//! [`Course`](crate::moves::Course), where they hang under the question they
-//! were answering. A commit's course is **derived** from there by
-//! [`Moves::decided`](crate::moves::Moves::decided).
-//!
-//! Nothing was migrated, because nothing had to be: an old record saying
-//! `verdict=dead-end` no longer reads as a verdict, so it comes back as a note
-//! with its prose intact. What is lost is the word, not the writing.
-//!
-//! # Pruning and invalidation are not stored
-//!
-//! What is written down is *this commit is invalid*. That its descendants are
-//! suspect is **derived**, by walking git at the time somebody asks — so a
-//! commit made tomorrow under an invalid one is suspect the moment it exists,
-//! without anybody having gone back to write it down.
+//! That everything under an invalid commit is suspect is **derived**, by
+//! walking git when somebody asks, so a commit made tomorrow under one is
+//! suspect the moment it exists.
 
 use serde::{Deserialize, Serialize};
 use somatize_store::{Digest, Meta, Store};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// How many slots to try before giving up on being heard.
-///
-/// Only ever more than one when somebody else claimed the same slot in the same
-/// instant, so this is a bound on a race and not on a queue.
+/// How many slots to try before giving up on being heard. A bound on a race
+/// and not on a queue: more than one turn means somebody claimed the same
+/// instant.
 const PATIENCE: u32 = 32;
 
 /// What somebody found out about a commit itself.
 ///
-/// Two, and on purpose. These are the only judgements about the **code and its
-/// measurements** rather than about where to go next, and
-/// [`Invalid`](Self::Invalid) is the only one with a mechanical consequence:
-/// everything under it is suspect. Deciding a line is dead, or promising, or
-/// done better elsewhere, says nothing about whether what is already there was
-/// measured correctly — those are decisions, they carry a scope and a reason,
-/// and they live in layer 2 as [`Course`](crate::moves::Course).
+/// Two, and on purpose: these are the only judgements about the **code and its
+/// measurements** rather than about where to go next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {
@@ -72,20 +44,15 @@ pub enum Verdict {
     Invalid,
     /// Looked at and nothing wrong with it.
     ///
-    /// Exists so that being wrong about being wrong is sayable. A commit
-    /// nobody judged is already not invalid, so this says nothing new on its
-    /// own — its whole use is to be the **last** word after an `invalid`, and
-    /// to lift the doubt from everything that inherited it. Without it a
-    /// mistaken `invalid` would poison a subtree for good, which is the one
-    /// thing an append-only record must never let happen.
+    /// A commit nobody judged is already not invalid, so this says nothing on
+    /// its own — its whole use is to be the **last** word after an `invalid`,
+    /// so a mistaken one does not poison a subtree for good.
     Sound,
 }
 
 impl Verdict {
-    /// A word we no longer read comes back as `None`, which makes the saying a
-    /// note. That is the whole of the migration away from `promising`,
-    /// `dead-end` and `superseded`: the prose was always the part worth
-    /// keeping, and it is untouched.
+    /// A word no longer read comes back as `None`, which makes the saying a
+    /// note with its prose intact.
     pub fn read(said: &str) -> Option<Self> {
         match said {
             "invalid" => Some(Self::Invalid),
@@ -148,10 +115,8 @@ impl<'a> Journal<'a> {
 
     /// The name a commit's `nth` saying is bound under.
     ///
-    /// The same shape a study's trials have — `<study>/trial/<n>/<attempt>` —
-    /// one noun along, which is not a coincidence: `exp/<tree>/<commit>` **is**
-    /// the study name, so trials for this version land underneath without a
-    /// line of soma changing.
+    /// `exp/<tree>/<commit>` **is** a study name, so trials for this version
+    /// land underneath without a line of soma changing.
     fn named(&self, commit: &str, nth: u32) -> String {
         format!("exp/{}/{commit}/said/{nth}", self.tree)
     }
@@ -171,9 +136,8 @@ impl<'a> Journal<'a> {
         let said = self.kept.put(prose.as_bytes()).map_err(Trouble::Store)?;
         let first = self.last_of(commit)?.map_or(0, |last| last + 1);
         // Each turn is the **next slot along**, not a retry of the same one:
-        // being told a slot is taken means somebody else's saying is in it and
-        // stands, and this one goes after it. Neither is lost, which is the
-        // whole point of claiming rather than binding.
+        // being told a slot is taken means somebody else's saying stands in
+        // it, and this one goes after it.
         for nth in first..first + PATIENCE {
             let meta: Meta = [
                 ("what".to_string(), "said".to_string()),
@@ -208,9 +172,8 @@ impl<'a> Journal<'a> {
 
     /// Everything anybody said in this investigation, oldest first.
     ///
-    /// A scan and **no fetches**: what a verdict is comes back in the record,
-    /// so reading forty commits costs one walk of the store. The prose is a
-    /// digest here and stays one until somebody asks to read it.
+    /// A scan and **no fetches**: the prose stays a digest until somebody asks
+    /// to read it.
     pub fn all(&self) -> Result<Vec<Saying>, Trouble> {
         let under = format!("exp/{}/", self.tree);
         let mut said: Vec<Saying> = self
@@ -220,8 +183,7 @@ impl<'a> Journal<'a> {
             .into_iter()
             .filter_map(|bound| {
                 // A store holds whatever anybody put in it — snapshots, a
-                // cache, another investigation — so this is a question and not
-                // an assumption.
+                // cache, another investigation — so this is a question.
                 let rest = bound.name.strip_prefix(&under)?;
                 let (commit, nth) = rest.split_once("/said/")?;
                 Some(Saying {

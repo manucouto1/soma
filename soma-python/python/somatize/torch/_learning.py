@@ -1,64 +1,37 @@
 """Training the half that is not here, from beside the node and not inside it.
 
 What crosses a cable is the value and not the graph that made it, so a node on
-another machine gets no gradient from a `backward()` run in this process. The
-answer is not to bring it back: it is to **put a trainer over there**. It keeps
-the activation where its autograd graph is, it is handed `dL/d(what the node
-produced)`, it carries on with the chain rule under an optimizer of its own, and
-it gives back `dL/d(what the node was given)` so whoever is above can do the
-same.
+another machine gets no gradient from a `backward()` run here. The answer is to
+**put a trainer over there**: it keeps the activation where its autograd graph
+is, is handed `dL/d(what the node produced)`, carries on with the chain rule
+under an optimizer of its own, and gives back `dL/d(what the node was given)`.
 
 That is split learning, and the same shape covers the rest: ignore the signal and
-it is local greedy, run no backward at all and it is forward-forward, predict the
-signal and it is synthetic gradients. **One hole, four techniques** — `learn` is
-the only thing a technique writes.
+it is local greedy, run no backward and it is forward-forward, predict the signal
+and it is synthetic gradients. **One hole, four techniques** — `learn` is the
+only thing a technique writes.
 
-## Whose job this is
-
-The node's job is to compute. Nothing here asks it to know that it is being
-trained, where it runs, or what a gradient is: it is the same node, unchanged,
-whether it trains here, on another machine, or by an objective of its own. Which
-of them is trained on its own is a fact of the **training run**, said by whoever
-trains::
+Nothing here asks the node to know it is being trained. Which of them is trained
+on its own is a fact of the **training run**::
 
     Trainer(g, objective=…, optimizer=…, trains={"body": Split(SGD, lr=0.1)})
 
-## Where it lives, and why that is the catalog
+The optimizer has to point at the tensors that execute, so the trainer
+**travels**, into the one thing a worker keeps between calls — its catalog — in
+two positions::
 
-The optimizer has to point at the tensors that execute, and those are the ones on
-the machine the node runs on: the client's copy of the weights is other objects
-in another process. So the trainer **travels**, and the one thing a worker keeps
-between calls is its catalog — so that is where it goes, in the two positions a
-graph can put it in:
-
-```text
     …  →  body:in  →  body:computes  →  body   →  …
           the trainer   the node        the trainer
           leafs the     computes        keeps the activation,
           input                         gives out what it let go of
-```
 
-Both positions are the **same object**, and `pickle` keeps that: two entries of
-one catalog, one trainer, one optimizer, pointing at the weights that are there.
-Nothing in the worker, the protocol or the core learns that training exists —
-what arrived is objects with a `forward`, which is all a catalog ever holds.
+Both are the **same object**, and `pickle` keeps that. What tells a backward
+message from an input is a reserved key, on the precedent of `__soma_opaque__`;
+a **map** of them is a fan-in of gradients and the chain rule says they add, and
+one carrying nothing is how *no gradient for you this step* is said.
 
-## The envelope
-
-What tells a backward message from an input is a reserved key, on the precedent
-of `__soma_opaque__`, with a cheap check before anything is built. One key and
-not two, because unlike a packed opaque there is no kind to carry. In a learning
-pass every value on every edge is an envelope, so a **map** of envelopes is not a
-fan-in of inputs but a fan-in of gradients, and the chain rule says they add. An
-envelope carrying nothing is how "no gradient for you this step" is said, which
-is what a technique that gives none back answers.
-
-## What this slice does not do
-
-The wire is not touched: activations and gradients cross as lists of floats,
-built back into a tensor on arrival. And a trained node takes **one** input — one
-with two producers would owe a different gradient to each, which the transpose
-alone does not route.
+A trained node takes **one** input: one with two producers would owe a different
+gradient to each, which the transpose alone does not route.
 """
 
 from __future__ import annotations
@@ -98,14 +71,10 @@ class OutOfStep(Exception):
 
 
 def envelope(gradient: Any, closing: bool = False) -> Envelope:
-    """A gradient in its envelope, which is how one crosses an edge. What a
-    transposed stage is fed with, by a `Trainer` or by hand.
-
-    `closing` says that this is the gradient that ends a group of accumulated
-    ones, so whoever is accumulating applies what it has. It rides on the
-    envelope and not on a message of its own because it is the same fact seen
-    from the other end: *how many steps make an update* is the training run's,
-    and the training run is here.
+    """A gradient in its envelope, which is how one crosses an edge. `closing`
+    says this gradient ends a group of accumulated ones, so whoever is
+    accumulating applies what it has — it rides on the envelope because it is the
+    same fact seen from the other end.
     """
     sent: Envelope = {SIGNAL: _data(gradient)}
     if closing:
@@ -125,11 +94,9 @@ def gradient(value: Any, device: str | None = None) -> "torch.Tensor | None":
 
 
 def leaf(value: Any, device: str | None = None) -> "torch.Tensor":
-    """A value as something that can be differentiated back to.
-
-    Detached on purpose, and it is the whole premise: what trains a node lets go
-    of the chain that produced its input, which is why it cuts the graph exactly
-    as a cable does.
+    """A value as something that can be differentiated back to. Detached on
+    purpose, and it is the whole premise: what trains a node lets go of the chain
+    that produced its input, which cuts the graph exactly as a cable does.
     """
     if isinstance(value, dict):
         raise ValueError(
@@ -144,12 +111,10 @@ def leaf(value: Any, device: str | None = None) -> "torch.Tensor":
 class Learning(Node):
     """What trains one node, on the machine that node runs on.
 
-    A technique writes `learn(signal, ctx)` and nothing else: it is handed
-    `dL/d(what the node produced)` and gives back `dL/d(what it was given)`, or
-    `None` if it hands nothing back. `Split` is the one that comes with this.
-
-    It reaches the node it trains through `held` — the activation of this step —
-    and `given` — the leaf its input became. Both are dropped after each `learn`.
+    A technique writes `learn(signal, ctx)` and nothing else: handed
+    `dL/d(what the node produced)`, it gives back `dL/d(what it was given)`, or
+    `None`. It reaches the node through `held` — this step's activation — and
+    `given` — the leaf its input became; both are dropped after each `learn`.
     """
 
     given: Any = None
@@ -178,11 +143,9 @@ class Learning(Node):
         self.every = every
 
     def accumulating(self, every: int | None) -> "Learning":
-        """How many steps go into one update, unless this one already said.
-
-        The trainer's number is the default and a technique that named its own
-        **wins** — the same rule `trains` follows for who trains whom. Saying it
-        twice is then a thing somebody meant, not a thing nobody noticed.
+        """How many steps go into one update, unless this one already said. A
+        technique that named its own **wins**, the same rule `trains` follows for
+        who trains whom.
         """
         if self.every is None:
             self.every = every
@@ -246,11 +209,9 @@ class Learning(Node):
         return given
 
     def waiting(self) -> Any:
-        """The activation this step left, or `OutOfStep` if there is none.
-
-        Not a `None` walking into an optimizer: a gradient for an activation that
-        is not there means the two halves are a step apart, and that is worth
-        stopping for.
+        """The activation this step left, or `OutOfStep` if there is none. Not a
+        `None` walking into an optimizer: a gradient for an activation that is
+        not there means the two halves are a step apart.
         """
         if self.held is None:
             raise OutOfStep(
@@ -281,12 +242,9 @@ class Learning(Node):
 
 class Split(Learning):
     """Split learning: carry on with the chain rule from the gradient of the
-    seam, step, and hand back the gradient of the input.
-
-    With a group of more than one step it is the same three movements taken
-    apart: the gradients are cleared where the group **opens**, added to in
-    between, and the optimizer moves where it **closes**. With a group of one —
-    which is the default — the three fall back together into the line they were.
+    seam, step, and hand back the gradient of the input. With a group of more
+    than one step the same three movements are taken apart — cleared where the
+    group opens, added to in between, stepped where it closes.
     """
 
     def learn(self, signal: "torch.Tensor | None", ctx: "Ctx") -> Any:
@@ -337,10 +295,8 @@ def _is_an_envelope(value: Any) -> bool:
 
 def _closes(value: Any) -> bool:
     """Whether what arrived says the group of accumulated gradients ends here.
-
-    Asked of the whole thing and not of one envelope: a fan-in is one step, so
-    either all of them close it or none does, and a single one saying so is the
-    step saying so.
+    Asked of the whole thing and not of one envelope: a fan-in is one step, so a
+    single one saying so is the step saying so.
     """
     if _is_an_envelope(value):
         return CLOSING in value
@@ -370,11 +326,9 @@ def _tensor(
     device: str | None = None,
     dtype: Any = torch.float32,
 ) -> "torch.Tensor":
-    """A value as a tensor, on the device whoever asks was placed on.
-
-    It takes a wrapped one as well as a bare one: an envelope built here and read
-    here never crossed anything, and one that crossed came back out of its
-    wrapper — and neither of those is the caller's business.
+    """A value as a tensor, on the device whoever asks was placed on. It takes a
+    wrapped one as well as a bare one: an envelope built and read here never
+    crossed anything, and neither case is the caller's business.
     """
     if isinstance(value, Opaque):
         value = value.value
@@ -384,12 +338,9 @@ def _tensor(
 
 
 def _data(value: Any) -> Any:
-    """A tensor wrapped so that it crosses an edge whole.
-
-    It used to be `tolist()`, and the docstring here used to say that this slice
-    did not touch the wire — so a gradient crossed as floats. Now a codec writes
-    a tensor down and it crosses as bytes, in this direction as in the other one:
-    a backward pass is a forward pass, and it should not be paying a different
-    price.
+    """A tensor wrapped so that it crosses an edge whole. It used to be
+    `tolist()`; now a codec writes it down and it crosses as bytes, in this
+    direction as in the other — a backward pass is a forward pass and should not
+    pay a different price.
     """
     return Opaque(value.detach()) if torch.is_tensor(value) else value

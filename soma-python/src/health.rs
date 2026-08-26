@@ -1,17 +1,11 @@
-//! The verdict, on its way to Python.
+//! The verdict, on its way to Python. A thin translation and nothing else: the
+//! numbers arrive as a dict, the bounds as a `Thresholds`, and what comes back
+//! is a list of strings.
 //!
-//! A thin translation and nothing else: the numbers arrive as a dict, the
-//! bounds as a `Thresholds`, and what comes back is a list of strings. Nothing
-//! here decides anything — that is the whole point of the diagnosis living in a
-//! crate that has no dependencies and cannot measure.
-//!
-//! # Why the numbers arrive as a dict
-//!
-//! Because that is how they were **written down**. A health fact is a record
-//! entry like any other — `Fact::flattened`'s shape, text to text — and reading
-//! one back out of a store gives exactly this. So a diagnosis over a stored
-//! record and a diagnosis over a run in flight take the same argument, which is
-//! what makes the invariant testable rather than aspirational.
+//! As a dict because that is how they were **written down** — a health fact is a
+//! record entry like any other. So a diagnosis over a stored record and one over
+//! a run in flight take the same argument, which is what makes the invariant
+//! testable rather than aspirational.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -116,16 +110,9 @@ impl PyThresholds {
     }
 }
 
-/// What is wrong with these numbers, as a list of names.
-///
-/// Named `verdict` like the Rust it wraps, so that `somatize.health.diagnose`
-/// — which reads a store and calls this once per node — is the only `diagnose`
-/// there is.
-///
-/// The numbers are the fields of a health fact, exactly as they were written
-/// down. Anything missing is **not measured**, which is not zero and not
-/// healthy: an empty answer means nothing tripped, and a metric nobody took
-/// cannot trip.
+/// What is wrong with these numbers, as a list of names. Named `verdict` like
+/// the Rust it wraps, so `somatize.health.diagnose` is the only `diagnose` there
+/// is. Anything missing is **not measured**, which is not zero and not healthy.
 #[pyfunction]
 #[pyo3(signature = (seen, thresholds = None))]
 pub fn verdict(
@@ -236,12 +223,10 @@ pub fn about(flag: &str) -> PyResult<String> {
 /// The flag that name is, whatever it counts.
 ///
 /// A list and not a `match`, because it goes the other way: a name arrives as
-/// text out of a record and has to find its variant. Which means **the compiler
-/// does not keep it** — a variant added to the enum and not added here parses
-/// as nothing, and `about` refuses a flag this library did in fact raise. It
-/// has happened. The tests that catch it are the two that ask every flag a run
-/// raises, and every flag a **probe** raises, what to do about itself — two,
-/// because a flag only one of them can produce is exactly the one that slips.
+/// text out of a record and has to find its variant — so **the compiler does not
+/// keep it**, and a variant added to the enum and not here parses as nothing. It
+/// has happened. The tests that catch it ask every flag a run raises, and every
+/// flag a **probe** raises, what to do about itself.
 fn known(flag: &str) -> PyResult<somatize_health::Flag> {
     use somatize_health::Flag;
     let bare = flag.split('(').next().unwrap_or(flag);

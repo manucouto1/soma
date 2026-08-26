@@ -4,15 +4,11 @@ use super::judging::{latest, not_a_number};
 use super::{Pruner, Reason, Verdict};
 use std::fmt;
 
-/// Prune what leaves the bounds you already know are hopeless.
-///
-/// The only scheme that needs **no other trial**, so it works on the very first
-/// one — which is where a diverged configuration costs the most and where the
-/// other two have nothing to compare against.
-///
-/// With neither bound it still prunes what is not a number, and that is a
-/// legitimate way to use it: [`diverged`](Threshold::diverged) says only "stop
-/// what blew up".
+/// Prune what leaves the bounds you already know are hopeless. The only scheme
+/// that needs **no other trial**, so it works on the very first one — where a
+/// diverged configuration costs most and the other two have nothing to compare
+/// against. With neither bound it still prunes what is not a number, which is
+/// what [`diverged`](Threshold::diverged) is.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Threshold {
     /// Below this is hopeless. `None` for no floor.

@@ -23,9 +23,6 @@ def store(tmp_path):
     return Store(str(tmp_path))
 
 
-# ── Bytes, by what they are ──
-
-
 def test_what_it_saves_it_gives_back(store):
     digest = store.put(b"a tensor, once")
 
@@ -44,9 +41,6 @@ def test_different_bytes_are_different_names(store):
 
 def test_asking_for_something_that_is_not_here_is_not_a_failure(store):
     assert store.get("sha256:" + "0" * 64) is None
-
-
-# ── Names, which point at them ──
 
 
 def test_a_name_points_at_bytes_and_carries_what_was_said_beside_it(store):
@@ -83,9 +77,6 @@ def test_everything_bound_can_be_looked_at(store):
 def test_what_is_remembered_beside_a_name_is_text_to_text(store):
     with pytest.raises(ValueError, match="text to text"):
         store.bind("n", store.put(b"x"), {"round": 3})
-
-
-# ── Values, which is what anybody actually has ──
 
 
 def test_a_map_of_tensors_goes_in_and_comes_out_a_map_of_tensors(tmp_path):
@@ -137,9 +128,6 @@ def test_keeping_gives_back_the_digest_so_a_round_can_be_named_by_it(store):
 
     assert store.resolve("round/0").digest == digest
     assert store.get(digest) is not None
-
-
-# ── Claiming, which is how work gets handed out ──
 
 
 def test_a_name_nobody_has_can_be_claimed_and_one_somebody_has_cannot(store):
@@ -226,9 +214,6 @@ def test_and_whoever_was_told_they_won_is_the_one_written_down(tmp_path):
     assert len(won) == 1, won
     digest = store.resolve("one/piece/of/work").digest
     assert store.get(digest) == f"racer {won[0]}".encode()
-
-
-# ── And the point of all of it: it crosses a process ──
 
 
 WRITER = """

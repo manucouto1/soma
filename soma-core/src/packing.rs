@@ -5,22 +5,11 @@ use crate::{Codec, Keeper, KeeperError, Kept, Key, Value};
 /// Whatever a [`Codec`] can write down, kept — by a [`Keeper`] that never finds
 /// out any of it was ever anything but bytes.
 ///
-/// # Why the two holes meet here and not in each library
-///
-/// A store and a wire ask the same question of an opaque value — *what does this
-/// weigh in bytes* — and it has one answer. So the pair `(keeper, codec)` is
-/// wired up once, here, rather than once per thing that has a codec: the Python
-/// side hands its registry of `dump`/`load` pairs, `data/` hands Arrow IPC, and
-/// neither writes this again. Two copies of it would be two chances to disagree
-/// about when a failure is a miss and when it is a stop.
-///
-/// Which is decided here, and the two directions are **not** symmetrical:
-///
-/// | | when the codec cannot | why |
-/// |---|---|---|
-/// | naming a value | no name, and the run goes on | a cache is an optimization; one that can kill a run at hour three is not one |
-/// | keeping it | the keeper's error | somebody asked for it to be kept, and it was not |
-/// | reading it back | the keeper's error | bytes in a store that nobody can read are worse news than a miss |
+/// A store and a wire ask an opaque value the same question, so the pair
+/// `(keeper, codec)` is wired up once here rather than once per tenant. What is
+/// decided here is that the directions are **not** symmetrical: failing to
+/// *name* a value costs the name and the run goes on, while failing to keep it
+/// or to read it back is the keeper's error.
 pub struct Packing<'a> {
     inner: &'a dyn Keeper,
     codec: &'a dyn Codec,

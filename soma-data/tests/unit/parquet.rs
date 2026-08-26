@@ -13,8 +13,6 @@ use somatize_store::{Cache, Digest, Local, Meta, Store};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// ── Fixtures ──
-
 /// `rows` numbered rows, cut into row groups of `per_group`.
 pub fn numbers(rows: i64, per_group: usize) -> Vec<u8> {
     let schema = Schema::new(vec![Field::new("n", DataType::Int64, false)]);
@@ -55,8 +53,6 @@ fn column(frame: &Frame) -> Vec<i64> {
         .values()
         .to_vec()
 }
-
-// ── Reading ──
 
 #[test]
 fn a_span_is_the_rows_it_names() {
@@ -133,8 +129,6 @@ fn the_columns_come_back_with_their_names_and_their_types() {
     assert_eq!(frame.rows(), 2);
 }
 
-// ── Saying what it is, without reading itself ──
-
 #[test]
 fn the_version_is_what_the_store_already_knew() {
     let where_ = tempdir::Dir::new();
@@ -188,8 +182,6 @@ fn a_name_nobody_bound_says_so_before_anything_runs() {
     assert!(why.message().contains("data/nothing"), "{why}");
 }
 
-// ── What it costs ──
-
 #[test]
 fn declaring_a_dataset_does_not_open_it() {
     // The half of a virtual table worth having: a graph that names a dataset
@@ -219,8 +211,6 @@ fn and_the_bytes_arrive_once_however_many_spans_are_asked_for() {
 
     assert_eq!(store.seen(), (0, 1), "three spans, one fetch");
 }
-
-// ── In a graph ──
 
 /// Counts the rows it was handed, and how many times it was asked at all.
 pub struct Rows(pub AtomicUsize);

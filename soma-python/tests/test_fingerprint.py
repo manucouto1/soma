@@ -73,9 +73,6 @@ def changing(write, old, new):
     return digest(write(BASE)), digest(write(changed))
 
 
-# ── The shape ──
-
-
 def test_a_fingerprint_is_the_name_and_the_version(write):
     mark = fingerprint(write(BASE))
 
@@ -109,9 +106,6 @@ def test_the_fingerprint_does_not_depend_on_the_process(tmp_path):
     assert len(outputs) == 1, outputs
 
 
-# ── What does change the version ──
-
-
 def test_changing_the_body_of_forward_changes_it(write):
     before, after = changing(write, "return long_ones(words)", "return words")
     assert before != after
@@ -136,9 +130,6 @@ def test_changing_the_base_class_changes_it(write):
         "class Common(Node):\n        def forward(self, x, ctx):\n            return x or []",
     )
     assert before != after
-
-
-# ── What does not change it, and matters just as much ──
 
 
 def test_a_comment_does_not_change_it(write):
@@ -188,9 +179,6 @@ def test_two_different_classes_do_not_share_a_fingerprint(write):
 
     next_door = getattr(_sys.modules[module.__module__], "NextDoor")
     assert digest(module) != digest(next_door)
-
-
-# ── What cannot be versioned ──
 
 
 def test_a_class_without_source_says_so(write):
@@ -285,9 +273,6 @@ def test_a_decorator_of_your_own_still_gets_in(write):
     changed = decorated.replace("fn(self, fn(self, words, ctx), ctx)", "fn(self, words, ctx)")
     assert changed != decorated, "the test is changing nothing"
     assert digest(write(decorated)) != digest(write(changed))
-
-
-# ── What the version was computed over ──
 
 
 @pytest.fixture

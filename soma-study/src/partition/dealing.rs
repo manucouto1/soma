@@ -1,10 +1,7 @@
-//! The mechanics every scheme shares: dealing indices out, and putting the
-//! folds back together.
-//!
-//! Free functions and not methods, because they are not anybody's: `assemble`
-//! is what makes four of the five schemes come out a partition with both sides
-//! ascending, and having it in **one** place is what makes that true by
-//! construction rather than by each scheme remembering to.
+//! The mechanics every scheme shares: dealing indices out, and putting the folds
+//! back together. Free functions because they are not anybody's — having
+//! `assemble` in **one** place is what makes both sides of every fold ascending
+//! by construction rather than by each scheme remembering to.
 
 use super::{Fold, PartitionError};
 use std::collections::BTreeMap;

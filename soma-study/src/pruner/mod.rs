@@ -1,10 +1,7 @@
 //! Whether a trial that is going badly is worth another epoch.
 //!
-//! Each scheme is a type of its own with its own `verdict`, in its own file, and
-//! [`Pruner`] is the family for when the scheme arrives as data — the same shape
-//! as [`Partition`](crate::Partition), and for the same three reasons.
-//!
-//! # Three schemes, and they differ in what they compare against
+//! Each scheme is a type of its own with its own `verdict`, and [`Pruner`] is the
+//! family for when the scheme arrives as data.
 //!
 //! | scheme | judged against | needs other trials |
 //! |---|---|---|
@@ -12,33 +9,22 @@
 //! | [`Threshold`] | **a constant** you already know is hopeless | no |
 //! | [`Patience`] | **itself**: it has stopped improving | no |
 //!
-//! `Median` is not a fourth: it is [`Percentile`] with `p = 50`, and the
-//! original having both is the same "a scheme that is a parameter" that gave
-//! sklearn fifteen ways of cutting.
-//!
-//! **Successive halving and Hyperband are deliberately not here.** They are not
-//! verdicts on a trial, they are a way of handing budget out: which trials get
-//! more epochs, decided over the whole population at once. That is the shape of
-//! the loop, and the loop belongs to whoever writes it.
-//!
-//! # Nothing is asked of the trainer
+//! `Median` is not a fourth: it is [`Percentile`] with `p = 50`. Successive
+//! halving and Hyperband are deliberately not here — they are not verdicts on a
+//! trial but a way of handing budget out across the whole population, which is
+//! the shape of the loop, and the loop belongs to whoever writes it.
 //!
 //! A pruner does not stop anything. It answers, and **the loop stops calling**:
 //!
 //! ```python
-//! for trial in trials:
-//!     reported = []
-//!     for epoch in range(50):
-//!         reported.append(trainer.fit(data, epochs=1).loss)
-//!         if why := pruner.verdict(reported, finished):
-//!             break
-//!     finished.append(reported)
+//! for epoch in range(50):
+//!     reported.append(trainer.fit(data, epochs=1).loss)
+//!     if why := pruner.verdict(reported, finished):
+//!         break
 //! ```
 //!
-//! `Trainer.step` was already documented as the primitive and `fit` as sugar
-//! over it, so this slice adds **zero lines to level 2**. A trainer that had to
-//! be told to stop would be a callback crossing the boundary, which is the same
-//! thing the original's `TrialExecutor` turned out to be.
+//! So this adds **zero lines to level 2**. A trainer that had to be told to stop
+//! would be a callback crossing the boundary.
 
 mod judging;
 mod patience;
@@ -75,11 +61,9 @@ impl Verdict {
     }
 }
 
-/// Why a trial is not worth another epoch.
-///
-/// Structured and not a string, because it is worth recording: "how many were
-/// pruned, and for which of the three reasons" is the question you ask of a
-/// search that pruned too much.
+/// Why a trial is not worth another epoch. Structured and not a string, because
+/// *how many were pruned, and for which of the three reasons* is the question
+/// you ask of a search that pruned too much.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reason {
     /// It reported something that is not a number. Every scheme prunes this.
@@ -147,13 +131,10 @@ pub enum Pruner {
 }
 
 impl Pruner {
-    /// Continue, or the reason not to — whichever scheme this is.
-    ///
-    /// `mine` is what this trial has reported so far, in order; `others` is the
-    /// same for the trials that already finished. A "step" is **the n-th
-    /// report**, so trials have to report on the same schedule for the
-    /// comparison to mean anything — which is true of every pruner that
-    /// compares across trials, optuna's included.
+    /// Continue, or the reason not to. `mine` is what this trial has reported so
+    /// far, in order; `others` the same for those that finished. A step is **the
+    /// n-th report**, so trials have to report on the same schedule — true of
+    /// every pruner that compares across trials, optuna's included.
     pub fn verdict(&self, mine: &[f64], others: &[Vec<f64>]) -> Verdict {
         match self {
             Self::Percentile(rule) => rule.verdict(mine, others),

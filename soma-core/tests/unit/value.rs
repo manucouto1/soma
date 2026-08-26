@@ -27,8 +27,6 @@ fn every_variant_knows_its_name() {
     assert_eq!(Value::list(vec![]).type_name(), "list");
 }
 
-// ── What the core carries without looking ──
-
 /// Something the core has no way of understanding.
 #[derive(Debug, PartialEq)]
 struct Foreign(String);

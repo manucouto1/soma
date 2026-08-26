@@ -59,13 +59,10 @@ fn run_err(e: RunError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
-/// What was handed to `stamping=`, as pairs of text.
-///
-/// Text on both sides and refused otherwise, rather than `str()` over whatever
-/// arrived. A store keeps this for years and hands it back as it got it: a
-/// `Path` that stringifies into somebody's home directory, or an object whose
-/// `repr` carries an address, is provenance that means nothing on the machine
-/// that reads it. Better to be told now than to find it out from a record.
+/// What was handed to `stamping=`, as pairs of text. Text on both sides and
+/// refused otherwise, rather than `str()` over whatever arrived: a `Path` that
+/// stringifies into somebody's home directory is provenance that means nothing
+/// on the machine that reads it.
 fn stamped(said: &Bound<'_, PyAny>) -> PyResult<Vec<(String, String)>> {
     let map = said.downcast::<PyDict>().map_err(|_| {
         PyValueError::new_err(format!(
@@ -172,11 +169,9 @@ impl PyGraph {
     }
 
     /// Says this node's state does not change from here on, with the digest of
-    /// the state it is settled at if whoever calls knows how to hash weights.
-    ///
-    /// The primitive `.frozen()` ends at, and it **declares**: making it true is
-    /// `somatize.torch.freeze`, exactly as moving a tensor to a GPU is the
-    /// node's job and not the core's.
+    /// the state it is settled at if the caller knows how to hash weights. The
+    /// primitive `.frozen()` ends at, and it **declares**: making it true is
+    /// `somatize.torch.freeze`.
     #[pyo3(signature = (node_id, state = None))]
     fn freeze(&mut self, node_id: &str, state: Option<String>) -> PyResult<()> {
         let id = self.known(node_id)?;
@@ -184,12 +179,8 @@ impl PyGraph {
         Ok(())
     }
 
-    /// Says this node maps over the items of its input: hand it a list and it
-    /// answers with a list as long, item for item.
-    ///
-    /// What it buys is a cache with the grain of an **item**: without it, adding
-    /// one document to a list of a thousand changes the name of the list and all
-    /// thousand miss.
+    /// Says this node maps over the items of its input: a list in, a list as
+    /// long out. What it buys is a cache with the grain of an **item**.
     fn mapped(&mut self, node_id: &str) -> PyResult<()> {
         let id = self.known(node_id)?;
         self.memory.map(id);
@@ -263,12 +254,9 @@ impl PyGraph {
         })
     }
 
-    /// Which nodes map over the items of their input, in declaration order.
-    ///
-    /// A list and not a dict, unlike `frozen()` and `cached()`: mapping carries
-    /// nothing beside it — there is no state and no salt to answer with. And
-    /// `mapped_nodes` rather than `mapped`, because that name is already the
-    /// setter and a class cannot have both.
+    /// Which nodes map over the items of their input, in declaration order. A
+    /// list and not a dict, since mapping carries nothing beside it — and
+    /// `mapped_nodes` rather than `mapped`, which is already the setter.
     fn mapped_nodes(&self) -> Vec<String> {
         self.graph
             .nodes()
@@ -377,13 +365,9 @@ impl PyGraph {
 
     /// The same shape, as **data**: `Plan`'s own serde form, as JSON text.
     ///
-    /// Two methods and not one because they answer to different readers.
-    /// `plan()` is for a person and for the tests that already compare its text;
-    /// this one is for whoever draws it, and parsing a `Debug` to find out what
-    /// runs beside what is how a renderer starts lying. JSON so that the reader
-    /// is `json.loads` and nobody installs anything to look at a shape.
-    ///
-    /// The core does not learn to draw. It is asked for the fact.
+    /// Two methods because they answer to different readers: `plan()` is for a
+    /// person, and this one is for whoever draws it — parsing a `Debug` to find
+    /// out what runs beside what is how a renderer starts lying.
     fn plan_json(&self) -> PyResult<String> {
         let plan = compile(&self.graph, &self.catalog).map_err(compile_err)?;
         serde_json::to_string(&distribute(&plan, &self.placement))
@@ -393,25 +377,16 @@ impl PyGraph {
     /// What each node's output will be called, with **nothing executed**.
     ///
     /// The pass `forward` makes before its first node, asked for on its own:
-    /// only the input is hashed by content, so every name below it is knowable
-    /// in advance. `{"keys": {node: name}, "unneeded": [node, ...]}`, where
-    /// `unneeded` is what would not have to run at all because something below
-    /// it is already kept.
+    /// `{"keys": {node: name}, "unneeded": [node, ...]}`, where `unneeded` is
+    /// what would not have to run because something below it is already kept.
     ///
-    /// `store=` for the same reason `forward` takes one: without somewhere to
-    /// keep things there is no keeper, and without a keeper nothing is named —
-    /// the core does not compute a key it has nobody to hash with. A directory
-    /// nothing was ever written to answers fine; `unneeded` is empty and the
-    /// names are the same ones a real store would have given.
+    /// `store=` for the same reason `forward` takes one — without a keeper
+    /// nothing is named. A directory nothing was written to answers fine.
     ///
-    /// Two nodes are missing from `keys` and it is not an omission: a
-    /// `.mapped()` node is named by the content of its items, and so is
-    /// anything under an input that cannot be written down. Whoever compares
-    /// two of these has to read the absence as "cannot tell", never as "did not
-    /// change".
-    ///
-    /// Both parts are **ordered by id**, like `resume`'s and for the same
-    /// reason: this crosses a process boundary.
+    /// Two kinds of node are missing from `keys` and it is not an omission: a
+    /// `.mapped()` one, and anything under an input that cannot be written down.
+    /// Read the absence as *cannot tell*, never as *did not change*. Both parts
+    /// are ordered by id, because this crosses a process boundary.
     #[pyo3(signature = (input = None, *, store = None))]
     fn foreseen_json(
         &self,
@@ -447,30 +422,21 @@ impl PyGraph {
 
     /// Executes the whole graph and returns what it produced.
     ///
-    /// `broker=` says who knows where each host is. A node sent to a host that
-    /// is not there is **not executed here just in case**.
+    /// `broker=` says who knows where each host is; a node sent to a host that
+    /// is not there is **not executed here just in case**. `store=` is a
+    /// directory: whatever was declared `.cached()` is looked up before being
+    /// computed and kept after, and whether it can honestly be kept is asked
+    /// **here**, before the first node runs.
     ///
-    /// `store=` is a directory: with one, whatever was declared `.cached()` is
-    /// looked up before being computed and kept after. Whether what was
-    /// declared can honestly be kept is asked **here**, before the first node
-    /// runs, so a `.cached()` in the wrong place fails at once and not as a net
-    /// that quietly stopped training.
+    /// `watching=` is told what happens as it happens — a `Recorder`, any
+    /// callable, or a list. What a worker saw comes back down the connection
+    /// that was already open, saying which host it was.
     ///
-    /// `watching=` is told what happens **as it happens**: a `Recorder`, any
-    /// callable, or a list of them. A node on another machine is no different —
-    /// what its worker saw comes back down the connection that was already open
-    /// and arrives here saying which host it was.
-    /// `stamping=` is a `{str: str}` written beside **everything this run
-    /// keeps**, on top of the node, the fingerprint and the input the engine
-    /// writes itself.
-    ///
-    /// It is how a cached value stops being an anonymous hash. A store outlives
-    /// every process that wrote to it, and *which environment produced this,
-    /// which run did it belong to, which commit was checked out* are questions
-    /// asked months later with another tool in hand — and none of them can be
-    /// recovered from a key, which does not run backwards. The core is not told
-    /// what any of those words mean: they are the caller's, passed through
-    /// untouched, exactly like the name a study is filed under.
+    /// `stamping=` is a `{str: str}` written beside everything this run keeps,
+    /// on top of the node, the fingerprint and the input. A store outlives every
+    /// process that wrote to it and a key does not run backwards, so what cannot
+    /// be recovered is written down now. The core is not told what any of those
+    /// words mean.
     #[pyo3(signature = (input = None, *, broker = None, store = None, watching = None, stamping = None))]
     fn forward(
         &self,

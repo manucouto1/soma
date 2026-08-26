@@ -1,20 +1,13 @@
 //! Who carries a slice of plan elsewhere and brings back what it produced.
 //!
-//! The core does not know what a wire is: to it a [`Host`](crate::Host) is a
-//! name and a `Transport` is someone who knows how to reach it. It neither
-//! serializes, nor spawns processes, nor knows about sockets — just as it does
-//! not know what a [`Fact`](crate::Fact) is for, which is why a
-//! [`Watcher`] is somebody else's too.
+//! The core does not know what a wire is: a [`Host`](crate::Host) is a name and
+//! a `Transport` is someone who knows how to reach it. It neither serializes nor
+//! spawns processes nor knows about sockets — a wire format would require
+//! `serde`, and the core has no dependencies.
 //!
-//! The same old division of labour, and the reason the core still has no
-//! dependencies: **the core provides the hole; whoever knows what goes in it is
-//! a library.** A wire format would require `serde`.
-//!
-//! Declared versus injected, for the third time: a [`Node`](crate::Node) is put
-//! there by whoever declares the graph; a `Transport` and a [`Watcher`] by
-//! whoever **executes**. That is why a [`Host`](crate::Host) is a name and not an
-//! address — the same graph spreads across two processes here or two machines
-//! there without touching a line of what was declared.
+//! Declared versus injected: a [`Node`](crate::Node) is put there by whoever
+//! declares the graph, a `Transport` and a [`Watcher`] by whoever **executes**.
+//! That is why a host is a name and not an address.
 
 use crate::{Keys, Memory, NodeId, Placement, Plan, Value, Watcher};
 use std::fmt;
@@ -91,7 +84,7 @@ impl Outcome {
     /// **not** filtered is `last`, which is the value of the slice itself: that
     /// one has a reader here by definition.
     ///
-    /// Whoever does read one of the dropped values gets [`RunError::Lost`],
+    /// Whoever does read one of the dropped values gets [`RunError::Lost`](crate::RunError::Lost),
     /// naming both ends.
     pub fn travelling(mut self) -> Self {
         self.produced.retain(|(_, value)| value.travels());

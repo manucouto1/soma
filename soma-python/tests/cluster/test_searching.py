@@ -84,9 +84,6 @@ def searched(tmp_path_factory, cluster, two_with_torch, data):
     return Store(where), took
 
 
-# ── The study, spread over four machines that never speak ──
-
-
 def test_every_trial_ran_exactly_once_across_all_of_them(searched):
     # No queue, no messages, no coordinator. A claim is a claim, and that is the
     # whole of how eight trials get divided between the machines.
@@ -119,9 +116,6 @@ def test_the_record_says_which_machine_ran_which(searched):
     assert len(who) >= 2
 
 
-# ── That it is a search and not a loop that ran ──
-
-
 def test_something_it_tried_actually_learnt_to_tell_spam_from_ham(searched):
     # Thirteen per cent of these messages are spam, so "always ham" is already
     # right 87% of the time and its loss sits around 0.39. A configuration that
@@ -143,9 +137,6 @@ def test_the_configurations_are_not_all_the_same_one(searched):
     tried = [str(one["point"]) for one in trials(store, space, study=STUDY)]
 
     assert len(set(tried)) == TRIALS
-
-
-# ── Giving up on a trial, judged against curves other machines drew ──
 
 
 def test_what_was_given_up_on_stopped_early_and_what_was_not_ran_to_the_end(searched):
@@ -170,9 +161,6 @@ def test_a_trial_that_was_given_up_on_is_not_a_configuration_that_scored_badly(s
     ran_out = [one for one in trials(store, space, study=STUDY) if one["state"] == DONE]
 
     assert len(finished(store, space, study=STUDY)) == len(ran_out)
-
-
-# ── And the half of it that is the cluster ──
 
 
 def test_the_preprocessing_ran_where_there_is_no_torch_at_all(in_container, searched):

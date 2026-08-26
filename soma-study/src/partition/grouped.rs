@@ -5,13 +5,10 @@ use super::{Fold, Partition, PartitionError};
 use crate::Samples;
 use std::fmt;
 
-/// Grouping is not a different algorithm either: it is a k-fold **over the
-/// groups**, with the samples following theirs.
-///
-/// Needs [`in_groups`](Samples::in_groups), and takes no seed: it places the
-/// biggest groups first into whichever fold is emptiest, which is what keeps
-/// the folds comparable in size when the groups are not. Shuffling that would
-/// only make them worse.
+/// Grouping is a k-fold **over the groups**, with the samples following theirs.
+/// Needs [`in_groups`](Samples::in_groups) and takes no seed: it places the
+/// biggest groups first into whichever fold is emptiest, which is what keeps the
+/// folds comparable when the groups are not.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Grouped {
     /// How many folds.

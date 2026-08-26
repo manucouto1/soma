@@ -68,9 +68,6 @@ def tagged(output, tag):
     raise AssertionError(f"`{tag}` was not printed in:\n{output}")
 
 
-# ── The whole graph here: the reference everything is compared against ──
-
-
 def test_undistributed_everything_runs_in_the_clients_process():
     done = run("client_whole.py")
     output = ast.literal_eval(tagged(done.stdout, "OUTPUT"))
@@ -79,9 +76,6 @@ def test_undistributed_everything_runs_in_the_clients_process():
     assert output["how_many"] == 4.0
     assert output["long_ones"] == ["quickly"]
     assert output["pids"] == [here], "something ran away without anyone sending it"
-
-
-# ── Distributing, with the workers started by the client ──
 
 
 def test_distributing_across_two_workers_gives_the_result_and_two_processes():
@@ -122,9 +116,6 @@ def test_distributed_gives_the_same_as_whole():
     assert distributed["long_ones"] == whole["long_ones"]
 
 
-# ── Sending the code, for a worker that does not have the project ──
-
-
 def test_a_generic_worker_receives_the_network_and_executes_it(tmp_path):
     # From a directory where `net.py` is not: whatever reaches the worker got
     # there over the wire.
@@ -149,9 +140,6 @@ def test_without_send_the_generic_worker_cannot_open_what_it_is_sent(tmp_path):
     assert "send=" in done.stderr, f"the message has to say what to do:\n{done.stderr}"
 
 
-# ── What the worker cannot do ──
-
-
 def test_the_worker_does_not_write_to_its_stdout():
     # That is where the wire runs when the worker is a child. If one of your
     # nodes — or a library on import — printed something, the client would read
@@ -162,7 +150,6 @@ def test_the_worker_does_not_write_to_its_stdout():
     assert done.stderr == "", f"the worker spoke where it should not:\n{done.stderr}"
 
 
-# ── The use case: an independent worker, in the background ──
 #
 # Everything above starts the worker from the client, so it dies with it. Here
 # the worker stands up first, on its own, from another directory, and the client
@@ -259,9 +246,6 @@ def test_the_two_hosts_can_be_the_same_worker(tmp_path):
     assert len(pids) == 1, f"a single process was expected on the other side: {pids}"
 
 
-# ── The `project` strategy: the worker supplies the code ──
-
-
 def test_a_worker_with_the_project_receives_only_names_and_state(tmp_path):
     with standing_worker(tmp_path, clone=HERE) as w:
         done = run("client_project.py", w.addr, cwd=tmp_path)
@@ -290,9 +274,6 @@ def test_a_worker_without_the_project_says_so_instead_of_guessing(tmp_path):
 
     assert "net" in done.stderr, done.stderr
     assert "network" in done.stderr, f"the message has to say the way out:\n{done.stderr}"
-
-
-# ── Versioning ──
 
 
 def other_version(tmp_path):

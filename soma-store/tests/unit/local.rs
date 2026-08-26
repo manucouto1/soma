@@ -305,8 +305,6 @@ fn many_threads_writing_at_once_do_not_tread_on_each_other() {
     }
 }
 
-// ── Claiming, which is how work gets handed out ──
-
 #[test]
 fn a_name_nobody_has_can_be_claimed() {
     let (store, _dir) = store();

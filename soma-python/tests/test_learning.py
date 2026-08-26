@@ -126,9 +126,6 @@ def seeded(seed=0):
     torch.manual_seed(seed)
 
 
-# ── The two positions ──
-
-
 def test_the_input_becomes_a_leaf_and_the_node_never_finds_out():
     node = Doubles()
     learning, entering = beside(node)
@@ -206,9 +203,6 @@ def test_it_lets_go_of_the_chain_that_produced_its_input():
     assert all(p.grad is None for p in above.parameters())
 
 
-# ── The optimizer, which is not built where you would think ──
-
-
 def test_it_is_built_on_first_use_over_the_parameters_of_the_node():
     node = Body()
     learning, entering = beside(node)
@@ -237,9 +231,6 @@ def test_a_trainer_rebuilt_by_pickle_still_trains():
     a_pass(learning, entering, [[1.0, 2.0, 3.0, 4.0]])
     learning.forward(envelope([[1.0, 1.0, 1.0]]), HERE)
     assert float(learning.node.lin.weight.detach().abs().sum()) != before
-
-
-# ── Driven by the Trainer, which is how anybody would write it ──
 
 
 def driving(node, technique=None, lr=0.1, at=None, seed=0, every=1, **how):
@@ -314,9 +305,6 @@ def test_the_same_weights_in_two_optimizers_is_refused():
         )
 
 
-# ── Over a wire, which is the case all of this was written for ──
-
-
 def a_run(at, lr, steps=10, every=1):
     """The same net, the same seed and the same batches, with the body here or on
     another process. Returns the losses."""
@@ -354,7 +342,6 @@ def test_and_with_the_far_side_standing_still_the_loss_comes_down_less():
     assert a_run("w1", 0.1)[-1] < a_run("w1", 0.0)[-1]
 
 
-# ── The four techniques, which are one hole answered four ways ──
 #
 # Split learning is the one `Learning` comes with, and it is what everything
 # above this line is about. These three are the same hole with another answer

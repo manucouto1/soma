@@ -23,9 +23,6 @@ class Remembers(Node):
         return Opaque(x)
 
 
-# ── Any object at all ──
-
-
 def test_any_object_crosses_without_being_converted(g):
     class Odd:
         pass
@@ -81,9 +78,6 @@ def test_it_fits_in_a_list_and_in_a_map(g):
 
 def test_the_repr_says_what_type_it_is():
     assert repr(Opaque({1: 2})) == "Opaque(dict)"
-
-
-# ── The case that motivated the variant ──
 
 
 def test_torchs_autograd_survives_the_graph(g):
