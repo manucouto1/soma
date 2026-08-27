@@ -254,9 +254,10 @@ def a_run(into: dict[str, bytes]) -> None:
             return list(self.net.parameters())
 
     class Mean(Node):
-        # A node with two predecessors is handed a map keyed by who sent what,
-        # and what is in it is the value itself: the engine unwraps an `Opaque`
-        # on the way in, so there is nothing here to unwrap.
+        # A node with two predecessors is handed a map keyed by who sent what.
+        # What is in it is the value itself: an `Opaque` is only visible from
+        # OUTSIDE the graph — the engine opens it on the way in, whatever the
+        # node's arity — so there is nothing here to unwrap.
         def forward(self, said, ctx):
             values = list(said.values())
             return Opaque(sum(values) / len(values))

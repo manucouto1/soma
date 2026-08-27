@@ -87,6 +87,27 @@ cross a wire a `Codec` writes it down — which is the fifth hole, and `Ipc` in
 Everything heavy is behind an `Arc`, because a value is cloned on every edge
 and cloning must not copy.
 
+**An `Opaque` is only visible from outside the graph.** You return one, and the
+next node down is handed **the value**, unwrapped — whether it has one
+predecessor or five, because the engine opens it on the way in. So `.value`
+inside a `forward` is an `AttributeError`, and `.value` is right when you call
+`node.forward(x, ctx)` yourself, which is what a unit test of one node does:
+
+```python
+class Encode(Node):
+    def forward(self, x, ctx):
+        return Opaque(self.net(x))       # wrapped on the way out
+
+class Next(Node):
+    def forward(self, x, ctx):
+        return self.net(x)               # x is the tensor, not the Opaque
+
+Encode().forward(batch, None).value      # …and outside, it is the Opaque
+```
+
+Which is worth knowing before you write your first aggregator: it is the same
+rule, and reaching for `.value` on what arrived is the mistake it invites.
+
 **A `bool` is not one of them**, and the refusal is deliberate:
 
 ```python
