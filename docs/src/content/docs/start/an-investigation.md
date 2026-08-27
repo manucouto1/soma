@@ -174,6 +174,14 @@ why-recall · question · open · Recall sits at 0.61 and nothing we change move
     ⋯ 1 folded · abandon · The split by length explains it; the embedding is not the proble…
 ```
 
+And it draws, from the same store and with nothing run again:
+
+![The investigation as a DAG](../../../assets/figures/reasoning.png)
+
+Hue says which of the five kinds a move is and **never whether it went well** —
+how a question stands is written on it, in words. The abandoned line is the
+dashed box, folded, saying how many it hides.
+
 Nobody typed `validated` or `partly-refuted`. Which matters when a commit a
 refutation rested on is later judged `invalid`: the hypothesis goes back to what
 it was before, with nobody saying anything again.

@@ -63,6 +63,15 @@ python docs/scripts/figures.py            # all of them, about 35 seconds
 python docs/scripts/figures.py study      # one group, without pruning the rest
 ```
 
+One group needs more than an environment: `reasoning` writes its moves with the
+`somatize-tree` **binary**, because asking and deciding happen between runs and
+the library only reads them back. Build it first, or point `SOMA_TREE_BIN` at
+one — it says so and stops rather than skipping:
+
+```bash
+cargo build --release -p somatize-tree
+```
+
 Seeds are fixed, so two runs give the same pictures. There is **no `--check`**:
 a figure is not a hash, and a byte comparison would go red when a font moves.
 What guards them is astro, which fails with `[ImageNotFound]` when a page points

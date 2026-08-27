@@ -443,7 +443,80 @@ def an_architecture(into: dict[str, bytes]) -> None:
     )
 
 
-GROUPS = {"graph": a_graph, "architecture": an_architecture, "study": a_study, "run": a_run, "health": health}
+# ── The reasoning of an investigation ────────────────────────────────────────
+
+
+def reasoning(into: dict[str, bytes]) -> None:
+    """The DAG behind an investigation, drawn from what was written down.
+
+    The only group that needs something built rather than installed: the moves
+    are written by the `somatize-tree` binary, because asking, supposing and
+    deciding happen between runs and the library only reads them back.
+
+    It runs the very session `start/an-investigation` shows, against the very
+    fixture the end-to-end tests use, so the page's figure and the page's
+    commands cannot drift apart.
+    """
+    import os
+    import subprocess
+
+    from somatize import Store
+    from somatize.reasoning import figure, moves, standing
+
+    root = Path(__file__).resolve().parent.parent.parent
+    binary = os.environ.get("SOMA_TREE_BIN", str(root / "target/release/somatize-tree"))
+    if not Path(binary).exists():
+        raise SystemExit(
+            f"{binary} is not there. This group writes moves with the CLI:\n"
+            "  cargo build --release -p somatize-tree"
+        )
+
+    where = Path(tempfile.mkdtemp())
+    repo, cache = where / "repo", where / "cache"
+    repo.mkdir()
+    subprocess.run(
+        ["bash", str(root / "soma-tree/tests/an-investigation.sh"), "--only-build", str(repo)],
+        check=True, capture_output=True,
+    )
+
+    # Its own cache, because the default store is shared by every repository
+    # answering to the same `tree` in `soma-tree.toml` — two runs of this would
+    # otherwise collide on the move names.
+    env = {**os.environ, "XDG_CACHE_HOME": str(cache)}
+
+    def tree(*args: str) -> None:
+        subprocess.run([binary, *args], cwd=repo, env=env, check=True, capture_output=True)
+
+    strict = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD~2"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    ran = subprocess.run(
+        [binary, "keep"], cwd=repo, env=env, check=True, capture_output=True, text=True,
+        input="python -m experiments.run --threshold 2.0 --seed 7",
+    ).stdout.strip()
+
+    tree("ask", "why-recall", "-m",
+         "Recall sits at 0.61 and nothing we change moves it. What is holding it down?")
+    tree("suppose", "threshold-too-strict", "--under", "why-recall", "-m",
+         "The strict classifier at 2.0 throws away the short documents.")
+    tree("suppose", "embedding-too-flat", "--under", "why-recall", "-m",
+         "A linear embedding cannot separate them at all, whatever the threshold.")
+    tree("tried", "at-2.0", "--under", "threshold-too-strict", "--cites", strict,
+         "--ran", ran, "-m", "Ran the strict classifier at 2.0 on the full split.")
+    tree("found", "short-docs-lost", "--under", "at-2.0", "-m",
+         "Recall on documents under 20 tokens is 0.31; on the rest it is 0.79.")
+    tree("says", "short-docs-lost", "validates", "threshold-too-strict", "--about", "at-2.0")
+    tree("says", "short-docs-lost", "refutes", "embedding-too-flat", "--partly")
+    tree("decide", "abandon", "drop-flat-embedding", "--about", "embedding-too-flat", "-m",
+         "The split by length explains it; the embedding is not the problem.")
+
+    store = Store(str(cache / "somatize-tree"))
+    print(f"  moves: {len(moves(store, tree='an-investigation'))}, "
+          f"standing: {standing(store, tree='an-investigation')}")
+    drawn(figure(store, tree="an-investigation"), "reasoning", into, width=980, height=300)
+
+
+GROUPS = {"graph": a_graph, "reasoning": reasoning, "architecture": an_architecture, "study": a_study, "run": a_run, "health": health}
 
 
 def main() -> None:

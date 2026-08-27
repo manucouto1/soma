@@ -128,8 +128,9 @@ sidebar, and the guard fails until it is.
 
 The **figures** on the hand-written pages are committed for the same reason:
 drawing one needs torch, plotly and kaleido. `python docs/scripts/figures.py`
-redraws all of them from real runs in about thirty-five seconds, with fixed
-seeds. Astro fails the build if a page points at a figure that is not there, so
+redraws all of them from real runs, with fixed seeds. One group also needs
+`cargo build --release -p somatize-tree`, because the reasoning DAG's moves are
+written by the CLI; it says so and stops rather than skipping. Astro fails the build if a page points at a figure that is not there, so
 they can go stale but not missing.
 
 The reference has one step the others do not, because reading a docstring needs
