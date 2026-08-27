@@ -3,7 +3,7 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
-    "generate": "python3 scripts/notebooks_to_docs.py && python3 scripts/use_cases_to_docs.py",
+    "generate": "python3 scripts/notebooks_to_docs.py && python3 scripts/use_cases_to_docs.py && python3 scripts/python_to_docs.py",
     "predev": "npm run generate",
     "dev": "astro dev",
     "prestart": "npm run generate",

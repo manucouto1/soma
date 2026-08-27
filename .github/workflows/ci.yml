@@ -169,6 +169,16 @@ jobs:
           . .venv/bin/activate
           cd soma-python && mypy
 
+      # The docs' Python reference is generated from these very docstrings, via
+      # a JSON dump that IS committed — because the site builds on a runner with
+      # a bare `python3` and no extension. A committed copy needs the check that
+      # prose cannot have, and this is the only job that can run it: the one
+      # that has just installed the package it describes.
+      - name: The Python reference still matches the package
+        run: |
+          . .venv/bin/activate
+          python docs/scripts/python_surface.py --check
+
       # `tests/cluster` is ignored rather than left to skip itself: it needs
       # docker and images that take a quarter of an hour to build, and it has a
       # workflow of its own. Ignoring it says so; skipping it would not.
