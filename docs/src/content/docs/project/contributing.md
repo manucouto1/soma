@@ -112,16 +112,30 @@ npm --prefix docs run dev     # http://localhost:4321/soma/
 npm --prefix docs run check   # guards + production build
 ```
 
-Four guards, and each exists because something failed silently once: every page
-must be in the sidebar, every internal link must carry the `/soma` base **and**
-land on a page that exists, every `file:line` anchor must resolve, and every
-mermaid fence must parse.
+Each guard exists because something failed silently once: every page must be in
+the sidebar; every internal link must carry the `/soma` base, land on a page
+that exists **and**, if it has a `#`, reach a heading; every `file:line` anchor
+must resolve; and every mermaid fence must parse with no backtick in its
+caption — a fence's info string may not contain one, so a caption with a
+backtick is not a fence at all and the diagram ships as literal text.
 
-Two groups are **generated and not committed** — the thirteen tutorials from
-`examples/`, and the use cases from `docs/use-cases.md`. The source is the
-truth, and a committed copy would eventually disagree with it. Adding a
-notebook to `examples/` is deliberately **not** enough to publish it: it has to
-be given a place in the sidebar, and the guard fails until it is.
+Three groups are **generated and not committed** — the thirteen tutorials from
+`examples/`, the use cases from `docs/use-cases.md`, and the Python reference
+from the package's own docstrings. The source is the truth, and a committed
+copy would eventually disagree with it. Adding a notebook to `examples/` is
+deliberately **not** enough to publish it: it has to be given a place in the
+sidebar, and the guard fails until it is.
+
+The reference has one step the others do not, because reading a docstring needs
+the extension built and the site builds with a bare `python3`:
+
+```bash
+python docs/scripts/python_surface.py     # after editing any public docstring
+```
+
+That rewrites `docs/python-surface.json`, which **is** committed, and CI runs
+the same script with `--check` in the job that has just installed the package.
+`npm run check` cannot catch a stale dump — it never imports somatize.
 
 ## Adding a notebook
 
