@@ -1438,14 +1438,14 @@ checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
 name = "somatize-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "somatize-data"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -1459,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-fabric-broker"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rmp-serde",
  "serde",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-fabric-wire"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rmp-serde",
  "serde",
@@ -1479,11 +1479,11 @@ dependencies = [
 
 [[package]]
 name = "somatize-health"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "somatize-python"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1501,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "somatize-store"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rmp-serde",
  "rusty-s3",
@@ -1514,11 +1514,11 @@ dependencies = [
 
 [[package]]
 name = "somatize-study"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "somatize-tree"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "serde",

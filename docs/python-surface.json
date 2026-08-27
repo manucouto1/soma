@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "modules": [
     {
       "name": "somatize",
@@ -429,7 +429,7 @@
         {
           "name": "__version__",
           "type": "str",
-          "repr": "'1.0.0'"
+          "repr": "'1.0.1'"
         }
       ]
     },

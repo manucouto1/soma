@@ -24,12 +24,12 @@ somatize-fabric-broker = { workspace = true, optional = true }
 somatize-store = { workspace = true, features = ["s3"] }
 # A source is a Rust node, and a frame is what it answers with: this side
 # translates both, which is what `python/` is for.
-somatize-data = { path = "../soma-data", version = "1.0.0" }
+somatize-data = { path = "../soma-data", version = "1.0.1" }
 # To hand one column over as plain Python values, so that a worker with no
 # dataframe library in it can still read a column of text.
 arrow-array = "59"
 arrow-schema = "59"
-somatize-study = { path = "../soma-study", version = "1.0.0" }
+somatize-study = { path = "../soma-study", version = "1.0.1" }
 # The verdict: numbers in, flags out, and no dependencies of its own.
 somatize-health = { workspace = true }
 # The reasoning, read back. `default-features = false` on purpose: the feature
