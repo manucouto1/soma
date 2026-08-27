@@ -703,13 +703,23 @@ def _watch(
 #: fourteen leaves it is fourteen things and a diagram nobody looks at twice.
 WHOLE = ("attention", "recurrent")
 
+#: Composites `depth` does not open, because there is nothing inside them to
+#: open **to**. `MultiheadAttention` runs out of `F.multi_head_attention_forward`,
+#: which is handed the four tensors and never calls `out_proj` — its only child.
+#: So opening one does not refine it, it **deletes** it: `depth=2` used to draw
+#: the encoder block's norms and its feed-forward and no attention at all.
+#: Measured and not believed — a test hooks `out_proj` and watches it never fire.
+FLOOR = ("MultiheadAttention",)
+
 
 def _worth_drawing(module: Any, depth: int = 0) -> list[tuple[str, Any]]:
     """Which of a module's parts get a box, as `[(path, module)]`.
 
     One rule: **draw the smallest thing that is still a thing**. A composite
     everybody recognises is one, and is not opened, because reading it as its
-    parts is reading it as something nobody named. `depth` opens them further.
+    parts is reading it as something nobody named. `depth` opens them further,
+    down to a `FLOOR` — where the parts are not things, but tensors a functional
+    was handed.
     """
     said: list[tuple[str, Any]] = []
     closed: list[str] = []
@@ -726,7 +736,10 @@ def _worth_drawing(module: Any, depth: int = 0) -> list[tuple[str, Any]]:
         # `TransformerEncoder`, and asking for one level of detail should not
         # have to know that.
         under = sum(1 for above in opened if path.startswith(above))
-        whole = composite and under >= depth
+        # And a floor is whole however deep it was asked for: `depth` refines,
+        # and asking to refine what has no parts that run has to answer the
+        # thing itself rather than nothing.
+        whole = composite and (under >= depth or type(one).__name__ in FLOOR)
         if composite:
             opened.append(f"{path}." if path else "")
         if whole:

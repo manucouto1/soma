@@ -398,6 +398,58 @@ def test_a_composite_everybody_recognises_is_one_box():
     assert len(_worth_drawing(block, depth=1)) > 1, "and `depth=` opens it"
 
 
+def test_torch_never_calls_the_module_inside_an_attention_block():
+    # The measurement the `FLOOR` rests on, rather than the belief. An
+    # attention block's only child is `out_proj`, and it is never called: the
+    # weights go to `F.multi_head_attention_forward` and the module is only
+    # where they are kept. Whoever raises this by making torch call it can
+    # delete the floor.
+    att = torch.nn.MultiheadAttention(16, 4, batch_first=True)
+    fired = []
+    hook = att.out_proj.register_forward_hook(lambda *_: fired.append(True))
+
+    try:
+        with torch.no_grad():
+            att(*(torch.randn(2, 5, 16),) * 3)
+    finally:
+        hook.remove()
+
+    assert not fired, "torch called `out_proj`, so there is something to open to"
+
+
+def test_opening_an_encoder_block_shows_its_attention_at_every_depth():
+    # Opening a composite has to **refine** it. Asked past the attention it
+    # deleted it instead — `out_proj` is what a module walk finds under one and
+    # nothing runs it, so `depth=2` drew the block's norms and its feed-forward
+    # and no attention at all, which is a transformer figure with no transformer
+    # in it.
+    pytest.importorskip("plotly")
+
+    class Stack(Node):
+        def __init__(self):
+            self.body = torch.nn.TransformerEncoder(
+                torch.nn.TransformerEncoderLayer(8, 2, 16, batch_first=True), num_layers=2
+            )
+
+        def forward(self, said, ctx):
+            return Opaque(self.body(said))
+
+        def parameters(self):
+            return list(self.body.parameters())
+
+    g = Graph.somatize(Stack().named("text"))
+    x = Opaque(torch.randn(4, 5, 8))
+
+    for depth in (1, 2, 3):
+        (attention,) = [
+            one for one in architecture(g, x, depth=depth)["text"].layers
+            if one.kind == "attention"
+        ]
+        # And it says how many lanes it runs at once, which is what puts the
+        # plates behind it rather than four boxes nobody wired.
+        assert attention.parallel == 2, depth
+
+
 def test_blocks_that_are_the_same_block_collapse_to_one_and_a_count():
     # Twelve identical layers drawn twelve times is a figure nobody reads.
     pytest.importorskip("plotly")

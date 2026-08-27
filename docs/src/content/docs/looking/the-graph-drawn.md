@@ -128,13 +128,16 @@ each of them. That is the dashed frame: the count is said once and the block is
 said once. Four encoder layers written out would be eight boxes each saying
 `×4`, which is the count said eight times and the block said none.
 
-:::caution[One thing that figure is missing, and it is not the drawing]
-There is no attention in it. `architecture` traces an explicit
-`nn.MultiheadAttention` — `kind_of` answers `attention` for one — but the
-self-attention **inside torch's fused `nn.TransformerEncoderLayer`** is not
-surfaced at any `depth=`, so what you get is that block's norms and its
-feed-forward. Written out rather than fused, it draws:
-:::
+**And `depth=` has a floor.** It never opens an `nn.MultiheadAttention`, because
+there is nothing inside one to open **to**: torch runs it out of
+`F.multi_head_attention_forward`, which is handed four tensors and never calls
+`out_proj` — its only child. Opening it did not refine it, it **deleted** it,
+and `depth=2` used to draw the encoder block's norms and its feed-forward and
+no attention at all. The floor is measured rather than believed: a test hooks
+`out_proj` and watches it never fire, so whoever makes torch call it can delete
+the rule.
+
+Written out by hand rather than taken from torch, the same block draws:
 
 ![An attention block with its heads behind it](../../../assets/figures/architecture-attention.png)
 

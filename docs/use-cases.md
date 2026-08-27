@@ -4394,6 +4394,29 @@ The plates are capped at two however many lanes there are, because eight plates
 are a smudge and what says *eight* is the word. They go **downwards**, since the
 first layer of a block has its `×N` immediately above it.
 
+### Opening a composite has to refine it, and once it deleted it
+
+`depth=` opened a `MultiheadAttention` into `out_proj`, which is its only child
+and is **never called**: torch runs attention out of
+`F.multi_head_attention_forward`, handed the four tensors, and the module is
+only where they are kept. So no hook fired, the box disappeared, and `depth=2`
+drew the encoder block's norms and its feed-forward and no attention at all —
+which is a transformer figure with no transformer in it.
+
+It was published as a `:::caution` saying the self-attention inside torch's
+*fused* `TransformerEncoderLayer` is not surfaced at any depth. That diagnosis
+was wrong, and the way it was wrong is worth keeping: torch bails out of that
+fused path the moment **any** hook is attached anywhere under the layer, and
+`architecture` attaches one to everything it draws — so the fast path was never
+taken here and `depth=1` had the attention all along. What the caution really
+described was `depth=2`, the setting the figure was generated at.
+
+So `depth` gained a **floor**: `MultiheadAttention` is whole however deep it was
+asked for, because refining what has no parts that run has to answer the thing
+itself rather than nothing. Measured and not believed — the test hooks
+`out_proj` and watches it never fire, so whoever makes torch call it can delete
+the rule.
+
 ### Why this was copied and not adopted
 
 `torchview` does both of these already: `expand_nested=True` puts an expanded
@@ -4425,6 +4448,10 @@ to be written.
 - [x] and a block that is one layer keeps its count inline
 - [x] **how many lanes a layer runs is read and never inferred**
 - [x] something that runs one lane says nothing about lanes
+- [x] **torch never calls the module inside an attention block**, which is the
+      measurement the floor rests on
+- [x] and opening an encoder block shows its attention at every depth, with its
+      lanes still on it
 
 ## CU23 — Workers and jobs, live
 

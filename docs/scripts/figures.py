@@ -414,12 +414,10 @@ def an_architecture(into: dict[str, bytes]) -> None:
     deeper = architecture(g, example, depth=2)
     drawn(g.figure(inside=deeper), "architecture-opened", into, width=980, height=1200)
 
-    # The plates, which need an attention written out rather than torch's fused
-    # `TransformerEncoderLayer`: the self-attention inside that one is not
-    # surfaced by the trace at any depth, so the figure above has the block's
-    # norms and feed-forward and no attention at all. Measured, not assumed —
-    # `kind_of(nn.MultiheadAttention(...))` answers `attention`, and an explicit
-    # one draws with its heads behind it.
+    # An attention block written out rather than torch's, which is where the
+    # **residual** shows: `y + x` is not a module, so a hand-written block draws
+    # the skip that the encoder layer keeps inside a `forward` nobody can see
+    # into. The plates behind the heads are on both figures.
     class Block(Node):
         def __init__(self):
             self.att = nn.MultiheadAttention(64, 4, batch_first=True)
