@@ -590,8 +590,8 @@ fn going(
         .map(|cited| cited.id.clone())
     else {
         return Err(format!(
-            "`{moved}` is a {} and cites no commit, so there is nowhere to go. \
-             Only an attempt runs one",
+            "`{moved}` cites no commit, so there is nowhere to go — its kind is \
+             `{}`, and only an attempt runs one",
             one.kind
         )
         .into());

@@ -15,7 +15,11 @@ set -euo pipefail
 ONLY_BUILD=""
 if [ "${1:-}" = "--only-build" ]; then ONLY_BUILD="$2"; fi
 WHERE="${ONLY_BUILD:-$(mktemp -d)}"
-PYTHON="${SOMA_TREE_PYTHON:-$(cd "$(dirname "$0")/../../soma" 2>/dev/null && pwd)/.venv/bin/python}"
+# The workspace's own `.venv`, which is where `maturin develop` puts the
+# extension. `../../soma` was a sibling checkout, from before this repository
+# took the name — it resolved to `/.venv/bin/python` and had done for a while,
+# unnoticed because the end-to-end test always passes `SOMA_TREE_PYTHON`.
+PYTHON="${SOMA_TREE_PYTHON:-$(cd "$(dirname "$0")/../.." && pwd)/.venv/bin/python}"
 
 mkdir -p "$WHERE/experiments"
 cd "$WHERE"

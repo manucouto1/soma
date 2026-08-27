@@ -57,6 +57,19 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// `a` or `an`, for reading this kind into a sentence.
+    ///
+    /// Of the five only `Attempt` takes `an`, and it is the one these messages
+    /// reach for most: the commonest of them is `go` refusing a move that cites
+    /// no commit, which only an attempt ever could. So `a attempt` was the
+    /// article almost everybody saw.
+    pub fn article(&self) -> &'static str {
+        match self {
+            Self::Attempt => "an",
+            _ => "a",
+        }
+    }
+
     pub fn read(said: &str) -> Option<Self> {
         match said {
             "question" => Some(Self::Question),
@@ -1152,10 +1165,17 @@ impl fmt::Display for Trouble {
                 "hanging {child} under {parent} would make a cycle, and a walk over one does not end"
             ),
             Self::Nonsense { says, from, to } => {
-                write!(f, "a `{says}` from a {from} to a {to} means nothing")
+                // No article in front of `{says}`: it is a quoted verb, and
+                // `answers` would want `an` while `refutes` wants `a`.
+                let (a, b) = (from.article(), to.article());
+                write!(f, "`{says}` from {a} {from} to {b} {to} means nothing")
             }
             Self::NotADecision { kind } => {
-                write!(f, "a course is carried by a decision, and this is a {kind}")
+                write!(
+                    f,
+                    "a course is carried by a decision, and this is {} {kind}",
+                    kind.article()
+                )
             }
             Self::NameTaken { name, by } => write!(
                 f,
@@ -1164,8 +1184,9 @@ impl fmt::Display for Trouble {
             Self::NoSuchName { name } => write!(f, "nothing here is called `{name}`"),
             Self::CannotCite { kind } => write!(
                 f,
-                "a {kind} is about moves and not about commits or trials: citing belongs \
-                 to an attempt or a finding"
+                "{} {kind} is about moves and not about commits or trials: citing belongs \
+                 to an attempt or a finding",
+                kind.article()
             ),
             Self::Crowded => write!(f, "too many people writing at once"),
         }
