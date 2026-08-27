@@ -48,9 +48,9 @@ necessity and are looked up by the trait, not by the type.
 public API, so they cannot pass by leaning on anything private. One test binary
 per type (`tests/unit/main.rs` with one `mod` per module), not one per file.
 
-**The core knows nothing about Python.** `#[pyclass]` does not go into `core/`.
+**The core knows nothing about Python.** `#[pyclass]` does not go into `soma-core/`.
 The moment a core type carries one, it can no longer be used without an
-interpreter loaded. `python/` translates; if a domain rule ends up written
+interpreter loaded. `soma-python/` translates; if a domain rule ends up written
 there, it is in the wrong place.
 
 ## The original as an oracle, not a template
@@ -85,10 +85,10 @@ something — happens **inside it**, holding whatever client that takes.
 uv run cargo test --workspace
 uv run cargo clippy --workspace -- -D warnings && uv run cargo fmt --all -- --check
 
-# The wire and the broker live next door, in `soma-fabric`, and are a workspace
-# of their own. `python/` depends on both by path, so a change there is compiled
-# by the command above — but its own tests are only run by its own workspace.
-(cd ../soma-fabric && cargo test --workspace)
+# That covers the wire and the broker as well: they are members of this
+# workspace, at `soma-fabric/wire` and `soma-fabric/broker`, and not a workspace
+# of their own — there is no `soma-fabric/Cargo.toml`. The `../soma-fabric` next
+# door is the copy they came from: abandoned, and it does not compile.
 
 # The Python side still needs `mos`, because that is where torch is.
 conda activate mos
@@ -161,7 +161,7 @@ exists not to build. `Watcher` arrived with two implementors in two crates on th
 first day, which is the bar. What `Driver` left behind is the channel: `Ctx` is
 where whoever executes hands a node what it knows, so an agentic layer that wants
 something injected puts it there and **no node signature changes**. The core
-still has no dependencies. The wire has one of its own, filled from `python/`:
+still has no dependencies. The wire has one of its own, filled from `soma-python/`:
 `Provision` turns an artifact into a catalog. Between them an `Opaque` crosses a
 wire, and what does not is the one nobody registered a codec for.
 
