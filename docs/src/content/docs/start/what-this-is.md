@@ -26,6 +26,15 @@ embed.frozen()              # settled, so what is kept stays valid
 source.mapped()             # one name per item, not per batch
 ```
 
+Which is a picture, and it draws itself:
+
+![A graph with every suffix on it, drawn before it has ever run](../../../assets/figures/graph-declared.png)
+
+Nothing has run there. The dashed frames are the two machines, the green box is
+the device, `cached · frozen` is what is remembered, and `wave` is the plan's
+word for what happens at the same time — one figure carrying every suffix
+above it.
+
 ## The five facts, which are the thing to hold
 
 Confusing them is the easy mistake, and the whole design is arranged so the
@@ -57,6 +66,17 @@ the original kept all three in one enum of thirty-seven variants:
   step-to-weight ratio that has gone. It is computed from the stored record and
   never from a second training run, which is what makes arguing about a
   threshold cost a scan rather than an afternoon of GPU.
+
+Those three, in order — a run read back out of the store, and a diagnosis drawn
+on the graph the ill layers are in:
+
+![The loss over 120 forwards, and where the time went](../../../assets/figures/record-progress.png)
+
+![Three layers the audit calls STALLED, marked on the graph](../../../assets/figures/health-overlaid.png)
+
+The second one is the point of keeping them apart: that verdict came out of the
+stored record and not out of a second training run, so moving a bound and asking
+again costs a scan.
 
 Around those: `probe`, which is one recorded forward that never trained, so
 something can be said before the first step is taken; `fleet`, which turns the
