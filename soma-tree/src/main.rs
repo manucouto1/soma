@@ -883,7 +883,9 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
         // with its stops and no steps at all, and `restless` counts steps — so
         // the line below was being said about work nobody looked at, which is
         // the one sentence this tool must never say by accident.
-        (true, _) => println!("Nothing here was compared, so nothing is said about what an edit did."),
+        (true, _) => {
+            println!("Nothing here was compared, so nothing is said about what an edit did.")
+        }
         (_, 0) => println!("No step leaves results that cannot be compared with the one before."),
         // Steps and not a sum of nodes: the same node counted at three steps is
         // one node looked at three times, and adding those said nothing.
