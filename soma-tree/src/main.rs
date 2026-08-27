@@ -496,6 +496,16 @@ fn moving(
         });
     }
 
+    // Resolved before anything is written, the way `--about` already is.
+    // Hanging after the write meant a parent nobody knows left the move in the
+    // store hanging from nothing — and its name claimed, so the command that
+    // had just refused could not be typed again with the parent corrected.
+    let parents = writing
+        .under
+        .iter()
+        .map(|parent| moves.went(parent))
+        .collect::<Result<Vec<_>, _>>()?;
+
     let id = moves.add(Written {
         scope: reached(&moves, carries.about)?,
         cites,
@@ -507,8 +517,8 @@ fn moving(
             &revision::whoami(&bench.repo),
         )
     })?;
-    for parent in &writing.under {
-        moves.hang(id, moves.went(parent)?)?;
+    for parent in parents {
+        moves.hang(id, parent)?;
     }
 
     println!("{} · {kind} · {id}", writing.name);
@@ -867,11 +877,17 @@ fn printed(walk: &Walk, all_lines: bool) -> bool {
     }
 
     println!();
-    match restless {
-        0 => println!("No step leaves results that cannot be compared with the one before."),
+    match (walk.steps.is_empty(), restless) {
+        // *Could not be compared* and *did not change* are two answers, and
+        // only the first one is true here. Without a probe a walk comes back
+        // with its stops and no steps at all, and `restless` counts steps — so
+        // the line below was being said about work nobody looked at, which is
+        // the one sentence this tool must never say by accident.
+        (true, _) => println!("Nothing here was compared, so nothing is said about what an edit did."),
+        (_, 0) => println!("No step leaves results that cannot be compared with the one before."),
         // Steps and not a sum of nodes: the same node counted at three steps is
         // one node looked at three times, and adding those said nothing.
-        n => println!("{n} of the steps leave results NOT comparable with the one before."),
+        (_, n) => println!("{n} of the steps leave results NOT comparable with the one before."),
     }
     restless == 0
 }

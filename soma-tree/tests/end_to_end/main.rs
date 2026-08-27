@@ -960,6 +960,18 @@ fn a_repository_with_nothing_to_build_reads_the_same() {
         said.matches("\n").count() > 3,
         "the stops are still there: {said}"
     );
+    // And the half that is missing says so, rather than being handed back as a
+    // clean bill. `restless` counts steps and a walk with no probe has none,
+    // so what stood here was the reassuring sentence — said about work nobody
+    // had looked at.
+    assert!(
+        said.contains("Nothing here was compared"),
+        "and no step is called comparable when none was taken: {said}",
+    );
+    assert!(
+        !said.contains("No step leaves"),
+        "which is the sentence this must never say by accident: {said}",
+    );
 }
 
 #[test]
@@ -1251,6 +1263,53 @@ fn two_moves_cannot_answer_to_one_name_from_the_terminal_either() {
     let said = soma_tree_refusing(at, &["ask", "capacity", "-m", "asked twice"]);
 
     assert!(said.contains("already names"), "{said}");
+}
+
+#[test]
+fn a_parent_nobody_knows_writes_nothing_and_leaves_the_name_free() {
+    // Hanging used to happen after the write, so a mistyped `--under` claimed
+    // the name, stored a move rooted nowhere, and refused — and the command
+    // that had just refused could not be typed again with the parent spelled
+    // right. The two halves of the damage are asserted separately: nothing was
+    // kept, and the name is still there to be used.
+    given!(at);
+    somatize_tree(at, &["ask", "capacity", "-m", "does more capacity help?"]);
+
+    let said = soma_tree_refusing(
+        at,
+        &[
+            "suppose",
+            "wider",
+            "-m",
+            "width is the bottleneck",
+            "--under",
+            "capacitty",
+        ],
+    );
+    assert!(said.contains("capacitty"), "and which name: {said}");
+
+    let outlined = somatize_tree(at, &["moves"]);
+    assert!(
+        !outlined.contains("wider"),
+        "a refused move is not half-written: {outlined}",
+    );
+
+    // The same command, spelled right, and it goes where it was meant to.
+    somatize_tree(
+        at,
+        &[
+            "suppose",
+            "wider",
+            "-m",
+            "width is the bottleneck",
+            "--under",
+            "capacity",
+        ],
+    );
+    assert!(
+        somatize_tree(at, &["moves"]).contains("  wider · hypothesis"),
+        "and hangs where it was told the second time",
+    );
 }
 
 #[test]
