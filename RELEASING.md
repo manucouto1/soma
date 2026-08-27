@@ -1,16 +1,15 @@
 # Releasing
 
-What has to happen for a version to publish, in order, and why the first one is
-not like the ones after it.
+What has to happen for a version to publish, in order, and what the first one
+needed that the ones after it do not.
 
 ## Where things stand
 
 | | Published | At | Next |
 |---|---|---|---|
-| PyPI `somatize` | yes, from the old implementation | 0.5.1 | **1.0.0** |
-| crates.io `somatize-core`, `somatize-store` | yes, same | 0.5.1 | **1.0.0** |
-| crates.io — the other six | **never** | — | **1.0.0** |
-| crates.io `somatize`, `-runtime`, and eight more | yes | 0.5.1 | **nothing, ever** |
+| PyPI `somatize` | yes | **1.0.0** | a bump of it |
+| crates.io — the eight this workspace publishes | yes | **1.0.0** | the same number, shared |
+| crates.io `somatize`, `-runtime`, and eight more | yes, from the old implementation | 0.5.1 | **nothing, ever** |
 
 **1.0.0 and not 0.6.0.** This is a re-derivation, not a version more: the names
 carry over, the code does not. crates.io versions are immutable, so publishing
@@ -23,7 +22,13 @@ publishing a version. There is nothing to do with them.
 nothing can depend on it from Rust, and it carries `publish = false`. Its
 artifact is the wheel.
 
-## The first release needs a token. Only the first.
+**The number is shared.** `release.toml` sets `shared-version`, so all eight go
+out at the tag's number whether or not anything in them moved — a patch that
+only touches the Python half still publishes eight crates. That is the point:
+one number describes one tree, and a reader who has `somatize-core` 1.0.1 knows
+which `somatize-store` it was tested against.
+
+## The first release needed a token. Only the first did, and it is done.
 
 `release.yml` publishes with Trusted Publishing (OIDC) and stores no tokens.
 That works for a crate that **already exists**: crates.io keys a
@@ -31,10 +36,12 @@ trusted-publisher config to a crate id, and unlike PyPI it has no "pending
 publisher" for a name that has never been published. There is nowhere to
 configure a publisher for a crate that does not exist yet.
 
-`somatize-core` and `somatize-store` carry theirs over from 0.5.x — same
+`somatize-core` and `somatize-store` carried theirs over from 0.5.x — same
 repository, same workflow file name, which is why **this file is still called
-`release.yml`**. The other six have to go out once from a machine with a
-crates.io token, in dependency order:
+`release.yml`**. The other six went out once from a machine with a crates.io
+token, in dependency order, and all eight are at 1.0.0 now. So none of this is
+needed again — unless a **new crate** joins the list, in which case it is
+exactly this, once, before the tag:
 
 ```bash
 for c in somatize-core somatize-health somatize-study somatize-store \
@@ -51,7 +58,7 @@ what `|| break` is for, and it is the lesson the 0.5.0 release paid for: the
 publish loop used to end every line in `|| true`, so three crates the facade
 needed had never gone out and nobody knew.
 
-## Then configure Trusted Publishing
+## Trusted Publishing, configured once per crate
 
 **crates.io** — for each of the eight crates `release.yml` publishes: Settings →
 Trusted Publishing → GitHub, with
@@ -71,10 +78,26 @@ repository and the same workflow filename.
 ## Then tag
 
 ```bash
-cargo release major     # bumps the shared workspace version and tags v1.0.0
+cargo release patch     # bumps the shared version, commits, tags and pushes
 ```
 
-`release.yml` runs on `v*` and does three jobs:
+By hand it is four things and not one, and the third is the one that is easy to
+miss:
+
+```bash
+# 1. the shared version, AND the `version =` beside every internal `path`
+#    dependency — a registry ignores `path`, so that number is what resolves.
+# 2. cargo update --workspace          # the lock names the members too
+# 3. python docs/scripts/python_surface.py
+# 4. git commit && git tag v1.0.1 && git push && git push --tags
+```
+
+Step 3 is not documentation housekeeping: `docs/python-surface.json` is
+committed, it records `__version__` of the package it was dumped from, and
+`ci.yml` re-derives it with `--check` against the extension it just built. A
+bump without it turns `main` red on the commit that releases.
+
+`release.yml` runs on `v*` and does four jobs:
 
 - `publish-crates` — eight crates in dependency order. A version already on
   crates.io is skipped; **anything else fails the job**.
@@ -83,9 +106,13 @@ cargo release major     # bumps the shared workspace version and tags v1.0.0
   `somatize-python` builds against pyo3's limited API (`abi3-py310`), so a
   single `cp310-abi3` wheel answers for 3.10 and everything after it, including
   interpreters that did not exist when it was compiled.
-- `github-release` — notes generated from the commits. Creating it is also what
-  triggers `worker-image.yml`, so no worker image is cut for a version that
-  failed to go out.
+- `github-release` — notes generated from the commits, and only if both of the
+  above got there.
+- `worker-image` — **called** by this workflow and not triggered by the release,
+  so no image is cut for a version that failed to go out. It used to listen for
+  `release: [published]` and never fired: GitHub raises no workflow from an
+  event the `GITHUB_TOKEN` caused, and v1.0.0 went out with no image and nothing
+  said so.
 
 ## What can be verified before you tag, and what cannot
 
@@ -103,11 +130,11 @@ The Rust half cannot be dry-run end to end before the fact. `cargo package`
 verifies against the registry, so every crate after the first reports
 
 ```
-failed to select a version for the requirement `somatize-core = "^1.0.0"`
+failed to select a version for the requirement `somatize-core = "^1.0.1"`
 ```
 
-until `somatize-core` 1.0.0 is actually published. **That is expected, not a
-defect.** What can be checked in advance is the metadata, and that is what
+until `somatize-core` is actually published at the version being released.
+**That is expected, not a defect.** What can be checked in advance is the metadata, and that is what
 `cargo package --no-verify -p somatize-core` (or `-health`, or `-study` — the
 three with no internal dependencies) confirms: every crate inherits `version`,
 `license = "Elastic-2.0"`, `repository` and `readme` from `[workspace.package]`,
