@@ -25,7 +25,11 @@ use node::{PyCtx, PyNode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
-#[cfg(feature = "remote")]
+// Not behind `remote`, and it was: `Host`, `Packing` and `distribute` are the
+// **core's** — where a node runs, what is packed for it and how a plan is cut
+// are facts about the graph, and the wire is only who carries the result. With
+// the import gated, `--no-default-features` did not compile at all, which is
+// the one thing that build exists to prove.
 use somatize_core::{
     Catalog, CompileError, Device, DeviceError, Executor, Graph, GraphError, Host, Keys, Memory,
     MemoryError, NodeId, Packing, Placement, RunError, cacheable, compile, distribute,

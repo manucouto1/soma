@@ -94,7 +94,13 @@ class Graph(_RustGraph):
             return None
         return drawn._repr_mimebundle_(include=include, exclude=exclude) or None
 
-    def forward(
+    # The narrowing is deliberate, and it is the design: the Rust `Broker` this
+    # overrides knows where a host is and nothing else, while **this** one
+    # carries the packing table — what can be packed depends on what is
+    # installed on that machine, which the Rust half does not know a
+    # `cloudpickle` about. A bare one would reach `provision` with no
+    # `packing_for`.
+    def forward(  # type: ignore[override]
         self,
         input: Any | None = None,
         *,

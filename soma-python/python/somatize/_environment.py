@@ -22,6 +22,7 @@ import functools
 import hashlib
 import json
 import sys
+from typing import Mapping
 
 __all__ = ["WHERE", "environment", "named"]
 
@@ -39,7 +40,7 @@ collision is two runs quietly filed as one."""
 
 
 @functools.cache
-def _installed() -> dict[str, list[str]]:
+def _installed() -> Mapping[str, list[str]]:
     """Which distribution each importable top-level name comes from.
 
     A reading of what is **installed**, which does not change while a process
@@ -54,6 +55,9 @@ def _installed() -> dict[str, list[str]]:
     """
     import importlib.metadata as about
 
+    # Handed back as the `Mapping` the stdlib returns and not copied into a
+    # `dict`: this is cached, so one caller mutating it would poison every
+    # later reading.
     return about.packages_distributions()
 
 
