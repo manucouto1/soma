@@ -20,6 +20,7 @@ npm run build   # production build only
 | `scripts/use_cases_to_docs.py` | Splits `use-cases.md` into one page per slice |
 | `scripts/python_to_docs.py` | Renders `python-surface.json` into the Python reference |
 | `scripts/python_surface.py` | Dumps that JSON. **Needs somatize installed** — see below |
+| `scripts/figures.py` | Draws the figures the hand-written pages show. **Needs torch** — see below |
 | `scripts/check-*.mjs` | The guards `npm run check` runs before building |
 | `src/assets/logo-{light,dark}.svg` | The header mark (two files so the theme toggle works) |
 | `public/favicon.svg` | Tab icon — the mark reduced to one period |
@@ -48,6 +49,25 @@ python docs/scripts/python_surface.py --check    # what CI runs
 `--check` runs in CI's Python job — the only one that has already built and
 installed the extension — so a stale dump fails there rather than shipping.
 `npm run check` cannot catch it: it never imports the package.
+
+### The figures are committed too, and for the same reason
+
+A page that describes a framework which draws itself should show a drawing, and
+until this existed none of the hand-written ones did. `scripts/figures.py` runs
+real code — a study with a `Trainer` under it, a run with a `Recorder`, an
+audited stack that is ill on purpose — and writes PNGs into
+`src/assets/figures/`, which **are** in git:
+
+```bash
+python docs/scripts/figures.py            # all of them, about 35 seconds
+python docs/scripts/figures.py study      # one group, without pruning the rest
+```
+
+Seeds are fixed, so two runs give the same pictures. There is **no `--check`**:
+a figure is not a hash, and a byte comparison would go red when a font moves.
+What guards them is astro, which fails with `[ImageNotFound]` when a page points
+at an image that is not there — so a figure can go stale, but it cannot go
+missing.
 
 ## The tutorials are not written here
 

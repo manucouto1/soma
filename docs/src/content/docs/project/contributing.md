@@ -126,6 +126,12 @@ copy would eventually disagree with it. Adding a notebook to `examples/` is
 deliberately **not** enough to publish it: it has to be given a place in the
 sidebar, and the guard fails until it is.
 
+The **figures** on the hand-written pages are committed for the same reason:
+drawing one needs torch, plotly and kaleido. `python docs/scripts/figures.py`
+redraws all of them from real runs in about thirty-five seconds, with fixed
+seeds. Astro fails the build if a page points at a figure that is not there, so
+they can go stale but not missing.
+
 The reference has one step the others do not, because reading a docstring needs
 the extension built and the site builds with a bare `python3`:
 
