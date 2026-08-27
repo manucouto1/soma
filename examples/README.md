@@ -35,14 +35,14 @@ PLOTLY_RENDERER="plotly_mimetype+png" jupyter lab      # or when re-executing th
 ## Running them
 
 ```bash
-cd python && maturin develop          # the tests and the notebooks both run
-pip install 'somatize[viz]'          # plotly, for every figure here
-pip install ipywidgets                # optional: `Live` redraws in place with it
+cd soma-python && maturin develop  # the tests and the notebooks both run
+pip install 'somatize[viz]'        # plotly, for every figure here
+pip install ipywidgets             # optional: `Live` redraws in place with it
 ```
 
 `maturin develop` is not optional: the notebooks run against the **installed**
-extension, so a change in `python/src/` that was not rebuilt means a notebook
-that is green about code that is not the code.
+extension, so a change in `soma-python/src/` that was not rebuilt means a
+notebook that is green about code that is not the code.
 
 But it installs a **debug** build, and the numbers stored here were measured
 against a release one. Re-executing a notebook that reports a timing — 3, 10 and
@@ -52,7 +52,7 @@ what gave it away was the coordinate, which hashes nothing and slowed down just
 as much. Build the package once and point at it:
 
 ```bash
-cargo build --release -p soma-python
+cargo build --release -p somatize-python
 cp -r soma-python/python/somatize /tmp/relpkg/ && rm /tmp/relpkg/somatize/_somatize.*.so
 cp target/release/lib_somatize.so /tmp/relpkg/somatize/_somatize.cpython-313-x86_64-linux-gnu.so
 PYTHONPATH=/tmp/relpkg python -  # the loop below
@@ -99,5 +99,5 @@ own rather than borrowing one that means something else.
 **A run spread over real machines.** Notebook 2 starts one worker on this
 machine and notebook 9 reads a fleet back out of a record. Containers on
 separate hosts, a GPU among them, and a study handed out of a shared folder live
-in `python/tests/cluster/`, which needs docker and is opt-in — an example that
-needs a cluster is an example nobody can open.
+in `soma-python/tests/cluster/`, which needs docker and is opt-in — an example
+that needs a cluster is an example nobody can open.
