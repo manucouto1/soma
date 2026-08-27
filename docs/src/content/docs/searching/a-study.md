@@ -156,7 +156,14 @@ coordinates(store, space, study="spam")  # parallel coordinates
 `importance` is **Spearman's ρ**, which the original names as fANOVA-deferred
 and never wrote. `coordinates` is hand-drawn out of splines because plotly's
 `Parcoords` only draws straight segments; it trades brushing for a trial
-reading as one curve.
+reading as one curve:
+
+![Every trial as one curve across the knobs](../../../assets/figures/study-coordinates.png)
+
+That is thirty trials over the space above. What it answers is *where the good
+ones live*, which is a different question from `influence`'s *which knob
+mattered* — see [a search end to end](/soma/start/a-search/) for the same study
+with its table and its ρ beside this.
 
 In all three, **pruned and finished are never ranked together** — a pruned
 trial's score was measured after fewer epochs, and it is not comparable.

@@ -98,6 +98,14 @@ own `forward`.
 and a `Remote` already are — and lays the inside out by what feeds what, so a
 skip runs down a gutter and enters from the side.
 
+![Three nodes, each opened up](../../../assets/figures/architecture.png)
+
+Three nodes and three architectures. The shapes are doing the work: a
+convolution is a parallelogram, a normalisation a capsule, a non-linearity is
+pointed, and the head's two `Linear`s taper because they narrow — `64 → 16 →
+1`, which is the only thing that makes a bottleneck a picture rather than a
+number you have to go and look up.
+
 ## The rules that make an architecture readable
 
 **A kind, not a class name, decides the silhouette.** A convolution is a
@@ -108,15 +116,31 @@ kind is guessed **by role**, so a class the table has never heard of whose name
 ends in `Norm` is a normalisation — a guess, and a good one, because the
 alternative is calling half of everybody's models `other`.
 
-**A composite everybody recognises is one box**, and `depth=` opens it.
+**A composite everybody recognises is one box**, and `depth=` opens it. Above,
+`TransformerEncoderLayer ×4` is a single box that says what is in it. Asked to
+open:
+
+![The same stack with depth=2](../../../assets/figures/architecture-opened.png)
 
 **Blocks that are the same block collapse to `×N`** — and when the block is
 more than one layer, that `×N` goes on a **frame around them** rather than on
-each of them. Four encoder layers opened up are eight boxes each saying `×4`,
-which is the count said eight times and the block said none.
+each of them. That is the dashed frame: the count is said once and the block is
+said once. Four encoder layers written out would be eight boxes each saying
+`×4`, which is the count said eight times and the block said none.
+
+:::caution[One thing that figure is missing, and it is not the drawing]
+There is no attention in it. `architecture` traces an explicit
+`nn.MultiheadAttention` — `kind_of` answers `attention` for one — but the
+self-attention **inside torch's fused `nn.TransformerEncoderLayer`** is not
+surfaced at any `depth=`, so what you get is that block's norms and its
+feed-forward. Written out rather than fused, it draws:
+:::
+
+![An attention block with its heads behind it](../../../assets/figures/architecture-attention.png)
 
 **Identical lanes running at once get plates behind them**, never separate
-boxes. The heads of an attention block and the groups of a convolution are one
+boxes — the four plates stacked behind `MultiheadAttention · 4 heads` above.
+The heads of an attention block and the groups of a convolution are one
 projection in torch; four of them wired side by side would be a graph nobody
 built.
 

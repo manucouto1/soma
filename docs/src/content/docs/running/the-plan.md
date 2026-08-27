@@ -130,6 +130,12 @@ n.edge("b", "d")
 n.figure()
 ```
 
+![The N, drawn](../../../assets/figures/graph-the-n.png)
+
+`a` and `b` share a box because they run at the same time, and the arrows —
+not the box — say that `c` waits for `a` while `d` waits for both. There is no
+nesting to read, and the figure does not invent any.
+
 ## Then it is cut a second time
 
 ```rust

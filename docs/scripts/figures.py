@@ -342,7 +342,108 @@ def health(into: dict[str, bytes]) -> None:
     print(f"  diagnosed: {diagnose(store, run='sigmoids')}")
 
 
-GROUPS = {"graph": a_graph, "study": a_study, "run": a_run, "health": health}
+# ── A node opened up ─────────────────────────────────────────────────────────
+
+
+def an_architecture(into: dict[str, bytes]) -> None:
+    """Three nodes, each a real architecture, drawn inside their own boxes.
+
+    Chosen to put every drawing rule on one picture rather than to be a good
+    model: a convolutional trunk for the silhouettes and the `ch`/`len` shape
+    names, a transformer stack for the `xN` frame and the plates behind
+    attention heads, and a head that narrows so the taper has something to say.
+    """
+    import torch
+    from torch import nn
+
+    import somatize.torch  # noqa: F401
+    from somatize import Graph, Node, Opaque
+    from somatize.torch import architecture
+
+    torch.manual_seed(0)
+
+    class Trunk(Node):
+        def __init__(self):
+            self.net = nn.Sequential(
+                nn.Conv1d(1, 32, 5, padding=2), nn.BatchNorm1d(32), nn.ReLU(),
+                nn.Conv1d(32, 64, 5, padding=2), nn.BatchNorm1d(64), nn.ReLU(),
+            )
+
+        def forward(self, x, ctx):
+            return Opaque(self.net(x))
+
+        def parameters(self):
+            return list(self.net.parameters())
+
+    class Encode(Node):
+        def __init__(self):
+            one = nn.TransformerEncoderLayer(
+                d_model=64, nhead=4, dim_feedforward=128, batch_first=True
+            )
+            self.net = nn.TransformerEncoder(one, num_layers=4)
+
+        def forward(self, x, ctx):
+            return Opaque(self.net(x.transpose(1, 2)))
+
+        def parameters(self):
+            return list(self.net.parameters())
+
+    class Head(Node):
+        def __init__(self):
+            self.net = nn.Sequential(nn.Linear(64, 16), nn.ReLU(), nn.Linear(16, 1))
+
+        def forward(self, x, ctx):
+            return Opaque(self.net(x.mean(1)))
+
+        def parameters(self):
+            return list(self.net.parameters())
+
+    g = Graph.somatize(
+        Trunk().named("trunk") >> Encode().named("encode") >> Head().named("head")
+    )
+    # Wrapped, because a bare tensor does not cross an edge — the same rule as
+    # `Opaque` on the way out, seen from the caller's side.
+    example = Opaque(torch.randn(4, 1, 32))
+    inside = architecture(g, example)
+    print(f"  architecture traced: {sorted(inside)}")
+    drawn(g.figure(inside=inside), "architecture", into, width=980, height=900)
+
+    # The same graph with the composite opened. `depth=` is the whole of the
+    # difference: a `TransformerEncoderLayer` everybody recognises is one box
+    # until somebody asks, and then it is the `xN` frame and the plates.
+    deeper = architecture(g, example, depth=2)
+    drawn(g.figure(inside=deeper), "architecture-opened", into, width=980, height=1200)
+
+    # The plates, which need an attention written out rather than torch's fused
+    # `TransformerEncoderLayer`: the self-attention inside that one is not
+    # surfaced by the trace at any depth, so the figure above has the block's
+    # norms and feed-forward and no attention at all. Measured, not assumed —
+    # `kind_of(nn.MultiheadAttention(...))` answers `attention`, and an explicit
+    # one draws with its heads behind it.
+    class Block(Node):
+        def __init__(self):
+            self.att = nn.MultiheadAttention(64, 4, batch_first=True)
+            self.norm = nn.LayerNorm(64)
+            self.ff = nn.Sequential(nn.Linear(64, 128), nn.GELU(), nn.Linear(128, 64))
+
+        def forward(self, x, ctx):
+            y, _ = self.att(x, x, x)
+            y = self.norm(y + x)
+            return Opaque(self.norm(y + self.ff(y)))
+
+        def parameters(self):
+            return [
+                *self.att.parameters(), *self.norm.parameters(), *self.ff.parameters()
+            ]
+
+    b = Graph.somatize(Block().named("block"))
+    drawn(
+        b.figure(inside=architecture(b, Opaque(torch.randn(4, 32, 64)))),
+        "architecture-attention", into, width=880, height=700,
+    )
+
+
+GROUPS = {"graph": a_graph, "architecture": an_architecture, "study": a_study, "run": a_run, "health": health}
 
 
 def main() -> None:
