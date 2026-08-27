@@ -212,7 +212,136 @@ def a_study(into: dict[str, bytes]) -> None:
         print(f"    {score:.4f}  {point}")
 
 
-GROUPS = {"graph": a_graph, "study": a_study}
+# ── A run, watched ───────────────────────────────────────────────────────────
+
+
+def a_run(into: dict[str, bytes]) -> None:
+    """A short training run, written down and read back.
+
+    A fan on purpose: `spent` and `gantt` are about *when*, and a graph that is
+    a straight line has nothing to say about it. The two branches run in one
+    `Wave`, which is what makes the timeline draw as overlapping bars rather
+    than a staircase.
+    """
+    import torch
+
+    import somatize.torch  # noqa: F401
+    from somatize import Graph, Node, Opaque, Recorder, Store
+    from somatize.record import gantt, progress, spent
+    from somatize.torch import Trainer, parameters
+
+    torch.manual_seed(0)
+    WIDTH = 16
+    # Something to learn. Training against `randn` targets draws a loss that
+    # hovers, which shows the figure works and the framework does not — and a
+    # front page should not have to explain why its own curve is flat.
+    truth = torch.randn(WIDTH, WIDTH)
+
+    def batch(how_many=32):
+        x = torch.randn(how_many, WIDTH)
+        return x, torch.tanh(x @ truth)
+
+    class Block(Node):
+        def __init__(self, width=WIDTH):
+            self.net = torch.nn.Sequential(
+                torch.nn.Linear(width, width), torch.nn.ReLU()
+            )
+
+        def forward(self, x, ctx):
+            return Opaque(self.net(x))
+
+        def parameters(self):
+            return list(self.net.parameters())
+
+    class Mean(Node):
+        # A node with two predecessors is handed a map keyed by who sent what,
+        # and what is in it is the value itself: the engine unwraps an `Opaque`
+        # on the way in, so there is nothing here to unwrap.
+        def forward(self, said, ctx):
+            values = list(said.values())
+            return Opaque(sum(values) / len(values))
+
+    g = Graph.somatize(
+        Block().named("encode")
+        >> (Block().named("strict") | Block().named("loose"))
+        >> Mean().named("vote")
+    )
+    store = Store(tempfile.mkdtemp())
+    t = Trainer(
+        g,
+        objective=torch.nn.functional.mse_loss,
+        optimizer=torch.optim.Adam(parameters(g), lr=0.01),
+        watching=Recorder(store, run="tuesday", summarising=["loss"]),
+    )
+    for _ in range(120):
+        t.step(batch())
+
+    drawn(progress(store, run="tuesday", smooth=5), "record-progress", into)
+    drawn(spent(store, run="tuesday"), "record-spent", into, height=380)
+    drawn(gantt(store, run="tuesday", forward=0), "record-gantt", into, height=380)
+
+
+# ── The health of a network ──────────────────────────────────────────────────
+
+
+def health(into: dict[str, bytes]) -> None:
+    """A stack that cannot train, diagnosed from its record.
+
+    Five sigmoid layers in a row, and what it earns is `STALLED` on the first
+    three: the update is tiny next to the weights it moves. Built to be ill on
+    purpose, because a figure of a healthy network shows that the drawing works
+    and not that the diagnosis does.
+
+    Which flag it earns was **read off the run and not decided here** — the
+    guess when this was written was `VANISHING`, and the audit said otherwise.
+    """
+    import torch
+
+    import somatize.torch  # noqa: F401
+    from somatize import Graph, Node, Opaque, Recorder, Store
+    from somatize.health import diagnose, flags, overlaid, profile
+    from somatize.torch import Trainer, parameters
+
+    torch.manual_seed(0)
+    WIDTH = 16
+
+    class Block(Node):
+        def __init__(self, width=WIDTH, activation="sigmoid"):
+            self.net = torch.nn.Linear(width, width)
+            self.after = {
+                "relu": torch.nn.ReLU(),
+                "sigmoid": torch.nn.Sigmoid(),
+            }[activation]
+
+        def forward(self, x, ctx):
+            return Opaque(self.after(self.net(x)))
+
+        def parameters(self):
+            return list(self.net.parameters())
+
+    wired = Block().named("b0")
+    for i in range(1, 5):
+        wired = wired >> Block().named(f"b{i}")
+    g = Graph.somatize(wired)
+
+    store = Store(tempfile.mkdtemp())
+    t = Trainer(
+        g,
+        objective=torch.nn.functional.mse_loss,
+        optimizer=torch.optim.SGD(parameters(g), lr=0.05),
+        auditing=True,
+        watching=Recorder(store, run="sigmoids", summarising=["loss"]),
+    )
+    for _ in range(20):
+        t.step((torch.randn(32, WIDTH), torch.randn(32, WIDTH)))
+
+    drawn(profile(store, run="sigmoids"), "health-profile", into)
+    drawn(flags(store, run="sigmoids"), "health-flags", into, height=250)
+    drawn(overlaid(g, store, run="sigmoids"), "health-overlaid", into, width=760, height=560)
+    print(f"  diagnosed: {diagnose(store, run='sigmoids')}")
+
+
+GROUPS = {"graph": a_graph, "study": a_study, "run": a_run, "health": health}
 
 
 def main() -> None:

@@ -115,6 +115,22 @@ alerts(store, run="tuesday")      # the loud one: cards a cell shows on its own
 profile(store, run="tuesday")     # the shape over depth
 ```
 
+![Three ill layers marked on the graph they are in](../../../assets/figures/health-overlaid.png)
+
+Five sigmoid layers in a row, twenty steps, and the audit says `STALLED` on the
+first three: the update is tiny next to the weights it moves. Nothing about
+that was decided here — it is what the stored record answers, and moving a
+bound and asking again costs a scan rather than an afternoon.
+
+![The shape over depth](../../../assets/figures/health-profile.png)
+
+![Which flags, on which nodes](../../../assets/figures/health-flags.png)
+
+`profile` is the picture because a fading gradient is a **shape over depth**
+and not a property of any one layer; `flags` is the table. They are the only
+figures here where colour may mean good-or-bad, because they are the only ones
+drawing opinions.
+
 Health gets **a channel of its own** on the figure: the fill goes on saying
 where a node runs and the **outline** turns red. On a graph spread over three
 machines, *where does this run* is the answer somebody came for, and taking that

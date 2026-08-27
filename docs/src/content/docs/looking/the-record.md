@@ -149,6 +149,19 @@ spent(store, run="tuesday")      # where the time went
 gantt(store, run="tuesday")      # the timeline, waves overlapping
 ```
 
+![The loss over 120 forwards, read back from the store](../../../assets/figures/record-progress.png)
+
+![Where the time went, node by node](../../../assets/figures/record-spent.png)
+
+![One forward on a timeline](../../../assets/figures/record-gantt.png)
+
+The timeline is the one that pays for every fact carrying **how far into the
+`forward` it began**. `strict` and `loose` overlap because they are one `Wave`
+— they ran at the same time, and a figure that stacked them would be telling
+you the opposite. An offset into a slice is a fact about the slice, which is
+what lets a remote one sit inside the round trip it arrived under; two wall
+clocks would not have composed.
+
 `Live` is handed facts as they happen. It and `progress` fill **one drawing
 function**, and they can, because a fact read back is the very dict a watcher
 was given. A live view and a report written twice are two things that slowly
