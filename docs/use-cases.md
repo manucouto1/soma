@@ -5391,10 +5391,9 @@ rendezvous was granted.
 **Two names for one place** (`broker/tests/unit/reaching.rs`)
 - [x] two hosts at one address share one wire
 - [x] **two hosts with the same command are two processes**
-- [ ] and what is packed for them is packed **once** — the grouping happens in
-      Python, where nothing exercises it yet
-- [ ] two names for one place declared with different packing are refused — the
-      refusal is written and nothing calls it
+- [x] and what is packed for them is packed **once**
+- [x] two names for one place declared with different packing are refused, **by
+      name**, saying what each of them asked for
 
 **Which hosts a placement names** (`soma-core/tests/unit/placement.rs`)
 - [x] they come back once each
