@@ -89,6 +89,18 @@ there and **no node signature changes**. See
 | the `Trainer` | an afternoon | a training run |
 | N training runs | a campaign | **a Python list** |
 
+```mermaid Downward is a call. Upward is only ever a return value — no level is handed a callback into the one above it.
+flowchart TB
+    L3["N training runs · a campaign<br/>a Python list. No type at all"]
+    L2["Trainer · an afternoon<br/>one training run"]
+    L1["Graph · one forward<br/>a network"]
+
+    L3 -->|"calls"| L2
+    L2 -->|"calls"| L1
+    L1 -.->|"what it produced"| L2
+    L2 -.->|"a loss, a verdict"| L3
+```
+
 The third one has no type, and that is on purpose. A graph earns its keep when
 there are dependencies to declare; N runs have none, so `fedavg` is a function
 and a federated round is a `for` loop. Making level 3 a graph would have been

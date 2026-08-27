@@ -31,10 +31,23 @@ function walk(dir) {
 }
 
 const bad = [];
+const captions = [];
 let count = 0;
 
 for (const page of walk(PAGES).filter((f) => /\.mdx?$/.test(f))) {
 	const text = readFileSync(page, 'utf8');
+	// The caption is the fence's info string, and CommonMark forbids a backtick
+	// there — so a caption with one is not a fence at all. Markdown then emits
+	// the whole diagram as a paragraph of literal text, the page builds, every
+	// guard passes, and what ships is the source code of a picture. Two of this
+	// site's first three diagrams went out that way, and only opening one in a
+	// browser said so: `mermaid.parse` below is handed the body, which was
+	// always fine.
+	for (const [, caption] of text.matchAll(/^```mermaid([^\n]*)$/gm)) {
+		if (caption.includes('`')) {
+			captions.push({ page: relative('.', page), caption: caption.trim() });
+		}
+	}
 	for (const [, body] of text.matchAll(FENCE)) {
 		count++;
 		// The page escapes `<` on the way out; the browser hands mermaid the
@@ -46,6 +59,16 @@ for (const page of walk(PAGES).filter((f) => /\.mdx?$/.test(f))) {
 			bad.push({ page: relative('.', page), message: String(e.message ?? e).split('\n')[0] });
 		}
 	}
+}
+
+if (captions.length) {
+	console.error(`Mermaid captions containing a backtick (${captions.length}):`);
+	for (const c of captions) console.error(`  - ${c.page}: \`\`\`mermaid${c.caption}`);
+	console.error(
+		'\nA fence info string may not contain a backtick, so markdown does not' +
+			'\nsee a fence at all and publishes the diagram as literal text.',
+	);
+	process.exit(1);
 }
 
 if (bad.length) {

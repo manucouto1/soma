@@ -60,6 +60,48 @@ The broker answers with a `Path`, and there are four:
 | `Direct` | the two ends reach each other and speak, over a socket or over a child's pipes. One crossing, lowest latency, broker gone |
 | `Relayed` | neither can reach the other, so the bytes stream through the broker. No disk, no durability, never more than a window in flight |
 
+What the table cannot show is the part that matters: **where the bytes
+actually go**. The broker is in the first exchange and out of the second —
+except in the one case where nothing else is left.
+
+```mermaid Where the bytes go. The broker is asked once per host per session; after that only Relayed keeps it in the path.
+flowchart TB
+    subgraph ask["Rendezvous · tens of bytes, once per host per session"]
+        direction LR
+        C0["client"] -. "where is w1?" .-> B0(["broker"])
+        B0 -. "a Path" .-> C0
+    end
+
+    subgraph one["InProcess · nothing is transferred"]
+        direction LR
+        C1["client and worker, one process"]
+    end
+
+    subgraph two["Mount · both ends see the same filesystem"]
+        direction LR
+        C2["client"] ==> |written| D2[("a shared directory")]
+        D2 ==> |read| W2["worker"]
+    end
+
+    subgraph three["Direct · lowest latency, broker gone"]
+        direction LR
+        C3["client"] ==> |"a socket, or a child's pipes"| W3["worker"]
+    end
+
+    subgraph four["Relayed · neither end can reach the other"]
+        direction LR
+        C4["client"] ==> B4(["broker"])
+        B4 ==> W4["worker"]
+    end
+
+    ask ~~~ one ~~~ two ~~~ three ~~~ four
+```
+
+`InProcess` still runs the slice where it was placed — it is the `.at()` that
+never left home and pays for a trip anyway. And `Relayed` is the only one that
+keeps the broker in the path, which is why it is the last resort rather than
+the default: no disk, no durability, and never more than a window in flight.
+
 A client always does the same thing: it talks to a broker. The only thing that
 changes between having a platform account, having a head node and having
 neither is **which** broker, which is a URL. There is no second code path and

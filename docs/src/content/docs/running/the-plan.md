@@ -75,6 +75,31 @@ that built it. This matters because the same graph built with `node()` and
 | there is a **series cut** | `Sequence` of the two sides |
 | no cut | a flat `Sequence`: the graph is not series-parallel |
 
+Which for `a >> (b | c) >> d`, with `c` placed on another host, is this — the
+tree `g.plan()` actually prints:
+
+```mermaid The plan for tokenize >> (strict | loose.at("w1")) >> vote. The numbers on a Sequence are order; a Wave's branches have none, because they run at once.
+flowchart TD
+    S["Sequence"]
+    S -->|1| E1["Execute tokenize<br/>from: the graph's input"]
+    S -->|2| W["Wave"]
+    S -->|3| E4["Execute vote<br/>from: strict, loose"]
+    W -->|at once| E2["Execute strict<br/>from: tokenize"]
+    W -->|at once| R["Remote w1"]
+    R --> E3["Execute loose<br/>from: tokenize"]
+
+    classDef here fill:none,stroke-width:1px
+    classDef away stroke-dasharray: 4 3
+    class E1,E2,E4 here
+    class R,E3 away
+```
+
+`Remote` sits **above** the node it carries rather than beside it, which is the
+whole of what "a slice and not a step" means: everything under that box crosses
+the wire once. And nothing in `Execute` refers to the graph — `from` is the
+plan's own answer to *where does my input come from*, which is why a branch of
+it can be sent to a process that has never seen the graph.
+
 A **series cut** `(A, B)` is what a `>>` produces: the crossing edges run from
 **all** the sinks of `A` to **all** the sources of `B`, and from nowhere else.
 Only the prefixes of a topological order need testing, because in a serial
