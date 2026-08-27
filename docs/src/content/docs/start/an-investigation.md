@@ -35,8 +35,9 @@ soma-tree/tests/an-investigation.sh
 
 It takes about a minute. It is also the fixture the end-to-end tests run
 against, so it cannot rot without the suite going red. Every `diff` and `log`
-below is its output verbatim; the reasoning half is a session run in the same
-repository, since the script only builds the record.
+below is its output, headers trimmed, except the one section that says it comes
+from somewhere else; the reasoning half is a session run in the same repository,
+since the script only builds the record.
 
 ## What it needs
 
@@ -110,6 +111,74 @@ experiments.encoder:build   ·   3 commits
 Nobody marked the top commit. It inherits the doubt through git, because
 `verdict invalid` is the one judgement whose consequence is mechanical:
 everything under it becomes suspect, and nobody had to write that down.
+
+### And in a repository nobody wrote for this
+
+Everything above is the walkthrough, and a walkthrough plants what it wants you
+to find. The one thing it cannot show is the case this command exists for:
+somebody who was not looking.
+
+`symptoms-or-shortcuts` is a real study — the interpretable end of a paper,
+four nodes in a line, distilled onto current `somatize`. Nine commits of
+ordinary work: a device name, a plotting import, a batching bug. Asked what
+those commits did, with nothing running and nothing checked out:
+
+```console
+$ somatize-tree log --most 8
+
+probing 9 of 9 commits; 0 were already known
+csb.graph:build   ·   8 commits
+
+0483214b4547  A channel hands the readout a rate, not a sum, and it is the axis that mattered
+     │    edit: channels
+2b5012bff14a  Ask the evidence whether it separates the classes, before blaming a cell
+     │    no changes
+b04c93e54f5a  The first full run flagged everybody, and two things were wrong
+     │    no changes
+8e63947d2a5f  A batch is a cache key, so who is in one cannot depend on the seed
+     │    no changes
+83d597c43dd2  A missing plotting library must not throw away a finished run
+     │    no changes
+b9d1d33a5d0b  The device is cuda:0 and never cuda: somatize refuses the bare name
+     │    no changes
+6132a2f397e5  Evaluate on the batching that was trained on, or the cache never hits
+     │    no changes
+9420fafb9a61  Training, evaluation and the queue: a run of the interpretable end, end to end
+     │    from 9268e85172de · edit: channels, encoder, evidence, readout · ⚠ STALE: channels, encoder, evidence, readout · ⚠ suspect: channels, evidence, readout
+
+2 of the steps leave results NOT comparable with the one before.
+```
+
+Six of the eight steps moved nothing, which is the answer you want from six
+commits about a device string and a missing import. The one that did:
+
+```console
+$ somatize-tree diff 9268e85 9420faf
+
+  channels  STALE · SUSPECT
+  encoder   STALE
+  evidence  STALE · SUSPECT
+  readout   STALE · SUSPECT
+
+The edit is in: channels, encoder, evidence, readout
+⚠ 4 node(s) with the SAME key and other code: the cache will HIT.
+4 node(s) with results NOT comparable with the ones before.
+```
+
+**Every node in the graph, with the same key and other code.** The commit that
+first wired the thing up end to end rewrote all four `forward` bodies and moved
+not one name, because [the fingerprint is deliberately not in the
+key](/soma/running/what-is-remembered/) — so a store filled before it would have
+gone on answering, correctly as far as anything could tell, with the previous
+model's activations.
+
+Nobody wrote that commit as a lesson and nobody went looking. It is the whole
+argument for asking by default: a planted `STALE` proves the detector fires, and
+only an unplanted one says the question was worth asking.
+
+The repository is not published — it is somebody's research, and the numbers in
+it are theirs. What is reproduced here is the two commands and what they
+printed.
 
 `diff` follows `git diff --quiet`: **0** means nothing moved, **1** means
 something did, and **2** is an error. So a hook can branch on a stale key
