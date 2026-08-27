@@ -100,6 +100,13 @@ spread.frozen()      # {'embed': None}
 spread.mapped_nodes()
 ```
 
+![The same graph, drawn](../../../assets/figures/graph-declared.png)
+
+That is `spread.figure()`, and **nothing has run**. The four suffixes are the
+four things on it: the dashed frames are the two workers, the green box is the
+device, and `cached · frozen` is what is remembered. `wave` is the plan's word
+for what happens at the same time.
+
 They are four different facts and mixing them up is the easy mistake. The graph
 says **what** exists, `.at()` says **where**, `.on()` says on which device,
 `.cached()` says **what is remembered**, and the plan says **when** — which you

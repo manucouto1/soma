@@ -8,11 +8,19 @@ g.figure()   # a plotly Figure, to show or to compose
 g            # in a notebook: the same figure, straight in the cell
 ```
 
-A graph can be drawn **having never run**. Printing a declaration is not
-observing it, and this is the first of the three things observability was split
-into — the other two being
+![A graph drawn from its declaration, before it has ever run](../../../assets/figures/graph-declared.png)
+
+A graph can be drawn **having never run** — that one is the
+[quickstart's](/soma/start/quickstart/), and nothing has executed. Printing a
+declaration is not observing it, and this is the first of the three things
+observability was split into — the other two being
 [the record of what happened](/soma/looking/the-record/) and
 [the diagnosis](/soma/looking/health/).
+
+Every suffix is in it. `worker1` and `worker2` are the two dashed frames, which
+is what leaves this machine; `cuda:0 · cached · frozen` sits on the one node
+that carries all three; `wave` is the frame around what runs at the same time.
+None of that is a legend somebody maintains — it is the plan, laid out.
 
 ## What is drawn is the plan
 
@@ -39,6 +47,12 @@ the nesting stops saying who feeds whom — the truth lives entirely in each
 step's `from`. So the two channels are separated on purpose, and the **N**
 (`a→c`, `a→d`, `b→d`) is the case that keeps the figure honest. It is in the
 tests.
+
+![The N: four nodes with no series-parallel tree](../../../assets/figures/graph-the-n.png)
+
+There is no nesting to read here and the figure does not invent any: `a` and
+`b` sit in the same box because they run at the same time, and the arrows —
+not the box — say that `c` waits for `a` while `d` waits for both.
 
 An edge that would cross a box it does not belong to is **routed around it**,
 one lane each. An arrow drawn over a node reads as an arrow into it.
