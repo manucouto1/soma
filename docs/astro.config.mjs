@@ -78,6 +78,8 @@ export default defineConfig({
 					items: [
 						{ label: 'What this is', slug: 'start/what-this-is' },
 						{ label: 'Install, and a first graph', slug: 'start/quickstart' },
+						{ label: 'A search, and the machines running it', slug: 'start/a-search' },
+						{ label: 'Following an investigation', slug: 'start/an-investigation' },
 						{ label: 'The notebooks', slug: 'start/notebooks' },
 					],
 				},
