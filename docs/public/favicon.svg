@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- The logo reduced for 16px: one turn instead of two, two rungs
+       instead of eight, heavier strokes. Same construction as
+       src/assets/logo-light.svg — see the comments there — including the
+       back strand broken at the crossing, which is the only thing that
+       stops the two strands merging into a closed lens. -->
+  <g fill="none" stroke-linecap="round">
+    <path class="rung" d="M35.2 45v38M92.8 45v38" stroke-width="7" opacity=".45"/>
+    <path class="strand" stroke-width="11" stroke-linecap="butt"
+          d="M16 64C29 85.7 42 89.7 55 76.2M73 51.8C86 38.3 99 42.3 112 64"/>
+    <path class="strand" stroke-width="11"
+          d="M16 64C32 37.3 48 37.3 64 64C80 90.7 96 90.7 112 64"/>
+  </g>
+  <style>
+    .strand, .rung { stroke: #1c1b19 }
+    @media (prefers-color-scheme: dark) {
+      .strand, .rung { stroke: #f5f4f2 }
+    }
+  </style>
+</svg>

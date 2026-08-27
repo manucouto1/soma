@@ -1,0 +1,99 @@
+/* A wider content channel, without long prose lines.
+ *
+ * Starlight's default channel is 45rem, which is a comfortable measure for a
+ * paragraph and much too narrow for everything else this site puts in it: the
+ * Internals tables are four columns wide with a `file:line` in one of them,
+ * the Rust listings run past 90 columns, and a diagram squeezed to 45rem draws
+ * its own type at half size.
+ *
+ * So the channel widens and the *prose* keeps its measure. Paragraphs, lists
+ * and asides stay readable; tables, code and figures use the whole channel. */
+
+:root {
+	/* Effectively uncapped: the channel is whatever the panes leave, and what
+	 * they leave is set below. Starlight's 45rem was the cap doing the work. */
+	--sl-content-width: 90rem;
+	/* The measure for running text. Roughly 85 characters at the body size. */
+	--soma-prose-width: 48rem;
+	/* The table of contents needs about this much and no more. Starlight sizes
+	 * it as `sidebar-width + half the slack`, which hands it 460px on a wide
+	 * screen and 144px on a laptop — the opposite of what either wants. It
+	 * grows with the viewport instead, so a laptop spends its pixels on the
+	 * content and a wide screen can afford a comfortable index. */
+	--soma-toc-width: 11rem;
+	--sl-sidebar-width: 16.5rem;
+}
+
+@media (min-width: 90rem) {
+	:root {
+		--soma-toc-width: 13rem;
+		--sl-sidebar-width: 18rem;
+	}
+}
+
+@media (min-width: 105rem) {
+	:root {
+		--soma-toc-width: 15.5rem;
+		--sl-sidebar-width: 18.75rem;
+	}
+}
+
+/* Give the contents pane a width of its own and the rest to the content. The
+ * selector matches Starlight's own so the specificity lines up; `@layer` is
+ * what lets these win without `!important`. */
+@media (min-width: 72rem) {
+	[data-has-sidebar][data-has-toc] .main-pane {
+		width: calc(100% - var(--soma-toc-width));
+	}
+
+	.right-sidebar-container {
+		width: var(--soma-toc-width);
+	}
+
+	/* `.right-sidebar` is `position: fixed`, so its `width: 100%` resolves
+	 * against the viewport rather than the container it sits in — it is
+	 * 1440px wide on a 1440px screen and runs a whole screen off the right.
+	 * Stock Starlight gets away with it because its headings are short; ours
+	 * are sentences, and they were being cut rather than wrapped. */
+	.right-sidebar {
+		width: var(--soma-toc-width);
+	}
+
+	/* The panel inside sizes itself from `--sl-sidebar-width` — the *left*
+	 * nav's width — rather than from the panel it is in, so it stayed 256px
+	 * wide inside a 208px column and its links ran off the screen. */
+	.right-sidebar-panel .sl-container {
+		width: calc(var(--soma-toc-width) - 2 * var(--sl-sidebar-pad-x));
+		max-width: 100%;
+	}
+}
+
+/* Running text only. A heading is a label, not a paragraph: capping it makes a
+ * long one overflow rather than wrap, and it sits oddly above a table that uses
+ * the whole channel. */
+.sl-markdown-content > :is(p, ul, ol, dl, blockquote, .starlight-aside),
+.sl-markdown-content > details > :is(p, ul, ol) {
+	max-width: var(--soma-prose-width);
+}
+
+/* Nothing else is capped, so tables, code and figures already use the whole
+ * channel. They do need to stay inside it: `max-width: none` here let a figure
+ * with a wide drawing push the page sideways on a phone. */
+.sl-markdown-content > :is(table, figure, .expressive-code, pre) {
+	max-width: 100%;
+}
+
+/* A table that still does not fit scrolls inside itself rather than pushing
+ * the page sideways. */
+.sl-markdown-content > table {
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	overflow-x: auto;
+}
+
+@media (max-width: 72rem) {
+	:root {
+		--soma-prose-width: none;
+	}
+}

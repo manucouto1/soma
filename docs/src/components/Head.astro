@@ -1,0 +1,64 @@
+---
+// Starlight's own <head>, plus the mermaid renderer.
+//
+// The renderer is a module script, so Astro bundles it — no CDN, which the
+// site could not reach offline anyway. `mermaid` itself is imported lazily and
+// only on a page that actually has a diagram: it is a megabyte, and most pages
+// have none.
+import Default from '@astrojs/starlight/components/Head.astro';
+---
+
+<Default><slot /></Default>
+
+<script>
+	const nodes = document.querySelectorAll<HTMLElement>('pre.mermaid');
+	if (nodes.length) {
+		// Read the palette off Starlight's own variables so a diagram is the
+		// same two themes the rest of the page is, and never a third one.
+		const css = (name: string, fallback: string) =>
+			getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+
+		const palette = () => ({
+			background: css('--sl-color-bg', '#ffffff'),
+			primaryColor: css('--sl-color-bg-nav', '#f6f6f6'),
+			primaryTextColor: css('--sl-color-white', '#000000'),
+			primaryBorderColor: css('--sl-color-hairline-shade', '#888888'),
+			lineColor: css('--sl-color-gray-3', '#888888'),
+			secondaryColor: css('--sl-color-bg-sidebar', '#f0f0f0'),
+			tertiaryColor: css('--sl-color-bg-inline-code', '#eeeeee'),
+			fontFamily: css('--sl-font-system-mono', 'ui-monospace, monospace'),
+			fontSize: '14px',
+		});
+
+		const source = new Map<HTMLElement, string>();
+		for (const n of nodes) source.set(n, n.textContent ?? '');
+
+		const mermaid = (await import('mermaid')).default;
+
+		const render = async () => {
+			for (const [n, src] of source) {
+				n.removeAttribute('data-processed');
+				n.textContent = src;
+			}
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: 'base',
+				themeVariables: palette(),
+				securityLevel: 'strict',
+				flowchart: { curve: 'basis', htmlLabels: false, padding: 12 },
+				sequence: { useMaxWidth: true },
+			});
+			await mermaid.run({ nodes: [...source.keys()] });
+		};
+
+		await render();
+
+		// Starlight's toggle flips `data-theme` on <html>; the SVG is already
+		// painted by then, so it has to be drawn again.
+		let pending: number | undefined;
+		new MutationObserver(() => {
+			clearTimeout(pending);
+			pending = window.setTimeout(render, 50);
+		}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+	}
+</script>

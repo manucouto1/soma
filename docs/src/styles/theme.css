@@ -1,0 +1,272 @@
+/* The site's palette, and it is not a new one.
+ *
+ * `somatize._theme` is one table of colours for everything this library draws,
+ * and the pages here are full of what it drew. A site whose chrome is a second
+ * palette is the thing that table exists to prevent — so the chrome is built
+ * out of the same five values, at the same five levels:
+ *
+ *   GROUND  #101319  the paper a figure is drawn on   → the page
+ *   RAISED  #1a1e28  a surface sitting on the ground  → nav, sidebar, cards
+ *   EDGE    #2c3242  a line that separates            → hairlines, inline code
+ *   MUTED   #868ea3  read only if you look for it     → captions, units
+ *   INK     #e7e9ef  text                             → text
+ *
+ * The page being GROUND is the point of the whole thing: a figure exported at
+ * `scale=2` carries its own background, and on this page that background is
+ * the page. The figure has no edge. Nothing is inset, nothing is framed, and
+ * the reader never sees where the drawing stops.
+ *
+ * ── The accent is deliberately not a colour ──────────────────────────────────
+ *
+ * One fact per channel: in that table hue says *where* a node ran or *which*
+ * series it is, and it never doubles as good-or-bad. Every hue is already
+ * spoken for — green is a device, orange is another machine, purple is a
+ * hypothesis, red is the one thing that means a judgement. A brand colour
+ * would have to take one of those and mean something else with it on the same
+ * page, so it does not: what marks a link is a steel grey a shade cooler than
+ * the prose, plus an underline. Two channels, neither of them a hue.
+ */
+
+/* NOT inside `@layer starlight.base`. Starlight declares its own tokens there,
+ * at the same specificity, so the cascade would fall through to source order —
+ * and its stylesheet is emitted after this one, which is how the light theme
+ * went on being Starlight's own blue while these values sat in the bundle
+ * doing nothing. Unlayered declarations beat layered ones, always. */
+
+:root,
+::backdrop {
+  --sl-color-white: #eef1f7;
+  --sl-color-gray-1: #e7e9ef; /* INK */
+  --sl-color-gray-2: #c9cfdd; /* body text */
+  --sl-color-gray-3: #868ea3; /* MUTED */
+  --sl-color-gray-4: #5b6377;
+  --sl-color-gray-5: #2c3242; /* EDGE */
+  --sl-color-gray-6: #1a1e28; /* RAISED */
+  --sl-color-gray-7: #151821;
+  --sl-color-black: #101319; /* GROUND */
+
+  --sl-color-accent-low: #232a38;
+  --sl-color-accent: #7d8aa6;
+  --sl-color-accent-high: #e2eaf8;
+
+  /* Two of the semantic hues are the table's own, so an aside and a
+	 * figure agree about what orange means. The other three stay near the
+	 * table's neighbourhood rather than at Starlight's full saturation,
+	 * which was tuned against a much lighter page than this one. */
+  --sl-color-orange: #eb6834;
+  --sl-color-orange-low: #2a2216;
+  --sl-color-orange-high: #f2c9a8;
+  --sl-color-green: #3f9d6d;
+  --sl-color-green-low: #12291f;
+  --sl-color-green-high: #a9e7c5;
+  --sl-color-purple: #a98bdd;
+  --sl-color-purple-low: #1d1a2b;
+  --sl-color-purple-high: #d9cbf2;
+  --sl-color-blue: #6f8fd1;
+  --sl-color-blue-low: #1a2133;
+  --sl-color-blue-high: #c2d2f0;
+  --sl-color-red: #ef5f6b; /* the alarm, and it is the same alarm */
+  --sl-color-red-low: #2c171b;
+  --sl-color-red-high: #f7b9be;
+
+  --sl-color-hairline-shade: #1a1e28;
+  --sl-color-backdrop-overlay: rgb(16 19 25 / 0.72);
+
+  /* Flatter than Starlight's. Depth here comes from the four surface
+	 * levels above, not from a drop shadow — a card that is both lighter
+	 * *and* floating reads as two claims about the same box. */
+  --sl-shadow-sm: 0 1px 0 rgb(0 0 0 / 0.28);
+  --sl-shadow-md: 0 2px 8px rgb(0 0 0 / 0.32);
+  --sl-shadow-lg: 0 12px 32px rgb(0 0 0 / 0.44);
+}
+
+/* Light, and sober in the same way. The figures stay dark — that is
+ * `_theme`'s decision and not this file's, taken because what they are for is
+ * being looked at for a long time beside a training run — so here they are
+ * given an edge and read as inset panels rather than as holes. */
+:root[data-theme="light"],
+[data-theme="light"] ::backdrop {
+  --sl-color-white: #131722;
+  --sl-color-gray-1: #1c2130;
+  --sl-color-gray-2: #363d4f;
+  --sl-color-gray-3: #626b80;
+  --sl-color-gray-4: #949bad;
+  --sl-color-gray-5: #cdd2dc;
+  --sl-color-gray-6: #eceff4;
+  --sl-color-gray-7: #f5f7fa;
+  --sl-color-black: #ffffff;
+
+  --sl-color-accent-low: #dfe4ef;
+  --sl-color-accent: #54607d;
+  --sl-color-accent-high: #1e2b47;
+
+  --sl-color-hairline-shade: #eceff4;
+  --sl-color-backdrop-overlay: rgb(19 23 34 / 0.5);
+
+  /* And the semantic ones, which are otherwise Starlight's pastels: an
+	 * `<Card>` puts its icon on a `-low` chip, so six cards on the home page
+	 * came out in six sweet shades and the page read as a toy. Tinted greys
+	 * of the same hues instead — a chip is a container, not a claim. */
+  --sl-color-orange: #b4501f;
+  --sl-color-orange-low: #f3ece5;
+  --sl-color-orange-high: #6d3113;
+  --sl-color-green: #2c7a52;
+  --sl-color-green-low: #e6efea;
+  --sl-color-green-high: #1a5033;
+  --sl-color-purple: #6f56a0;
+  --sl-color-purple-low: #ecebf3;
+  --sl-color-purple-high: #453169;
+  --sl-color-blue: #3f5b96;
+  --sl-color-blue-low: #e8ecf4;
+  --sl-color-blue-high: #26375c;
+  --sl-color-red: #b83f4a;
+  --sl-color-red-low: #f5e9ea;
+  --sl-color-red-high: #7a2630;
+}
+
+/* ── Shape ───────────────────────────────────────────────────────────────────
+ *
+ * The radii are shadcn's: 0.25 / 0.375 / 0.5 / 0.75rem, small and consistent.
+ * Starlight exposes no radius variable, so the chrome is named one box at a
+ * time rather than left to the default 0.5rem everywhere.
+ */
+
+:root {
+  --soma-radius-sm: 0.25rem;
+  --soma-radius: 0.375rem;
+  --soma-radius-lg: 0.5rem;
+  --soma-radius-xl: 0.75rem;
+}
+
+.card,
+.starlight-aside,
+.expressive-code .frame pre,
+.expressive-code .frame .header {
+  border-radius: var(--soma-radius-lg);
+}
+
+:not(pre) > code {
+  border-radius: var(--soma-radius-sm);
+  padding: 0.1875em 0.375em;
+  font-size: 0.9em;
+}
+
+/* An aside is a panel, not a poster: a hairline on all four sides and a bar on
+ * the one that says which kind. Starlight's default paints the whole box in
+ * the hue, which on this ground is louder than anything it ever says. */
+.starlight-aside {
+  background: var(--sl-color-gray-7);
+  border: 1px solid var(--sl-color-gray-5);
+  border-inline-start: 3px solid var(--sl-color-asides-border);
+}
+
+.starlight-aside__title {
+  color: var(--sl-color-asides-text-accent);
+}
+
+/* ── Links ───────────────────────────────────────────────────────────────────
+ *
+ * Underlined always, and not on hover only. Colour alone would be the second
+ * channel this palette refuses to spend; and a docs page whose links are only
+ * a shade cooler than the prose is a page you have to sweep with the mouse.
+ */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-decoration: underline;
+  text-decoration-color: var(--sl-color-gray-4);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+  transition:
+    text-decoration-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: currentColor;
+}
+
+/* ── Chrome ──────────────────────────────────────────────────────────────────
+ *
+ * The nav and the sidebar sit one level above the page (RAISED on GROUND),
+ * which is the whole hierarchy — no shadow, no gradient, one hairline.
+ */
+.header {
+  border-bottom: 1px solid var(--sl-color-hairline-shade);
+  box-shadow: none;
+}
+
+.sidebar-pane {
+  border-inline-end: 1px solid var(--sl-color-hairline-shade);
+}
+
+/* The selected page is a filled chip rather than blue text: it says *where you
+ * are*, which is a position and not a link. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover {
+  background: var(--sl-color-gray-5);
+  color: var(--sl-color-white);
+  border-radius: var(--soma-radius);
+}
+
+.sidebar-content a:hover {
+  background: var(--sl-color-gray-6);
+  border-radius: var(--soma-radius);
+}
+
+/* A group label is a label. Starlight sets it at body weight and body colour,
+ * which makes eight groups read as eight more links. */
+.sidebar-content .group-label .large {
+  color: var(--sl-color-gray-3);
+  font-size: var(--sl-text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────────
+ *
+ * Rules between rows and none around the outside. The pages here are mostly
+ * tables — a price list, a taxonomy, thirteen notebooks — and a full grid
+ * turns each of them into a spreadsheet.
+ */
+.sl-markdown-content table {
+  border-collapse: collapse;
+}
+
+.sl-markdown-content :is(th, td) {
+  border: none;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  padding: 0.5rem 0.75rem;
+}
+
+.sl-markdown-content th {
+  color: var(--sl-color-gray-3);
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-align: start;
+}
+
+.sl-markdown-content tr:last-child :is(th, td) {
+  border-bottom: none;
+}
+
+/* ── Figures ─────────────────────────────────────────────────────────────────
+ *
+ * In dark, a figure's own ground is the page's, so it needs nothing. In light
+ * it is a dark panel and gets the edge that makes it read as one.
+ */
+:root[data-theme="light"] .sl-markdown-content img,
+:root[data-theme="light"] .nb-output {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: var(--soma-radius-lg);
+}
+
+/* A `<Card>` puts its icon on a chip tinted with a semantic hue, so six cards
+ * came out in six colours and the home page read as a toy. Hue in this
+ * library says *where* something ran, never how important it is — a chip is a
+ * container and it says nothing. */
+.card .icon {
+	background: var(--sl-color-gray-6);
+	border: 1px solid var(--sl-color-gray-5);
+	color: var(--sl-color-gray-2);
+}

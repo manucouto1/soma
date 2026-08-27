@@ -1,0 +1,24 @@
+/* Rich outputs carried over from the notebooks: `_repr_html_` cards, the run
+   tables and the architecture diagrams.
+
+   Legacy pinned this box to a white surface, because back then those outputs
+   arrived with light colours baked in and a docs page cannot know which theme
+   they were drawn for. Ours arrive drawn from `somatize._theme` — `#101319`
+   grounds and `#e7e9ef` ink — so the white box was a light frame around a dark
+   card. The box gives no surface at all now: the output brings its own, and on
+   this page that surface is the page's. */
+.nb-output {
+	margin: 1rem 0;
+	/* Diagrams and run tables are wider than the prose column. They scroll
+	   inside this box; the page itself must never scroll sideways. */
+	overflow-x: auto;
+}
+
+.nb-output svg {
+	display: block;
+	max-width: none;
+}
+
+.nb-output table {
+	margin: 0;
+}

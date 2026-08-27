@@ -3,36 +3,73 @@ name: Documentation
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
+# Deliberately not at workflow level. The guards are worth running on a pull
+# request — a page missing from the sidebar should fail before it is merged,
+# not afterwards in the job whose name says "deploy" — and a pull request has
+# no business holding a token that can write to Pages. So `build` runs with
+# `contents: read` and the write lives in the job that deploys.
+#
+# `upload-pages-artifact` is fine under `contents: read`: it uploads with the
+# Actions runtime token, not with `GITHUB_TOKEN`.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    name: Rust API reference to Pages
+  build:
+    name: The site, with the Rust reference under it
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # ── The site ────────────────────────────────────────────────────────────
+      #
+      # `npm run check` is the guards *and* the production build: a page missing
+      # from the sidebar, an internal link without the `/soma` base, or a mermaid
+      # fence that does not parse fails here rather than shipping. The `pre*`
+      # hook renders `examples/` into `src/content/docs/tutorials/` first, which
+      # is why python3 has to be on the runner — it is stdlib only, no install.
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install the site's dependencies
+        working-directory: docs
+        run: npm ci
+
+      - name: Build the site, guards included
+        working-directory: docs
+        run: npm run check
+
+      # ── The Rust reference, under /api/rust/ ────────────────────────────────
+      #
+      # It used to be the whole of what this workflow published, which is how it
+      # came to occupy the URL the site had. It is a reference and not a front
+      # door, so it sits under the site rather than in front of it.
+
       - name: Install the pinned toolchain
+        if: github.event_name != 'pull_request'
         run: rustup show active-toolchain || rustup toolchain install
 
       - name: Setup Python for PyO3
+        if: github.event_name != 'pull_request'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
       - name: Point PyO3 at the pinned interpreter
+        if: github.event_name != 'pull_request'
         run: echo "PYO3_PYTHON=$(which python)" >> "$GITHUB_ENV"
 
       # Narrower than the same command in `ci.yml`, and deliberately so. There
@@ -43,18 +80,26 @@ jobs:
       # cdylib puts a page of Rust in front of it that says nothing true about
       # how it is used.
       - name: Build the API reference
+        if: github.event_name != 'pull_request'
         run: cargo doc --workspace --no-deps --lib --exclude somatize-python
 
-      # `cargo doc` writes no index for a workspace: it lands nine crate
-      # directories and nothing that points at them, so Pages would serve a
-      # 404 at the root. There is no facade crate to redirect to either, and
-      # picking one would be a lie about where to start.
-      - name: A front page, since a workspace has none
+      - name: Put it under the site
+        if: github.event_name != 'pull_request'
         run: |
-          cat > target/doc/index.html <<'HTML'
+          mkdir -p docs/dist/api/rust
+          cp -R target/doc/. docs/dist/api/rust/
+
+      # `cargo doc` writes no index for a workspace: it lands eight crate
+      # directories and nothing that points at them, so /api/rust/ would 404.
+      # There is no facade crate to redirect to either, and picking one would be
+      # a lie about where to start.
+      - name: A front page, since a workspace has none
+        if: github.event_name != 'pull_request'
+        run: |
+          cat > docs/dist/api/rust/index.html <<'HTML'
           <!doctype html>
           <meta charset="utf-8">
-          <title>somatize — API reference</title>
+          <title>somatize — Rust API reference</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>
             :root { color-scheme: light dark;
@@ -68,7 +113,8 @@ jobs:
             span { opacity: .7; }
           </style>
           <h1>somatize</h1>
-          <p class="sub">The Rust API reference. The Python package is
+          <p class="sub">The Rust API reference. The documentation is
+            <a href="/soma/">over here</a>; the Python package is
             <code>pip install somatize</code>.</p>
           <ul>
             <li><a href="somatize_core/index.html"><code>somatize-core</code></a>
@@ -91,18 +137,32 @@ jobs:
           HTML
 
       - name: Setup Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: target/doc
+          path: docs/dist
 
-      # No `PAGES_ENABLED` gate any more. Legacy had one because that repository
-      # was private and Pages on a private repository needs a paid plan, so the
-      # deploy 404'd on every push and painted the workflow red for a reason
-      # that was not the code. This repository is public and Pages is already
-      # configured with `build_type: workflow`, so the deploy is simply allowed.
+  # No `PAGES_ENABLED` gate any more. Legacy had one because that repository was
+  # private and Pages on a private repository needs a paid plan, so the deploy
+  # 404'd on every push and painted the workflow red for a reason that was not
+  # the code. This repository is public and Pages is already configured with
+  # `build_type: workflow`, so the deploy is simply allowed.
+  deploy:
+    name: Publish
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

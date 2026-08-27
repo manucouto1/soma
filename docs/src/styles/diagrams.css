@@ -1,0 +1,84 @@
+/* Diagrams — the hand-drawn inline SVG and the mermaid figures.
+ *
+ * Both take their colours from Starlight's variables, so a diagram is the same
+ * two themes as the page around it. The semantic tokens below carry the one
+ * thing each diagram is about; everything structural is `currentColor`. */
+
+:root {
+	--soma-build: #1f6e8c;
+	--soma-compile: #a8502f;
+	--soma-exec: #2f6b47;
+	--soma-edge: #6b4e9e;
+	--soma-figure-bg: var(--sl-color-gray-7, #f6f6f9);
+	--soma-figure-rule: var(--sl-color-gray-5);
+}
+
+:root[data-theme='dark'] {
+	--soma-build: #5fb3d0;
+	--soma-compile: #e08a63;
+	--soma-exec: #6fbe8c;
+	--soma-edge: #a98cdb;
+	--soma-figure-bg: var(--sl-color-black);
+	--soma-figure-rule: var(--sl-color-gray-5);
+}
+
+/* Figures sit on their own ground so they read as a drawn thing rather than
+ * as text that happens to be arranged. Width comes from the channel now; see
+ * layout.css. */
+.sl-markdown-content .soma-figure,
+.sl-markdown-content .mermaid-figure {
+	margin-block: 2rem;
+	padding: 1.25rem 1.25rem 0;
+	background: var(--soma-figure-bg);
+	border: 1px solid var(--soma-figure-rule);
+	border-radius: 0.5rem;
+	overflow-x: auto;
+}
+
+/* A diagram below its comfortable width scrolls rather than shrinking: the
+ * type inside is drawn at a fixed size and stops being readable first. */
+figure.soma-figure svg {
+	display: block;
+	min-width: 46rem;
+	width: 100%;
+	height: auto;
+	color: var(--sl-color-white);
+}
+
+figure.soma-figure svg text {
+	font-family: var(--sl-font-system-mono, ui-monospace, monospace);
+}
+
+.mermaid-figure pre.mermaid {
+	background: none;
+	border: none;
+	padding: 0;
+	margin: 0;
+	display: flex;
+	justify-content: center;
+}
+
+/* Before mermaid runs, the source would flash as text. */
+.mermaid-figure pre.mermaid:not([data-processed]) {
+	visibility: hidden;
+	min-height: 8rem;
+}
+
+.mermaid-figure pre.mermaid svg {
+	max-width: 100%;
+	height: auto;
+}
+
+.sl-markdown-content .soma-figure figcaption,
+.sl-markdown-content .mermaid-figure figcaption {
+	margin: 1rem -1.25rem 0;
+	padding: 0.75rem 1.25rem;
+	border-top: 1px solid var(--soma-figure-rule);
+	font-size: var(--sl-text-sm);
+	line-height: 1.5;
+	color: var(--sl-color-gray-2);
+}
+
+.sl-markdown-content figcaption code {
+	font-size: 0.9em;
+}

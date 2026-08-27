@@ -1,0 +1,70 @@
+---
+title: somatize
+description: Declare a computational graph, run it across machines, and ask it what it did.
+template: splash
+hero:
+  tagline: Declare a graph. Run it across machines. Then ask it what it did — and what you were trying to find out.
+  actions:
+    - text: What this is
+      link: /soma/start/what-this-is/
+      icon: right-arrow
+    - text: Quickstart
+      link: /soma/start/quickstart/
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/manucouto1/soma
+      variant: minimal
+      icon: github
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="A graph is one expression" icon="rocket">
+    `a >> (b | c) >> d`, and a node is one thing: `forward(input, ctx)` takes
+    what arrived along the edges and returns what it produced. No filter type,
+    no step type, no return value that tells them apart. The graph is compiled
+    and executed in Rust.
+  </Card>
+  <Card title="Where it runs is a suffix" icon="setting">
+    `.on("cuda:0")` is a device, `.at("worker1")` is another machine,
+    `.cached()` is a value worth keeping. The graph says **what** exists and
+    those say **where** and **what is remembered** — five orthogonal facts, and
+    confusing them is the easy mistake.
+  </Card>
+  <Card title="It tells you what happened" icon="approve-check">
+    A run emits facts as it goes, including from the machines it was spread
+    over — a `Watcher` is a hole in the core, so a notebook is told live and a
+    store is written for later. The record is read back with a price list, and
+    it draws.
+  </Card>
+  <Card title="And whether the network is learning" icon="warning">
+    Dead units, saturation, a step-to-weight ratio that has gone. A diagnosis
+    is an **opinion about the stored record**, which is what makes arguing with
+    a threshold cost a scan instead of an afternoon of GPU. And `probe` asks
+    what can be said before the first step is taken.
+  </Card>
+  <Card title="A search that needs no coordinator" icon="random">
+    A trial is a number, `ask` is a function of it, and a shared folder settles
+    who gets which — so a machine that claimed trial 7 derives it without
+    replaying six. Halton and Sobol cover the space for every prefix, which is
+    what stops two machines proposing neighbours.
+  </Card>
+  <Card title="And what you were trying to find out" icon="pencil">
+    The half a repository loses. `somatize-tree` writes down questions,
+    hypotheses, attempts, findings and decisions in a DAG beside the code —
+    then `go` takes you back to a move by the name you remember, instead of a
+    hash you do not.
+  </Card>
+</CardGrid>
+
+## Install
+
+```bash
+pip install 'somatize[viz]'
+```
+
+The Rust is compiled inside the wheel; `viz` adds plotly, which every figure
+here needs. Then [a first graph in five minutes](/soma/start/quickstart/), or
+[the thirteen notebooks](/soma/start/notebooks/), which ship executed with
+their outputs.

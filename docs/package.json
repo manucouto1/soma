@@ -1,0 +1,27 @@
+{
+  "name": "docs",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "generate": "python3 scripts/notebooks_to_docs.py && python3 scripts/use_cases_to_docs.py",
+    "predev": "npm run generate",
+    "dev": "astro dev",
+    "prestart": "npm run generate",
+    "start": "astro dev",
+    "prebuild": "npm run generate",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "precheck": "npm run generate",
+    "check": "node scripts/check-sidebar.mjs && node scripts/check-anchors.mjs && node scripts/check-mermaid.mjs && astro build"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.38.2",
+    "astro": "^6.0.1",
+    "mermaid": "^11.16.1",
+    "sharp": "^0.34.2"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}
