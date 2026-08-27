@@ -4098,6 +4098,20 @@ what happened to it.)*
       the shape keeps the names
 - [x] a recurrent cell says its output and not its hidden state
 
+**What was measured survives the steps that did not measure it**
+(`soma-python/tests/test_health.py`)
+- [x] a number taken on the snapshot cadence is still in `seen` after steps that
+      did not take it
+
+Half of what an audit measures is an SVD and runs every `snapshot` steps —
+`eff_rank`, `group_cka`, `update_rank`. `seen` promises *the latest of each*,
+and the first draft read that as *the latest fact*, replacing the whole dict on
+every step: so a run that did not happen to end on a snapshot step dropped all
+of them, and `LEAKAGE` and `NARROWING` could fire only by arithmetic luck. The
+fix is one word — merge rather than replace — and what found it was writing an
+example whose entire point was a leaking pair of branches, which is the third
+real bug the examples have paid for.
+
 **Drawn** (`soma-python/tests/test_figure.py`)
 - [x] a node with an inside becomes a frame around it, and one without is drawn
       exactly as before

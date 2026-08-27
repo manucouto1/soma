@@ -82,7 +82,13 @@ def seen(
     for row in _rows(store, run=run, last=last):
         for fact in row:
             if fact.get("fact") == "health" and "node" in fact:
-                latest[named(fact)] = _numbers(fact)
+                # Merged and not replaced, and that is the whole of "the latest
+                # of **each**": half of what an audit measures is on a cadence —
+                # `eff_rank`, `group_cka` and `update_rank` are an SVD and run
+                # every `snapshot` steps — so a run that does not happen to end
+                # on one of those steps would drop them, and `LEAKAGE` and
+                # `NARROWING` could only fire by arithmetic luck.
+                latest.setdefault(named(fact), {}).update(_numbers(fact))
     return latest
 
 

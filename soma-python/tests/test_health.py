@@ -223,6 +223,27 @@ def test_a_cadence_measures_fewer_steps_and_says_the_same_kind_of_thing(store):
     assert all(value > 0 for _, value in drawn)
 
 
+def test_what_is_measured_on_a_cadence_survives_the_steps_that_do_not_measure_it(store):
+    # Half of what an audit measures is an SVD and runs every `snapshot` steps —
+    # `eff_rank`, `group_cka`, `update_rank`. `seen` reduces to *the latest of
+    # each*, and the first draft read that as *the latest fact*, so a run that
+    # did not happen to end on a snapshot step dropped all of them: `LEAKAGE`
+    # and `NARROWING` could then only fire by arithmetic luck. Found by writing
+    # an example whose whole point was a leaking pair of branches.
+    torch.manual_seed(0)
+    g, ids = chain([Block(activation="tanh") for _ in range(2)])
+    trained(g, store, steps=12,
+            auditing=Audit(channels=True, snapshot=5,
+                           groups={ids[0]: {"a": range(0, 8), "b": range(8, 16)}}))
+
+    measured = seen(store, run="a-run")[ids[0]]
+
+    assert "group_cka" in measured, "the snapshot half was thrown away"
+    assert "eff_rank" in measured
+    # And the cheap half is still this step's and not a stale one.
+    assert measured["grad_norm"] == history(store, run="a-run", node=ids[0])[-1][1]
+
+
 def test_auditing_does_not_change_what_the_network_computes(store):
     # Hooks read; they do not write. Two runs from the same seed have to end at
     # the same weights whether or not anybody was looking.
