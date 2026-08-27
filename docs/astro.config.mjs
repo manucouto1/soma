@@ -124,6 +124,7 @@ export default defineConfig({
 						{ label: 'The plan: what runs when', slug: 'running/the-plan' },
 						{ label: 'Across machines', slug: 'running/across-machines' },
 						{ label: 'What is remembered', slug: 'running/what-is-remembered' },
+						{ label: 'Writing a codec', slug: 'running/writing-a-codec' },
 						{ label: 'Where the data comes from', slug: 'running/where-the-data-comes-from' },
 						{ label: 'The store', slug: 'running/the-store' },
 						{ label: 'Training', slug: 'running/training' },

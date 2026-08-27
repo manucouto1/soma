@@ -418,6 +418,11 @@
           "name": "codec",
           "signature": "(kind, of_type, *, dump, load)",
           "doc": "Says how objects of a type are written down and read back.\n\n`dump(obj) -> bytes` and `load(bytes) -> obj`. The `kind` is what gets\nwritten beside the bytes, so it is what a store keeps forever: name it after\nthe type, not after the run."
+        },
+        {
+          "name": "codecs_registered",
+          "signature": "()",
+          "doc": "What has a codec registered today, in the order they were registered."
         }
       ],
       "constants": [

@@ -82,7 +82,8 @@ nothing — and no shaped `Tensor`, because nobody produces one.
 destroyed: a torch tensor mid-autograd-graph, round-tripped through numbers,
 comes back without its `grad_fn`. So it travels as itself, and when it has to
 cross a wire a `Codec` writes it down — which is the fifth hole, and `Ipc` in
-`soma-data` is its second implementor.
+`soma-data` is its second implementor. Filling it for a type of your own is
+[four lines](/soma/running/writing-a-codec/).
 
 Everything heavy is behind an `Arc`, because a value is cloned on every edge
 and cloning must not copy.

@@ -108,7 +108,8 @@ about the graph, and `cacheable` runs before anything has produced one. So the
 rule to carry is that `.cached()` on a node returning an `Opaque` is **half a
 declaration** — the other half is the codec, and `somatize.torch` registers the
 one for a tensor on being imported, which is why this never comes up until you
-return something of your own.
+return something of your own. When it does:
+[**Writing a codec**](/soma/running/writing-a-codec/).
 
 ## Frozen is information, and somebody else obeys
 

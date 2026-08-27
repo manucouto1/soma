@@ -180,7 +180,8 @@ turns an artifact into a catalog.
 What only exists in one process — a torch tensor with its autograd graph —
 crosses with a `Codec` in front of it. That is the fifth hole. A value nobody
 registered a codec for is the one that does not cross, and the message says so
-rather than arriving mangled.
+rather than arriving mangled. Yours is four lines and one decision about where
+to put them: [**Writing a codec**](/soma/running/writing-a-codec/).
 
 ## The worker itself
 

@@ -40,6 +40,7 @@ from somatize._somatize import (
     Recorder,
     Store,
     codec,
+    codecs_registered,
     __version__,
 )
 
@@ -54,5 +55,6 @@ __all__ = [
     "Broker",
     "Worker",
     "codec",
+    "codecs_registered",
     "__version__",
 ]
