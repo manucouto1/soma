@@ -35,9 +35,23 @@ on:
       - "**/Cargo.toml"
       - "rust-toolchain.toml"
       - ".github/workflows/worker-image.yml"
-  release:
-    types: [published]
+  # Not `release: [published]`, which is what this was and why v1.0.0 went out
+  # with no image: our release is created by `release.yml` with the
+  # `GITHUB_TOKEN`, and GitHub deliberately raises no workflow from an event a
+  # token like that caused. So `release.yml` **calls** this instead, which is
+  # the ordering it wanted anyway — and now gets.
+  workflow_call:
+    inputs:
+      publish:
+        description: Push the image to the registry, tagged from the ref.
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the image to the registry, tagged from the ref.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,7 +84,7 @@ jobs:
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to the registry
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        if: inputs.publish
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -84,7 +98,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=raw,value=latest,enable=${{ inputs.publish == true }}
             type=sha
 
       # The CPU stage only. `worker-gpu` is not built here and not published:
@@ -119,7 +133,7 @@ jobs:
       # Retagged and pushed, never rebuilt. `docker/metadata-action` writes one
       # tag per line, which is why this is a loop and not an argument.
       - name: Publish
-        if: github.event_name == 'release'
+        if: inputs.publish
         run: |
           set -euo pipefail
           echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
