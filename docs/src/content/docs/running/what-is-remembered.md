@@ -85,6 +85,31 @@ The two ways it refuses:
 | `Unsettled` | something upstream of a cached node is not frozen |
 | `Nameless` | something upstream has no identity, so no key reaches down |
 
+### And a third way, which does not refuse
+
+Both of those raise, and stop you. There is one that does not: **an `Opaque`
+whose type has no `Codec` cannot be written down**, so the value is computed,
+not kept, and computed again next time. The run stays green. What you get is a
+line on `stderr` that interrupts nothing:
+
+```
+what `enc` produced could not be kept: ValueError: a `dict` cannot leave this
+process: nothing says how to write one down. Register it with
+`codec("a name", dict, dump=..., load=...)`
+```
+
+Measured on a node that sleeps 0.4 s and returns `Opaque({...})`: the second
+`forward` cost **0.40 s** without a codec and **0.00 s** with one. At real
+scale — a sentence encoder in front of a training loop — that is every epoch
+paying for a prefix that was supposed to be paid for once.
+
+It does not refuse because it cannot: whether a value is writable is not a fact
+about the graph, and `cacheable` runs before anything has produced one. So the
+rule to carry is that `.cached()` on a node returning an `Opaque` is **half a
+declaration** — the other half is the codec, and `somatize.torch` registers the
+one for a tensor on being imported, which is why this never comes up until you
+return something of your own.
+
 ## Frozen is information, and somebody else obeys
 
 The core holds *this node's state does not change while the graph runs* as
