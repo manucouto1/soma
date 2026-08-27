@@ -1,6 +1,12 @@
 /target
 __pycache__/
 *.so
+
+# `maturin develop` replaces the extension while an interpreter still has the
+# old one open, and on NFS a file that is open is renamed rather than removed.
+# It weighs 199 MB, it is untracked, and it is gone when that process exits —
+# which is exactly the shape of thing that gets committed by accident.
+.nfs*
 .pytest_cache/
 *.egg-info/
 /.venv
